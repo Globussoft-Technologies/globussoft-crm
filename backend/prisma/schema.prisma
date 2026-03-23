@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id       Int      @id @default(autoincrement())
+  email    String   @unique
+  password String
+  role     String   @default("user")
+}
+
+model Contact {
+  id         Int        @id @default(autoincrement())
+  name       String
+  email      String
+  company    String
+  title      String
+  status     String     @default("Lead")
+  activities Activity[]
+}
+
+model Activity {
+  id          Int      @id @default(autoincrement())
+  type        String
+  description String
+  createdAt   DateTime @default(now())
+  contactId   Int
+  contact     Contact  @relation(fields: [contactId], references: [id])
+}
+
+model Deal {
+  id          Int      @id @default(autoincrement())
+  title       String
+  company     String
+  amount      Float
+  probability Int
+  stage       String   @default("lead")
+}
+
+model Ticket {
+  id          Int      @id @default(autoincrement())
+  subject     String
+  requester   String
+  status      String   @default("Open")
+  priority    String   @default("Low")
+  lastUpdated String
+}
+
+model Campaign {
+  id      Int    @id @default(autoincrement())
+  name    String
+  status  String @default("Draft")
+  sent    Int    @default(0)
+  opened  Float  @default(0.0)
+  clicked Float  @default(0.0)
+}

@@ -1,7 +1,7 @@
 # Globussoft CRM
 
 A modern, premium Customer Relationship Management system built with React, Vite, and Node.js. 
-This application provides essential tools for managing contacts, tracking sales pipelines, and visualizing core metrics—all modeled after the world's top 100 CRM platforms.
+This application provides essential tools for managing contacts, tracking sales pipelines, and visualizing core metrics—all modeled after the world's top CRM platforms.
 
 ## ✨ Key Features
 - **Authentication & Dashboard:** Secure access with a premium, glassmorphism-styled dashboard layout.

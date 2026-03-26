@@ -115,3 +115,6 @@ button {
 .table-row-hover:hover {
   background-color: var(--surface-hover);
 }
+
+
+/* Mobile Responsiveness Added by ClawTeam \@media (max-width: 768px) { .sidebar { display: none; } .glass { padding: 1rem; } } */

@@ -1,3 +1,4 @@
+import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, MoreVertical, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -9,9 +10,7 @@ const Contacts = () => {
   const [newContact, setNewContact] = useState({ name: '', email: '', company: '', title: '', status: 'Lead' });
 
   const fetchContacts = () => {
-    fetch('http://localhost:5000/api/contacts')
-      .then(res => res.json())
-      .then(data => {
+    fetchApi('/api/contacts').then(data => {
         setContacts(data);
         setLoading(false);
       });
@@ -23,7 +22,7 @@ const Contacts = () => {
 
   const handleAddContact = async (e) => {
     e.preventDefault();
-    await fetch('http://localhost:5000/api/contacts', {
+    await fetchApi('/api/contacts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newContact)
@@ -35,7 +34,7 @@ const Contacts = () => {
 
   const handleDelete = async (id) => {
     if (window.confirm("Are you sure you want to delete this contact?")) {
-      await fetch(`http://localhost:5000/api/contacts/${id}`, { method: 'DELETE' });
+      await fetchApi('/api/contacts/${id}', { method: 'DELETE' });
       fetchContacts();
     }
   };

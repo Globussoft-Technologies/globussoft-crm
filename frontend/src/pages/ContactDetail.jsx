@@ -1,3 +1,4 @@
+import { fetchApi } from '../utils/api';
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Phone, Mail, Calendar } from 'lucide-react';
@@ -8,9 +9,7 @@ const ContactDetail = () => {
 
   useEffect(() => {
     // Mock fetch for specific user
-    fetch('http://localhost:5000/api/contacts')
-      .then(res => res.json())
-      .then(data => {
+    fetchApi('/api/contacts').then(data => {
         const found = data.find(c => c.id.toString() === id);
         setContact(found || data[0]); // fallback to first if not found
       });

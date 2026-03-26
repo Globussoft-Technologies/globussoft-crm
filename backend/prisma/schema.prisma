@@ -16,6 +16,8 @@ model User {
   createdAt DateTime  @default(now())
   deals     Deal[]    @relation("OwnerDeals")
   tickets   Ticket[]  @relation("AssignedTickets")
+  apiKeys   ApiKey[]
+  webhooks  Webhook[]
 }
 
 model Contact {
@@ -26,9 +28,13 @@ model Contact {
   title       String?
   status      String     @default("Lead") // Lead, Prospect, Customer, Churned
   source      String?    @default("Organic")
+  aiScore     Int        @default(0) // 1-100 predictive close probability
   createdAt   DateTime   @default(now())
   activities  Activity[]
   deals       Deal[]
+  emails      EmailMessage[]
+  callLogs    CallLog[]
+  invoices    Invoice[]
 }
 
 model Activity {
@@ -54,6 +60,8 @@ model Deal {
   
   ownerId       Int?
   owner         User?    @relation("OwnerDeals", fields: [ownerId], references: [id], onDelete: SetNull)
+  attachments   Attachment[]
+  invoices      Invoice[]
 }
 
 model Ticket {
@@ -87,4 +95,76 @@ model AutomationRule {
   actionType  String
   targetState String?
   isActive    Boolean  @default(true)
+}
+
+model EmailMessage {
+  id        Int      @id @default(autoincrement())
+  subject   String
+  body      String
+  from      String
+  to        String
+  direction String   @default("INBOUND") // INBOUND, OUTBOUND
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  
+  contactId Int?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+}
+
+model CallLog {
+  id           Int      @id @default(autoincrement())
+  duration     Int      // seconds
+  notes        String?
+  direction    String   @default("OUTBOUND")
+  recordingUrl String?
+  createdAt    DateTime @default(now())
+  
+  contactId    Int?
+  contact      Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+}
+
+model Attachment {
+  id        Int      @id @default(autoincrement())
+  filename  String
+  fileUrl   String
+  createdAt DateTime @default(now())
+  
+  dealId    Int
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id        Int      @id @default(autoincrement())
+  keySecret String   @unique // Hashed or raw token
+  name      String
+  createdAt DateTime @default(now())
+  lastUsed  DateTime?
+  
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Webhook {
+  id        Int      @id @default(autoincrement())
+  event     String   // e.g. "deal.*", "contact.created"
+  targetUrl String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Invoice {
+  id          Int      @id @default(autoincrement())
+  invoiceNum  String   @unique
+  amount      Float
+  status      String   @default("UNPAID") // UNPAID, PAID, OVERDUE
+  dueDate     DateTime
+  issuedDate  DateTime @default(now())
+  
+  dealId      Int?
+  deal        Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  contactId   Int
+  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
 }

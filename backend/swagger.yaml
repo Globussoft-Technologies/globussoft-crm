@@ -1,0 +1,31 @@
+openapi: 3.0.0
+info:
+  title: Globussoft Enterprise CRM API
+  version: 2.0.0
+  description: Public REST API for third-party developer integrations. Use Webhooks for streaming external state events and REST endpoints for CRUD fetching.
+servers:
+  - url: http://localhost:5000/api
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-KEY
+paths:
+  /deals:
+    get:
+      summary: Retrieve Pipeline Deals
+      description: Returns an array of deal objects, optionally filtered.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: A JSON array of deals alongside relational sub-nodes.
+  /contacts:
+    get:
+      summary: Retrieve Address Book Contacts
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Contact dataset

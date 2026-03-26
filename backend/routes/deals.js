@@ -64,5 +64,16 @@ router.put("/:id/stage", async (req, res) => {
     res.status(500).json({ error: "Stage transition error" });
   }
 });
+// DELETE deal
+router.delete("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.deal.delete({ where: { id: parseInt(id) } });
+    if(req.io) req.io.emit("deal_deleted", parseInt(id));
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to delete deal" });
+  }
+});
 
 module.exports = router;

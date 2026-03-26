@@ -6,7 +6,7 @@ const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const { setUser } = useContext(AuthContext);
+  const { setUser, setToken } = useContext(AuthContext);
   const navigate = useNavigate();
 
   const handleLogin = async (e) => {
@@ -23,6 +23,7 @@ const Login = () => {
       
       if (response.ok) {
         setUser(data.user);
+        setToken(data.token);
         navigate('/');
       } else {
         setError(data.message || 'Login failed');
@@ -75,7 +76,7 @@ const Login = () => {
         </form>
         <div style={{ marginTop: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
           <p>Demo Credentials:</p>
-          <p>Email: admin@globussoft.com | Password: password123</p>
+          <p>Email: admin | Password: admin</p>
         </div>
       </div>
     </div>

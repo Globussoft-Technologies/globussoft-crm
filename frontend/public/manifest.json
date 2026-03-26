@@ -1,0 +1,15 @@
+{
+  "short_name": "Globussoft",
+  "name": "Globussoft Enterprise CRM",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "type": "image/svg+xml",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a"
+}

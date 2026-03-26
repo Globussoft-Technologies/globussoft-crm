@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { PrismaClient } = require("@prisma/client");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -53,5 +54,33 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// Middleware Endpoint mapping export
+// Admin User Management
+router.get("/users", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({ select: { id: true, email: true, name: true, role: true, createdAt: true } });
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch directory" });
+  }
+});
+
+router.put("/users/:id/role", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { role } = req.body;
+    const user = await prisma.user.update({ where: { id: parseInt(req.params.id) }, data: { role } });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update role" });
+  }
+});
+
+router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    await prisma.user.delete({ where: { id: parseInt(req.params.id) } });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to obliterate user" });
+  }
+});
+
 module.exports = router;

@@ -20,17 +20,17 @@ async function main() {
 
   await prisma.deal.createMany({
     data: [
-      { title: 'Enterprise Software License', company: 'TechCorp', amount: 45000, probability: 50, stage: 'lead' },
-      { title: 'Cloud Migration Project', company: 'Initech', amount: 120000, probability: 75, stage: 'contacted' },
-      { title: 'Annual Support Contract', company: 'Globex', amount: 15000, probability: 90, stage: 'proposal' },
-      { title: 'Security Audit', company: 'Stark Industries', amount: 25000, probability: 100, stage: 'won' }
+      { title: 'Enterprise Software License', amount: 45000, probability: 50, stage: 'lead' },
+      { title: 'Cloud Migration Project', amount: 120000, probability: 75, stage: 'contacted' },
+      { title: 'Annual Support Contract', amount: 15000, probability: 90, stage: 'proposal' },
+      { title: 'Security Audit', amount: 25000, probability: 100, stage: 'won' }
     ]
   });
 
   await prisma.ticket.createMany({
     data: [
-      { subject: 'Cannot access billing portal', requester: 'Alice Cooper', status: 'Open', priority: 'High', lastUpdated: '10 mins ago' },
-      { subject: 'Feature Request: Custom fields', requester: 'Bob Smith', status: 'Closed', priority: 'Low', lastUpdated: '2 days ago' }
+      { subject: 'Cannot access billing portal', description: 'From Alice Cooper', status: 'Open', priority: 'High' },
+      { subject: 'Feature Request: Custom fields', description: 'From Bob Smith', status: 'Closed', priority: 'Low' }
     ]
   });
 

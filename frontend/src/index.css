@@ -1,25 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
 :root {
-  /* Premium Dark/Light Theme Variables */
-  --bg-color: #0d0f12;
-  --surface-color: #1a1d24;
-  --surface-hover: #232730;
-  --text-primary: #ffffff;
-  --text-secondary: #9ca3af;
+  --bg-color: #0b0c10;
+  --surface-color: rgba(22, 24, 29, 0.4);
+  --surface-hover: rgba(35, 40, 48, 0.6);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
   --accent-color: #3b82f6;
-  --accent-hover: #2563eb;
+  --accent-glow: rgba(59, 130, 246, 0.5);
+  --accent-hover: #60a5fa;
   --success-color: #10b981;
   --warning-color: #f59e0b;
   --danger-color: #ef4444;
   
-  --border-color: #2d323e;
+  --border-color: rgba(255, 255, 255, 0.08);
   
-  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
   
-  --glass-bg: rgba(26, 29, 36, 0.7);
+  --glass-bg: rgba(20, 22, 28, 0.35);
   --glass-border: rgba(255, 255, 255, 0.1);
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
-  --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.3), 0 2px 4px -1px rgba(0,0,0,0.2);
-  --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.4), 0 4px 6px -2px rgba(0,0,0,0.2);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  
+  --transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 * {
@@ -31,9 +33,13 @@
 body {
   font-family: var(--font-family);
   background-color: var(--bg-color);
+  background-image: radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.12), transparent 25%),
+                    radial-gradient(circle at 85% 30%, rgba(168, 85, 247, 0.12), transparent 25%);
+  background-attachment: fixed;
   color: var(--text-primary);
-  line-height: 1.5;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
 }
 
 a {
@@ -46,75 +52,136 @@ button {
   font-family: inherit;
 }
 
-/* Glassmorphism Utilities */
+/* Glassmorphism Classes */
 .glass {
   background: var(--glass-bg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: 16px;
 }
 
 .card {
-  background-color: var(--surface-color);
-  border-radius: 12px;
+  background: var(--surface-color);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 16px;
   border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-sm);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%; width: 50%; height: 100%;
+  background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.03), transparent);
+  transform: skewX(-20deg);
+  transition: .5s;
+}
+
+.card:hover::before {
+  left: 150%;
 }
 
 .card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 25px rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 .btn-primary {
-  background-color: var(--accent-color);
+  background: linear-gradient(135deg, var(--accent-color), #2563eb);
   color: white;
   border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 8px;
+  padding: 0.6rem 1.25rem;
+  border-radius: 10px;
   font-weight: 500;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
+  transition: var(--transition);
+  box-shadow: 0 4px 15px var(--accent-glow);
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-primary:after {
+  content: '';
+  position: absolute;
+  top: -50%; right: -50%; bottom: -50%; left: -50%;
+  background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0.2) 50%, rgba(255,255,255,0));
+  transform: rotateZ(45deg) translate(-1.5em, -3em);
+  transition: transform 0.6s;
+}
+
+.btn-primary:hover:after {
+  transform: rotateZ(45deg) translate(2em, 3em);
 }
 
 .btn-primary:hover {
-  background-color: var(--accent-hover);
-  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.4);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px var(--accent-glow);
 }
 
 .input-field {
   width: 100%;
-  padding: 0.75rem 1rem;
-  background-color: var(--bg-color);
+  padding: 0.8rem 1.25rem;
+  background-color: rgba(15, 23, 42, 0.6);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 10px;
   color: var(--text-primary);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  font-family: var(--font-family);
+  transition: var(--transition);
 }
 
 .input-field:focus {
   outline: none;
   border-color: var(--accent-color);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
+  background-color: rgba(15, 23, 42, 0.8);
 }
 
-/* Extra Styles */
+.nav-link {
+  position: relative;
+  overflow: hidden;
+}
+
 .nav-link:hover {
-  background-color: var(--surface-hover);
+  background-color: var(--surface-hover) !important;
   color: var(--text-primary) !important;
+  transform: translateX(4px);
 }
 
 .nav-link.active {
-  background-color: rgba(59, 130, 246, 0.1);
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.2), transparent) !important;
+  border-left: 3px solid var(--accent-color);
   color: var(--accent-color) !important;
-  font-weight: 500;
+  font-weight: 600;
 }
 
-.table-row-hover:hover {
-  background-color: var(--surface-hover);
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}
 
-/* Mobile Responsiveness Added by ClawTeam \@media (max-width: 768px) { .sidebar { display: none; } .glass { padding: 1rem; } } */
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}

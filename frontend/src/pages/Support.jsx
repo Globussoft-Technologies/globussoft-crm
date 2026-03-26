@@ -1,3 +1,4 @@
+import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, MessageCircle } from 'lucide-react';
 
@@ -6,9 +7,7 @@ const Support = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('http://localhost:5000/api/support')
-      .then(res => res.json())
-      .then(data => {
+    fetchApi('/api/support').then(data => {
         setTickets(data);
         setLoading(false);
       });

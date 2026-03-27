@@ -9,7 +9,8 @@ export const fetchApi = async (url, options = {}) => {
     headers['Authorization'] = `Bearer ${token}`;
   }
   
-  const response = await fetch(`http://localhost:5000${url}`, {
+  // Use relative URL dynamically proxied by Nginx
+  const response = await fetch(url, {
     ...options,
     headers,
   });

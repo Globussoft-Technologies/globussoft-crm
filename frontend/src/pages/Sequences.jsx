@@ -62,7 +62,8 @@ export default function Sequences() {
          </button>
       </header>
 
-      <div style={{ flex: 1, border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', overflow: 'hidden', background: '#0f172a', boxShadow: 'inset 0 0 30px rgba(0,0,0,0.8)', display: 'flex' }}>
+      {/* Adding minHeight: 0 to prevent flexbox boundary explosion that clips the React Flow layer */}
+      <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', overflow: 'hidden', background: '#0f172a', boxShadow: 'inset 0 0 30px rgba(0,0,0,0.8)', display: 'flex' }}>
         
         {/* ReactFlow Graph Canvas */}
         <div style={{ flex: 3, position: 'relative' }}>

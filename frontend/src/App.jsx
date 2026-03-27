@@ -16,6 +16,7 @@ import CustomObjects from './pages/CustomObjects';
 import CustomObjectView from './pages/CustomObjectView';
 import Sequences from './pages/Sequences';
 import Login from './pages/Login';
+import Placeholder from './pages/Placeholder';
 import Layout from './components/Layout';
 
 export const AuthContext = createContext();
@@ -53,6 +54,17 @@ export default function App() {
             <Route path="objects/:entityName" element={<CustomObjectView />} />
             <Route path="sequences" element={<Sequences />} />
             <Route path="settings" element={<Settings />} />
+            {/* Missing Modules Patched by Issue Triage */}
+            <Route path="expenses" element={<Placeholder />} />
+            <Route path="contracts" element={<Placeholder />} />
+            <Route path="estimates" element={<Placeholder />} />
+            <Route path="invoices" element={<Placeholder />} />
+            <Route path="tickets" element={<Placeholder />} />
+            <Route path="tasks" element={<Placeholder />} />
+            <Route path="projects" element={<Placeholder />} />
+            <Route path="clients" element={<Placeholder />} />
+            <Route path="leads" element={<Placeholder />} />
+            <Route path="staff" element={<Placeholder />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, PhoneOff, Mic, MicOff, Keypad, Loader2 } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, Grid, Loader2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
 export default function Softphone() {
@@ -116,7 +116,7 @@ export default function Softphone() {
                 {isMuted ? <MicOff size={20} style={{margin:'0 auto'}}/> : <Mic size={20} style={{margin:'0 auto'}}/>}
               </button>
               <button type="button" disabled className="btn-secondary" style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)' }}>
-                <Keypad size={20} style={{margin:'0 auto'}}/>
+                <Grid size={20} style={{margin:'0 auto'}}/>
               </button>
             </div>
 

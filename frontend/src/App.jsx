@@ -11,6 +11,10 @@ import Settings from './pages/Settings';
 import Developer from './pages/Developer';
 import Billing from './pages/Billing';
 import Portal from './pages/Portal';
+import Marketplace from './pages/Marketplace';
+import CustomObjects from './pages/CustomObjects';
+import CustomObjectView from './pages/CustomObjectView';
+import Sequences from './pages/Sequences';
 import Login from './pages/Login';
 import Layout from './components/Layout';
 
@@ -44,6 +48,10 @@ export default function App() {
             <Route path="workflows" element={<Workflows />} />
             <Route path="developer" element={<Developer />} />
             <Route path="billing" element={<Billing />} />
+            <Route path="marketplace" element={<Marketplace />} />
+            <Route path="objects" element={<CustomObjects />} />
+            <Route path="objects/:entityName" element={<CustomObjectView />} />
+            <Route path="sequences" element={<Sequences />} />
             <Route path="settings" element={<Settings />} />
           </Route>
         </Routes>

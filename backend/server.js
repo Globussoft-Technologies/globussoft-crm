@@ -64,6 +64,10 @@ const billingRoutes = require("./routes/billing");
 const searchRoutes = require("./routes/search");
 const aiRoutes = require("./routes/ai");
 const ticketsRoutes = require("./routes/tickets");
+const integrationsRoutes = require("./routes/integrations");
+const customObjectsRoutes = require("./routes/custom_objects");
+const sequencesRoutes = require("./routes/sequences");
+const cpqRoutes = require("./routes/cpq");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -88,6 +92,10 @@ app.use("/api/billing", billingRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/tickets", ticketsRoutes);
+app.use("/api/integrations", integrationsRoutes);
+app.use("/api/custom_objects", customObjectsRoutes);
+app.use("/api/sequences", sequencesRoutes);
+app.use("/api/cpq", cpqRoutes);
 
 // Server File Uploads Statically
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));

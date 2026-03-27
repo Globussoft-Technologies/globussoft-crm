@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit } from 'lucide-react';
+import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network } from 'lucide-react';
 
 const Sidebar = () => {
   return (
@@ -25,6 +25,9 @@ const Sidebar = () => {
         <NavLink to="/marketing" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Send size={20} /> Marketing
         </NavLink>
+        <NavLink to="/sequences" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Network size={20} /> Sequences
+        </NavLink>
         <NavLink to="/reports" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <BarChart3 size={20} /> Reports
         </NavLink>
@@ -33,6 +36,9 @@ const Sidebar = () => {
         </NavLink>
         <NavLink to="/support" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <LifeBuoy size={20} /> Support
+        </NavLink>
+        <NavLink to="/objects" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Database size={20} /> App Builder
         </NavLink>
         <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <NavLink to="/developer" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>

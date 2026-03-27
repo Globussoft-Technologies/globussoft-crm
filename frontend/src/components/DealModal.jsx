@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, FileText, UploadCloud, Download, FileSignature } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import CPQBuilder from './CPQBuilder';
 
 const API_BASE = "http://localhost:5000";
 
@@ -112,6 +113,9 @@ export default function DealModal({ deal, onClose }) {
                 </div>
               ))}
             </div>
+
+            <CPQBuilder dealId={deal.id} />
+            
           </div>
 
           {/* Side Pane */}

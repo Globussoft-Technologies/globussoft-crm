@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Omnibar from './Omnibar';
 import Presence from './Presence';
+import Softphone from './Softphone';
 
 const Layout = () => {
   return (
@@ -12,6 +13,7 @@ const Layout = () => {
         <Outlet />
       </main>
       <Omnibar />
+      <Softphone />
       <Presence />
     </div>
   );

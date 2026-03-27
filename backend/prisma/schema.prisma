@@ -35,6 +35,7 @@ model Contact {
   emails      EmailMessage[]
   callLogs    CallLog[]
   invoices    Invoice[]
+  sequenceEnrollments SequenceEnrollment[]
 }
 
 model Activity {
@@ -62,6 +63,7 @@ model Deal {
   owner         User?    @relation("OwnerDeals", fields: [ownerId], references: [id], onDelete: SetNull)
   attachments   Attachment[]
   invoices      Invoice[]
+  quotes        Quote[]
 }
 
 model Ticket {
@@ -167,4 +169,110 @@ model Invoice {
   deal        Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
   contactId   Int
   contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+model Integration {
+  id        Int      @id @default(autoincrement())
+  provider  String   @unique // slack, google, stripe, mailchimp
+  token     String?
+  isActive  Boolean  @default(false)
+  settings  String?  // JSON stringified configuration
+  updatedAt DateTime @updatedAt
+}
+
+model CustomEntity {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  fields      CustomField[]
+  records     CustomRecord[]
+}
+
+model CustomField {
+  id         Int      @id @default(autoincrement())
+  name       String
+  type       String   @default("Text") // Text, Number, Date, Boolean
+  entityId   Int
+  entity     CustomEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  values     CustomValue[]
+}
+
+model CustomRecord {
+  id         Int      @id @default(autoincrement())
+  entityId   Int
+  entity     CustomEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  values     CustomValue[]
+  createdAt  DateTime @default(now())
+}
+
+model CustomValue {
+  id         Int      @id @default(autoincrement())
+  valueStr   String?
+  valueNum   Float?
+  valueBool  Boolean?
+  valueDate  DateTime?
+  recordId   Int
+  record     CustomRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  fieldId    Int
+  field      CustomField  @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+}
+
+model Sequence {
+  id          Int      @id @default(autoincrement())
+  name        String
+  isActive    Boolean  @default(false)
+  nodes       String?  // JSON string
+  edges       String?  // JSON string
+  enrollments SequenceEnrollment[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model SequenceEnrollment {
+  id          Int      @id @default(autoincrement())
+  sequenceId  Int
+  sequence    Sequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  contactId   Int
+  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  currentNode String?  
+  nextRun     DateTime? 
+  status      String   @default("Active") // Active, Completed, Paused
+  createdAt   DateTime @default(now())
+}
+
+model Product {
+  id          Int      @id @default(autoincrement())
+  name        String
+  sku         String?  @unique
+  description String?
+  price       Float
+  isRecurring Boolean  @default(true) // true = MRR, false = One-Time
+  createdAt   DateTime @default(now())
+  lineItems   QuoteLineItem[]
+}
+
+model Quote {
+  id          Int      @id @default(autoincrement())
+  title       String
+  totalAmount Float    @default(0.0)
+  mrr         Float    @default(0.0)
+  status      String   @default("Draft") // Draft, Sent, Accepted, Rejected
+  dealId      Int
+  deal        Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  lineItems   QuoteLineItem[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model QuoteLineItem {
+  id          Int      @id @default(autoincrement())
+  quantity    Int      @default(1)
+  unitPrice   Float
+  quoteId     Int
+  quote       Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  productId   Int?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName String   
+  isRecurring Boolean  @default(true)
 }

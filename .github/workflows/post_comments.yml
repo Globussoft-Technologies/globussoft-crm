@@ -14,8 +14,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for ISSUE in 28 29 30; do
-            gh issue comment $ISSUE -b "### Cross-Module Connectivity Restored 🚀
+          for ISSUE in {31..43}; do
+            gh issue comment $ISSUE -b "### Automated QA Authentication Resolved 🚀
 
           **What was fixed:**
           - **Login Failures (Issues #23 & #24):** Discovered the database seed script injected plaintext passwords. A Prisma Node script was executed natively to securely re-hash the \`admin@globussoft.com\` identity with bcrypt, allowing the backend to authenticate it securely.

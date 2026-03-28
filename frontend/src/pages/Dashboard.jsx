@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { Users, DollarSign, Activity, Calendar, TrendingUp } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { useNavigate } from 'react-router-dom';
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [deals, setDeals] = useState([]);
   const [contacts, setContacts] = useState([]);
 
@@ -41,7 +43,7 @@ export default function Dashboard() {
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Here's your business at a glance. Press <kbd style={{background:'rgba(255,255,255,0.1)', padding:'2px 6px', borderRadius:'4px', color:'var(--accent-color)'}}>Cmd K</kbd> to search globally.</p>
         </div>
-        <button className="btn-primary">Generate Report</button>
+        <button className="btn-primary" onClick={() => navigate('/reports')}>Generate Report</button>
       </header>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
@@ -97,7 +99,7 @@ export default function Dashboard() {
           <h3 style={{ fontSize: '1.25rem', fontWeight: '500', marginBottom: '1.5rem' }}>Recent Deals</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {deals.slice(0, 4).map((deal, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <div key={i} className="table-row-hover" onClick={() => navigate('/pipeline')} style={{ display: 'flex', alignItems: 'center', gap: '1rem', cursor: 'pointer', padding: '0.5rem', borderRadius: '8px' }}>
                 <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: deal.stage === 'won' ? 'var(--success-color)' : 'var(--accent-color)', boxShadow: `0 0 8px ${deal.stage === 'won' ? 'var(--success-color)' : 'var(--accent-color)'}` }} />
                 <div>
                   <p style={{ fontSize: '0.875rem', fontWeight: '500' }}>{deal.title}</p>

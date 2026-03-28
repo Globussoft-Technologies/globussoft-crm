@@ -13,9 +13,10 @@ const initialStages = [
 
 const Pipeline = () => {
   const [deals, setDeals] = useState([]);
+  const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-  const [newDeal, setNewDeal] = useState({ title: '', company: '', amount: '', probability: '', stage: 'lead' });
+  const [newDeal, setNewDeal] = useState({ title: '', company: '', contactName: '', amount: '', probability: '', stage: 'lead' });
   const [aiScoreModal, setAiScoreModal] = useState(null);
   const [selectedDeal, setSelectedDeal] = useState(null);
 
@@ -30,11 +31,16 @@ const Pipeline = () => {
   };
 
   useEffect(() => {
-    fetchApi('/api/deals')
-      .then(data => { setDeals(data); setLoading(false); })
-      .catch(err => console.error(err));
+    Promise.all([
+      fetchApi('/api/deals'),
+      fetchApi('/api/contacts')
+    ]).then(([dealData, contactData]) => {
+      setDeals(Array.isArray(dealData) ? dealData : []);
+      setContacts(Array.isArray(contactData) ? contactData : []);
+      setLoading(false);
+    }).catch(err => console.error(err));
 
-    const socket = io('http://localhost:5000');
+    const socket = io('/');
     
     socket.on('deal_updated', (updatedDeal) => {
       setDeals(prevDeals => {
@@ -61,7 +67,7 @@ const Pipeline = () => {
       body: JSON.stringify({...newDeal, amount: parseFloat(newDeal.amount), probability: parseInt(newDeal.probability)})
     });
     setShowModal(false);
-    setNewDeal({ title: '', company: '', amount: '', probability: '', stage: 'lead' });
+    setNewDeal({ title: '', company: '', contactName: '', amount: '', probability: '', stage: 'lead' });
   };
 
   const handleDelete = async (e, id) => {
@@ -161,7 +167,7 @@ const Pipeline = () => {
                         ${(deal.amount || 0).toLocaleString()}
                       </p>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '500' }}>{deal.company || 'Unknown'}</span>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '500' }}>{deal.company || deal.contactName || 'Unknown'}</span>
                         <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', backgroundColor: `${stage.color}20`, color: stage.color, borderRadius: '4px', fontWeight: '600' }}>
                           {deal.probability}%
                         </span>
@@ -186,7 +192,20 @@ const Pipeline = () => {
             <h3 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 'bold' }}>Add New Deal</h3>
             <form onSubmit={handleAddDeal} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               <input type="text" placeholder="Deal Title" required className="input-field" value={newDeal.title} onChange={e => setNewDeal({...newDeal, title: e.target.value})} />
-              <input type="text" placeholder="Company Name" className="input-field" value={newDeal.company} onChange={e => setNewDeal({...newDeal, company: e.target.value})} />
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <div style={{ flex: 1 }}>
+                  <input type="text" list="contacts-list" placeholder="Contact Person" className="input-field" value={newDeal.contactName} onChange={e => setNewDeal({...newDeal, contactName: e.target.value})} />
+                  <datalist id="contacts-list">
+                    {contacts.map(c => <option key={c.id} value={c.name}>{c.company}</option>)}
+                  </datalist>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <input type="text" list="companies-list" placeholder="Company Name" className="input-field" value={newDeal.company} onChange={e => setNewDeal({...newDeal, company: e.target.value})} />
+                  <datalist id="companies-list">
+                    {[...new Set(contacts.map(c => c.company))].filter(Boolean).map((comp, idx) => <option key={idx} value={comp} />)}
+                  </datalist>
+                </div>
+              </div>
               <div style={{ display: 'flex', gap: '1rem' }}>
                 <input type="number" placeholder="Amount ($)" required className="input-field" value={newDeal.amount} onChange={e => setNewDeal({...newDeal, amount: e.target.value})} />
                 <input type="number" placeholder="Probability (%)" required className="input-field" value={newDeal.probability} onChange={e => setNewDeal({...newDeal, probability: e.target.value})} />

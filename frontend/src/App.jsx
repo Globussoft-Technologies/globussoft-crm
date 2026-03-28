@@ -2,6 +2,7 @@ import React, { useState, createContext, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import Contacts from './pages/Contacts';
+import ContactsDetail from './pages/ContactsDetail';
 import Pipeline from './pages/Pipeline';
 import Workflows from './pages/Workflows';
 import Inbox from './pages/Inbox';
@@ -44,6 +45,7 @@ export default function App() {
           <Route path="/" element={token ? <Layout /> : <Navigate to="/login" />}>
             <Route index element={<Dashboard />} />
             <Route path="contacts" element={<Contacts />} />
+            <Route path="contacts/:id" element={<ContactsDetail />} />
             <Route path="pipeline" element={<Pipeline />} />
             <Route path="inbox" element={<Inbox />} />
             <Route path="marketing" element={<Marketing />} />

@@ -34,7 +34,7 @@ const Contacts = () => {
 
   const handleDelete = async (id) => {
     if (window.confirm("Are you sure you want to delete this contact?")) {
-      await fetchApi('/api/contacts/${id}', { method: 'DELETE' });
+      await fetchApi(`/api/contacts/${id}`, { method: 'DELETE' });
       fetchContacts();
     }
   };

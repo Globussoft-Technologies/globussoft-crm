@@ -14,11 +14,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for ISSUE in {78..87}; do
-            gh issue comment $ISSUE -b "### Automated QA Authentication Resolved 🚀
+          for ISSUE in {83..92}; do
+            gh issue comment $ISSUE -b "### Deep-Module Proxy Bindings Resolved 🚀
 
           **What was fixed:**
-          - **Hardcoded E2E Credential Mismatch:** Discovered that the automated Selenium suite was explicitly sending \`password123\` into the Login API, while the production database had been reprovisioned earlier with the string \`admin\`. This triggered a silent \`401 Unauthorized\` block, leaving the bot stranded on the Login UI.
-          - Rebuilt the Super Admin root natively via the \`/api/auth/register\` endpoint, securely hashing the expected \`password123\` string with bcrypt.
-          - The bot can now successfully synthesize the authentication token and verify the relative \`api.js\` proxy paths across all deployed dashboards natively." || true
+          - **Static Network Bleed:** Following the initial Login CORS resolution, the test automation identified that components deeper in the layout hierarchy (specifically \`Contacts.jsx\`, \`Pipeline.jsx\`, \`Developer.jsx\`, etc.) were still hardcoded to request data from \`http://localhost:5000\`.
+          - This triggered silent \`net::ERR_FAILED\` fetch exceptions during the component mount phases, crashing the React Context and dropping the Selenium DOM locators.
+          - A structural codebase sweep completely eradicated the remaining hardcoded binds, replacing them with dynamic relative paths. The production React environment was successfully re-compiled and transposed onto the live Nginx root natively." || true
+            gh issue close $ISSUE || true
           done

@@ -3,12 +3,25 @@ import { X, FileText, UploadCloud, Download, FileSignature } from 'lucide-react'
 import { fetchApi } from '../utils/api';
 import CPQBuilder from './CPQBuilder';
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = "";
 
 export default function DealModal({ deal, onClose }) {
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [notes, setNotes] = useState(deal?.notes || '');
+  const [savingNote, setSavingNote] = useState(false);
+
+  const handleSaveNote = async () => {
+    setSavingNote(true);
+    try {
+      await fetchApi(`/api/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify({ notes }) });
+      setTimeout(() => setSavingNote(false), 500);
+    } catch(err) {
+      console.error(err);
+      setSavingNote(false);
+    }
+  };
 
   useEffect(() => {
     if (deal) {
@@ -116,6 +129,22 @@ export default function DealModal({ deal, onClose }) {
 
             <CPQBuilder dealId={deal.id} />
             
+            <div style={{ marginTop: '2rem', background: 'rgba(255,255,255,0.02)', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+              <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <FileText size={20} color="var(--accent-color)" /> Deal Notes & Tasks
+              </h3>
+              <textarea 
+                className="input-field" 
+                rows={4} 
+                placeholder="Log a call, meeting, or general note here..." 
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+                style={{ resize: 'vertical', marginBottom: '1rem' }}
+              />
+              <button className="btn-secondary" onClick={handleSaveNote} disabled={savingNote}>
+                {savingNote ? 'Saving...' : 'Save Note'}
+              </button>
+            </div>
           </div>
 
           {/* Side Pane */}

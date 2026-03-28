@@ -7,7 +7,7 @@ export default function Marketing() {
   const [copied, setCopied] = useState(false);
 
   // Hardcode base API for snippet (In production this relies on window.location or process.env)
-  const API_ENDPOINT = 'http://localhost:5000/api/marketing/submit';
+  const API_ENDPOINT = '/api/marketing/submit';
 
   const embedCode = `<form action="${API_ENDPOINT}" method="POST" style="display: flex; flex-direction: column; gap: 1rem; font-family: sans-serif; max-width: 400px; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
   <h3 style="margin: 0; font-size: 1.25rem; font-weight: 600; color: #1e293b;">${formName}</h3>

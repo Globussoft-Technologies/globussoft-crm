@@ -12,7 +12,7 @@ export default function Presence() {
     if (!user) return;
     
     // Connect to global WS multiplex
-    socket = io('http://localhost:5000');
+    socket = io('/');
     
     socket.emit('join_presence', { userId: user.id || Math.random(), name: user.name || 'Anonymous' });
 

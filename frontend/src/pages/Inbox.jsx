@@ -5,6 +5,7 @@ import { fetchApi } from '../utils/api';
 export default function Inbox() {
   const [emails, setEmails] = useState([]);
   const [calls, setCalls] = useState([]);
+  const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('emails');
   
@@ -15,10 +16,12 @@ export default function Inbox() {
   useEffect(() => {
     Promise.all([
       fetchApi('/api/communications/inbox'),
-      fetchApi('/api/communications/calls')
-    ]).then(([emailData, callData]) => {
+      fetchApi('/api/communications/calls'),
+      fetchApi('/api/contacts')
+    ]).then(([emailData, callData, contactData]) => {
       setEmails(Array.isArray(emailData) ? emailData : []);
       setCalls(Array.isArray(callData) ? callData : []);
+      setContacts(Array.isArray(contactData) ? contactData : []);
       setLoading(false);
     }).catch(err => {
       console.error(err);
@@ -137,7 +140,10 @@ export default function Inbox() {
             <form onSubmit={handleSendEmail} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>To:</label>
-                <input type="email" required className="input-field" value={composeData.to} onChange={e => setComposeData({...composeData, to: e.target.value})} placeholder="client@company.com" />
+                <input type="email" list="contacts-list" required className="input-field" value={composeData.to} onChange={e => setComposeData({...composeData, to: e.target.value})} placeholder="client@company.com" />
+                <datalist id="contacts-list">
+                  {contacts.map(c => <option key={c.id} value={c.email}>{c.name}</option>)}
+                </datalist>
               </div>
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Subject:</label>

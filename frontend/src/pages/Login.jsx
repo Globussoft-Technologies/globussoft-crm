@@ -1,5 +1,5 @@
 import React, { useState, useContext } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { AuthContext } from '../App';
 
 const Login = () => {
@@ -13,7 +13,7 @@ const Login = () => {
     e.preventDefault();
     try {
       // In development, we'll mock the backend call
-      const response = await fetch('http://localhost:5000/api/auth/login', {
+      const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -77,6 +77,12 @@ const Login = () => {
         <div style={{ marginTop: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
           <p>Demo Credentials:</p>
           <p>Email: admin | Password: admin</p>
+        </div>
+        <div style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.875rem' }}>
+          <span style={{ color: 'var(--text-secondary)' }}>Don't have an account? </span>
+          <Link to="/signup" style={{ color: 'var(--primary-color)', textDecoration: 'none', fontWeight: '500' }}>
+            Sign up
+          </Link>
         </div>
       </div>
     </div>

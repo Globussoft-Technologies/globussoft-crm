@@ -16,6 +16,7 @@ import CustomObjects from './pages/CustomObjects';
 import CustomObjectView from './pages/CustomObjectView';
 import Sequences from './pages/Sequences';
 import Login from './pages/Login';
+import Signup from './pages/Signup';
 import Placeholder from './pages/Placeholder';
 import Layout from './components/Layout';
 
@@ -38,6 +39,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={!token ? <Login /> : <Navigate to="/" />} />
+          <Route path="/signup" element={!token ? <Signup /> : <Navigate to="/" />} />
           <Route path="/portal" element={<Portal />} />
           <Route path="/" element={token ? <Layout /> : <Navigate to="/login" />}>
             <Route index element={<Dashboard />} />

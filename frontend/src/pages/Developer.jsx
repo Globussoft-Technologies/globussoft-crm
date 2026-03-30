@@ -82,7 +82,7 @@ export default function Developer() {
             <Key size={20} color="var(--accent-color)" /> API Credentials
           </h3>
           <form onSubmit={generateKey} style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
-            <input type="text" className="input-field" style={{ margin: 0, flex: 1 }} placeholder="Key Description (e.g. Zapier Integration)" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} />
+            <input type="text" className="input-field" style={{ margin: 0, flex: 1 }} placeholder="Key Name (e.g. Zapier Integration)" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} />
             <button className="btn-primary" type="submit">Generate Key</button>
           </form>
 

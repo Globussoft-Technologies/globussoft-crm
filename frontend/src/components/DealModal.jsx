@@ -76,7 +76,8 @@ export default function DealModal({ deal, onClose }) {
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(10px)', zIndex: 9999, display: 'flex', justifyContent: 'center', alignItems: 'center', animation: 'fadeIn 0.2s ease-out' }} onClick={onClose}>
       <div 
-        className="card" 
+        className="card modal"
+        role="dialog" 
         style={{ width: '800px', height: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)' }} 
         onClick={e => e.stopPropagation()}
       >

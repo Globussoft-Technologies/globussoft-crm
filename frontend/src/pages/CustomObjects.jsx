@@ -42,7 +42,7 @@ export default function CustomObjects() {
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Visually prototype custom SQL-level CRM schema objects traversing native UI wrappers.</p>
         </div>
         <button onClick={() => setShowAdd(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#ec4899', color: '#fff' }}>
-          <Plus size={18} /> Provision Database Entity
+          <Plus size={18} /> Create Entity
         </button>
       </header>
 
@@ -92,8 +92,8 @@ export default function CustomObjects() {
             </h3>
             <form onSubmit={handleAddEntity} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Entity Classification Descriptor (Plural Noun)</label>
-                <input type="text" required className="input-field" placeholder="e.g. Logistics Containers" value={newEntity.name} onChange={e=>setNewEntity({...newEntity, name: e.target.value})} style={{ background: '#0f172a' }} />
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Entity Name</label>
+                <input type="text" name="name" required className="input-field" placeholder="e.g. Properties" value={newEntity.name} onChange={e=>setNewEntity({...newEntity, name: e.target.value})} style={{ background: '#0f172a' }} />
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Internal Structural Remarks</label>
@@ -123,8 +123,8 @@ export default function CustomObjects() {
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem' }}>
-                <button type="button" onClick={()=>setShowAdd(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel Provisioning</button>
-                <button type="submit" className="btn-primary" style={{ background: '#ec4899', border: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><CheckCircle2 size={18}/> Commit Master Entity Schema</button>
+                <button type="button" onClick={()=>setShowAdd(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" className="btn-primary" style={{ background: '#ec4899', border: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><CheckCircle2 size={18}/> Create Schema</button>
               </div>
             </form>
           </div>

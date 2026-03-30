@@ -26,7 +26,7 @@ const Login = () => {
         setToken(data.token);
         navigate('/');
       } else {
-        setError(data.message || 'Login failed');
+        setError(data.error || 'Login failed');
       }
     } catch (err) {
       setError('Server error. Ensure backend is running.');
@@ -76,7 +76,7 @@ const Login = () => {
         </form>
         <div style={{ marginTop: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
           <p>Demo Credentials:</p>
-          <p>Email: admin | Password: admin</p>
+          <p>Email: admin@globussoft.com | Password: password123</p>
         </div>
         <div style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.875rem' }}>
           <span style={{ color: 'var(--text-secondary)' }}>Don't have an account? </span>

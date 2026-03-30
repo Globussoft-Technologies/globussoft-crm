@@ -1,4 +1,6 @@
 import paramiko
+import os
+import glob
 
 host = "163.227.174.141"
 username = "empcloud-development"
@@ -8,18 +10,26 @@ try:
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(host, username=username, password=ssh_pass)
-    
     sftp = ssh.open_sftp()
     
     print("Uploading backend/server.js ...")
     sftp.put(r"c:\Users\Admin\gbs-projects\gbs-crm\backend\server.js", "/home/empcloud-development/globussoft-crm/backend/server.js")
     
-    print("Uploading backend/routes/tasks.js ...")
-    sftp.put(r"c:\Users\Admin\gbs-projects\gbs-crm\backend\routes\tasks.js", "/home/empcloud-development/globussoft-crm/backend/routes/tasks.js")
+    # Upload all routes
+    routes_dir = r"c:\Users\Admin\gbs-projects\gbs-crm\backend\routes"
+    for file in glob.glob(os.path.join(routes_dir, "*.js")):
+        filename = os.path.basename(file)
+        print(f"Uploading backend/routes/{filename} ...")
+        sftp.put(file, f"/home/empcloud-development/globussoft-crm/backend/routes/{filename}")
 
-    print("Uploading backend/routes/contacts.js ...")
-    sftp.put(r"c:\Users\Admin\gbs-projects\gbs-crm\backend\routes\contacts.js", "/home/empcloud-development/globussoft-crm/backend/routes/contacts.js")
-    
+    # Upload middleware just in case
+    middleware_dir = r"c:\Users\Admin\gbs-projects\gbs-crm\backend\middleware"
+    if os.path.exists(middleware_dir):
+        for file in glob.glob(os.path.join(middleware_dir, "*.js")):
+            filename = os.path.basename(file)
+            print(f"Uploading backend/middleware/{filename} ...")
+            sftp.put(file, f"/home/empcloud-development/globussoft-crm/backend/middleware/{filename}")
+
     sftp.close()
 
     print("Restarting the backend node process via PM2...")

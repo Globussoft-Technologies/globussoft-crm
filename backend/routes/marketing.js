@@ -1,8 +1,33 @@
 const express = require("express");
 const { PrismaClient } = require("@prisma/client");
+const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Get all email campaigns
+router.get("/campaigns", verifyToken, async (req, res) => {
+  try {
+    const campaigns = await prisma.campaign.findMany({ orderBy: { createdAt: 'desc' } });
+    res.json(campaigns);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch campaigns." });
+  }
+});
+
+// Create a new campaign
+router.post("/campaigns", verifyToken, async (req, res) => {
+  try {
+    const { name, budget } = req.body;
+    const campaign = await prisma.campaign.create({
+      data: { name, budget: parseFloat(budget || 0) }
+    });
+    res.status(201).json(campaign);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to create campaign." });
+  }
+});
+
 
 // Public endpoint for embedded forms to POST to (CORS must be enabled in server.js)
 router.post("/submit", async (req, res) => {

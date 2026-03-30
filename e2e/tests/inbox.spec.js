@@ -8,7 +8,7 @@ const { test, expect } = require('@playwright/test');
 test.describe('Inbox', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/inbox');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('renders the Inbox page', async ({ page }) => {
@@ -33,7 +33,7 @@ test.describe('Inbox', () => {
     page.on('pageerror', (err) => errors.push(err.message));
 
     await page.goto('/inbox');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
 
     expect(errors).toHaveLength(0);

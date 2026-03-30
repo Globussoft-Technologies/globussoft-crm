@@ -8,7 +8,7 @@ const { test, expect } = require('@playwright/test');
 test.describe('App Builder — Custom Objects', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/objects');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('renders the App Builder page', async ({ page }) => {
@@ -24,7 +24,7 @@ test.describe('App Builder — Custom Objects', () => {
     page.on('pageerror', (err) => errors.push(err.message));
 
     await page.goto('/objects');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
 
     expect(errors).toHaveLength(0);
@@ -123,7 +123,7 @@ test.describe('App Builder — Custom Objects', () => {
 
     if (linkCount > 0) {
       await entityLink.click();
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       await expect(page).toHaveURL(/\/objects\/.+/);
       await page.screenshot({ path: 'playwright-results/custom-objects-entity-view.png' });

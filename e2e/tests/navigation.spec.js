@@ -50,7 +50,7 @@ const ALL_SIDEBAR_LINKS = [
 test.describe('Navigation — Sidebar presence', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('sidebar is visible on all authenticated pages', async ({ page }) => {
@@ -75,7 +75,7 @@ test.describe('Navigation — Sidebar link routing', () => {
   for (const route of SIDEBAR_ROUTES) {
     test(`sidebar link "${route.label}" navigates to ${route.path}`, async ({ page }) => {
       await page.goto('/');
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       // Click the sidebar link
       const link = page
@@ -85,7 +85,7 @@ test.describe('Navigation — Sidebar link routing', () => {
       await expect(link).toBeVisible({ timeout: 8000 });
       await link.click();
 
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       // URL should match the expected path
       if (route.path === '/') {
@@ -109,7 +109,7 @@ test.describe('Navigation — Direct route access', () => {
       page.on('pageerror', (err) => errors.push(err.message));
 
       await page.goto(route.path);
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       // Should not have navigated away (no 404 redirect to login)
       if (route.path !== '/') {
@@ -126,7 +126,7 @@ test.describe('Navigation — Placeholder pages', () => {
   for (const placeholder of PLACEHOLDER_ROUTES) {
     test(`${placeholder.path} shows "In Development" placeholder state`, async ({ page }) => {
       await page.goto(placeholder.path);
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       // Placeholder component shows module name + "under active development"
       await expect(
@@ -141,7 +141,7 @@ test.describe('Navigation — Placeholder pages', () => {
 
   test('placeholder page renders construction icon', async ({ page }) => {
     await page.goto('/expenses');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Lucide Construction icon renders as SVG
     const constructionIcon = page.locator('svg').first();
@@ -154,23 +154,23 @@ test.describe('Navigation — Placeholder pages', () => {
 test.describe('Navigation — Browser back/forward', () => {
   test('browser back button works after navigating between pages', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     await page.goto('/contacts');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expect(page).toHaveURL(/\/contacts/);
 
     await page.goBack();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expect(page).toHaveURL('/');
   });
 
   test('browser forward button works after going back', async ({ page }) => {
     await page.goto('/contacts');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     await page.goto('/pipeline');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     await page.goBack();
     await expect(page).toHaveURL(/\/contacts/);

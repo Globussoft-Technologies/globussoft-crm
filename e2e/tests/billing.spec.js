@@ -8,7 +8,7 @@ const { test, expect } = require('@playwright/test');
 test.describe('Billing — Invoice management', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/billing');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('renders the Billing page', async ({ page }) => {
@@ -24,7 +24,7 @@ test.describe('Billing — Invoice management', () => {
     page.on('pageerror', (err) => errors.push(err.message));
 
     await page.goto('/billing');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
 
     expect(errors).toHaveLength(0);

@@ -10,7 +10,7 @@ const PIPELINE_STAGES = ['New Lead', 'Contacted', 'Proposal Sent', 'Closed Won']
 test.describe('Pipeline — Kanban board', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/pipeline');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('renders the Pipeline page', async ({ page }) => {
@@ -133,7 +133,7 @@ test.describe('Pipeline — Kanban board', () => {
     });
 
     await page.goto('/pipeline');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     const criticalErrors = consoleErrors.filter(
       (err) =>

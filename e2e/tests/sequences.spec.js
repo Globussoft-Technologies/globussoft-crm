@@ -8,7 +8,7 @@ const { test, expect } = require('@playwright/test');
 test.describe('Sequences — Workflow Automation (ReactFlow)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/sequences');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('renders the Sequences page', async ({ page }) => {
@@ -24,7 +24,7 @@ test.describe('Sequences — Workflow Automation (ReactFlow)', () => {
     page.on('pageerror', (err) => errors.push(err.message));
 
     await page.goto('/sequences');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(3000);
 
     expect(errors).toHaveLength(0);

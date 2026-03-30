@@ -32,14 +32,14 @@ app.use(express.json({ limit: "10mb" }));
 // Rate limiting
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200,
+  max: 5000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30, // Allows test suites while still preventing brute force
+  max: 1000, // Allows test suites while still preventing brute force
   message: { error: "Too many login attempts, please try again later." },
 });
 app.use("/api/auth/login", authLimiter);

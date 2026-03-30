@@ -18,7 +18,7 @@ const VALID_CREDENTIALS = {
 test.describe('Authentication — Login flow', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('renders login page with required elements', async ({ page }) => {
@@ -100,7 +100,7 @@ test.describe('Authentication — Login flow', () => {
 
     // Reload the page
     await page.reload();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Should still be on dashboard, not redirected to login
     await expect(page).not.toHaveURL(/\/login/);
@@ -110,7 +110,7 @@ test.describe('Authentication — Login flow', () => {
   test('unauthenticated user is redirected to login when accessing protected route', async ({ page }) => {
     // Attempt to navigate to dashboard without auth
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Should be redirected to /login
     await expect(page).toHaveURL(/\/login/, { timeout: 8000 });
@@ -131,7 +131,7 @@ test.describe('Authentication — Logout flow', () => {
     // Simulate logout by clearing the token from localStorage
     await page.evaluate(() => localStorage.removeItem('token'));
     await page.reload();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Should redirect to /login
     await expect(page).toHaveURL(/\/login/, { timeout: 8000 });
@@ -141,7 +141,7 @@ test.describe('Authentication — Logout flow', () => {
 test.describe('Authentication — Signup page', () => {
   test('signup page renders correctly', async ({ page }) => {
     await page.goto('/signup');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     await expect(page).toHaveURL(/\/signup/);
     // Page should contain some form for registration
@@ -160,7 +160,7 @@ test.describe('Authentication — Signup page', () => {
 
     // Now navigate to /signup — should redirect to dashboard
     await page.goto('/signup');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expect(page).not.toHaveURL(/\/signup/);
     await expect(page).toHaveURL('/');
   });

@@ -11,6 +11,10 @@ const Login = () => {
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    if (!email || !password) {
+      setError('Please fill out all required fields');
+      return;
+    }
     try {
       // In development, we'll mock the backend call
       const response = await fetch('/api/auth/login', {
@@ -56,7 +60,6 @@ const Login = () => {
               placeholder="admin@globussoft.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              required
             />
           </div>
           <div style={{ marginBottom: '1.5rem' }}>
@@ -67,7 +70,6 @@ const Login = () => {
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              required
             />
           </div>
           <button type="submit" className="btn-primary" style={{ width: '100%' }}>

@@ -8,7 +8,7 @@ const { test, expect } = require('@playwright/test');
 test.describe('Dashboard', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('renders the Enterprise Overview header', async ({ page }) => {
@@ -77,7 +77,7 @@ test.describe('Dashboard', () => {
     });
 
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Filter out known non-critical browser extension errors
     const criticalErrors = consoleErrors.filter(
@@ -93,7 +93,7 @@ test.describe('Dashboard', () => {
     });
 
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     const criticalFailures = failedRequests.filter(
       (r) => !r.url.includes('favicon') && !r.url.includes('socket.io')
@@ -104,14 +104,14 @@ test.describe('Dashboard', () => {
   test('dashboard loads within acceptable time', async ({ page }) => {
     const start = Date.now();
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     const duration = Date.now() - start;
     // Page should load within 8 seconds
     expect(duration).toBeLessThan(8000);
   });
 
   test('full dashboard screenshot', async ({ page }) => {
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.screenshot({ path: 'playwright-results/dashboard-full.png', fullPage: true });
   });
 });

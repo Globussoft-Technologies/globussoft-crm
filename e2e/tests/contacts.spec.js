@@ -15,7 +15,7 @@ const TEST_CONTACT = {
 test.describe('Contacts — List view', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/contacts');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('renders the Contacts page header', async ({ page }) => {
@@ -78,7 +78,7 @@ test.describe('Contacts — List view', () => {
 test.describe('Contacts — Create contact', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/contacts');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('Add Contact button opens the create modal', async ({ page }) => {
@@ -139,7 +139,7 @@ test.describe('Contacts — Create contact', () => {
 test.describe('Contacts — Delete contact', () => {
   test('delete button triggers confirmation and removes contact', async ({ page }) => {
     await page.goto('/contacts');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1500);
 
     // Accept the confirmation dialog automatically
@@ -164,7 +164,7 @@ test.describe('Contacts — Delete contact', () => {
 test.describe('Contacts — Contact detail page', () => {
   test('clicking a contact navigates to detail page', async ({ page }) => {
     await page.goto('/contacts');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1500);
 
     // Find the first contact link
@@ -173,7 +173,7 @@ test.describe('Contacts — Contact detail page', () => {
 
     if (linkCount > 0) {
       await contactLink.click();
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       // URL should be /contacts/:id
       await expect(page).toHaveURL(/\/contacts\/\w+/);
@@ -186,7 +186,7 @@ test.describe('Contacts — Contact detail page', () => {
 
   test('contact detail page renders without errors', async ({ page }) => {
     await page.goto('/contacts');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1500);
 
     const contactLink = page.locator('a[href^="/contacts/"]').first();
@@ -195,7 +195,7 @@ test.describe('Contacts — Contact detail page', () => {
     if (linkCount > 0) {
       const href = await contactLink.getAttribute('href');
       await page.goto(href);
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       // Should not show a 404 or error state
       const errorText = page.locator('text=404, text=Not Found, text=Error');

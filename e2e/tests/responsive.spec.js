@@ -27,7 +27,7 @@ for (const viewport of VIEWPORTS) {
     for (const page_info of KEY_PAGES) {
       test(`${page_info.label} page renders at ${viewport.name} viewport`, async ({ page }) => {
         await page.goto(page_info.path);
-        await page.waitForLoadState('networkidle');
+        await page.waitForLoadState('domcontentloaded');
 
         // Page should not have a horizontal scrollbar beyond a small tolerance
         const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
@@ -53,7 +53,7 @@ for (const viewport of VIEWPORTS) {
       await page.evaluate(() => localStorage.clear());
 
       await page.goto('/login');
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       // Login form should be visible and usable
       await expect(page.locator('input[type="email"]')).toBeVisible({ timeout: 10000 });
@@ -71,7 +71,7 @@ test.describe('Responsive — Sidebar behavior', () => {
   test('sidebar is visible on desktop viewport', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     const sidebar = page.locator('aside').first();
     await expect(sidebar).toBeVisible({ timeout: 10000 });
@@ -82,7 +82,7 @@ test.describe('Responsive — Sidebar behavior', () => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto('/');
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       // Main content area should be visible
       const main = page.locator('main').first();
@@ -103,7 +103,7 @@ test.describe('Responsive — Touch interactions (mobile)', () => {
 
   test('buttons are large enough for touch targets on mobile', async ({ page }) => {
     await page.goto('/contacts');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     const addBtn = page.locator('button', { hasText: 'Add Contact' }).first();
     const btnCount = await addBtn.count();
@@ -123,7 +123,7 @@ test.describe('Responsive — Touch interactions (mobile)', () => {
     await page.evaluate(() => localStorage.clear());
 
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     const emailInput = page.locator('input[type="email"]');
     const passwordInput = page.locator('input[type="password"]');

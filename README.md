@@ -31,7 +31,7 @@ The CRM is divided into high-performance web modules. Below is a comprehensive l
 
 - **Frontend Edge:** React.js 18, React Router v6, Vite build toolchain, Lucide Web Icons, Vanilla CSS (Glassmorphism UI Engine).
 - **Backend Core:** Node.js, Express.js REST API Architecture, Swagger UI.
-- **Database & State:** SQLite, Prisma ORM.
+- **Database & State:** MySQL, Prisma ORM.
 - **Real-Time Delivery:** Socket.io, Node-Cron (Scheduling).
 - **Production Architecture:** PM2 Runtime, Nginx Reverse Proxy, Certbot SSL.
 

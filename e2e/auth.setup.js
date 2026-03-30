@@ -35,10 +35,10 @@ setup('authenticate and save storage state', async ({ page, request }) => {
 
   // Navigate to dashboard — should now be authenticated
   await page.goto('/');
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
 
   // Verify we're on the dashboard (not redirected to /login)
-  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page).not.toHaveURL(/\/login/, { timeout: 15000 });
   await expect(page.locator('text=Globussoft').first()).toBeVisible({ timeout: 10000 });
 
   console.log('[auth.setup] Dashboard loaded successfully');

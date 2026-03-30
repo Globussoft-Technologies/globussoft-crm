@@ -13,7 +13,7 @@ Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM 
 | Layer | Technologies |
 |-------|-------------|
 | Frontend | React 18, Vite, React Router v6, Lucide Icons, Recharts, ReactFlow, Socket.io-client, Vanilla CSS (glassmorphism) |
-| Backend | Node.js, Express.js, Prisma ORM, SQLite, Socket.io, node-cron, Swagger UI |
+| Backend | Node.js, Express.js, Prisma ORM, MySQL, Socket.io, node-cron, Swagger UI |
 | Auth | JWT (bcryptjs), RBAC: ADMIN / MANAGER / USER |
 | Production | PM2, Nginx reverse proxy, Certbot SSL |
 | Testing | Playwright E2E (e2e/ directory) |
@@ -24,7 +24,7 @@ Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM 
 
 - **server.js** — Express app, Socket.io, CORS, Swagger at `/api-docs`, route mounting, weekly cron
 - **middleware/auth.js** — `verifyToken` + `verifyRole` JWT middleware
-- **prisma/schema.prisma** — SQLite via Prisma ORM
+- **prisma/schema.prisma** — MySQL via Prisma ORM
 - **routes/** — 20 route files: auth, contacts, deals, calendar, ai_scoring, workflows, communications, deals_documents, marketing, reports, developer, billing, search, ai, tickets, integrations, custom_objects, sequences, cpq, email
 - All API endpoints prefixed with `/api/`
 
@@ -84,7 +84,7 @@ expenses, contracts, estimates, invoices, tickets, tasks, projects, clients, lea
 2. **Auth bypass** — admin/admin login in routes/auth.js for demo/testing (intentional)
 3. **CORS wide open** — `cors({ origin: "*" })` in server.js
 4. **No rate limiting** on any endpoints
-5. **SQLite .db committed** — prisma/globussoft.db is in the repo
+5. **MySQL production DB** — remote MySQL on 163.227.174.141:3306, database `gbscrm`
 6. **Deployment scripts with credentials** — removed from git tracking, added to .gitignore
 
 ## E2E Testing

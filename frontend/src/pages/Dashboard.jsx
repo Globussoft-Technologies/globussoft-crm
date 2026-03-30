@@ -16,6 +16,13 @@ export default function Dashboard() {
 
   // Compute stats
   const totalRevenue = deals.filter(d => d.stage === 'won').reduce((sum, d) => sum + (d.amount || 0), 0);
+  
+  const calculateExpectedRevenue = (deals) => {
+    const probs = { lead: 0.1, contacted: 0.3, proposal: 0.7, won: 1.0 };
+    return deals.reduce((sum, d) => sum + ((d.amount || 0) * (probs[d.stage] || 0)), 0);
+  };
+  const expectedRevenue = calculateExpectedRevenue(deals);
+
   const activeLeads = contacts.length;
   const conversionRate = deals.length > 0 ? Math.round((deals.filter(d => d.stage === 'won').length / deals.length) * 100) : 0;
   
@@ -29,8 +36,9 @@ export default function Dashboard() {
 
   const stats = [
     { label: 'Closed Revenue', value: `$${totalRevenue.toLocaleString()}`, increase: '+14%', icon: <DollarSign size={24} />, color: 'var(--accent-color)' },
-    { label: 'Total Contacts', value: activeLeads.toString(), increase: '+5%', icon: <Users size={24} />, color: 'var(--success-color)' },
-    { label: 'Conversion Rate', value: `${conversionRate}%`, increase: '+1.2%', icon: <Activity size={24} />, color: 'var(--warning-color)' },
+    { label: 'Expected Revenue', value: `$${expectedRevenue.toLocaleString()}`, increase: '+8%', icon: <Activity size={24} />, color: 'var(--success-color)' },
+    { label: 'Total Contacts', value: activeLeads.toString(), increase: '+5%', icon: <Users size={24} />, color: '#3b82f6' },
+    { label: 'Conversion Rate', value: `${conversionRate}%`, increase: '+1.2%', icon: <TrendingUp size={24} />, color: 'var(--warning-color)' },
     { label: 'Total Deals', value: deals.length.toString(), increase: '+22%', icon: <Calendar size={24} />, color: '#a855f7' }
   ];
 

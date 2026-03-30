@@ -8,12 +8,24 @@ export default function ContactsDetail() {
   const navigate = useNavigate();
   const [contact, setContact] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [newActivity, setNewActivity] = useState({ type: 'Note', description: '' });
 
-  useEffect(() => {
+  const loadData = () => {
     fetchApi(`/api/contacts/${id}`)
       .then(data => { setContact(data); setLoading(false); })
       .catch(err => { console.error(err); setLoading(false); });
-  }, [id]);
+  };
+
+  useEffect(() => { loadData(); }, [id]);
+
+  const postActivity = async (e) => {
+    e.preventDefault();
+    try {
+      await fetchApi(`/api/contacts/${id}/activities`, { method: 'POST', body: JSON.stringify(newActivity) });
+      setNewActivity({ type: 'Note', description: '' });
+      loadData();
+    } catch (err) { alert('Failed to log activity'); }
+  };
 
   if (loading) {
     return <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading contact record...</div>;
@@ -99,8 +111,39 @@ export default function ContactsDetail() {
             <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <FileText size={20} color="var(--accent-color)" /> CRM Interaction History
             </h3>
-            <div style={{ padding: '2rem', border: '1px dashed var(--border-color)', borderRadius: '12px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-              No recent interactions logged for this contact. Link emails in the Inbox module or associate deals in the Pipeline to populate this feed.
+            
+            <form onSubmit={postActivity} className="card" style={{ padding: '1.5rem', marginBottom: '2rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <select className="input-field" value={newActivity.type} onChange={e => setNewActivity({...newActivity, type: e.target.value})} style={{ width: '150px' }}>
+                  <option>Note</option>
+                  <option>Call</option>
+                  <option>Email</option>
+                  <option>Meeting</option>
+                </select>
+                <input type="text" className="input-field" placeholder="Describe the interaction..." required value={newActivity.description} onChange={e => setNewActivity({...newActivity, description: e.target.value})} style={{ flex: 1 }} />
+                <button type="submit" className="btn-primary" style={{ padding: '0 1.5rem' }}>Log</button>
+              </div>
+            </form>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {(!contact.activities || contact.activities.length === 0) ? (
+                <div style={{ padding: '2rem', border: '1px dashed var(--border-color)', borderRadius: '12px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  No recent interactions logged for this contact.
+                </div>
+              ) : contact.activities.map(act => (
+                <div key={act.id} style={{ display: 'flex', gap: '1.5rem', padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', borderLeft: '4px solid var(--accent-color)' }}>
+                  <div style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '50%', height: '40px', width: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {act.type === 'Email' ? <Mail size={18} color="var(--success-color)"/> : act.type === 'Call' ? <Phone size={18} color="var(--warning-color)"/> : <FileText size={18} color="var(--accent-color)" />}
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.25rem' }}>
+                      <span style={{ fontWeight: 'bold' }}>{act.type}</span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(act.createdAt).toLocaleString()}</span>
+                    </div>
+                    <p style={{ color: 'var(--text-primary)' }}>{act.description}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 

@@ -70,6 +70,7 @@ const Contacts = () => {
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Company</th>
+              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>AI Score</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Status</th>
               <th style={{ padding: '1rem', textAlign: 'right' }}>Actions</th>
             </tr>
@@ -89,6 +90,18 @@ const Contacts = () => {
                 </td>
                 <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.email}</td>
                 <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.company}</td>
+                <td style={{ padding: '1rem' }}>
+                  <span style={{ 
+                    padding: '0.25rem 0.75rem', 
+                    borderRadius: '999px', 
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold',
+                    backgroundColor: contact.aiScore > 75 ? 'rgba(16, 185, 129, 0.1)' : contact.aiScore > 40 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                    color: contact.aiScore > 75 ? 'var(--success-color)' : contact.aiScore > 40 ? 'var(--warning-color)' : '#ef4444'
+                  }}>
+                    {contact.aiScore}/100
+                  </span>
+                </td>
                 <td style={{ padding: '1rem' }}>
                   <span style={{ 
                     padding: '0.25rem 0.75rem', 

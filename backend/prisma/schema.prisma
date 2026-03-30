@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./globussoft.db"
+  provider = "mysql"
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -18,6 +18,7 @@ model User {
   tickets   Ticket[]  @relation("AssignedTickets")
   apiKeys   ApiKey[]
   webhooks  Webhook[]
+  tasks     Task[]
 }
 
 model Contact {
@@ -36,6 +37,7 @@ model Contact {
   callLogs    CallLog[]
   invoices    Invoice[]
   sequenceEnrollments SequenceEnrollment[]
+  tasks       Task[]
 }
 
 model Activity {
@@ -176,7 +178,7 @@ model Integration {
   provider  String   @unique // slack, google, stripe, mailchimp
   token     String?
   isActive  Boolean  @default(false)
-  settings  String?  // JSON stringified configuration
+  settings  String?  @db.Text // JSON stringified configuration
   updatedAt DateTime @updatedAt
 }
 
@@ -222,8 +224,8 @@ model Sequence {
   id          Int      @id @default(autoincrement())
   name        String
   isActive    Boolean  @default(false)
-  nodes       String?  // JSON string
-  edges       String?  // JSON string
+  nodes       String?  @db.Text // JSON string
+  edges       String?  @db.Text // JSON string
   enrollments SequenceEnrollment[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -275,4 +277,19 @@ model QuoteLineItem {
   product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   productName String   
   isRecurring Boolean  @default(true)
+}
+
+model Task {
+  id        Int      @id @default(autoincrement())
+  title     String
+  dueDate   DateTime?
+  status    String   @default("Pending") // Pending, Completed
+  notes     String?
+  createdAt DateTime @default(now())
+
+  contactId Int?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

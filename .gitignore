@@ -1,8 +1,26 @@
 node_modules
 .env
+.env.*
 dev.db
 dev.db-journal
 dist
 build
 npm-debug.log*
 .DS_Store
+
+# Deployment scripts containing server credentials — NEVER commit
+deploy.py
+deploy_frontend.sh
+setup.sh
+start.sh
+fix-nginx.sh
+fix-port.sh
+fix_ssl.sh
+fix_500_403.sh
+fix_admin.js
+fix_via_api.py
+recover.sh
+update-env.sh
+diagnose.sh
+logs.sh
+create_test_users.mjs

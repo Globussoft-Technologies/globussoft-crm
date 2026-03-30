@@ -1,0 +1,24 @@
+{
+  "name": "globussoft-crm-e2e",
+  "version": "1.0.0",
+  "description": "E2E test suite for Globussoft CRM",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:trace": "playwright test --trace on",
+    "test:report": "playwright show-report",
+    "test:auth": "playwright test tests/auth.spec.js",
+    "test:dashboard": "playwright test tests/dashboard.spec.js",
+    "test:contacts": "playwright test tests/contacts.spec.js",
+    "test:pipeline": "playwright test tests/pipeline.spec.js",
+    "test:navigation": "playwright test tests/navigation.spec.js",
+    "test:api": "playwright test tests/api-health.spec.js",
+    "test:ci": "playwright test --reporter=html,junit",
+    "setup:auth": "playwright test auth.setup.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

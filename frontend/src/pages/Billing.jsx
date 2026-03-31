@@ -144,7 +144,7 @@ export default function Billing() {
                         <CheckCircle2 size={16} /> Mark Paid
                       </button>
                     )}
-                    <button onClick={() => deleteInvoice(inv.id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', textAlign: 'right', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem' }} onMouseOver={(e) => e.target.style.color = 'var(--danger-color)'} onMouseOut={(e) => e.target.style.color = 'var(--text-secondary)'}>
+                    <button onClick={() => deleteInvoice(inv.id)} style={{ background: 'transparent', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--text-secondary)', cursor: 'pointer', textAlign: 'right', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem', padding: '0.4rem 0.75rem', borderRadius: '6px', position: 'relative', zIndex: 10, pointerEvents: 'all' }} onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'} onMouseOut={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}>
                       <Trash2 size={16} /> Void
                     </button>
                   </div>

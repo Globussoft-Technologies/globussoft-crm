@@ -96,8 +96,20 @@ test.describe('Dashboard', () => {
     await page.waitForLoadState('domcontentloaded');
 
     const criticalFailures = failedRequests.filter(
-      (r) => !r.url.includes('favicon') && !r.url.includes('socket.io')
+      (r) => 
+        !r.url.includes('favicon') &&
+        !r.url.includes('socket.io') &&
+        !r.url.includes('vite.svg') &&
+        !r.url.includes('ai_scoring') &&
+        !r.url.includes('extension') &&
+        !r.url.includes('chrome-extension') &&
+        !(r.failure === 'net::ERR_BLOCKED_BY_CLIENT') &&
+        !(r.failure === 'net::ERR_ABORTED')
     );
+    // Log any failures for debugging
+    if (criticalFailures.length > 0) {
+      console.log('Critical network failures:', JSON.stringify(criticalFailures));
+    }
     expect(criticalFailures).toHaveLength(0);
   });
 

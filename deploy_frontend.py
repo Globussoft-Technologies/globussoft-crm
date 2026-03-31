@@ -5,7 +5,12 @@ host = "163.227.174.141"
 username = "empcloud-development"
 ssh_pass = "rSPa3izkYPtAjCFLa5cqPDpsFvV071KN9u"
 
+import subprocess
+
 try:
+    print("Zipping frontend/dist ...")
+    subprocess.run(["powershell", "-Command", "Compress-Archive -Path frontend\\dist\\* -DestinationPath frontend\\dist.zip -Force"], check=True)
+    
     print("Connecting to server...")
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())

@@ -58,7 +58,7 @@ export default function Sequences() {
            <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Visual Drip Campaign array mapping utilizing CRON step execution loops.</p>
          </div>
          <button onClick={saveSequence} disabled={saving} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#ec4899', border: 'none' }}>
-           <Save size={18} /> {saving ? 'Compiling Graphs...' : 'Deploy Drip Sequence Layer'}
+           <Save size={18} /> {saving ? 'Compiling Graphs...' : 'Create Sequence'}
          </button>
       </header>
 
@@ -78,7 +78,7 @@ export default function Sequences() {
         </div>
 
         {/* Existing Sequences Sidebar */}
-        <div style={{ flex: 1, borderLeft: '1px solid rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.4)', padding: '1.5rem', overflowY: 'auto' }}>
+        <div className="sequence-list card" style={{ flex: 1, borderLeft: '1px solid rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.4)', padding: '1.5rem', overflowY: 'auto' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#ec4899' }}><Network size={20} /> Mounted Matrices</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {sequences.map(seq => (

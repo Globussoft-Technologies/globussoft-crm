@@ -36,8 +36,15 @@ router.get("/", async (req, res) => {
 // POST new deal + Emit Socket event
 router.post("/", async (req, res) => {
   try {
+    const { title, amount, probability, stage } = req.body;
     const deal = await prisma.deal.create({
-      data: { ...req.body, ownerId: req.user.userId }
+      data: { 
+        title, 
+        amount: parseFloat(amount) || 0,
+        probability: parseInt(probability) || 50,
+        stage: stage || 'lead',
+        ownerId: req.user.userId 
+      }
     });
     
     // Broadcast real-time update to all connected clients

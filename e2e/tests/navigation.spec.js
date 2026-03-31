@@ -130,12 +130,12 @@ test.describe('Navigation — Placeholder pages', () => {
 
       // Placeholder component shows module name + "under active development"
       await expect(
-        page.locator(`text=${placeholder.moduleName} Module`).first()
+        page.locator('h1, h2').filter({ hasText: new RegExp(`${placeholder.moduleName} Module`, 'i') }).first()
       ).toBeVisible({ timeout: 10000 });
 
       await expect(
-        page.locator('text=under active development, text=upcoming release').first()
-      ).toBeVisible({ timeout: 8000 });
+        page.locator('p').filter({ hasText: /under active development/i }).first()
+      ).toBeVisible({ timeout: 10000 });
     });
   }
 

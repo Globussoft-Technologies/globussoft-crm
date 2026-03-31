@@ -2,7 +2,7 @@ import React, { useState, createContext, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import Contacts from './pages/Contacts';
-import ContactsDetail from './pages/ContactsDetail';
+import ContactDetail from './pages/ContactDetail';
 import Pipeline from './pages/Pipeline';
 import Workflows from './pages/Workflows';
 import Inbox from './pages/Inbox';
@@ -18,7 +18,6 @@ import CustomObjectView from './pages/CustomObjectView';
 import Sequences from './pages/Sequences';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
-import Tasks from './pages/Tasks';
 import Placeholder from './pages/Placeholder';
 import Layout from './components/Layout';
 
@@ -46,7 +45,7 @@ export default function App() {
           <Route path="/" element={token ? <Layout /> : <Navigate to="/login" />}>
             <Route index element={<Dashboard />} />
             <Route path="contacts" element={<Contacts />} />
-            <Route path="contacts/:id" element={<ContactsDetail />} />
+            <Route path="contacts/:id" element={<ContactDetail />} />
             <Route path="pipeline" element={<Pipeline />} />
             <Route path="inbox" element={<Inbox />} />
             <Route path="marketing" element={<Marketing />} />
@@ -65,7 +64,7 @@ export default function App() {
             <Route path="estimates" element={<Placeholder />} />
             <Route path="invoices" element={<Placeholder />} />
             <Route path="tickets" element={<Placeholder />} />
-            <Route path="tasks" element={<Tasks />} />
+            <Route path="tasks" element={<Placeholder />} />
             <Route path="projects" element={<Placeholder />} />
             <Route path="clients" element={<Placeholder />} />
             <Route path="leads" element={<Placeholder />} />

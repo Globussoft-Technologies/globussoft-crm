@@ -62,6 +62,11 @@ const Contacts = () => {
               style={{ paddingLeft: '2.5rem', backgroundColor: 'var(--surface-hover)' }}
             />
           </div>
+          <select className="input-field" style={{ width: '150px' }}>
+            <option value="All">All Statuses</option>
+            <option value="Lead">Lead</option>
+            <option value="Customer">Customer</option>
+          </select>
         </div>
         
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
@@ -82,7 +87,7 @@ const Contacts = () => {
               <tr key={contact.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                 <td style={{ padding: '1rem' }}>
                   <div style={{ fontWeight: '500' }}>
-                    <Link to={`/contacts/${contact.id}`} style={{ color: 'var(--text-primary)', textDecoration: 'none' }} className="hover-underline">
+                    <Link to={`/contacts/${contact.id}`} style={{ color: 'var(--text-primary)', textDecoration: 'none', display: 'block', pointerEvents: 'all', position: 'relative', zIndex: 10 }} className="hover-underline">
                       {contact.name}
                     </Link>
                   </div>

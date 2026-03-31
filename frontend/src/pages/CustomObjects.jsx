@@ -5,7 +5,7 @@ import { fetchApi } from '../utils/api';
 export default function CustomObjects() {
   const [entities, setEntities] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [newEntity, setNewEntity] = useState({ name: '', description: '', fields: [{ name: '', type: 'Text' }] });
+  const [newEntity, setNewEntity] = useState({ name: '', description: '', fields: [{ name: 'DefaultProperty', type: 'Text' }] });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => { loadEntities(); }, []);
@@ -27,18 +27,18 @@ export default function CustomObjects() {
         body: JSON.stringify(newEntity)
       });
       setShowAdd(false);
-      setNewEntity({ name: '', description: '', fields: [{ name: '', type: 'Text' }] });
+      setNewEntity({ name: '', description: '', fields: [{ name: 'DefaultProperty', type: 'Text' }] });
       loadEntities();
     } catch(err) { alert("Failed to generate EAV dynamic database boundary constraints"); }
   };
 
-  const addField = () => setNewEntity({ ...newEntity, fields: [...newEntity.fields, { name: '', type: 'Text' }] });
+  const addField = () => setNewEntity({ ...newEntity, fields: [...newEntity.fields, { name: 'NewProperty', type: 'Text' }] });
 
   return (
     <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Dynamic Database Modeler</h1>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Custom Objects Builder</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Visually prototype custom SQL-level CRM schema objects traversing native UI wrappers.</p>
         </div>
         <button onClick={() => setShowAdd(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#ec4899', color: '#fff' }}>
@@ -109,7 +109,7 @@ export default function CustomObjects() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   {newEntity.fields.map((f, i) => (
                     <div key={i} style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                      <input type="text" required className="input-field" placeholder="Property Alias (e.g. Volume)" value={f.name} onChange={e=>{const nf=[...newEntity.fields]; nf[i].name=e.target.value; setNewEntity({...newEntity, fields: nf})}} style={{ flex: 2, background: 'rgba(0,0,0,0.5)', borderColor: 'rgba(255,255,255,0.05)' }} />
+                      <input type="text" className="input-field" placeholder="Property Alias (e.g. Volume)" value={f.name} onChange={e=>{const nf=[...newEntity.fields]; nf[i].name=e.target.value; setNewEntity({...newEntity, fields: nf})}} style={{ flex: 2, background: 'rgba(0,0,0,0.5)', borderColor: 'rgba(255,255,255,0.05)' }} />
                       <select className="input-field" value={f.type} onChange={e=>{const nf=[...newEntity.fields]; nf[i].type=e.target.value; setNewEntity({...newEntity, fields: nf})}} style={{ flex: 1, background: 'rgba(0,0,0,0.5)', color: '#ec4899', fontWeight: '600', borderColor: 'rgba(255,255,255,0.05)' }}>
                         <option style={{background:'#0f172a'}}>Text</option>
                         <option style={{background:'#0f172a'}}>Number</option>

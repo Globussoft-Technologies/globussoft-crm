@@ -62,10 +62,27 @@ const Pipeline = () => {
 
   const handleAddDeal = async (e) => {
     e.preventDefault();
-    await fetchApi('/api/deals', {
-      method: 'POST',
-      body: JSON.stringify({...newDeal, amount: parseFloat(newDeal.amount), probability: parseInt(newDeal.probability)})
-    });
+    try {
+      const created = await fetchApi('/api/deals', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: newDeal.title,
+          amount: parseFloat(newDeal.amount) || 0,
+          probability: parseInt(newDeal.probability) || 50,
+          stage: newDeal.stage || 'lead',
+        })
+      });
+      // Optimistically add to local state in case socket.io is slow
+      if (created && created.id) {
+        setDeals(prev => [created, ...prev]);
+      }
+      // Also refresh from server for reliability
+      fetchApi('/api/deals').then(data => {
+        if (Array.isArray(data)) setDeals(data);
+      }).catch(() => {});
+    } catch (err) {
+      console.error('Failed to create deal:', err);
+    }
     setShowModal(false);
     setNewDeal({ title: '', company: '', contactName: '', amount: '', probability: '', stage: 'lead' });
   };

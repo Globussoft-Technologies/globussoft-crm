@@ -50,8 +50,8 @@ for (const viewport of VIEWPORTS) {
     test(`login page renders correctly at ${viewport.name}`, async ({ page, context }) => {
       // Clear auth state for this test
       await context.clearCookies();
-      await page.evaluate(() => localStorage.clear());
-
+      await page.goto('/'); // establish origin
+      await page.evaluate(() => localStorage.clear()); // clear correctly
       await page.goto('/login');
       await page.waitForLoadState('domcontentloaded');
 
@@ -120,8 +120,8 @@ test.describe('Responsive — Touch interactions (mobile)', () => {
 
   test('login form is usable on mobile', async ({ page, context }) => {
     await context.clearCookies();
+    await page.goto('/'); // establish origin
     await page.evaluate(() => localStorage.clear());
-
     await page.goto('/login');
     await page.waitForLoadState('domcontentloaded');
 

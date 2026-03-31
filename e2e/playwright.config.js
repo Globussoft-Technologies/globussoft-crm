@@ -40,6 +40,7 @@ module.exports = defineConfig({
     {
       name: 'chromium',
       testDir: './tests',
+      testIgnore: /.*(auth|api-health)\.spec\.js/,
       use: {
         ...devices['Desktop Chrome'],
         storageState: AUTH_STATE_PATH,

@@ -304,6 +304,158 @@ async function main() {
   }
   console.log(`✅ ${rules.length} automation rules seeded`);
 
+  // ── Expenses ───────────────────────────────────────────────
+  const expensesData = [
+    { title: 'Flight to NYC for client meeting',       amount: 850.00,  category: 'Travel',    status: 'Approved',    userIdx: 0, contactIdx: 0,  expenseDate: new Date('2026-03-10') },
+    { title: 'Figma annual team license',              amount: 1200.00, category: 'Software',  status: 'Approved',    userIdx: 1, contactIdx: null, expenseDate: new Date('2026-02-15') },
+    { title: 'Conference booth materials',             amount: 1950.00, category: 'Marketing', status: 'Pending',     userIdx: 3, contactIdx: 4,  expenseDate: new Date('2026-03-22') },
+    { title: 'Ergonomic keyboard and monitor stand',   amount: 320.00,  category: 'Office',    status: 'Reimbursed',  userIdx: 2, contactIdx: null, expenseDate: new Date('2026-01-28') },
+    { title: 'Client dinner — Pinnacle Ventures',      amount: 175.50,  category: 'General',   status: 'Approved',    userIdx: 4, contactIdx: 1,  expenseDate: new Date('2026-03-05') },
+    { title: 'Uber rides during trade show week',      amount: 68.00,   category: 'Travel',    status: 'Rejected',    userIdx: 3, contactIdx: null, expenseDate: new Date('2026-03-18') },
+  ];
+
+  let expenseCount = 0;
+  for (const e of expensesData) {
+    await prisma.expense.create({
+      data: {
+        title: e.title,
+        amount: e.amount,
+        category: e.category,
+        status: e.status,
+        expenseDate: e.expenseDate,
+        userId: users[e.userIdx].id,
+        contactId: e.contactIdx !== null ? contacts[e.contactIdx].id : null,
+      },
+    });
+    expenseCount++;
+  }
+  console.log(`✅ ${expenseCount} expenses seeded`);
+
+  // ── Contracts ──────────────────────────────────────────────
+  const contractsData = [
+    { title: 'TechFlow Enterprise SLA',          status: 'Active',  value: 48000, contactIdx: 0,  dealIdx: 0,  startDate: new Date('2025-06-01'), endDate: new Date('2026-05-31'), terms: 'Annual enterprise SLA covering 24/7 priority support, 99.9% uptime guarantee, and quarterly business reviews.' },
+    { title: 'QuantumLeap AI Partnership',       status: 'Draft',   value: 50000, contactIdx: 5,  dealIdx: 5,  startDate: new Date('2026-04-15'), endDate: new Date('2027-04-14'), terms: 'Draft partnership agreement for AI integration services including model hosting, API access, and joint go-to-market.' },
+    { title: 'BrightHorizon Campaign Retainer',  status: 'Sent',    value: 12000, contactIdx: 2,  dealIdx: 2,  startDate: new Date('2026-01-01'), endDate: new Date('2026-12-31'), terms: 'Monthly retainer for campaign management services, 10 campaigns per quarter, with performance reporting.' },
+    { title: 'EuroTech Legacy Support',          status: 'Expired', value: 5000,  contactIdx: 7,  dealIdx: 7,  startDate: new Date('2024-01-01'), endDate: new Date('2025-12-31'), terms: 'Legacy support contract for v1.x platform maintenance and critical bug fixes. No new feature development.' },
+  ];
+
+  let contractCount = 0;
+  for (const c of contractsData) {
+    await prisma.contract.create({
+      data: {
+        title: c.title,
+        status: c.status,
+        value: c.value,
+        startDate: c.startDate,
+        endDate: c.endDate,
+        terms: c.terms,
+        contactId: contacts[c.contactIdx].id,
+        dealId: deals[c.dealIdx].id,
+      },
+    });
+    contractCount++;
+  }
+  console.log(`✅ ${contractCount} contracts seeded`);
+
+  // ── Estimates (with line items) ────────────────────────────
+  const estimatesData = [
+    {
+      estimateNum: 'EST-001',
+      title: 'GreenLeaf Platform Implementation',
+      status: 'Draft',
+      contactIdx: 4,
+      dealIdx: 4,
+      validUntil: new Date('2026-05-15'),
+      notes: 'Initial estimate for sustainability platform build-out. Subject to scope review.',
+      lineItems: [
+        { description: 'Platform setup and configuration', quantity: 1, unitPrice: 8500 },
+        { description: 'Custom dashboard development',     quantity: 2, unitPrice: 4200 },
+        { description: 'Data migration services',          quantity: 1, unitPrice: 3000 },
+      ],
+    },
+    {
+      estimateNum: 'EST-002',
+      title: 'GulfStar Fleet Management Suite',
+      status: 'Sent',
+      contactIdx: 8,
+      dealIdx: 8,
+      validUntil: new Date('2026-04-30'),
+      notes: 'Comprehensive fleet management solution with GPS tracking and real-time analytics.',
+      lineItems: [
+        { description: 'Fleet tracking module',       quantity: 1, unitPrice: 25000 },
+        { description: 'Driver management portal',    quantity: 1, unitPrice: 12000 },
+      ],
+    },
+    {
+      estimateNum: 'EST-003',
+      title: 'Tokyo Robotics R&D License Bundle',
+      status: 'Accepted',
+      contactIdx: 14,
+      dealIdx: 13,
+      validUntil: new Date('2026-06-30'),
+      notes: 'Accepted — converting to contract. Includes multi-year volume discount.',
+      lineItems: [
+        { description: 'Enterprise R&D license (annual)',   quantity: 5, unitPrice: 18500 },
+        { description: 'Dedicated support engineer',        quantity: 1, unitPrice: 36000 },
+        { description: 'On-site training (2 days)',         quantity: 2, unitPrice: 7500  },
+      ],
+    },
+  ];
+
+  let estimateCount = 0;
+  for (const est of estimatesData) {
+    const totalAmount = est.lineItems.reduce((sum, li) => sum + li.quantity * li.unitPrice, 0);
+    await prisma.estimate.create({
+      data: {
+        estimateNum: est.estimateNum,
+        title: est.title,
+        status: est.status,
+        totalAmount,
+        validUntil: est.validUntil,
+        notes: est.notes,
+        contactId: contacts[est.contactIdx].id,
+        dealId: deals[est.dealIdx].id,
+        lineItems: {
+          create: est.lineItems.map((li) => ({
+            description: li.description,
+            quantity: li.quantity,
+            unitPrice: li.unitPrice,
+          })),
+        },
+      },
+    });
+    estimateCount++;
+  }
+  console.log(`✅ ${estimateCount} estimates seeded (with line items)`);
+
+  // ── Projects ───────────────────────────────────────────────
+  const projectsData = [
+    { name: 'CRM v3.0 Platform Rebuild',           status: 'Active',    priority: 'Critical', budget: 95000, ownerIdx: 0, contactIdx: 0,  dealIdx: 0,  startDate: new Date('2026-01-15'), endDate: new Date('2026-09-30'), description: 'Major platform rebuild with microservices architecture, improved API performance, and real-time collaboration features.' },
+    { name: 'GreenLeaf Sustainability Dashboard',   status: 'Planning',  priority: 'High',     budget: 32000, ownerIdx: 1, contactIdx: 4,  dealIdx: 4,  startDate: new Date('2026-04-01'), endDate: new Date('2026-07-31'), description: 'Custom sustainability metrics dashboard with carbon footprint tracking and ESG reporting for GreenLeaf Eco.' },
+    { name: 'Mobile App Phase 1',                   status: 'On Hold',   priority: 'Medium',   budget: 55000, ownerIdx: 4, contactIdx: 5,  dealIdx: 5,  startDate: new Date('2026-03-01'), endDate: new Date('2026-08-15'), description: 'React Native mobile app for field sales teams — pipeline view, contact lookup, and offline sync. On hold pending budget approval.' },
+    { name: 'Legacy Data Migration — EuroTech',     status: 'Completed', priority: 'Low',      budget: 12000, ownerIdx: 0, contactIdx: 7,  dealIdx: 7,  startDate: new Date('2025-10-01'), endDate: new Date('2026-01-15'), description: 'Migrated 50K+ records from EuroTech legacy system to CRM v2. Completed ahead of schedule with zero data loss.' },
+  ];
+
+  let projectCount = 0;
+  for (const p of projectsData) {
+    await prisma.project.create({
+      data: {
+        name: p.name,
+        description: p.description,
+        status: p.status,
+        priority: p.priority,
+        budget: p.budget,
+        startDate: p.startDate,
+        endDate: p.endDate,
+        ownerId: users[p.ownerIdx].id,
+        contactId: contacts[p.contactIdx].id,
+        dealId: deals[p.dealIdx].id,
+      },
+    });
+    projectCount++;
+  }
+  console.log(`✅ ${projectCount} projects seeded`);
+
   console.log('\n🎉 Database seeded successfully!');
 }
 

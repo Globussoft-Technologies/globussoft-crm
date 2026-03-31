@@ -1,6 +1,6 @@
 import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, MoreVertical, Trash2 } from 'lucide-react';
+import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 const Contacts = () => {
@@ -9,11 +9,25 @@ const Contacts = () => {
   const [showModal, setShowModal] = useState(false);
   const [newContact, setNewContact] = useState({ name: '', email: '', company: '', title: '', status: 'Lead' });
 
+  const [rescoring, setRescoring] = useState(false);
+
   const fetchContacts = () => {
     fetchApi('/api/contacts').then(data => {
         setContacts(data);
         setLoading(false);
       });
+  };
+
+  const handleRescore = async () => {
+    setRescoring(true);
+    try {
+      await fetchApi('/api/ai_scoring/trigger', { method: 'POST' });
+      fetchContacts();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setRescoring(false);
+    }
   };
 
   useEffect(() => {
@@ -46,9 +60,21 @@ const Contacts = () => {
           <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Contacts</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Manage your leads and customers</p>
         </div>
-        <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Plus size={18} /> Add Contact
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <button
+            onClick={handleRescore}
+            disabled={rescoring}
+            className="btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: rescoring ? 0.7 : 1 }}
+            title="Re-run AI scoring engine"
+          >
+            <RefreshCw size={15} style={{ animation: rescoring ? 'spin 1s linear infinite' : 'none' }} />
+            {rescoring ? 'Scoring...' : 'AI Re-score'}
+          </button>
+          <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Plus size={18} /> Add Contact
+          </button>
+        </div>
       </header>
       
       <div className="card" style={{ overflow: 'hidden' }}>

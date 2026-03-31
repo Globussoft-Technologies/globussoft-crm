@@ -16,6 +16,8 @@ import Marketplace from './pages/Marketplace';
 import CustomObjects from './pages/CustomObjects';
 import CustomObjectView from './pages/CustomObjectView';
 import Sequences from './pages/Sequences';
+import Tasks from './pages/Tasks';
+import LeadScoring from './pages/LeadScoring';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Placeholder from './pages/Placeholder';
@@ -64,7 +66,8 @@ export default function App() {
             <Route path="estimates" element={<Placeholder />} />
             <Route path="invoices" element={<Placeholder />} />
             <Route path="tickets" element={<Placeholder />} />
-            <Route path="tasks" element={<Placeholder />} />
+            <Route path="tasks" element={<Tasks />} />
+            <Route path="lead-scoring" element={<LeadScoring />} />
             <Route path="projects" element={<Placeholder />} />
             <Route path="clients" element={<Placeholder />} />
             <Route path="leads" element={<Placeholder />} />

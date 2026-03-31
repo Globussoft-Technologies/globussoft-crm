@@ -284,6 +284,7 @@ model Task {
   title     String
   dueDate   DateTime?
   status    String   @default("Pending") // Pending, Completed
+  priority  String   @default("Medium") // Low, Medium, High, Critical
   notes     String?
   createdAt DateTime @default(now())
 

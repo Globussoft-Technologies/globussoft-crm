@@ -183,4 +183,8 @@ cron.schedule('0 8 * * 1', async () => {
 const { initSequenceCron } = require('./cron/sequenceEngine');
 initSequenceCron();
 
+// Initialize Lead Scoring Engine (runs every 10 min, immediate first tick)
+const { initLeadScoringCron } = require('./cron/leadScoringEngine');
+initLeadScoringCron(io);
+
 // nodemon restart trigger

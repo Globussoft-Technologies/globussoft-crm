@@ -1,0 +1,100 @@
+
+Running 13 tests using 10 workers
+
+[auth.setup] Got token via API bypass
+[auth.setup] Dashboard loaded successfully
+[auth.setup] Storage state saved to: C:\Users\Admin\gbs-projects\gbs-crm\e2e\playwright\.auth\user.json
+  ✓   1 [setup] › auth.setup.js:12:1 › authenticate and save storage state (4.3s)
+  ✓   9 [chromium] › tests\tasks.spec.js:14:3 › Tasks — Agent Priority Queue › renders the Tasks page with correct heading (3.3s)
+  ✓   8 [chromium] › tests\tasks.spec.js:31:3 › Tasks — Agent Priority Queue › task form fields are visible (3.4s)
+  ✓   6 [chromium] › tests\lead-scoring.spec.js:53:3 › Lead Scoring — AI Lead Intelligence › scores are updated via trigger API (3.5s)
+  ✓   2 [chromium] › tests\lead-scoring.spec.js:14:3 › Lead Scoring — AI Lead Intelligence › renders Lead Scoring page with correct heading (4.1s)
+  ✓  10 [chromium] › tests\tasks.spec.js:21:3 › Tasks — Agent Priority Queue › page loads without JS runtime errors (4.9s)
+  ✓   3 [chromium] › tests\lead-scoring.spec.js:31:3 › Lead Scoring — AI Lead Intelligence › KPI stat cards are visible (6.5s)
+  ✓   4 [chromium] › tests\lead-scoring.spec.js:21:3 › Lead Scoring — AI Lead Intelligence › page loads without JS runtime errors (6.4s)
+  ✓  11 [chromium] › tests\lead-scoring.spec.js:66:3 › Lead Scoring — AI Lead Intelligence › full lead scoring page screenshot (6.7s)
+  ✓   7 [chromium] › tests\lead-scoring.spec.js:40:3 › Lead Scoring — AI Lead Intelligence › Re-score All button triggers scoring and shows confirmation (7.8s)
+  ✓  13 [chromium] › tests\tasks.spec.js:89:3 › Tasks — Agent Priority Queue › full tasks page screenshot (4.5s)
+  ✓  12 [chromium] › tests\tasks.spec.js:63:3 › Tasks — Agent Priority Queue › marks a task as complete and it moves to completed log (4.7s)
+  ✘   5 [chromium] › tests\tasks.spec.js:42:3 › Tasks — Agent Priority Queue › creates a Critical priority task and it appears in queue (13.4s)
+  ✘  14 [chromium] › tests\tasks.spec.js:42:3 › Tasks — Agent Priority Queue › creates a Critical priority task and it appears in queue (retry #1) (13.2s)
+
+
+  1) [chromium] › tests\tasks.spec.js:42:3 › Tasks — Agent Priority Queue › creates a Critical priority task and it appears in queue 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: locator('h4').filter({ hasText: 'E2E Critical Task — Auto Test' }).first()
+    Expected: visible
+    Timeout: 8000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 8000ms[22m
+    [2m  - waiting for locator('h4').filter({ hasText: 'E2E Critical Task — Auto Test' }).first()[22m
+
+
+      56 |
+      57 |     const taskInQueue = page.locator('h4').filter({ hasText: 'E2E Critical Task — Auto Test' }).first();
+    > 58 |     await expect(taskInQueue).toBeVisible({ timeout: 8000 });
+         |                               ^
+      59 |
+      60 |     await page.screenshot({ path: 'playwright-results/tasks-critical-created.png' });
+      61 |   });
+        at C:\Users\Admin\gbs-projects\gbs-crm\e2e\tests\tasks.spec.js:58:31
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-results\tasks-Tasks-—-Agent-Priori-93d71-ask-and-it-appears-in-queue-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-results\tasks-Tasks-—-Agent-Priori-93d71-ask-and-it-appears-in-queue-chromium\error-context.md
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: locator('h4').filter({ hasText: 'E2E Critical Task — Auto Test' }).first()
+    Expected: visible
+    Timeout: 8000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 8000ms[22m
+    [2m  - waiting for locator('h4').filter({ hasText: 'E2E Critical Task — Auto Test' }).first()[22m
+
+
+      56 |
+      57 |     const taskInQueue = page.locator('h4').filter({ hasText: 'E2E Critical Task — Auto Test' }).first();
+    > 58 |     await expect(taskInQueue).toBeVisible({ timeout: 8000 });
+         |                               ^
+      59 |
+      60 |     await page.screenshot({ path: 'playwright-results/tasks-critical-created.png' });
+      61 |   });
+        at C:\Users\Admin\gbs-projects\gbs-crm\e2e\tests\tasks.spec.js:58:31
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-results\tasks-Tasks-—-Agent-Priori-93d71-ask-and-it-appears-in-queue-chromium-retry1\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-results\tasks-Tasks-—-Agent-Priori-93d71-ask-and-it-appears-in-queue-chromium-retry1\video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-results\tasks-Tasks-—-Agent-Priori-93d71-ask-and-it-appears-in-queue-chromium-retry1\error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-results\tasks-Tasks-—-Agent-Priori-93d71-ask-and-it-appears-in-queue-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-results\tasks-Tasks-—-Agent-Priori-93d71-ask-and-it-appears-in-queue-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › tests\tasks.spec.js:42:3 › Tasks — Agent Priority Queue › creates a Critical priority task and it appears in queue 
+  12 passed (38.2s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

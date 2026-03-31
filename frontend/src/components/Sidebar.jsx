@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network } from 'lucide-react';
+import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network, Target, CheckSquare } from 'lucide-react';
 
 const Sidebar = () => {
   return (
@@ -30,6 +30,12 @@ const Sidebar = () => {
         </NavLink>
         <NavLink to="/reports" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <BarChart3 size={20} /> Reports
+        </NavLink>
+        <NavLink to="/tasks" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <CheckSquare size={20} /> Task Queue
+        </NavLink>
+        <NavLink to="/lead-scoring" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Target size={20} /> Lead Scoring
         </NavLink>
         <NavLink to="/billing" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <FileDigit size={20} /> Billing

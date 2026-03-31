@@ -30,6 +30,19 @@ try:
             print(f"Uploading backend/middleware/{filename} ...")
             sftp.put(file, f"/home/empcloud-development/globussoft-crm/backend/middleware/{filename}")
 
+    # Upload cron folder
+    cron_dir = r"c:\Users\Admin\gbs-projects\gbs-crm\backend\cron"
+    if os.path.exists(cron_dir):
+        # ensure remote directory exists
+        try:
+            sftp.mkdir("/home/empcloud-development/globussoft-crm/backend/cron")
+        except:
+            pass  # usually ok if it already exists
+        for file in glob.glob(os.path.join(cron_dir, "*.js")):
+            filename = os.path.basename(file)
+            print(f"Uploading backend/cron/{filename} ...")
+            sftp.put(file, f"/home/empcloud-development/globussoft-crm/backend/cron/{filename}")
+
     sftp.close()
 
     print("Restarting the backend node process via PM2...")

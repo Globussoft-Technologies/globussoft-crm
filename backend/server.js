@@ -179,4 +179,8 @@ cron.schedule('0 8 * * 1', async () => {
   console.log('[CRON] Automated Report Dispensed to administrative nodes.');
 });
 
+// Initialize Sequence Engine
+const { initSequenceCron } = require('./cron/sequenceEngine');
+initSequenceCron();
+
 // nodemon restart trigger

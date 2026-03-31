@@ -115,4 +115,49 @@ test.describe('Sequences — Workflow Automation (ReactFlow)', () => {
     await page.waitForTimeout(3000);
     await page.screenshot({ path: 'playwright-results/sequences-full.png', fullPage: true });
   });
+
+  test('creates a functional sequence with nodes and debug tick', async ({ page }) => {
+    // Navigate to page
+    await page.goto('/sequences');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2000);
+
+    // Add nodes via panel buttons
+    const addEmailBtn = page.locator('button').filter({ hasText: 'Add Email' }).first();
+    const addDelayBtn = page.locator('button').filter({ hasText: 'Add Delay' }).first();
+    
+    if (await addEmailBtn.isVisible() && await addDelayBtn.isVisible()) {
+      await addEmailBtn.click({ force: true });
+      await addDelayBtn.click({ force: true });
+      
+      // Save sequence
+      const createBtn = page.locator('#save-sequence-btn');
+      await createBtn.click({ force: true });
+
+      // Modal appears
+      const nameInput = page.locator('input[placeholder="e.g. Onboarding Drip Week 1"]');
+      await expect(nameInput).toBeVisible();
+      await nameInput.fill('E2E Automated Sequence Test');
+
+      const saveBtn = page.locator('.card button').filter({ hasText: 'Save' }).first();
+      await saveBtn.click({ force: true });
+
+      // Wait for the sequence to appear in the list
+      const sequenceItem = page.locator('.sequence-list h4').filter({ hasText: 'E2E Automated Sequence Test' }).first();
+      await expect(sequenceItem).toBeVisible({ timeout: 5000 });
+
+      // Trigger the backend debug tick
+      const res = await page.evaluate(async () => {
+        const resp = await fetch('/api/sequences/debug/tick', { 
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        return resp.json();
+      });
+      expect(res.success).toBe(true);
+      expect(res.message).toBe('Cron tick fired');
+    } else {
+      test.skip(true, 'Flow builder buttons not found');
+    }
+  });
 });

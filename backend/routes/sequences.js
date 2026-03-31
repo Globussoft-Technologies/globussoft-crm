@@ -89,4 +89,46 @@ router.delete("/:id", verifyToken, async (req, res) => {
   }
 });
 
+// Enroll a contact in a sequence
+router.post("/:id/enroll", verifyToken, async (req, res) => {
+  try {
+    const sequenceId = parseInt(req.params.id);
+    const { contactId } = req.body;
+    if (isNaN(sequenceId) || !contactId) return res.status(400).json({ error: 'Valid sequence ID and contactId required' });
+    
+    // Check if already enrolled
+    const existing = await prisma.sequenceEnrollment.findFirst({
+      where: { sequenceId, contactId }
+    });
+    
+    if (existing) {
+      return res.status(400).json({ error: 'Contact is already enrolled in this sequence' });
+    }
+    
+    const enrollment = await prisma.sequenceEnrollment.create({
+      data: {
+        sequenceId,
+        contactId: parseInt(contactId),
+        status: 'Active',
+      }
+    });
+    
+    res.json({ success: true, enrollment });
+  } catch(err) {
+    res.status(500).json({ error: "Failed to enroll contact." });
+  }
+});
+
+// Debug endpoint to manually trigger a cron tick (useful for E2E testing)
+router.post("/debug/tick", async (req, res) => {
+  try {
+    // We only expose this in dev/test, but for demo let's just trigger it directly
+    const { tickSequenceEngine } = require('../cron/sequenceEngine');
+    await tickSequenceEngine();
+    res.json({ success: true, message: 'Cron tick fired' });
+  } catch(err) {
+    res.status(500).json({ error: "Tick failed." });
+  }
+});
+
 module.exports = router;

@@ -126,7 +126,35 @@ test.describe('App Builder — Custom Objects', () => {
       await page.waitForLoadState('domcontentloaded');
 
       await expect(page).toHaveURL(/\/objects\/.+/);
+      await page.waitForTimeout(1000);
       await page.screenshot({ path: 'playwright-results/custom-objects-entity-view.png' });
+    } else {
+      test.skip(true, 'No custom entity links found');
+    }
+  });
+
+  test('can open Add Record modal inside an entity view', async ({ page }) => {
+    await page.waitForTimeout(2000);
+
+    const entityLink = page.locator('a[href^="/objects/"]').first();
+    const linkCount = await entityLink.count();
+
+    if (linkCount > 0) {
+      // First column is usually standard Fields
+      await entityLink.click();
+      await page.waitForLoadState('domcontentloaded');
+      
+      const addRecordBtn = page.locator('button').filter({ hasText: /add record|\+ record/i }).first();
+      const btnCount = await addRecordBtn.count();
+      
+      if (btnCount > 0) {
+        await addRecordBtn.click();
+        await page.waitForTimeout(500);
+        const modal = page.locator('[role="dialog"], .modal').first();
+        await expect(modal).toBeVisible({ timeout: 5000 });
+      } else {
+        test.skip(true, 'Add Record button not found in entity view');
+      }
     } else {
       test.skip(true, 'No custom entity links found');
     }

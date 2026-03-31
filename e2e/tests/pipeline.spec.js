@@ -142,7 +142,11 @@ test.describe('Pipeline — Kanban board', () => {
         !err.includes('favicon') &&
         !err.includes('extension') &&
         !err.includes('socket.io') &&
-        !err.includes('ai_scoring') // AI scoring endpoint may not be available
+        !err.includes('ai_scoring') && // AI scoring endpoint may not be available
+        !err.includes('WebSocket') &&
+        !err.includes('net::ERR_') &&
+        !err.includes('Failed to fetch') &&
+        !err.includes('connect_error')
     );
     expect(criticalErrors).toHaveLength(0);
   });

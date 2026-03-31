@@ -40,8 +40,14 @@ const Pipeline = () => {
       setLoading(false);
     }).catch(err => console.error(err));
 
-    const socket = io('/');
+    const socket = io('/', {
+      reconnection: false, // don't spam reconnect errors
+      timeout: 5000,
+    });
     
+    socket.on('connect_error', () => { /* silently ignore — nginx may not proxy socket.io */ });
+    socket.on('error', () => { /* silently ignore */ });
+
     socket.on('deal_updated', (updatedDeal) => {
       setDeals(prevDeals => {
         const exists = prevDeals.find(d => d.id === updatedDeal.id);

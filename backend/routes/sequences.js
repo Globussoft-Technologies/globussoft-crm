@@ -54,4 +54,39 @@ router.patch("/:id/toggle", verifyToken, async (req, res) => {
   }
 });
 
+// Update sequence (save over existing)
+router.patch("/:id", verifyToken, async (req, res) => {
+  try {
+    const { name, nodes, edges, isActive } = req.body;
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid sequence ID' });
+    const updated = await prisma.sequence.update({
+      where: { id },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(nodes !== undefined && { nodes: JSON.stringify(nodes) }),
+        ...(edges !== undefined && { edges: JSON.stringify(edges) }),
+        ...(isActive !== undefined && { isActive }),
+      }
+    });
+    res.json(updated);
+  } catch(err) {
+    res.status(500).json({ error: "Failed to update sequence." });
+  }
+});
+
+// Delete sequence
+router.delete("/:id", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid sequence ID' });
+    // Delete enrollments first
+    await prisma.sequenceEnrollment.deleteMany({ where: { sequenceId: id } });
+    await prisma.sequence.delete({ where: { id } });
+    res.json({ success: true });
+  } catch(err) {
+    res.status(500).json({ error: "Failed to delete sequence." });
+  }
+});
+
 module.exports = router;

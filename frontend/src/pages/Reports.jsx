@@ -50,10 +50,10 @@ export default function Reports() {
         </button>
       </header>
 
-      <div style={{ display: 'flex', gap: '2rem', flex: 1, minHeight: 0 }}>
+      <div style={{ display: 'flex', gap: '2rem', flex: 1, minHeight: 0, flexWrap: 'wrap' }}>
         
         {/* Controls Sidebar */}
-        <div className="card" style={{ width: '300px', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+        <div className="card" style={{ width: '300px', minWidth: '260px', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '2rem', flex: '0 0 auto' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Filter size={20} color="var(--accent-color)" /> Query Builder
           </h3>

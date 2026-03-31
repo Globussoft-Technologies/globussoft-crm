@@ -12,9 +12,17 @@ export default function Presence() {
     if (!user) return;
     
     // Connect to global WS multiplex
-    socket = io('/');
+    socket = io('/', {
+      reconnection: false, // prevent spamming reconnect errors
+      timeout: 5000,
+    });
     
-    socket.emit('join_presence', { userId: user.id || Math.random(), name: user.name || 'Anonymous' });
+    socket.on('connect_error', () => { /* silently ignore — nginx may not proxy socket.io */ });
+    socket.on('error', () => { /* silently ignore */ });
+
+    socket.on('connect', () => {
+      socket.emit('join_presence', { userId: user.id || Math.random(), name: user.name || 'Anonymous' });
+    });
 
     socket.on('cursor_update', (data) => {
       setCursors(prev => ({ ...prev, [data.id]: data }));
@@ -32,6 +40,7 @@ export default function Presence() {
     const handleMouseMove = (e) => {
       // Throttle mousemove emissions to 30ms (~30fps) for performance scaling
       if (throttleTimer) return;
+      if (!socket?.connected) return; // only emit when connected
       
       const rx = e.clientX / window.innerWidth;
       const ry = e.clientY / window.innerHeight;

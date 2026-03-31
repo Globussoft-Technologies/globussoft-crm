@@ -52,6 +52,7 @@ module.exports = defineConfig({
     {
       name: 'firefox',
       testDir: './tests',
+      testIgnore: /.*(auth|api-health)\.spec\.js/,
       use: {
         ...devices['Desktop Firefox'],
         storageState: AUTH_STATE_PATH,
@@ -63,6 +64,7 @@ module.exports = defineConfig({
     {
       name: 'mobile-chrome',
       testDir: './tests',
+      testIgnore: /.*(auth|api-health)\.spec\.js/,
       use: {
         ...devices['Pixel 5'],
         storageState: AUTH_STATE_PATH,

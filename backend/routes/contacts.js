@@ -9,7 +9,8 @@ router.use(verifyToken);
 
 router.get('/', async (req, res) => {
   try {
-    res.json(await prisma.contact.findMany({ include: { activities: true, tasks: true } }));
+    const where = req.query.status ? { status: req.query.status } : {};
+    res.json(await prisma.contact.findMany({ where, include: { activities: true, tasks: true } }));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
   }

@@ -19,6 +19,8 @@ model User {
   apiKeys   ApiKey[]
   webhooks  Webhook[]
   tasks     Task[]
+  expenses  Expense[]
+  projects  Project[] @relation("ProjectOwner")
 }
 
 model Contact {
@@ -38,6 +40,10 @@ model Contact {
   invoices    Invoice[]
   sequenceEnrollments SequenceEnrollment[]
   tasks       Task[]
+  expenses    Expense[]
+  contracts   Contract[]
+  estimates   Estimate[]
+  projects    Project[]
 }
 
 model Activity {
@@ -66,6 +72,9 @@ model Deal {
   attachments   Attachment[]
   invoices      Invoice[]
   quotes        Quote[]
+  contracts     Contract[]
+  estimates     Estimate[]
+  projects      Project[]
 }
 
 model Ticket {
@@ -290,7 +299,91 @@ model Task {
 
   contactId Int?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  
+
   userId    Int?
   user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  projectId Int?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+}
+
+model Expense {
+  id          Int      @id @default(autoincrement())
+  title       String
+  amount      Float
+  category    String   @default("General") // General, Travel, Software, Office, Marketing, Other
+  status      String   @default("Pending") // Pending, Approved, Rejected, Reimbursed
+  receiptUrl  String?
+  notes       String?  @db.Text
+  expenseDate DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  userId      Int?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  contactId   Int?
+  contact     Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+}
+
+model Contract {
+  id          Int       @id @default(autoincrement())
+  title       String
+  status      String    @default("Draft") // Draft, Sent, Active, Expired, Terminated
+  startDate   DateTime?
+  endDate     DateTime?
+  value       Float     @default(0.0)
+  terms       String?   @db.Text
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  contactId   Int?
+  contact     Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  dealId      Int?
+  deal        Deal?     @relation(fields: [dealId], references: [id], onDelete: SetNull)
+}
+
+model Estimate {
+  id          Int              @id @default(autoincrement())
+  estimateNum String           @unique
+  title       String
+  status      String           @default("Draft") // Draft, Sent, Accepted, Rejected, Converted
+  totalAmount Float            @default(0.0)
+  validUntil  DateTime?
+  notes       String?          @db.Text
+  createdAt   DateTime         @default(now())
+
+  contactId   Int?
+  contact     Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  dealId      Int?
+  deal        Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  lineItems   EstimateLineItem[]
+}
+
+model EstimateLineItem {
+  id          Int      @id @default(autoincrement())
+  description String
+  quantity    Int      @default(1)
+  unitPrice   Float
+  estimateId  Int
+  estimate    Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+}
+
+model Project {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?  @db.Text
+  status      String   @default("Planning") // Planning, Active, On Hold, Completed, Cancelled
+  priority    String   @default("Medium") // Low, Medium, High, Critical
+  startDate   DateTime?
+  endDate     DateTime?
+  budget      Float    @default(0.0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ownerId     Int?
+  owner       User?    @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  contactId   Int?
+  contact     Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  dealId      Int?
+  deal        Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  tasks       Task[]
 }

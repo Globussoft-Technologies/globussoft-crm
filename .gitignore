@@ -24,3 +24,37 @@ update-env.sh
 diagnose.sh
 logs.sh
 create_test_users.mjs
+
+# Deployment scripts with credentials
+deploy_backend.py
+deploy_frontend.py
+run_ssh.py
+server_db_setup.py
+add_priority_column.py
+verify_schema.py
+
+# Utility scripts (local only)
+close_issues.py
+director_agent.py
+monitor_issues.py
+test_login.py
+screenshot.py
+checked_issues.json
+
+# Test result artifacts
+e2e/result*.txt
+e2e/results.json
+e2e/results.txt
+e2e/final_run.txt
+e2e/verified_run.txt
+e2e/auth_test.txt
+e2e/test_results.txt
+e2e/test_phase4.txt
+e2e/test_phase4_final.txt
+result_final.txt
+uncommitted_diff.txt
+test-results/
+
+# Build artifacts
+frontend/dist.zip
+screenshot77.png

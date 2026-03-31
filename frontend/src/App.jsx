@@ -17,10 +17,18 @@ import CustomObjects from './pages/CustomObjects';
 import CustomObjectView from './pages/CustomObjectView';
 import Sequences from './pages/Sequences';
 import Tasks from './pages/Tasks';
+import Tickets from './pages/Tickets';
+import Staff from './pages/Staff';
+import Invoices from './pages/Invoices';
 import LeadScoring from './pages/LeadScoring';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
-import Placeholder from './pages/Placeholder';
+import Leads from './pages/Leads';
+import Clients from './pages/Clients';
+import Expenses from './pages/Expenses';
+import Contracts from './pages/Contracts';
+import Estimates from './pages/Estimates';
+import Projects from './pages/Projects';
 import Layout from './components/Layout';
 
 export const AuthContext = createContext();
@@ -60,18 +68,17 @@ export default function App() {
             <Route path="objects/:entityName" element={<CustomObjectView />} />
             <Route path="sequences" element={<Sequences />} />
             <Route path="settings" element={<Settings />} />
-            {/* Missing Modules Patched by Issue Triage */}
-            <Route path="expenses" element={<Placeholder />} />
-            <Route path="contracts" element={<Placeholder />} />
-            <Route path="estimates" element={<Placeholder />} />
-            <Route path="invoices" element={<Placeholder />} />
-            <Route path="tickets" element={<Placeholder />} />
+            <Route path="expenses" element={<Expenses />} />
+            <Route path="contracts" element={<Contracts />} />
+            <Route path="estimates" element={<Estimates />} />
+            <Route path="invoices" element={<Invoices />} />
+            <Route path="tickets" element={<Tickets />} />
             <Route path="tasks" element={<Tasks />} />
             <Route path="lead-scoring" element={<LeadScoring />} />
-            <Route path="projects" element={<Placeholder />} />
-            <Route path="clients" element={<Placeholder />} />
-            <Route path="leads" element={<Placeholder />} />
-            <Route path="staff" element={<Placeholder />} />
+            <Route path="projects" element={<Projects />} />
+            <Route path="clients" element={<Clients />} />
+            <Route path="leads" element={<Leads />} />
+            <Route path="staff" element={<Staff />} />
           </Route>
         </Routes>
       </BrowserRouter>

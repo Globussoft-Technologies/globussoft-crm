@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network, Target, CheckSquare } from 'lucide-react';
+import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network, Target, CheckSquare, UserPlus, Building2, Receipt, Ticket, UsersRound, FileText, FileSpreadsheet, FolderKanban, DollarSign } from 'lucide-react';
 
 const Sidebar = () => {
   return (
@@ -37,8 +37,32 @@ const Sidebar = () => {
         <NavLink to="/lead-scoring" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Target size={20} /> Lead Scoring
         </NavLink>
+        <NavLink to="/leads" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <UserPlus size={20} /> Leads
+        </NavLink>
+        <NavLink to="/clients" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Building2 size={20} /> Clients
+        </NavLink>
         <NavLink to="/billing" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <FileDigit size={20} /> Billing
+        </NavLink>
+        <NavLink to="/invoices" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Receipt size={20} /> Invoices
+        </NavLink>
+        <NavLink to="/estimates" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <FileSpreadsheet size={20} /> Estimates
+        </NavLink>
+        <NavLink to="/expenses" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <DollarSign size={20} /> Expenses
+        </NavLink>
+        <NavLink to="/contracts" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <FileText size={20} /> Contracts
+        </NavLink>
+        <NavLink to="/projects" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <FolderKanban size={20} /> Projects
+        </NavLink>
+        <NavLink to="/tickets" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Ticket size={20} /> Tickets
         </NavLink>
         <NavLink to="/support" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <LifeBuoy size={20} /> Support
@@ -47,6 +71,9 @@ const Sidebar = () => {
           <Database size={20} /> App Builder
         </NavLink>
         <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <NavLink to="/staff" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+            <UsersRound size={20} /> Staff
+          </NavLink>
           <NavLink to="/developer" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
             <Code size={20} /> Developers
           </NavLink>

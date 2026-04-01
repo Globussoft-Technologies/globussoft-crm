@@ -50,7 +50,7 @@ export default function CustomObjectView() {
     <div style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-          <Link to="/objects" style={{ color: 'var(--text-secondary)', textDecoration: 'none', background: 'rgba(255,255,255,0.05)', padding: '0.75rem', borderRadius: '8px', display: 'flex' }}>
+          <Link to="/objects" style={{ color: 'var(--text-secondary)', textDecoration: 'none', background: 'var(--subtle-bg)', padding: '0.75rem', borderRadius: '8px', display: 'flex' }}>
             <ArrowLeft size={20} />
           </Link>
           <div>
@@ -68,10 +68,10 @@ export default function CustomObjectView() {
         </div>
       </header>
 
-      <div className="card" style={{ flex: 1, overflow: 'auto', background: 'rgba(0,0,0,0.2)', padding: '0' }}>
+      <div className="card" style={{ flex: 1, overflow: 'auto', background: 'var(--table-header-bg)', padding: '0' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
           <thead>
-            <tr style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid var(--border-color)' }}>
+            <tr style={{ background: 'var(--subtle-bg-2)', borderBottom: '1px solid var(--border-color)' }}>
               <th style={{ padding: '1rem 1.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.875rem' }}>ID</th>
               {entity.fields.map(f => (
                 <th key={f.id} style={{ padding: '1rem 1.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.875rem' }}>
@@ -83,7 +83,7 @@ export default function CustomObjectView() {
           </thead>
           <tbody>
             {records.map(r => (
-              <tr key={r.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', transition: 'background 0.2s' }} onMouseOver={e=>e.currentTarget.style.background='rgba(255,255,255,0.02)'} onMouseOut={e=>e.currentTarget.style.background='transparent'}>
+              <tr key={r.id} style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.2s' }} onMouseOver={e=>e.currentTarget.style.background='var(--subtle-bg-2)'} onMouseOut={e=>e.currentTarget.style.background='transparent'}>
                 <td style={{ padding: '1rem 1.5rem', fontSize: '0.875rem', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>EAV-{r.id}</td>
                 {entity.fields.map(f => (
                   <td key={f.id} style={{ padding: '1rem 1.5rem', fontSize: '0.875rem' }}>
@@ -115,16 +115,16 @@ export default function CustomObjectView() {
                   <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>{f.name} <span style={{fontSize:'0.7rem', color:'#ec4899', float:'right'}}>{f.type}</span></label>
                   
                   {f.type === 'Boolean' ? (
-                    <select className="input-field" value={formPayload[f.name]} onChange={e=>setFormPayload({...formPayload, [f.name]: e.target.value === 'true'})} style={{ background: '#0f172a' }}>
+                    <select className="input-field" value={formPayload[f.name]} onChange={e=>setFormPayload({...formPayload, [f.name]: e.target.value === 'true'})} style={{ background: 'var(--input-bg)' }}>
                       <option value="false">False</option>
                       <option value="true">True</option>
                     </select>
                   ) : f.type === 'Number' ? (
-                    <input type="number" required className="input-field" value={formPayload[f.name]} onChange={e=>setFormPayload({...formPayload, [f.name]: e.target.value})} style={{ background: '#0f172a' }} />
+                    <input type="number" required className="input-field" value={formPayload[f.name]} onChange={e=>setFormPayload({...formPayload, [f.name]: e.target.value})} style={{ background: 'var(--input-bg)' }} />
                   ) : f.type === 'Date' ? (
-                    <input type="date" required className="input-field" value={formPayload[f.name]} onChange={e=>setFormPayload({...formPayload, [f.name]: e.target.value})} style={{ background: '#0f172a' }} />
+                    <input type="date" required className="input-field" value={formPayload[f.name]} onChange={e=>setFormPayload({...formPayload, [f.name]: e.target.value})} style={{ background: 'var(--input-bg)' }} />
                   ) : (
-                    <input type="text" required className="input-field" value={formPayload[f.name]} onChange={e=>setFormPayload({...formPayload, [f.name]: e.target.value})} style={{ background: '#0f172a' }} />
+                    <input type="text" required className="input-field" value={formPayload[f.name]} onChange={e=>setFormPayload({...formPayload, [f.name]: e.target.value})} style={{ background: 'var(--input-bg)' }} />
                   )}
                 </div>
               ))}

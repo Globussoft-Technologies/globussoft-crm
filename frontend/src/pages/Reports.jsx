@@ -61,11 +61,11 @@ export default function Reports() {
           <div>
             <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600' }}>1. Select Metric (Y-Axis)</label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.75rem', background: metric === 'revenue' ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)', borderRadius: '8px', transition: 'var(--transition)' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.75rem', background: metric === 'revenue' ? 'var(--accent-color)' : 'var(--subtle-bg)', borderRadius: '8px', transition: 'var(--transition)' }}>
                 <input type="radio" name="metric" value="revenue" checked={metric === 'revenue'} onChange={() => setMetric('revenue')} style={{ display: 'none' }} />
                 <span style={{ fontWeight: '500' }}>Total Revenue ($)</span>
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.75rem', background: metric === 'count' ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)', borderRadius: '8px', transition: 'var(--transition)' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.75rem', background: metric === 'count' ? 'var(--accent-color)' : 'var(--subtle-bg)', borderRadius: '8px', transition: 'var(--transition)' }}>
                 <input type="radio" name="metric" value="count" checked={metric === 'count'} onChange={() => setMetric('count')} style={{ display: 'none' }} />
                 <span style={{ fontWeight: '500' }}>Deal Count (#)</span>
               </label>
@@ -74,7 +74,7 @@ export default function Reports() {
 
           <div>
             <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600' }}>2. Group By (X-Axis)</label>
-            <select className="input-field" value={groupBy} onChange={e => setGroupBy(e.target.value)} style={{ padding: '0.75rem', background: '#0f172a', width: '100%', outline: 'none' }}>
+            <select className="input-field" value={groupBy} onChange={e => setGroupBy(e.target.value)} style={{ padding: '0.75rem', background: 'var(--input-bg)', width: '100%', outline: 'none' }}>
               <option value="stage">Pipeline Stage</option>
               <option value="probability">Probability Score</option>
             </select>
@@ -82,7 +82,7 @@ export default function Reports() {
 
           <div>
             <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600' }}>3. Visualization Type</label>
-            <select className="input-field" value={chartType} onChange={e => setChartType(e.target.value)} style={{ padding: '0.75rem', background: '#0f172a', width: '100%', outline: 'none' }}>
+            <select className="input-field" value={chartType} onChange={e => setChartType(e.target.value)} style={{ padding: '0.75rem', background: 'var(--input-bg)', width: '100%', outline: 'none' }}>
               <option value="bar">Bar Chart</option>
               <option value="pie">Donut Chart</option>
               <option value="area">Area Chart</option>
@@ -91,7 +91,7 @@ export default function Reports() {
 
           <div style={{ marginTop: 'auto', padding: '1.5rem', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.5rem' }}>Aggregate Total</p>
-            <h2 style={{ fontSize: '1.75rem', fontWeight: 'bold', color: '#3b82f6' }}>
+            <h2 style={{ fontSize: '1.75rem', fontWeight: 'bold', color: 'var(--accent-color)' }}>
               {metric === 'revenue' ? `$${totalValue.toLocaleString()}` : totalValue}
             </h2>
           </div>
@@ -114,10 +114,10 @@ export default function Reports() {
               <ResponsiveContainer width="100%" height="100%">
                 {chartType === 'bar' ? (
                   <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                     <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
                     <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={val => metric==='revenue' ? `$${val/1000}k` : val} />
-                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: '#fff' }} />
+                    <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                     <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                       {data.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -131,7 +131,7 @@ export default function Reports() {
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: '#fff' }} />
+                    <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                   </PieChart>
                 ) : (
                   <AreaChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
@@ -141,10 +141,10 @@ export default function Reports() {
                         <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                     <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
                     <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={val => metric==='revenue' ? `$${val/1000}k` : val} />
-                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
+                    <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
                     <Area type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorVal)" />
                   </AreaChart>
                 )}

@@ -167,7 +167,7 @@ export default function Invoices() {
         )}
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem',
-          background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
+          background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
         }}>
           {invoices.length} total invoices
         </span>
@@ -204,7 +204,7 @@ export default function Invoices() {
                 required
                 value={newInvoice.contactId}
                 onChange={e => handleFieldChange('contactId', e.target.value)}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
                 aria-label="Contact"
               >
                 <option value="">-- Select Contact --</option>
@@ -220,7 +220,7 @@ export default function Invoices() {
                 className="input-field"
                 value={newInvoice.dealId}
                 onChange={e => handleFieldChange('dealId', e.target.value)}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
                 aria-label="Associated deal"
               >
                 <option value="">-- No Deal --</option>
@@ -264,7 +264,7 @@ export default function Invoices() {
                 className="input-field"
                 value={newInvoice.status}
                 onChange={e => handleFieldChange('status', e.target.value)}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
                 aria-label="Invoice status"
               >
                 <option value="UNPAID">Unpaid</option>
@@ -286,7 +286,7 @@ export default function Invoices() {
           </h3>
 
           {invoices.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
               <Receipt size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
               <p style={{ color: 'var(--text-secondary)' }}>No invoices yet. Create one to get started.</p>
             </div>
@@ -312,7 +312,7 @@ export default function Invoices() {
                         borderBottom: '1px solid var(--border-color)',
                         transition: 'background 0.15s',
                       }}
-                      onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                      onMouseOver={e => e.currentTarget.style.background = 'var(--hover-bg)'}
                       onMouseOut={e => e.currentTarget.style.background = 'transparent'}
                     >
                       <td style={{ padding: '1rem 0.5rem', fontWeight: '600', letterSpacing: '0.03em' }}>

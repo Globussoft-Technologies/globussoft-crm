@@ -177,7 +177,7 @@ export default function Projects() {
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem',
-          background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
+          background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
         }}>
           {projects.length} total projects
         </span>
@@ -224,7 +224,7 @@ export default function Projects() {
                 className="input-field"
                 value={form.priority}
                 onChange={e => handleFormChange('priority', e.target.value)}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
                 aria-label="Project priority"
               >
                 <option value="Low">Low</option>
@@ -277,7 +277,7 @@ export default function Projects() {
                 className="input-field"
                 value={form.contactId}
                 onChange={e => handleFormChange('contactId', e.target.value)}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
                 aria-label="Contact"
               >
                 <option value="">-- Select Contact --</option>
@@ -293,7 +293,7 @@ export default function Projects() {
                 className="input-field"
                 value={form.dealId}
                 onChange={e => handleFormChange('dealId', e.target.value)}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
                 aria-label="Associated deal"
               >
                 <option value="">-- No Deal --</option>
@@ -316,7 +316,7 @@ export default function Projects() {
           </h3>
 
           {projects.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
               <FolderKanban size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
               <p style={{ color: 'var(--text-secondary)' }}>No projects yet. Create one to get started.</p>
             </div>
@@ -342,7 +342,7 @@ export default function Projects() {
                       <tr
                         key={proj.id}
                         style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.15s' }}
-                        onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                        onMouseOver={e => e.currentTarget.style.background = 'var(--hover-bg)'}
                         onMouseOut={e => e.currentTarget.style.background = 'transparent'}
                       >
                         <td style={{ padding: '1rem 0.5rem', fontWeight: '600' }}>
@@ -384,7 +384,7 @@ export default function Projects() {
                               value={proj.status}
                               onChange={e => updateStatus(proj.id, e.target.value)}
                               style={{
-                                background: '#0f172a', color: 'var(--text-primary)',
+                                background: 'var(--input-bg)', color: 'var(--text-primary)',
                                 border: '1px solid var(--border-color)', borderRadius: '6px',
                                 padding: '0.35rem 0.5rem', fontSize: '0.75rem', cursor: 'pointer',
                               }}

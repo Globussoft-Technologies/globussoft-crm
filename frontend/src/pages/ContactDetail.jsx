@@ -58,7 +58,7 @@ const ContactDetail = () => {
               <div style={{ position: 'absolute', left: '-9px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'var(--warning-color)' }}></div>
               <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Yesterday, 2:15 PM</p>
               <p style={{ fontWeight: '500' }}>Discovery Call Completed</p>
-              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem', padding: '0.75rem', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem', padding: '0.75rem', backgroundColor: 'var(--subtle-bg)', borderRadius: '6px' }}>
                 Discussed enterprise tier pricing. High interest.
               </p>
             </div>

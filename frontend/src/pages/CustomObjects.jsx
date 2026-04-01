@@ -56,12 +56,12 @@ export default function CustomObjects() {
                 </div>
                 <div>
                   <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>{ent.name}</h3>
-                  <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.1)', borderRadius: '12px', color: 'var(--text-secondary)' }}>EAV Key-Value Sync Integrity: PASS</span>
+                  <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'var(--subtle-bg-3)', borderRadius: '12px', color: 'var(--text-secondary)' }}>EAV Key-Value Sync Integrity: PASS</span>
                 </div>
               </div>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem', flex: 1 }}>{ent.description || 'Natively defined backend matrix array limit parameters.'}</p>
               
-              <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <div style={{ background: 'var(--subtle-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                 <h4 style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>Dynamically Generated Schema Fields:</h4>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                   {ent.fields.map(f => (
@@ -75,7 +75,7 @@ export default function CustomObjects() {
             </div>
           ))}
           {entities.length === 0 && (
-            <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '5rem 2rem', background: 'rgba(255,255,255,0.01)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '12px' }}>
+            <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '5rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '12px' }}>
               <Database size={56} color="var(--text-secondary)" style={{ opacity: 0.2, margin: '0 auto 1.5rem' }} />
               <h3 style={{ fontSize: '1.5rem', fontWeight: '600', marginBottom: '0.5rem' }}>Schema Definitions Missing</h3>
               <p style={{ color: 'var(--text-secondary)' }}>Use the visual abstraction tool to mint independent EAV schemas (e.g. `Properties`, `Vehicles`, `Shipments`).</p>
@@ -93,14 +93,14 @@ export default function CustomObjects() {
             <form onSubmit={handleAddEntity} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Entity Name</label>
-                <input type="text" name="name" required className="input-field" placeholder="e.g. Properties" value={newEntity.name} onChange={e=>setNewEntity({...newEntity, name: e.target.value})} style={{ background: '#0f172a' }} />
+                <input type="text" name="name" required className="input-field" placeholder="e.g. Properties" value={newEntity.name} onChange={e=>setNewEntity({...newEntity, name: e.target.value})} style={{ background: 'var(--input-bg)' }} />
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Internal Structural Remarks</label>
-                <input type="text" className="input-field" placeholder="Architectural notes for this custom relational mapping..." value={newEntity.description} onChange={e=>setNewEntity({...newEntity, description: e.target.value})} style={{ background: '#0f172a' }} />
+                <input type="text" className="input-field" placeholder="Architectural notes for this custom relational mapping..." value={newEntity.description} onChange={e=>setNewEntity({...newEntity, description: e.target.value})} style={{ background: 'var(--input-bg)' }} />
               </div>
 
-              <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1.5rem' }}>
+              <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                   <h4 style={{ fontSize: '0.875rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>Data Schema Fields</h4>
                   <button type="button" onClick={addField} style={{ background: 'transparent', color: '#ec4899', border: 'none', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontWeight: '600' }}><Plus size={16}/> Insert Schema Property</button>
@@ -109,12 +109,12 @@ export default function CustomObjects() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   {newEntity.fields.map((f, i) => (
                     <div key={i} style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                      <input type="text" className="input-field" placeholder="Property Alias (e.g. Volume)" value={f.name} onChange={e=>{const nf=[...newEntity.fields]; nf[i].name=e.target.value; setNewEntity({...newEntity, fields: nf})}} style={{ flex: 2, background: 'rgba(0,0,0,0.5)', borderColor: 'rgba(255,255,255,0.05)' }} />
-                      <select className="input-field" value={f.type} onChange={e=>{const nf=[...newEntity.fields]; nf[i].type=e.target.value; setNewEntity({...newEntity, fields: nf})}} style={{ flex: 1, background: 'rgba(0,0,0,0.5)', color: '#ec4899', fontWeight: '600', borderColor: 'rgba(255,255,255,0.05)' }}>
-                        <option style={{background:'#0f172a'}}>Text</option>
-                        <option style={{background:'#0f172a'}}>Number</option>
-                        <option style={{background:'#0f172a'}}>Date</option>
-                        <option style={{background:'#0f172a'}}>Boolean</option>
+                      <input type="text" className="input-field" placeholder="Property Alias (e.g. Volume)" value={f.name} onChange={e=>{const nf=[...newEntity.fields]; nf[i].name=e.target.value; setNewEntity({...newEntity, fields: nf})}} style={{ flex: 2, background: 'var(--input-bg)', borderColor: 'var(--border-color)' }} />
+                      <select className="input-field" value={f.type} onChange={e=>{const nf=[...newEntity.fields]; nf[i].type=e.target.value; setNewEntity({...newEntity, fields: nf})}} style={{ flex: 1, background: 'var(--input-bg)', color: '#ec4899', fontWeight: '600', borderColor: 'var(--border-color)' }}>
+                        <option style={{background:'var(--input-bg)'}}>Text</option>
+                        <option style={{background:'var(--input-bg)'}}>Number</option>
+                        <option style={{background:'var(--input-bg)'}}>Date</option>
+                        <option style={{background:'var(--input-bg)'}}>Boolean</option>
                       </select>
                       <button type="button" onClick={()=>{const nf=[...newEntity.fields]; nf.splice(i,1); setNewEntity({...newEntity, fields: nf})}} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={20}/></button>
                     </div>

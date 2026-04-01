@@ -62,7 +62,7 @@ export default function CPQBuilder({ dealId }) {
   };
 
   return (
-    <div style={{ marginTop: '3rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '2.5rem' }}>
+    <div style={{ marginTop: '3rem', borderTop: '1px solid var(--border-color)', paddingTop: '2.5rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}><Calculator size={22} color="#8b5cf6" /> Configure, Price, Quote (CPQ)</h3>
         {!isBuilding && (
@@ -73,14 +73,14 @@ export default function CPQBuilder({ dealId }) {
       </div>
 
       {isBuilding && (
-        <div style={{ background: 'rgba(0,0,0,0.4)', padding: '1.5rem', borderRadius: '12px', border: '1px solid rgba(139, 92, 246, 0.4)', marginBottom: '2rem', boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)' }}>
+        <div style={{ background: 'var(--surface-color)', padding: '1.5rem', borderRadius: '12px', border: '1px solid rgba(139, 92, 246, 0.4)', marginBottom: '2rem', boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)' }}>
           <input 
             type="text" 
             placeholder="Quote Contract Title (e.g. Enterprise SLA Agreement Array)" 
             value={newQuote.title} 
             onChange={e=>setNewQuote({...newQuote, title: e.target.value})} 
             className="input-field" 
-            style={{ marginBottom: '1.5rem', background: '#0f172a', fontSize: '1.1rem', fontWeight: 'bold' }} 
+            style={{ marginBottom: '1.5rem', background: 'var(--input-bg)', fontSize: '1.1rem', fontWeight: 'bold' }} 
           />
 
           <div style={{ marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -94,15 +94,15 @@ export default function CPQBuilder({ dealId }) {
             
             {newQuote.lineItems.map((line, i) => (
               <div key={i} style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                <input type="text" placeholder="Custom Configuration" value={line.productName} onChange={e=>updateLine(i, 'productName', e.target.value)} className="input-field" style={{ flex: 3, background: 'rgba(0,0,0,0.6)', borderColor: 'rgba(255,255,255,0.05)' }} />
-                <input type="number" value={line.quantity} onChange={e=>updateLine(i, 'quantity', parseInt(e.target.value))} className="input-field" style={{ flex: 1, background: 'rgba(0,0,0,0.6)', borderColor: 'rgba(255,255,255,0.05)' }} />
+                <input type="text" placeholder="Custom Configuration" value={line.productName} onChange={e=>updateLine(i, 'productName', e.target.value)} className="input-field" style={{ flex: 3, background: 'var(--input-bg)', borderColor: 'var(--border-color)' }} />
+                <input type="number" value={line.quantity} onChange={e=>updateLine(i, 'quantity', parseInt(e.target.value))} className="input-field" style={{ flex: 1, background: 'var(--input-bg)', borderColor: 'var(--border-color)' }} />
                 <div style={{ flex: 1, position: 'relative' }}>
                   <span style={{position:'absolute', left:'10px', top:'10px', color:'var(--text-secondary)', fontWeight: 'bold'}}>$</span>
-                  <input type="number" value={line.unitPrice} onChange={e=>updateLine(i, 'unitPrice', parseFloat(e.target.value))} className="input-field" style={{ width: '100%', paddingLeft: '25px', background: 'rgba(0,0,0,0.6)', borderColor: 'rgba(255,255,255,0.05)' }} />
+                  <input type="number" value={line.unitPrice} onChange={e=>updateLine(i, 'unitPrice', parseFloat(e.target.value))} className="input-field" style={{ width: '100%', paddingLeft: '25px', background: 'var(--input-bg)', borderColor: 'var(--border-color)' }} />
                 </div>
-                <select value={line.isRecurring} onChange={e=>updateLine(i, 'isRecurring', e.target.value === 'true')} className="input-field" style={{ flex: 1, background: 'rgba(0,0,0,0.6)', borderColor: 'rgba(255,255,255,0.05)', color: line.isRecurring ? '#8b5cf6' : '#fff' }}>
-                  <option value="true" style={{background:'#0f172a'}}>Monthly (MRR)</option>
-                  <option value="false" style={{background:'#0f172a'}}>One-Time Payload</option>
+                <select value={line.isRecurring} onChange={e=>updateLine(i, 'isRecurring', e.target.value === 'true')} className="input-field" style={{ flex: 1, background: 'var(--input-bg)', borderColor: 'var(--border-color)', color: line.isRecurring ? '#8b5cf6' : 'var(--text-primary)' }}>
+                  <option value="true" style={{background:'var(--input-bg)'}}>Monthly (MRR)</option>
+                  <option value="false" style={{background:'var(--input-bg)'}}>One-Time Payload</option>
                 </select>
                 <button onClick={() => removeLine(i)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={20} /></button>
               </div>
@@ -116,7 +116,7 @@ export default function CPQBuilder({ dealId }) {
             
             <div style={{ display: 'flex', gap: '1rem' }}>
               <button onClick={() => setIsBuilding(false)} className="btn-secondary" style={{ border: 'none', color: 'var(--text-secondary)' }}>Abort Schema</button>
-              <button onClick={saveQuote} className="btn-primary" style={{ background: '#8b5cf6', color: '#fff', border: 'none', boxShadow: '0 4px 15px rgba(139, 92, 246, 0.5)' }}>Commit Active CPQ Engine</button>
+              <button onClick={saveQuote} className="btn-primary" style={{ background: '#8b5cf6', color: 'var(--text-primary)', border: 'none', boxShadow: '0 4px 15px rgba(139, 92, 246, 0.5)' }}>Commit Active CPQ Engine</button>
             </div>
           </div>
         </div>
@@ -126,7 +126,7 @@ export default function CPQBuilder({ dealId }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         {quotes.length === 0 && !isBuilding && <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic', padding: '1rem 0', opacity: 0.5 }}>No Configure, Price, Quote schemas established upon this database entity.</p>}
         {quotes.map(q => (
-          <div key={q.id} style={{ background: 'rgba(255,255,255,0.02)', padding: '1.5rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden' }}>
+          <div key={q.id} style={{ background: 'var(--subtle-bg-2)', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)', position: 'relative', overflow: 'hidden' }}>
             <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: '4px', background: '#8b5cf6' }}></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
               <div>
@@ -139,10 +139,10 @@ export default function CPQBuilder({ dealId }) {
               </div>
             </div>
             
-            <div style={{ background: 'rgba(0,0,0,0.5)', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.02)' }}>
+            <div style={{ background: 'var(--surface-color)', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
               {q.lineItems.map(li => (
-                <div key={li.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.02)', fontSize: '0.875rem' }}>
-                  <span style={{ color: '#e2e8f0' }}>{li.quantity}x {li.productName}</span>
+                <div key={li.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)', fontSize: '0.875rem' }}>
+                  <span style={{ color: 'var(--text-primary)' }}>{li.quantity}x {li.productName}</span>
                   <span style={{ color: li.isRecurring ? '#8b5cf6' : 'var(--text-secondary)', fontWeight: li.isRecurring ? 'bold' : 'normal' }}>${li.unitPrice.toLocaleString()}{li.isRecurring ? '/mo' : ''}</span>
                 </div>
               ))}

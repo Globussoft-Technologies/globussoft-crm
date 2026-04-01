@@ -74,14 +74,14 @@ export default function DealModal({ deal, onClose }) {
   if (!deal) return null;
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(10px)', zIndex: 9999, display: 'flex', justifyContent: 'center', alignItems: 'center', animation: 'fadeIn 0.2s ease-out' }} onClick={onClose}>
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(10px)', zIndex: 9999, display: 'flex', justifyContent: 'center', alignItems: 'center', animation: 'fadeIn 0.2s ease-out' }} onClick={onClose}>
       <div 
         className="card modal"
         role="dialog" 
-        style={{ width: '800px', height: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)' }} 
+        style={{ width: '800px', height: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border-color)', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)' }} 
         onClick={e => e.stopPropagation()}
       >
-        <header style={{ padding: '2rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)' }}>
+        <header style={{ padding: '2rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--subtle-bg-2)' }}>
           <div>
             <h2 style={{ fontSize: '1.75rem', fontWeight: 'bold' }}>{deal.title}</h2>
             <p style={{ color: 'var(--text-secondary)' }}>{deal.company} • ${(deal.amount || 0).toLocaleString()} • Stage: {deal.stage.toUpperCase()}</p>
@@ -111,7 +111,7 @@ export default function DealModal({ deal, onClose }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               {attachments.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem', border: '1px dashed var(--border-color)', borderRadius: '12px' }}>No documents attached to this deal.</p>}
               {attachments.map(att => (
-                <div key={att.id} style={{ padding: '1rem', border: '1px solid var(--border-color)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)' }}>
+                <div key={att.id} style={{ padding: '1rem', border: '1px solid var(--border-color)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--subtle-bg-2)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: 'rgba(59, 130, 246, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3b82f6' }}>
                       <FileText size={20} />
@@ -130,7 +130,7 @@ export default function DealModal({ deal, onClose }) {
 
             <CPQBuilder dealId={deal.id} />
             
-            <div style={{ marginTop: '2rem', background: 'rgba(255,255,255,0.02)', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+            <div style={{ marginTop: '2rem', background: 'var(--subtle-bg-2)', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
               <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <FileText size={20} color="var(--accent-color)" /> Deal Notes & Tasks
               </h3>

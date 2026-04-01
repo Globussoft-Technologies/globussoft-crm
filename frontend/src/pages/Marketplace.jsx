@@ -54,7 +54,7 @@ export default function Marketplace() {
               {installed && <div style={{ position: 'absolute', top: 0, right: 0, padding: '0.25rem 1rem', background: 'var(--accent-color)', color: '#fff', fontSize: '0.75rem', fontWeight: 'bold', borderBottomLeftRadius: '8px', zIndex: 1 }}>Authenticated</div>}
               
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
-                <div style={{ background: 'rgba(255,255,255,0.05)', padding: '0.75rem', borderRadius: '12px' }}>
+                <div style={{ background: 'var(--subtle-bg)', padding: '0.75rem', borderRadius: '12px' }}>
                   {app.icon}
                 </div>
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>{app.name}</h3>

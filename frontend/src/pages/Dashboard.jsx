@@ -46,10 +46,10 @@ export default function Dashboard() {
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
-          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', background: 'linear-gradient(to right, var(--text-primary), var(--text-secondary))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
             Enterprise Overview
           </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Here's your business at a glance. Press <kbd style={{background:'rgba(255,255,255,0.1)', padding:'2px 6px', borderRadius:'4px', color:'var(--accent-color)'}}>Cmd K</kbd> to search globally.</p>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Here's your business at a glance. Press <kbd style={{background:'var(--kbd-bg)', padding:'2px 6px', borderRadius:'4px', color:'var(--accent-color)'}}>Cmd K</kbd> to search globally.</p>
         </div>
         <button className="btn-primary" onClick={() => navigate('/reports')}>Generate Report</button>
       </header>
@@ -57,7 +57,7 @@ export default function Dashboard() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
         {stats.map((stat, i) => (
           <div key={i} className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: `rgba(255,255,255,0.05)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: stat.color, border: `1px solid ${stat.color}40`, boxShadow: `0 0 15px ${stat.color}40` }}>
+            <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--subtle-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: stat.color, border: `1px solid ${stat.color}40`, boxShadow: `0 0 15px ${stat.color}40` }}>
               {stat.icon}
             </div>
             <div>
@@ -93,10 +93,10 @@ export default function Dashboard() {
                 <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
                 <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `$${value/1000}k`} />
                 <Tooltip 
-                  contentStyle={{ backgroundColor: 'rgba(11, 12, 16, 0.9)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px' }}
-                  itemStyle={{ color: '#fff' }}
+                  contentStyle={{ backgroundColor: 'var(--tooltip-bg)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px' }}
+                  itemStyle={{ color: 'var(--text-primary)' }}
                 />
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                 <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorValue)" />
               </AreaChart>
             </ResponsiveContainer>

@@ -52,7 +52,7 @@ export default function ContactsDetail() {
       </button>
 
       <div className="card" style={{ padding: '3rem', display: 'flex', gap: '3rem', alignItems: 'flex-start' }}>
-        <div style={{ width: '120px', height: '120px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(168, 85, 247, 0.2))', border: '2px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-color)', flexShrink: 0 }}>
+        <div style={{ width: '120px', height: '120px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(168, 85, 247, 0.2))', border: '2px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-color)', flexShrink: 0 }}>
           <User size={64} />
         </div>
         
@@ -76,30 +76,30 @@ export default function ContactsDetail() {
             </span>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', padding: '1.5rem', background: 'var(--subtle-bg-2)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', color: 'var(--text-secondary)' }}><Mail size={18}/></div>
+              <div style={{ padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '8px', color: 'var(--text-secondary)' }}><Mail size={18}/></div>
               <div>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Email Address</p>
                 <p style={{ fontWeight: '500' }}>{contact.email}</p>
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', color: 'var(--text-secondary)' }}><Phone size={18}/></div>
+              <div style={{ padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '8px', color: 'var(--text-secondary)' }}><Phone size={18}/></div>
               <div>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Phone Number</p>
                 <p style={{ fontWeight: '500' }}>{contact.phone || 'Not Provided'}</p>
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', color: 'var(--text-secondary)' }}><Building size={18}/></div>
+              <div style={{ padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '8px', color: 'var(--text-secondary)' }}><Building size={18}/></div>
               <div>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Organization</p>
                 <p style={{ fontWeight: '500' }}>{contact.company || 'Not Provided'}</p>
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', color: 'var(--text-secondary)' }}><Clock size={18}/></div>
+              <div style={{ padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '8px', color: 'var(--text-secondary)' }}><Clock size={18}/></div>
               <div>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Record Created</p>
                 <p style={{ fontWeight: '500' }}>{contact.createdAt ? new Date(contact.createdAt).toLocaleDateString() : 'Unknown'}</p>
@@ -131,8 +131,8 @@ export default function ContactsDetail() {
                   No recent interactions logged for this contact.
                 </div>
               ) : contact.activities.map(act => (
-                <div key={act.id} style={{ display: 'flex', gap: '1.5rem', padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', borderLeft: '4px solid var(--accent-color)' }}>
-                  <div style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '50%', height: '40px', width: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div key={act.id} style={{ display: 'flex', gap: '1.5rem', padding: '1.5rem', background: 'var(--subtle-bg-2)', borderRadius: '8px', borderLeft: '4px solid var(--accent-color)' }}>
+                  <div style={{ padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '50%', height: '40px', width: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     {act.type === 'Email' ? <Mail size={18} color="var(--success-color)"/> : act.type === 'Call' ? <Phone size={18} color="var(--warning-color)"/> : <FileText size={18} color="var(--accent-color)" />}
                   </div>
                   <div>

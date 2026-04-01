@@ -136,7 +136,7 @@ export default function Contracts() {
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-          background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
+          background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
           display: 'flex', alignItems: 'center', gap: '0.3rem',
         }}>
           <DollarSign size={14} /> {activeValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} active value
@@ -166,7 +166,7 @@ export default function Contracts() {
                 className="input-field"
                 value={form.contactId}
                 onChange={e => setForm({ ...form, contactId: e.target.value })}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
               >
                 <option value="">-- Select Contact --</option>
                 {contacts.map(c => (
@@ -181,7 +181,7 @@ export default function Contracts() {
                 className="input-field"
                 value={form.dealId}
                 onChange={e => setForm({ ...form, dealId: e.target.value })}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
               >
                 <option value="">-- No Deal --</option>
                 {deals.map(d => (
@@ -240,7 +240,7 @@ export default function Contracts() {
           </h3>
 
           {contracts.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
               <FileText size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
               <p style={{ color: 'var(--text-secondary)' }}>No contracts yet. Create your first contract to get started.</p>
             </div>
@@ -262,7 +262,7 @@ export default function Contracts() {
                 <tbody>
                   {contracts.map(c => (
                     <tr key={c.id} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.2s' }}
-                      onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+                      onMouseOver={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                       onMouseOut={e => e.currentTarget.style.background = 'transparent'}
                     >
                       <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600' }}>{c.title}</td>

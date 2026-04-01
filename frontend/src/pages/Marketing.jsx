@@ -73,7 +73,7 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Manage outbound campaigns and inbound lead capture forms.</p>
         </div>
         
-        <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', padding: '0.25rem' }}>
+        <div style={{ display: 'flex', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '0.25rem' }}>
           <button onClick={() => setActiveTab('campaigns')} style={{ padding: '0.5rem 1rem', borderRadius: '6px', border: 'none', cursor: 'pointer', background: activeTab === 'campaigns' ? 'var(--primary-color)' : 'transparent', color: activeTab === 'campaigns' ? '#fff' : 'var(--text-secondary)', fontWeight: activeTab === 'campaigns' ? '600' : '400' }}>Email Campaigns</button>
           <button onClick={() => setActiveTab('forms')} style={{ padding: '0.5rem 1rem', borderRadius: '6px', border: 'none', cursor: 'pointer', background: activeTab === 'forms' ? 'var(--primary-color)' : 'transparent', color: activeTab === 'forms' ? '#fff' : 'var(--text-secondary)', fontWeight: activeTab === 'forms' ? '600' : '400' }}>Embedded Forms</button>
         </div>
@@ -97,21 +97,21 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
                     </div>
                     <h3 style={{ fontSize: '1.125rem', fontWeight: 'bold' }}>{camp.name}</h3>
                   </div>
-                  <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', background: 'rgba(255,255,255,0.1)', borderRadius: '12px' }}>{camp.status}</span>
+                  <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', background: 'var(--subtle-bg-3)', borderRadius: '12px' }}>{camp.status}</span>
                 </div>
                 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginTop: '1.5rem' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'var(--table-header-bg)', padding: '0.75rem', borderRadius: '8px' }}>
                     <Send size={16} color="var(--text-secondary)" style={{ marginBottom: '0.25rem' }}/>
                     <span style={{ fontSize: '1.25rem', fontWeight: '600' }}>{camp.sent}</span>
                     <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Sent</span>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'var(--table-header-bg)', padding: '0.75rem', borderRadius: '8px' }}>
                     <BarChart size={16} color="var(--text-secondary)" style={{ marginBottom: '0.25rem' }}/>
                     <span style={{ fontSize: '1.25rem', fontWeight: '600' }}>{camp.opened}%</span>
                     <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Open Rate</span>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'var(--table-header-bg)', padding: '0.75rem', borderRadius: '8px' }}>
                     <MousePointerClick size={16} color="var(--text-secondary)" style={{ marginBottom: '0.25rem' }}/>
                     <span style={{ fontSize: '1.25rem', fontWeight: '600' }}>{camp.clicked}%</span>
                     <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Click Rate</span>
@@ -121,7 +121,7 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
             ))}
             
             {campaigns.length === 0 && (
-              <div style={{ gridColumn: '1 / -1', padding: '4rem', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px dashed rgba(255,255,255,0.1)' }}>
+              <div style={{ gridColumn: '1 / -1', padding: '4rem', textAlign: 'center', background: 'var(--subtle-bg-2)', borderRadius: '12px', border: '1px dashed var(--border-color)' }}>
                 <Megaphone size={48} color="var(--text-secondary)" style={{ opacity: 0.3, margin: '0 auto 1rem' }} />
                 <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem' }}>No campaigns found</h3>
                 <p style={{ color: 'var(--text-secondary)' }}>Launch your first email campaign to start tracking engagement.</p>
@@ -163,8 +163,8 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
               <h4 style={{ fontSize: '1rem', fontWeight: '600' }}>Fields</h4>
               {fields.map((field, idx) => (
-                <div key={field.id} style={{ display: 'flex', gap: '1rem', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem' }}>{idx + 1}</div>
+                <div key={field.id} style={{ display: 'flex', gap: '1rem', alignItems: 'center', background: 'var(--subtle-bg-2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                  <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--subtle-bg-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem' }}>{idx + 1}</div>
                   <input type="text" className="input-field" value={field.label} onChange={e => {
                     const newFields = [...fields];
                     newFields[idx].label = e.target.value;

@@ -28,6 +28,16 @@
   --scrollbar-thumb: rgba(255, 255, 255, 0.1);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
   --card-shimmer: rgba(255, 255, 255, 0.03);
+
+  --overlay-bg: rgba(0, 0, 0, 0.6);
+  --subtle-bg: rgba(255, 255, 255, 0.05);
+  --subtle-bg-2: rgba(255, 255, 255, 0.02);
+  --subtle-bg-3: rgba(255, 255, 255, 0.1);
+  --subtle-bg-4: rgba(255, 255, 255, 0.04);
+  --table-header-bg: rgba(0, 0, 0, 0.2);
+  --tooltip-bg: rgba(11, 12, 16, 0.9);
+  --hover-bg: rgba(255, 255, 255, 0.03);
+  --kbd-bg: rgba(255, 255, 255, 0.1);
 }
 
 [data-theme="light"] {
@@ -54,6 +64,16 @@
   --scrollbar-thumb: rgba(0, 0, 0, 0.15);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.25);
   --card-shimmer: rgba(0, 0, 0, 0.02);
+
+  --overlay-bg: rgba(0, 0, 0, 0.4);
+  --subtle-bg: rgba(0, 0, 0, 0.04);
+  --subtle-bg-2: rgba(0, 0, 0, 0.02);
+  --subtle-bg-3: rgba(0, 0, 0, 0.06);
+  --subtle-bg-4: rgba(0, 0, 0, 0.03);
+  --table-header-bg: rgba(0, 0, 0, 0.04);
+  --tooltip-bg: rgba(255, 255, 255, 0.95);
+  --hover-bg: rgba(0, 0, 0, 0.03);
+  --kbd-bg: rgba(0, 0, 0, 0.08);
 }
 
 * {

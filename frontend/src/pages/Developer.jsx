@@ -88,7 +88,7 @@ export default function Developer() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {keys.map(k => (
-              <div key={k.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+              <div key={k.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
                 <div>
                   <h4 style={{ fontWeight: '600', fontSize: '1rem' }}>{k.name}</h4>
                   <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontFamily: 'monospace', letterSpacing: '0.1em', marginTop: '0.25rem' }}>{k.keySecret.substring(0, 10)}****************</p>
@@ -98,7 +98,7 @@ export default function Developer() {
                 </button>
               </div>
             ))}
-            {keys.length === 0 && <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', textAlign: 'center' }}>No active API keys located.</p>}
+            {keys.length === 0 && <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', padding: '1rem', background: 'var(--subtle-bg)', borderRadius: '8px', textAlign: 'center' }}>No active API keys located.</p>}
           </div>
         </div>
 
@@ -113,7 +113,7 @@ export default function Developer() {
 
           <form onSubmit={registerWebhook} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
             <div style={{ display: 'flex', gap: '1rem' }}>
-              <select className="input-field" style={{ margin: 0, width: '200px', background: '#0f172a' }} value={newHook.event} onChange={e => setNewHook({ ...newHook, event: e.target.value })}>
+              <select className="input-field" style={{ margin: 0, width: '200px', background: 'var(--input-bg)' }} value={newHook.event} onChange={e => setNewHook({ ...newHook, event: e.target.value })}>
                 <option value="deal.created">Deal Created</option>
                 <option value="deal.won">Deal Won</option>
                 <option value="contact.created">Contact Created</option>
@@ -125,7 +125,7 @@ export default function Developer() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {hooks.map(h => (
-              <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+              <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
                 <div>
                   <h4 style={{ fontWeight: '600', fontSize: '1rem', color: 'var(--success-color)', display: 'inline-block', padding: '0.25rem 0.5rem', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '4px' }}>{h.event}</h4>
                   <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.75rem' }}>POST: {h.targetUrl}</p>
@@ -135,7 +135,7 @@ export default function Developer() {
                 </button>
               </div>
             ))}
-            {hooks.length === 0 && <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', textAlign: 'center' }}>No registered webhook listeners.</p>}
+            {hooks.length === 0 && <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', padding: '1rem', background: 'var(--subtle-bg)', borderRadius: '8px', textAlign: 'center' }}>No registered webhook listeners.</p>}
           </div>
         </div>
 

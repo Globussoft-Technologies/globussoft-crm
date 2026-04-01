@@ -154,7 +154,7 @@ export default function Expenses() {
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-          background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
+          background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
         }}>
           {expenses.length} total expenses
         </span>
@@ -184,7 +184,7 @@ export default function Expenses() {
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Category</label>
               <select className="input-field" value={form.category}
                 onChange={e => setForm({ ...form, category: e.target.value })}
-                style={{ background: '#0f172a' }}>
+                style={{ background: 'var(--input-bg)' }}>
                 {CATEGORY_OPTIONS.map(cat => <option key={cat} value={cat}>{cat}</option>)}
               </select>
             </div>
@@ -199,7 +199,7 @@ export default function Expenses() {
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Associated Contact</label>
               <select className="input-field" value={form.contactId}
                 onChange={e => setForm({ ...form, contactId: e.target.value })}
-                style={{ background: '#0f172a' }}>
+                style={{ background: 'var(--input-bg)' }}>
                 <option value="">-- None --</option>
                 {contacts.map(c => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
               </select>
@@ -244,7 +244,7 @@ export default function Expenses() {
                 <tbody>
                   {expenses.map(exp => (
                     <tr key={exp.id} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s' }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{exp.title}</td>
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '600', color: '#10b981' }}>

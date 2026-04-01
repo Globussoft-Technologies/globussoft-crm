@@ -72,7 +72,7 @@ export default function Workflows() {
          </button>
       </header>
 
-      <div style={{ flex: 1, border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', overflow: 'hidden', background: '#0f172a', boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)' }}>
+      <div style={{ flex: 1, border: '1px solid var(--border-color)', borderRadius: '12px', overflow: 'hidden', background: 'var(--input-bg)', boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)' }}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -82,13 +82,13 @@ export default function Workflows() {
           fitView
           theme="dark"
         >
-          <Panel position="top-left" style={{ display: 'flex', gap: '1rem', background: 'rgba(0,0,0,0.6)', padding: '0.75rem', borderRadius: '8px', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.05)' }}>
+          <Panel position="top-left" style={{ display: 'flex', gap: '1rem', background: 'var(--surface-color)', padding: '0.75rem', borderRadius: '8px', backdropFilter: 'blur(10px)', border: '1px solid var(--border-color)' }}>
             <button onClick={() => addNode('default', 'CONDITION: Value > $10,000', '#f59e0b')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Database size={16} /> Data Check</button>
             <button onClick={() => addNode('output', 'ACTION: Issue Final Invoice', '#3b82f6')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Mail size={16} /> Emit Invoice</button>
             <button onClick={() => addNode('output', 'WEBHOOK: Dispatch Payload', '#ec4899')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Zap size={16} /> POST Call</button>
           </Panel>
           <Background color="#334155" gap={20} size={1.5} />
-          <Controls style={{ background: '#1e293b', fill: '#fff', border: '1px solid rgba(255,255,255,0.1)' }} />
+          <Controls style={{ background: 'var(--input-bg)', fill: 'var(--text-primary)', border: '1px solid var(--border-color)' }} />
         </ReactFlow>
       </div>
     </div>

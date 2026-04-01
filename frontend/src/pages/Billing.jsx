@@ -69,7 +69,7 @@ export default function Billing() {
             
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Billed Entity (Contact Profile)</label>
-              <select className="input-field" required value={newInvoice.contactId} onChange={e => setNewInvoice({...newInvoice, contactId: e.target.value})} style={{ background: '#0f172a' }}>
+              <select className="input-field" required value={newInvoice.contactId} onChange={e => setNewInvoice({...newInvoice, contactId: e.target.value})} style={{ background: 'var(--input-bg)' }}>
                 <option value="">-- Select Contact --</option>
                 {contacts.map(c => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
               </select>
@@ -77,7 +77,7 @@ export default function Billing() {
 
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Associate Deal Track (Optional)</label>
-              <select className="input-field" value={newInvoice.dealId} onChange={e => setNewInvoice({...newInvoice, dealId: e.target.value})} style={{ background: '#0f172a' }}>
+              <select className="input-field" value={newInvoice.dealId} onChange={e => setNewInvoice({...newInvoice, dealId: e.target.value})} style={{ background: 'var(--input-bg)' }}>
                 <option value="">-- Standalone Invoice --</option>
                 {deals.map(d => <option key={d.id} value={d.id}>{d.title} - ${d.amount.toLocaleString()}</option>)}
               </select>
@@ -106,7 +106,7 @@ export default function Billing() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {invoices.map(inv => (
-              <div key={inv.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.5rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '8px', transition: 'transform 0.2s', ':hover': { transform: 'scale(1.01)'} }}>
+              <div key={inv.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.5rem', background: 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: '8px', transition: 'transform 0.2s', ':hover': { transform: 'scale(1.01)'} }}>
                 
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem' }}>
@@ -154,7 +154,7 @@ export default function Billing() {
             ))}
             
             {invoices.length === 0 && (
-              <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+              <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
                 <CreditCard size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
                 <p style={{ color: 'var(--text-secondary)' }}>The financial ledger is currently isolated and idle.</p>
               </div>

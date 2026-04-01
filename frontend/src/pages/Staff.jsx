@@ -90,13 +90,13 @@ export default function Staff() {
             {managerCount} Managers
           </span>
           <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(255,255,255,0.04)',
+            padding: '0.4rem 1rem', borderRadius: '999px', background: 'var(--subtle-bg-4)',
             color: 'var(--text-secondary)', fontSize: '0.8rem', border: '1px solid var(--border-color)',
           }}>
             {userCount} Users
           </span>
           <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(255,255,255,0.04)',
+            padding: '0.4rem 1rem', borderRadius: '999px', background: 'var(--subtle-bg-4)',
             color: 'var(--text-secondary)', fontSize: '0.8rem', border: '1px solid var(--border-color)',
           }}>
             {staff.length} total
@@ -132,7 +132,7 @@ export default function Staff() {
               <tbody>
                 {staff.map(member => (
                   <tr key={member.id} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s' }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
                     <td style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>

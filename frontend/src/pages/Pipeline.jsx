@@ -158,7 +158,7 @@ const Pipeline = () => {
                 <div style={{ padding: '1.25rem', borderBottom: `2px solid ${stage.color}` }}>
                   <h3 style={{ fontSize: '1rem', fontWeight: '600', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     {stage.title}
-                    <span style={{ fontSize: '0.75rem', padding: '2px 8px', background: 'rgba(255,255,255,0.1)', borderRadius: '12px' }}>{stageDeals.length}</span>
+                    <span style={{ fontSize: '0.75rem', padding: '2px 8px', background: 'var(--subtle-bg-3)', borderRadius: '12px' }}>{stageDeals.length}</span>
                   </h3>
                   <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem', fontWeight: '500' }}>
                     ${totalValue.toLocaleString()}
@@ -210,7 +210,7 @@ const Pipeline = () => {
       )}
 
       {showModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}>
           <div className="card modal" role="dialog" style={{ padding: '2.5rem', width: '450px' }}>
             <h3 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 'bold' }}>Add New Deal</h3>
             <form onSubmit={handleAddDeal} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -248,7 +248,7 @@ const Pipeline = () => {
       )}
 
       {aiScoreModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 150, animation: 'fadeIn 0.3s ease-out' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 150, animation: 'fadeIn 0.3s ease-out' }}>
           <div className="card" style={{ padding: '2.5rem', width: '500px', border: '1px solid #a855f7', boxShadow: '0 10px 40px rgba(168, 85, 247, 0.2)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -270,7 +270,7 @@ const Pipeline = () => {
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>AI Confidence Level:</span>
-                <span style={{ padding: '0.25rem 0.75rem', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.1)', fontSize: '0.875rem' }}>
+                <span style={{ padding: '0.25rem 0.75rem', borderRadius: '12px', backgroundColor: 'var(--subtle-bg-3)', fontSize: '0.875rem' }}>
                   {aiScoreModal.confidence}
                 </span>
               </div>
@@ -279,11 +279,11 @@ const Pipeline = () => {
             <div style={{ marginBottom: '1.5rem' }}>
               <h5 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '0.75rem' }}>Predictive Variables</h5>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px' }}>
+                <div style={{ padding: '1rem', background: 'var(--subtle-bg)', borderRadius: '8px' }}>
                   <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Stage Weighting</p>
                   <p style={{ fontWeight: '500' }}>+{aiScoreModal.predictiveVariables.stageWeight}</p>
                 </div>
-                <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px' }}>
+                <div style={{ padding: '1rem', background: 'var(--subtle-bg)', borderRadius: '8px' }}>
                   <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Budget Bonus</p>
                   <p style={{ fontWeight: '500' }}>+{aiScoreModal.predictiveVariables.budgetBonus}</p>
                 </div>

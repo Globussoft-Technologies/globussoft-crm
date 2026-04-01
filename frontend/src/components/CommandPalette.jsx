@@ -50,13 +50,13 @@ const CommandPalette = () => {
   };
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)', zIndex: 9999, display: 'flex', justifyContent: 'center', paddingTop: '10vh', animation: 'fadeIn 0.2s ease-out' }} onClick={() => setIsOpen(false)}>
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(12px)', zIndex: 9999, display: 'flex', justifyContent: 'center', paddingTop: '10vh', animation: 'fadeIn 0.2s ease-out' }} onClick={() => setIsOpen(false)}>
       <div 
         className="card" 
-        style={{ width: '600px', maxHeight: '60vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)' }} 
+        style={{ width: '600px', maxHeight: '60vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border-color)', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)' }} 
         onClick={e => e.stopPropagation()}
       >
-        <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(255,255,255,0.02)' }}>
+        <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--subtle-bg-2)' }}>
           <Search size={24} color="var(--text-secondary)" />
           <input 
             ref={inputRef}
@@ -66,7 +66,7 @@ const CommandPalette = () => {
             onChange={e => setQuery(e.target.value)}
             style={{ flex: 1, background: 'transparent', border: 'none', color: 'var(--text-primary)', fontSize: '1.25rem', outline: 'none' }}
           />
-          <button style={{ background: 'rgba(255,255,255,0.1)', border: 'none', padding: '0.25rem 0.5rem', borderRadius: '4px', color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 'bold' }}>ESC</button>
+          <button style={{ background: 'var(--subtle-bg-3)', border: 'none', padding: '0.25rem 0.5rem', borderRadius: '4px', color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 'bold' }}>ESC</button>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
@@ -110,7 +110,7 @@ const CommandPalette = () => {
                         <p style={{ fontWeight: '500' }}>{deal.title}</p>
                         <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{deal.company} • ${(deal.amount || 0).toLocaleString()}</p>
                       </div>
-                      <span style={{ fontSize: '0.75rem', padding: '0.1rem 0.5rem', borderRadius: '8px', background: 'rgba(255,255,255,0.1)' }}>{deal.stage}</span>
+                      <span style={{ fontSize: '0.75rem', padding: '0.1rem 0.5rem', borderRadius: '8px', background: 'var(--subtle-bg-3)' }}>{deal.stage}</span>
                     </div>
                   ))}
                 </div>
@@ -147,8 +147,8 @@ const CommandPalette = () => {
 
         </div>
         <div style={{ padding: '0.75rem 1rem', background: 'var(--surface-color)', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'center', gap: '2rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-          <span style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ padding: '0.2rem 0.4rem', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', fontWeight: 'bold' }}>↑↓</span> to navigate</span>
-          <span style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ padding: '0.2rem 0.4rem', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', fontWeight: 'bold' }}>Enter</span> to select</span>
+          <span style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ padding: '0.2rem 0.4rem', background: 'var(--subtle-bg-3)', borderRadius: '4px', fontWeight: 'bold' }}>↑↓</span> to navigate</span>
+          <span style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ padding: '0.2rem 0.4rem', background: 'var(--subtle-bg-3)', borderRadius: '4px', fontWeight: 'bold' }}>Enter</span> to select</span>
         </div>
       </div>
     </div>

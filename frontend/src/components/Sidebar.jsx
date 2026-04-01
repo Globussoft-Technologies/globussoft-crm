@@ -22,6 +22,9 @@ const Sidebar = () => {
         <NavLink to="/pipeline" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Briefcase size={20} /> Pipeline
         </NavLink>
+        <NavLink to="/cpq" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <FileDigit size={20} /> CPQ
+        </NavLink>
         <NavLink to="/marketing" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Send size={20} /> Marketing
         </NavLink>
@@ -70,7 +73,7 @@ const Sidebar = () => {
         <NavLink to="/objects" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Database size={20} /> App Builder
         </NavLink>
-        <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <NavLink to="/staff" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
             <UsersRound size={20} /> Staff
           </NavLink>
@@ -92,7 +95,7 @@ const navStyle = {
   padding: '0.75rem 1rem',
   gap: '0.75rem',
   borderRadius: '8px',
-  color: 'var(--text-secondary)',
+  color: 'var(--text-primary)',
   transition: 'all 0.2s ease',
   textDecoration: 'none'
 };

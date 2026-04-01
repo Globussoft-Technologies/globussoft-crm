@@ -17,11 +17,13 @@ const Developer = lazy(() => import('./pages/Developer'));
 const Billing = lazy(() => import('./pages/Billing'));
 const Portal = lazy(() => import('./pages/Portal'));
 const Marketplace = lazy(() => import('./pages/Marketplace'));
+const CPQ = lazy(() => import('./pages/CPQ'));
 const CustomObjects = lazy(() => import('./pages/CustomObjects'));
 const CustomObjectView = lazy(() => import('./pages/CustomObjectView'));
 const Sequences = lazy(() => import('./pages/Sequences'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 const Tickets = lazy(() => import('./pages/Tickets'));
+const Support = lazy(() => import('./pages/Support'));
 const Staff = lazy(() => import('./pages/Staff'));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const LeadScoring = lazy(() => import('./pages/LeadScoring'));
@@ -33,10 +35,12 @@ const Estimates = lazy(() => import('./pages/Estimates'));
 const Projects = lazy(() => import('./pages/Projects'));
 
 export const AuthContext = createContext();
+export const ThemeContext = createContext();
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('token') || null);
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
 
   useEffect(() => {
     if (token) {
@@ -46,10 +50,18 @@ export default function App() {
     }
   }, [token]);
 
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
+
   return (
+    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
     <AuthContext.Provider value={{ user, setUser, token, setToken }}>
       <BrowserRouter>
-        <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: 'var(--text-secondary)' }}>Loading...</div>}>
+        <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: 'var(--text-primary)' }}>Loading...</div>}>
           <Routes>
             <Route path="/login" element={!token ? <Login /> : <Navigate to="/" />} />
             <Route path="/signup" element={!token ? <Signup /> : <Navigate to="/" />} />
@@ -65,10 +77,12 @@ export default function App() {
               <Route path="workflows" element={<Workflows />} />
               <Route path="developer" element={<Developer />} />
               <Route path="billing" element={<Billing />} />
+              <Route path="cpq" element={<CPQ />} />
               <Route path="marketplace" element={<Marketplace />} />
               <Route path="objects" element={<CustomObjects />} />
               <Route path="objects/:entityName" element={<CustomObjectView />} />
               <Route path="sequences" element={<Sequences />} />
+              <Route path="support" element={<Support />} />
               <Route path="settings" element={<Settings />} />
               <Route path="expenses" element={<Expenses />} />
               <Route path="contracts" element={<Contracts />} />
@@ -86,5 +100,6 @@ export default function App() {
         </Suspense>
       </BrowserRouter>
     </AuthContext.Provider>
+    </ThemeContext.Provider>
   );
 }

@@ -105,6 +105,7 @@ const expensesRoutes = require("./routes/expenses");
 const contractsRoutes = require("./routes/contracts");
 const estimatesRoutes = require("./routes/estimates");
 const projectsRoutes = require("./routes/projects");
+const supportRoutes = require("./routes/support");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -140,6 +141,7 @@ app.use("/api/integrations", integrationsRoutes);
 app.use("/api/custom_objects", customObjectsRoutes);
 app.use("/api/sequences", sequencesRoutes);
 app.use("/api/cpq", cpqRoutes);
+app.use("/api/support", supportRoutes);
 app.use("/api/tasks", tasksRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/expenses", expensesRoutes);

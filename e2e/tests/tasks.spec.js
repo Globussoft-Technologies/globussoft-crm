@@ -70,18 +70,25 @@ test.describe('Tasks — Agent Priority Queue', () => {
     await assignBtn.click({ force: true });
     await page.waitForTimeout(2000);
 
-    // Find and click its Resolve button
-    const taskRow = page.locator('div').filter({ hasText: uniqueTitle }).first();
-    const resolveBtn = taskRow.locator('button').filter({ hasText: /Resolve/i }).first();
+    // Find the task's Resolve button in the Active Priority Queue section
+    const activeSection = page.locator('h3').filter({ hasText: /Active Priority Queue/i }).locator('..');
+    const taskHeading = activeSection.locator('h4').filter({ hasText: uniqueTitle }).first();
 
-    if (await resolveBtn.count() > 0) {
-      await resolveBtn.click({ force: true });
-      await page.waitForTimeout(3000);
-      // After resolving, the task should either appear in completed log or disappear from active list
-      const activeTask = page.locator('div').filter({ hasText: uniqueTitle }).locator('button').filter({ hasText: /Resolve/i }).first();
-      const stillActive = await activeTask.count();
-      // If it's no longer showing Resolve button, it was completed successfully
-      expect(stillActive).toBe(0);
+    if (await taskHeading.count() > 0) {
+      // Navigate up to the task row and find its Resolve button
+      const taskContainer = taskHeading.locator('..').locator('..');
+      const resolveBtn = taskContainer.locator('button').filter({ hasText: /Resolve/i }).first();
+
+      if (await resolveBtn.count() > 0) {
+        await resolveBtn.click({ force: true });
+        await page.waitForTimeout(3000);
+
+        // Verify: the task should now appear in the Completed Log section
+        const completedSection = page.locator('h3').filter({ hasText: /Completed Log/i }).locator('..');
+        const completedEntry = completedSection.locator(`text=${uniqueTitle}`).first();
+        const isCompleted = await completedEntry.count() > 0;
+        expect(isCompleted).toBeTruthy();
+      }
     }
     await page.screenshot({ path: 'playwright-results/tasks-completed.png' });
   });

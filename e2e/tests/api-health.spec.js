@@ -381,3 +381,146 @@ test.describe('API Health — Response shape validation', () => {
     }
   });
 });
+
+// ============================================================
+// Extended API Health Checks — All remaining backend routes
+// ============================================================
+
+test.describe('Extended API Health Checks', () => {
+  test('GET /api/tasks returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/tasks');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/tickets returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/tickets');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/staff returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/staff');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/expenses returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/expenses');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/contracts returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/contracts');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/estimates returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/estimates');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/projects returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/projects');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/sequences returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/sequences');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/custom_objects/entities returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/custom_objects/entities');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/cpq/products returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/cpq/products');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/search?q=test returns 200 with search results object', async ({ request }) => {
+    const response = await authGet(request, '/api/search?q=test');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(typeof body).toBe('object');
+    expect(Array.isArray(body)).toBe(false);
+  });
+
+  test('GET /api/workflows returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/workflows');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/reports/query returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/reports/query?metric=revenue&groupBy=stage');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/communications/inbox returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/communications/inbox');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/communications/calls returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/communications/calls');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/integrations returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/integrations');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('GET /api/support returns 200 with array', async ({ request }) => {
+    const response = await authGet(request, '/api/support');
+    expect(response.status()).toBe(200);
+    const body = await safeJson(response);
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body)).toBe(true);
+  });
+});

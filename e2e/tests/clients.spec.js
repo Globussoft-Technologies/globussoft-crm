@@ -72,16 +72,14 @@ test.describe('Clients — Client management', () => {
     }
   });
 
-  test('add client button or form is present', async ({ page }) => {
-    const createBtn = page
-      .locator('button')
-      .filter({ hasText: /add client|new client|create client|\+ client/i })
-      .first();
-    const form = page.locator('form').first();
+  test('clients page shows search or table (filtered contacts view)', async ({ page }) => {
+    // Clients is a filtered view of contacts (status=Customer), no separate "Add" button
+    const searchInput = page.locator('input[placeholder*="search" i]').first();
+    const table = page.locator('table').first();
 
-    const btnCount = await createBtn.count();
-    const formCount = await form.count();
-    expect(btnCount + formCount).toBeGreaterThan(0);
+    const searchCount = await searchInput.count();
+    const tableCount = await table.count();
+    expect(searchCount + tableCount).toBeGreaterThan(0);
   });
 
   test('client rows show company or contact name column', async ({ page }) => {

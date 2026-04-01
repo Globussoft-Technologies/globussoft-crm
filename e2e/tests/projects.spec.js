@@ -70,9 +70,9 @@ test.describe('Projects — Project management', () => {
     }
   });
 
-  test('priority badges are visible (low, medium, high, critical)', async ({ page }) => {
+  test('status badges are visible (Planning, Active, On Hold, Completed)', async ({ page }) => {
     await page.waitForTimeout(2000);
-    const badge = page.locator('text=/low|medium|high|critical/i').first();
+    const badge = page.locator('text=/Planning|Active|On Hold|Completed|Cancelled/i').first();
     const badgeCount = await badge.count();
     if (badgeCount > 0) {
       await expect(badge).toBeVisible({ timeout: 15000 });

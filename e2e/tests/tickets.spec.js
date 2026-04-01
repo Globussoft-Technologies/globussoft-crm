@@ -41,17 +41,19 @@ test.describe('Tickets — Support ticket management', () => {
       await page.waitForTimeout(500);
     }
 
-    // Subject field
+    // Subject field — has placeholder "e.g. Login page not loading" and label "Subject"
     const subjectField = page
-      .locator('input[placeholder*="subject" i], input[name*="subject" i], textarea[placeholder*="subject" i]')
+      .locator('input[placeholder*="subject" i], input[name*="subject" i], input[placeholder*="Login page" i]')
       .first();
-    // Priority field
+    // Priority field — select with Low/Medium/High/Urgent options, identified by label
     const priorityField = page
-      .locator('select[name*="priority" i], [placeholder*="priority" i]')
+      .locator('select')
+      .filter({ hasText: /Low|Medium|High|Urgent/i })
       .first();
-    // Assignee field
+    // Assignee field — select with "Unassigned" option
     const assigneeField = page
-      .locator('select[name*="assign" i], input[placeholder*="assign" i], [placeholder*="assignee" i]')
+      .locator('select')
+      .filter({ hasText: /Unassigned/i })
       .first();
 
     const subjectCount = await subjectField.count();

@@ -30,20 +30,16 @@ test.describe('Support — Ticket Management', () => {
     expect(errors).toHaveLength(0);
   });
 
-  test('shows support tickets or empty state', async ({ page }) => {
+  test('shows support tickets table', async ({ page }) => {
     await page.waitForTimeout(2000);
 
-    const ticketList = page.locator('text=/ticket|no tickets|empty/i').first();
-    const ticketCount = await ticketList.count();
+    // Support page always renders a table with headers
+    const table = page.locator('table').first();
+    await expect(table).toBeVisible({ timeout: 10000 });
 
-    if (ticketCount > 0) {
-      await expect(ticketList).toBeVisible();
-    }
-
-    // There should be either a ticket list, table, or an empty state
-    const contentArea = page.locator('table, .ticket-list, [class*="ticket"], ul, [class*="empty"], text=/no tickets|open|closed|pending/i').first();
-    const contentCount = await contentArea.count();
-    expect(contentCount).toBeGreaterThanOrEqual(0);
+    // Check for table headers
+    const subjectHeader = page.locator('th').filter({ hasText: /Subject/i }).first();
+    await expect(subjectHeader).toBeVisible({ timeout: 5000 });
   });
 
   test('has a form or button to create tickets', async ({ page }) => {

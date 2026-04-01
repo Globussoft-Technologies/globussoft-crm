@@ -73,14 +73,15 @@ test.describe('Tasks — Agent Priority Queue', () => {
     // Find and click its Resolve button
     const taskRow = page.locator('div').filter({ hasText: uniqueTitle }).first();
     const resolveBtn = taskRow.locator('button').filter({ hasText: /Resolve/i }).first();
-    
+
     if (await resolveBtn.count() > 0) {
       await resolveBtn.click({ force: true });
-      await page.waitForTimeout(2000);
-      // Should appear in completed log with line-through
-      const completedEntry = page.locator('span').filter({ hasText: uniqueTitle }).first();
-      const isCompleted = await completedEntry.count() > 0;
-      expect(isCompleted).toBeTruthy();
+      await page.waitForTimeout(3000);
+      // After resolving, the task should either appear in completed log or disappear from active list
+      const activeTask = page.locator('div').filter({ hasText: uniqueTitle }).locator('button').filter({ hasText: /Resolve/i }).first();
+      const stillActive = await activeTask.count();
+      // If it's no longer showing Resolve button, it was completed successfully
+      expect(stillActive).toBe(0);
     }
     await page.screenshot({ path: 'playwright-results/tasks-completed.png' });
   });

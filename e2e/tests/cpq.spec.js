@@ -33,17 +33,16 @@ test.describe('CPQ — Configure, Price, Quote', () => {
   test('displays deals list or empty state', async ({ page }) => {
     await page.waitForTimeout(2000);
 
-    const dealsList = page.locator('text=/deal|select a deal|no deals/i').first();
-    const dealsCount = await dealsList.count();
+    // CPQ page shows "Deal Selection" heading and either deals or "No deals available"
+    const dealSelection = page.locator('text=/Deal Selection/i').first();
+    const noDealMsg = page.locator('text=/No deals available|Loading deals/i').first();
+    const dealButtons = page.locator('button').filter({ hasText: /./  });
 
-    if (dealsCount > 0) {
-      await expect(dealsList).toBeVisible();
-    }
+    const headingCount = await dealSelection.count();
+    const msgCount = await noDealMsg.count();
 
-    // There should be either a deals list or an empty state message
-    const contentArea = page.locator('.deals-list, .deal-select, table, ul, [class*="deal"], [class*="empty"], text=/no deals|select/i').first();
-    const contentCount = await contentArea.count();
-    expect(contentCount).toBeGreaterThanOrEqual(0);
+    // Either the heading is visible, or a message, or deal buttons
+    expect(headingCount + msgCount).toBeGreaterThanOrEqual(1);
   });
 
   test('shows CPQ-related headings (Configure, Price, Quote)', async ({ page }) => {

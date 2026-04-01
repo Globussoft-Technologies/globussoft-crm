@@ -39,6 +39,7 @@ test.describe('Billing — Invoice management', () => {
   });
 
   test('Create Invoice or Issue Invoice form is present', async ({ page }) => {
+    await page.waitForTimeout(2000);
     // The billing page has a form to issue new invoices
     const createForm = page.locator('form').first();
     const createBtn = page

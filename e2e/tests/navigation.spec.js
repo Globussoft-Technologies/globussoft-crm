@@ -19,17 +19,18 @@ const SIDEBAR_ROUTES = [
   { label: 'Settings', path: '/settings', heading: /Settings|Organization/i },
 ];
 
-const PLACEHOLDER_ROUTES = [
-  { path: '/expenses', moduleName: 'Expenses' },
-  { path: '/contracts', moduleName: 'Contracts' },
-  { path: '/estimates', moduleName: 'Estimates' },
-  { path: '/invoices', moduleName: 'Invoices' },
-  { path: '/tickets', moduleName: 'Tickets' },
-  { path: '/tasks', moduleName: 'Tasks' },
-  { path: '/projects', moduleName: 'Projects' },
-  { path: '/clients', moduleName: 'Clients' },
-  { path: '/leads', moduleName: 'Leads' },
-  { path: '/staff', moduleName: 'Staff' },
+// These modules are now fully built — no longer placeholders
+const FULLY_BUILT_ROUTES = [
+  { path: '/expenses', heading: /Expenses/i },
+  { path: '/contracts', heading: /Contracts/i },
+  { path: '/estimates', heading: /Estimates/i },
+  { path: '/invoices', heading: /Invoices/i },
+  { path: '/tickets', heading: /Tickets/i },
+  { path: '/tasks', heading: /Task/i },
+  { path: '/projects', heading: /Projects/i },
+  { path: '/clients', heading: /Clients/i },
+  { path: '/leads', heading: /Leads/i },
+  { path: '/staff', heading: /Staff/i },
 ];
 
 const ALL_SIDEBAR_LINKS = [
@@ -122,30 +123,24 @@ test.describe('Navigation — Direct route access', () => {
   }
 });
 
-test.describe('Navigation — Placeholder pages', () => {
-  for (const placeholder of PLACEHOLDER_ROUTES) {
-    test(`${placeholder.path} shows "In Development" placeholder state`, async ({ page }) => {
-      await page.goto(placeholder.path);
+test.describe('Navigation — Fully built module pages', () => {
+  for (const route of FULLY_BUILT_ROUTES) {
+    test(`${route.path} renders with correct heading`, async ({ page }) => {
+      await page.goto(route.path);
       await page.waitForLoadState('domcontentloaded');
 
-      // Placeholder component shows module name + "under active development"
       await expect(
-        page.locator('h1, h2').filter({ hasText: new RegExp(`${placeholder.moduleName} Module`, 'i') }).first()
-      ).toBeVisible({ timeout: 10000 });
-
-      await expect(
-        page.locator('p').filter({ hasText: /under active development/i }).first()
+        page.locator('h1, h2').filter({ hasText: route.heading }).first()
       ).toBeVisible({ timeout: 10000 });
     });
   }
 
-  test('placeholder page renders construction icon', async ({ page }) => {
+  test('module page renders SVG icons', async ({ page }) => {
     await page.goto('/expenses');
     await page.waitForLoadState('domcontentloaded');
 
-    // Lucide Construction icon renders as SVG
-    const constructionIcon = page.locator('svg').first();
-    await expect(constructionIcon).toBeVisible();
+    const icon = page.locator('svg').first();
+    await expect(icon).toBeVisible();
 
     await page.screenshot({ path: 'playwright-results/navigation-placeholder.png' });
   });

@@ -21,7 +21,7 @@ const SIDEBAR_ROUTES = [
 
 // These modules are now fully built — no longer placeholders
 const FULLY_BUILT_ROUTES = [
-  { path: '/expenses', heading: /Expenses/i },
+  { path: '/expenses', heading: /Expense/i },
   { path: '/contracts', heading: /Contracts/i },
   { path: '/estimates', heading: /Estimates/i },
   { path: '/invoices', heading: /Invoices/i },

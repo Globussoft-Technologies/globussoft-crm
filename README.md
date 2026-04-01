@@ -1,62 +1,114 @@
 # Globussoft Enterprise CRM
 
-> A modern, premium Customer Relationship Management system built with React, Vite, Node.js, Express, and Prisma ORM.
+> A full-stack enterprise CRM built by Globussoft Technologies with glassmorphism UI, AI-powered lead scoring, dark/light theme, and 25+ fully functional modules.
 
-This application provides essential tools for managing contacts, tracking sales pipelines, executing complex AI sequences, and visualizing core metrics. The platform is engineered to mirror the capabilities of the world's top enterprise CRM suites with a relentless focus on aesthetics, rapid workflows, and scalability.
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v2.0.0
 
-## ✨ Core Modules & Available Features
+## Tech Stack
 
-The CRM is divided into high-performance web modules. Below is a comprehensive list of all functionalities developed and actively supported:
+| Layer | Technologies |
+|-------|-------------|
+| Frontend | React 18, Vite, React Router v6, React.lazy() code splitting, Lucide Icons, Recharts, ReactFlow, Socket.io-client |
+| Backend | Node.js, Express.js, Prisma ORM, MySQL, Socket.io, node-cron, express-rate-limit, Swagger UI |
+| Auth | JWT (bcryptjs), RBAC: ADMIN / MANAGER / USER |
+| Production | PM2, Nginx reverse proxy, Certbot SSL |
+| Testing | Playwright E2E (30 spec files, 270+ tests) |
+| Styling | Vanilla CSS with glassmorphism design, dark/light theme support |
 
-### 💼 Field Sales & Management
-- **Dashboard Analytics:** High-level executive overview of active MRR, revenue streams, and deal closures.
-- **Pipeline (Kanban):** Drag-and-drop opportunity management board to track deals across Lifecycle Stages.
-- **Contacts Directory:** A highly sortable, 360-degree ledger for managing individual B2B/B2C prospect profiles.
-- **Sequences & Workflows:** Visual automation orchestrators for drip campaigns and conditional outbound targeting.
+## Modules
 
-### 🌐 Operations & Productivity
-- **Omnichannel Inbox:** Unified communications nexus integrating synced email threads and SMS data.
-- **Settings & Security:** Enterprise RBAC (Role-Based Access Control) supporting `ADMIN`, `MANAGER`, and `USER` tiers.
-- **Marketing Hub:** Tools for executing scalable outreach and measuring outbound campaign effectiveness.
-- **Reports & Business Intelligence:** Analytical drill-downs of organizational performance (e.g., automated weekly PDF CRON summaries).
-- **Billing & Transactions:** Accounts receivable oversight for estimates, invoices, and expense tracking.
+### Sales & Pipeline
+- **Dashboard** - Executive analytics (MRR, revenue, deal closures, pipeline charts)
+- **Pipeline** - Kanban drag-and-drop deal board with real-time Socket.io sync
+- **Contacts** - 360-degree B2B/B2C directory with AI scoring
+- **Leads** - Filtered contacts (status=Lead) with convert-to-customer
+- **Clients** - Filtered contacts (status=Customer) with search
+- **Lead Scoring** - AI-powered scoring engine running on node-cron
 
-### 🛠️ Advanced Engineering & Customization
-- **App Builder (Custom Objects):** Define new proprietary dynamic database schemas on-the-fly directly from the user interface without touching raw SQL.
-- **Developer Portal & Webhooks:** First-class API key provisioning and granular webhook endpoint configurations for developers. 
-- **Real-Time Presence:** Powered by Socket.io, enabling real-time collaborative cursor tracking inside shared workspaces.
-- **Unified Modular Routing:** Broad fallback structures guarantee that newly activating endpoints (e.g., `Staff`, `Tasks`, `Tickets`) elegantly render "In Development" states securely without 404 crashes.
+### Automation & Communication
+- **Sequences** - Visual drip campaign builder with ReactFlow
+- **Workflows** - Automation rule engine with visual flow editor
+- **Inbox** - Omnichannel communications (email/SMS)
+- **Marketing** - Campaign management with metrics
 
-## 🛠 Tech Stack
+### Financial
+- **Billing** - Invoice overview and management
+- **Invoices** - Full CRUD with mark-paid, void, status badges
+- **Estimates** - Line-item estimates with convert-to-invoice
+- **Expenses** - Category tracking with approve/reject/reimburse workflow
+- **Contracts** - Contract lifecycle (Draft > Active > Expired > Terminated)
+- **CPQ** - Configure-Price-Quote builder with deal selection and line-item schemas
 
-- **Frontend Edge:** React.js 18, React Router v6, Vite build toolchain, Lucide Web Icons, Vanilla CSS (Glassmorphism UI Engine).
-- **Backend Core:** Node.js, Express.js REST API Architecture, Swagger UI.
-- **Database & State:** MySQL, Prisma ORM.
-- **Real-Time Delivery:** Socket.io, Node-Cron (Scheduling).
-- **Production Architecture:** PM2 Runtime, Nginx Reverse Proxy, Certbot SSL.
+### Project & Task Management
+- **Projects** - Project management with budget, status, and task association
+- **Task Queue** - Priority-based task management with status tracking
 
-## 🚀 Getting Started
+### Support
+- **Tickets** - Support ticketing with priority/status/assignee
+- **Support** - Customer helpdesk management
 
-Follow these instructions to spin up the local development servers.
+### Platform & Developer
+- **App Builder** - Custom Objects with dynamic schemas from UI (EAV pattern)
+- **Developer Portal** - API key provisioning and webhook configuration
+- **Staff** - User directory with RBAC role management (ADMIN only)
+- **Marketplace** - Integration catalog
+- **Settings** - Organization settings, user management, dark/light theme toggle
+- **Command Palette** - Quick navigation (Cmd+K / Ctrl+K)
+- **Softphone** - Twilio VoIP integration
+- **Real-time Presence** - Socket.io collaborative cursors
 
-### 1. Backend Setup
-1. Mount the `backend` directory: `cd backend`
-2. Install dependencies: `npm install`
-3. Generate the Prisma database maps: `npx prisma generate` && `npx prisma db push`
-4. Ignite the server: `npm run dev`
-   *(API securely mounted on http://localhost:5000 | Docs at `/api-docs`)*
+### Dark / Light Theme
+Full theme support across all pages. Toggle from Settings > Appearance. Persists across sessions via localStorage. Uses CSS custom properties with `[data-theme="light"]` overrides.
 
-### 2. Frontend Setup
-1. Mount the `frontend` directory: `cd frontend`
-2. Install dependencies: `npm install`
-3. Launch proxy server: `npm run dev`
-   *(Client UI mounted on http://localhost:5173)*
+## Getting Started
 
-## 🔒 Demo Credentials
-Test out the role-based functionality using the following seed identities:
-- **Admin Root:** admin@globussoft.com / `password123`
-- **Manager Node:** manager@crm.com / `password123`
-- **User Node:** user@crm.com / `password123`
+```bash
+# Backend
+cd backend && npm install
+npx prisma generate && npx prisma db push
+node prisma/seed.js   # Optional: seed demo data
+npm run dev            # API on http://localhost:5000, Swagger at /api-docs
+
+# Frontend
+cd frontend && npm install
+npm run dev            # UI on http://localhost:5173
+
+# E2E Tests
+cd e2e && npm install
+npx playwright test --project=chromium
+```
+
+## Demo Credentials
+
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | admin@globussoft.com | password123 |
+| Manager | manager@crm.com | password123 |
+| User | user@crm.com | password123 |
+| Test bypass | admin | admin |
+
+## API
+
+28 route modules, all prefixed with `/api/`, protected by JWT auth.
+
+Rate limiting: 5000 req/15min general, 1000 req/15min on auth.
+
+Interactive docs at `/api-docs` (Swagger UI).
+
+## E2E Testing
+
+30 Playwright spec files with 270+ tests covering all modules, API health, responsive design, theme toggle, and navigation flows.
+
+```bash
+cd e2e && npx playwright test --project=chromium
+```
+
+## Deployment
+
+- **Domain:** crm.globusdemos.com
+- **Architecture:** PM2 (backend) + Nginx (frontend static + reverse proxy) + Certbot SSL
+- **Deploy flow:** git pull > npm install > prisma generate > vite build > copy dist to Nginx > pm2 restart
 
 ---
-*Developed and maintained by the Engineering Org at Globussoft.*
+
+*Built by [Globussoft Technologies](https://globussoft.com)*

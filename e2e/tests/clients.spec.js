@@ -57,14 +57,15 @@ test.describe('Clients — Client management', () => {
     expect(value).toBe('acme');
   });
 
-  test('client name links navigate to detail page', async ({ page }) => {
+  test('client name links navigate to contact detail page', async ({ page }) => {
     await page.waitForTimeout(2000);
-    const clientLink = page.locator('a[href*="/clients/"]').first();
+    // Clients page links go to /contacts/:id (clients is a filtered view of contacts)
+    const clientLink = page.locator('a[href*="/contacts/"]').first();
     const linkCount = await clientLink.count();
     if (linkCount > 0) {
       await clientLink.click();
       await page.waitForLoadState('domcontentloaded');
-      await expect(page).toHaveURL(/\/clients\/.+/);
+      await expect(page).toHaveURL(/\/contacts\/.+/);
       await page.screenshot({ path: 'playwright-results/clients-detail.png' });
     } else {
       // No clients yet — skip gracefully

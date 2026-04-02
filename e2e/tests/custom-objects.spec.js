@@ -118,45 +118,49 @@ test.describe('App Builder — Custom Objects', () => {
   test('clicking a custom entity navigates to /objects/:entityName', async ({ page }) => {
     await page.waitForTimeout(2000);
 
-    const entityLink = page.locator('a[href^="/objects/"]').first();
-    const linkCount = await entityLink.count();
+    // Custom Objects page uses buttons with window.location.href, not <a> links
+    const entityBtn = page.locator('button').filter({ hasText: /Access Dataset Records/i }).first();
+    const btnCount = await entityBtn.count();
 
-    if (linkCount > 0) {
-      await entityLink.click();
+    if (btnCount > 0) {
+      await entityBtn.click();
       await page.waitForLoadState('domcontentloaded');
 
       await expect(page).toHaveURL(/\/objects\/.+/);
       await page.waitForTimeout(1000);
       await page.screenshot({ path: 'playwright-results/custom-objects-entity-view.png' });
     } else {
-      test.skip(true, 'No custom entity links found');
+      test.skip(true, 'No custom entity buttons found');
     }
   });
 
   test('can open Add Record modal inside an entity view', async ({ page }) => {
     await page.waitForTimeout(2000);
 
-    const entityLink = page.locator('a[href^="/objects/"]').first();
-    const linkCount = await entityLink.count();
+    // Navigate to an entity view first
+    const entityBtn = page.locator('button').filter({ hasText: /Access Dataset Records/i }).first();
+    const btnCount = await entityBtn.count();
 
-    if (linkCount > 0) {
-      // First column is usually standard Fields
-      await entityLink.click();
+    if (btnCount > 0) {
+      await entityBtn.click();
       await page.waitForLoadState('domcontentloaded');
-      
-      const addRecordBtn = page.locator('button').filter({ hasText: /add record|\+ record/i }).first();
-      const btnCount = await addRecordBtn.count();
-      
-      if (btnCount > 0) {
+      await page.waitForTimeout(1000);
+
+      // Look for Add/Insert/New record button
+      const addRecordBtn = page.locator('button').filter({ hasText: /add record|insert|new record|\+ record/i }).first();
+      const addCount = await addRecordBtn.count();
+
+      if (addCount > 0) {
         await addRecordBtn.click();
         await page.waitForTimeout(500);
-        const modal = page.locator('[role="dialog"], .modal').first();
-        await expect(modal).toBeVisible({ timeout: 5000 });
+        // After clicking, a form should appear
+        const form = page.locator('form').first();
+        await expect(form).toBeVisible({ timeout: 5000 });
       } else {
         test.skip(true, 'Add Record button not found in entity view');
       }
     } else {
-      test.skip(true, 'No custom entity links found');
+      test.skip(true, 'No custom entity buttons found');
     }
   });
 

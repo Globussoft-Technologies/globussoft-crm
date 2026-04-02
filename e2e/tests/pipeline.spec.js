@@ -114,8 +114,8 @@ test.describe('Pipeline — Kanban board', () => {
   test('AI Score button is visible on deal cards', async ({ page }) => {
     await page.waitForTimeout(2000);
 
-    // The Pipeline has AI scoring buttons (Zap icon)
-    const aiBtn = page.locator('button svg[data-lucide="zap"], button', { hasText: /ai|score/i }).first();
+    // The Pipeline has AI scoring buttons with title="Generate AI Insights"
+    const aiBtn = page.locator('button[title="Generate AI Insights"]').first();
     const btnCount = await aiBtn.count();
 
     if (btnCount > 0) {

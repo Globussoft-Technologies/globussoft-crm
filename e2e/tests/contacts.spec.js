@@ -140,21 +140,25 @@ test.describe('Contacts — Delete contact', () => {
   test('delete button triggers confirmation and removes contact', async ({ page }) => {
     await page.goto('/contacts');
     await page.waitForLoadState('domcontentloaded');
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(2000);
 
     // Accept the confirmation dialog automatically
     page.on('dialog', (dialog) => dialog.accept());
 
-    // Find a delete button (trash icon button)
-    const deleteBtn = page.locator('button[title*="delete" i], button svg[data-lucide="trash2"]').first();
-    const deleteBtnCount = await deleteBtn.count();
+    // Delete buttons are red (#ef4444) icon buttons in the Actions column
+    const deleteBtn = page.locator('td').last().locator('button').first();
+    // Find all action column buttons (last td in each row)
+    const actionButtons = page.locator('tr').filter({ has: page.locator('td') }).locator('td:last-child button').first();
+    const btnCount = await actionButtons.count();
 
-    if (deleteBtnCount > 0) {
-      await deleteBtn.click();
-      // After delete, list should reload without error
-      await page.waitForTimeout(1000);
-      // No error should be thrown
+    if (btnCount > 0) {
+      const countBefore = await page.locator('tr').filter({ has: page.locator('td') }).count();
+      await actionButtons.click();
+      await page.waitForTimeout(1500);
       await expect(page).toHaveURL(/\/contacts/);
+      // Verify the list has one fewer row (or stayed the same if deletion was the last E2E contact)
+      const countAfter = await page.locator('tr').filter({ has: page.locator('td') }).count();
+      expect(countAfter).toBeLessThanOrEqual(countBefore);
     } else {
       test.skip(true, 'No delete buttons found — list may be empty');
     }

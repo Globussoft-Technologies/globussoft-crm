@@ -6,7 +6,7 @@ const router = express.Router();
 const prisma = new PrismaClient();
 
 // List all email templates
-router.get("/", verifyToken, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
     const templates = await prisma.emailTemplate.findMany({
       orderBy: { updatedAt: "desc" },
@@ -19,7 +19,7 @@ router.get("/", verifyToken, async (req, res) => {
 });
 
 // Get single template
-router.get("/:id", verifyToken, async (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
     const template = await prisma.emailTemplate.findUnique({
       where: { id: parseInt(req.params.id) },
@@ -33,14 +33,14 @@ router.get("/:id", verifyToken, async (req, res) => {
 });
 
 // Create template
-router.post("/", verifyToken, async (req, res) => {
+router.post("/", async (req, res) => {
   try {
     const { name, subject, body, category } = req.body;
     if (!name || !subject || !body) {
       return res.status(400).json({ error: "name, subject, and body are required" });
     }
     const template = await prisma.emailTemplate.create({
-      data: { name, subject, body, category: category || null },
+      data: { name, subject, body, category: category || "General" },
     });
     res.status(201).json(template);
   } catch (err) {
@@ -50,7 +50,7 @@ router.post("/", verifyToken, async (req, res) => {
 });
 
 // Update template
-router.put("/:id", verifyToken, async (req, res) => {
+router.put("/:id", async (req, res) => {
   try {
     const { name, subject, body, category } = req.body;
     const template = await prisma.emailTemplate.update({
@@ -70,7 +70,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 });
 
 // Delete template
-router.delete("/:id", verifyToken, async (req, res) => {
+router.delete("/:id", async (req, res) => {
   try {
     await prisma.emailTemplate.delete({
       where: { id: parseInt(req.params.id) },

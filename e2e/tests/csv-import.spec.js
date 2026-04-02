@@ -67,13 +67,13 @@ test.describe('CSV Import — Contacts page', () => {
 
   test('clicking import opens a modal with file input', async ({ page }) => {
     await page.waitForTimeout(1500);
-    const importBtn = page.locator('button, a').filter({ hasText: /import/i }).first();
+    const importBtn = page.locator('button').filter({ hasText: /import/i }).first();
     await importBtn.click();
     await page.waitForTimeout(500);
 
-    // Check that a modal or dialog appeared
-    const modal = page.locator('[class*="modal"], [role="dialog"], [class*="dialog"], [class*="overlay"]').first();
-    await expect(modal).toBeVisible({ timeout: 5000 });
+    // The modal shows "Import CSV" heading
+    const modalHeading = page.locator('h3').filter({ hasText: /Import CSV/i }).first();
+    await expect(modalHeading).toBeVisible({ timeout: 5000 });
   });
 
   test('import modal has a file upload area', async ({ page }) => {

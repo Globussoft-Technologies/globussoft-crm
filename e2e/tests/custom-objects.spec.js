@@ -146,8 +146,8 @@ test.describe('App Builder — Custom Objects', () => {
       await page.waitForLoadState('domcontentloaded');
       await page.waitForTimeout(1000);
 
-      // Look for Add/Insert/New record button
-      const addRecordBtn = page.locator('button').filter({ hasText: /add record|insert|new record|\+ record/i }).first();
+      // Look for "New <entity>" button (text is "New" + entity name with last char trimmed)
+      const addRecordBtn = page.locator('button').filter({ hasText: /^New\s/i }).first();
       const addCount = await addRecordBtn.count();
 
       if (addCount > 0) {

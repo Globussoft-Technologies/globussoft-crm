@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Shield, UserPlus, Trash2, Key, Sun, Moon } from 'lucide-react';
+import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { ThemeContext } from '../App';
 
@@ -8,12 +8,62 @@ export default function Settings() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'USER' });
+  const [pipelineStages, setPipelineStages] = useState([]);
+  const [newStage, setNewStage] = useState({ name: '', color: '#3b82f6' });
+  const [stagesLoading, setStagesLoading] = useState(true);
+
+  const fetchStages = () => {
+    fetchApi('/api/pipeline_stages')
+      .then(res => { setPipelineStages(Array.isArray(res) ? res : []); setStagesLoading(false); })
+      .catch(() => setStagesLoading(false));
+  };
 
   useEffect(() => {
     fetchApi('/api/auth/users')
       .then(res => { setUsers(res); setLoading(false); })
       .catch(err => console.error(err));
+    fetchStages();
   }, []);
+
+  const handleAddStage = async (e) => {
+    e.preventDefault();
+    if (!newStage.name.trim()) return;
+    try {
+      await fetchApi('/api/pipeline_stages', {
+        method: 'POST',
+        body: JSON.stringify({ name: newStage.name, color: newStage.color, position: pipelineStages.length })
+      });
+      setNewStage({ name: '', color: '#3b82f6' });
+      fetchStages();
+    } catch (err) {
+      alert('Failed to add stage');
+    }
+  };
+
+  const handleDeleteStage = async (id) => {
+    if (window.confirm('Delete this pipeline stage?')) {
+      await fetchApi(`/api/pipeline_stages/${id}`, { method: 'DELETE' });
+      fetchStages();
+    }
+  };
+
+  const handleMoveStage = async (index, direction) => {
+    const newStages = [...pipelineStages];
+    const swapIndex = index + direction;
+    if (swapIndex < 0 || swapIndex >= newStages.length) return;
+    [newStages[index], newStages[swapIndex]] = [newStages[swapIndex], newStages[index]];
+    const reordered = newStages.map((s, i) => ({ id: s.id, position: i }));
+    setPipelineStages(newStages);
+    try {
+      await fetchApi('/api/pipeline_stages/reorder', {
+        method: 'PUT',
+        body: JSON.stringify({ stages: reordered })
+      });
+      fetchStages();
+    } catch (err) {
+      fetchStages();
+    }
+  };
 
   const handleCreateUser = async (e) => {
     e.preventDefault();
@@ -85,6 +135,49 @@ export default function Settings() {
               Switch to {theme === 'dark' ? 'Light' : 'Dark'} Mode
             </button>
           </div>
+        </div>
+
+        {/* Pipeline Stages Card */}
+        <div className="card" style={{ padding: '2rem' }}>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Layers size={20} color="var(--accent-color)" /> Pipeline Stages
+          </h3>
+
+          {stagesLoading ? <p>Loading stages...</p> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+              {pipelineStages.length === 0 && (
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No custom stages configured. The pipeline uses default stages.</p>
+              )}
+              {pipelineStages.map((stage, index) => (
+                <div key={stage.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-color)', border: '1px solid var(--border-color)', padding: '1rem 1.25rem', borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ width: '20px', height: '20px', borderRadius: '6px', backgroundColor: stage.color, flexShrink: 0 }} />
+                    <span style={{ fontWeight: '500' }}>{stage.name}</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Position {index + 1}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <button onClick={() => handleMoveStage(index, -1)} disabled={index === 0} style={{ background: 'none', border: 'none', color: index === 0 ? 'var(--border-color)' : 'var(--text-secondary)', cursor: index === 0 ? 'default' : 'pointer', padding: '0.25rem' }}>
+                      <ArrowUp size={16} />
+                    </button>
+                    <button onClick={() => handleMoveStage(index, 1)} disabled={index === pipelineStages.length - 1} style={{ background: 'none', border: 'none', color: index === pipelineStages.length - 1 ? 'var(--border-color)' : 'var(--text-secondary)', cursor: index === pipelineStages.length - 1 ? 'default' : 'pointer', padding: '0.25rem' }}>
+                      <ArrowDown size={16} />
+                    </button>
+                    <button onClick={() => handleDeleteStage(stage.id)} style={{ background: 'none', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', padding: '0.25rem' }}>
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <form onSubmit={handleAddStage} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            <input type="text" placeholder="Stage name" required className="input-field" style={{ flex: 1 }} value={newStage.name} onChange={e => setNewStage({ ...newStage, name: e.target.value })} />
+            <input type="color" value={newStage.color} onChange={e => setNewStage({ ...newStage, color: e.target.value })} style={{ width: '40px', height: '40px', border: '1px solid var(--border-color)', borderRadius: '8px', cursor: 'pointer', padding: '2px', background: 'var(--input-bg)' }} />
+            <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', whiteSpace: 'nowrap' }}>
+              <Plus size={16} /> Add Stage
+            </button>
+          </form>
         </div>
 
         {/* Invite User Card */}

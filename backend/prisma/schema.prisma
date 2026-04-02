@@ -14,13 +14,15 @@ model User {
   role      String    @default("USER") // ADMIN, USER, MANAGER
   name      String?
   createdAt DateTime  @default(now())
-  deals     Deal[]    @relation("OwnerDeals")
-  tickets   Ticket[]  @relation("AssignedTickets")
-  apiKeys   ApiKey[]
-  webhooks  Webhook[]
-  tasks     Task[]
-  expenses  Expense[]
-  projects  Project[] @relation("ProjectOwner")
+  deals         Deal[]    @relation("OwnerDeals")
+  tickets       Ticket[]  @relation("AssignedTickets")
+  apiKeys       ApiKey[]
+  webhooks      Webhook[]
+  tasks         Task[]
+  expenses      Expense[]
+  projects      Project[] @relation("ProjectOwner")
+  notifications Notification[]
+  auditLogs     AuditLog[]
 }
 
 model Contact {
@@ -365,6 +367,49 @@ model EstimateLineItem {
   unitPrice   Float
   estimateId  Int
   estimate    Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  title     String
+  message   String
+  type      String   @default("info") // info, success, warning, error
+  isRead    Boolean  @default(false)
+  link      String?  // optional URL to navigate to
+  createdAt DateTime @default(now())
+
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  action     String   // CREATE, UPDATE, DELETE
+  entity     String   // Contact, Deal, Invoice, etc.
+  entityId   Int?
+  details    String?  @db.Text // JSON diff or description
+  createdAt  DateTime @default(now())
+
+  userId     Int?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model PipelineStage {
+  id        Int      @id @default(autoincrement())
+  name      String
+  color     String   @default("#3b82f6")
+  position  Int      @default(0) // ordering
+  createdAt DateTime @default(now())
+}
+
+model EmailTemplate {
+  id        Int      @id @default(autoincrement())
+  name      String
+  subject   String
+  body      String   @db.Text
+  category  String   @default("General") // General, Follow-up, Onboarding, Sales, Support
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Project {

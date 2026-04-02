@@ -1,13 +1,39 @@
 import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp } from 'lucide-react';
+import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet } from 'lucide-react';
 import { Link } from 'react-router-dom';
+
+const parseCSV = (text) => {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
+  return lines.slice(1).map(line => {
+    // Handle quoted values with commas
+    const values = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') { inQuotes = !inQuotes; continue; }
+      if (line[i] === ',' && !inQuotes) { values.push(current.trim()); current = ''; continue; }
+      current += line[i];
+    }
+    values.push(current.trim());
+    const row = {};
+    headers.forEach((h, i) => { row[h] = values[i] || ''; });
+    return row;
+  });
+};
 
 const Contacts = () => {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [newContact, setNewContact] = useState({ name: '', email: '', company: '', title: '', status: 'Lead' });
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [csvRows, setCsvRows] = useState([]);
+  const [csvHeaders, setCsvHeaders] = useState([]);
+  const [importResult, setImportResult] = useState(null);
+  const [importing, setImporting] = useState(false);
 
   const [rescoring, setRescoring] = useState(false);
 
@@ -46,6 +72,46 @@ const Contacts = () => {
     fetchContacts();
   };
 
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const rows = parseCSV(ev.target.result);
+      if (rows.length > 0) {
+        setCsvHeaders(Object.keys(rows[0]));
+        setCsvRows(rows);
+        setImportResult(null);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImport = async () => {
+    if (csvRows.length === 0) return;
+    setImporting(true);
+    try {
+      const mapped = csvRows.map(row => ({
+        name: row.name || row.Name || '',
+        email: row.email || row.Email || '',
+        company: row.company || row.Company || '',
+        title: row.title || row.Title || '',
+        status: row.status || row.Status || 'Lead',
+      }));
+      const result = await fetchApi('/api/contacts/import-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contacts: mapped })
+      });
+      setImportResult(result);
+      fetchContacts();
+    } catch (err) {
+      setImportResult({ error: 'Import failed' });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const handleDelete = async (id) => {
     if (window.confirm("Are you sure you want to delete this contact?")) {
       await fetchApi(`/api/contacts/${id}`, { method: 'DELETE' });
@@ -70,6 +136,9 @@ const Contacts = () => {
           >
             <RefreshCw size={15} style={{ animation: rescoring ? 'spin 1s linear infinite' : 'none' }} />
             {rescoring ? 'Scoring...' : 'AI Re-score'}
+          </button>
+          <button onClick={() => { setShowImportModal(true); setCsvRows([]); setCsvHeaders([]); setImportResult(null); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Upload size={15} /> Import CSV
           </button>
           <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={18} /> Add Contact
@@ -154,6 +223,84 @@ const Contacts = () => {
           </tbody>
         </table>
       </div>
+
+      {showImportModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div className="card" style={{ padding: '2rem', width: '600px', maxHeight: '80vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <FileSpreadsheet size={20} color="var(--accent-color)" /> Import CSV
+              </h3>
+              <button onClick={() => setShowImportModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={20} /></button>
+            </div>
+
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', padding: '2rem', border: '2px dashed var(--border-color)', borderRadius: '12px', textAlign: 'center', cursor: 'pointer', transition: 'var(--transition)' }}>
+                <Upload size={32} style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }} />
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Click to select a .csv file</p>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.25rem' }}>Expected columns: name, email, company, title, status</p>
+                <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
+              </label>
+            </div>
+
+            {csvRows.length > 0 && !importResult && (
+              <>
+                <div style={{ marginBottom: '1rem' }}>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                    Detected columns: <strong>{csvHeaders.join(', ')}</strong>
+                  </p>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--text-primary)' }}>
+                    {csvRows.length} row{csvRows.length !== 1 ? 's' : ''} found — previewing first {Math.min(5, csvRows.length)}:
+                  </p>
+                </div>
+                <div style={{ overflowX: 'auto', marginBottom: '1.5rem' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                        {csvHeaders.map(h => (
+                          <th key={h} style={{ padding: '0.5rem', textAlign: 'left', color: 'var(--text-secondary)', fontWeight: '500' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {csvRows.slice(0, 5).map((row, i) => (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          {csvHeaders.map(h => (
+                            <td key={h} style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>{row[h]}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button onClick={handleImport} disabled={importing} className="btn-primary" style={{ width: '100%', opacity: importing ? 0.7 : 1 }}>
+                  {importing ? 'Importing...' : `Import ${csvRows.length} Contact${csvRows.length !== 1 ? 's' : ''}`}
+                </button>
+              </>
+            )}
+
+            {importResult && !importResult.error && (
+              <div style={{ padding: '1.5rem', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                <p style={{ fontWeight: '600', color: 'var(--success-color)', marginBottom: '0.5rem', fontSize: '1rem' }}>Import Complete</p>
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-primary)' }}>{importResult.imported} imported, {importResult.skipped} skipped (duplicate email)</p>
+                {importResult.errors && importResult.errors.length > 0 && (
+                  <div style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: '#ef4444' }}>
+                    {importResult.errors.map((e, i) => <p key={i}>{e}</p>)}
+                  </div>
+                )}
+                <button onClick={() => setShowImportModal(false)} className="btn-primary" style={{ marginTop: '1rem', width: '100%' }}>Done</button>
+              </div>
+            )}
+
+            {importResult && importResult.error && (
+              <div style={{ padding: '1.5rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                <p style={{ fontWeight: '600', color: '#ef4444' }}>Import Failed</p>
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>{importResult.error}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>

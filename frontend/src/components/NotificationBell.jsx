@@ -1,0 +1,299 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Bell, Check, X } from 'lucide-react';
+import { fetchApi } from '../utils/api';
+
+const NotificationBell = () => {
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  const fetchUnreadCount = useCallback(async () => {
+    try {
+      const data = await fetchApi('/api/notifications/unread-count');
+      setUnreadCount(data.count);
+    } catch (err) {
+      // silently fail
+    }
+  }, []);
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const data = await fetchApi('/api/notifications');
+      setNotifications(data);
+    } catch (err) {
+      // silently fail
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchUnreadCount();
+    const interval = setInterval(fetchUnreadCount, 30000);
+    return () => clearInterval(interval);
+  }, [fetchUnreadCount]);
+
+  useEffect(() => {
+    if (open) fetchNotifications();
+  }, [open, fetchNotifications]);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const markAsRead = async (id) => {
+    try {
+      await fetchApi(`/api/notifications/${id}/read`, { method: 'PUT' });
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+      setUnreadCount((c) => Math.max(0, c - 1));
+    } catch (err) {
+      // silently fail
+    }
+  };
+
+  const markAllRead = async () => {
+    try {
+      await fetchApi('/api/notifications/read-all', { method: 'PUT' });
+      setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+      setUnreadCount(0);
+    } catch (err) {
+      // silently fail
+    }
+  };
+
+  const deleteNotification = async (e, id) => {
+    e.stopPropagation();
+    try {
+      await fetchApi(`/api/notifications/${id}`, { method: 'DELETE' });
+      const removed = notifications.find((n) => n.id === id);
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      if (removed && !removed.isRead) setUnreadCount((c) => Math.max(0, c - 1));
+    } catch (err) {
+      // silently fail
+    }
+  };
+
+  const timeAgo = (dateStr) => {
+    const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+    if (seconds < 60) return 'just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
+  const typeColor = (type) => {
+    switch (type) {
+      case 'success': return '#10b981';
+      case 'warning': return '#f59e0b';
+      case 'error': return '#ef4444';
+      default: return 'var(--accent-color)';
+    }
+  };
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          position: 'relative',
+          padding: '8px',
+          color: 'var(--text-primary)',
+          display: 'flex',
+          alignItems: 'center',
+        }}
+      >
+        <Bell size={20} />
+        {unreadCount > 0 && (
+          <span
+            style={{
+              position: 'absolute',
+              top: 2,
+              right: 2,
+              background: '#ef4444',
+              color: '#fff',
+              borderRadius: '50%',
+              width: 18,
+              height: 18,
+              fontSize: 11,
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              lineHeight: 1,
+            }}
+          >
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            right: 0,
+            width: 360,
+            maxHeight: 460,
+            overflowY: 'auto',
+            background: 'var(--surface-color)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 12,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+            zIndex: 9999,
+          }}
+        >
+          {/* Header */}
+          <div
+            style={{
+              padding: '14px 16px',
+              borderBottom: '1px solid var(--border-color)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>
+              Notifications
+            </span>
+            {unreadCount > 0 && (
+              <button
+                onClick={markAllRead}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--accent-color)',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                <Check size={14} /> Mark all as read
+              </button>
+            )}
+          </div>
+
+          {/* Notification List */}
+          {notifications.length === 0 ? (
+            <div
+              style={{
+                padding: '32px 16px',
+                textAlign: 'center',
+                color: 'var(--text-secondary)',
+                fontSize: 14,
+              }}
+            >
+              No notifications
+            </div>
+          ) : (
+            notifications.map((n) => (
+              <div
+                key={n.id}
+                onClick={() => !n.isRead && markAsRead(n.id)}
+                style={{
+                  padding: '12px 16px',
+                  borderBottom: '1px solid var(--border-color)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  background: n.isRead ? 'transparent' : 'rgba(59,130,246,0.06)',
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.04)')}
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = n.isRead ? 'transparent' : 'rgba(59,130,246,0.06)')
+                }
+              >
+                {/* Unread dot */}
+                <div style={{ paddingTop: 5, minWidth: 10 }}>
+                  {!n.isRead && (
+                    <div
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        background: '#3b82f6',
+                      }}
+                    />
+                  )}
+                </div>
+
+                {/* Content */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: 2,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontWeight: 600,
+                        fontSize: 13,
+                        color: 'var(--text-primary)',
+                        borderLeft: `3px solid ${typeColor(n.type)}`,
+                        paddingLeft: 6,
+                      }}
+                    >
+                      {n.title}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'nowrap', marginLeft: 8 }}>
+                      {timeAgo(n.createdAt)}
+                    </span>
+                  </div>
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 12,
+                      color: 'var(--text-secondary)',
+                      lineHeight: 1.4,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {n.message}
+                  </p>
+                </div>
+
+                {/* Delete button */}
+                <button
+                  onClick={(e) => deleteNotification(e, n.id)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--text-secondary)',
+                    padding: 4,
+                    opacity: 0.5,
+                    transition: 'opacity 0.15s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.5')}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default NotificationBell;

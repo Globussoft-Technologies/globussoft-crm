@@ -45,7 +45,24 @@ export default function Reports() {
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Reports &amp; Analytics</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Business intelligence dashboard — real-time revenue, pipeline, and deal analytics.</p>
         </div>
-        <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={() => {
+          const token = localStorage.getItem('token');
+          const baseUrl = import.meta.env.VITE_API_URL || '';
+          const url = `${baseUrl}/api/reports/export-csv?metric=${metric}&groupBy=${groupBy}`;
+          fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+            .then(res => {
+              if (!res.ok) throw new Error('CSV export failed');
+              return res.blob();
+            })
+            .then(blob => {
+              const link = document.createElement('a');
+              link.href = URL.createObjectURL(blob);
+              link.download = 'report.csv';
+              link.click();
+              URL.revokeObjectURL(link.href);
+            })
+            .catch(() => alert('Failed to export CSV'));
+        }}>
           <Download size={18} /> Export CSV
         </button>
       </header>

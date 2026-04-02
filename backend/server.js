@@ -106,6 +106,10 @@ const contractsRoutes = require("./routes/contracts");
 const estimatesRoutes = require("./routes/estimates");
 const projectsRoutes = require("./routes/projects");
 const supportRoutes = require("./routes/support");
+const pipelineStagesRoutes = require("./routes/pipeline_stages");
+const notificationsRoutes = require("./routes/notifications");
+const auditRoutes = require("./routes/audit");
+const emailTemplatesRoutes = require("./routes/email_templates");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -148,6 +152,10 @@ app.use("/api/expenses", expensesRoutes);
 app.use("/api/contracts", contractsRoutes);
 app.use("/api/estimates", estimatesRoutes);
 app.use("/api/projects", projectsRoutes);
+app.use("/api/pipeline_stages", pipelineStagesRoutes);
+app.use("/api/notifications", notificationsRoutes);
+app.use("/api/audit", auditRoutes);
+app.use("/api/email_templates", emailTemplatesRoutes);
 
 // Server File Uploads Statically
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));

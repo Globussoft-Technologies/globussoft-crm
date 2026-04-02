@@ -44,4 +44,48 @@ router.get("/query", async (req, res) => {
   }
 });
 
+// CSV Export Endpoint
+router.get("/export-csv", async (req, res) => {
+  try {
+    const { metric = "revenue", groupBy = "stage" } = req.query;
+    let formatted = [];
+
+    if (metric === "revenue") {
+      const data = await prisma.deal.groupBy({
+        by: [groupBy],
+        _sum: { amount: true },
+      });
+      formatted = data
+        .map((d) => ({
+          name: String(d[groupBy]).toUpperCase(),
+          value: d._sum.amount || 0,
+        }))
+        .filter((d) => d.value > 0);
+    } else if (metric === "count") {
+      const data = await prisma.deal.groupBy({
+        by: [groupBy],
+        _count: { id: true },
+      });
+      formatted = data.map((d) => ({
+        name: String(d[groupBy]).toUpperCase(),
+        value: d._count.id,
+      }));
+    } else {
+      return res.status(400).json({ error: "Unsupported metric for CSV export." });
+    }
+
+    let csv = "Name,Value\n";
+    formatted.forEach((row) => {
+      csv += `"${String(row.name).replace(/"/g, '""')}",${row.value}\n`;
+    });
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=report.csv");
+    res.send(csv);
+  } catch (err) {
+    console.error("[CSV Export Error]:", err);
+    res.status(500).json({ error: "Failed to export CSV report." });
+  }
+});
+
 module.exports = router;

@@ -4,7 +4,7 @@ import { fetchApi } from '../utils/api';
 import { io } from 'socket.io-client';
 import DealModal from '../components/DealModal';
 
-const initialStages = [
+const defaultStages = [
   { id: 'lead', title: 'New Lead', color: 'var(--accent-color)' },
   { id: 'contacted', title: 'Contacted', color: 'var(--warning-color)' },
   { id: 'proposal', title: 'Proposal Sent', color: '#a855f7' },
@@ -14,6 +14,7 @@ const initialStages = [
 const Pipeline = () => {
   const [deals, setDeals] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [stages, setStages] = useState(defaultStages);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [newDeal, setNewDeal] = useState({ title: '', company: '', contactName: '', amount: '', probability: '', stage: 'lead' });
@@ -33,10 +34,14 @@ const Pipeline = () => {
   useEffect(() => {
     Promise.all([
       fetchApi('/api/deals'),
-      fetchApi('/api/contacts')
-    ]).then(([dealData, contactData]) => {
+      fetchApi('/api/contacts'),
+      fetchApi('/api/pipeline_stages')
+    ]).then(([dealData, contactData, stageData]) => {
       setDeals(Array.isArray(dealData) ? dealData : []);
       setContacts(Array.isArray(contactData) ? contactData : []);
+      if (Array.isArray(stageData) && stageData.length > 0) {
+        setStages(stageData.map(s => ({ id: s.name.toLowerCase().replace(/\s+/g, '_'), title: s.name, color: s.color, dbId: s.id })));
+      }
       setLoading(false);
     }).catch(err => console.error(err));
 
@@ -143,7 +148,7 @@ const Pipeline = () => {
         <div style={{ textAlign: 'center', padding: '2rem' }}>Loading deals...</div>
       ) : (
         <div style={{ display: 'flex', gap: '1.5rem', flex: 1, overflowX: 'auto', paddingBottom: '1rem' }}>
-          {initialStages.map(stage => {
+          {stages.map(stage => {
             const stageDeals = deals.filter(d => d.stage === stage.id);
             const totalValue = stageDeals.reduce((sum, d) => sum + (d.amount || 0), 0);
 
@@ -234,7 +239,7 @@ const Pipeline = () => {
                 <input type="number" placeholder="Probability (%)" required className="input-field" value={newDeal.probability} onChange={e => setNewDeal({...newDeal, probability: e.target.value})} />
               </div>
               <select className="input-field" value={newDeal.stage} onChange={e => setNewDeal({...newDeal, stage: e.target.value})}>
-                {initialStages.map(stage => (
+                {stages.map(stage => (
                    <option key={stage.id} value={stage.id} style={{ background: 'var(--bg-color)' }}>{stage.title}</option>
                 ))}
               </select>

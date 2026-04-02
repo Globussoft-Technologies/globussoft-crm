@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle } from 'lucide-react';
+import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
 const STATUS_CONFIG = {
@@ -116,6 +116,25 @@ export default function Invoices() {
     } catch (err) {
       alert('Failed to mark invoice as paid');
     }
+  };
+
+  const downloadPdf = (id, invoiceNum) => {
+    const token = localStorage.getItem('token');
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const url = `${baseUrl}/api/billing/${id}/pdf`;
+    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+      .then(res => {
+        if (!res.ok) throw new Error('PDF generation failed');
+        return res.blob();
+      })
+      .then(blob => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${invoiceNum || 'invoice'}.pdf`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      })
+      .catch(() => alert('Failed to download PDF'));
   };
 
   const deleteInvoice = async (id) => {
@@ -339,6 +358,20 @@ export default function Invoices() {
                       </td>
                       <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                          <button
+                            onClick={() => downloadPdf(inv.id, inv.invoiceNum)}
+                            style={{
+                              background: 'transparent', border: '1px solid rgba(59,130,246,0.3)',
+                              color: 'var(--text-secondary)', cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', gap: '0.3rem',
+                              fontSize: '0.8rem', padding: '0.4rem 0.75rem', borderRadius: '6px',
+                            }}
+                            onMouseOver={e => e.currentTarget.style.color = '#3b82f6'}
+                            onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'}
+                            aria-label={`Download PDF for invoice ${inv.invoiceNum}`}
+                          >
+                            <Download size={14} /> PDF
+                          </button>
                           {inv.status !== 'PAID' && (
                             <button
                               onClick={() => markPaid(inv.id)}

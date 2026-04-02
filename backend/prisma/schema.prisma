@@ -115,7 +115,7 @@ model AutomationRule {
 model EmailMessage {
   id        Int      @id @default(autoincrement())
   subject   String
-  body      String
+  body      String   @db.Text
   from      String
   to        String
   direction String   @default("INBOUND") // INBOUND, OUTBOUND

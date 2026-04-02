@@ -12,7 +12,8 @@ test.describe('Profile — User Profile page', () => {
   });
 
   test('renders the Profile page with user info', async ({ page }) => {
-    const heading = page.locator('h1, h2, h3').filter({ hasText: /profile|account/i });
+    await page.waitForTimeout(2000);
+    const heading = page.locator('h1').filter({ hasText: /Profile/i }).first();
     await expect(heading).toBeVisible({ timeout: 10000 });
   });
 

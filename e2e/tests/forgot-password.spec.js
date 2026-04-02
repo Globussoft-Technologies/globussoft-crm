@@ -52,7 +52,7 @@ test.describe('Forgot Password — Password reset flow', () => {
       const resetResponse = await request.post(`${BASE_URL}/api/auth/reset-password`, {
         data: {
           token: token,
-          password: 'password123',
+          newPassword: 'password123',
         },
       });
 

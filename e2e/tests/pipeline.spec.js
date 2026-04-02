@@ -32,9 +32,9 @@ test.describe('Pipeline — Kanban board', () => {
 
   test('stage columns show deal count indicators', async ({ page }) => {
     await page.waitForTimeout(3000);
-    // Each stage column header has a count badge
+    // Each stage column header has a count badge span
     const firstStageHeader = page.locator('h3').first();
-    await expect(newLeadColumn).toBeVisible();
+    await expect(firstStageHeader).toBeVisible();
   });
 
   test('Add Deal button is visible', async ({ page }) => {

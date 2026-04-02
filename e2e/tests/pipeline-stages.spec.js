@@ -74,7 +74,7 @@ test.describe('Pipeline Stages — API endpoints', () => {
     }
   });
 
-  test('API: POST /api/pipeline_stages creates a new stage', async ({ request }) => {
+  test('API: POST /api/pipeline_stages creates and cleans up a stage', async ({ request }) => {
     const stageName = `E2E Stage ${Date.now()}`;
     const response = await authPost(request, '/api/pipeline_stages', {
       name: stageName,
@@ -90,6 +90,13 @@ test.describe('Pipeline Stages — API endpoints', () => {
       expect(body).toHaveProperty('id');
       expect(body).toHaveProperty('name');
       expect(body.name).toBe(stageName);
+
+      // Clean up — delete the test stage so it doesn't pollute the pipeline
+      const token = await getAuthToken(request);
+      await request.delete(`${BASE_URL}/api/pipeline_stages/${body.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: REQUEST_TIMEOUT,
+      });
     }
   });
 });

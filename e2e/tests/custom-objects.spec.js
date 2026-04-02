@@ -146,8 +146,8 @@ test.describe('App Builder — Custom Objects', () => {
       await page.waitForLoadState('domcontentloaded');
       await page.waitForTimeout(1000);
 
-      // Look for "New <entity>" button (text is "New" + entity name with last char trimmed)
-      const addRecordBtn = page.locator('button').filter({ hasText: /^New\s/i }).first();
+      // The button text is "New <entity>" (e.g. "New Propertie") with a Plus icon
+      const addRecordBtn = page.locator('button').filter({ hasText: /New /i }).first();
       const addCount = await addRecordBtn.count();
 
       if (addCount > 0) {

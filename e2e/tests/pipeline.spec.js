@@ -95,8 +95,8 @@ test.describe('Pipeline — Kanban board', () => {
   test('clicking a deal card opens the deal detail modal', async ({ page }) => {
     await page.waitForTimeout(3000);
 
-    // Deal cards have h4 headings with deal titles and a $ amount
-    const dealCard = page.locator('.card.table-row-hover').first();
+    // Deal cards contain h4 headings — find a card that has an h4 inside it
+    const dealCard = page.locator('div[draggable="true"]').first();
     const cardCount = await dealCard.count();
 
     if (cardCount > 0) {
@@ -117,15 +117,15 @@ test.describe('Pipeline — Kanban board', () => {
   test('AI Score button is visible on deal cards', async ({ page }) => {
     await page.waitForTimeout(3000);
 
-    // The Pipeline has AI scoring buttons with title="Generate AI Insights"
-    const aiBtn = page.locator('button[title="Generate AI Insights"]').first();
-    const btnCount = await aiBtn.count();
+    // AI score buttons are on draggable deal cards with title="Generate AI Insights"
+    const dealCards = page.locator('div[draggable="true"]');
+    const cardCount = await dealCards.count();
 
-    if (btnCount > 0) {
-      await expect(aiBtn).toBeVisible();
+    if (cardCount > 0) {
+      const aiBtn = page.locator('button[title="Generate AI Insights"]').first();
+      await expect(aiBtn).toBeVisible({ timeout: 5000 });
     } else {
-      // Skip if no deals are rendered
-      test.skip(true, 'No AI score buttons found — board may be empty');
+      test.skip(true, 'No deal cards found — board may be empty');
     }
   });
 

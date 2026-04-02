@@ -8,29 +8,41 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [deals, setDeals] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [dateRange, setDateRange] = useState('all');
 
   useEffect(() => {
     fetchApi('/api/deals').then(setDeals);
     fetchApi('/api/contacts').then(setContacts);
   }, []);
 
+  // Filter deals by date range
+  const filterByDate = (items) => {
+    if (dateRange === 'all') return items;
+    const now = new Date();
+    const days = { '7d': 7, '30d': 30, '90d': 90, '365d': 365 }[dateRange];
+    const cutoff = new Date(now.getTime() - days * 86400000);
+    return items.filter(d => new Date(d.createdAt) >= cutoff);
+  };
+
+  const filteredDeals = filterByDate(deals);
+
   // Compute stats
-  const totalRevenue = deals.filter(d => d.stage === 'won').reduce((sum, d) => sum + (d.amount || 0), 0);
+  const totalRevenue = filteredDeals.filter(d => d.stage === 'won').reduce((sum, d) => sum + (d.amount || 0), 0);
   
   const calculateExpectedRevenue = (deals) => {
     const probs = { lead: 0.1, contacted: 0.3, proposal: 0.7, won: 1.0 };
     return deals.reduce((sum, d) => sum + ((d.amount || 0) * (probs[d.stage] || 0)), 0);
   };
-  const expectedRevenue = calculateExpectedRevenue(deals);
+  const expectedRevenue = calculateExpectedRevenue(filteredDeals);
 
   const activeLeads = contacts.length;
-  const conversionRate = deals.length > 0 ? Math.round((deals.filter(d => d.stage === 'won').length / deals.length) * 100) : 0;
+  const conversionRate = filteredDeals.length > 0 ? Math.round((filteredDeals.filter(d => d.stage === 'won').length / filteredDeals.length) * 100) : 0;
   
   // Aggregate data for chart (Revenue by Stage)
   const chartData = [
-    { name: 'Lead', value: deals.filter(d=>d.stage==='lead').reduce((s,d)=>s+d.amount,0) },
-    { name: 'Contacted', value: deals.filter(d=>d.stage==='contacted').reduce((s,d)=>s+d.amount,0) },
-    { name: 'Proposal', value: deals.filter(d=>d.stage==='proposal').reduce((s,d)=>s+d.amount,0) },
+    { name: 'Lead', value: filteredDeals.filter(d=>d.stage==='lead').reduce((s,d)=>s+(d.amount||0),0) },
+    { name: 'Contacted', value: filteredDeals.filter(d=>d.stage==='contacted').reduce((s,d)=>s+(d.amount||0),0) },
+    { name: 'Proposal', value: filteredDeals.filter(d=>d.stage==='proposal').reduce((s,d)=>s+(d.amount||0),0) },
     { name: 'Won', value: totalRevenue }
   ];
 
@@ -39,7 +51,7 @@ export default function Dashboard() {
     { label: 'Expected Revenue', value: `$${expectedRevenue.toLocaleString()}`, increase: '+8%', icon: <Activity size={24} />, color: 'var(--success-color)' },
     { label: 'Total Contacts', value: activeLeads.toString(), increase: '+5%', icon: <Users size={24} />, color: '#3b82f6' },
     { label: 'Conversion Rate', value: `${conversionRate}%`, increase: '+1.2%', icon: <TrendingUp size={24} />, color: 'var(--warning-color)' },
-    { label: 'Total Deals', value: deals.length.toString(), increase: '+22%', icon: <Calendar size={24} />, color: '#a855f7' }
+    { label: 'Total Deals', value: filteredDeals.length.toString(), increase: '+22%', icon: <Calendar size={24} />, color: '#a855f7' }
   ];
 
   return (
@@ -77,8 +89,12 @@ export default function Dashboard() {
         <div className="card" style={{ padding: '2rem', minHeight: '350px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>Pipeline Analytics</h3>
-            <select className="input-field" style={{ width: 'auto', padding: '0.5rem' }}>
-              <option>All Time</option>
+            <select className="input-field" style={{ width: 'auto', padding: '0.5rem' }} value={dateRange} onChange={e => setDateRange(e.target.value)}>
+              <option value="all">All Time</option>
+              <option value="7d">Last 7 Days</option>
+              <option value="30d">Last 30 Days</option>
+              <option value="90d">Last 90 Days</option>
+              <option value="365d">This Year</option>
             </select>
           </div>
           <div style={{ width: '100%', height: '260px' }}>
@@ -106,7 +122,7 @@ export default function Dashboard() {
         <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '500', marginBottom: '1.5rem' }}>Recent Deals</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            {deals.slice(0, 4).map((deal, i) => (
+            {filteredDeals.slice(0, 4).map((deal, i) => (
               <div key={i} className="table-row-hover" onClick={() => navigate('/pipeline')} style={{ display: 'flex', alignItems: 'center', gap: '1rem', cursor: 'pointer', padding: '0.5rem', borderRadius: '8px' }}>
                 <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: deal.stage === 'won' ? 'var(--success-color)' : 'var(--accent-color)', boxShadow: `0 0 8px ${deal.stage === 'won' ? 'var(--success-color)' : 'var(--accent-color)'}` }} />
                 <div>
@@ -115,7 +131,7 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
-            {deals.length === 0 && <p style={{ color: 'var(--text-secondary)' }}>No deals in pipeline.</p>}
+            {filteredDeals.length === 0 && <p style={{ color: 'var(--text-secondary)' }}>No deals in pipeline.</p>}
           </div>
         </div>
       </div>

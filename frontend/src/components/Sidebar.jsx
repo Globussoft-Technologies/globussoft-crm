@@ -46,9 +46,6 @@ const Sidebar = () => {
         <NavLink to="/clients" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Building2 size={20} /> Clients
         </NavLink>
-        <NavLink to="/billing" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <FileDigit size={20} /> Billing
-        </NavLink>
         <NavLink to="/invoices" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Receipt size={20} /> Invoices
         </NavLink>

@@ -6,8 +6,37 @@ const Login = () => {
   const [email, setEmail] = useState('admin@globussoft.com');
   const [password, setPassword] = useState('password123');
   const [error, setError] = useState('');
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotMessage, setForgotMessage] = useState('');
+  const [forgotToken, setForgotToken] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
   const { setUser, setToken } = useContext(AuthContext);
   const navigate = useNavigate();
+
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    if (!forgotEmail) { setForgotMessage('Please enter your email'); return; }
+    setForgotLoading(true);
+    setForgotMessage('');
+    try {
+      const response = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setForgotMessage(data.message);
+        if (data.resetToken) setForgotToken(data.resetToken);
+      } else {
+        setForgotMessage(data.error || 'Request failed');
+      }
+    } catch (err) {
+      setForgotMessage('Server error. Ensure backend is running.');
+    }
+    setForgotLoading(false);
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -76,6 +105,45 @@ const Login = () => {
             Sign In
           </button>
         </form>
+
+        <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+          <button
+            onClick={() => { setShowForgot(!showForgot); setForgotMessage(''); setForgotToken(''); }}
+            style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.875rem', fontWeight: '500' }}
+          >
+            Forgot Password?
+          </button>
+        </div>
+
+        {showForgot && (
+          <div style={{ marginTop: '1rem', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.03)' }}>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>Enter your email to generate a password reset token.</p>
+            <form onSubmit={handleForgotPassword}>
+              <input
+                type="email"
+                className="input-field"
+                placeholder="Your email address"
+                value={forgotEmail}
+                onChange={(e) => setForgotEmail(e.target.value)}
+                style={{ marginBottom: '0.75rem' }}
+              />
+              <button type="submit" className="btn-primary" style={{ width: '100%' }} disabled={forgotLoading}>
+                {forgotLoading ? 'Sending...' : 'Reset Password'}
+              </button>
+            </form>
+            {forgotMessage && (
+              <p style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{forgotMessage}</p>
+            )}
+            {forgotToken && (
+              <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: 'rgba(16,185,129,0.1)', borderRadius: '6px', fontSize: '0.75rem', wordBreak: 'break-all' }}>
+                <strong style={{ color: 'var(--text-primary)' }}>Reset Token:</strong>
+                <span style={{ color: '#10b981', marginLeft: '0.5rem' }}>{forgotToken}</span>
+                <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)' }}>In production, this would be emailed. Use this token with the reset-password API.</p>
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={{ marginTop: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
           <p>Demo Credentials:</p>
           <p>Email: admin@globussoft.com | Password: password123</p>

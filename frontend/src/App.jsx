@@ -14,7 +14,6 @@ const Marketing = lazy(() => import('./pages/Marketing'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Developer = lazy(() => import('./pages/Developer'));
-const Billing = lazy(() => import('./pages/Billing'));
 const Portal = lazy(() => import('./pages/Portal'));
 const Marketplace = lazy(() => import('./pages/Marketplace'));
 const CPQ = lazy(() => import('./pages/CPQ'));
@@ -33,6 +32,7 @@ const Expenses = lazy(() => import('./pages/Expenses'));
 const Contracts = lazy(() => import('./pages/Contracts'));
 const Estimates = lazy(() => import('./pages/Estimates'));
 const Projects = lazy(() => import('./pages/Projects'));
+const Profile = lazy(() => import('./pages/Profile'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -76,7 +76,7 @@ export default function App() {
               <Route path="reports" element={<Reports />} />
               <Route path="workflows" element={<Workflows />} />
               <Route path="developer" element={<Developer />} />
-              <Route path="billing" element={<Billing />} />
+              <Route path="billing" element={<Navigate to="/invoices" replace />} />
               <Route path="cpq" element={<CPQ />} />
               <Route path="marketplace" element={<Marketplace />} />
               <Route path="objects" element={<CustomObjects />} />
@@ -95,6 +95,7 @@ export default function App() {
               <Route path="clients" element={<Clients />} />
               <Route path="leads" element={<Leads />} />
               <Route path="staff" element={<Staff />} />
+              <Route path="profile" element={<Profile />} />
             </Route>
           </Routes>
         </Suspense>

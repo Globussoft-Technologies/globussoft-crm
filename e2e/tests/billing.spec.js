@@ -7,12 +7,12 @@ const { test, expect } = require('@playwright/test');
 
 test.describe('Billing — Invoice management', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/billing');
+    await page.goto('/invoices');
     await page.waitForLoadState('domcontentloaded');
   });
 
   test('renders the Billing page', async ({ page }) => {
-    await expect(page).toHaveURL(/\/billing/);
+    await expect(page).toHaveURL(/\/invoices/);
     await expect(page.locator('h1, h2').filter({ hasText: /billing|invoice/i }).first()).toBeVisible({
       timeout: 10000,
     });
@@ -23,7 +23,7 @@ test.describe('Billing — Invoice management', () => {
     const errors = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
-    await page.goto('/billing');
+    await page.goto('/invoices');
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
 

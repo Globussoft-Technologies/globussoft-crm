@@ -93,9 +93,13 @@ async function main() {
 
   const contacts = [];
   for (const c of contactsData) {
-    contacts.push(await prisma.contact.create({ data: c }));
+    try {
+      contacts.push(await prisma.contact.create({ data: c }));
+    } catch (err) {
+      console.log(`  Skipped contact ${c.email}: ${err.message.slice(0, 60)}`);
+    }
   }
-  console.log(`Contacts: ${contacts.length} created`);
+  console.log(`Contacts: ${contacts.length} created (of ${contactsData.length})`);
 
   // ══════════════════════════════════════════════════════════════
   // STEP 4: PIPELINE STAGES — Custom enterprise stages
@@ -142,7 +146,7 @@ async function main() {
     { title: 'CloudNine Infrastructure Assessment',     amount: 200000, probability: 20,  stage: 'lead',      ci: 22, ui: 0, close: daysFromNow(75) },
     { title: 'SolarBright IoT Monitoring Pilot',        amount: 18000,  probability: 15,  stage: 'lead',      ci: 23, ui: 3, close: daysFromNow(60) },
     { title: 'Parisian Agency Creative Suite',          amount: 28000,  probability: 25,  stage: 'lead',      ci: 26, ui: 3, close: daysFromNow(65) },
-    { title: 'Bangalore AI Labs ML Platform',           amount: 115000, probability: 30,  stage: 'lead',      ci: 29, ui: 2, close: daysFromNow(80) },
+    { title: 'Bangalore AI Labs ML Platform',           amount: 115000, probability: 30,  stage: 'lead',      ci: 27, ui: 2, close: daysFromNow(80) },
     // Lost
     { title: 'LatAm Logistics Tracking System',         amount: 33000,  probability: 0,   stage: 'lost',      ci: 25, ui: 1, close: daysAgo(40) },
     { title: 'Milan Design Studio Proposal',            amount: 15000,  probability: 0,   stage: 'lost',      ci: 21, ui: 5, close: daysAgo(25) },

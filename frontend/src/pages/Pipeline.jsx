@@ -33,9 +33,9 @@ const Pipeline = () => {
 
   useEffect(() => {
     Promise.all([
-      fetchApi('/api/deals'),
-      fetchApi('/api/contacts'),
-      fetchApi('/api/pipeline_stages')
+      fetchApi('/api/deals').catch(() => []),
+      fetchApi('/api/contacts').catch(() => []),
+      fetchApi('/api/pipeline_stages').catch(() => [])
     ]).then(([dealData, contactData, stageData]) => {
       setDeals(Array.isArray(dealData) ? dealData : []);
       setContacts(Array.isArray(contactData) ? contactData : []);

@@ -228,6 +228,21 @@ button {
   animation: fadeIn 0.4s ease-out forwards;
 }
 
+/* Sidebar nav scrollbar — more visible */
+aside nav::-webkit-scrollbar {
+  width: 5px;
+}
+aside nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+aside nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+}
+aside nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;

@@ -1,6 +1,6 @@
 import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet } from 'lucide-react';
+import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 const parseCSV = (text) => {
@@ -35,6 +35,7 @@ const Contacts = () => {
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
 
+  const [staff, setStaff] = useState([]);
   const [rescoring, setRescoring] = useState(false);
 
   const fetchContacts = () => {
@@ -58,7 +59,17 @@ const Contacts = () => {
 
   useEffect(() => {
     fetchContacts();
+    fetchApi('/api/staff').then(data => setStaff(data)).catch(() => {});
   }, []);
+
+  const handleAssign = async (contactId, assignedToId) => {
+    await fetchApi(`/api/contacts/${contactId}/assign`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assignedToId: assignedToId || null }),
+    });
+    fetchContacts();
+  };
 
   const handleAddContact = async (e) => {
     e.preventDefault();
@@ -172,12 +183,13 @@ const Contacts = () => {
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Company</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>AI Score</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Status</th>
+              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
               <th style={{ padding: '1rem', textAlign: 'right' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan="5" style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
+              <tr><td colSpan="7" style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
             ) : contacts.map(contact => (
               <tr key={contact.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                 <td style={{ padding: '1rem' }}>
@@ -212,6 +224,19 @@ const Contacts = () => {
                   }}>
                     {contact.status}
                   </span>
+                </td>
+                <td style={{ padding: '1rem' }}>
+                  <select
+                    className="input-field"
+                    value={contact.assignedToId || ''}
+                    onChange={e => handleAssign(contact.id, e.target.value)}
+                    style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
+                  >
+                    <option value="">Unassigned</option>
+                    {staff.map(s => (
+                      <option key={s.id} value={s.id}>{s.name || s.email}</option>
+                    ))}
+                  </select>
                 </td>
                 <td style={{ padding: '1rem', textAlign: 'right' }}>
                   <button onClick={() => handleDelete(contact.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}>

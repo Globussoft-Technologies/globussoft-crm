@@ -9,8 +9,11 @@ router.use(verifyToken);
 
 router.get('/', async (req, res) => {
   try {
-    const where = req.query.status ? { status: req.query.status } : {};
-    res.json(await prisma.contact.findMany({ where, include: { activities: true, tasks: true } }));
+    const where = {};
+    if (req.query.status) where.status = req.query.status;
+    if (req.query.assignedToId) where.assignedToId = parseInt(req.query.assignedToId);
+    if (req.query.unassigned === 'true') where.assignedToId = null;
+    res.json(await prisma.contact.findMany({ where, include: { activities: true, tasks: true, assignedTo: { select: { id: true, name: true, email: true } } } }));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
   }
@@ -22,7 +25,7 @@ router.get('/:id', async (req, res) => {
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid contact ID' });
     const contact = await prisma.contact.findUnique({
       where: { id },
-      include: { activities: { orderBy: { createdAt: 'desc' } }, tasks: true, deals: true }
+      include: { activities: { orderBy: { createdAt: 'desc' } }, tasks: true, deals: true, assignedTo: { select: { id: true, name: true, email: true } } }
     });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     res.json(contact);
@@ -39,10 +42,27 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Bulk assign agent to multiple contacts (must be before /:id routes)
+router.put('/bulk-assign', async (req, res) => {
+  try {
+    const { contactIds, assignedToId } = req.body;
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({ error: 'No contact IDs provided' });
+    }
+    await prisma.contact.updateMany({
+      where: { id: { in: contactIds.map(id => parseInt(id)) } },
+      data: { assignedToId: assignedToId ? parseInt(assignedToId) : null }
+    });
+    res.json({ updated: contactIds.length, assignedToId: assignedToId || null });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to bulk assign agent' });
+  }
+});
+
 router.post('/:id/activities', async (req, res) => {
   try {
     res.status(201).json(await prisma.activity.create({
-      data: { ...req.body, contactId: parseInt(req.params.id) }
+      data: { ...req.body, contactId: parseInt(req.params.id), userId: req.user ? req.user.userId : null }
     }));
   } catch (err) {
     res.status(500).json({ error: 'Failed to create activity' });
@@ -98,6 +118,21 @@ router.post('/import-csv', async (req, res) => {
     res.json({ imported, skipped, errors });
   } catch (err) {
     res.status(500).json({ error: 'Failed to import contacts' });
+  }
+});
+
+// Assign agent to a contact
+router.put('/:id/assign', async (req, res) => {
+  try {
+    const { assignedToId } = req.body;
+    const contact = await prisma.contact.update({
+      where: { id: parseInt(req.params.id) },
+      data: { assignedToId: assignedToId ? parseInt(assignedToId) : null },
+      include: { assignedTo: { select: { id: true, name: true, email: true } } }
+    });
+    res.json(contact);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to assign agent' });
   }
 });
 

@@ -60,8 +60,8 @@ export default function CPQ() {
                     width: '100%',
                     padding: '0.95rem 1rem',
                     borderRadius: '12px',
-                    background: selectedDeal?.id === deal.id ? 'rgba(59, 130, 246, 0.18)' : 'var(--subtle-bg-2)',
-                    border: selectedDeal?.id === deal.id ? '1px solid rgba(59, 130, 246, 0.35)' : '1px solid var(--border-color)',
+                    background: selectedDeal?.id === deal.id ? 'rgba(59, 130, 246, 0.18)' : 'rgba(255,255,255,0.03)',
+                    border: selectedDeal?.id === deal.id ? '1px solid rgba(59, 130, 246, 0.35)' : '1px solid rgba(255,255,255,0.06)',
                     color: 'var(--text-primary)',
                     cursor: 'pointer',
                     textAlign: 'left'

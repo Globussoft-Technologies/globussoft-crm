@@ -106,10 +106,7 @@ const contractsRoutes = require("./routes/contracts");
 const estimatesRoutes = require("./routes/estimates");
 const projectsRoutes = require("./routes/projects");
 const supportRoutes = require("./routes/support");
-const pipelineStagesRoutes = require("./routes/pipeline_stages");
-const notificationsRoutes = require("./routes/notifications");
-const auditRoutes = require("./routes/audit");
-const emailTemplatesRoutes = require("./routes/email_templates");
+const reportSchedulesRoutes = require("./routes/report_schedules");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -120,7 +117,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/health"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/health"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, next);
 });
@@ -152,10 +149,7 @@ app.use("/api/expenses", expensesRoutes);
 app.use("/api/contracts", contractsRoutes);
 app.use("/api/estimates", estimatesRoutes);
 app.use("/api/projects", projectsRoutes);
-app.use("/api/pipeline_stages", pipelineStagesRoutes);
-app.use("/api/notifications", notificationsRoutes);
-app.use("/api/audit", auditRoutes);
-app.use("/api/email_templates", emailTemplatesRoutes);
+app.use("/api/report-schedules", reportSchedulesRoutes);
 
 // Server File Uploads Statically
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -191,13 +185,9 @@ server.listen(PORT, () => {
   console.log(`[Backend] Enterprise Express Server running securely on port ${PORT}`);
 });
 
-// Weekly Automated Reporting Schema
-cron.schedule('0 8 * * 1', async () => {
-  // Executes every Monday at 8:00 AM
-  console.log('[CRON] Assembling Weekly CRM BI Report...');
-  // Logic to execute Prisma queries, generate a PDF report via pdfkit, and dispatch it via Nodemailer to the Admin
-  console.log('[CRON] Automated Report Dispensed to administrative nodes.');
-});
+// Scheduled Report Engine (checks hourly for due report schedules)
+const { initReportCron } = require('./cron/reportEngine');
+initReportCron();
 
 // Initialize Sequence Engine
 const { initSequenceCron } = require('./cron/sequenceEngine');

@@ -23,6 +23,11 @@ model User {
   projects      Project[] @relation("ProjectOwner")
   notifications Notification[]
   auditLogs     AuditLog[]
+  assignedContacts Contact[] @relation("AssignedContacts")
+  activities    Activity[]
+  callLogs      CallLog[]
+  emailMessages EmailMessage[]
+  reportSchedules ReportSchedule[]
 }
 
 model Contact {
@@ -35,6 +40,10 @@ model Contact {
   source      String?    @default("Organic")
   aiScore     Int        @default(0) // 1-100 predictive close probability
   createdAt   DateTime   @default(now())
+
+  assignedToId Int?
+  assignedTo   User?     @relation("AssignedContacts", fields: [assignedToId], references: [id], onDelete: SetNull)
+
   activities  Activity[]
   deals       Deal[]
   emails      EmailMessage[]
@@ -55,6 +64,9 @@ model Activity {
   createdAt   DateTime @default(now())
   contactId   Int
   contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  userId      Int?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
 
 model Deal {
@@ -121,9 +133,12 @@ model EmailMessage {
   direction String   @default("INBOUND") // INBOUND, OUTBOUND
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
-  
+
   contactId Int?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
 
 model CallLog {
@@ -133,9 +148,12 @@ model CallLog {
   direction    String   @default("OUTBOUND")
   recordingUrl String?
   createdAt    DateTime @default(now())
-  
+
   contactId    Int?
   contact      Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  userId       Int?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
 
 model Attachment {
@@ -431,4 +449,23 @@ model Project {
   dealId      Int?
   deal        Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
   tasks       Task[]
+}
+
+model ReportSchedule {
+  id            Int      @id @default(autoincrement())
+  name          String
+  reportType    String   @default("deals") // deals, agent-performance, pipeline, contacts, tasks
+  metrics       String?  @db.Text // JSON: ["revenue","count"]
+  groupBy       String?  // stage, owner, source, status
+  frequency     String   @default("weekly") // daily, weekly, monthly
+  cronExpression String  @default("0 8 * * 1") // default Monday 8am
+  recipients    String   @db.Text // JSON array of email addresses
+  format        String   @default("PDF") // PDF, CSV
+  enabled       Boolean  @default(true)
+  lastRunAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

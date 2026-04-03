@@ -18,7 +18,7 @@ async function main() {
   console.log('Wiping all tables...');
   await prisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 0');
   const tables = [
-    'Notification', 'AuditLog', 'PipelineStage', 'EmailTemplate',
+    'ReportSchedule', 'Notification', 'AuditLog', 'PipelineStage', 'EmailTemplate',
     'CustomValue', 'CustomRecord', 'CustomField', 'CustomEntity',
     'QuoteLineItem', 'Quote', 'Product',
     'EstimateLineItem', 'Estimate',
@@ -92,14 +92,16 @@ async function main() {
   ];
 
   const contacts = [];
-  for (const c of contactsData) {
+  for (let i = 0; i < contactsData.length; i++) {
     try {
-      contacts.push(await prisma.contact.create({ data: c }));
+      const c = contactsData[i];
+      // Assign contacts round-robin to users
+      contacts.push(await prisma.contact.create({ data: { ...c, assignedToId: users[i % users.length].id } }));
     } catch (err) {
-      console.log(`  Skipped contact ${c.email}: ${err.message.slice(0, 60)}`);
+      console.log(`  Skipped contact ${contactsData[i].email}: ${err.message.slice(0, 60)}`);
     }
   }
-  console.log(`Contacts: ${contacts.length} created (of ${contactsData.length})`);
+  console.log(`Contacts: ${contacts.length} created (of ${contactsData.length}) — assigned to agents round-robin`);
 
   // ══════════════════════════════════════════════════════════════
   // STEP 4: PIPELINE STAGES — Custom enterprise stages
@@ -193,7 +195,7 @@ async function main() {
     for (let i = 0; i < count; i++) {
       const a = pick(actDescriptions);
       await prisma.activity.create({
-        data: { type: a.type, description: a.text, contactId: contact.id, createdAt: daysAgo(between(1, 90)) },
+        data: { type: a.type, description: a.text, contactId: contact.id, userId: pick(users).id, createdAt: daysAgo(between(1, 90)) },
       });
       activityCount++;
     }
@@ -340,6 +342,7 @@ async function main() {
         to: isIn ? 'team@globussoft.com' : (contact ? contact.email : 'all@globussoft.com'),
         direction: e.dir, read: e.read,
         contactId: contact ? contact.id : null,
+        userId: pick(users).id,
         createdAt: daysAgo(e.ago),
       },
     });
@@ -570,15 +573,80 @@ async function main() {
   console.log(`Audit Logs: ${auditData.length} created`);
 
   // ══════════════════════════════════════════════════════════════
+  // CALL LOGS — 15 realistic call logs assigned to agents
+  // ══════════════════════════════════════════════════════════════
+  const callNotes = [
+    'Discovery call — mapped out current tech stack and pain points',
+    'Pricing negotiation — client requested 10% discount for annual commitment',
+    'Follow-up call to discuss proposal feedback',
+    'Demo walkthrough of new analytics dashboard',
+    'Onboarding kickoff call with IT team',
+    'Quarterly business review — discussed roadmap',
+    'Support escalation — resolved SSO issue on call',
+    'Cold outreach — introduced CRM platform capabilities',
+    'Contract renewal discussion — upsell opportunity identified',
+    'Technical deep-dive with engineering team',
+    'Post-sale check-in — NPS score collected',
+    'Partnership alignment call — co-marketing plans',
+    'Budget approval follow-up with CFO',
+    'Implementation timeline review',
+    'Feature request discussion — custom reporting needs',
+  ];
+
+  for (let i = 0; i < 15; i++) {
+    await prisma.callLog.create({
+      data: {
+        duration: between(120, 1800),
+        notes: callNotes[i],
+        direction: i % 3 === 0 ? 'INBOUND' : 'OUTBOUND',
+        contactId: contacts[i % contacts.length].id,
+        userId: users[i % users.length].id,
+        createdAt: daysAgo(between(1, 60)),
+      }
+    });
+  }
+  console.log('Call Logs: 15 created');
+
+  // ══════════════════════════════════════════════════════════════
+  // REPORT SCHEDULES — 2 sample scheduled reports
+  // ══════════════════════════════════════════════════════════════
+  await prisma.reportSchedule.create({
+    data: {
+      name: 'Weekly Sales Summary',
+      reportType: 'deals',
+      frequency: 'weekly',
+      cronExpression: '0 8 * * 1',
+      recipients: JSON.stringify(['admin@globussoft.com', 'manager@crm.com']),
+      format: 'PDF',
+      enabled: true,
+      userId: users[0].id,
+    }
+  });
+  await prisma.reportSchedule.create({
+    data: {
+      name: 'Monthly Agent Performance',
+      reportType: 'agent-performance',
+      frequency: 'monthly',
+      cronExpression: '0 8 1 * *',
+      recipients: JSON.stringify(['admin@globussoft.com']),
+      format: 'PDF',
+      enabled: true,
+      userId: users[0].id,
+    }
+  });
+  console.log('Report Schedules: 2 created');
+
+  // ══════════════════════════════════════════════════════════════
   // DONE
   // ══════════════════════════════════════════════════════════════
   console.log('\n=== Database seeded successfully! ===');
-  console.log('  Users: 6  |  Contacts: 30  |  Deals: 24  |  Invoices: 15');
+  console.log('  Users: 6  |  Contacts: 30 (assigned)  |  Deals: 24  |  Invoices: 15');
   console.log('  Tasks: 15  |  Tickets: 8  |  Campaigns: 8  |  Projects: 5');
   console.log('  Contracts: 6  |  Estimates: 4  |  Expenses: 10  |  Emails: 20');
   console.log('  Pipeline Stages: 6  |  Products: 8  |  Sequences: 3');
   console.log('  Email Templates: 5  |  Notifications: 10  |  Audit Logs: 12');
-  console.log('  Automation Rules: 6  |  Integrations: 4');
+  console.log('  Automation Rules: 6  |  Integrations: 4  |  Call Logs: 15');
+  console.log('  Report Schedules: 2');
 }
 
 main()

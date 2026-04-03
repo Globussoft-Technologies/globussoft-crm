@@ -46,7 +46,8 @@ router.post("/send-email", async (req, res) => {
         to,
         direction: "OUTBOUND",
         read: true,
-        contactId: contactId ? parseInt(contactId) : null
+        contactId: contactId ? parseInt(contactId) : null,
+        userId: req.user ? req.user.userId : null
       }
     });
 
@@ -80,7 +81,8 @@ router.post("/log-call", async (req, res) => {
         notes,
         direction: direction || "OUTBOUND",
         recordingUrl,
-        contactId: contactId ? parseInt(contactId) : null
+        contactId: contactId ? parseInt(contactId) : null,
+        userId: req.user ? req.user.userId : null
       }
     });
 

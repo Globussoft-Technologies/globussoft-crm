@@ -12,6 +12,7 @@ const Workflows = lazy(() => import('./pages/Workflows'));
 const Inbox = lazy(() => import('./pages/Inbox'));
 const Marketing = lazy(() => import('./pages/Marketing'));
 const Reports = lazy(() => import('./pages/Reports'));
+const AgentReports = lazy(() => import('./pages/AgentReports'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Developer = lazy(() => import('./pages/Developer'));
 const Portal = lazy(() => import('./pages/Portal'));
@@ -74,6 +75,7 @@ export default function App() {
               <Route path="inbox" element={<Inbox />} />
               <Route path="marketing" element={<Marketing />} />
               <Route path="reports" element={<Reports />} />
+              <Route path="agent-reports" element={<AgentReports />} />
               <Route path="workflows" element={<Workflows />} />
               <Route path="developer" element={<Developer />} />
               <Route path="billing" element={<Navigate to="/invoices" replace />} />

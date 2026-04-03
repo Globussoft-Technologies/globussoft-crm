@@ -40,7 +40,24 @@ const Pipeline = () => {
       setDeals(Array.isArray(dealData) ? dealData : []);
       setContacts(Array.isArray(contactData) ? contactData : []);
       if (Array.isArray(stageData) && stageData.length > 0) {
-        setStages(stageData.map(s => ({ id: s.name.toLowerCase().replace(/\s+/g, '_'), title: s.name, color: s.color, dbId: s.id })));
+        // Map stage names to deal stage IDs used in the database
+        const stageIdMap = {
+          'new lead': 'lead', 'lead': 'lead',
+          'contacted': 'contacted',
+          'proposal sent': 'proposal', 'proposal': 'proposal',
+          'negotiation': 'proposal',
+          'closed won': 'won', 'won': 'won',
+          'closed lost': 'lost', 'lost': 'lost',
+        };
+        setStages(stageData
+          .filter(s => stageIdMap[s.name.toLowerCase()])
+          .map(s => ({
+            id: stageIdMap[s.name.toLowerCase()],
+            title: s.name,
+            color: s.color,
+            dbId: s.id
+          }))
+        );
       }
       setLoading(false);
     }).catch(err => console.error(err));

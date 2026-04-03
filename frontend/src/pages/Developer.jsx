@@ -5,6 +5,7 @@ import { fetchApi } from '../utils/api';
 export default function Developer() {
   const [keys, setKeys] = useState([]);
   const [hooks, setHooks] = useState([]);
+  const [copiedId, setCopiedId] = useState(null);
 
   const [newKeyName, setNewKeyName] = useState('');
   const [newHook, setNewHook] = useState({ event: 'deal.created', targetUrl: '' });
@@ -93,9 +94,22 @@ export default function Developer() {
                   <h4 style={{ fontWeight: '600', fontSize: '1rem' }}>{k.name}</h4>
                   <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', fontFamily: 'monospace', letterSpacing: '0.1em', marginTop: '0.25rem' }}>{k.keySecret.substring(0, 10)}****************</p>
                 </div>
-                <button onClick={() => deleteKey(k.id)} style={{ background: 'transparent', border: 'none', color: 'var(--danger-color)', cursor: 'pointer' }}>
-                  <Trash2 size={18} />
-                </button>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(k.keySecret);
+                      setCopiedId(k.id);
+                      setTimeout(() => setCopiedId(null), 2000);
+                    }}
+                    title="Copy to Clipboard"
+                    style={{ background: 'transparent', border: 'none', color: copiedId === k.id ? 'var(--success-color)' : 'var(--accent-color)', cursor: 'pointer' }}
+                  >
+                    {copiedId === k.id ? <CheckCircle2 size={18} /> : <Copy size={18} />}
+                  </button>
+                  <button onClick={() => deleteKey(k.id)} style={{ background: 'transparent', border: 'none', color: 'var(--danger-color)', cursor: 'pointer' }}>
+                    <Trash2 size={18} />
+                  </button>
+                </div>
               </div>
             ))}
             {keys.length === 0 && <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', padding: '1rem', background: 'var(--subtle-bg)', borderRadius: '8px', textAlign: 'center' }}>No active API keys located.</p>}

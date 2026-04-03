@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Globus CRM — Enterprise Sales Intelligence Platform</title>
+  <meta name="description" content="Globus CRM is a full-stack enterprise CRM with AI-powered lead scoring, agent performance analytics, automated email reports, and 25+ integrated modules.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar">
+    <div class="container nav-inner">
+      <a href="#" class="logo">
+        <div class="logo-icon"></div>
+        <span>Globus <strong>CRM</strong></span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#modules">Modules</a>
+        <a href="#screenshots">Screenshots</a>
+        <a href="#testing">Quality</a>
+        <a href="https://crm.globusdemos.com" target="_blank" class="btn btn-primary btn-sm">Live Demo</a>
+      </div>
+      <button class="mobile-menu-btn" onclick="document.querySelector('.nav-links').classList.toggle('open')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-glow hero-glow-1"></div>
+    <div class="hero-glow hero-glow-2"></div>
+    <div class="container hero-inner">
+      <div class="hero-badge">Enterprise-Grade CRM Platform</div>
+      <h1>Close more deals.<br>Know every customer.<br><span class="gradient-text">Powered by AI.</span></h1>
+      <p class="hero-sub">Globus CRM gives your sales team a 360-degree view of every lead, deal, and customer — with AI scoring, automated reports, and real-time pipeline analytics across 25+ integrated modules.</p>
+      <div class="hero-actions">
+        <a href="https://crm.globusdemos.com" target="_blank" class="btn btn-primary btn-lg">Try Live Demo</a>
+        <a href="#features" class="btn btn-outline btn-lg">Explore Features</a>
+      </div>
+      <div class="hero-stats">
+        <div class="stat"><span class="stat-num">25+</span><span class="stat-label">Modules</span></div>
+        <div class="stat"><span class="stat-num">313</span><span class="stat-label">E2E Tests</span></div>
+        <div class="stat"><span class="stat-num">30+</span><span class="stat-label">API Endpoints</span></div>
+        <div class="stat"><span class="stat-num">100%</span><span class="stat-label">Pass Rate</span></div>
+      </div>
+    </div>
+    <div class="hero-image-wrap">
+      <div class="hero-image-glow"></div>
+      <img src="../qa_screenshots/feature-dashboard.png" alt="Globus CRM Dashboard" class="hero-image" loading="eager">
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features" class="section">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-badge">Core Capabilities</div>
+        <h2>Everything your sales team needs</h2>
+        <p>From first contact to closed deal — Globus CRM covers the entire customer lifecycle with intelligent automation.</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card feature-highlight">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #3b82f6, #8b5cf6);">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <h3>Agent Assignment</h3>
+          <p>Assign sales agents to leads and contacts with one click. Bulk-assign multiple leads at once. Round-robin distribution built into the seed.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #ef4444);">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+          </div>
+          <h3>Agent-wise Reports</h3>
+          <p>Performance leaderboard ranking every agent by revenue, deals won, win rate, tasks, calls, and emails sent.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #059669);">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+          </div>
+          <h3>Detailed Reports + Download</h3>
+          <p>8 metric types, date range filters, chart + table views. Export any report as PDF or CSV with one click.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #ec4899, #8b5cf6);">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          </div>
+          <h3>Auto Email Reports</h3>
+          <p>Schedule daily, weekly, or monthly reports delivered via email as PDF or CSV. Manage recipients and toggle schedules from the UI.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #6366f1, #3b82f6);">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          </div>
+          <h3>AI Lead Scoring</h3>
+          <p>Machine learning engine scores every contact 1-100 based on engagement, company profile, and deal history. Runs on cron every 10 minutes.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background: linear-gradient(135deg, #14b8a6, #10b981);">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          </div>
+          <h3>Drag-Drop Pipeline</h3>
+          <p>Kanban board with real-time Socket.io sync. Drag deals between stages — all connected users see changes instantly.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Screenshots -->
+  <section id="screenshots" class="section section-dark">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-badge">Product Tour</div>
+        <h2>See it in action</h2>
+        <p>Every screen is production-ready with glassmorphism design, dark/light theme, and responsive layout.</p>
+      </div>
+      <div class="screenshots-grid">
+        <div class="screenshot-card">
+          <div class="screenshot-label">Agent Assignment on Leads</div>
+          <img src="../qa_screenshots/feature-agent-assignment-leads.png" alt="Agent Assignment" loading="lazy">
+        </div>
+        <div class="screenshot-card">
+          <div class="screenshot-label">Agent Performance Reports</div>
+          <img src="../qa_screenshots/feature-agent-reports.png" alt="Agent Reports" loading="lazy">
+        </div>
+        <div class="screenshot-card">
+          <div class="screenshot-label">Reports & Analytics — Charts</div>
+          <img src="../qa_screenshots/feature-reports-charts.png" alt="Reports Charts" loading="lazy">
+        </div>
+        <div class="screenshot-card">
+          <div class="screenshot-label">Detailed Data Tables</div>
+          <img src="../qa_screenshots/feature-reports-detailed.png" alt="Reports Detailed" loading="lazy">
+        </div>
+        <div class="screenshot-card">
+          <div class="screenshot-label">Schedule Email Reports</div>
+          <img src="../qa_screenshots/feature-auto-email-schedule.png" alt="Auto Email Reports" loading="lazy">
+        </div>
+        <div class="screenshot-card">
+          <div class="screenshot-label">Executive Dashboard</div>
+          <img src="../qa_screenshots/feature-dashboard.png" alt="Dashboard" loading="lazy">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Modules -->
+  <section id="modules" class="section">
+    <div class="container">
+      <div class="section-header">
+        <h2>25+ Integrated Modules</h2>
+        <p>One platform. Every department. No silos.</p>
+      </div>
+      <div class="modules-grid">
+        <div class="module-chip">Dashboard</div>
+        <div class="module-chip">Pipeline (Kanban)</div>
+        <div class="module-chip">Contacts 360</div>
+        <div class="module-chip">Leads</div>
+        <div class="module-chip">Clients</div>
+        <div class="module-chip">Agent Reports</div>
+        <div class="module-chip">BI Analytics</div>
+        <div class="module-chip">Auto Email Reports</div>
+        <div class="module-chip">AI Lead Scoring</div>
+        <div class="module-chip">Sequences</div>
+        <div class="module-chip">Workflows</div>
+        <div class="module-chip">Inbox</div>
+        <div class="module-chip">Marketing</div>
+        <div class="module-chip">Invoices</div>
+        <div class="module-chip">Estimates</div>
+        <div class="module-chip">Expenses</div>
+        <div class="module-chip">Contracts</div>
+        <div class="module-chip">CPQ Builder</div>
+        <div class="module-chip">Projects</div>
+        <div class="module-chip">Task Queue</div>
+        <div class="module-chip">Tickets</div>
+        <div class="module-chip">Support</div>
+        <div class="module-chip">App Builder</div>
+        <div class="module-chip">Developer Portal</div>
+        <div class="module-chip">Staff / RBAC</div>
+        <div class="module-chip">Notifications</div>
+        <div class="module-chip">Audit Log</div>
+        <div class="module-chip">CSV Import</div>
+        <div class="module-chip">Softphone</div>
+        <div class="module-chip">Command Palette</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tech Stack -->
+  <section class="section section-dark">
+    <div class="container">
+      <div class="section-header">
+        <h2>Built on Modern Technology</h2>
+      </div>
+      <div class="tech-grid">
+        <div class="tech-card">
+          <h4>Frontend</h4>
+          <p>React 18, Vite, React Router v6, Recharts, ReactFlow, Socket.io</p>
+        </div>
+        <div class="tech-card">
+          <h4>Backend</h4>
+          <p>Node.js, Express.js, Prisma ORM, MySQL, PDFKit, Nodemailer</p>
+        </div>
+        <div class="tech-card">
+          <h4>Auth & Security</h4>
+          <p>JWT + bcrypt, RBAC (Admin/Manager/User), rate limiting, CORS</p>
+        </div>
+        <div class="tech-card">
+          <h4>Infrastructure</h4>
+          <p>PM2, Nginx, Certbot SSL, node-cron, Swagger API docs</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Testing / Quality -->
+  <section id="testing" class="section">
+    <div class="container">
+      <div class="section-header">
+        <h2>Production-Grade Quality</h2>
+        <p>313 automated tests. 10 deep workflow verifications. 30 API endpoints validated. Zero failures.</p>
+      </div>
+      <div class="test-results">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Workflow</th>
+              <th>Status</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Lead Creation + Agent Assignment</td><td><span class="badge-pass">PASS</span></td><td>Create lead, assign agent, verify across pages</td></tr>
+            <tr><td>2</td><td>Pipeline Deal Lifecycle</td><td><span class="badge-pass">PASS</span></td><td>6 stages, 29 deals, create via modal, detail view</td></tr>
+            <tr><td>3</td><td>Reports: Charts + Metrics</td><td><span class="badge-pass">PASS</span></td><td>Revenue, deal count, win rate metrics render</td></tr>
+            <tr><td>4</td><td>Reports: Detailed Data Tables</td><td><span class="badge-pass">PASS</span></td><td>6 data types with 27-35 records each</td></tr>
+            <tr><td>5</td><td>PDF + CSV Export</td><td><span class="badge-pass">PASS</span></td><td>Both formats generate valid files</td></tr>
+            <tr><td>6</td><td>Agent Reports Leaderboard</td><td><span class="badge-pass">PASS</span></td><td>6 agents, charts, stat cards, drill-down</td></tr>
+            <tr><td>7</td><td>Auto Email Report Scheduling</td><td><span class="badge-pass">PASS</span></td><td>Full CRUD: create, pause, delete</td></tr>
+            <tr><td>8</td><td>Forgot Password Flow</td><td><span class="badge-pass">PASS</span></td><td>Token generation + password reset API</td></tr>
+            <tr><td>9</td><td>Invoice / Task / Ticket Management</td><td><span class="badge-pass">PASS</span></td><td>Records loaded, Mark Paid workflow</td></tr>
+            <tr><td>10</td><td>API Endpoint Health Sweep</td><td><span class="badge-pass">PASS</span></td><td>30/30 endpoints return 200</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="section-cta">
+    <div class="container">
+      <h2>Ready to transform your sales process?</h2>
+      <p>See Globus CRM in action with our live demo — fully loaded with realistic enterprise data.</p>
+      <div class="hero-actions">
+        <a href="https://crm.globusdemos.com" target="_blank" class="btn btn-primary btn-lg">Launch Live Demo</a>
+        <a href="https://github.com/Globussoft-Technologies/globussoft-crm" target="_blank" class="btn btn-outline btn-lg">View on GitHub</a>
+      </div>
+      <p class="cta-creds">Demo login: <code>admin@globussoft.com</code> / <code>password123</code></p>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <a href="#" class="logo">
+          <div class="logo-icon"></div>
+          <span>Globus <strong>CRM</strong></span>
+        </a>
+        <p>Enterprise sales intelligence platform built by Globussoft Technologies.</p>
+      </div>
+      <div class="footer-links">
+        <div>
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#screenshots">Screenshots</a>
+          <a href="#modules">Modules</a>
+          <a href="#testing">Quality</a>
+        </div>
+        <div>
+          <h4>Resources</h4>
+          <a href="https://crm.globusdemos.com" target="_blank">Live Demo</a>
+          <a href="https://crm.globusdemos.com/api-docs" target="_blank">API Docs</a>
+          <a href="https://github.com/Globussoft-Technologies/globussoft-crm" target="_blank">GitHub</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2026 Globussoft Technologies. All rights reserved.</p>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

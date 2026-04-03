@@ -49,9 +49,6 @@ const Sidebar = () => {
         <NavLink to="/clients" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Building2 size={20} /> Clients
         </NavLink>
-        <NavLink to="/billing" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <FileDigit size={20} /> Billing
-        </NavLink>
         <NavLink to="/invoices" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Receipt size={20} /> Invoices
         </NavLink>
@@ -76,7 +73,7 @@ const Sidebar = () => {
         <NavLink to="/objects" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Database size={20} /> App Builder
         </NavLink>
-        <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <NavLink to="/staff" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
             <UsersRound size={20} /> Staff
           </NavLink>

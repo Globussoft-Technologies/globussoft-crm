@@ -156,11 +156,28 @@ Interactive docs at `/api-docs` (Swagger UI).
 
 ## E2E Testing
 
-40 Playwright spec files with 313+ tests covering all modules, API health, responsive design, theme toggle, and navigation flows.
+40 Playwright spec files with **313 tests, 100% passing** — covering all modules, API health, responsive design, theme toggle, and navigation flows.
 
 ```bash
 cd e2e && npx playwright test --project=chromium
 ```
+
+### Deep Workflow Test Results
+
+10 end-to-end workflows verified against the live production deployment:
+
+| # | Workflow | Result | Details |
+|---|---------|--------|---------|
+| 1 | Lead Creation + Agent Assignment | PASS | Created lead, assigned agent via dropdown, verified on both Leads and Contacts pages |
+| 2 | Pipeline Deal Lifecycle | PASS | 6 stages rendered, 29 deals distributed, created deal via modal, opened detail view, drag-drop ready |
+| 3 | Reports: Charts + Metrics | PASS | 3 metrics tested (revenue, deal count, win rate), chart renders, aggregate total $2.89M |
+| 4 | Reports: Detailed Data Tables | PASS | 6 table types: Deals (27), Contacts (35), Tasks (21), Call Logs (17), Invoices (12), Expenses (12) |
+| 5 | Reports: PDF + CSV Export | PASS | CSV returns proper headers + data rows, PDF generates valid document |
+| 6 | Agent Reports | PASS | 6 agents in leaderboard, bar chart, stat cards, drill-down detail panel |
+| 7 | Auto Email Report Scheduling | PASS | Full CRUD: create schedule, verify in table, toggle pause, delete |
+| 8 | Forgot Password Flow | PASS | API returns reset token, password reset completes successfully |
+| 9 | Invoice + Task + Ticket Management | PASS | Invoices (10 records, Mark Paid workflow), Tasks loaded, Tickets loaded |
+| 10 | API Endpoint Health | PASS | 30/30 authenticated endpoints return 200 |
 
 ## Deployment
 

@@ -29,7 +29,7 @@ const Signup = () => {
       if (response.ok && data.token) {
         setUser(data.user);
         setToken(data.token);
-        navigate('/');
+        navigate('/dashboard');
       } else {
         setError(data.message || data.error || 'Registration failed securely. Please verify fields.');
       }

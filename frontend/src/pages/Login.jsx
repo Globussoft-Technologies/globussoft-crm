@@ -57,7 +57,7 @@ const Login = () => {
       if (response.ok) {
         setUser(data.user);
         setToken(data.token);
-        navigate('/');
+        navigate('/dashboard');
       } else {
         setError(data.error || 'Login failed');
       }

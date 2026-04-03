@@ -2,6 +2,7 @@ import React, { useState, createContext, useEffect, Suspense, lazy } from 'react
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import Landing from './pages/Landing';
 import Layout from './components/Layout';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -34,6 +35,7 @@ const Contracts = lazy(() => import('./pages/Contracts'));
 const Estimates = lazy(() => import('./pages/Estimates'));
 const Projects = lazy(() => import('./pages/Projects'));
 const Profile = lazy(() => import('./pages/Profile'));
+const Pricing = lazy(() => import('./pages/Pricing'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -64,11 +66,13 @@ export default function App() {
       <BrowserRouter>
         <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: 'var(--text-primary)' }}>Loading...</div>}>
           <Routes>
-            <Route path="/login" element={!token ? <Login /> : <Navigate to="/" />} />
-            <Route path="/signup" element={!token ? <Signup /> : <Navigate to="/" />} />
+            <Route path="/login" element={!token ? <Login /> : <Navigate to="/dashboard" />} />
+            <Route path="/signup" element={!token ? <Signup /> : <Navigate to="/dashboard" />} />
+            <Route path="/pricing" element={<Pricing />} />
             <Route path="/portal" element={<Portal />} />
-            <Route path="/" element={token ? <Layout /> : <Navigate to="/login" />}>
-              <Route index element={<Dashboard />} />
+            <Route path="/" element={!token ? <Landing /> : <Navigate to="/dashboard" />} />
+            <Route path="/*" element={token ? <Layout /> : <Navigate to="/login" />}>
+              <Route path="dashboard" element={<Dashboard />} />
               <Route path="contacts" element={<Contacts />} />
               <Route path="contacts/:id" element={<ContactDetail />} />
               <Route path="pipeline" element={<Pipeline />} />
@@ -78,7 +82,7 @@ export default function App() {
               <Route path="agent-reports" element={<AgentReports />} />
               <Route path="workflows" element={<Workflows />} />
               <Route path="developer" element={<Developer />} />
-              <Route path="billing" element={<Navigate to="/invoices" replace />} />
+              <Route path="billing" element={<Navigate to="/invoices" />} />
               <Route path="cpq" element={<CPQ />} />
               <Route path="marketplace" element={<Marketplace />} />
               <Route path="objects" element={<CustomObjects />} />

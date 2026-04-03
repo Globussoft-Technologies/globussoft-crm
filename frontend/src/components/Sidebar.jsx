@@ -3,13 +3,13 @@ import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as I
 
 const Sidebar = () => {
   return (
-    <aside className="glass" style={{ width: '250px', height: '100vh', padding: '1.5rem', display: 'flex', flexDirection: 'column', borderRadius: '0', borderLeft: 'none', borderTop: 'none', borderBottom: 'none' }}>
-      <div style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+    <aside className="glass" style={{ width: '250px', height: '100vh', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', borderRadius: '0', borderLeft: 'none', borderTop: 'none', borderBottom: 'none' }}>
+      <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
         <div style={{ width: '32px', height: '32px', backgroundColor: 'var(--accent-color)', borderRadius: '8px', boxShadow: '0 0 15px var(--accent-glow)' }}></div>
         <h1 style={{ fontSize: '1.25rem', fontWeight: 'bold', fontFamily: 'var(--font-family)' }}>Globussoft</h1>
       </div>
 
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}>
         <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <LayoutDashboard size={20} /> Dashboard
         </NavLink>
@@ -73,7 +73,7 @@ const Sidebar = () => {
         <NavLink to="/objects" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Database size={20} /> App Builder
         </NavLink>
-        <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <div style={{ paddingTop: '0.75rem', marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
           <NavLink to="/staff" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
             <UsersRound size={20} /> Staff
           </NavLink>
@@ -92,12 +92,14 @@ const Sidebar = () => {
 const navStyle = {
   display: 'flex',
   alignItems: 'center',
-  padding: '0.75rem 1rem',
-  gap: '0.75rem',
+  padding: '0.5rem 0.875rem',
+  gap: '0.625rem',
   borderRadius: '8px',
   color: 'var(--text-primary)',
   transition: 'all 0.2s ease',
-  textDecoration: 'none'
+  textDecoration: 'none',
+  fontSize: '0.9rem',
+  flexShrink: 0,
 };
 
 export default Sidebar;

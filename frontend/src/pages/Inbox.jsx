@@ -73,6 +73,9 @@ export default function Inbox() {
   };
 
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiTone, setAiTone] = useState('professional');
+  const [aiSubjects, setAiSubjects] = useState([]);
+
   const handleAIGenerate = async () => {
     if (!composeData.subject) {
       alert("Please enter a subject so the AI knows what to write about.");
@@ -80,12 +83,33 @@ export default function Inbox() {
     }
     setAiLoading(true);
     try {
-      const res = await fetchApi('/api/ai/draft', { method: 'POST', body: JSON.stringify({ context: composeData.subject }) });
+      // Find contact ID from the recipient email for CRM-aware drafting
+      const matchedContact = contacts.find(c => c.email === composeData.to);
+      const res = await fetchApi('/api/ai/draft', {
+        method: 'POST',
+        body: JSON.stringify({
+          context: composeData.subject,
+          recipientEmail: composeData.to,
+          contactId: matchedContact?.id || null,
+          tone: aiTone,
+        })
+      });
       setComposeData(prev => ({ ...prev, body: res.draft }));
     } catch(err) {
       console.error(err);
     }
     setAiLoading(false);
+  };
+
+  const handleAISubjects = async () => {
+    if (!composeData.subject && !composeData.to) return;
+    try {
+      const res = await fetchApi('/api/ai/subject-lines', {
+        method: 'POST',
+        body: JSON.stringify({ context: composeData.subject || composeData.to, count: 4 })
+      });
+      setAiSubjects(res.subjects || []);
+    } catch { setAiSubjects([]); }
   };
 
   return (
@@ -237,10 +261,35 @@ export default function Inbox() {
                 <textarea required className="input-field" value={composeData.body} onChange={e => setComposeData({...composeData, body: e.target.value})} placeholder="Write your email here..." rows={6} style={{ resize: 'vertical' }} />
               </div>
               
+              {/* AI Subject Suggestions */}
+              {aiSubjects.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+                  {aiSubjects.map((s, i) => (
+                    <button key={i} type="button" onClick={() => { setComposeData(prev => ({ ...prev, subject: s })); setAiSubjects([]); }}
+                      style={{ padding: '0.25rem 0.6rem', borderRadius: '12px', border: '1px solid rgba(59,130,246,0.3)', background: 'rgba(59,130,246,0.08)', color: 'var(--accent-color)', fontSize: '0.75rem', cursor: 'pointer' }}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', alignItems: 'center' }}>
-                <button type="button" onClick={handleAIGenerate} disabled={aiLoading} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(59, 130, 246, 0.2)', border: '1px solid var(--accent-color)', color: 'var(--accent-color)', padding: '0.5rem 1rem' }}>
-                  {aiLoading ? <span style={{ animation: 'pulse 1s infinite' }}>🧠 Simulating LLM...</span> : <>✨ AI Smart Draft</>}
-                </button>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <select value={aiTone} onChange={e => setAiTone(e.target.value)} className="input-field" style={{ padding: '0.4rem 0.5rem', fontSize: '0.8rem', width: 'auto' }}>
+                    <option value="professional">Professional</option>
+                    <option value="friendly">Friendly</option>
+                    <option value="formal">Formal</option>
+                    <option value="casual">Casual</option>
+                    <option value="persuasive">Persuasive</option>
+                    <option value="concise">Concise</option>
+                  </select>
+                  <button type="button" onClick={handleAIGenerate} disabled={aiLoading} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(59, 130, 246, 0.2)', border: '1px solid var(--accent-color)', color: 'var(--accent-color)', padding: '0.5rem 1rem' }}>
+                    {aiLoading ? <span style={{ animation: 'pulse 1s infinite' }}>Generating...</span> : <>✨ AI Draft</>}
+                  </button>
+                  <button type="button" onClick={handleAISubjects} className="btn-secondary" style={{ padding: '0.5rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                    💡 Subjects
+                  </button>
+                </div>
                 <div style={{ display: 'flex', gap: '1rem' }}>
                   <button type="button" onClick={() => setShowCompose(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
                   <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

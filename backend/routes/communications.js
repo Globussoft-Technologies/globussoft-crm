@@ -1,19 +1,56 @@
 const express = require("express");
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 const { PrismaClient } = require("@prisma/client");
-const nodemailer = require("nodemailer");
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// In a real production setup, these would be loaded from process.env configured by each user
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.ethereal.email',
-  port: process.env.SMTP_PORT || 587,
-  auth: {
-    user: process.env.SMTP_USER || 'demo',
-    pass: process.env.SMTP_PASS || 'demo123'
+// Mailgun email sending via their REST API
+const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
+const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || "crm.globusdemos.com";
+const FROM_EMAIL = `Globussoft CRM <noreply@${MAILGUN_DOMAIN}>`;
+
+async function sendMailgun(to, subject, body) {
+  if (!MAILGUN_API_KEY) {
+    console.log(`[Email] Mailgun not configured — email to ${to} logged but not sent`);
+    return { sent: false, reason: "no_api_key" };
   }
-});
+
+  const formData = new URLSearchParams();
+  formData.append("from", FROM_EMAIL);
+  formData.append("to", to);
+  formData.append("subject", subject);
+  formData.append("text", body);
+  formData.append("html", body.replace(/\n/g, "<br>"));
+
+  try {
+    const response = await fetch(`https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`, {
+      method: "POST",
+      headers: { Authorization: "Basic " + Buffer.from("api:" + MAILGUN_API_KEY).toString("base64") },
+      body: formData,
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`[Email] Sent to ${to}: ${data.id}`);
+      return { sent: true, id: data.id };
+    } else {
+      const err = await response.text();
+      console.error(`[Email] Mailgun error (${response.status}):`, err);
+      return { sent: false, reason: err };
+    }
+  } catch (err) {
+    console.error("[Email] Send error:", err.message);
+    return { sent: false, reason: err.message };
+  }
+}
+
+if (MAILGUN_API_KEY) {
+  console.log(`[Email] Mailgun configured for domain: ${MAILGUN_DOMAIN}`);
+} else {
+  console.warn("[Email] MAILGUN_API_KEY not set — emails will be logged but not delivered");
+}
 
 // GET all communications (Unified Inbox)
 router.get("/inbox", async (req, res) => {
@@ -29,31 +66,45 @@ router.get("/inbox", async (req, res) => {
   }
 });
 
-// POST to send email via CRM
+// POST to send email via CRM (now with real Mailgun delivery)
 router.post("/send-email", async (req, res) => {
   try {
     const { to, subject, body, contactId } = req.body;
-    
-    // Abstracted sendMail mock for demo environments.
-    // In production: await transporter.sendMail({ from: "CRM Admin <admin@crm.com>", to, subject, text: body });
-    console.log(`[NodeMailer Mock] Sending email to ${to}: ${subject}`);
+    if (!to || !subject) return res.status(400).json({ error: "Recipient and subject required" });
 
+    // Send via Mailgun
+    const mailResult = await sendMailgun(to, subject, body);
+
+    // Always persist to DB regardless of delivery status
     const emailRecord = await prisma.emailMessage.create({
       data: {
         subject,
         body,
-        from: "admin@globussoft.com",
+        from: FROM_EMAIL,
         to,
         direction: "OUTBOUND",
         read: true,
         contactId: contactId ? parseInt(contactId) : null,
-        userId: req.user ? req.user.userId : null
+        userId: req.user ? req.user.id : null
       }
     });
 
+    // Create activity on the contact
+    if (contactId) {
+      await prisma.activity.create({
+        data: {
+          type: "Email",
+          description: `Sent email: "${subject}"`,
+          contactId: parseInt(contactId),
+          userId: req.user ? req.user.id : null,
+        }
+      }).catch(() => {}); // non-critical
+    }
+
     if (req.io) req.io.emit('email_sent', emailRecord);
-    res.status(200).json({ success: true, email: emailRecord });
+    res.status(200).json({ success: true, delivered: mailResult.sent, email: emailRecord });
   } catch (err) {
+    console.error("[Email] Dispatch error:", err);
     res.status(500).json({ error: "Email dispatch failed" });
   }
 });
@@ -82,7 +133,7 @@ router.post("/log-call", async (req, res) => {
         direction: direction || "OUTBOUND",
         recordingUrl,
         contactId: contactId ? parseInt(contactId) : null,
-        userId: req.user ? req.user.userId : null
+        userId: req.user ? req.user.id : null
       }
     });
 

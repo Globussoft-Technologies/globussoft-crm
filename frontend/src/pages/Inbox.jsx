@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Mail, Phone, ArrowRight, User, Send, Clock, Play, Calendar } from 'lucide-react';
+import { Mail, Phone, ArrowRight, User, Send, Clock, Play, Calendar, MessageSquare, MessageCircle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
 export default function Inbox() {
   const [emails, setEmails] = useState([]);
   const [calls, setCalls] = useState([]);
+  const [smsMessages, setSmsMessages] = useState([]);
+  const [waMessages, setWaMessages] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('emails');
@@ -21,11 +23,15 @@ export default function Inbox() {
     Promise.all([
       fetchApi('/api/communications/inbox'),
       fetchApi('/api/communications/calls'),
-      fetchApi('/api/contacts')
-    ]).then(([emailData, callData, contactData]) => {
+      fetchApi('/api/contacts'),
+      fetchApi('/api/sms/messages').catch(() => []),
+      fetchApi('/api/whatsapp/messages').catch(() => []),
+    ]).then(([emailData, callData, contactData, smsData, waData]) => {
       setEmails(Array.isArray(emailData) ? emailData : []);
       setCalls(Array.isArray(callData) ? callData : []);
       setContacts(Array.isArray(contactData) ? contactData : []);
+      setSmsMessages(Array.isArray(smsData?.messages || smsData) ? (smsData?.messages || smsData) : []);
+      setWaMessages(Array.isArray(waData?.messages || waData) ? (waData?.messages || waData) : []);
       setLoading(false);
     }).catch(err => {
       console.error(err);
@@ -109,11 +115,58 @@ export default function Inbox() {
         <button onClick={() => setActiveTab('calls')} style={{ background: 'none', border: 'none', padding: '1rem 2rem', color: activeTab === 'calls' ? 'var(--warning-color)' : 'var(--text-secondary)', borderBottom: activeTab === 'calls' ? '2px solid var(--warning-color)' : '2px solid transparent', fontWeight: 'bold', cursor: 'pointer', transition: 'var(--transition)' }}>
           Call Logs ({calls.length})
         </button>
+        <button onClick={() => setActiveTab('sms')} style={{ background: 'none', border: 'none', padding: '1rem 2rem', color: activeTab === 'sms' ? '#10b981' : 'var(--text-secondary)', borderBottom: activeTab === 'sms' ? '2px solid #10b981' : '2px solid transparent', fontWeight: 'bold', cursor: 'pointer', transition: 'var(--transition)' }}>
+          <MessageSquare size={16} style={{ verticalAlign: 'middle', marginRight: '0.25rem' }} /> SMS ({smsMessages.length})
+        </button>
+        <button onClick={() => setActiveTab('whatsapp')} style={{ background: 'none', border: 'none', padding: '1rem 2rem', color: activeTab === 'whatsapp' ? '#25D366' : 'var(--text-secondary)', borderBottom: activeTab === 'whatsapp' ? '2px solid #25D366' : '2px solid transparent', fontWeight: 'bold', cursor: 'pointer', transition: 'var(--transition)' }}>
+          <MessageCircle size={16} style={{ verticalAlign: 'middle', marginRight: '0.25rem' }} /> WhatsApp ({waMessages.length})
+        </button>
       </div>
 
       <div className="card" style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
         {loading ? (
           <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Syncing communications...</p>
+        ) : activeTab === 'sms' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {smsMessages.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>No SMS messages yet. Configure SMS in Settings &gt; Channels.</p>}
+            {smsMessages.map(msg => (
+              <div key={msg.id} style={{ padding: '1.25rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: msg.direction === 'INBOUND' ? 'rgba(16, 185, 129, 0.05)' : 'transparent', display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: '#10b981' }}>
+                  <MessageSquare size={18} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
+                    <span style={{ fontWeight: '600' }}>{msg.direction === 'INBOUND' ? msg.from || msg.to : msg.to}</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(msg.createdAt).toLocaleString()}</span>
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{msg.body}</p>
+                  <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', marginTop: '0.375rem', display: 'inline-block', background: msg.status === 'DELIVERED' ? 'rgba(16,185,129,0.1)' : msg.status === 'FAILED' ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)', color: msg.status === 'DELIVERED' ? '#10b981' : msg.status === 'FAILED' ? '#ef4444' : '#3b82f6' }}>{msg.status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : activeTab === 'whatsapp' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {waMessages.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>No WhatsApp messages yet. Configure WhatsApp in Settings &gt; Channels.</p>}
+            {waMessages.map(msg => (
+              <div key={msg.id} style={{ padding: '1.25rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: msg.direction === 'INBOUND' ? 'rgba(37, 211, 102, 0.05)' : 'transparent', display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(37, 211, 102, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: '#25D366' }}>
+                  <MessageCircle size={18} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
+                    <span style={{ fontWeight: '600' }}>{msg.direction === 'INBOUND' ? msg.from || msg.to : msg.to}</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(msg.createdAt).toLocaleString()}</span>
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{msg.body || `Template: ${msg.templateName}`}</p>
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.375rem', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', background: msg.status === 'READ' ? 'rgba(59,130,246,0.1)' : msg.status === 'DELIVERED' ? 'rgba(16,185,129,0.1)' : msg.status === 'FAILED' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)', color: msg.status === 'READ' ? '#3b82f6' : msg.status === 'DELIVERED' ? '#10b981' : msg.status === 'FAILED' ? '#ef4444' : '#f59e0b' }}>{msg.status}</span>
+                    {msg.status === 'READ' && <span style={{ color: '#3b82f6', fontSize: '0.7rem' }}>✓✓</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         ) : activeTab === 'emails' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {emails.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>Inbox is empty. Start communicating!</p>}

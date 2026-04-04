@@ -113,6 +113,11 @@ const emailTemplatesRoutes = require("./routes/email_templates");
 const emailRoutes = require("./routes/email");
 const auditRoutes = require("./routes/audit");
 const marketplaceLeadsRoutes = require("./routes/marketplace_leads");
+const smsRoutes = require("./routes/sms");
+const whatsappRoutes = require("./routes/whatsapp");
+const telephonyRoutes = require("./routes/telephony");
+const pushRoutes = require("./routes/push");
+const { router: landingPagesRoutes, publicRouter: landingPagesPublic } = require("./routes/landing_pages");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -123,7 +128,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/health", "/marketplace-leads/webhook"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, next);
 });
@@ -162,6 +167,14 @@ app.use("/api/email_templates", emailTemplatesRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/marketplace-leads", marketplaceLeadsRoutes);
+app.use("/api/sms", smsRoutes);
+app.use("/api/whatsapp", whatsappRoutes);
+app.use("/api/telephony", telephonyRoutes);
+app.use("/api/push", pushRoutes);
+app.use("/api/landing-pages", landingPagesRoutes);
+
+// Public landing pages (outside /api/ prefix, no auth guard)
+app.use("/p", landingPagesPublic);
 
 // Server File Uploads Statically
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));

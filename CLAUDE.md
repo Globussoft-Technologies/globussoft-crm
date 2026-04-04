@@ -30,7 +30,8 @@ Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM 
 - **cron/sequenceEngine.js** — Automated sequence execution
 - **cron/marketplaceEngine.js** — Indian marketplace lead sync (every 5 min)
 - **utils/deduplication.js** — Phone normalization + contact/lead deduplication
-- **routes/** — 27 route files: auth, contacts, deals, calendar, ai_scoring, workflows, communications, deals_documents, marketing, marketplace_leads, reports, developer, billing, search, ai, tickets, integrations, custom_objects, sequences, cpq, email, tasks, staff, expenses, contracts, estimates, projects
+- **services/** — smsProvider, whatsappProvider, telephonyProvider, pushService, landingPageRenderer
+- **routes/** — 32 route files: auth, contacts, deals, calendar, ai_scoring, workflows, communications, deals_documents, marketing, marketplace_leads, reports, developer, billing, search, ai, tickets, integrations, custom_objects, sequences, cpq, email, tasks, staff, expenses, contracts, estimates, projects
 - All API endpoints prefixed with `/api/`
 - Global auth guard protects all routes except /auth/login, /auth/signup, /auth/register, /health, /marketplace-leads/webhook
 - Rate limiting: 5000 req/15min general, 1000 req/15min on auth/login
@@ -74,6 +75,12 @@ User, Contact, Activity, Deal, Ticket, Campaign, AutomationRule, EmailMessage, C
 - **Real-time Presence** — Socket.io collaborative cursors
 - **Command Palette & Omnibar** — Quick navigation
 - **Marketplace Leads** — Indian marketplace integration (IndiaMART, JustDial, TradeIndia) with auto-import, deduplication, webhooks, and cron-based sync
+- **SMS Campaigns** — SMS messaging via MSG91/Twilio with templates, DLT compliance, delivery tracking, sequence node
+- **WhatsApp Business** — WhatsApp Cloud API integration with template management, approval workflow, chat inbox
+- **Indian Telephony** — Click-to-call via MyOperator/Knowlarity, call logging, incoming call popup
+- **Push Notifications** — Web push via VAPID keys, CRM user + website visitor subscriptions, campaigns
+- **Landing Page Builder** — No-code drag-and-drop page builder with templates, form submissions, analytics
+- **Channels Settings** — Unified configuration for SMS, WhatsApp, Telephony, Push providers
 
 ## Demo Credentials
 

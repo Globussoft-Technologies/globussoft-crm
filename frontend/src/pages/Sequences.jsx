@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import ReactFlow, { MiniMap, Controls, Background, addEdge, applyNodeChanges, applyEdgeChanges, Panel } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Network, Play, Plus, Save, Clock, Mail, Trash2, Users, RefreshCw } from 'lucide-react';
+import { Network, Play, Plus, Save, Clock, Mail, Trash2, Users, RefreshCw, MessageSquare, MessageCircle, Bell } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
 const initialNodes = [
@@ -155,6 +155,15 @@ export default function Sequences() {
               </button>
               <button onClick={() => addLogicNode('default', 'CONDITION: Tag Check', '#8b5cf6')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderColor: 'rgba(139,92,246,0.4)' }}>
                 <Network size={16} color="#8b5cf6"/> Add Condition
+              </button>
+              <button onClick={() => addLogicNode('default', 'ACTION: Send SMS', '#10b981')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderColor: 'rgba(16,185,129,0.4)' }}>
+                <MessageSquare size={16} color="#10b981"/> SMS
+              </button>
+              <button onClick={() => addLogicNode('default', 'ACTION: Send WhatsApp', '#25D366')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderColor: 'rgba(37,211,102,0.4)' }}>
+                <MessageCircle size={16} color="#25D366"/> WhatsApp
+              </button>
+              <button onClick={() => addLogicNode('default', 'ACTION: Send Push', '#a855f7')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderColor: 'rgba(168,85,247,0.4)' }}>
+                <Bell size={16} color="#a855f7"/> Push
               </button>
             </Panel>
             <Background color="#1e293b" gap={24} size={2} />

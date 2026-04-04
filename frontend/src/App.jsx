@@ -37,6 +37,9 @@ const Projects = lazy(() => import('./pages/Projects'));
 const Profile = lazy(() => import('./pages/Profile'));
 const Pricing = lazy(() => import('./pages/Pricing'));
 const MarketplaceLeads = lazy(() => import('./pages/MarketplaceLeads'));
+const Channels = lazy(() => import('./pages/Channels'));
+const LandingPages = lazy(() => import('./pages/LandingPages'));
+const LandingPageBuilder = lazy(() => import('./pages/LandingPageBuilder'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -87,6 +90,9 @@ export default function App() {
               <Route path="cpq" element={<CPQ />} />
               <Route path="marketplace" element={<Marketplace />} />
               <Route path="marketplace-leads" element={<MarketplaceLeads />} />
+              <Route path="channels" element={<Channels />} />
+              <Route path="landing-pages" element={<LandingPages />} />
+              <Route path="landing-pages/builder/:id" element={<LandingPageBuilder />} />
               <Route path="objects" element={<CustomObjects />} />
               <Route path="objects/:entityName" element={<CustomObjectView />} />
               <Route path="sequences" element={<Sequences />} />

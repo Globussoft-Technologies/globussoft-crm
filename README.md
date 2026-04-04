@@ -98,10 +98,16 @@ Auto-import leads from **IndiaMART, JustDial, and TradeIndia** — India's large
 - **Auto Email Reports** - Scheduled report delivery via email (daily/weekly/monthly, PDF/CSV)
 
 ### Automation & Communication
-- **Sequences** - Visual drip campaign builder with ReactFlow
+- **Sequences** - Visual drip campaign builder with ReactFlow (Email, SMS, WhatsApp, Push node types)
 - **Workflows** - Automation rule engine with visual flow editor
-- **Inbox** - Omnichannel communications (email/SMS)
-- **Marketing** - Campaign management with metrics
+- **Inbox** - Omnichannel communications (Email, Calls, SMS, WhatsApp)
+- **Marketing** - Campaign management (Email, SMS, Push campaigns)
+- **SMS Campaigns** - SMS via MSG91/Twilio, DLT compliance, templates with variable substitution
+- **WhatsApp Business** - WhatsApp Cloud API, template approval workflow, chat-style inbox
+- **Indian Telephony** - Click-to-call via MyOperator/Knowlarity, call recording, CDR webhooks
+- **Push Notifications** - Web push (VAPID), CRM user + visitor subscriptions, marketing campaigns
+- **Landing Page Builder** - No-code drag-and-drop builder with 4 templates, form submissions, analytics
+- **Channels Settings** - Unified provider configuration for all communication channels
 
 ### Financial
 - **Billing / Invoices** - Full CRUD with mark-paid, void, PDF download, status badges
@@ -163,7 +169,7 @@ npx playwright test --project=chromium
 
 ## API
 
-30 route modules, all prefixed with `/api/`, protected by JWT auth.
+35 route modules, all prefixed with `/api/`, protected by JWT auth. Public landing pages served at `/p/:slug`.
 
 Rate limiting: 5000 req/15min general, 1000 req/15min on auth.
 

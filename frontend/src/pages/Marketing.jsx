@@ -3,7 +3,7 @@ import { Copy, Code, Layout, Blocks, CheckCircle2, Megaphone, Plus, BarChart, Se
 import { fetchApi } from '../utils/api';
 
 export default function Marketing() {
-  const [activeTab, setActiveTab] = useState('campaigns'); // 'campaigns' or 'forms'
+  const [activeTab, setActiveTab] = useState('campaigns'); // 'campaigns', 'forms', 'sms', 'push'
   
   // Forms State
   const [formName, setFormName] = useState('My Contact Form');
@@ -75,6 +75,8 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
         
         <div style={{ display: 'flex', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '0.25rem' }}>
           <button onClick={() => setActiveTab('campaigns')} style={{ padding: '0.5rem 1rem', borderRadius: '6px', border: 'none', cursor: 'pointer', background: activeTab === 'campaigns' ? 'var(--primary-color)' : 'transparent', color: activeTab === 'campaigns' ? '#fff' : 'var(--text-secondary)', fontWeight: activeTab === 'campaigns' ? '600' : '400' }}>Email Campaigns</button>
+          <button onClick={() => setActiveTab('sms')} style={{ padding: '0.5rem 1rem', borderRadius: '6px', border: 'none', cursor: 'pointer', background: activeTab === 'sms' ? '#10b981' : 'transparent', color: activeTab === 'sms' ? '#fff' : 'var(--text-secondary)', fontWeight: activeTab === 'sms' ? '600' : '400' }}>SMS Campaigns</button>
+          <button onClick={() => setActiveTab('push')} style={{ padding: '0.5rem 1rem', borderRadius: '6px', border: 'none', cursor: 'pointer', background: activeTab === 'push' ? '#8b5cf6' : 'transparent', color: activeTab === 'push' ? '#fff' : 'var(--text-secondary)', fontWeight: activeTab === 'push' ? '600' : '400' }}>Push Campaigns</button>
           <button onClick={() => setActiveTab('forms')} style={{ padding: '0.5rem 1rem', borderRadius: '6px', border: 'none', cursor: 'pointer', background: activeTab === 'forms' ? 'var(--primary-color)' : 'transparent', color: activeTab === 'forms' ? '#fff' : 'var(--text-secondary)', fontWeight: activeTab === 'forms' ? '600' : '400' }}>Embedded Forms</button>
         </div>
       </header>
@@ -144,6 +146,19 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
               <button type="submit" className="btn-primary">Create Campaign</button>
             </div>
           </form>
+        </div>
+      )}
+
+      {(activeTab === 'sms' || activeTab === 'push') && (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ textAlign: 'center', padding: '4rem', background: 'var(--subtle-bg-2)', borderRadius: '12px', border: '1px dashed var(--border-color)', maxWidth: '500px' }}>
+            <Megaphone size={48} color="var(--text-secondary)" style={{ opacity: 0.3, margin: '0 auto 1rem' }} />
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem' }}>{activeTab === 'sms' ? 'SMS' : 'Push'} Campaigns</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+              Configure your {activeTab === 'sms' ? 'SMS provider (MSG91 / Twilio)' : 'VAPID keys and push'} settings first, then create templates and send campaigns.
+            </p>
+            <a href="/channels" style={{ color: 'var(--accent-color)', fontWeight: '500', textDecoration: 'none' }}>Go to Channels Settings →</a>
+          </div>
         </div>
       )}
 

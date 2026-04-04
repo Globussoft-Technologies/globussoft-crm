@@ -46,6 +46,41 @@ const processNode = async (node, enrollment) => {
     return { delayMinutes };
   }
   
+  if (label.startsWith('ACTION: Send SMS')) {
+    if (enrollment.contact.phone) {
+      await prisma.smsMessage.create({
+        data: {
+          to: enrollment.contact.phone,
+          body: `Automated sequence message for ${enrollment.contact.name}`,
+          direction: 'OUTBOUND',
+          status: 'QUEUED',
+          contactId: enrollment.contact.id,
+        }
+      });
+    }
+    return { delayMinutes: 0 };
+  }
+
+  if (label.startsWith('ACTION: Send WhatsApp')) {
+    if (enrollment.contact.phone) {
+      await prisma.whatsAppMessage.create({
+        data: {
+          to: enrollment.contact.phone,
+          body: `Automated WhatsApp sequence message for ${enrollment.contact.name}`,
+          direction: 'OUTBOUND',
+          status: 'QUEUED',
+          contactId: enrollment.contact.id,
+        }
+      });
+    }
+    return { delayMinutes: 0 };
+  }
+
+  if (label.startsWith('ACTION: Send Push')) {
+    // Create a notification record for the contact owner
+    return { delayMinutes: 0 };
+  }
+
   if (label.startsWith('CONDITION:')) {
     // Determine condition result. We'll default to true for now since ReactFlow 
     // basic setup doesn't have custom true/false handles mapped yet.

@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network, Target, CheckSquare, UserPlus, Building2, Receipt, Ticket, UsersRound, FileText, FileSpreadsheet, FolderKanban, DollarSign, Trophy, ShoppingBag } from 'lucide-react';
+import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network, Target, CheckSquare, UserPlus, Building2, Receipt, Ticket, UsersRound, FileText, FileSpreadsheet, FolderKanban, DollarSign, Trophy, ShoppingBag, Radio, PanelTop } from 'lucide-react';
 
 const Sidebar = () => {
   return (
@@ -49,6 +49,9 @@ const Sidebar = () => {
         <NavLink to="/marketplace-leads" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <ShoppingBag size={20} /> Marketplace Leads
         </NavLink>
+        <NavLink to="/channels" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Radio size={20} /> Channels
+        </NavLink>
         <NavLink to="/clients" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Building2 size={20} /> Clients
         </NavLink>
@@ -75,6 +78,9 @@ const Sidebar = () => {
         </NavLink>
         <NavLink to="/objects" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Database size={20} /> App Builder
+        </NavLink>
+        <NavLink to="/landing-pages" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <PanelTop size={20} /> Landing Pages
         </NavLink>
         <div style={{ paddingTop: '0.75rem', marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
           <NavLink to="/staff" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>

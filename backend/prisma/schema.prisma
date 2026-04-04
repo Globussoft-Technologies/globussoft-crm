@@ -28,6 +28,10 @@ model User {
   callLogs      CallLog[]
   emailMessages EmailMessage[]
   reportSchedules ReportSchedule[]
+  smsMessages     SmsMessage[]
+  whatsappMessages WhatsAppMessage[]
+  pushSubscriptions PushSubscription[]
+  landingPages    LandingPage[]
 }
 
 model Contact {
@@ -57,6 +61,9 @@ model Contact {
   estimates   Estimate[]
   projects    Project[]
   marketplaceLeads MarketplaceLead[]
+  smsMessages      SmsMessage[]
+  whatsappMessages WhatsAppMessage[]
+  pushSubscriptions PushSubscription[]
 }
 
 model Activity {
@@ -109,12 +116,15 @@ model Ticket {
 model Campaign {
   id          Int      @id @default(autoincrement())
   name        String
+  channel     String   @default("EMAIL") // EMAIL, SMS, PUSH, WHATSAPP
   status      String   @default("Draft") // Draft, Active, Completed
   sent        Int      @default(0)
   opened      Int      @default(0)
   clicked     Int      @default(0)
   budget      Float    @default(0.0)
   createdAt   DateTime @default(now())
+  smsMessages SmsMessage[]
+  pushNotifications PushNotification[]
 }
 
 model AutomationRule {
@@ -144,18 +154,23 @@ model EmailMessage {
 }
 
 model CallLog {
-  id           Int      @id @default(autoincrement())
-  duration     Int      // seconds
-  notes        String?
-  direction    String   @default("OUTBOUND")
-  recordingUrl String?
-  createdAt    DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  duration       Int      // seconds
+  notes          String?
+  direction      String   @default("OUTBOUND")
+  recordingUrl   String?
+  provider       String?  // "myoperator", "knowlarity", "twilio", "webrtc"
+  providerCallId String?
+  status         String   @default("COMPLETED") // INITIATED, RINGING, CONNECTED, COMPLETED, MISSED, FAILED
+  callerNumber   String?
+  calleeNumber   String?
+  createdAt      DateTime @default(now())
 
-  contactId    Int?
-  contact      Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contactId      Int?
+  contact        Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
-  userId       Int?
-  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId         Int?
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
 
 model Attachment {
@@ -503,4 +518,199 @@ model MarketplaceConfig {
   settings    String?  @db.Text // JSON for extra config
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// ── SMS ───────────────────────────────────────────────────────────
+
+model SmsMessage {
+  id            Int       @id @default(autoincrement())
+  to            String
+  from          String?
+  body          String    @db.Text
+  direction     String    @default("OUTBOUND") // INBOUND, OUTBOUND
+  status        String    @default("QUEUED") // QUEUED, SENT, DELIVERED, FAILED, RECEIVED
+  provider      String?   // "msg91", "twilio"
+  providerMsgId String?
+  dltTemplateId String?
+  errorMessage  String?
+  read          Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  contactId     Int?
+  contact       Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  userId        Int?
+  user          User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  campaignId    Int?
+  campaign      Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+}
+
+model SmsTemplate {
+  id            Int      @id @default(autoincrement())
+  name          String
+  body          String   @db.Text
+  category      String   @default("Promotional") // Promotional, Transactional, OTP
+  dltTemplateId String?
+  isApproved    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model SmsConfig {
+  id          Int      @id @default(autoincrement())
+  provider    String   @unique // "msg91", "twilio"
+  apiKey      String?
+  authToken   String?
+  senderId    String?
+  dltEntityId String?
+  isActive    Boolean  @default(false)
+  settings    String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ── WhatsApp ──────────────────────────────────────────────────────
+
+model WhatsAppMessage {
+  id              Int      @id @default(autoincrement())
+  to              String
+  from            String?
+  body            String?  @db.Text
+  mediaUrl        String?
+  mediaType       String?
+  direction       String   @default("OUTBOUND")
+  status          String   @default("QUEUED") // QUEUED, SENT, DELIVERED, READ, FAILED
+  providerMsgId   String?
+  templateName    String?
+  errorMessage    String?
+  read            Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  contactId       Int?
+  contact         Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  userId          Int?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model WhatsAppTemplate {
+  id              Int      @id @default(autoincrement())
+  name            String   @unique
+  language        String   @default("en")
+  category        String   @default("MARKETING") // MARKETING, UTILITY, AUTHENTICATION
+  headerType      String?  // TEXT, IMAGE, DOCUMENT, VIDEO, NONE
+  headerContent   String?
+  body            String   @db.Text
+  footer          String?
+  buttons         String?  @db.Text // JSON
+  status          String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  metaTemplateId  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model WhatsAppConfig {
+  id                 Int      @id @default(autoincrement())
+  provider           String   @unique // "meta_cloud", "twilio_whatsapp", "gupshup"
+  phoneNumberId      String?
+  businessAccountId  String?
+  accessToken        String?
+  webhookVerifyToken String?
+  isActive           Boolean  @default(false)
+  settings           String?  @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+// ── Telephony ─────────────────────────────────────────────────────
+
+model TelephonyConfig {
+  id            Int      @id @default(autoincrement())
+  provider      String   @unique // "myoperator", "knowlarity", "twilio"
+  apiKey        String?
+  apiSecret     String?
+  virtualNumber String?
+  agentNumber   String?
+  isActive      Boolean  @default(false)
+  settings      String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ── Push Notifications ────────────────────────────────────────────
+
+model PushSubscription {
+  id          Int      @id @default(autoincrement())
+  endpoint    String   @unique @db.VarChar(500)
+  p256dh      String
+  auth        String
+  type        String   @default("CRM_USER") // CRM_USER, WEBSITE_VISITOR
+  userId      Int?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contactId   Int?
+  contact     Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  userAgent   String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+model PushNotification {
+  id             Int       @id @default(autoincrement())
+  title          String
+  body           String    @db.Text
+  icon           String?
+  url            String?
+  imageUrl       String?
+  type           String    @default("INTERNAL") // INTERNAL, MARKETING
+  status         String    @default("QUEUED")
+  sentCount      Int       @default(0)
+  deliveredCount Int       @default(0)
+  clickedCount   Int       @default(0)
+  failedCount    Int       @default(0)
+  createdAt      DateTime  @default(now())
+  campaignId     Int?
+  campaign       Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+}
+
+model PushTemplate {
+  id        Int      @id @default(autoincrement())
+  name      String
+  title     String
+  body      String   @db.Text
+  icon      String?
+  url       String?
+  category  String   @default("General")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── Landing Pages ─────────────────────────────────────────────────
+
+model LandingPage {
+  id              Int       @id @default(autoincrement())
+  title           String
+  slug            String    @unique
+  description     String?
+  templateType    String?
+  content         String?   @db.LongText // JSON component array
+  cssOverrides    String?   @db.Text
+  metaTitle       String?
+  metaDescription String?
+  status          String    @default("DRAFT") // DRAFT, PUBLISHED, ARCHIVED
+  visits          Int       @default(0)
+  submissions     Int       @default(0)
+  publishedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  userId          Int?
+  user            User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  analytics       LandingPageAnalytics[]
+}
+
+model LandingPageAnalytics {
+  id            Int         @id @default(autoincrement())
+  landingPageId Int
+  landingPage   LandingPage @relation(fields: [landingPageId], references: [id], onDelete: Cascade)
+  eventType     String      // VISIT, FORM_SUBMIT, BUTTON_CLICK
+  visitorIp     String?
+  userAgent     String?
+  referrer      String?
+  metadata      String?     @db.Text
+  createdAt     DateTime    @default(now())
 }

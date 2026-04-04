@@ -34,6 +34,7 @@ model Contact {
   id          Int        @id @default(autoincrement())
   name        String
   email       String     @unique
+  phone       String?
   company     String?
   title       String?
   status      String     @default("Lead") // Lead, Prospect, Customer, Churned
@@ -55,6 +56,7 @@ model Contact {
   contracts   Contract[]
   estimates   Estimate[]
   projects    Project[]
+  marketplaceLeads MarketplaceLead[]
 }
 
 model Activity {
@@ -468,4 +470,37 @@ model ReportSchedule {
 
   userId        Int
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model MarketplaceLead {
+  id              Int      @id @default(autoincrement())
+  provider        String   // "indiamart", "justdial", "tradeindia"
+  externalLeadId  String?  // provider's lead ID for dedup
+  rawPayload      String?  @db.Text // JSON of original webhook/API payload
+  name            String?
+  email           String?
+  phone           String?
+  company         String?
+  product         String?  // what they inquired about
+  message         String?  @db.Text
+  city            String?
+  status          String   @default("New") // New, Imported, Duplicate, Dismissed
+  contactId       Int?
+  contact         Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now())
+
+  @@unique([provider, externalLeadId])
+}
+
+model MarketplaceConfig {
+  id          Int      @id @default(autoincrement())
+  provider    String   @unique // "indiamart", "justdial", "tradeindia"
+  apiKey      String?
+  apiSecret   String?
+  glueCrmKey  String?  // IndiaMART CRM key
+  isActive    Boolean  @default(false)
+  lastSyncAt  DateTime?
+  settings    String?  @db.Text // JSON for extra config
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

@@ -36,6 +36,7 @@ const Estimates = lazy(() => import('./pages/Estimates'));
 const Projects = lazy(() => import('./pages/Projects'));
 const Profile = lazy(() => import('./pages/Profile'));
 const Pricing = lazy(() => import('./pages/Pricing'));
+const MarketplaceLeads = lazy(() => import('./pages/MarketplaceLeads'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -85,6 +86,7 @@ export default function App() {
               <Route path="billing" element={<Navigate to="/invoices" />} />
               <Route path="cpq" element={<CPQ />} />
               <Route path="marketplace" element={<Marketplace />} />
+              <Route path="marketplace-leads" element={<MarketplaceLeads />} />
               <Route path="objects" element={<CustomObjects />} />
               <Route path="objects/:entityName" element={<CustomObjectView />} />
               <Route path="sequences" element={<Sequences />} />

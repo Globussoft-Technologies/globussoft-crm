@@ -28,9 +28,11 @@ Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM 
 - **prisma/seed.js** — Seeds all models with demo data
 - **cron/leadScoringEngine.js** — AI lead scoring engine (every 10 min)
 - **cron/sequenceEngine.js** — Automated sequence execution
-- **routes/** — 26 route files: auth, contacts, deals, calendar, ai_scoring, workflows, communications, deals_documents, marketing, reports, developer, billing, search, ai, tickets, integrations, custom_objects, sequences, cpq, email, tasks, staff, expenses, contracts, estimates, projects
+- **cron/marketplaceEngine.js** — Indian marketplace lead sync (every 5 min)
+- **utils/deduplication.js** — Phone normalization + contact/lead deduplication
+- **routes/** — 27 route files: auth, contacts, deals, calendar, ai_scoring, workflows, communications, deals_documents, marketing, marketplace_leads, reports, developer, billing, search, ai, tickets, integrations, custom_objects, sequences, cpq, email, tasks, staff, expenses, contracts, estimates, projects
 - All API endpoints prefixed with `/api/`
-- Global auth guard protects all routes except /auth/login, /auth/signup, /auth/register, /health
+- Global auth guard protects all routes except /auth/login, /auth/signup, /auth/register, /health, /marketplace-leads/webhook
 - Rate limiting: 5000 req/15min general, 1000 req/15min on auth/login
 
 ### Frontend (frontend/src/)
@@ -38,11 +40,11 @@ Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM 
 - **App.jsx** — AuthContext provider, React Router, Suspense + React.lazy() for 27 page components (code-split)
 - **utils/api.js** — `fetchApi` helper with auto Bearer token and 401 redirect
 - **components/** (8): Layout, Sidebar, CPQBuilder, CommandPalette, DealModal, Omnibar, Presence, Softphone
-- **pages/** (33): Dashboard, Contacts, ContactDetail, Pipeline, Inbox, Marketing, Reports, Workflows, Developer, Billing, Marketplace, CustomObjects, CustomObjectView, Sequences, Tasks, LeadScoring, Settings, Signup, Login, Portal, Support, Leads, Clients, Invoices, Tickets, Staff, Expenses, Contracts, Estimates, Projects, ContactsDetail, Placeholder (unused)
+- **pages/** (34): Dashboard, Contacts, ContactDetail, Pipeline, Inbox, Marketing, MarketplaceLeads, Reports, Workflows, Developer, Billing, Marketplace, CustomObjects, CustomObjectView, Sequences, Tasks, LeadScoring, Settings, Signup, Login, Portal, Support, Leads, Clients, Invoices, Tickets, Staff, Expenses, Contracts, Estimates, Projects, ContactsDetail, Placeholder (unused)
 
 ### Prisma Models (21+)
 
-User, Contact, Activity, Deal, Ticket, Campaign, AutomationRule, EmailMessage, CallLog, Attachment, ApiKey, Webhook, Invoice, Integration, CustomEntity, CustomField, CustomRecord, CustomValue, Sequence, SequenceEnrollment, Product, Quote, QuoteLineItem, Task, Expense, Contract, Estimate, EstimateLineItem, Project
+User, Contact, Activity, Deal, Ticket, Campaign, AutomationRule, EmailMessage, CallLog, Attachment, ApiKey, Webhook, Invoice, Integration, CustomEntity, CustomField, CustomRecord, CustomValue, Sequence, SequenceEnrollment, Product, Quote, QuoteLineItem, Task, Expense, Contract, Estimate, EstimateLineItem, Project, Notification, AuditLog, PipelineStage, EmailTemplate, ReportSchedule, MarketplaceLead, MarketplaceConfig
 
 ## Core Modules
 
@@ -71,6 +73,7 @@ User, Contact, Activity, Deal, Ticket, Campaign, AutomationRule, EmailMessage, C
 - **Softphone** — Twilio VoIP integration
 - **Real-time Presence** — Socket.io collaborative cursors
 - **Command Palette & Omnibar** — Quick navigation
+- **Marketplace Leads** — Indian marketplace integration (IndiaMART, JustDial, TradeIndia) with auto-import, deduplication, webhooks, and cron-based sync
 
 ## Demo Credentials
 

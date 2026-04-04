@@ -37,7 +37,7 @@ const ContactDetail = () => {
               <Mail size={16} /> {contact.email}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: 'var(--text-secondary)' }}>
-              <Phone size={16} /> +1 (555) 012-3456
+              <Phone size={16} /> {contact.phone || 'No phone number'}
             </div>
           </div>
         </div>

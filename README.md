@@ -68,15 +68,29 @@ Schedule automated email reports with configurable **frequency (Daily, Weekly, M
 
 ---
 
+### Marketplace Leads (India Market Integration)
+Auto-import leads from **IndiaMART, JustDial, and TradeIndia** — India's largest B2B/B2C marketplaces. Supports both **real-time webhooks** and **cron-based API polling** (every 5 min). Features smart deduplication (by external lead ID, email, and normalized phone), one-click or bulk import into CRM contacts, provider-wise stats dashboard, and an admin configuration panel with webhook URL display.
+
+**Key capabilities:**
+- Webhook endpoints for each provider (no-auth, push-based)
+- Scheduled API sync engine for pull-based lead fetching
+- Phone number normalization (Indian 10-digit → +91 format)
+- Duplicate detection across marketplace leads and existing contacts
+- Auto-creates Contact + Deal on import with source attribution
+- Real-time Socket.io notifications on new marketplace leads
+
+---
+
 ## All Modules
 
 ### Sales & Pipeline
 - **Dashboard** - Executive analytics (MRR, revenue, deal closures, pipeline charts)
 - **Pipeline** - Kanban drag-and-drop deal board with real-time Socket.io sync
-- **Contacts** - 360-degree B2B/B2C directory with AI scoring and agent assignment
+- **Contacts** - 360-degree B2B/B2C directory with AI scoring, phone tracking, and agent assignment
 - **Leads** - Filtered contacts (status=Lead) with agent assignment, bulk assign, and convert-to-customer
 - **Clients** - Filtered contacts (status=Customer) with search
 - **Lead Scoring** - AI-powered scoring engine running on node-cron
+- **Marketplace Leads** - Indian marketplace integration (IndiaMART, JustDial, TradeIndia) — auto-import leads via webhooks and cron-based API sync, smart deduplication, bulk import, config panel
 
 ### Reports & Analytics
 - **Reports** - BI dashboard with 8 metrics, date filters, charts, data tables, PDF/CSV export
@@ -109,6 +123,7 @@ Schedule automated email reports with configurable **frequency (Daily, Weekly, M
 - **Developer Portal** - API key provisioning and webhook configuration
 - **Staff** - User directory with RBAC role management (ADMIN only)
 - **Marketplace** - Integration catalog
+- **Marketplace Leads** - IndiaMART / JustDial / TradeIndia lead ingestion with dedup engine
 - **Settings** - Organization settings, pipeline stage management, dark/light theme toggle
 - **Command Palette** - Quick navigation (Cmd+K / Ctrl+K)
 - **Softphone** - Twilio VoIP integration
@@ -148,7 +163,7 @@ npx playwright test --project=chromium
 
 ## API
 
-29 route modules, all prefixed with `/api/`, protected by JWT auth.
+30 route modules, all prefixed with `/api/`, protected by JWT auth.
 
 Rate limiting: 5000 req/15min general, 1000 req/15min on auth.
 

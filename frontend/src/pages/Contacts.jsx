@@ -28,7 +28,7 @@ const Contacts = () => {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-  const [newContact, setNewContact] = useState({ name: '', email: '', company: '', title: '', status: 'Lead' });
+  const [newContact, setNewContact] = useState({ name: '', email: '', phone: '', company: '', title: '', status: 'Lead' });
   const [showImportModal, setShowImportModal] = useState(false);
   const [csvRows, setCsvRows] = useState([]);
   const [csvHeaders, setCsvHeaders] = useState([]);
@@ -79,7 +79,7 @@ const Contacts = () => {
       body: JSON.stringify(newContact)
     });
     setShowModal(false);
-    setNewContact({ name: '', email: '', company: '', title: '', status: 'Lead' });
+    setNewContact({ name: '', email: '', phone: '', company: '', title: '', status: 'Lead' });
     fetchContacts();
   };
 
@@ -180,6 +180,7 @@ const Contacts = () => {
             <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
+              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Company</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>AI Score</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Status</th>
@@ -189,7 +190,7 @@ const Contacts = () => {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan="7" style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
+              <tr><td colSpan="8" style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
             ) : contacts.map(contact => (
               <tr key={contact.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                 <td style={{ padding: '1rem' }}>
@@ -201,6 +202,7 @@ const Contacts = () => {
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{contact.title}</div>
                 </td>
                 <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.email}</td>
+                <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.phone || '—'}</td>
                 <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.company}</td>
                 <td style={{ padding: '1rem' }}>
                   <span style={{ 
@@ -334,6 +336,7 @@ const Contacts = () => {
             <form onSubmit={handleAddContact} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <input type="text" placeholder="Name" required className="input-field" value={newContact.name} onChange={e => setNewContact({...newContact, name: e.target.value})} />
               <input type="email" placeholder="Email" required className="input-field" value={newContact.email} onChange={e => setNewContact({...newContact, email: e.target.value})} />
+              <input type="tel" placeholder="Phone (e.g. +91 98765 43210)" className="input-field" value={newContact.phone} onChange={e => setNewContact({...newContact, phone: e.target.value})} />
               <input type="text" placeholder="Company" required className="input-field" value={newContact.company} onChange={e => setNewContact({...newContact, company: e.target.value})} />
               <input type="text" placeholder="Title" className="input-field" value={newContact.title} onChange={e => setNewContact({...newContact, title: e.target.value})} />
               <select className="input-field" value={newContact.status} onChange={e => setNewContact({...newContact, status: e.target.value})}>

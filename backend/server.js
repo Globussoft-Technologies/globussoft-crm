@@ -1,7 +1,9 @@
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true }); // load root .env for API keys (Gemini, Mailgun, etc.)
+
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
-const path = require("path");
 const { Server } = require("socket.io");
 const cron = require("node-cron");
 const swaggerUi = require("swagger-ui-express");

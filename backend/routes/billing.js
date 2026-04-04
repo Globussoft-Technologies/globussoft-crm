@@ -126,6 +126,33 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
   }
 });
 
+// Set invoice as recurring
+router.put("/:id/recurring", verifyToken, async (req, res) => {
+  try {
+    const { isRecurring, recurFrequency } = req.body;
+    const invoice = await prisma.invoice.findUnique({ where: { id: parseInt(req.params.id) } });
+    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+
+    const nextDate = isRecurring ? new Date() : null;
+    if (nextDate && recurFrequency) {
+      switch (recurFrequency) {
+        case "monthly": nextDate.setMonth(nextDate.getMonth() + 1); break;
+        case "quarterly": nextDate.setMonth(nextDate.getMonth() + 3); break;
+        case "yearly": nextDate.setFullYear(nextDate.getFullYear() + 1); break;
+      }
+    }
+
+    const updated = await prisma.invoice.update({
+      where: { id: parseInt(req.params.id) },
+      data: { isRecurring: !!isRecurring, recurFrequency: recurFrequency || null, nextRecurDate: nextDate },
+      include: { contact: true }
+    });
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update recurring status" });
+  }
+});
+
 // Obliterate Invoice
 router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {

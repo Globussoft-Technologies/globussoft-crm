@@ -1,6 +1,6 @@
 import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck } from 'lucide-react';
+import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 const parseCSV = (text) => {
@@ -37,6 +37,30 @@ const Contacts = () => {
 
   const [staff, setStaff] = useState([]);
   const [rescoring, setRescoring] = useState(false);
+  const [showDupes, setShowDupes] = useState(false);
+  const [dupes, setDupes] = useState([]);
+  const [merging, setMerging] = useState(false);
+
+  const handleFindDupes = async () => {
+    try {
+      const data = await fetchApi('/api/contacts/duplicates/find');
+      setDupes(Array.isArray(data) ? data : []);
+      setShowDupes(true);
+    } catch { setDupes([]); }
+  };
+
+  const handleMerge = async (primaryId, secondaryIds) => {
+    setMerging(true);
+    try {
+      await fetchApi('/api/contacts/merge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ primaryId, secondaryIds })
+      });
+      handleFindDupes();
+      fetchContacts();
+    } catch { alert('Merge failed'); }
+    setMerging(false);
+  };
 
   const fetchContacts = () => {
     fetchApi('/api/contacts').then(data => {
@@ -147,6 +171,9 @@ const Contacts = () => {
           >
             <RefreshCw size={15} style={{ animation: rescoring ? 'spin 1s linear infinite' : 'none' }} />
             {rescoring ? 'Scoring...' : 'AI Re-score'}
+          </button>
+          <button onClick={handleFindDupes} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <GitMerge size={15} /> Find Duplicates
           </button>
           <button onClick={() => { setShowImportModal(true); setCsvRows([]); setCsvHeaders([]); setImportResult(null); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Upload size={15} /> Import CSV
@@ -348,6 +375,58 @@ const Contacts = () => {
                 <button type="submit" className="btn-primary">Save Contact</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Duplicate Contacts Modal */}
+      {showDupes && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div className="card" style={{ padding: '2rem', width: '700px', maxHeight: '80vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <GitMerge size={20} color="var(--accent-color)" /> Duplicate Contacts ({dupes.length} groups)
+              </h3>
+              <button onClick={() => setShowDupes(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={20} /></button>
+            </div>
+            {dupes.length === 0 ? (
+              <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No duplicate contacts found. Your database is clean!</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {dupes.map((group, gi) => (
+                  <div key={gi} className="card" style={{ padding: '1rem', border: '1px solid rgba(245,158,11,0.3)', background: 'rgba(245,158,11,0.03)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: '600' }}>Match: {group.reason}</span>
+                      <button
+                        onClick={() => handleMerge(group.primary.id, group.duplicates.map(d => d.id))}
+                        disabled={merging}
+                        className="btn-primary"
+                        style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                      >
+                        <GitMerge size={12} /> Merge into Primary
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
+                        <span style={{ fontSize: '0.65rem', fontWeight: '700', color: '#10b981', textTransform: 'uppercase' }}>Primary</span>
+                        <span style={{ fontWeight: '500', fontSize: '0.85rem' }}>{group.primary.name}</span>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{group.primary.email}</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{group.primary.company}</span>
+                        <span style={{ fontSize: '0.7rem', marginLeft: 'auto', color: 'var(--text-secondary)' }}>Score: {group.primary.aiScore}</span>
+                      </div>
+                      {group.duplicates.map(dup => (
+                        <div key={dup.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.15)' }}>
+                          <span style={{ fontSize: '0.65rem', fontWeight: '700', color: '#ef4444', textTransform: 'uppercase' }}>Dup</span>
+                          <span style={{ fontWeight: '500', fontSize: '0.85rem' }}>{dup.name}</span>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{dup.email}</span>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{dup.company}</span>
+                          <span style={{ fontSize: '0.7rem', marginLeft: 'auto', color: 'var(--text-secondary)' }}>Score: {dup.aiScore}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

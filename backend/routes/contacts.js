@@ -136,6 +136,153 @@ router.put('/:id/assign', async (req, res) => {
   }
 });
 
+// ── Find duplicate contacts ───────────────────────────────────────
+router.get('/duplicates/find', async (req, res) => {
+  try {
+    const contacts = await prisma.contact.findMany({ select: { id: true, name: true, email: true, phone: true, company: true, status: true, aiScore: true, createdAt: true } });
+    const dupes = [];
+    const seen = new Map();
+
+    for (const c of contacts) {
+      // Match by email domain + name similarity, or exact phone
+      const key = c.email.toLowerCase();
+      if (seen.has(key)) {
+        const existing = seen.get(key);
+        if (!dupes.find(d => d.primary.id === existing.id)) {
+          dupes.push({ primary: existing, duplicates: [c], reason: 'Same email' });
+        } else {
+          dupes.find(d => d.primary.id === existing.id).duplicates.push(c);
+        }
+      } else {
+        seen.set(key, c);
+      }
+
+      // Phone match
+      if (c.phone) {
+        const phoneKey = c.phone.replace(/[^0-9]/g, '').slice(-10);
+        if (phoneKey.length >= 10) {
+          for (const [, other] of seen) {
+            if (other.id !== c.id && other.phone) {
+              const otherPhone = other.phone.replace(/[^0-9]/g, '').slice(-10);
+              if (phoneKey === otherPhone && !dupes.find(d => (d.primary.id === other.id && d.duplicates.some(dd => dd.id === c.id)))) {
+                const existing = dupes.find(d => d.primary.id === other.id);
+                if (existing) { existing.duplicates.push(c); }
+                else { dupes.push({ primary: other, duplicates: [c], reason: 'Same phone' }); }
+              }
+            }
+          }
+        }
+      }
+
+      // Name + Company match
+      if (c.name && c.company) {
+        const nameCompanyKey = `${c.name.toLowerCase().trim()}|${c.company.toLowerCase().trim()}`;
+        for (const [, other] of seen) {
+          if (other.id !== c.id && other.name && other.company) {
+            const otherKey = `${other.name.toLowerCase().trim()}|${other.company.toLowerCase().trim()}`;
+            if (nameCompanyKey === otherKey && !dupes.find(d => (d.primary.id === other.id && d.duplicates.some(dd => dd.id === c.id)))) {
+              const existing = dupes.find(d => d.primary.id === other.id);
+              if (existing) { existing.duplicates.push(c); }
+              else { dupes.push({ primary: other, duplicates: [c], reason: 'Same name + company' }); }
+            }
+          }
+        }
+      }
+    }
+
+    res.json(dupes);
+  } catch (err) {
+    console.error('[Contacts] Duplicate find error:', err);
+    res.status(500).json({ error: 'Failed to find duplicates' });
+  }
+});
+
+// Merge contacts: keep primary, move relationships from secondary, delete secondary
+router.post('/merge', async (req, res) => {
+  try {
+    const { primaryId, secondaryIds } = req.body;
+    if (!primaryId || !Array.isArray(secondaryIds) || secondaryIds.length === 0) {
+      return res.status(400).json({ error: 'primaryId and secondaryIds required' });
+    }
+
+    const primary = await prisma.contact.findUnique({ where: { id: parseInt(primaryId) } });
+    if (!primary) return res.status(404).json({ error: 'Primary contact not found' });
+
+    let merged = 0;
+    for (const secId of secondaryIds) {
+      const sid = parseInt(secId);
+      const secondary = await prisma.contact.findUnique({ where: { id: sid } });
+      if (!secondary) continue;
+
+      // Move all relationships to primary
+      await prisma.activity.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.deal.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.emailMessage.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.callLog.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.task.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.invoice.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.expense.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.contract.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.estimate.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.smsMessage.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+      await prisma.whatsAppMessage.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+
+      // Fill in missing fields on primary from secondary
+      const updates = {};
+      if (!primary.phone && secondary.phone) updates.phone = secondary.phone;
+      if (!primary.company && secondary.company) updates.company = secondary.company;
+      if (!primary.title && secondary.title) updates.title = secondary.title;
+      if (secondary.aiScore > primary.aiScore) updates.aiScore = secondary.aiScore;
+      if (Object.keys(updates).length > 0) {
+        await prisma.contact.update({ where: { id: primary.id }, data: updates });
+      }
+
+      // Log the merge
+      await prisma.activity.create({
+        data: { type: 'Note', description: `Merged contact "${secondary.name}" (${secondary.email}) into this record`, contactId: primary.id, userId: req.user?.id || null }
+      });
+
+      // Delete secondary
+      await prisma.sequenceEnrollment.deleteMany({ where: { contactId: sid } });
+      await prisma.contact.delete({ where: { id: sid } });
+      merged++;
+    }
+
+    await prisma.auditLog.create({
+      data: { action: 'MERGE', entity: 'Contact', entityId: primary.id, details: JSON.stringify({ mergedIds: secondaryIds, count: merged }), userId: req.user?.id || null }
+    });
+
+    res.json({ success: true, merged, primaryId: primary.id });
+  } catch (err) {
+    console.error('[Contacts] Merge error:', err);
+    res.status(500).json({ error: 'Failed to merge contacts' });
+  }
+});
+
+// ── Contact Attachments ───────────────────────────────────────────
+router.get('/:id/attachments', async (req, res) => {
+  try {
+    res.json(await prisma.contactAttachment.findMany({ where: { contactId: parseInt(req.params.id) }, orderBy: { createdAt: 'desc' } }));
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch attachments' }); }
+});
+
+router.post('/:id/attachments', async (req, res) => {
+  try {
+    const { filename, fileUrl, fileSize, mimeType } = req.body;
+    const attachment = await prisma.contactAttachment.create({
+      data: { filename, fileUrl, fileSize: fileSize ? parseInt(fileSize) : null, mimeType, contactId: parseInt(req.params.id) }
+    });
+    res.status(201).json(attachment);
+  } catch (err) { res.status(500).json({ error: 'Failed to add attachment' }); }
+});
+
+router.delete('/attachments/:attachId', async (req, res) => {
+  try {
+    await prisma.contactAttachment.delete({ where: { id: parseInt(req.params.attachId) } });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Failed to delete attachment' }); }
+});
+
 router.delete('/:id', async (req, res) => {
   try {
     await prisma.activity.deleteMany({ where: { contactId: parseInt(req.params.id) } });

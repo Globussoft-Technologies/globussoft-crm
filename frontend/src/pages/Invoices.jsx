@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download } from 'lucide-react';
+import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download, RefreshCw } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
 const STATUS_CONFIG = {
@@ -387,6 +387,26 @@ export default function Invoices() {
                               <CheckCircle2 size={14} /> Mark Paid
                             </button>
                           )}
+                          <button
+                            onClick={async () => {
+                              const freq = inv.isRecurring ? null : prompt('Recurring frequency: monthly, quarterly, or yearly', 'monthly');
+                              if (!inv.isRecurring && !freq) return;
+                              await fetchApi(`/api/billing/${inv.id}/recurring`, {
+                                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ isRecurring: !inv.isRecurring, recurFrequency: freq })
+                              });
+                              loadData();
+                            }}
+                            style={{
+                              background: inv.isRecurring ? 'rgba(139,92,246,0.1)' : 'transparent',
+                              border: `1px solid ${inv.isRecurring ? 'rgba(139,92,246,0.3)' : 'var(--border-color)'}`,
+                              color: inv.isRecurring ? '#8b5cf6' : 'var(--text-secondary)', cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', gap: '0.3rem',
+                              fontSize: '0.8rem', padding: '0.4rem 0.75rem', borderRadius: '6px',
+                            }}
+                          >
+                            <RefreshCw size={14} /> {inv.isRecurring ? `${inv.recurFrequency}` : 'Recur'}
+                          </button>
                           <button
                             onClick={() => deleteInvoice(inv.id)}
                             style={{

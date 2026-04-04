@@ -64,6 +64,7 @@ model Contact {
   smsMessages      SmsMessage[]
   whatsappMessages WhatsAppMessage[]
   pushSubscriptions PushSubscription[]
+  attachments      ContactAttachment[]
 }
 
 model Activity {
@@ -206,17 +207,21 @@ model Webhook {
 }
 
 model Invoice {
-  id          Int      @id @default(autoincrement())
-  invoiceNum  String   @unique
-  amount      Float
-  status      String   @default("UNPAID") // UNPAID, PAID, OVERDUE
-  dueDate     DateTime
-  issuedDate  DateTime @default(now())
-  
-  dealId      Int?
-  deal        Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  contactId   Int
-  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  id            Int      @id @default(autoincrement())
+  invoiceNum    String   @unique
+  amount        Float
+  status        String   @default("UNPAID") // UNPAID, PAID, OVERDUE, VOID
+  dueDate       DateTime
+  issuedDate    DateTime @default(now())
+  isRecurring   Boolean  @default(false)
+  recurFrequency String? // "monthly", "quarterly", "yearly"
+  nextRecurDate DateTime?
+  parentInvoiceId Int?   // original invoice this was generated from
+
+  dealId        Int?
+  deal          Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  contactId     Int
+  contact       Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
 }
 
 model Integration {
@@ -713,4 +718,32 @@ model LandingPageAnalytics {
   referrer      String?
   metadata      String?     @db.Text
   createdAt     DateTime    @default(now())
+}
+
+// ── Contact Attachments ───────────────────────────────────────────
+
+model ContactAttachment {
+  id          Int      @id @default(autoincrement())
+  filename    String
+  fileUrl     String
+  fileSize    Int?     // bytes
+  mimeType    String?
+  createdAt   DateTime @default(now())
+  contactId   Int
+  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+// ── Email Tracking ────────────────────────────────────────────────
+
+model EmailTracking {
+  id          Int      @id @default(autoincrement())
+  emailId     Int      // references EmailMessage.id
+  trackingId  String   @unique // UUID for tracking pixel/link
+  type        String   // "open", "click"
+  url         String?  // original URL for click tracking
+  openedAt    DateTime?
+  clickedAt   DateTime?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
 }

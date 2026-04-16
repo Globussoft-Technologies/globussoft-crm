@@ -36,6 +36,14 @@ app.use(cors({
 }));
 app.use(express.json({ limit: "10mb" }));
 
+// Security middleware
+const cookieParser = require('cookie-parser');
+const { helmetMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+app.use(helmetMiddleware);
+app.use(cookieParser());
+app.use(sanitizeBody);
+app.use(stripTenantOverride);
+
 // Rate limiting
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -193,6 +201,10 @@ app.use("/api", (req, res, next) => {
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, next);
 });
+
+// Strip dangerous fields (id, createdAt, updatedAt, tenantId, userId) from all request bodies
+const { stripDangerous } = require('./middleware/validateInput');
+app.use(stripDangerous);
 
 // Map API Endpoints
 app.use("/api/auth", authRoutes);

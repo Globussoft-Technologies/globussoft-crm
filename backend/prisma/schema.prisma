@@ -114,7 +114,7 @@ model User {
 model Contact {
   id          Int        @id @default(autoincrement())
   name        String
-  email       String     @unique
+  email       String
   phone       String?
   company     String?
   title       String?
@@ -163,6 +163,11 @@ model Contact {
   whatsappMessages WhatsAppMessage[]
   pushSubscriptions PushSubscription[]
   attachments      ContactAttachment[]
+
+  @@unique([email, tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, assignedToId])
 }
 
 model Activity {
@@ -178,6 +183,9 @@ model Activity {
 
   userId      Int?
   user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([contactId, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model Deal {
@@ -207,6 +215,10 @@ model Deal {
   contracts     Contract[]
   estimates     Estimate[]
   projects      Project[]
+
+  @@index([tenantId, stage])
+  @@index([tenantId, ownerId])
+  @@index([tenantId, createdAt])
 }
 
 model Ticket {
@@ -227,6 +239,9 @@ model Ticket {
 
   assigneeId  Int?
   assignee    User?    @relation("AssignedTickets", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([tenantId, priority])
 }
 
 model Campaign {
@@ -280,6 +295,10 @@ model EmailMessage {
 
   userId    Int?
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, direction])
+  @@index([tenantId, contactId])
+  @@index([tenantId, createdAt])
 }
 
 model CallLog {
@@ -303,6 +322,8 @@ model CallLog {
 
   userId         Int?
   user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
 }
 
 model Attachment {
@@ -365,6 +386,9 @@ model Invoice {
   deal          Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
   contactId     Int
   contact       Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([tenantId, contactId])
 }
 
 model Integration {
@@ -519,6 +543,9 @@ model Task {
 
   projectId Int?
   project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([tenantId, userId])
 }
 
 model Expense {
@@ -539,6 +566,8 @@ model Expense {
   user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   contactId   Int?
   contact     Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
 }
 
 model Contract {
@@ -604,6 +633,9 @@ model Notification {
 
   userId    Int
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([tenantId, createdAt])
 }
 
 model AuditLog {
@@ -619,6 +651,9 @@ model AuditLog {
 
   userId     Int?
   user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, entity])
+  @@index([tenantId, createdAt])
 }
 
 model PipelineStage {

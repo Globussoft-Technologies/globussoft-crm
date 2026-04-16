@@ -385,4 +385,8 @@ initWorkflowEngine(io);
 const { initCampaignCron } = require('./cron/campaignEngine');
 initCampaignCron();
 
+// Initialize Automated Backup Engine (daily at 2 AM)
+const { initBackupCron } = require('./cron/backupEngine');
+initBackupCron();
+
 // nodemon restart trigger

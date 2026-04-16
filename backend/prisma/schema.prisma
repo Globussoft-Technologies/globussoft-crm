@@ -749,6 +749,9 @@ model MarketplaceLead {
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([provider, externalLeadId])
+
+  @@index([tenantId, status])
+  @@index([tenantId, provider])
 }
 
 model MarketplaceConfig {
@@ -794,6 +797,8 @@ model SmsMessage {
   user          User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   campaignId    Int?
   campaign      Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
 }
 
 model SmsTemplate {
@@ -852,6 +857,8 @@ model WhatsAppMessage {
   contact         Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
   userId          Int?
   user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
 }
 
 model WhatsAppTemplate {
@@ -996,6 +1003,8 @@ model LandingPage {
   userId          Int?
   user            User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   analytics       LandingPageAnalytics[]
+
+  @@index([tenantId, status])
 }
 
 model LandingPageAnalytics {
@@ -1286,6 +1295,8 @@ model Touchpoint {
   url        String?
   timestamp  DateTime @default(now())
   tenantId   Int      @default(1)
+
+  @@index([tenantId, contactId])
 }
 
 // ── Web Visitor Tracking ─────────────────────────────────────────
@@ -1303,6 +1314,8 @@ model WebVisitor {
   firstSeen  DateTime @default(now())
   lastSeen   DateTime @default(now())
   tenantId   Int      @default(1)
+
+  @@index([tenantId, lastSeen])
 }
 
 // ── Chatbot ──────────────────────────────────────────────────────
@@ -1399,6 +1412,8 @@ model SurveyResponse {
   comment     String?  @db.Text
   respondedAt DateTime @default(now())
   tenantId    Int      @default(1)
+
+  @@index([tenantId, surveyId])
 }
 
 // ── E-Signature ──────────────────────────────────────────────────
@@ -1462,6 +1477,8 @@ model Booking {
   contactId     Int?
   tenantId      Int      @default(1)
   createdAt     DateTime @default(now())
+
+  @@index([tenantId, scheduledAt])
 }
 
 // ── Email Scheduling + Signatures ────────────────────────────────
@@ -1479,6 +1496,8 @@ model ScheduledEmail {
   userId       Int?
   tenantId     Int      @default(1)
   createdAt    DateTime @default(now())
+
+  @@index([tenantId, status, scheduledFor])
 }
 
 // ── Custom Dashboards ────────────────────────────────────────────
@@ -1550,6 +1569,8 @@ model Payment {
   metadata    String?  @db.Text
   tenantId    Int      @default(1)
   createdAt   DateTime @default(now())
+
+  @@index([tenantId, status])
 }
 
 // ── Accounting Sync ──────────────────────────────────────────────
@@ -1576,6 +1597,9 @@ model DealInsight {
   isResolved  Boolean  @default(false)
   generatedAt DateTime @default(now())
   tenantId    Int      @default(1)
+
+  @@index([tenantId, dealId])
+  @@index([tenantId, isResolved])
 }
 
 // ── Group / Shared Inbox ─────────────────────────────────────────
@@ -1613,6 +1637,8 @@ model LiveChatSession {
   closedAt     DateTime?
   rating       Int?     // 1-5 satisfaction
   tenantId     Int      @default(1)
+
+  @@index([tenantId, status])
 }
 
 model LiveChatMessage {

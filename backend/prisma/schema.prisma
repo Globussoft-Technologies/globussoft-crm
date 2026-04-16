@@ -665,6 +665,8 @@ model PipelineStage {
 
   tenantId  Int      @default(1)
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, position])
 }
 
 model EmailTemplate {

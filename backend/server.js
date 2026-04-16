@@ -365,4 +365,12 @@ initDealInsightsCron(io);
 const { initForecastSnapshotCron } = require('./cron/forecastSnapshotEngine');
 initForecastSnapshotCron();
 
+// Initialize Workflow Trigger Engine (event-driven, not polled)
+const { initWorkflowEngine } = require('./cron/workflowEngine');
+initWorkflowEngine(io);
+
+// Initialize Campaign Send Engine (processes scheduled campaigns every minute)
+const { initCampaignCron } = require('./cron/campaignEngine');
+initCampaignCron();
+
 // nodemon restart trigger

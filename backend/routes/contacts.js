@@ -36,7 +36,9 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    res.status(201).json(await prisma.contact.create({ data: { ...req.body, tenantId: req.user.tenantId } }));
+    const contact = await prisma.contact.create({ data: { ...req.body, tenantId: req.user.tenantId } });
+    try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (e) { /* event bus optional */ }
+    res.status(201).json(contact);
   } catch (err) {
     res.status(500).json({ error: 'Failed to create contact' });
   }

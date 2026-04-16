@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign Document — Globussoft CRM</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f5f7fa; color: #1a1a2e; min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+  .header { width: 100%; background: #1a1a2e; color: #fff; padding: 16px 24px; text-align: center; }
+  .header h1 { font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
+  .header span { font-size: 12px; opacity: 0.7; }
+  .container { max-width: 560px; width: 100%; padding: 24px 16px; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 32px 28px; margin-bottom: 20px; }
+  .card h2 { font-size: 20px; margin-bottom: 8px; }
+  .card p { font-size: 14px; color: #555; line-height: 1.5; }
+  .meta { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+  .meta-item { background: #f0f4ff; border-radius: 8px; padding: 10px 14px; flex: 1; min-width: 140px; }
+  .meta-item label { display: block; font-size: 11px; text-transform: uppercase; color: #888; margin-bottom: 2px; }
+  .meta-item span { font-size: 14px; font-weight: 600; }
+  .canvas-wrap { text-align: center; margin-top: 20px; }
+  .canvas-wrap p { font-size: 13px; color: #888; margin-bottom: 8px; }
+  canvas { border: 2px dashed #ccc; border-radius: 8px; background: #fafafa; cursor: crosshair; touch-action: none; max-width: 100%; }
+  .actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .actions button { flex: 1; min-width: 120px; padding: 12px 16px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+  .btn-sign { background: #2563eb; color: #fff; }
+  .btn-sign:hover { background: #1d4ed8; }
+  .btn-sign:disabled { background: #93b4f5; cursor: not-allowed; }
+  .btn-clear { background: #e5e7eb; color: #333; }
+  .btn-clear:hover { background: #d1d5db; }
+  .btn-decline { background: #fee2e2; color: #dc2626; }
+  .btn-decline:hover { background: #fecaca; }
+  .msg { padding: 20px; border-radius: 10px; text-align: center; font-size: 15px; }
+  .msg-success { background: #d1fae5; color: #065f46; }
+  .msg-error { background: #fee2e2; color: #991b1b; }
+  .msg-declined { background: #fef3c7; color: #92400e; }
+  .msg-info { background: #e0e7ff; color: #3730a3; }
+  .loading { text-align: center; padding: 60px 20px; color: #888; }
+  .spinner { width: 36px; height: 36px; border: 3px solid #e5e7eb; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 480px) { .card { padding: 20px 16px; } canvas { width: 100%; height: 150px; } }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Globussoft CRM</h1>
+  <span>Document Signing</span>
+</div>
+<div class="container" id="app">
+  <div class="loading"><div class="spinner"></div>Loading document details...</div>
+</div>
+
+<script>
+(function() {
+  const app = document.getElementById('app');
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+
+  if (!token) {
+    app.innerHTML = '<div class="card"><div class="msg msg-error">No signing token provided. Please use the link from your email.</div></div>';
+    return;
+  }
+
+  let drawing = false;
+  let hasDrawn = false;
+  let ctx, canvas;
+
+  fetch('/api/signatures/sign/' + encodeURIComponent(token))
+    .then(r => { if (!r.ok) throw new Error(r.status === 404 ? 'Invalid or expired signing link.' : 'Failed to load document.'); return r.json(); })
+    .then(renderForm)
+    .catch(err => { app.innerHTML = '<div class="card"><div class="msg msg-error">' + escapeHtml(err.message) + '</div></div>'; });
+
+  function renderForm(data) {
+    const expires = data.expiresAt ? new Date(data.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A';
+    app.innerHTML =
+      '<div class="card">' +
+        '<h2>Signature Requested</h2>' +
+        '<p>You\'ve been asked to sign a <strong>' + escapeHtml(data.documentType || 'document') + '</strong>.</p>' +
+        '<div class="meta">' +
+          '<div class="meta-item"><label>Signer</label><span id="signer-name">' + escapeHtml(data.signerName || 'Unknown') + '</span></div>' +
+          '<div class="meta-item"><label>Expires</label><span>' + escapeHtml(expires) + '</span></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card">' +
+        '<div class="canvas-wrap">' +
+          '<p>Draw your signature below</p>' +
+          '<canvas id="sig-canvas" width="400" height="200"></canvas>' +
+        '</div>' +
+        '<div class="actions">' +
+          '<button class="btn-clear" id="btn-clear">Clear</button>' +
+          '<button class="btn-decline" id="btn-decline">Decline</button>' +
+          '<button class="btn-sign" id="btn-sign" disabled>Sign Document</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="result"></div>';
+
+    canvas = document.getElementById('sig-canvas');
+    ctx = canvas.getContext('2d');
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#1a1a2e';
+
+    // Handle high-DPI
+    var dpr = window.devicePixelRatio || 1;
+    var rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#1a1a2e';
+
+    canvas.addEventListener('mousedown', startDraw);
+    canvas.addEventListener('mousemove', draw);
+    canvas.addEventListener('mouseup', stopDraw);
+    canvas.addEventListener('mouseleave', stopDraw);
+    canvas.addEventListener('touchstart', function(e) { e.preventDefault(); startDraw(touchPos(e)); }, { passive: false });
+    canvas.addEventListener('touchmove', function(e) { e.preventDefault(); draw(touchPos(e)); }, { passive: false });
+    canvas.addEventListener('touchend', stopDraw);
+
+    document.getElementById('btn-clear').addEventListener('click', clearCanvas);
+    document.getElementById('btn-sign').addEventListener('click', submitSignature);
+    document.getElementById('btn-decline').addEventListener('click', declineSignature);
+  }
+
+  function getPos(e) {
+    var r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+  function touchPos(e) {
+    var t = e.touches[0];
+    return { clientX: t.clientX, clientY: t.clientY };
+  }
+  function startDraw(e) {
+    drawing = true;
+    var p = getPos(e.clientX !== undefined ? e : { clientX: e.clientX, clientY: e.clientY });
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+  }
+  function draw(e) {
+    if (!drawing) return;
+    var p = getPos(e.clientX !== undefined ? e : { clientX: e.clientX, clientY: e.clientY });
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    if (!hasDrawn) { hasDrawn = true; document.getElementById('btn-sign').disabled = false; }
+  }
+  function stopDraw() { drawing = false; }
+
+  function clearCanvas() {
+    var dpr = window.devicePixelRatio || 1;
+    ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+    hasDrawn = false;
+    document.getElementById('btn-sign').disabled = true;
+  }
+
+  function submitSignature() {
+    var btn = document.getElementById('btn-sign');
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+    // Export at 1x resolution
+    var tempCanvas = document.createElement('canvas');
+    tempCanvas.width = 400;
+    tempCanvas.height = 200;
+    var tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(canvas, 0, 0, 400, 200);
+    var dataUrl = tempCanvas.toDataURL('image/png');
+
+    fetch('/api/signatures/sign/' + encodeURIComponent(token), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signature: dataUrl })
+    })
+    .then(function(r) { if (!r.ok) throw new Error('Signature submission failed.'); return r.json(); })
+    .then(function() {
+      document.getElementById('result').innerHTML = '<div class="msg msg-success">&#10003; Document signed successfully. You may close this page.</div>';
+      btn.parentElement.style.display = 'none';
+      canvas.parentElement.style.display = 'none';
+    })
+    .catch(function(err) {
+      document.getElementById('result').innerHTML = '<div class="msg msg-error">' + escapeHtml(err.message) + '</div>';
+      btn.disabled = false;
+      btn.textContent = 'Sign Document';
+    });
+  }
+
+  function declineSignature() {
+    if (!confirm('Are you sure you want to decline signing this document?')) return;
+    var btn = document.getElementById('btn-decline');
+    btn.disabled = true;
+    btn.textContent = 'Declining...';
+
+    fetch('/api/signatures/decline/' + encodeURIComponent(token), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    })
+    .then(function(r) { if (!r.ok) throw new Error('Failed to decline.'); return r.json(); })
+    .then(function() {
+      document.getElementById('result').innerHTML = '<div class="msg msg-declined">Document declined. The sender has been notified.</div>';
+      document.querySelector('.actions').style.display = 'none';
+      canvas.parentElement.style.display = 'none';
+    })
+    .catch(function(err) {
+      document.getElementById('result').innerHTML = '<div class="msg msg-error">' + escapeHtml(err.message) + '</div>';
+      btn.disabled = false;
+      btn.textContent = 'Decline';
+    });
+  }
+
+  function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+})();
+</script>
+</body>
+</html>

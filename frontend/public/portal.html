@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Customer Portal — Globussoft CRM</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f5f7fa; color: #1a1a2e; min-height: 100vh; }
+  .header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
+  .header span { font-size: 12px; opacity: 0.7; }
+  .header-left span { display: block; }
+  .btn-logout { background: rgba(255,255,255,0.15); color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .btn-logout:hover { background: rgba(255,255,255,0.25); }
+
+  /* Login */
+  .login-wrap { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - 60px); padding: 20px; }
+  .login-card { background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); padding: 40px 36px; max-width: 400px; width: 100%; }
+  .login-card h2 { font-size: 22px; margin-bottom: 6px; text-align: center; }
+  .login-card p { font-size: 14px; color: #666; text-align: center; margin-bottom: 24px; }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #444; }
+  .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; outline: none; transition: border 0.2s; }
+  .form-group input:focus, .form-group textarea:focus { border-color: #2563eb; }
+  .form-group textarea { resize: vertical; min-height: 80px; }
+  .btn-primary { width: 100%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-primary:disabled { background: #93b4f5; cursor: not-allowed; }
+  .btn-sm { padding: 8px 16px; font-size: 13px; width: auto; }
+  .error-msg { background: #fee2e2; color: #991b1b; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; display: none; }
+  .success-msg { background: #d1fae5; color: #065f46; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; display: none; }
+
+  /* Dashboard */
+  .dashboard { max-width: 900px; margin: 0 auto; padding: 24px 16px; }
+  .welcome { font-size: 20px; font-weight: 600; margin-bottom: 20px; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); padding: 24px; margin-bottom: 20px; }
+  .card h3 { font-size: 16px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; }
+  .badge { background: #e0e7ff; color: #3730a3; font-size: 12px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 10px 12px; background: #f8fafc; border-bottom: 2px solid #e5e7eb; font-weight: 600; color: #555; text-transform: uppercase; font-size: 11px; }
+  td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; }
+  tr:hover td { background: #f8fafc; }
+  .status { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+  .status-open { background: #dbeafe; color: #1e40af; }
+  .status-closed, .status-resolved { background: #d1fae5; color: #065f46; }
+  .status-pending, .status-in_progress { background: #fef3c7; color: #92400e; }
+  .status-paid { background: #d1fae5; color: #065f46; }
+  .status-unpaid, .status-overdue { background: #fee2e2; color: #991b1b; }
+  .status-draft { background: #e5e7eb; color: #374151; }
+  .empty { text-align: center; padding: 24px; color: #999; font-size: 14px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #e5e7eb; }
+  .tab { padding: 10px 20px; cursor: pointer; font-size: 14px; font-weight: 500; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; }
+  .tab:hover { color: #2563eb; }
+  .tab.active { color: #2563eb; border-bottom-color: #2563eb; font-weight: 600; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  .hidden { display: none !important; }
+  @media (max-width: 600px) { .login-card { padding: 28px 20px; } .card { padding: 18px; } .tabs { overflow-x: auto; } .tab { white-space: nowrap; padding: 10px 14px; font-size: 13px; } }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-left">
+    <h1>Customer Portal</h1>
+    <span>Globussoft CRM</span>
+  </div>
+  <button class="btn-logout hidden" id="btn-logout">Logout</button>
+</div>
+
+<!-- Login View -->
+<div id="login-view" class="login-wrap">
+  <div class="login-card">
+    <h2>Welcome Back</h2>
+    <p>Sign in to access your tickets, invoices, and more.</p>
+    <div class="error-msg" id="login-error"></div>
+    <form id="login-form">
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" placeholder="you@company.com" required>
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="Your password" required>
+      </div>
+      <button type="submit" class="btn-primary" id="btn-login">Sign In</button>
+    </form>
+  </div>
+</div>
+
+<!-- Dashboard View -->
+<div id="dashboard-view" class="dashboard hidden">
+  <p class="welcome" id="welcome-msg">Welcome back!</p>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="tickets">My Tickets</div>
+    <div class="tab" data-tab="new-ticket">Submit Ticket</div>
+    <div class="tab" data-tab="invoices">My Invoices</div>
+    <div class="tab" data-tab="settings">Settings</div>
+  </div>
+
+  <!-- Tickets Tab -->
+  <div class="tab-content active" id="tab-tickets">
+    <div class="card">
+      <h3>Support Tickets <span class="badge" id="ticket-count">0</span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ID</th><th>Subject</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead>
+          <tbody id="tickets-body"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Ticket Tab -->
+  <div class="tab-content" id="tab-new-ticket">
+    <div class="card">
+      <h3>Submit a New Ticket</h3>
+      <div class="success-msg" id="ticket-success"></div>
+      <div class="error-msg" id="ticket-error"></div>
+      <form id="ticket-form">
+        <div class="form-group">
+          <label for="ticket-subject">Subject</label>
+          <input type="text" id="ticket-subject" placeholder="Brief description of your issue" required>
+        </div>
+        <div class="form-group">
+          <label for="ticket-desc">Description</label>
+          <textarea id="ticket-desc" placeholder="Provide details about your issue..." required></textarea>
+        </div>
+        <div class="form-group">
+          <label for="ticket-priority">Priority</label>
+          <select id="ticket-priority">
+            <option value="LOW">Low</option>
+            <option value="MEDIUM" selected>Medium</option>
+            <option value="HIGH">High</option>
+          </select>
+        </div>
+        <button type="submit" class="btn-primary btn-sm" id="btn-submit-ticket">Submit Ticket</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Invoices Tab -->
+  <div class="tab-content" id="tab-invoices">
+    <div class="card">
+      <h3>Invoices <span class="badge" id="invoice-count">0</span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Invoice #</th><th>Date</th><th>Due Date</th><th>Amount</th><th>Status</th></tr></thead>
+          <tbody id="invoices-body"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Tab -->
+  <div class="tab-content" id="tab-settings">
+    <div class="card">
+      <h3>Set Password</h3>
+      <p style="font-size:13px;color:#666;margin-bottom:16px;">Use this form to set or change your portal password.</p>
+      <div class="success-msg" id="pw-success"></div>
+      <div class="error-msg" id="pw-error"></div>
+      <form id="pw-form">
+        <div class="form-group">
+          <label for="new-pw">New Password</label>
+          <input type="password" id="new-pw" placeholder="Enter new password" required minlength="6">
+        </div>
+        <div class="form-group">
+          <label for="confirm-pw">Confirm Password</label>
+          <input type="password" id="confirm-pw" placeholder="Confirm new password" required minlength="6">
+        </div>
+        <button type="submit" class="btn-primary btn-sm">Update Password</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var API = '/api/portal';
+  var contact = null;
+
+  // Elements
+  var loginView = document.getElementById('login-view');
+  var dashView = document.getElementById('dashboard-view');
+  var logoutBtn = document.getElementById('btn-logout');
+
+  // Check existing session
+  if (sessionStorage.getItem('portal_token')) {
+    loadDashboard();
+  }
+
+  // Tabs
+  document.querySelectorAll('.tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+      document.querySelectorAll('.tab-content').forEach(function(tc) { tc.classList.remove('active'); });
+      tab.classList.add('active');
+      document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    });
+  });
+
+  // Login
+  document.getElementById('login-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var btn = document.getElementById('btn-login');
+    var errEl = document.getElementById('login-error');
+    errEl.style.display = 'none';
+    btn.disabled = true;
+    btn.textContent = 'Signing in...';
+
+    apiFetch('/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: document.getElementById('email').value, password: document.getElementById('password').value })
+    })
+    .then(function(data) {
+      sessionStorage.setItem('portal_token', data.token);
+      contact = data.contact;
+      showDashboard();
+    })
+    .catch(function(err) {
+      errEl.textContent = err.message || 'Invalid email or password.';
+      errEl.style.display = 'block';
+    })
+    .finally(function() { btn.disabled = false; btn.textContent = 'Sign In'; });
+  });
+
+  // Logout
+  logoutBtn.addEventListener('click', function() {
+    sessionStorage.removeItem('portal_token');
+    contact = null;
+    dashView.classList.add('hidden');
+    loginView.classList.remove('hidden');
+    logoutBtn.classList.add('hidden');
+  });
+
+  // Submit ticket
+  document.getElementById('ticket-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var btn = document.getElementById('btn-submit-ticket');
+    var successEl = document.getElementById('ticket-success');
+    var errEl = document.getElementById('ticket-error');
+    successEl.style.display = 'none';
+    errEl.style.display = 'none';
+    btn.disabled = true;
+
+    apiFetch('/tickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        subject: document.getElementById('ticket-subject').value,
+        description: document.getElementById('ticket-desc').value,
+        priority: document.getElementById('ticket-priority').value
+      })
+    })
+    .then(function() {
+      successEl.textContent = 'Ticket submitted successfully!';
+      successEl.style.display = 'block';
+      document.getElementById('ticket-form').reset();
+      loadTickets();
+    })
+    .catch(function(err) {
+      errEl.textContent = err.message || 'Failed to submit ticket.';
+      errEl.style.display = 'block';
+    })
+    .finally(function() { btn.disabled = false; });
+  });
+
+  // Set password
+  document.getElementById('pw-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var pw = document.getElementById('new-pw').value;
+    var confirm = document.getElementById('confirm-pw').value;
+    var successEl = document.getElementById('pw-success');
+    var errEl = document.getElementById('pw-error');
+    successEl.style.display = 'none';
+    errEl.style.display = 'none';
+
+    if (pw !== confirm) {
+      errEl.textContent = 'Passwords do not match.';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    apiFetch('/set-password', {
+      method: 'POST',
+      body: JSON.stringify({ password: pw })
+    })
+    .then(function() {
+      successEl.textContent = 'Password updated successfully!';
+      successEl.style.display = 'block';
+      document.getElementById('pw-form').reset();
+    })
+    .catch(function(err) {
+      errEl.textContent = err.message || 'Failed to update password.';
+      errEl.style.display = 'block';
+    });
+  });
+
+  function loadDashboard() {
+    apiFetch('/me')
+      .then(function(data) { contact = data.contact || data; showDashboard(); })
+      .catch(function() { sessionStorage.removeItem('portal_token'); });
+  }
+
+  function showDashboard() {
+    var name = contact ? (contact.name || contact.firstName || contact.email || 'Customer') : 'Customer';
+    document.getElementById('welcome-msg').textContent = 'Welcome back, ' + name + '!';
+    loginView.classList.add('hidden');
+    dashView.classList.remove('hidden');
+    logoutBtn.classList.remove('hidden');
+    loadTickets();
+    loadInvoices();
+  }
+
+  function loadTickets() {
+    apiFetch('/tickets')
+      .then(function(data) {
+        var tickets = Array.isArray(data) ? data : (data.tickets || []);
+        document.getElementById('ticket-count').textContent = tickets.length;
+        var tbody = document.getElementById('tickets-body');
+        if (!tickets.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No tickets yet.</td></tr>'; return; }
+        tbody.innerHTML = tickets.map(function(t) {
+          var status = (t.status || 'OPEN').toLowerCase();
+          var date = t.createdAt ? new Date(t.createdAt).toLocaleDateString() : '-';
+          return '<tr><td>#' + esc(t.id) + '</td><td>' + esc(t.subject || '-') + '</td><td><span class="status status-' + status + '">' + esc(t.status || 'OPEN') + '</span></td><td>' + esc(t.priority || '-') + '</td><td>' + date + '</td></tr>';
+        }).join('');
+      })
+      .catch(function() {
+        document.getElementById('tickets-body').innerHTML = '<tr><td colspan="5" class="empty">Failed to load tickets.</td></tr>';
+      });
+  }
+
+  function loadInvoices() {
+    apiFetch('/invoices')
+      .then(function(data) {
+        var invoices = Array.isArray(data) ? data : (data.invoices || []);
+        document.getElementById('invoice-count').textContent = invoices.length;
+        var tbody = document.getElementById('invoices-body');
+        if (!invoices.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No invoices found.</td></tr>'; return; }
+        tbody.innerHTML = invoices.map(function(inv) {
+          var status = (inv.status || 'DRAFT').toLowerCase();
+          var date = inv.date ? new Date(inv.date).toLocaleDateString() : (inv.createdAt ? new Date(inv.createdAt).toLocaleDateString() : '-');
+          var due = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString() : '-';
+          var amt = inv.total != null ? formatCurrency(inv.total) : (inv.amount != null ? formatCurrency(inv.amount) : '-');
+          return '<tr><td>' + esc(inv.invoiceNumber || inv.number || '#' + inv.id) + '</td><td>' + date + '</td><td>' + due + '</td><td>' + amt + '</td><td><span class="status status-' + status + '">' + esc(inv.status || 'DRAFT') + '</span></td></tr>';
+        }).join('');
+      })
+      .catch(function() {
+        document.getElementById('invoices-body').innerHTML = '<tr><td colspan="5" class="empty">Failed to load invoices.</td></tr>';
+      });
+  }
+
+  function apiFetch(path, opts) {
+    opts = opts || {};
+    var headers = { 'Content-Type': 'application/json' };
+    var token = sessionStorage.getItem('portal_token');
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    opts.headers = headers;
+    return fetch(API + path, opts).then(function(r) {
+      if (r.status === 401) { sessionStorage.removeItem('portal_token'); loginView.classList.remove('hidden'); dashView.classList.add('hidden'); logoutBtn.classList.add('hidden'); throw new Error('Session expired. Please sign in again.'); }
+      if (!r.ok) return r.json().then(function(d) { throw new Error(d.message || d.error || 'Request failed'); });
+      return r.json();
+    });
+  }
+
+  function formatCurrency(n) { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(n); }
+  function esc(s) { if (s == null) return ''; var d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+})();
+</script>
+</body>
+</html>

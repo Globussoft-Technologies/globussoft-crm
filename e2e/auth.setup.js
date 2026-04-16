@@ -16,16 +16,16 @@ setup('authenticate and save storage state', async ({ page, request }) => {
     fs.mkdirSync(authDir, { recursive: true });
   }
 
-  // Use the admin/admin bypass to get a token via API
+  // Login with real admin credentials
   const loginResponse = await request.post('/api/auth/login', {
-    data: { email: 'admin', password: 'admin' },
+    data: { email: 'admin@globussoft.com', password: 'password123' },
   });
 
   expect(loginResponse.ok()).toBeTruthy();
   const loginData = await loginResponse.json();
   expect(loginData.token).toBeTruthy();
 
-  console.log('[auth.setup] Got token via API bypass');
+  console.log('[auth.setup] Got token via admin login');
 
   // Navigate to the app and inject the token into localStorage
   await page.goto('/login');

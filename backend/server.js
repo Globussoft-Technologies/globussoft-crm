@@ -15,6 +15,7 @@ const rateLimit = require("express-rate-limit");
 const { verifyToken } = require("./middleware/auth");
 
 const app = express();
+app.set('trust proxy', 1); // trust first proxy (Nginx)
 const server = http.createServer(app);
 
 // Initialize Sentry early for full request capture (no-op if SENTRY_DSN not set)

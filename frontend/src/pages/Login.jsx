@@ -1,5 +1,6 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { Mail, Square } from 'lucide-react';
 import { AuthContext } from '../App';
 
 const Login = () => {
@@ -13,6 +14,50 @@ const Login = () => {
   const [forgotLoading, setForgotLoading] = useState(false);
   const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
+
+  // Handle SSO redirect callback — server bounces user here with ?sso_token=...&tenant=...
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ssoToken = params.get('sso_token');
+    const tenantParam = params.get('tenant');
+    const ssoErr = params.get('sso_error');
+
+    if (ssoErr) {
+      setError(decodeURIComponent(ssoErr));
+      // Clean URL so the error doesn't re-fire on remount
+      window.history.replaceState({}, document.title, window.location.pathname);
+      return;
+    }
+
+    if (ssoToken) {
+      setToken(ssoToken);
+      localStorage.setItem('token', ssoToken);
+
+      let parsedTenant = null;
+      if (tenantParam) {
+        try { parsedTenant = JSON.parse(decodeURIComponent(tenantParam)); } catch { /* ignore */ }
+      }
+      if (parsedTenant && setTenant) {
+        setTenant(parsedTenant);
+        localStorage.setItem('tenant', JSON.stringify(parsedTenant));
+      }
+
+      // Pull canonical user profile from the server now that we have a token.
+      fetch('/api/auth/me', { headers: { Authorization: `Bearer ${ssoToken}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(profile => { if (profile) setUser(profile); })
+        .catch(() => {})
+        .finally(() => {
+          window.history.replaceState({}, document.title, window.location.pathname);
+          navigate('/dashboard');
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSsoLogin = (provider) => {
+    window.location.href = `/api/sso/${provider}/start`;
+  };
 
   const handleForgotPassword = async (e) => {
     e.preventDefault();
@@ -106,6 +151,63 @@ const Login = () => {
             Sign In
           </button>
         </form>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', margin: '1.25rem 0 1rem' }}>
+          <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }} />
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>or continue with</span>
+          <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }} />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <button
+            type="button"
+            onClick={() => handleSsoLogin('google')}
+            className="glass"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem',
+              width: '100%',
+              padding: '0.65rem 1rem',
+              borderRadius: '8px',
+              border: '1px solid var(--border-color)',
+              background: 'rgba(255,255,255,0.06)',
+              backdropFilter: 'blur(8px)',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+            }}
+          >
+            <Mail size={16} />
+            <span>Sign in with Google</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSsoLogin('microsoft')}
+            className="glass"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem',
+              width: '100%',
+              padding: '0.65rem 1rem',
+              borderRadius: '8px',
+              border: '1px solid var(--border-color)',
+              background: 'rgba(255,255,255,0.06)',
+              backdropFilter: 'blur(8px)',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+            }}
+          >
+            <Square size={16} />
+            <span>Sign in with Microsoft</span>
+          </button>
+        </div>
 
         <div style={{ marginTop: '1rem', textAlign: 'center' }}>
           <button

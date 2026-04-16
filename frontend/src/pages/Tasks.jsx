@@ -133,7 +133,7 @@ export default function Tasks() {
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Priority Level</label>
               <select id="task-priority-select" className="input-field" value={newTask.priority}
                 onChange={e => setNewTask({ ...newTask, priority: e.target.value })}
-                style={{ background: '#0f172a' }}>
+                style={{ background: 'var(--input-bg)' }}>
                 <option value="Critical">🔴 Critical</option>
                 <option value="High">🟠 High</option>
                 <option value="Medium">🔵 Medium</option>
@@ -145,7 +145,7 @@ export default function Tasks() {
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Associated Contact</label>
               <select className="input-field" value={newTask.contactId}
                 onChange={e => setNewTask({ ...newTask, contactId: e.target.value })}
-                style={{ background: '#0f172a' }}>
+                style={{ background: 'var(--input-bg)' }}>
                 <option value="">-- Unassigned --</option>
                 {contacts.map(c => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
               </select>

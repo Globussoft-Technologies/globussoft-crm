@@ -8,9 +8,9 @@ const Support = () => {
 
   useEffect(() => {
     fetchApi('/api/support').then(data => {
-        setTickets(data);
+        setTickets(Array.isArray(data) ? data : []);
         setLoading(false);
-      });
+      }).catch(() => { setTickets([]); setLoading(false); });
   }, []);
 
   return (

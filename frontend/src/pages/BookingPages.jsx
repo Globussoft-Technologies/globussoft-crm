@@ -144,13 +144,13 @@ export default function BookingPages() {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
-                <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--bg-secondary)', borderRadius: 6 }}>
+                <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: 6 }}>
                   <div style={{ fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
                     <Clock size={14} /> {page.durationMins}m
                   </div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Duration</div>
                 </div>
-                <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--bg-secondary)', borderRadius: 6 }}>
+                <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: 6 }}>
                   <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{page.bookingCount || 0}</div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Bookings</div>
                 </div>
@@ -390,7 +390,7 @@ function EditDrawer({ page, bookings, onClose, onSaved, onCancelBooking, onCopyU
               return (
                 <div key={d.key} style={{
                   display: 'flex', alignItems: 'center', gap: '0.75rem',
-                  padding: '0.5rem 0.75rem', background: 'var(--bg-secondary)', borderRadius: 6,
+                  padding: '0.5rem 0.75rem', background: 'var(--subtle-bg)', borderRadius: 6,
                 }}>
                   <div style={{ width: 50, fontWeight: 600, fontSize: '0.85rem' }}>{d.label}</div>
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
@@ -419,7 +419,7 @@ function EditDrawer({ page, bookings, onClose, onSaved, onCancelBooking, onCopyU
         <div style={{ marginBottom: '1.25rem' }}>
           <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem' }}>Recent Bookings ({bookings.length})</h4>
           {bookings.length === 0 ? (
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: 6 }}>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: 6 }}>
               No bookings yet. Share your URL to receive your first booking.
             </p>
           ) : (

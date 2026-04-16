@@ -239,7 +239,7 @@ const MarketplaceLeads = () => {
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {['indiamart', 'justdial', 'tradeindia'].map(p => (
-              <div key={p} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', background: 'var(--bg-secondary)', borderRadius: '6px' }}>
+              <div key={p} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
                 <span style={{ fontWeight: '500', minWidth: '100px', color: PROVIDER_COLORS[p].color }}>{PROVIDER_COLORS[p].label}:</span>
                 <code style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', flex: 1 }}>
                   {window.location.origin.replace(':5173', ':5000')}/api/marketplace-leads/webhook/{p}
@@ -310,7 +310,7 @@ const MarketplaceLeads = () => {
       {/* Filters Bar */}
       <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
         {/* Provider Tabs */}
-        <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--bg-secondary)', borderRadius: '8px', padding: '0.25rem' }}>
+        <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '0.25rem' }}>
           {PROVIDERS.map(p => (
             <button
               key={p.key}
@@ -414,7 +414,7 @@ const MarketplaceLeads = () => {
                 const sc = STATUS_COLORS[lead.status] || STATUS_COLORS.New;
                 return (
                   <tr key={lead.id} style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.15s' }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary)'}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
                     <td style={tdStyle}>

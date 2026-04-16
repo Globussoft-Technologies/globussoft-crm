@@ -65,7 +65,7 @@ export default function Channels() {
       </header>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--bg-secondary)', borderRadius: '8px', padding: '0.25rem', marginBottom: '1.5rem', width: 'fit-content' }}>
+      <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '0.25rem', marginBottom: '1.5rem', width: 'fit-content' }}>
         {TABS.map(t => (
           <button key={t.key} onClick={() => setActiveTab(t.key)} style={{ padding: '0.5rem 1.25rem', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '0.85rem', fontWeight: activeTab === t.key ? '600' : '400', background: activeTab === t.key ? t.color : 'transparent', color: activeTab === t.key ? '#fff' : 'var(--text-secondary)', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <t.icon size={16} /> {t.label}
@@ -119,7 +119,7 @@ export default function Channels() {
             <h3 style={{ fontWeight: '600', marginBottom: '1rem' }}>VAPID Configuration</h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1rem' }}>Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY environment variables on the server. Generate with: <code>npx web-push generate-vapid-keys</code></p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <div style={{ padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: '6px', fontSize: '0.8rem' }}>
+              <div style={{ padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: '6px', fontSize: '0.8rem' }}>
                 <strong>Embeddable Script:</strong> Add this to your website to collect visitor push subscriptions:
                 <pre style={{ marginTop: '0.5rem', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: '4px', overflow: 'auto', fontSize: '0.75rem' }}>{`<script src="${webhookBase}/api/push/crm-push.js"></script>`}</pre>
               </div>
@@ -188,7 +188,7 @@ function ConfigCard({ provider, configForm, setConfigForm, onSave }) {
 
 function WebhookInfo({ label, url, copied, copyText }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: '6px', marginTop: '0.5rem' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: '6px', marginTop: '0.5rem' }}>
       <span style={{ fontWeight: '500', minWidth: '140px', fontSize: '0.85rem' }}>{label}:</span>
       <code style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', flex: 1 }}>{url}</code>
       <button onClick={() => copyText(url, label)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === label ? '#10b981' : 'var(--text-secondary)' }}>
@@ -221,7 +221,7 @@ function TemplateSection({ templates, columns, onDelete, onCreate, statusColors 
                 <span style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '600', color: statusColors?.[t.status] || 'var(--text-secondary)', background: `${statusColors?.[t.status] || '#666'}22` }}>{t.status}</span>
               )}
               {columns.includes('category') && t.category && (
-                <span style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', background: 'var(--bg-secondary)' }}>{t.category}</span>
+                <span style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', background: 'var(--subtle-bg)' }}>{t.category}</span>
               )}
               <button onClick={() => onDelete(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><Trash2 size={14} /></button>
             </div>

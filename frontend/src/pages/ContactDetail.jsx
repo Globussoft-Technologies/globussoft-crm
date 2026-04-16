@@ -123,7 +123,7 @@ const ContactDetail = () => {
             )}
 
             {showUpload && (
-              <form onSubmit={handleUpload} style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: '6px' }}>
+              <form onSubmit={handleUpload} style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
                 <input className="input-field" placeholder="File name" required value={uploadForm.filename} onChange={e => setUploadForm({ ...uploadForm, filename: e.target.value })} style={{ padding: '0.4rem', fontSize: '0.8rem' }} />
                 <input className="input-field" placeholder="File URL" required value={uploadForm.fileUrl} onChange={e => setUploadForm({ ...uploadForm, fileUrl: e.target.value })} style={{ padding: '0.4rem', fontSize: '0.8rem' }} />
                 <div style={{ display: 'flex', gap: '0.5rem' }}>

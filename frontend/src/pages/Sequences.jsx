@@ -141,7 +141,7 @@ export default function Sequences() {
       )}
 
       {/* Adding minHeight: 0 to prevent flexbox boundary explosion that clips the React Flow layer */}
-      <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', overflow: 'hidden', background: '#0f172a', boxShadow: 'inset 0 0 30px rgba(0,0,0,0.8)', display: 'flex' }}>
+      <div style={{ flex: 1, minHeight: 0, border: '1px solid var(--border-color)', borderRadius: '12px', overflow: 'hidden', background: 'var(--surface-color)', boxShadow: 'var(--glass-shadow)', display: 'flex' }}>
         
         {/* ReactFlow Graph Canvas */}
         <div style={{ flex: 3, position: 'relative' }}>
@@ -167,8 +167,8 @@ export default function Sequences() {
               </button>
             </Panel>
             <Background color="#1e293b" gap={24} size={2} />
-            <Controls style={{ background: '#0f172a', fill: '#ec4899', border: '1px solid rgba(255,255,255,0.1)' }} />
-            <MiniMap nodeStrokeColor="#ec4899" nodeColor="#1e293b" style={{ background: '#0f172a', border: '1px solid rgba(255,255,255,0.1)' }} />
+            <Controls style={{ background: 'var(--surface-color)', fill: '#ec4899', border: '1px solid var(--border-color)' }} />
+            <MiniMap nodeStrokeColor="#ec4899" nodeColor="var(--surface-color)" style={{ background: 'var(--surface-color)', border: '1px solid var(--border-color)' }} />
           </ReactFlow>
         </div>
 

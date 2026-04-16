@@ -11,8 +11,8 @@ export default function Dashboard() {
   const [dateRange, setDateRange] = useState('all');
 
   useEffect(() => {
-    fetchApi('/api/deals').then(setDeals);
-    fetchApi('/api/contacts').then(setContacts);
+    fetchApi('/api/deals').then(d => setDeals(Array.isArray(d) ? d : [])).catch(() => setDeals([]));
+    fetchApi('/api/contacts').then(d => setContacts(Array.isArray(d) ? d : [])).catch(() => setContacts([]));
   }, []);
 
   // Filter deals by date range

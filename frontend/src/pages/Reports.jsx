@@ -99,18 +99,18 @@ export default function Reports() {
       body: JSON.stringify({ ...newSchedule, recipients }),
     });
     setNewSchedule({ name: '', reportType: 'deals', frequency: 'weekly', recipients: '', format: 'PDF' });
-    fetchApi('/api/report-schedules').then(data => setSchedules(data));
+    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => {});
     setShowScheduleModal(false);
   };
 
   const handleToggleSchedule = async (id) => {
     await fetchApi(`/api/report-schedules/${id}/toggle`, { method: 'PUT' });
-    fetchApi('/api/report-schedules').then(data => setSchedules(data));
+    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => {});
   };
 
   const handleDeleteSchedule = async (id) => {
     await fetchApi(`/api/report-schedules/${id}`, { method: 'DELETE' });
-    fetchApi('/api/report-schedules').then(data => setSchedules(data));
+    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => {});
   };
 
   const totalValue = data.reduce((sum, item) => sum + (item.value || 0), 0);

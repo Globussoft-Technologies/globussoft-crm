@@ -150,7 +150,7 @@ export default function Currencies() {
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No open deals yet.</p>
             )}
             {Object.entries(pivot.byCurrency || {}).map(([code, info]) => (
-              <div key={code} style={{ padding: '0.75rem 1rem', background: 'var(--bg-secondary)', borderRadius: '8px', minWidth: 160 }}>
+              <div key={code} style={{ padding: '0.75rem 1rem', background: 'var(--subtle-bg)', borderRadius: '8px', minWidth: 160 }}>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{code} · {info.count} deals</div>
                 <div style={{ fontWeight: 600, fontSize: '1rem' }}>{formatCurrency(info.amount, code)}</div>
               </div>
@@ -170,7 +170,7 @@ export default function Currencies() {
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ background: 'var(--bg-secondary)', textAlign: 'left' }}>
+              <tr style={{ background: 'var(--subtle-bg)', textAlign: 'left' }}>
                 <th style={th}>Code</th>
                 <th style={th}>Symbol</th>
                 <th style={th}>Name</th>
@@ -277,7 +277,7 @@ export default function Currencies() {
 
 const th = { padding: '0.75rem 1rem', fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-secondary)', fontWeight: 600 };
 const td = { padding: '0.75rem 1rem', fontSize: '0.9rem' };
-const iconBtn = { background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.375rem 0.5rem', cursor: 'pointer', color: 'var(--text-secondary)' };
+const iconBtn = { background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.375rem 0.5rem', cursor: 'pointer', color: 'var(--text-secondary)' };
 
 function StatCard({ icon, label, value, subtitle, accent }) {
   return (

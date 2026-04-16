@@ -169,7 +169,7 @@ export default function DocumentTemplates() {
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <select value={filterType} onChange={e => setFilterType(e.target.value)} className="input"
-            style={{ padding: '0.5rem 0.75rem', borderRadius: '8px', background: 'var(--card-bg)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+            style={{ padding: '0.5rem 0.75rem', borderRadius: '8px', background: 'var(--surface-color)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
             <option value="">All types</option>
             {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
@@ -325,12 +325,12 @@ export default function DocumentTemplates() {
               <Send size={16} /> Send Email
             </button>
           </div>
-          <div style={{ border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden', background: '#fff', minHeight: '400px' }}>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden', background: 'var(--surface-color)', minHeight: '400px' }}>
             {previewState.html ? (
               <iframe
                 title="template-preview"
                 srcDoc={previewState.html}
-                style={{ width: '100%', height: '500px', border: 'none', background: '#fff' }}
+                style={{ width: '100%', height: '500px', border: 'none', background: 'var(--surface-color)' }}
               />
             ) : (
               <div style={{ padding: '3rem', textAlign: 'center', color: '#888' }}>
@@ -379,7 +379,7 @@ const inputStyle = {
   padding: '0.55rem 0.75rem',
   borderRadius: '8px',
   border: '1px solid var(--border-color)',
-  background: 'var(--card-bg)',
+  background: 'var(--surface-color)',
   color: 'var(--text-primary)',
   fontSize: '0.9rem',
 };
@@ -404,7 +404,7 @@ function Modal({ title, children, onClose, wide }) {
           maxHeight: '90vh',
           overflow: 'auto',
           padding: '1.25rem 1.5rem',
-          background: 'var(--card-bg)',
+          background: 'var(--surface-color)',
           border: '1px solid var(--border-color)',
           borderRadius: '14px',
         }}

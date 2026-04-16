@@ -141,7 +141,7 @@ const Pipeline = () => {
       });
     } catch (err) {
       // Revert if failed
-      fetchApi('/api/deals').then(data => setDeals(data));
+      fetchApi('/api/deals').then(data => setDeals(Array.isArray(data) ? data : [])).catch(() => {});
     }
   };
 

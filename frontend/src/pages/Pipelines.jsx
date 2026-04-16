@@ -175,7 +175,7 @@ const Pipelines = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
                 <span style={{
                   padding: '0.25rem 0.625rem',
-                  background: 'var(--bg-secondary)',
+                  background: 'var(--subtle-bg)',
                   borderRadius: '999px',
                   fontWeight: '500',
                 }}>

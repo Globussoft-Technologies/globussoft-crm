@@ -84,15 +84,15 @@ export default function LandingPages() {
                   <span style={{ padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '600', background: sc.bg, color: sc.color }}>{page.status}</span>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
-                  <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--bg-secondary)', borderRadius: '6px' }}>
+                  <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '1.25rem', fontWeight: '600' }}>{page.visits}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Visits</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--bg-secondary)', borderRadius: '6px' }}>
+                  <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '1.25rem', fontWeight: '600' }}>{page.submissions}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Leads</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--bg-secondary)', borderRadius: '6px' }}>
+                  <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#10b981' }}>{convRate}%</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Conv.</div>
                   </div>
@@ -130,7 +130,7 @@ export default function LandingPages() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
               {templates.map(t => (
                 <div key={t.id} onClick={() => handleCreate(t.id)} className="card" style={{ padding: '1.25rem', cursor: 'pointer', border: '2px solid transparent', transition: 'all 0.2s' }} onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent-color)'} onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}>
-                  <div style={{ width: '100%', height: '80px', background: 'var(--bg-secondary)', borderRadius: '6px', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: '100%', height: '80px', background: 'var(--subtle-bg)', borderRadius: '6px', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <PanelTop size={32} style={{ color: 'var(--text-secondary)', opacity: 0.3 }} />
                   </div>
                   <h4 style={{ fontWeight: '600', marginBottom: '0.25rem' }}>{t.name}</h4>

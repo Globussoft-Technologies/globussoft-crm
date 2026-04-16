@@ -205,7 +205,7 @@ export default function Estimates() {
                 className="input-field"
                 value={form.contactId}
                 onChange={e => handleFormChange('contactId', e.target.value)}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
                 aria-label="Contact"
               >
                 <option value="">-- Select Contact --</option>
@@ -221,7 +221,7 @@ export default function Estimates() {
                 className="input-field"
                 value={form.dealId}
                 onChange={e => handleFormChange('dealId', e.target.value)}
-                style={{ background: '#0f172a' }}
+                style={{ background: 'var(--input-bg)' }}
                 aria-label="Associated deal"
               >
                 <option value="">-- No Deal --</option>

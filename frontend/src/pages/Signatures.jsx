@@ -344,7 +344,7 @@ export default function Signatures() {
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                   <Check size={14} color="#10b981" /> Captured Signature
                 </div>
-                <div style={{ background: '#fff', borderRadius: '8px', padding: '0.75rem', border: '1px solid var(--border-color)' }}>
+                <div style={{ background: 'var(--surface-color)', borderRadius: '8px', padding: '0.75rem', border: '1px solid var(--border-color)' }}>
                   <img
                     src={details?.signature || viewing.signature}
                     alt="Signature"

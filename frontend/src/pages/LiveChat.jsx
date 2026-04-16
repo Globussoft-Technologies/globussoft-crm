@@ -208,7 +208,7 @@ export default function LiveChat() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 6,
-            background: '#dcfce7', color: '#15803d',
+            background: 'rgba(16,185,129,0.12)', color: 'var(--success-color)',
             padding: '6px 12px', borderRadius: 20, fontSize: 13, fontWeight: 600,
           }}>
             <Circle size={8} fill="#16a34a" color="#16a34a" /> Online
@@ -225,17 +225,17 @@ export default function LiveChat() {
       }}>
         {/* Session list */}
         <div style={{
-          background: 'var(--bg-card, #fff)', borderRadius: 12,
-          border: '1px solid var(--border, #e5e7eb)', overflow: 'hidden',
+          background: 'var(--surface-color)', borderRadius: 12,
+          border: '1px solid var(--border-color)', overflow: 'hidden',
           display: 'flex', flexDirection: 'column',
         }}>
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border, #e5e7eb)', fontWeight: 600 }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', fontWeight: 600 }}>
             {sessions.length} open session{sessions.length === 1 ? '' : 's'}
           </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
-            {loading && <div style={{ padding: 16, color: '#6b7280' }}>Loading...</div>}
+            {loading && <div style={{ padding: 16, color: 'var(--text-secondary)' }}>Loading...</div>}
             {!loading && sessions.length === 0 && (
-              <div style={{ padding: 24, textAlign: 'center', color: '#6b7280', fontSize: 13 }}>
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
                 No active chats. New visitor sessions will appear here.
               </div>
             )}
@@ -247,7 +247,7 @@ export default function LiveChat() {
                   onClick={() => setActiveId(s.id)}
                   style={{
                     padding: '12px 16px',
-                    borderBottom: '1px solid var(--border, #f3f4f6)',
+                    borderBottom: '1px solid var(--border-color)',
                     cursor: 'pointer',
                     background: isActive ? 'rgba(59, 130, 246, 0.08)' : 'transparent',
                     borderLeft: isActive ? '3px solid #3b82f6' : '3px solid transparent',
@@ -259,10 +259,10 @@ export default function LiveChat() {
                     </div>
                     {statusBadge(s.status)}
                   </div>
-                  <div style={{ fontSize: 12, color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {s.lastMessage?.body || 'No messages yet'}
                   </div>
-                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
                     {formatTime(s.lastMessage?.createdAt || s.startedAt)}
                   </div>
                 </div>
@@ -273,14 +273,14 @@ export default function LiveChat() {
 
         {/* Active chat */}
         <div style={{
-          background: 'var(--bg-card, #fff)', borderRadius: 12,
-          border: '1px solid var(--border, #e5e7eb)',
+          background: 'var(--surface-color)', borderRadius: 12,
+          border: '1px solid var(--border-color)',
           display: 'flex', flexDirection: 'column', minHeight: 0,
         }}>
           {!activeId && (
             <div style={{
               flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexDirection: 'column', color: '#6b7280', gap: 8,
+              flexDirection: 'column', color: 'var(--text-secondary)', gap: 8,
             }}>
               <MessageSquare size={48} color="#d1d5db" />
               <div>Select a chat to start responding</div>
@@ -291,14 +291,14 @@ export default function LiveChat() {
             <>
               {/* Chat header */}
               <div style={{
-                padding: '12px 16px', borderBottom: '1px solid var(--border, #e5e7eb)',
+                padding: '12px 16px', borderBottom: '1px solid var(--border-color)',
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               }}>
                 <div>
                   <div style={{ fontWeight: 600 }}>
                     {activeSession.visitorName || 'Anonymous Visitor'}
                   </div>
-                  <div style={{ fontSize: 12, color: '#6b7280' }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                     {activeSession.visitorEmail || `Visitor #${activeSession.visitorId}`}
                     &nbsp;&middot;&nbsp; Started {formatTime(activeSession.startedAt)}
                   </div>
@@ -363,11 +363,11 @@ export default function LiveChat() {
               )}
 
               {/* Message thread */}
-              <div ref={messageBoxRef} style={{ flex: 1, overflowY: 'auto', padding: 16, background: '#f9fafb' }}>
+              <div ref={messageBoxRef} style={{ flex: 1, overflowY: 'auto', padding: 16, background: 'var(--subtle-bg)' }}>
                 {messages.map((m) => {
                   if (m.sender === 'system') {
                     return (
-                      <div key={m.id} style={{ textAlign: 'center', margin: '12px 0', fontSize: 12, color: '#9ca3af' }}>
+                      <div key={m.id} style={{ textAlign: 'center', margin: '12px 0', fontSize: 12, color: 'var(--text-secondary)' }}>
                         {m.body} &middot; {formatTime(m.createdAt)}
                       </div>
                     );
@@ -383,8 +383,8 @@ export default function LiveChat() {
                     >
                       <div style={{
                         maxWidth: '70%',
-                        background: isAgent ? '#3b82f6' : '#e5e7eb',
-                        color: isAgent ? '#fff' : '#1f2937',
+                        background: isAgent ? 'var(--accent-color)' : 'var(--subtle-bg-3)',
+                        color: isAgent ? '#fff' : 'var(--text-primary)',
                         padding: '8px 12px',
                         borderRadius: 12,
                         borderBottomRightRadius: isAgent ? 2 : 12,
@@ -408,7 +408,7 @@ export default function LiveChat() {
               {/* Composer */}
               {activeSession.status !== 'CLOSED' ? (
                 <form onSubmit={handleSend} style={{
-                  padding: 12, borderTop: '1px solid var(--border, #e5e7eb)',
+                  padding: 12, borderTop: '1px solid var(--border-color)',
                   display: 'flex', gap: 8,
                 }}>
                   <input
@@ -417,7 +417,7 @@ export default function LiveChat() {
                     onChange={(e) => setDraft(e.target.value)}
                     placeholder="Type your reply..."
                     style={{
-                      flex: 1, padding: '10px 12px', border: '1px solid #d1d5db',
+                      flex: 1, padding: '10px 12px', border: '1px solid var(--border-color)',
                       borderRadius: 8, fontSize: 14, outline: 'none',
                     }}
                   />
@@ -436,8 +436,8 @@ export default function LiveChat() {
                 </form>
               ) : (
                 <div style={{
-                  padding: 12, borderTop: '1px solid var(--border, #e5e7eb)',
-                  textAlign: 'center', color: '#6b7280', fontSize: 13,
+                  padding: 12, borderTop: '1px solid var(--border-color)',
+                  textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13,
                 }}>
                   This chat has been closed.
                 </div>

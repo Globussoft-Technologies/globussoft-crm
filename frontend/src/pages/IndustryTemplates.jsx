@@ -217,7 +217,7 @@ export default function IndustryTemplates() {
                     style={{
                       fontSize: '0.8rem',
                       padding: '0.3rem 0.625rem',
-                      background: 'var(--bg-secondary)',
+                      background: 'var(--subtle-bg)',
                       color: 'var(--text-primary)',
                       borderRadius: 6,
                       textDecoration: 'none',
@@ -321,7 +321,7 @@ function TemplateCard({ template, applied, onApply }) {
 
       <div
         style={{
-          background: 'var(--bg-secondary)',
+          background: 'var(--subtle-bg)',
           borderRadius: 8,
           padding: '0.75rem 0.875rem',
           fontSize: '0.8rem',
@@ -406,7 +406,7 @@ function TemplateCard({ template, applied, onApply }) {
           marginTop: 'auto',
           ...(applied
             ? {
-                background: 'var(--bg-secondary)',
+                background: 'var(--subtle-bg)',
                 color: 'var(--text-primary)',
                 border: '1px solid var(--border-color)',
                 borderRadius: 8,

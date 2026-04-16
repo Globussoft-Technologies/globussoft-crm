@@ -190,10 +190,10 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
                     newFields[idx].name = e.target.value;
                     setFields(newFields);
                   }} style={{ margin: 0, width: '150px' }}>
-                    <option value="full_name" style={{ background: '#0f172a' }}>Full Name</option>
-                    <option value="email" style={{ background: '#0f172a' }}>Email</option>
-                    <option value="company_name" style={{ background: '#0f172a' }}>Company</option>
-                    <option value="phone" style={{ background: '#0f172a' }}>Phone</option>
+                    <option value="full_name" style={{ background: 'var(--input-bg)' }}>Full Name</option>
+                    <option value="email" style={{ background: 'var(--input-bg)' }}>Email</option>
+                    <option value="company_name" style={{ background: 'var(--input-bg)' }}>Company</option>
+                    <option value="phone" style={{ background: 'var(--input-bg)' }}>Phone</option>
                   </select>
                   <button 
                     onClick={() => setFields(fields.filter(f => f.id !== field.id))}
@@ -210,7 +210,7 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
           </div>
 
           {/* Output View */}
-          <div className="card" style={{ padding: '2rem', display: 'flex', flexDirection: 'column', background: '#0f172a', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+          <div className="card" style={{ padding: '2rem', display: 'flex', flexDirection: 'column', background: 'var(--surface-color)', border: '1px solid var(--border-color)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ fontSize: '1.25rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Code size={20} color="#3b82f6" /> Embed Snippet
@@ -224,7 +224,7 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
               Paste this HTML snippet directly into your website (Wordpress, Webflow, Shopify). Submissions will automatically sync to your pipeline.
             </p>
             
-            <div style={{ flex: 1, background: '#1e293b', borderRadius: '8px', padding: '1rem', overflow: 'auto', position: 'relative' }}>
+            <div style={{ flex: 1, background: 'var(--input-bg)', borderRadius: '8px', padding: '1rem', overflow: 'auto', position: 'relative' }}>
               <pre style={{ margin: 0, color: '#e2e8f0', fontSize: '0.875rem', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                 <code>{embedCode}</code>
               </pre>

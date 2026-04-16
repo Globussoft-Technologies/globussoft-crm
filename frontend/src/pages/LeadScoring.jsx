@@ -136,7 +136,7 @@ export default function LeadScoring() {
             <XAxis dataKey="label" tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} />
             <YAxis tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} allowDecimals={false} />
             <Tooltip
-              contentStyle={{ background: '#1e293b', border: '1px solid var(--border-color)', borderRadius: '8px', color: '#fff' }}
+              contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)' }}
               formatter={(v) => [`${v} contacts`, 'Count']}
             />
             <Bar dataKey="count" radius={[4, 4, 0, 0]}>

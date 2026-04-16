@@ -64,9 +64,9 @@ const Contacts = () => {
 
   const fetchContacts = () => {
     fetchApi('/api/contacts').then(data => {
-        setContacts(data);
+        setContacts(Array.isArray(data) ? data : []);
         setLoading(false);
-      });
+      }).catch(() => { setContacts([]); setLoading(false); });
   };
 
   const handleRescore = async () => {

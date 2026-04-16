@@ -461,7 +461,7 @@ export default function CustomReports() {
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                         <XAxis dataKey="name" stroke="rgba(255,255,255,0.6)" />
                         <YAxis stroke="rgba(255,255,255,0.6)" />
-                        <Tooltip contentStyle={{ background: '#1f1f2e', border: 'none', borderRadius: 8 }} />
+                        <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
                         <Bar dataKey="value" fill="#3b82f6" radius={[8, 8, 0, 0]} />
                       </BarChart>
                     ) : config.chartType === 'pie' ? (
@@ -470,14 +470,14 @@ export default function CustomReports() {
                           {chartData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                         </Pie>
                         <Legend />
-                        <Tooltip contentStyle={{ background: '#1f1f2e', border: 'none', borderRadius: 8 }} />
+                        <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
                       </PieChart>
                     ) : (
                       <LineChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                         <XAxis dataKey="name" stroke="rgba(255,255,255,0.6)" />
                         <YAxis stroke="rgba(255,255,255,0.6)" />
-                        <Tooltip contentStyle={{ background: '#1f1f2e', border: 'none', borderRadius: 8 }} />
+                        <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
                         <Line type="monotone" dataKey="value" stroke="#a855f7" strokeWidth={2} />
                       </LineChart>
                     )}

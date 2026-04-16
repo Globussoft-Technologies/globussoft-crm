@@ -26,7 +26,7 @@ export default function LandingPageBuilder() {
     fetchApi(`/api/landing-pages/${id}`).then(data => {
       setPage(data);
       try { setComponents(JSON.parse(data.content || '[]')); } catch { setComponents([]); }
-    });
+    }).catch(() => {});
   }, [id]);
 
   const handleSave = async () => {
@@ -72,7 +72,7 @@ export default function LandingPageBuilder() {
         <Link to="/landing-pages" style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>
         <input className="input-field" value={page.title} onChange={e => setPage({ ...page, title: e.target.value })} style={{ fontWeight: '600', fontSize: '1rem', padding: '0.375rem 0.75rem', width: '250px' }} />
         <div style={{ flex: 1 }} />
-        <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--bg-secondary)', borderRadius: '6px', padding: '0.2rem' }}>
+        <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--subtle-bg)', borderRadius: '6px', padding: '0.2rem' }}>
           <button onClick={() => setPreviewMode('desktop')} style={{ padding: '0.3rem 0.6rem', borderRadius: '4px', border: 'none', cursor: 'pointer', background: previewMode === 'desktop' ? 'var(--accent-color)' : 'transparent', color: previewMode === 'desktop' ? '#fff' : 'var(--text-secondary)' }}><Monitor size={14} /></button>
           <button onClick={() => setPreviewMode('mobile')} style={{ padding: '0.3rem 0.6rem', borderRadius: '4px', border: 'none', cursor: 'pointer', background: previewMode === 'mobile' ? 'var(--accent-color)' : 'transparent', color: previewMode === 'mobile' ? '#fff' : 'var(--text-secondary)' }}><Smartphone size={14} /></button>
         </div>
@@ -101,8 +101,8 @@ export default function LandingPageBuilder() {
         </div>
 
         {/* Center: Preview Canvas */}
-        <div style={{ flex: 1, overflowY: 'auto', background: '#f1f5f9', padding: '2rem', display: 'flex', justifyContent: 'center' }}>
-          <div style={{ width: previewMode === 'mobile' ? '375px' : '100%', maxWidth: '800px', background: '#fff', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', padding: '2rem', minHeight: '400px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', background: 'var(--subtle-bg)', padding: '2rem', display: 'flex', justifyContent: 'center' }}>
+          <div style={{ width: previewMode === 'mobile' ? '375px' : '100%', maxWidth: '800px', background: 'var(--surface-color)', borderRadius: '8px', boxShadow: 'var(--glass-shadow)', padding: '2rem', minHeight: '400px' }}>
             {components.length === 0 && (
               <div style={{ textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8' }}>
                 <Plus size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
@@ -163,7 +163,7 @@ function ComponentPreview({ comp }) {
     case 'divider': return <hr style={{ border: 'none', borderTop: `1px solid ${p.color}`, margin: p.margin }} />;
     case 'spacer': return <div style={{ height: p.height }} />;
     case 'video': return <div style={{ textAlign: 'center' }}><iframe src={p.url} style={{ width: p.width || '100%', maxWidth: '100%', height: '360px', border: 'none', borderRadius: '6px' }} allowFullScreen /></div>;
-    default: return <div style={{ padding: '1rem', background: '#f1f5f9', borderRadius: '6px', fontSize: '0.85rem' }}>Unknown: {comp.type}</div>;
+    default: return <div style={{ padding: '1rem', background: 'var(--subtle-bg)', borderRadius: '6px', fontSize: '0.85rem' }}>Unknown: {comp.type}</div>;
   }
 }
 

@@ -331,13 +331,13 @@ export default function AuditLog() {
                             Details
                           </div>
                           <pre style={{
-                            background: '#0b1220',
+                            background: 'var(--input-bg)',
                             border: '1px solid var(--border-color)',
                             borderRadius: 8,
                             padding: '1rem',
                             margin: 0,
                             fontSize: '0.78rem',
-                            color: '#cbd5e1',
+                            color: 'var(--text-secondary)',
                             overflowX: 'auto',
                             whiteSpace: 'pre-wrap',
                             wordBreak: 'break-word',

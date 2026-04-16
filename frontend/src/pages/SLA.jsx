@@ -258,7 +258,7 @@ const SLA = () => {
             onClick={() => setTab(t.id)}
             style={{
               padding: '0.6rem 1rem', border: 'none', cursor: 'pointer',
-              background: tab === t.id ? 'var(--bg-secondary)' : 'transparent',
+              background: tab === t.id ? 'var(--subtle-bg)' : 'transparent',
               color: tab === t.id ? 'var(--accent-color)' : 'var(--text-secondary)',
               fontWeight: tab === t.id ? 600 : 500,
               borderBottom: tab === t.id ? '2px solid var(--accent-color)' : '2px solid transparent',
@@ -269,7 +269,7 @@ const SLA = () => {
             <t.icon size={15} /> {t.label}
             <span style={{
               padding: '0.05rem 0.45rem', borderRadius: 999,
-              background: 'var(--bg-secondary)', color: 'var(--text-secondary)',
+              background: 'var(--subtle-bg)', color: 'var(--text-secondary)',
               fontSize: '0.7rem',
             }}>{t.count}</span>
           </button>
@@ -427,7 +427,7 @@ const SLA = () => {
                   padding: '0.875rem 1rem',
                   border: '1px solid var(--border-color)',
                   borderRadius: 8,
-                  background: 'var(--bg-secondary)',
+                  background: 'var(--subtle-bg)',
                   display: 'flex', flexDirection: 'column', gap: '0.5rem',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

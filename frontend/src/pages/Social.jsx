@@ -476,7 +476,7 @@ export default function Social() {
         <div onClick={() => setConnectModal(null)}
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
           <div onClick={e => e.stopPropagation()} className="card"
-            style={{ padding: '1.5rem', width: '90%', maxWidth: 480, background: 'var(--bg-card)' }}>
+            style={{ padding: '1.5rem', width: '90%', maxWidth: 480, background: 'var(--surface-color)' }}>
             <h3 style={{ marginBottom: '1rem' }}>Connect {platformMeta(connectModal).name}</h3>
             <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.4rem' }}>Access Token</label>
             <input type="text" value={connectToken} onChange={e => setConnectToken(e.target.value)}

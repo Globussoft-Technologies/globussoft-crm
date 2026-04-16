@@ -73,6 +73,16 @@ model User {
   name      String?
   createdAt DateTime  @default(now())
 
+  // 2FA
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret  String?
+  backupCodes      String? @db.Text // JSON array of hashed codes
+
+  // SSO
+  googleId    String? @unique
+  microsoftId String? @unique
+  ssoProvider String? // "google", "microsoft", null = local
+
   tenantId  Int       @default(1)
   tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -964,4 +974,119 @@ model EmailTracking {
 
   tenantId    Int      @default(1)
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// ── SSO Configuration ────────────────────────────────────────────
+
+model SsoConfig {
+  id           Int      @id @default(autoincrement())
+  provider     String   // "google", "microsoft"
+  clientId     String?
+  clientSecret String?
+  redirectUri  String?
+  isActive     Boolean  @default(false)
+  tenantId     Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([tenantId, provider])
+}
+
+// ── Calendar Integration ─────────────────────────────────────────
+
+model CalendarIntegration {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  provider     String   // "google", "microsoft"
+  accessToken  String   @db.Text
+  refreshToken String?  @db.Text
+  expiresAt    DateTime?
+  calendarId   String?  // primary calendar id
+  syncEnabled  Boolean  @default(true)
+  lastSyncAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenantId     Int      @default(1)
+
+  @@unique([userId, provider])
+}
+
+model CalendarEvent {
+  id              Int      @id @default(autoincrement())
+  externalId      String   // provider's event ID
+  provider        String
+  title           String
+  description     String?  @db.Text
+  startTime       DateTime
+  endTime         DateTime
+  location        String?
+  attendees       String?  @db.Text // JSON
+  meetingUrl      String?
+  userId          Int
+  contactId       Int?
+  dealId          Int?
+  tenantId        Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([provider, externalId])
+}
+
+// ── GDPR / Compliance ────────────────────────────────────────────
+
+model ConsentRecord {
+  id          Int      @id @default(autoincrement())
+  contactId   Int
+  type        String   // "marketing_email", "marketing_sms", "marketing_whatsapp", "data_processing"
+  granted     Boolean
+  ipAddress   String?
+  userAgent   String?
+  source      String?  // where consent was captured
+  createdAt   DateTime @default(now())
+
+  tenantId    Int      @default(1)
+}
+
+model DataExportRequest {
+  id          Int      @id @default(autoincrement())
+  contactId   Int?     // can be for a contact's data
+  userId      Int?     // or a user's own data
+  status      String   @default("PENDING") // PENDING, PROCESSING, COMPLETE, FAILED
+  fileUrl     String?  // download URL when complete
+  requestedAt DateTime @default(now())
+  completedAt DateTime?
+
+  tenantId    Int      @default(1)
+}
+
+model RetentionPolicy {
+  id          Int      @id @default(autoincrement())
+  entity      String   // "EmailMessage", "CallLog", "Activity", etc.
+  retainDays  Int      // delete records older than this
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenantId    Int      @default(1)
+
+  @@unique([tenantId, entity])
+}
+
+// ── Voice / Telephony Sessions ───────────────────────────────────
+
+model VoiceSession {
+  id          Int      @id @default(autoincrement())
+  sessionId   String   @unique // Twilio call SID or provider session
+  status      String   @default("INITIATED") // INITIATED, RINGING, IN_PROGRESS, COMPLETED, FAILED
+  fromNumber  String?
+  toNumber    String?
+  duration    Int?     // seconds
+  recordingUrl String?
+  transcript   String?  @db.Text
+  userId      Int?
+  contactId   Int?
+  tenantId    Int      @default(1)
+  createdAt   DateTime @default(now())
+  endedAt     DateTime?
 }

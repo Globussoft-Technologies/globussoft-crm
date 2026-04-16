@@ -1,6 +1,8 @@
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true }); // load root .env for API keys (Gemini, Mailgun, etc.)
 
+const { initSentry } = require("./lib/sentry");
+
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
@@ -14,6 +16,9 @@ const { verifyToken } = require("./middleware/auth");
 
 const app = express();
 const server = http.createServer(app);
+
+// Initialize Sentry early for full request capture (no-op if SENTRY_DSN not set)
+initSentry(app);
 
 // CORS — restrict to known origins
 const ALLOWED_ORIGINS = [
@@ -121,6 +126,14 @@ const telephonyRoutes = require("./routes/telephony");
 const pushRoutes = require("./routes/push");
 const { router: landingPagesRoutes, publicRouter: landingPagesPublic } = require("./routes/landing_pages");
 const tenantsRoutes = require("./routes/tenants");
+const auth2faRoutes = require("./routes/auth_2fa");
+const ssoRoutes = require("./routes/sso");
+const calendarGoogleRoutes = require("./routes/calendar_google");
+const calendarOutlookRoutes = require("./routes/calendar_outlook");
+const voiceRoutes = require("./routes/voice");
+const emailInboundRoutes = require("./routes/email_inbound");
+const gdprRoutes = require("./routes/gdpr");
+const auditViewerRoutes = require("./routes/audit_viewer");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -131,7 +144,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, next);
 });
@@ -176,6 +189,14 @@ app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
 app.use("/api/tenants", tenantsRoutes);
+app.use("/api/auth/2fa", auth2faRoutes);
+app.use("/api/sso", ssoRoutes);
+app.use("/api/calendar/google", calendarGoogleRoutes);
+app.use("/api/calendar/outlook", calendarOutlookRoutes);
+app.use("/api/voice", voiceRoutes);
+app.use("/api/email/inbound", emailInboundRoutes);
+app.use("/api/gdpr", gdprRoutes);
+app.use("/api/audit-viewer", auditViewerRoutes);
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
@@ -233,5 +254,9 @@ initRecurringInvoiceCron(io);
 // Initialize Marketplace Sync Engine (runs every 5 min)
 const { initMarketplaceCron } = require('./cron/marketplaceEngine');
 initMarketplaceCron(io);
+
+// Initialize GDPR Retention Engine (runs daily at 3 AM)
+const { initRetentionCron } = require('./cron/retentionEngine');
+initRetentionCron();
 
 // nodemon restart trigger

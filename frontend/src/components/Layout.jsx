@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import React, { useContext, useEffect } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { LogOut, ChevronDown } from 'lucide-react';
 import Sidebar from './Sidebar';
@@ -7,10 +7,16 @@ import Presence from './Presence';
 import Softphone from './Softphone';
 import NotificationBell from './NotificationBell';
 import { AuthContext } from '../App';
+import { setupPush } from '../utils/pushSetup';
 
 const Layout = () => {
-  const { user, setUser, setToken } = useContext(AuthContext);
+  const { user, setUser, setToken, token } = useContext(AuthContext);
   const navigate = useNavigate();
+
+  // Auto-register push notifications after login (silent failures OK)
+  useEffect(() => {
+    if (token) setupPush(token).catch(() => {});
+  }, [token]);
 
   const handleLogout = () => {
     setUser(null);

@@ -40,6 +40,10 @@ const MarketplaceLeads = lazy(() => import('./pages/MarketplaceLeads'));
 const Channels = lazy(() => import('./pages/Channels'));
 const LandingPages = lazy(() => import('./pages/LandingPages'));
 const LandingPageBuilder = lazy(() => import('./pages/LandingPageBuilder'));
+const AuditLog = lazy(() => import('./pages/AuditLog'));
+const Privacy = lazy(() => import('./pages/Privacy'));
+const CalendarSync = lazy(() => import('./pages/CalendarSync'));
+const Profile2FA = lazy(() => import('./pages/Profile2FA'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -121,6 +125,10 @@ export default function App() {
               <Route path="leads" element={<Leads />} />
               <Route path="staff" element={<Staff />} />
               <Route path="profile" element={<Profile />} />
+              <Route path="profile/2fa" element={<Profile2FA />} />
+              <Route path="audit-log" element={<AuditLog />} />
+              <Route path="privacy" element={<Privacy />} />
+              <Route path="calendar-sync" element={<CalendarSync />} />
             </Route>
           </Routes>
         </Suspense>

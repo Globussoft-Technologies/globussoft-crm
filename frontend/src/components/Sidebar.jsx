@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network, Target, CheckSquare, UserPlus, Building2, Receipt, Ticket, UsersRound, FileText, FileSpreadsheet, FolderKanban, DollarSign, Trophy, ShoppingBag, Radio, PanelTop, Calendar, Shield, ScrollText } from 'lucide-react';
+import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network, Target, CheckSquare, UserPlus, Building2, Receipt, Ticket, UsersRound, FileText, FileSpreadsheet, FolderKanban, DollarSign, Trophy, ShoppingBag, Radio, PanelTop, Calendar, Shield, ScrollText, GitBranch, TrendingUp, BookOpen, PenTool, ClipboardList, MessageSquare, Eye, BadgePercent, Bot, FileSignature, Award, CreditCard } from 'lucide-react';
 
 const Sidebar = () => {
   return (
@@ -22,6 +22,21 @@ const Sidebar = () => {
         <NavLink to="/pipeline" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Briefcase size={20} /> Pipeline
         </NavLink>
+        <NavLink to="/pipelines" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <GitBranch size={20} /> Pipelines
+        </NavLink>
+        <NavLink to="/forecasting" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <TrendingUp size={20} /> Forecasting
+        </NavLink>
+        <NavLink to="/quotas" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Award size={20} /> Quotas
+        </NavLink>
+        <NavLink to="/win-loss" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <BadgePercent size={20} /> Win/Loss
+        </NavLink>
+        <NavLink to="/deal-insights" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Eye size={20} /> Deal Insights
+        </NavLink>
         <NavLink to="/cpq" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <FileDigit size={20} /> CPQ
         </NavLink>
@@ -36,6 +51,51 @@ const Sidebar = () => {
         </NavLink>
         <NavLink to="/agent-reports" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Trophy size={20} /> Agent Reports
+        </NavLink>
+        <NavLink to="/dashboards" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <LayoutDashboard size={20} /> Dashboards
+        </NavLink>
+        <NavLink to="/custom-reports" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <BarChart3 size={20} /> Custom Reports
+        </NavLink>
+        <NavLink to="/booking-pages" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Calendar size={20} /> Booking Pages
+        </NavLink>
+        <NavLink to="/signatures" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <FileSignature size={20} /> E-Signatures
+        </NavLink>
+        <NavLink to="/document-templates" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <FileText size={20} /> Doc Templates
+        </NavLink>
+        <NavLink to="/ab-tests" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <PenTool size={20} /> A/B Tests
+        </NavLink>
+        <NavLink to="/web-visitors" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Eye size={20} /> Web Visitors
+        </NavLink>
+        <NavLink to="/chatbots" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Bot size={20} /> Chatbots
+        </NavLink>
+        <NavLink to="/knowledge-base" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <BookOpen size={20} /> Knowledge Base
+        </NavLink>
+        <NavLink to="/surveys" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <ClipboardList size={20} /> Surveys (NPS/CSAT)
+        </NavLink>
+        <NavLink to="/payments" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <CreditCard size={20} /> Payments
+        </NavLink>
+        <NavLink to="/approvals" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <CheckSquare size={20} /> Approvals
+        </NavLink>
+        <NavLink to="/territories" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Network size={20} /> Territories
+        </NavLink>
+        <NavLink to="/lead-routing" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Send size={20} /> Lead Routing
+        </NavLink>
+        <NavLink to="/sla" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Target size={20} /> SLA Policies
         </NavLink>
         <NavLink to="/tasks" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <CheckSquare size={20} /> Task Queue

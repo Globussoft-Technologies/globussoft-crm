@@ -1,15 +1,13 @@
 {
-  "short_name": "Globussoft",
-  "name": "Globussoft Enterprise CRM",
-  "icons": [
-    {
-      "src": "/vite.svg",
-      "type": "image/svg+xml",
-      "sizes": "512x512"
-    }
-  ],
-  "start_url": "/",
+  "name": "Globussoft CRM",
+  "short_name": "Globus CRM",
+  "description": "Enterprise CRM by Globussoft",
+  "start_url": "/dashboard",
   "display": "standalone",
-  "theme_color": "#0f172a",
-  "background_color": "#0f172a"
+  "background_color": "#0f172a",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/favicon.ico", "sizes": "64x64 32x32 24x24 16x16", "type": "image/x-icon" }
+  ]
 }

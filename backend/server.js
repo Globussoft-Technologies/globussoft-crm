@@ -134,6 +134,40 @@ const voiceRoutes = require("./routes/voice");
 const emailInboundRoutes = require("./routes/email_inbound");
 const gdprRoutes = require("./routes/gdpr");
 const auditViewerRoutes = require("./routes/audit_viewer");
+// Tier 1
+const pipelinesRoutes = require("./routes/pipelines");
+const forecastingRoutes = require("./routes/forecasting");
+const dashboardsRoutes = require("./routes/dashboards");
+const customReportsRoutes = require("./routes/custom_reports");
+const bookingPagesRoutes = require("./routes/booking_pages");
+const signaturesRoutes = require("./routes/signatures");
+const knowledgeBaseRoutes = require("./routes/knowledge_base");
+const portalRoutes = require("./routes/portal");
+const currenciesRoutes = require("./routes/currencies");
+const fieldPermissionsRoutes = require("./routes/field_permissions");
+const emailSchedulingRoutes = require("./routes/email_scheduling");
+// Tier 2
+const leadRoutingRoutes = require("./routes/lead_routing");
+const territoriesRoutes = require("./routes/territories");
+const quotasRoutes = require("./routes/quotas");
+const winLossRoutes = require("./routes/win_loss");
+const attributionRoutes = require("./routes/attribution");
+const abTestsRoutes = require("./routes/ab_tests");
+const webVisitorsRoutes = require("./routes/web_visitors");
+const chatbotsRoutes = require("./routes/chatbots");
+const approvalsRoutes = require("./routes/approvals");
+const documentTemplatesRoutes = require("./routes/document_templates");
+const surveysRoutes = require("./routes/surveys");
+const paymentsRoutes = require("./routes/payments");
+const accountingRoutes = require("./routes/accounting");
+const dealInsightsRoutes = require("./routes/deal_insights");
+const dataEnrichmentRoutes = require("./routes/data_enrichment");
+const slaRoutes = require("./routes/sla");
+const cannedResponsesRoutes = require("./routes/canned_responses");
+// Tier 3
+const scimRoutes = require("./routes/scim");
+const sharedInboxRoutes = require("./routes/shared_inbox");
+const sentimentRoutes = require("./routes/sentiment");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -144,7 +178,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, next);
 });
@@ -197,6 +231,40 @@ app.use("/api/voice", voiceRoutes);
 app.use("/api/email/inbound", emailInboundRoutes);
 app.use("/api/gdpr", gdprRoutes);
 app.use("/api/audit-viewer", auditViewerRoutes);
+// Tier 1
+app.use("/api/pipelines", pipelinesRoutes);
+app.use("/api/forecasting", forecastingRoutes);
+app.use("/api/dashboards", dashboardsRoutes);
+app.use("/api/custom-reports", customReportsRoutes);
+app.use("/api/booking-pages", bookingPagesRoutes);
+app.use("/api/signatures", signaturesRoutes);
+app.use("/api/knowledge-base", knowledgeBaseRoutes);
+app.use("/api/portal", portalRoutes);
+app.use("/api/currencies", currenciesRoutes);
+app.use("/api/field-permissions", fieldPermissionsRoutes);
+app.use("/api/email-scheduling", emailSchedulingRoutes);
+// Tier 2
+app.use("/api/lead-routing", leadRoutingRoutes);
+app.use("/api/territories", territoriesRoutes);
+app.use("/api/quotas", quotasRoutes);
+app.use("/api/win-loss", winLossRoutes);
+app.use("/api/attribution", attributionRoutes);
+app.use("/api/ab-tests", abTestsRoutes);
+app.use("/api/web-visitors", webVisitorsRoutes);
+app.use("/api/chatbots", chatbotsRoutes);
+app.use("/api/approvals", approvalsRoutes);
+app.use("/api/document-templates", documentTemplatesRoutes);
+app.use("/api/surveys", surveysRoutes);
+app.use("/api/payments", paymentsRoutes);
+app.use("/api/accounting", accountingRoutes);
+app.use("/api/deal-insights", dealInsightsRoutes);
+app.use("/api/data-enrichment", dataEnrichmentRoutes);
+app.use("/api/sla", slaRoutes);
+app.use("/api/canned-responses", cannedResponsesRoutes);
+// Tier 3
+app.use("/api/scim", scimRoutes);
+app.use("/api/shared-inbox", sharedInboxRoutes);
+app.use("/api/sentiment", sentimentRoutes);
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
@@ -258,5 +326,17 @@ initMarketplaceCron(io);
 // Initialize GDPR Retention Engine (runs daily at 3 AM)
 const { initRetentionCron } = require('./cron/retentionEngine');
 initRetentionCron();
+
+// Initialize Scheduled Email Engine (runs every minute)
+const { initScheduledEmailCron } = require('./cron/scheduledEmailEngine');
+initScheduledEmailCron();
+
+// Initialize Sentiment Analysis Engine (runs every 15 min)
+const { initSentimentCron } = require('./cron/sentimentEngine');
+initSentimentCron();
+
+// Initialize AI Deal Insights Engine (runs every 6 hours)
+const { initDealInsightsCron } = require('./cron/dealInsightsEngine');
+initDealInsightsCron(io);
 
 // nodemon restart trigger

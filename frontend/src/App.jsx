@@ -44,6 +44,29 @@ const AuditLog = lazy(() => import('./pages/AuditLog'));
 const Privacy = lazy(() => import('./pages/Privacy'));
 const CalendarSync = lazy(() => import('./pages/CalendarSync'));
 const Profile2FA = lazy(() => import('./pages/Profile2FA'));
+const Pipelines = lazy(() => import('./pages/Pipelines'));
+const Forecasting = lazy(() => import('./pages/Forecasting'));
+const Dashboards = lazy(() => import('./pages/Dashboards'));
+const CustomReports = lazy(() => import('./pages/CustomReports'));
+const BookingPages = lazy(() => import('./pages/BookingPages'));
+const Signatures = lazy(() => import('./pages/Signatures'));
+const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'));
+const Currencies = lazy(() => import('./pages/Currencies'));
+const FieldPermissions = lazy(() => import('./pages/FieldPermissions'));
+const LeadRouting = lazy(() => import('./pages/LeadRouting'));
+const Territories = lazy(() => import('./pages/Territories'));
+const Quotas = lazy(() => import('./pages/Quotas'));
+const WinLoss = lazy(() => import('./pages/WinLoss'));
+const AbTests = lazy(() => import('./pages/AbTests'));
+const WebVisitors = lazy(() => import('./pages/WebVisitors'));
+const Chatbots = lazy(() => import('./pages/Chatbots'));
+const Approvals = lazy(() => import('./pages/Approvals'));
+const DocumentTemplates = lazy(() => import('./pages/DocumentTemplates'));
+const Surveys = lazy(() => import('./pages/Surveys'));
+const Payments = lazy(() => import('./pages/Payments'));
+const DealInsights = lazy(() => import('./pages/DealInsights'));
+const SharedInbox = lazy(() => import('./pages/SharedInbox'));
+const SLA = lazy(() => import('./pages/SLA'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -129,6 +152,29 @@ export default function App() {
               <Route path="audit-log" element={<AuditLog />} />
               <Route path="privacy" element={<Privacy />} />
               <Route path="calendar-sync" element={<CalendarSync />} />
+              <Route path="pipelines" element={<Pipelines />} />
+              <Route path="forecasting" element={<Forecasting />} />
+              <Route path="dashboards" element={<Dashboards />} />
+              <Route path="custom-reports" element={<CustomReports />} />
+              <Route path="booking-pages" element={<BookingPages />} />
+              <Route path="signatures" element={<Signatures />} />
+              <Route path="knowledge-base" element={<KnowledgeBase />} />
+              <Route path="currencies" element={<Currencies />} />
+              <Route path="field-permissions" element={<FieldPermissions />} />
+              <Route path="lead-routing" element={<LeadRouting />} />
+              <Route path="territories" element={<Territories />} />
+              <Route path="quotas" element={<Quotas />} />
+              <Route path="win-loss" element={<WinLoss />} />
+              <Route path="ab-tests" element={<AbTests />} />
+              <Route path="web-visitors" element={<WebVisitors />} />
+              <Route path="chatbots" element={<Chatbots />} />
+              <Route path="approvals" element={<Approvals />} />
+              <Route path="document-templates" element={<DocumentTemplates />} />
+              <Route path="surveys" element={<Surveys />} />
+              <Route path="payments" element={<Payments />} />
+              <Route path="deal-insights" element={<DealInsights />} />
+              <Route path="shared-inbox" element={<SharedInbox />} />
+              <Route path="sla" element={<SLA />} />
             </Route>
           </Routes>
         </Suspense>

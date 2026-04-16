@@ -78,6 +78,11 @@ model User {
   twoFactorSecret  String?
   backupCodes      String? @db.Text // JSON array of hashed codes
 
+  // Personalization
+  emailSignature   String? @db.Text
+  language         String  @default("en")
+  timezone         String  @default("UTC")
+
   // SSO
   googleId    String? @unique
   microsoftId String? @unique
@@ -116,6 +121,24 @@ model Contact {
   status      String     @default("Lead") // Lead, Prospect, Customer, Churned
   source      String?    @default("Organic")
   aiScore     Int        @default(0) // 1-100 predictive close probability
+
+  // Data enrichment
+  industry      String?
+  companySize   String?
+  linkedin      String?
+  website       String?
+  lastEnrichedAt DateTime?
+
+  // Marketing attribution
+  firstTouchSource String?
+  lastTouchSource  String?
+
+  // Territory
+  territoryId   Int?
+
+  // Customer portal
+  portalPasswordHash String?
+
   createdAt   DateTime   @default(now())
 
   tenantId    Int        @default(1)
@@ -161,9 +184,13 @@ model Deal {
   id            Int      @id @default(autoincrement())
   title         String
   amount        Float    @default(0.0)
+  currency      String   @default("USD")
   probability   Int      @default(50)
   stage         String   @default("lead") // lead, contacted, proposal, won, lost
+  pipelineId    Int?     // links to Pipeline.id
   expectedClose DateTime?
+  lostReason    String?
+  winLossReasonId Int?
   createdAt     DateTime @default(now())
 
   tenantId      Int      @default(1)
@@ -188,6 +215,10 @@ model Ticket {
   description String?
   status      String   @default("Open") // Open, Pending, Resolved, Closed
   priority    String   @default("Low") // Low, Medium, High, Urgent
+  slaResponseDue DateTime?
+  slaResolveDue  DateTime?
+  firstResponseAt DateTime?
+  resolvedAt     DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -236,6 +267,9 @@ model EmailMessage {
   to        String
   direction String   @default("INBOUND") // INBOUND, OUTBOUND
   read      Boolean  @default(false)
+  sentiment String?  // positive, neutral, negative
+  sentimentScore Float? // -1 to 1
+  threadId  String?  // for conversation threading
   createdAt DateTime @default(now())
 
   tenantId  Int      @default(1)
@@ -1089,4 +1123,442 @@ model VoiceSession {
   tenantId    Int      @default(1)
   createdAt   DateTime @default(now())
   endedAt     DateTime?
+}
+
+// ── Multiple Sales Pipelines ─────────────────────────────────────
+
+model Pipeline {
+  id          Int      @id @default(autoincrement())
+  name        String
+  isDefault   Boolean  @default(false)
+  description String?
+  tenantId    Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ── Forecasting + Win/Loss ───────────────────────────────────────
+
+model Forecast {
+  id              Int      @id @default(autoincrement())
+  period          String   // "2026-Q1", "2026-04"
+  expectedRevenue Float    @default(0)
+  committedRevenue Float   @default(0)
+  bestCaseRevenue  Float   @default(0)
+  closedRevenue   Float    @default(0)
+  userId          Int?
+  tenantId        Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model WinLossReason {
+  id        Int      @id @default(autoincrement())
+  type      String   // "won" or "lost"
+  reason    String
+  count     Int      @default(0)
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+}
+
+// ── Sales Quotas ─────────────────────────────────────────────────
+
+model Quota {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  period    String   // "2026-Q1"
+  target    Float
+  achieved  Float    @default(0)
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([userId, period, tenantId])
+}
+
+// ── Lead Routing ─────────────────────────────────────────────────
+
+model LeadRoutingRule {
+  id         Int      @id @default(autoincrement())
+  name       String
+  conditions String   @db.Text // JSON
+  assignType String   @default("round_robin") // round_robin, specific_user, territory
+  assignTo   Int?     // userId if specific_user
+  priority   Int      @default(100)
+  isActive   Boolean  @default(true)
+  tenantId   Int      @default(1)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// ── Territory Management ─────────────────────────────────────────
+
+model Territory {
+  id            Int      @id @default(autoincrement())
+  name          String
+  regions       String?  @db.Text // JSON array
+  assignedUserIds String?  @db.Text // JSON array
+  tenantId      Int      @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ── Approval Workflows ───────────────────────────────────────────
+
+model ApprovalRequest {
+  id          Int      @id @default(autoincrement())
+  entity      String   // "Deal", "Quote", "Discount", etc.
+  entityId    Int
+  reason      String?
+  status      String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  requestedBy Int
+  approvedBy  Int?
+  comment     String?
+  requestedAt DateTime @default(now())
+  approvedAt  DateTime?
+  tenantId    Int      @default(1)
+}
+
+// ── A/B Testing ──────────────────────────────────────────────────
+
+model AbTest {
+  id              Int      @id @default(autoincrement())
+  name            String
+  campaignId      Int?
+  variantA        String   @db.Text // JSON
+  variantB        String   @db.Text // JSON
+  variantASent    Int      @default(0)
+  variantBSent    Int      @default(0)
+  variantAClicked Int      @default(0)
+  variantBClicked Int      @default(0)
+  winningVariant  String?  // "A" or "B"
+  status          String   @default("DRAFT") // DRAFT, RUNNING, COMPLETED
+  tenantId        Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ── Marketing Attribution ────────────────────────────────────────
+
+model Touchpoint {
+  id         Int      @id @default(autoincrement())
+  contactId  Int
+  channel    String   // "email", "social", "search", "direct", etc.
+  campaignId Int?
+  source     String?
+  medium     String?
+  url        String?
+  timestamp  DateTime @default(now())
+  tenantId   Int      @default(1)
+}
+
+// ── Web Visitor Tracking ─────────────────────────────────────────
+
+model WebVisitor {
+  id         Int      @id @default(autoincrement())
+  sessionId  String   @unique
+  ipAddress  String?
+  userAgent  String?  @db.Text
+  country    String?
+  city       String?
+  pages      String?  @db.LongText // JSON array of {url, timestamp}
+  contactId  Int?
+  identified Boolean  @default(false)
+  firstSeen  DateTime @default(now())
+  lastSeen   DateTime @default(now())
+  tenantId   Int      @default(1)
+}
+
+// ── Chatbot ──────────────────────────────────────────────────────
+
+model Chatbot {
+  id        Int      @id @default(autoincrement())
+  name      String
+  flow      String   @db.LongText // JSON node graph
+  isActive  Boolean  @default(false)
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ChatbotConversation {
+  id         Int      @id @default(autoincrement())
+  chatbotId  Int
+  visitorId  String   // links to WebVisitor.sessionId
+  messages   String   @db.LongText // JSON
+  contactId  Int?
+  status     String   @default("ACTIVE") // ACTIVE, COMPLETED, ABANDONED
+  tenantId   Int      @default(1)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// ── Knowledge Base ───────────────────────────────────────────────
+
+model KbCategory {
+  id        Int      @id @default(autoincrement())
+  name      String
+  slug      String
+  parentId  Int?
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+  @@unique([slug, tenantId])
+}
+
+model KbArticle {
+  id          Int      @id @default(autoincrement())
+  title       String
+  slug        String
+  content     String   @db.LongText
+  categoryId  Int?
+  isPublished Boolean  @default(false)
+  views       Int      @default(0)
+  tenantId    Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@unique([slug, tenantId])
+}
+
+// ── SLA Management ───────────────────────────────────────────────
+
+model SlaPolicy {
+  id              Int      @id @default(autoincrement())
+  name            String
+  priority        String   // Low, Medium, High, Urgent
+  responseMinutes Int      // first response target
+  resolveMinutes  Int      // resolution target
+  isActive        Boolean  @default(true)
+  tenantId        Int      @default(1)
+  createdAt       DateTime @default(now())
+}
+
+model CannedResponse {
+  id        Int      @id @default(autoincrement())
+  name      String
+  content   String   @db.Text
+  category  String   @default("General")
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── NPS / CSAT Surveys ───────────────────────────────────────────
+
+model Survey {
+  id        Int      @id @default(autoincrement())
+  name      String
+  type      String   @default("NPS") // NPS, CSAT, CUSTOM
+  question  String
+  isActive  Boolean  @default(true)
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SurveyResponse {
+  id          Int      @id @default(autoincrement())
+  surveyId    Int
+  contactId   Int?
+  score       Int      // 0-10 for NPS, 1-5 for CSAT
+  comment     String?  @db.Text
+  respondedAt DateTime @default(now())
+  tenantId    Int      @default(1)
+}
+
+// ── E-Signature ──────────────────────────────────────────────────
+
+model SignatureRequest {
+  id         Int      @id @default(autoincrement())
+  documentType String  // "Contract", "Estimate", "Quote", "Custom"
+  documentId Int
+  signerName String
+  signerEmail String
+  signature  String?  @db.LongText // base64 data URL once signed
+  signedAt   DateTime?
+  status     String   @default("PENDING") // PENDING, SIGNED, DECLINED, EXPIRED
+  signToken  String   @unique // unique URL token for signer
+  tenantId   Int      @default(1)
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime?
+}
+
+// ── Document Templates ───────────────────────────────────────────
+
+model DocumentTemplate {
+  id        Int      @id @default(autoincrement())
+  name      String
+  type      String   @default("PROPOSAL") // PROPOSAL, NDA, CONTRACT, EMAIL
+  content   String   @db.LongText // HTML with {{variable}} placeholders
+  variables String?  @db.Text // JSON list of expected vars
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── Meeting Scheduler ────────────────────────────────────────────
+
+model BookingPage {
+  id           Int      @id @default(autoincrement())
+  slug         String   @unique
+  title        String
+  description  String?
+  ownerId      Int
+  durationMins Int      @default(30)
+  bufferMins   Int      @default(0)
+  availability String   @db.Text // JSON: weekly schedule
+  isActive     Boolean  @default(true)
+  tenantId     Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Booking {
+  id            Int      @id @default(autoincrement())
+  bookingPageId Int
+  contactName   String
+  contactEmail  String
+  contactPhone  String?
+  scheduledAt   DateTime
+  durationMins  Int
+  meetingUrl    String?
+  notes         String?
+  status        String   @default("CONFIRMED") // CONFIRMED, CANCELED, COMPLETED
+  contactId     Int?
+  tenantId      Int      @default(1)
+  createdAt     DateTime @default(now())
+}
+
+// ── Email Scheduling + Signatures ────────────────────────────────
+
+model ScheduledEmail {
+  id           Int      @id @default(autoincrement())
+  to           String
+  subject      String
+  body         String   @db.Text
+  scheduledFor DateTime
+  status       String   @default("PENDING") // PENDING, SENT, FAILED, CANCELED
+  sentAt       DateTime?
+  errorMessage String?
+  contactId    Int?
+  userId       Int?
+  tenantId     Int      @default(1)
+  createdAt    DateTime @default(now())
+}
+
+// ── Custom Dashboards ────────────────────────────────────────────
+
+model Dashboard {
+  id        Int      @id @default(autoincrement())
+  name      String
+  isDefault Boolean  @default(false)
+  layout    String   @db.LongText // JSON: array of widgets {type, x, y, w, h, config}
+  userId    Int?
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── Custom Reports ───────────────────────────────────────────────
+
+model CustomReport {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  config      String   @db.LongText // JSON: entity, filters, columns, groupBy, chartType
+  userId      Int?
+  tenantId    Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ── Multi-Currency ───────────────────────────────────────────────
+
+model Currency {
+  id           Int      @id @default(autoincrement())
+  code         String   // "USD", "INR", "EUR"
+  symbol       String
+  name         String
+  exchangeRate Float    @default(1.0) // relative to base
+  isBase       Boolean  @default(false)
+  tenantId     Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  @@unique([code, tenantId])
+}
+
+// ── Field-Level Permissions ──────────────────────────────────────
+
+model FieldPermission {
+  id        Int      @id @default(autoincrement())
+  role      String   // ADMIN, MANAGER, USER
+  entity    String   // Deal, Contact, etc.
+  field     String   // amount, email, etc.
+  canRead   Boolean  @default(true)
+  canWrite  Boolean  @default(true)
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+  @@unique([role, entity, field, tenantId])
+}
+
+// ── Payments (Stripe + Razorpay) ─────────────────────────────────
+
+model Payment {
+  id          Int      @id @default(autoincrement())
+  invoiceId   Int?
+  amount      Float
+  currency    String   @default("USD")
+  gateway     String   // stripe, razorpay
+  gatewayId   String?  // their charge/payment ID
+  status      String   @default("PENDING") // PENDING, SUCCESS, FAILED, REFUNDED
+  paidAt      DateTime?
+  metadata    String?  @db.Text
+  tenantId    Int      @default(1)
+  createdAt   DateTime @default(now())
+}
+
+// ── Accounting Sync ──────────────────────────────────────────────
+
+model AccountingSync {
+  id          Int      @id @default(autoincrement())
+  provider    String   // quickbooks, xero, tally
+  entityType  String   // Invoice, Expense, Customer
+  entityId    Int
+  externalId  String   // ID in external system
+  syncedAt    DateTime @default(now())
+  tenantId    Int      @default(1)
+  @@unique([provider, entityType, entityId, tenantId])
+}
+
+// ── AI Deal Insights ─────────────────────────────────────────────
+
+model DealInsight {
+  id          Int      @id @default(autoincrement())
+  dealId      Int
+  type        String   // RISK, OPPORTUNITY, NEXT_BEST_ACTION
+  insight     String   @db.Text
+  severity    String   @default("INFO") // INFO, WARNING, CRITICAL
+  isResolved  Boolean  @default(false)
+  generatedAt DateTime @default(now())
+  tenantId    Int      @default(1)
+}
+
+// ── Group / Shared Inbox ─────────────────────────────────────────
+
+model SharedInbox {
+  id        Int      @id @default(autoincrement())
+  name      String
+  emailAddress String  @unique
+  members   String?  @db.Text // JSON array of userIds
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+}
+
+// ── SCIM ─────────────────────────────────────────────────────────
+
+model ScimToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  name      String
+  lastUsed  DateTime?
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
 }

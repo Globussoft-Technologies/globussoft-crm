@@ -27,12 +27,26 @@ async function main() {
     'Activity', 'Task', 'Expense', 'Invoice', 'Contract', 'Project',
     'Deal', 'Ticket', 'Campaign', 'AutomationRule', 'Integration',
     'Webhook', 'ApiKey', 'Contact', 'User',
+    'Tenant',
   ];
   for (const table of tables) {
-    await prisma.$executeRawUnsafe(`TRUNCATE TABLE \`${table}\``);
+    try { await prisma.$executeRawUnsafe(`TRUNCATE TABLE \`${table}\``); } catch (e) { /* table may not exist yet */ }
   }
   await prisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 1');
   console.log('  All tables truncated.\n');
+
+  // Create the Default Org tenant (id=1) so all default tenantId references resolve
+  await prisma.tenant.create({
+    data: {
+      id: 1,
+      name: 'NovaCrest Technologies',
+      slug: 'novacrest',
+      plan: 'enterprise',
+      ownerEmail: 'admin@globussoft.com',
+      isActive: true,
+    },
+  });
+  console.log('  Default Org tenant created (id=1).\n');
 
   // ══════════════════════════════════════════════════════════════
   // STEP 2: USERS — The NovaCrest team

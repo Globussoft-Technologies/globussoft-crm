@@ -11,15 +11,15 @@ router.post("/click-to-call", verifyToken, async (req, res) => {
     const { to, contactId } = req.body;
     if (!to) return res.status(400).json({ error: "Destination number (to) is required" });
 
-    // Get active telephony config
-    const config = await prisma.telephonyConfig.findFirst({ where: { isActive: true } });
+    // Get active telephony config for this tenant
+    const config = await prisma.telephonyConfig.findFirst({ where: { isActive: true, tenantId: req.user.tenantId } });
     if (!config) return res.status(400).json({ error: "No active telephony provider configured" });
 
     // Lookup contact if not provided
     let resolvedContactId = contactId || null;
     if (!resolvedContactId) {
       const contact = await lookupContact(to, prisma);
-      if (contact) resolvedContactId = contact.id;
+      if (contact && contact.tenantId === req.user.tenantId) resolvedContactId = contact.id;
     }
 
     const result = await initiateCall({
@@ -42,7 +42,8 @@ router.post("/click-to-call", verifyToken, async (req, res) => {
         status: result.success ? "INITIATED" : "FAILED",
         notes: result.success ? null : result.error,
         contactId: resolvedContactId,
-        userId: req.user.id,
+        userId: req.user.userId,
+        tenantId: req.user.tenantId,
       },
     });
 
@@ -58,6 +59,7 @@ router.post("/click-to-call", verifyToken, async (req, res) => {
 });
 
 // POST /webhook/myoperator — MyOperator CDR webhook (no auth)
+// Tenant is inferred from the existing call log or contact, defaulting to 1.
 router.post("/webhook/myoperator", async (req, res) => {
   try {
     const data = req.body;
@@ -69,15 +71,14 @@ router.post("/webhook/myoperator", async (req, res) => {
     const providerCallId = data.call_id || data.id || null;
     const direction = data.direction === "inbound" || data.type === "incoming" ? "INBOUND" : "OUTBOUND";
 
-    // Try to find existing call log by provider call ID
     let callLog = null;
     if (providerCallId) {
       callLog = await prisma.callLog.findFirst({ where: { providerCallId } });
     }
 
-    // Lookup contact
     const contactPhone = direction === "INBOUND" ? caller : callee;
     const contact = contactPhone ? await lookupContact(contactPhone, prisma) : null;
+    const tenantId = callLog?.tenantId || contact?.tenantId || 1;
 
     if (callLog) {
       callLog = await prisma.callLog.update({
@@ -103,11 +104,11 @@ router.post("/webhook/myoperator", async (req, res) => {
           provider: "myoperator",
           providerCallId,
           contactId: contact ? contact.id : null,
+          tenantId,
         },
       });
     }
 
-    // Emit socket events
     if (req.io) {
       if (direction === "INBOUND" && (status === "ringing" || status === "incoming")) {
         req.io.emit("incoming_call", { callLog, contact });
@@ -142,6 +143,7 @@ router.post("/webhook/knowlarity", async (req, res) => {
 
     const contactPhone = direction === "INBOUND" ? caller : callee;
     const contact = contactPhone ? await lookupContact(contactPhone, prisma) : null;
+    const tenantId = callLog?.tenantId || contact?.tenantId || 1;
 
     if (callLog) {
       callLog = await prisma.callLog.update({
@@ -167,6 +169,7 @@ router.post("/webhook/knowlarity", async (req, res) => {
           provider: "knowlarity",
           providerCallId,
           contactId: contact ? contact.id : null,
+          tenantId,
         },
       });
     }
@@ -187,9 +190,10 @@ router.post("/webhook/knowlarity", async (req, res) => {
 });
 
 // GET /config — Get telephony configs (ADMIN only)
-router.get("/config", verifyToken, verifyRole("ADMIN"), async (req, res) => {
+router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const configs = await prisma.telephonyConfig.findMany({
+      where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
     });
     // Mask secrets in response
@@ -206,7 +210,7 @@ router.get("/config", verifyToken, verifyRole("ADMIN"), async (req, res) => {
 });
 
 // PUT /config/:provider — Upsert telephony config (ADMIN only)
-router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, res) => {
+router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { provider } = req.params;
     const { apiKey, apiSecret, virtualNumber, agentNumber, isActive, settings } = req.body;
@@ -216,7 +220,7 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
     }
 
     const config = await prisma.telephonyConfig.upsert({
-      where: { provider: provider.toLowerCase() },
+      where: { tenantId_provider: { tenantId: req.user.tenantId, provider: provider.toLowerCase() } },
       update: {
         ...(apiKey !== undefined && { apiKey }),
         ...(apiSecret !== undefined && { apiSecret }),
@@ -233,6 +237,7 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
         agentNumber: agentNumber || "",
         isActive: isActive !== undefined ? isActive : true,
         settings: settings ? (typeof settings === "string" ? settings : JSON.stringify(settings)) : null,
+        tenantId: req.user.tenantId,
       },
     });
 
@@ -243,11 +248,11 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
   }
 });
 
-// GET /recordings/:callLogId — Get recording URL
+// GET /recordings/:callLogId
 router.get("/recordings/:callLogId", verifyToken, async (req, res) => {
   try {
-    const callLog = await prisma.callLog.findUnique({
-      where: { id: parseInt(req.params.callLogId, 10) },
+    const callLog = await prisma.callLog.findFirst({
+      where: { id: parseInt(req.params.callLogId, 10), tenantId: req.user.tenantId },
     });
 
     if (!callLog) return res.status(404).json({ error: "Call log not found" });

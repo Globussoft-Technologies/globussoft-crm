@@ -5,9 +5,11 @@ const PDFDocument = require("pdfkit");
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// ─── Helper: Date range filter ───
-function dateFilter(startDate, endDate) {
-  const where = {};
+// All queries are scoped to req.user.tenantId
+
+// ─── Helper: Date range filter (with tenant) ───
+function buildWhere(req, startDate, endDate, extra = {}) {
+  const where = { tenantId: req.user.tenantId, ...extra };
   if (startDate || endDate) {
     where.createdAt = {};
     if (startDate) where.createdAt.gte = new Date(startDate);
@@ -20,12 +22,12 @@ function dateFilter(startDate, endDate) {
 router.get("/query", async (req, res) => {
   try {
     const { metric = "revenue", groupBy = "stage", startDate, endDate } = req.query;
-    const dateWhere = dateFilter(startDate, endDate);
+    const tenantId = req.user.tenantId;
 
     if (metric === "revenue") {
       const data = await prisma.deal.groupBy({
         by: [groupBy],
-        where: dateWhere,
+        where: buildWhere(req, startDate, endDate),
         _sum: { amount: true }
       });
       const formatted = data.map(d => ({
@@ -38,7 +40,7 @@ router.get("/query", async (req, res) => {
     if (metric === "count") {
       const data = await prisma.deal.groupBy({
         by: [groupBy],
-        where: dateWhere,
+        where: buildWhere(req, startDate, endDate),
         _count: { id: true }
       });
       const formatted = data.map(d => ({
@@ -49,9 +51,10 @@ router.get("/query", async (req, res) => {
     }
 
     if (metric === "win_rate") {
-      const total = await prisma.deal.count({ where: dateWhere });
-      const won = await prisma.deal.count({ where: { ...dateWhere, stage: 'won' } });
-      const lost = await prisma.deal.count({ where: { ...dateWhere, stage: 'lost' } });
+      const baseWhere = buildWhere(req, startDate, endDate);
+      const total = await prisma.deal.count({ where: baseWhere });
+      const won = await prisma.deal.count({ where: { ...baseWhere, stage: 'won' } });
+      const lost = await prisma.deal.count({ where: { ...baseWhere, stage: 'lost' } });
       return res.json([
         { name: 'Won', value: won },
         { name: 'Lost', value: lost },
@@ -62,68 +65,52 @@ router.get("/query", async (req, res) => {
     if (metric === "tasks") {
       const data = await prisma.task.groupBy({
         by: ['status'],
-        where: dateWhere,
+        where: buildWhere(req, startDate, endDate),
         _count: { id: true }
       });
-      const formatted = data.map(d => ({
-        name: d.status,
-        value: d._count.id
-      }));
+      const formatted = data.map(d => ({ name: d.status, value: d._count.id }));
       return res.json(formatted);
     }
 
     if (metric === "contacts_by_source") {
       const data = await prisma.contact.groupBy({
         by: ['source'],
-        where: dateWhere,
+        where: buildWhere(req, startDate, endDate),
         _count: { id: true }
       });
-      const formatted = data.map(d => ({
-        name: d.source || 'Unknown',
-        value: d._count.id
-      }));
+      const formatted = data.map(d => ({ name: d.source || 'Unknown', value: d._count.id }));
       return res.json(formatted);
     }
 
     if (metric === "contacts_by_status") {
       const data = await prisma.contact.groupBy({
         by: ['status'],
-        where: dateWhere,
+        where: buildWhere(req, startDate, endDate),
         _count: { id: true }
       });
-      const formatted = data.map(d => ({
-        name: d.status,
-        value: d._count.id
-      }));
+      const formatted = data.map(d => ({ name: d.status, value: d._count.id }));
       return res.json(formatted);
     }
 
     if (metric === "invoices") {
       const data = await prisma.invoice.groupBy({
         by: ['status'],
+        where: { tenantId },
         _sum: { amount: true },
         _count: { id: true }
       });
-      const formatted = data.map(d => ({
-        name: d.status,
-        value: d._sum.amount || 0,
-        count: d._count.id
-      }));
+      const formatted = data.map(d => ({ name: d.status, value: d._sum.amount || 0, count: d._count.id }));
       return res.json(formatted);
     }
 
     if (metric === "expenses") {
       const data = await prisma.expense.groupBy({
         by: ['category'],
-        where: dateWhere,
+        where: buildWhere(req, startDate, endDate),
         _sum: { amount: true },
         _count: { id: true }
       });
-      const formatted = data.map(d => ({
-        name: d.category,
-        value: d._sum.amount || 0,
-        count: d._count.id
-      }));
+      const formatted = data.map(d => ({ name: d.category, value: d._sum.amount || 0, count: d._count.id }));
       return res.json(formatted);
     }
 
@@ -138,20 +125,21 @@ router.get("/query", async (req, res) => {
 router.get("/agent-performance", async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const dateWhere = dateFilter(startDate, endDate);
+    const tenantId = req.user.tenantId;
 
-    const users = await prisma.user.findMany({ select: { id: true, name: true, email: true, role: true } });
+    const users = await prisma.user.findMany({ where: { tenantId }, select: { id: true, name: true, email: true, role: true } });
 
     const agentStats = await Promise.all(users.map(async (user) => {
+      const baseWhere = buildWhere(req, startDate, endDate);
       const [dealsWon, totalRevenue, dealsTotal, tasksCompleted, tasksTotal, callsMade, emailsSent, contactsAssigned] = await Promise.all([
-        prisma.deal.count({ where: { ownerId: user.id, stage: 'won', ...dateWhere } }),
-        prisma.deal.aggregate({ where: { ownerId: user.id, stage: 'won', ...dateWhere }, _sum: { amount: true } }),
-        prisma.deal.count({ where: { ownerId: user.id, ...dateWhere } }),
-        prisma.task.count({ where: { userId: user.id, status: 'Completed', ...dateWhere } }),
-        prisma.task.count({ where: { userId: user.id, ...dateWhere } }),
-        prisma.callLog.count({ where: { userId: user.id, ...dateWhere } }),
-        prisma.emailMessage.count({ where: { userId: user.id, direction: 'OUTBOUND', ...dateWhere } }),
-        prisma.contact.count({ where: { assignedToId: user.id } }),
+        prisma.deal.count({ where: { ...baseWhere, ownerId: user.id, stage: 'won' } }),
+        prisma.deal.aggregate({ where: { ...baseWhere, ownerId: user.id, stage: 'won' }, _sum: { amount: true } }),
+        prisma.deal.count({ where: { ...baseWhere, ownerId: user.id } }),
+        prisma.task.count({ where: { ...baseWhere, userId: user.id, status: 'Completed' } }),
+        prisma.task.count({ where: { ...baseWhere, userId: user.id } }),
+        prisma.callLog.count({ where: { ...baseWhere, userId: user.id } }),
+        prisma.emailMessage.count({ where: { ...baseWhere, userId: user.id, direction: 'OUTBOUND' } }),
+        prisma.contact.count({ where: { tenantId, assignedToId: user.id } }),
       ]);
 
       return {
@@ -171,7 +159,6 @@ router.get("/agent-performance", async (req, res) => {
       };
     }));
 
-    // Sort by revenue descending
     agentStats.sort((a, b) => b.revenue - a.revenue);
     res.json(agentStats);
   } catch (err) {
@@ -185,17 +172,18 @@ router.get("/agent/:userId", async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
     const { startDate, endDate } = req.query;
-    const dateWhere = dateFilter(startDate, endDate);
+    const tenantId = req.user.tenantId;
 
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, email: true, role: true } });
+    const user = await prisma.user.findFirst({ where: { id: userId, tenantId }, select: { id: true, name: true, email: true, role: true } });
     if (!user) return res.status(404).json({ error: 'Agent not found' });
 
+    const baseWhere = buildWhere(req, startDate, endDate);
     const [deals, tasks, calls, emails, contacts] = await Promise.all([
-      prisma.deal.findMany({ where: { ownerId: userId, ...dateWhere }, include: { contact: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take: 20 }),
-      prisma.task.findMany({ where: { userId, ...dateWhere }, orderBy: { createdAt: 'desc' }, take: 20 }),
-      prisma.callLog.findMany({ where: { userId, ...dateWhere }, include: { contact: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take: 20 }),
-      prisma.emailMessage.findMany({ where: { userId, direction: 'OUTBOUND', ...dateWhere }, orderBy: { createdAt: 'desc' }, take: 20 }),
-      prisma.contact.findMany({ where: { assignedToId: userId }, select: { id: true, name: true, email: true, status: true, aiScore: true } }),
+      prisma.deal.findMany({ where: { ...baseWhere, ownerId: userId }, include: { contact: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      prisma.task.findMany({ where: { ...baseWhere, userId }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      prisma.callLog.findMany({ where: { ...baseWhere, userId }, include: { contact: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      prisma.emailMessage.findMany({ where: { ...baseWhere, userId, direction: 'OUTBOUND' }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      prisma.contact.findMany({ where: { tenantId, assignedToId: userId }, select: { id: true, name: true, email: true, status: true, aiScore: true } }),
     ]);
 
     res.json({ agent: user, deals, tasks, calls, emails, contacts });
@@ -209,22 +197,23 @@ router.get("/agent/:userId", async (req, res) => {
 router.get("/leaderboard", async (req, res) => {
   try {
     const { metric = "revenue", startDate, endDate } = req.query;
-    const dateWhere = dateFilter(startDate, endDate);
-    const users = await prisma.user.findMany({ select: { id: true, name: true, email: true } });
+    const tenantId = req.user.tenantId;
+    const baseWhere = buildWhere(req, startDate, endDate);
+    const users = await prisma.user.findMany({ where: { tenantId }, select: { id: true, name: true, email: true } });
 
     const rankings = await Promise.all(users.map(async (user) => {
       let value = 0;
       if (metric === 'revenue') {
-        const agg = await prisma.deal.aggregate({ where: { ownerId: user.id, stage: 'won', ...dateWhere }, _sum: { amount: true } });
+        const agg = await prisma.deal.aggregate({ where: { ...baseWhere, ownerId: user.id, stage: 'won' }, _sum: { amount: true } });
         value = agg._sum.amount || 0;
       } else if (metric === 'deals') {
-        value = await prisma.deal.count({ where: { ownerId: user.id, stage: 'won', ...dateWhere } });
+        value = await prisma.deal.count({ where: { ...baseWhere, ownerId: user.id, stage: 'won' } });
       } else if (metric === 'calls') {
-        value = await prisma.callLog.count({ where: { userId: user.id, ...dateWhere } });
+        value = await prisma.callLog.count({ where: { ...baseWhere, userId: user.id } });
       } else if (metric === 'tasks') {
-        value = await prisma.task.count({ where: { userId: user.id, status: 'Completed', ...dateWhere } });
+        value = await prisma.task.count({ where: { ...baseWhere, userId: user.id, status: 'Completed' } });
       } else if (metric === 'emails') {
-        value = await prisma.emailMessage.count({ where: { userId: user.id, direction: 'OUTBOUND', ...dateWhere } });
+        value = await prisma.emailMessage.count({ where: { ...baseWhere, userId: user.id, direction: 'OUTBOUND' } });
       }
       return { id: user.id, name: user.name || user.email, value };
     }));
@@ -242,11 +231,12 @@ router.get("/detailed/:type", async (req, res) => {
   try {
     const { type } = req.params;
     const { startDate, endDate, ownerId, status, limit = '100' } = req.query;
-    const dateWhere = dateFilter(startDate, endDate);
+    const tenantId = req.user.tenantId;
+    const baseWhere = buildWhere(req, startDate, endDate);
     const take = Math.min(parseInt(limit), 500);
 
     if (type === 'deals') {
-      const where = { ...dateWhere };
+      const where = { ...baseWhere };
       if (ownerId) where.ownerId = parseInt(ownerId);
       if (status) where.stage = status;
       const data = await prisma.deal.findMany({
@@ -257,7 +247,7 @@ router.get("/detailed/:type", async (req, res) => {
     }
 
     if (type === 'contacts') {
-      const where = { ...dateWhere };
+      const where = { ...baseWhere };
       if (status) where.status = status;
       const data = await prisma.contact.findMany({
         where, take, orderBy: { createdAt: 'desc' },
@@ -267,7 +257,7 @@ router.get("/detailed/:type", async (req, res) => {
     }
 
     if (type === 'tasks') {
-      const where = { ...dateWhere };
+      const where = { ...baseWhere };
       if (ownerId) where.userId = parseInt(ownerId);
       if (status) where.status = status;
       const data = await prisma.task.findMany({
@@ -278,7 +268,7 @@ router.get("/detailed/:type", async (req, res) => {
     }
 
     if (type === 'calls') {
-      const where = { ...dateWhere };
+      const where = { ...baseWhere };
       if (ownerId) where.userId = parseInt(ownerId);
       const data = await prisma.callLog.findMany({
         where, take, orderBy: { createdAt: 'desc' },
@@ -288,7 +278,7 @@ router.get("/detailed/:type", async (req, res) => {
     }
 
     if (type === 'invoices') {
-      const where = {};
+      const where = { tenantId };
       if (status) where.status = status;
       const data = await prisma.invoice.findMany({
         where, take, orderBy: { issuedDate: 'desc' },
@@ -298,7 +288,7 @@ router.get("/detailed/:type", async (req, res) => {
     }
 
     if (type === 'expenses') {
-      const where = { ...dateWhere };
+      const where = { ...baseWhere };
       if (status) where.status = status;
       const data = await prisma.expense.findMany({
         where, take, orderBy: { createdAt: 'desc' },
@@ -318,16 +308,16 @@ router.get("/detailed/:type", async (req, res) => {
 router.get("/export-csv", async (req, res) => {
   try {
     const { metric = "revenue", groupBy = "stage", startDate, endDate, type } = req.query;
+    const tenantId = req.user.tenantId;
+    const baseWhere = buildWhere(req, startDate, endDate);
 
-    // If type is specified, export detailed data as CSV
     if (type) {
       const { ownerId, status } = req.query;
-      const dateWhere = dateFilter(startDate, endDate);
       let rows = [];
       let headers = [];
 
       if (type === 'deals') {
-        const where = { ...dateWhere };
+        const where = { ...baseWhere };
         if (ownerId) where.ownerId = parseInt(ownerId);
         if (status) where.stage = status;
         const data = await prisma.deal.findMany({
@@ -337,7 +327,7 @@ router.get("/export-csv", async (req, res) => {
         headers = ['Title', 'Amount', 'Stage', 'Probability', 'Owner', 'Contact', 'Expected Close', 'Created'];
         rows = data.map(d => [d.title, d.amount, d.stage, d.probability, d.owner?.name || '', d.contact?.name || '', d.expectedClose || '', d.createdAt]);
       } else if (type === 'contacts') {
-        const where = { ...dateWhere };
+        const where = { ...baseWhere };
         if (status) where.status = status;
         const data = await prisma.contact.findMany({
           where, orderBy: { createdAt: 'desc' },
@@ -346,18 +336,17 @@ router.get("/export-csv", async (req, res) => {
         headers = ['Name', 'Email', 'Company', 'Status', 'Source', 'AI Score', 'Assigned To', 'Created'];
         rows = data.map(d => [d.name, d.email, d.company || '', d.status, d.source || '', d.aiScore, d.assignedTo?.name || '', d.createdAt]);
       } else if (type === 'agent-performance') {
-        // Re-use agent performance logic
-        const users = await prisma.user.findMany({ select: { id: true, name: true, email: true } });
+        const users = await prisma.user.findMany({ where: { tenantId }, select: { id: true, name: true, email: true } });
         headers = ['Agent', 'Email', 'Deals Won', 'Revenue', 'Total Deals', 'Win Rate %', 'Tasks Done', 'Calls Made', 'Emails Sent', 'Contacts Assigned'];
         rows = await Promise.all(users.map(async (user) => {
           const [dw, rev, dt, tc, cm, es, ca] = await Promise.all([
-            prisma.deal.count({ where: { ownerId: user.id, stage: 'won', ...dateWhere } }),
-            prisma.deal.aggregate({ where: { ownerId: user.id, stage: 'won', ...dateWhere }, _sum: { amount: true } }),
-            prisma.deal.count({ where: { ownerId: user.id, ...dateWhere } }),
-            prisma.task.count({ where: { userId: user.id, status: 'Completed', ...dateWhere } }),
-            prisma.callLog.count({ where: { userId: user.id, ...dateWhere } }),
-            prisma.emailMessage.count({ where: { userId: user.id, direction: 'OUTBOUND', ...dateWhere } }),
-            prisma.contact.count({ where: { assignedToId: user.id } }),
+            prisma.deal.count({ where: { ...baseWhere, ownerId: user.id, stage: 'won' } }),
+            prisma.deal.aggregate({ where: { ...baseWhere, ownerId: user.id, stage: 'won' }, _sum: { amount: true } }),
+            prisma.deal.count({ where: { ...baseWhere, ownerId: user.id } }),
+            prisma.task.count({ where: { ...baseWhere, userId: user.id, status: 'Completed' } }),
+            prisma.callLog.count({ where: { ...baseWhere, userId: user.id } }),
+            prisma.emailMessage.count({ where: { ...baseWhere, userId: user.id, direction: 'OUTBOUND' } }),
+            prisma.contact.count({ where: { tenantId, assignedToId: user.id } }),
           ]);
           return [user.name || user.email, user.email, dw, rev._sum.amount || 0, dt, dt > 0 ? Math.round((dw / dt) * 100) : 0, tc, cm, es, ca];
         }));
@@ -375,15 +364,13 @@ router.get("/export-csv", async (req, res) => {
       return res.send(csv);
     }
 
-    // Legacy chart-data CSV export
-    const dateWhere = dateFilter(startDate, endDate);
     let formatted = [];
 
     if (metric === "revenue") {
-      const data = await prisma.deal.groupBy({ by: [groupBy], where: dateWhere, _sum: { amount: true } });
+      const data = await prisma.deal.groupBy({ by: [groupBy], where: baseWhere, _sum: { amount: true } });
       formatted = data.map(d => ({ name: String(d[groupBy]).toUpperCase(), value: d._sum.amount || 0 })).filter(d => d.value > 0);
     } else if (metric === "count") {
-      const data = await prisma.deal.groupBy({ by: [groupBy], where: dateWhere, _count: { id: true } });
+      const data = await prisma.deal.groupBy({ by: [groupBy], where: baseWhere, _count: { id: true } });
       formatted = data.map(d => ({ name: String(d[groupBy]).toUpperCase(), value: d._count.id }));
     } else {
       return res.status(400).json({ error: "Unsupported metric for CSV export." });
@@ -407,14 +394,14 @@ router.get("/export-csv", async (req, res) => {
 router.get("/export-pdf", async (req, res) => {
   try {
     const { type = "deals", startDate, endDate, metric = "revenue", groupBy = "stage" } = req.query;
-    const dateWhere = dateFilter(startDate, endDate);
+    const tenantId = req.user.tenantId;
+    const baseWhere = buildWhere(req, startDate, endDate);
 
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${type}-report.pdf`);
     doc.pipe(res);
 
-    // Header
     doc.fontSize(20).text('Globussoft CRM', { align: 'center' });
     doc.fontSize(12).fillColor('#666').text(`${type.charAt(0).toUpperCase() + type.slice(1)} Report`, { align: 'center' });
     if (startDate || endDate) {
@@ -424,18 +411,18 @@ router.get("/export-pdf", async (req, res) => {
     doc.moveDown(1.5);
 
     if (type === 'agent-performance') {
-      const users = await prisma.user.findMany({ select: { id: true, name: true, email: true } });
+      const users = await prisma.user.findMany({ where: { tenantId }, select: { id: true, name: true, email: true } });
       doc.fontSize(14).fillColor('#000').text('Agent Performance Summary', { underline: true });
       doc.moveDown(0.5);
 
       for (const user of users) {
         const [dw, rev, dt, tc, cm, es] = await Promise.all([
-          prisma.deal.count({ where: { ownerId: user.id, stage: 'won', ...dateWhere } }),
-          prisma.deal.aggregate({ where: { ownerId: user.id, stage: 'won', ...dateWhere }, _sum: { amount: true } }),
-          prisma.deal.count({ where: { ownerId: user.id, ...dateWhere } }),
-          prisma.task.count({ where: { userId: user.id, status: 'Completed', ...dateWhere } }),
-          prisma.callLog.count({ where: { userId: user.id, ...dateWhere } }),
-          prisma.emailMessage.count({ where: { userId: user.id, direction: 'OUTBOUND', ...dateWhere } }),
+          prisma.deal.count({ where: { ...baseWhere, ownerId: user.id, stage: 'won' } }),
+          prisma.deal.aggregate({ where: { ...baseWhere, ownerId: user.id, stage: 'won' }, _sum: { amount: true } }),
+          prisma.deal.count({ where: { ...baseWhere, ownerId: user.id } }),
+          prisma.task.count({ where: { ...baseWhere, userId: user.id, status: 'Completed' } }),
+          prisma.callLog.count({ where: { ...baseWhere, userId: user.id } }),
+          prisma.emailMessage.count({ where: { ...baseWhere, userId: user.id, direction: 'OUTBOUND' } }),
         ]);
 
         doc.fontSize(11).fillColor('#333').text(user.name || user.email, { continued: false });
@@ -446,14 +433,13 @@ router.get("/export-pdf", async (req, res) => {
       }
     } else if (type === 'deals') {
       const deals = await prisma.deal.findMany({
-        where: dateWhere, orderBy: { createdAt: 'desc' }, take: 100,
+        where: baseWhere, orderBy: { createdAt: 'desc' }, take: 100,
         include: { contact: { select: { name: true } }, owner: { select: { name: true } } }
       });
 
       doc.fontSize(14).fillColor('#000').text(`Deals Report (${deals.length} records)`, { underline: true });
       doc.moveDown(0.5);
 
-      // Table header
       const cols = [50, 150, 220, 290, 370, 440];
       doc.fontSize(9).fillColor('#333');
       doc.text('Title', cols[0], doc.y, { width: 95 });
@@ -464,10 +450,9 @@ router.get("/export-pdf", async (req, res) => {
         doc.text(`${deal.title}  |  $${deal.amount.toLocaleString()}  |  ${deal.stage}  |  ${deal.owner?.name || 'N/A'}  |  ${deal.contact?.name || 'N/A'}`, 50);
       }
     } else {
-      // Generic chart data export
       const data = metric === "revenue"
-        ? await prisma.deal.groupBy({ by: [groupBy], where: dateWhere, _sum: { amount: true } })
-        : await prisma.deal.groupBy({ by: [groupBy], where: dateWhere, _count: { id: true } });
+        ? await prisma.deal.groupBy({ by: [groupBy], where: baseWhere, _sum: { amount: true } })
+        : await prisma.deal.groupBy({ by: [groupBy], where: baseWhere, _count: { id: true } });
 
       doc.fontSize(14).fillColor('#000').text(`${metric === 'revenue' ? 'Revenue' : 'Deal Count'} by ${groupBy}`, { underline: true });
       doc.moveDown(0.5);

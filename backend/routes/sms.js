@@ -14,20 +14,21 @@ router.post("/send", verifyToken, async (req, res) => {
       return res.status(400).json({ error: "to and body are required" });
     }
 
-    // Get active provider config
-    const config = await prisma.smsConfig.findFirst({ where: { isActive: true } });
+    // Get active provider config for this tenant
+    const config = await prisma.smsConfig.findFirst({ where: { isActive: true, tenantId: req.user.tenantId } });
     if (!config) {
       return res.status(400).json({ error: "No active SMS provider configured" });
     }
 
     // If template specified, substitute variables
     let messageBody = body;
-    if (templateId && contactId) {
-      const template = await prisma.smsTemplate.findUnique({ where: { id: templateId } });
-      const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-      if (template && contact) {
-        messageBody = substituteVars(template.body, contact);
-      }
+    let templateRecord = null;
+    if (templateId) {
+      templateRecord = await prisma.smsTemplate.findFirst({ where: { id: templateId, tenantId: req.user.tenantId } });
+    }
+    if (templateRecord && contactId) {
+      const contact = await prisma.contact.findFirst({ where: { id: contactId, tenantId: req.user.tenantId } });
+      if (contact) messageBody = substituteVars(templateRecord.body, contact);
     }
 
     const normalizedTo = normalizePhone(to);
@@ -41,9 +42,10 @@ router.post("/send", verifyToken, async (req, res) => {
         direction: "OUTBOUND",
         status: "QUEUED",
         provider: config.provider,
-        dltTemplateId: templateId ? (await prisma.smsTemplate.findUnique({ where: { id: templateId } }))?.dltTemplateId : null,
+        dltTemplateId: templateRecord?.dltTemplateId || null,
         contactId: contactId || null,
-        userId: req.user.id,
+        userId: req.user.userId,
+        tenantId: req.user.tenantId,
       },
     });
 
@@ -90,7 +92,7 @@ router.get("/messages", verifyToken, async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const take = parseInt(limit);
 
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
     if (direction) where.direction = direction;
     if (contactId) where.contactId = parseInt(contactId);
     if (status) where.status = status;
@@ -125,6 +127,7 @@ router.get("/messages", verifyToken, async (req, res) => {
 router.get("/templates", verifyToken, async (req, res) => {
   try {
     const templates = await prisma.smsTemplate.findMany({
+      where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
     });
     res.json(templates);
@@ -149,6 +152,7 @@ router.post("/templates", verifyToken, async (req, res) => {
         body,
         category: category || "TRANSACTIONAL",
         dltTemplateId: dltTemplateId || null,
+        tenantId: req.user.tenantId,
       },
     });
 
@@ -165,8 +169,11 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
     const { id } = req.params;
     const { name, body, category, dltTemplateId } = req.body;
 
+    const existing = await prisma.smsTemplate.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
+
     const template = await prisma.smsTemplate.update({
-      where: { id: parseInt(id) },
+      where: { id: existing.id },
       data: {
         ...(name !== undefined && { name }),
         ...(body !== undefined && { body }),
@@ -187,7 +194,9 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
 router.delete("/templates/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    await prisma.smsTemplate.delete({ where: { id: parseInt(id) } });
+    const existing = await prisma.smsTemplate.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
+    await prisma.smsTemplate.delete({ where: { id: existing.id } });
     res.json({ success: true, message: "Template deleted" });
   } catch (err) {
     console.error("SMS template delete error:", err);
@@ -197,9 +206,10 @@ router.delete("/templates/:id", verifyToken, async (req, res) => {
 });
 
 // ─── Get SMS Config (ADMIN only) ────────────────────────────────────────────
-router.get("/config", verifyToken, verifyRole("ADMIN"), async (req, res) => {
+router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const configs = await prisma.smsConfig.findMany({
+      where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
     });
 
@@ -218,13 +228,13 @@ router.get("/config", verifyToken, verifyRole("ADMIN"), async (req, res) => {
 });
 
 // ─── Upsert SMS Config (ADMIN only) ─────────────────────────────────────────
-router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, res) => {
+router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { provider } = req.params;
     const { apiKey, authToken, senderId, dltEntityId, isActive, settings } = req.body;
 
     const config = await prisma.smsConfig.upsert({
-      where: { provider },
+      where: { tenantId_provider: { tenantId: req.user.tenantId, provider } },
       create: {
         provider,
         apiKey: apiKey || "",
@@ -233,6 +243,7 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
         dltEntityId: dltEntityId || null,
         isActive: isActive !== undefined ? isActive : true,
         settings: settings || null,
+        tenantId: req.user.tenantId,
       },
       update: {
         ...(apiKey !== undefined && { apiKey }),
@@ -244,10 +255,10 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
       },
     });
 
-    // If marking active, deactivate others
+    // If marking active, deactivate others in this tenant
     if (isActive) {
       await prisma.smsConfig.updateMany({
-        where: { provider: { not: provider } },
+        where: { provider: { not: provider }, tenantId: req.user.tenantId },
         data: { isActive: false },
       });
     }
@@ -260,18 +271,19 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
 });
 
 // ─── Webhook (NO AUTH) — Delivery status + inbound SMS ──────────────────────
+// Tenant inferred from existing message or matched contact, defaulting to 1.
 router.post("/webhook/:provider", async (req, res) => {
   try {
     const { provider } = req.params;
 
     if (provider === "twilio") {
-      // Twilio sends form-encoded data
       const { MessageSid, MessageStatus, From, To, Body, SmsStatus } = req.body;
       const status = MessageStatus || SmsStatus;
 
       if (Body && From) {
-        // Inbound message
+        // Inbound message — match a contact globally; if multiple, pick first
         const contact = await prisma.contact.findFirst({ where: { phone: { contains: From.replace("+", "") } } });
+        const tenantId = contact?.tenantId || 1;
 
         await prisma.smsMessage.create({
           data: {
@@ -283,6 +295,7 @@ router.post("/webhook/:provider", async (req, res) => {
             provider: "twilio",
             providerMsgId: MessageSid || null,
             contactId: contact?.id || null,
+            tenantId,
           },
         });
 
@@ -290,7 +303,6 @@ router.post("/webhook/:provider", async (req, res) => {
           req.io.emit("sms:received", { from: From, body: Body, contactId: contact?.id });
         }
       } else if (MessageSid && status) {
-        // Status update
         const statusMap = {
           queued: "QUEUED",
           sent: "SENT",
@@ -305,10 +317,8 @@ router.post("/webhook/:provider", async (req, res) => {
         });
       }
 
-      // Twilio expects 200 with TwiML or empty response
       res.status(200).type("text/xml").send("<Response></Response>");
     } else if (provider === "msg91") {
-      // MSG91 sends JSON delivery reports
       const data = req.body;
 
       if (data && data.request_id) {

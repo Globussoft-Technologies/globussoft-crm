@@ -7,7 +7,7 @@ const prisma = new PrismaClient();
 router.get("/", async (req, res) => {
   try {
     const { status } = req.query;
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
 
     const projects = await prisma.project.findMany({
@@ -28,8 +28,8 @@ router.get("/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid project ID" });
 
-    const project = await prisma.project.findUnique({
-      where: { id },
+    const project = await prisma.project.findFirst({
+      where: { id, tenantId: req.user.tenantId },
       include: { owner: true, contact: true, deal: true, tasks: true },
     });
     if (!project) return res.status(404).json({ error: "Project not found" });
@@ -57,6 +57,7 @@ router.post("/", async (req, res) => {
         ownerId: req.user.userId,
         contactId: contactId ? parseInt(contactId) : null,
         dealId: dealId ? parseInt(dealId) : null,
+        tenantId: req.user.tenantId,
       },
       include: { owner: true, contact: true, deal: true, tasks: true },
     });
@@ -73,6 +74,9 @@ router.put("/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid project ID" });
 
+    const existing = await prisma.project.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Project not found" });
+
     const { name, description, status, priority, startDate, endDate, budget, contactId, dealId } = req.body;
     const data = {};
     if (name !== undefined) data.name = name;
@@ -86,7 +90,7 @@ router.put("/:id", async (req, res) => {
     if (dealId !== undefined) data.dealId = dealId ? parseInt(dealId) : null;
 
     const project = await prisma.project.update({
-      where: { id },
+      where: { id: existing.id },
       data,
       include: { owner: true, contact: true, deal: true, tasks: true },
     });
@@ -102,7 +106,9 @@ router.delete("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid project ID" });
-    await prisma.project.delete({ where: { id } });
+    const existing = await prisma.project.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Project not found" });
+    await prisma.project.delete({ where: { id: existing.id } });
     res.json({ message: "Project deleted" });
   } catch (err) {
     console.error(err);

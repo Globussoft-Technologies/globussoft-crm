@@ -54,10 +54,11 @@ if (MAILGUN_API_KEY) {
   console.warn("[Email] MAILGUN_API_KEY not set — emails will be logged but not delivered");
 }
 
-// GET all communications (Unified Inbox)
+// GET all communications (Unified Inbox) — scoped to current tenant
 router.get("/inbox", async (req, res) => {
   try {
     const emails = await prisma.emailMessage.findMany({
+      where: { tenantId: req.user.tenantId },
       include: { contact: true },
       orderBy: { createdAt: 'desc' },
       take: 50
@@ -84,14 +85,15 @@ router.post("/send-email", async (req, res) => {
         direction: "OUTBOUND",
         read: true,
         contactId: contactId ? parseInt(contactId) : null,
-        userId: req.user ? req.user.id : null
+        userId: req.user ? req.user.userId : null,
+        tenantId: req.user.tenantId,
       }
     });
 
     // Create tracking pixel for open tracking
     const trackingId = crypto.randomUUID();
     await prisma.emailTracking.create({
-      data: { emailId: emailRecord.id, trackingId, type: "open" }
+      data: { emailId: emailRecord.id, trackingId, type: "open", tenantId: req.user.tenantId }
     });
 
     // Inject tracking pixel into email body for Mailgun
@@ -108,7 +110,8 @@ router.post("/send-email", async (req, res) => {
           type: "Email",
           description: `Sent email: "${subject}"`,
           contactId: parseInt(contactId),
-          userId: req.user ? req.user.id : null,
+          userId: req.user ? req.user.userId : null,
+          tenantId: req.user.tenantId,
         }
       }).catch(() => {}); // non-critical
     }
@@ -121,10 +124,11 @@ router.post("/send-email", async (req, res) => {
   }
 });
 
-// GET all call logs
+// GET all call logs — scoped to tenant
 router.get("/calls", async (req, res) => {
   try {
     const calls = await prisma.callLog.findMany({
+      where: { tenantId: req.user.tenantId },
       include: { contact: true },
       orderBy: { createdAt: 'desc' }
     });
@@ -145,7 +149,8 @@ router.post("/log-call", async (req, res) => {
         direction: direction || "OUTBOUND",
         recordingUrl,
         contactId: contactId ? parseInt(contactId) : null,
-        userId: req.user ? req.user.id : null
+        userId: req.user ? req.user.userId : null,
+        tenantId: req.user.tenantId,
       }
     });
 
@@ -195,7 +200,7 @@ router.get("/track/:trackingId/click", async (req, res) => {
 // Get tracking stats for an email
 router.get("/tracking/:emailId", async (req, res) => {
   try {
-    const tracks = await prisma.emailTracking.findMany({ where: { emailId: parseInt(req.params.emailId) } });
+    const tracks = await prisma.emailTracking.findMany({ where: { emailId: parseInt(req.params.emailId), tenantId: req.user.tenantId } });
     const opens = tracks.filter(t => t.openedAt).length;
     const clicks = tracks.filter(t => t.clickedAt).length;
     res.json({ emailId: parseInt(req.params.emailId), opens, clicks, events: tracks });

@@ -9,6 +9,7 @@ const prisma = new PrismaClient();
 router.get("/", async (req, res) => {
   try {
     const templates = await prisma.emailTemplate.findMany({
+      where: { tenantId: req.user.tenantId },
       orderBy: { updatedAt: "desc" },
     });
     res.json(templates);
@@ -21,8 +22,8 @@ router.get("/", async (req, res) => {
 // Get single template
 router.get("/:id", async (req, res) => {
   try {
-    const template = await prisma.emailTemplate.findUnique({
-      where: { id: parseInt(req.params.id) },
+    const template = await prisma.emailTemplate.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
     });
     if (!template) return res.status(404).json({ error: "Template not found" });
     res.json(template);
@@ -40,7 +41,7 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "name, subject, and body are required" });
     }
     const template = await prisma.emailTemplate.create({
-      data: { name, subject, body, category: category || "General" },
+      data: { name, subject, body, category: category || "General", tenantId: req.user.tenantId },
     });
     res.status(201).json(template);
   } catch (err) {
@@ -53,8 +54,10 @@ router.post("/", async (req, res) => {
 router.put("/:id", async (req, res) => {
   try {
     const { name, subject, body, category } = req.body;
+    const existing = await prisma.emailTemplate.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
     const template = await prisma.emailTemplate.update({
-      where: { id: parseInt(req.params.id) },
+      where: { id: existing.id },
       data: {
         ...(name !== undefined && { name }),
         ...(subject !== undefined && { subject }),
@@ -72,8 +75,10 @@ router.put("/:id", async (req, res) => {
 // Delete template
 router.delete("/:id", async (req, res) => {
   try {
+    const existing = await prisma.emailTemplate.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
     await prisma.emailTemplate.delete({
-      where: { id: parseInt(req.params.id) },
+      where: { id: existing.id },
     });
     res.json({ success: true });
   } catch (err) {

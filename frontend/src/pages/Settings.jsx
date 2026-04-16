@@ -1,16 +1,41 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers } from 'lucide-react';
+import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
-import { ThemeContext } from '../App';
+import { ThemeContext, AuthContext } from '../App';
 
 export default function Settings() {
   const { theme, toggleTheme } = useContext(ThemeContext);
+  const { tenant: ctxTenant, setTenant } = useContext(AuthContext);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'USER' });
   const [pipelineStages, setPipelineStages] = useState([]);
   const [newStage, setNewStage] = useState({ name: '', color: '#3b82f6' });
   const [stagesLoading, setStagesLoading] = useState(true);
+  const [tenant, setTenantState] = useState(ctxTenant || null);
+  const [tenantSaving, setTenantSaving] = useState(false);
+
+  useEffect(() => {
+    fetchApi('/api/tenants/current')
+      .then((res) => { setTenantState(res); if (setTenant) setTenant(res); })
+      .catch(() => { /* tenant endpoint may not be reachable */ });
+  }, []);
+
+  const handleSaveTenant = async (e) => {
+    e.preventDefault();
+    setTenantSaving(true);
+    try {
+      const updated = await fetchApi('/api/tenants/current', {
+        method: 'PUT',
+        body: JSON.stringify({ name: tenant.name, ownerEmail: tenant.ownerEmail }),
+      });
+      setTenantState(updated);
+      if (setTenant) setTenant(updated);
+    } catch (err) {
+      alert('Failed to update organization');
+    }
+    setTenantSaving(false);
+  };
 
   const fetchStages = () => {
     fetchApi('/api/pipeline_stages')
@@ -100,6 +125,38 @@ export default function Settings() {
       </header>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'revert', gap: '2rem', maxWidth: '1000px' }}>
+
+        {/* Organization Card */}
+        <div className="card" style={{ padding: '2rem' }}>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Building2 size={20} color="var(--accent-color)" /> Organization
+          </h3>
+          {tenant ? (
+            <form onSubmit={handleSaveTenant} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Organization Name</label>
+                <input type="text" required className="input-field" value={tenant.name || ''} onChange={e => setTenantState({ ...tenant, name: e.target.value })} />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Slug</label>
+                <input type="text" disabled className="input-field" value={tenant.slug || ''} title="Organization slug is permanent" />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Owner Email</label>
+                <input type="email" className="input-field" value={tenant.ownerEmail || ''} onChange={e => setTenantState({ ...tenant, ownerEmail: e.target.value })} />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Plan</label>
+                <input type="text" disabled className="input-field" value={tenant.plan || 'starter'} />
+              </div>
+              <button type="submit" className="btn-primary" disabled={tenantSaving} style={{ gridColumn: 'span 2' }}>
+                {tenantSaving ? 'Saving...' : 'Save Organization Details'}
+              </button>
+            </form>
+          ) : (
+            <p style={{ color: 'var(--text-secondary)' }}>Loading organization details…</p>
+          )}
+        </div>
 
         {/* Appearance Card */}
         <div className="card" style={{ padding: '2rem' }}>

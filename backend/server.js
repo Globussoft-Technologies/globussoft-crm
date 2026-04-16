@@ -120,6 +120,7 @@ const whatsappRoutes = require("./routes/whatsapp");
 const telephonyRoutes = require("./routes/telephony");
 const pushRoutes = require("./routes/push");
 const { router: landingPagesRoutes, publicRouter: landingPagesPublic } = require("./routes/landing_pages");
+const tenantsRoutes = require("./routes/tenants");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -174,6 +175,7 @@ app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
+app.use("/api/tenants", tenantsRoutes);
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);

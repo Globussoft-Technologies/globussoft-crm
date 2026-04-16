@@ -8,11 +8,11 @@ const prisma = new PrismaClient();
 
 // ── Authenticated routes ──────────────────────────────────────────
 
-// List marketplace leads with filters
+// List marketplace leads with filters (scoped to current tenant)
 router.get("/", verifyToken, async (req, res) => {
   try {
     const { provider, status, from, to, page = 1, limit = 50 } = req.query;
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
     if (provider) where.provider = provider;
     if (status) where.status = status;
     if (from || to) {
@@ -40,15 +40,16 @@ router.get("/", verifyToken, async (req, res) => {
   }
 });
 
-// Dashboard stats
+// Dashboard stats — scoped to tenant
 router.get("/stats", verifyToken, async (req, res) => {
   try {
+    const tenantId = req.user.tenantId;
     const [byProvider, byStatus, total, thisWeek] = await Promise.all([
-      prisma.marketplaceLead.groupBy({ by: ["provider"], _count: true }),
-      prisma.marketplaceLead.groupBy({ by: ["status"], _count: true }),
-      prisma.marketplaceLead.count(),
+      prisma.marketplaceLead.groupBy({ by: ["provider"], where: { tenantId }, _count: true }),
+      prisma.marketplaceLead.groupBy({ by: ["status"], where: { tenantId }, _count: true }),
+      prisma.marketplaceLead.count({ where: { tenantId } }),
       prisma.marketplaceLead.count({
-        where: { createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
+        where: { tenantId, createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
       }),
     ]);
 
@@ -71,13 +72,12 @@ router.get("/stats", verifyToken, async (req, res) => {
 // Import a single marketplace lead into CRM contacts
 router.post("/import/:id", verifyToken, async (req, res) => {
   try {
-    const lead = await prisma.marketplaceLead.findUnique({ where: { id: parseInt(req.params.id) } });
+    const lead = await prisma.marketplaceLead.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!lead) return res.status(404).json({ error: "Lead not found." });
     if (lead.status === "Imported") return res.status(400).json({ error: "Lead already imported." });
 
-    // Check for duplicate contact
     const existing = await findDuplicateContact(lead.email, lead.phone);
-    if (existing) {
+    if (existing && existing.tenantId === req.user.tenantId) {
       await prisma.marketplaceLead.update({
         where: { id: lead.id },
         data: { status: "Duplicate", contactId: existing.id },
@@ -85,7 +85,6 @@ router.post("/import/:id", verifyToken, async (req, res) => {
       return res.json({ imported: false, duplicate: true, contactId: existing.id, message: "Duplicate contact found — lead linked." });
     }
 
-    // Create new contact
     const contactEmail = lead.email || `marketplace-${lead.provider}-${lead.id}@imported.local`;
     const contact = await prisma.contact.create({
       data: {
@@ -94,35 +93,35 @@ router.post("/import/:id", verifyToken, async (req, res) => {
         phone: lead.phone || null,
         company: lead.company || null,
         status: "Lead",
-        source: lead.provider.charAt(0).toUpperCase() + lead.provider.slice(1), // "IndiaMART", "JustDial"
+        source: lead.provider.charAt(0).toUpperCase() + lead.provider.slice(1),
         aiScore: 25,
+        tenantId: req.user.tenantId,
       },
     });
 
-    // Create an inbound deal
     await prisma.deal.create({
       data: {
         title: `${lead.product || "Inquiry"} — ${lead.company || lead.name || "Unknown"}`,
         amount: 0,
         stage: "lead",
         contactId: contact.id,
+        tenantId: req.user.tenantId,
       },
     });
 
-    // Mark lead as imported
     await prisma.marketplaceLead.update({
       where: { id: lead.id },
       data: { status: "Imported", contactId: contact.id },
     });
 
-    // Create audit log
     await prisma.auditLog.create({
       data: {
         action: "CREATE",
         entity: "Contact",
         entityId: contact.id,
         details: JSON.stringify({ source: `Marketplace import (${lead.provider})`, leadId: lead.id }),
-        userId: req.user.id,
+        userId: req.user.userId,
+        tenantId: req.user.tenantId,
       },
     });
 
@@ -150,11 +149,11 @@ router.post("/import-bulk", verifyToken, async (req, res) => {
 
     for (const id of leadIds) {
       try {
-        const lead = await prisma.marketplaceLead.findUnique({ where: { id: parseInt(id) } });
+        const lead = await prisma.marketplaceLead.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
         if (!lead || lead.status === "Imported") { results.failed++; continue; }
 
         const existing = await findDuplicateContact(lead.email, lead.phone);
-        if (existing) {
+        if (existing && existing.tenantId === req.user.tenantId) {
           await prisma.marketplaceLead.update({ where: { id: lead.id }, data: { status: "Duplicate", contactId: existing.id } });
           results.duplicates++;
           continue;
@@ -170,6 +169,7 @@ router.post("/import-bulk", verifyToken, async (req, res) => {
             status: "Lead",
             source: lead.provider.charAt(0).toUpperCase() + lead.provider.slice(1),
             aiScore: 25,
+            tenantId: req.user.tenantId,
           },
         });
 
@@ -179,6 +179,7 @@ router.post("/import-bulk", verifyToken, async (req, res) => {
             amount: 0,
             stage: "lead",
             contactId: contact.id,
+            tenantId: req.user.tenantId,
           },
         });
 
@@ -201,8 +202,10 @@ router.post("/import-bulk", verifyToken, async (req, res) => {
 // Dismiss a lead
 router.put("/dismiss/:id", verifyToken, async (req, res) => {
   try {
+    const existing = await prisma.marketplaceLead.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Lead not found" });
     const lead = await prisma.marketplaceLead.update({
-      where: { id: parseInt(req.params.id) },
+      where: { id: existing.id },
       data: { status: "Dismissed" },
     });
     res.json(lead);
@@ -213,11 +216,9 @@ router.put("/dismiss/:id", verifyToken, async (req, res) => {
 
 // ── Configuration (ADMIN only) ────────────────────────────────────
 
-// Get all marketplace configs
-router.get("/config", verifyToken, verifyRole("ADMIN"), async (req, res) => {
+router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    const configs = await prisma.marketplaceConfig.findMany();
-    // Mask API keys for security
+    const configs = await prisma.marketplaceConfig.findMany({ where: { tenantId: req.user.tenantId } });
     const masked = configs.map((c) => ({
       ...c,
       apiKey: c.apiKey ? "••••" + c.apiKey.slice(-4) : null,
@@ -230,23 +231,22 @@ router.get("/config", verifyToken, verifyRole("ADMIN"), async (req, res) => {
   }
 });
 
-// Upsert config for a provider
-router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, res) => {
+// Upsert config for a provider (per tenant)
+router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { provider } = req.params;
     const { apiKey, apiSecret, glueCrmKey, isActive, settings } = req.body;
 
     const data = { isActive: isActive ?? false };
-    // Only update keys if new values provided (not masked)
     if (apiKey && !apiKey.startsWith("••••")) data.apiKey = apiKey;
     if (apiSecret && !apiSecret.startsWith("••••")) data.apiSecret = apiSecret;
     if (glueCrmKey && !glueCrmKey.startsWith("••••")) data.glueCrmKey = glueCrmKey;
     if (settings !== undefined) data.settings = typeof settings === "string" ? settings : JSON.stringify(settings);
 
     const config = await prisma.marketplaceConfig.upsert({
-      where: { provider },
+      where: { tenantId_provider: { tenantId: req.user.tenantId, provider } },
       update: data,
-      create: { provider, ...data },
+      create: { provider, ...data, tenantId: req.user.tenantId },
     });
 
     res.json({ success: true, provider: config.provider, isActive: config.isActive });
@@ -256,8 +256,7 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
   }
 });
 
-// Manual sync trigger
-router.post("/sync/:provider", verifyToken, verifyRole("ADMIN"), async (req, res) => {
+router.post("/sync/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { syncMarketplace } = require("../cron/marketplaceEngine");
     const result = await syncMarketplace(req.params.provider, req.io);
@@ -269,8 +268,9 @@ router.post("/sync/:provider", verifyToken, verifyRole("ADMIN"), async (req, res
 });
 
 // ── Public webhook endpoints (no auth) ────────────────────────────
+// Inbound webhooks default to Default Org tenant (id=1).
+// In production, route by configured tenant credentials/provider key.
 
-// IndiaMART Push Lead webhook
 router.post("/webhook/indiamart", async (req, res) => {
   try {
     console.log("[IndiaMART Webhook] Received:", JSON.stringify(req.body).slice(0, 500));
@@ -297,6 +297,7 @@ router.post("/webhook/indiamart", async (req, res) => {
           message: raw.QUERY_MESSAGE || raw.query_message || null,
           city: raw.SENDER_CITY || raw.sender_city || null,
           status: "New",
+          tenantId: 1,
         },
       });
       created++;
@@ -313,7 +314,6 @@ router.post("/webhook/indiamart", async (req, res) => {
   }
 });
 
-// JustDial Push Lead webhook
 router.post("/webhook/justdial", async (req, res) => {
   try {
     console.log("[JustDial Webhook] Received:", JSON.stringify(req.body).slice(0, 500));
@@ -340,6 +340,7 @@ router.post("/webhook/justdial", async (req, res) => {
           message: raw.description || raw.query || null,
           city: raw.city || raw.area || null,
           status: "New",
+          tenantId: 1,
         },
       });
       created++;
@@ -356,7 +357,6 @@ router.post("/webhook/justdial", async (req, res) => {
   }
 });
 
-// TradeIndia Push Lead webhook
 router.post("/webhook/tradeindia", async (req, res) => {
   try {
     console.log("[TradeIndia Webhook] Received:", JSON.stringify(req.body).slice(0, 500));
@@ -383,6 +383,7 @@ router.post("/webhook/tradeindia", async (req, res) => {
           message: raw.message || raw.query_message || null,
           city: raw.sender_city || raw.city || null,
           status: "New",
+          tenantId: 1,
         },
       });
       created++;

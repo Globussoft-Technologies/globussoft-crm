@@ -10,18 +10,19 @@ const prisma = new PrismaClient();
 router.post("/apikeys", verifyToken, async (req, res) => {
   try {
     const rawKey = `glbs_${crypto.randomBytes(24).toString('hex')}`;
-    
+
     // In production, we would hash the key secret before storing it.
     // However, for this dashboard demo context, we'll store it raw.
     const key = await prisma.apiKey.create({
       data: {
         name: req.body.name || "Default Ext-Integration Key",
         keySecret: rawKey,
-        userId: req.user.userId
+        userId: req.user.userId,
+        tenantId: req.user.tenantId,
       }
     });
 
-    res.status(201).json({ key, rawKey }); 
+    res.status(201).json({ key, rawKey });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to cryptographically construct API Key." });
@@ -31,8 +32,8 @@ router.post("/apikeys", verifyToken, async (req, res) => {
 // Fetch user's active API keys
 router.get("/apikeys", verifyToken, async (req, res) => {
   try {
-    const keys = await prisma.apiKey.findMany({ 
-      where: { userId: req.user.userId },
+    const keys = await prisma.apiKey.findMany({
+      where: { userId: req.user.userId, tenantId: req.user.tenantId },
       orderBy: { createdAt: 'desc' }
     });
     res.json(keys);
@@ -44,7 +45,9 @@ router.get("/apikeys", verifyToken, async (req, res) => {
 // Revoke API Key
 router.delete("/apikeys/:id", verifyToken, async (req, res) => {
   try {
-    await prisma.apiKey.delete({ where: { id: parseInt(req.params.id) } });
+    const existing = await prisma.apiKey.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "API key not found" });
+    await prisma.apiKey.delete({ where: { id: existing.id } });
     res.json({ success: true });
   } catch(err) {
     res.status(500).json({ error: "Failed to revoke key." });
@@ -58,7 +61,8 @@ router.post("/webhooks", verifyToken, async (req, res) => {
       data: {
         event: req.body.event,
         targetUrl: req.body.targetUrl,
-        userId: req.user.userId
+        userId: req.user.userId,
+        tenantId: req.user.tenantId,
       }
     });
     res.status(201).json(webhook);
@@ -70,8 +74,8 @@ router.post("/webhooks", verifyToken, async (req, res) => {
 // Fetch user's registered webhooks
 router.get("/webhooks", verifyToken, async (req, res) => {
   try {
-    const hooks = await prisma.webhook.findMany({ 
-      where: { userId: req.user.userId },
+    const hooks = await prisma.webhook.findMany({
+      where: { userId: req.user.userId, tenantId: req.user.tenantId },
       orderBy: { createdAt: 'desc' }
     });
     res.json(hooks);
@@ -83,7 +87,9 @@ router.get("/webhooks", verifyToken, async (req, res) => {
 // Delete Webhook Trigger
 router.delete("/webhooks/:id", verifyToken, async (req, res) => {
   try {
-    await prisma.webhook.delete({ where: { id: parseInt(req.params.id) } });
+    const existing = await prisma.webhook.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Webhook not found" });
+    await prisma.webhook.delete({ where: { id: existing.id } });
     res.json({ success: true });
   } catch(err) {
     res.status(500).json({ error: "Failed to deregister webhook target." });

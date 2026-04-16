@@ -13,25 +13,88 @@ const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 // In-memory store for password reset tokens (token -> { userId, expiresAt })
 const resetTokens = new Map();
 
-// Register Epic
+// Helper: build a unique slug for a tenant
+async function generateUniqueSlug(base) {
+  const root = (base || "org")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "org";
+  let slug = root;
+  let i = 1;
+  // Try until unused
+  while (await prisma.tenant.findUnique({ where: { slug } })) {
+    i += 1;
+    slug = `${root}-${i}`;
+  }
+  return slug;
+}
+
+// Register Epic — creates a new Tenant + first User (org owner)
 router.post("/register", async (req, res) => {
   try {
-    const { email, password, name } = req.body;
+    const { email, password, name, organizationName } = req.body;
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) return res.status(400).json({ error: "User already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = await prisma.user.create({
-      data: { email, password: hashedPassword, name }
+    const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const slug = await generateUniqueSlug(orgName);
+
+    const tenant = await prisma.tenant.create({
+      data: { name: orgName, slug, ownerEmail: email, plan: "starter" }
     });
 
-    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
-    
+    const user = await prisma.user.create({
+      data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
+    });
+
+    const token = jwt.sign({ userId: user.id, role: user.role, tenantId: tenant.id }, JWT_SECRET, { expiresIn: '7d' });
+    res.status(201).json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan }
+    });
+
   } catch (error) {
+    console.error("[auth] register error:", error);
     res.status(500).json({ error: "Server registration error" });
+  }
+});
+
+// Signup alias (matches signup page) — same behavior as register
+router.post("/signup", async (req, res) => {
+  try {
+    const { email, password, name, organizationName } = req.body;
+
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) return res.status(400).json({ error: "User already exists" });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const slug = await generateUniqueSlug(orgName);
+
+    const tenant = await prisma.tenant.create({
+      data: { name: orgName, slug, ownerEmail: email, plan: "starter" }
+    });
+
+    const user = await prisma.user.create({
+      data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
+    });
+
+    const token = jwt.sign({ userId: user.id, role: user.role, tenantId: tenant.id }, JWT_SECRET, { expiresIn: '7d' });
+    res.status(201).json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan }
+    });
+
+  } catch (error) {
+    console.error("[auth] signup error:", error);
+    res.status(500).json({ error: "Signup failed" });
   }
 });
 
@@ -39,31 +102,44 @@ router.post("/register", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    
+
     // Auth bypass for testing without actual DB population during simulation
     if (email === "admin" && password === "admin") {
-      const token = jwt.sign({ userId: 1, role: "ADMIN" }, JWT_SECRET, { expiresIn: '7d' });
-      return res.json({ token, user: { id: 1, email: "admin@crm.com", name: "Super Admin", role: "ADMIN" } });
+      const token = jwt.sign({ userId: 1, role: "ADMIN", tenantId: 1 }, JWT_SECRET, { expiresIn: '7d' });
+      return res.json({
+        token,
+        user: { id: 1, email: "admin@crm.com", name: "Super Admin", role: "ADMIN" },
+        tenant: { id: 1, name: "Default Org", slug: "default-org", plan: "enterprise" }
+      });
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { email }, include: { tenant: true } });
     if (!user) return res.status(401).json({ error: "Invalid credentials" });
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
-    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    
-    res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+    const tenantId = user.tenantId || 1;
+    const token = jwt.sign({ userId: user.id, role: user.role, tenantId }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan } : null
+    });
   } catch (error) {
+    console.error("[auth] login error:", error);
     res.status(500).json({ error: "Login system failure" });
   }
 });
 
-// Admin User Management
+// Admin User Management — scoped to current tenant
 router.get("/users", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const users = await prisma.user.findMany({ select: { id: true, email: true, name: true, role: true, createdAt: true } });
+    const users = await prisma.user.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, email: true, name: true, role: true, createdAt: true }
+    });
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch directory" });
@@ -73,7 +149,10 @@ router.get("/users", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, 
 router.put("/users/:id/role", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { role } = req.body;
-    const user = await prisma.user.update({ where: { id: parseInt(req.params.id) }, data: { role } });
+    // Ensure target user is in same tenant
+    const target = await prisma.user.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!target) return res.status(404).json({ error: "User not found in your organization" });
+    const user = await prisma.user.update({ where: { id: target.id }, data: { role } });
     res.json(user);
   } catch (err) {
     res.status(500).json({ error: "Failed to update role" });
@@ -82,7 +161,9 @@ router.put("/users/:id/role", verifyToken, verifyRole(["ADMIN"]), async (req, re
 
 router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    await prisma.user.delete({ where: { id: parseInt(req.params.id) } });
+    const target = await prisma.user.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!target) return res.status(404).json({ error: "User not found in your organization" });
+    await prisma.user.delete({ where: { id: target.id } });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to obliterate user" });
@@ -135,14 +216,20 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
-// Get current user profile
+// Get current user profile (with tenant info)
 router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, createdAt: true }
+      select: { id: true, name: true, email: true, role: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true } } }
     });
-    if (!user) return res.status(404).json({ error: "User not found" });
+    if (!user) {
+      // Bypass admin/admin (id=1) may not be in DB during demo — fall back gracefully
+      if (req.user.userId === 1) {
+        return res.json({ id: 1, name: "Super Admin", email: "admin@crm.com", role: "ADMIN", tenant: { id: 1, name: "Default Org", slug: "default-org", plan: "enterprise" } });
+      }
+      return res.status(404).json({ error: "User not found" });
+    }
     res.json(user);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch profile" });

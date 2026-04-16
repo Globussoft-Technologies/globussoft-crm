@@ -7,7 +7,7 @@ const prisma = new PrismaClient();
 router.get("/", async (req, res) => {
   try {
     const { status } = req.query;
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
 
     const contracts = await prisma.contract.findMany({
@@ -28,8 +28,8 @@ router.get("/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid contract ID" });
 
-    const contract = await prisma.contract.findUnique({
-      where: { id },
+    const contract = await prisma.contract.findFirst({
+      where: { id, tenantId: req.user.tenantId },
       include: { contact: true, deal: true },
     });
     if (!contract) return res.status(404).json({ error: "Contract not found" });
@@ -56,6 +56,7 @@ router.post("/", async (req, res) => {
         terms: terms || null,
         contactId: contactId ? parseInt(contactId) : null,
         dealId: dealId ? parseInt(dealId) : null,
+        tenantId: req.user.tenantId,
       },
       include: { contact: true, deal: true },
     });
@@ -72,6 +73,9 @@ router.put("/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid contract ID" });
 
+    const existing = await prisma.contract.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Contract not found" });
+
     const { title, status, startDate, endDate, value, terms, contactId, dealId } = req.body;
     const data = {};
     if (title !== undefined) data.title = title;
@@ -84,7 +88,7 @@ router.put("/:id", async (req, res) => {
     if (dealId !== undefined) data.dealId = dealId ? parseInt(dealId) : null;
 
     const contract = await prisma.contract.update({
-      where: { id },
+      where: { id: existing.id },
       data,
       include: { contact: true, deal: true },
     });
@@ -100,7 +104,9 @@ router.delete("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid contract ID" });
-    await prisma.contract.delete({ where: { id } });
+    const existing = await prisma.contract.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Contract not found" });
+    await prisma.contract.delete({ where: { id: existing.id } });
     res.json({ message: "Contract deleted" });
   } catch (err) {
     console.error(err);

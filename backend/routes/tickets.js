@@ -7,10 +7,11 @@ const prisma = new PrismaClient();
 const VALID_STATUSES = ["Open", "Pending", "Resolved", "Closed"];
 const VALID_PRIORITIES = ["Low", "Medium", "High", "Urgent"];
 
-// GET / — list all tickets with assignee info
+// GET / — list all tickets in current tenant
 router.get("/", async (req, res) => {
   try {
     const tickets = await prisma.ticket.findMany({
+      where: { tenantId: req.user.tenantId },
       include: {
         assignee: { select: { id: true, name: true, email: true } },
       },
@@ -22,11 +23,11 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET /:id — single ticket with assignee
+// GET /:id — single ticket
 router.get("/:id", async (req, res) => {
   try {
-    const ticket = await prisma.ticket.findUnique({
-      where: { id: parseInt(req.params.id, 10) },
+    const ticket = await prisma.ticket.findFirst({
+      where: { id: parseInt(req.params.id, 10), tenantId: req.user.tenantId },
       include: {
         assignee: { select: { id: true, name: true, email: true } },
       },
@@ -57,6 +58,7 @@ router.post("/", async (req, res) => {
       description: description || null,
       priority: priority || "Low",
       status: "Open",
+      tenantId: req.user.tenantId,
     };
 
     if (assigneeId) {
@@ -75,9 +77,12 @@ router.post("/", async (req, res) => {
   }
 });
 
-// PUT /:id — update ticket (status, priority, assigneeId)
+// PUT /:id — update ticket
 router.put("/:id", async (req, res) => {
   try {
+    const existing = await prisma.ticket.findFirst({ where: { id: parseInt(req.params.id, 10), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Ticket not found." });
+
     const { status, priority, assigneeId } = req.body;
     const updateData = {};
 
@@ -98,7 +103,7 @@ router.put("/:id", async (req, res) => {
     }
 
     const ticket = await prisma.ticket.update({
-      where: { id: parseInt(req.params.id, 10) },
+      where: { id: existing.id },
       data: updateData,
       include: {
         assignee: { select: { id: true, name: true, email: true } },
@@ -113,11 +118,13 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// DELETE /:id — delete ticket
+// DELETE /:id
 router.delete("/:id", async (req, res) => {
   try {
+    const existing = await prisma.ticket.findFirst({ where: { id: parseInt(req.params.id, 10), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Ticket not found." });
     await prisma.ticket.delete({
-      where: { id: parseInt(req.params.id, 10) },
+      where: { id: existing.id },
     });
     res.json({ message: "Ticket deleted." });
   } catch (err) {

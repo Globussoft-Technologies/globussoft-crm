@@ -11,7 +11,7 @@ router.get("/", verifyToken, async (req, res) => {
   try {
     const { status, priority, contactId, overdue } = req.query;
 
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
     if (priority) where.priority = priority;
     if (contactId) where.contactId = parseInt(contactId);
@@ -53,6 +53,7 @@ router.post("/", verifyToken, async (req, res) => {
         contactId: contactId ? parseInt(contactId) : null,
         userId: userId ? parseInt(userId) : null,
         notes: notes || null,
+        tenantId: req.user.tenantId,
       },
       include: { contact: true, user: true },
     });
@@ -69,6 +70,9 @@ router.put("/:id", verifyToken, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid task ID" });
 
+    const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Task not found" });
+
     const { title, notes, dueDate, priority, status } = req.body;
     const data = {};
     if (title !== undefined) data.title = title;
@@ -78,7 +82,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     if (status !== undefined) data.status = status;
 
     const task = await prisma.task.update({
-      where: { id },
+      where: { id: existing.id },
       data,
       include: { contact: true, user: true },
     });
@@ -95,8 +99,11 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid task ID" });
 
+    const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Task not found" });
+
     const task = await prisma.task.update({
-      where: { id },
+      where: { id: existing.id },
       data: { status: "Completed" },
     });
     res.json(task);
@@ -111,7 +118,9 @@ router.delete("/:id", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid task ID" });
-    await prisma.task.delete({ where: { id } });
+    const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Task not found" });
+    await prisma.task.delete({ where: { id: existing.id } });
     res.json({ message: "Task Deleted" });
   } catch (err) {
     console.error(err);

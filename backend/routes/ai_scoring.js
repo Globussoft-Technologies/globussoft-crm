@@ -12,13 +12,13 @@ const weights = {
   baseConfidence: 0.2,
 };
 
-// ─── Deal-based scoring (existing endpoint, unchanged) ─────────────────────
+// ─── Deal-based scoring ────────────────────────────────────────────────────
 router.get("/score/:dealId", async (req, res) => {
   try {
     const { dealId } = req.params;
 
-    const deal = await prisma.deal.findUnique({
-      where: { id: parseInt(dealId) },
+    const deal = await prisma.deal.findFirst({
+      where: { id: parseInt(dealId), tenantId: req.user.tenantId },
       include: { contact: { include: { activities: true } } },
     });
 
@@ -67,8 +67,8 @@ router.get("/contact/:contactId", verifyToken, async (req, res) => {
     const contactId = parseInt(req.params.contactId);
     if (isNaN(contactId)) return res.status(400).json({ error: "Invalid contactId" });
 
-    const contact = await prisma.contact.findUnique({
-      where: { id: contactId },
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, tenantId: req.user.tenantId },
       include: {
         deals: true,
         activities: true,

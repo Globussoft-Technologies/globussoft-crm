@@ -17,8 +17,8 @@ router.post("/send", verifyToken, async (req, res) => {
       return res.status(400).json({ error: "body or templateName is required" });
     }
 
-    // Get active config
-    const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true } });
+    // Get active config for this tenant
+    const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true, tenantId: req.user.tenantId } });
     if (!config) {
       return res.status(400).json({ error: "No active WhatsApp provider configured" });
     }
@@ -33,15 +33,16 @@ router.post("/send", verifyToken, async (req, res) => {
         status: "QUEUED",
         templateName: templateName || null,
         contactId: contactId || null,
-        userId: req.user.id,
+        userId: req.user.userId,
+        tenantId: req.user.tenantId,
       },
     });
 
     let result;
 
     if (templateName) {
-      // Look up template for language
-      const tpl = await prisma.whatsAppTemplate.findUnique({ where: { name: templateName } });
+      // Look up template within tenant
+      const tpl = await prisma.whatsAppTemplate.findFirst({ where: { name: templateName, tenantId: req.user.tenantId } });
       result = await sendTemplate({
         to,
         templateName,
@@ -91,7 +92,7 @@ router.get("/messages", verifyToken, async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const take = parseInt(limit);
 
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
     if (direction) where.direction = direction;
     if (contactId) where.contactId = parseInt(contactId);
     if (status) where.status = status;
@@ -126,6 +127,7 @@ router.get("/messages", verifyToken, async (req, res) => {
 router.get("/templates", verifyToken, async (req, res) => {
   try {
     const templates = await prisma.whatsAppTemplate.findMany({
+      where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
     });
     res.json(templates);
@@ -155,6 +157,7 @@ router.post("/templates", verifyToken, async (req, res) => {
         footer: footer || null,
         buttons: buttons ? JSON.stringify(buttons) : null,
         status: "PENDING",
+        tenantId: req.user.tenantId,
       },
     });
 
@@ -172,8 +175,11 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
     const { id } = req.params;
     const { name, language, category, body, headerType, headerContent, footer, buttons } = req.body;
 
+    const existing = await prisma.whatsAppTemplate.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
+
     const template = await prisma.whatsAppTemplate.update({
-      where: { id: parseInt(id) },
+      where: { id: existing.id },
       data: {
         ...(name !== undefined && { name }),
         ...(language !== undefined && { language }),
@@ -199,7 +205,9 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
 router.delete("/templates/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    await prisma.whatsAppTemplate.delete({ where: { id: parseInt(id) } });
+    const existing = await prisma.whatsAppTemplate.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
+    await prisma.whatsAppTemplate.delete({ where: { id: existing.id } });
     res.json({ success: true, message: "Template deleted" });
   } catch (err) {
     console.error("WhatsApp template delete error:", err);
@@ -212,13 +220,12 @@ router.delete("/templates/:id", verifyToken, async (req, res) => {
 router.post("/templates/:id/sync", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const template = await prisma.whatsAppTemplate.findUnique({ where: { id: parseInt(id) } });
+    const template = await prisma.whatsAppTemplate.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
     if (!template) return res.status(404).json({ error: "Template not found" });
 
-    const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true } });
+    const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true, tenantId: req.user.tenantId } });
     if (!config) return res.status(400).json({ error: "No active WhatsApp config" });
 
-    // Fetch template status from Meta
     const https = require("https");
     const result = await new Promise((resolve) => {
       const options = {
@@ -228,10 +235,10 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
         headers: { Authorization: `Bearer ${config.accessToken}` },
       };
 
-      const req = https.request(options, (res) => {
+      const req2 = https.request(options, (res2) => {
         let data = "";
-        res.on("data", (chunk) => (data += chunk));
-        res.on("end", () => {
+        res2.on("data", (chunk) => (data += chunk));
+        res2.on("end", () => {
           try {
             resolve(JSON.parse(data));
           } catch {
@@ -239,8 +246,8 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
           }
         });
       });
-      req.on("error", (err) => resolve({ error: { message: err.message } }));
-      req.end();
+      req2.on("error", (err) => resolve({ error: { message: err.message } }));
+      req2.end();
     });
 
     if (result.data && result.data.length > 0) {
@@ -248,7 +255,7 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
       const statusMap = { APPROVED: "APPROVED", REJECTED: "REJECTED", PENDING: "PENDING" };
 
       const updated = await prisma.whatsAppTemplate.update({
-        where: { id: parseInt(id) },
+        where: { id: template.id },
         data: {
           status: statusMap[metaTemplate.status] || "PENDING",
           metaTemplateId: metaTemplate.id || null,
@@ -266,13 +273,13 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
 });
 
 // ─── Get WhatsApp Config (ADMIN only) ───────────────────────────────────────
-router.get("/config", verifyToken, verifyRole("ADMIN"), async (req, res) => {
+router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const configs = await prisma.whatsAppConfig.findMany({
+      where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
     });
 
-    // Mask sensitive fields
     const masked = configs.map((c) => ({
       ...c,
       accessToken: c.accessToken ? c.accessToken.slice(0, 10) + "****" : null,
@@ -286,13 +293,13 @@ router.get("/config", verifyToken, verifyRole("ADMIN"), async (req, res) => {
 });
 
 // ─── Upsert WhatsApp Config (ADMIN only) ────────────────────────────────────
-router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, res) => {
+router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { provider } = req.params;
     const { phoneNumberId, businessAccountId, accessToken, webhookVerifyToken, isActive, settings } = req.body;
 
     const config = await prisma.whatsAppConfig.upsert({
-      where: { provider },
+      where: { tenantId_provider: { tenantId: req.user.tenantId, provider } },
       create: {
         provider,
         phoneNumberId: phoneNumberId || "",
@@ -301,6 +308,7 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
         webhookVerifyToken: webhookVerifyToken || null,
         isActive: isActive !== undefined ? isActive : true,
         settings: settings || null,
+        tenantId: req.user.tenantId,
       },
       update: {
         ...(phoneNumberId !== undefined && { phoneNumberId }),
@@ -312,10 +320,9 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
       },
     });
 
-    // If marking active, deactivate others
     if (isActive) {
       await prisma.whatsAppConfig.updateMany({
-        where: { provider: { not: provider } },
+        where: { provider: { not: provider }, tenantId: req.user.tenantId },
         data: { isActive: false },
       });
     }
@@ -336,7 +343,7 @@ router.put("/config/:provider", verifyToken, verifyRole("ADMIN"), async (req, re
 // ─── Meta Webhook Verification (GET, NO AUTH) ───────────────────────────────
 router.get("/webhook", async (req, res) => {
   try {
-    // Get verify token from config
+    // Match against any active WhatsApp config across all tenants
     const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true } });
     const token = config?.webhookVerifyToken || process.env.WHATSAPP_VERIFY_TOKEN || "";
 
@@ -352,12 +359,12 @@ router.get("/webhook", async (req, res) => {
   }
 });
 
-// ─── Meta Webhook (POST, NO AUTH) — Inbound messages + status updates ───────
+// ─── Meta Webhook (POST, NO AUTH) ───────────────────────────────────────────
+// Tenant inferred from matched contact, defaults to 1.
 router.post("/webhook", async (req, res) => {
   try {
     const { object, entry } = req.body;
 
-    // Always respond 200 to Meta quickly
     res.status(200).json({ received: true });
 
     if (object !== "whatsapp_business_account" || !entry) return;
@@ -373,17 +380,16 @@ router.post("/webhook", async (req, res) => {
         const statuses = value.statuses || [];
         const metadata = value.metadata || {};
 
-        // Process inbound messages
         for (const msg of messages) {
           const from = msg.from;
           const body = msg.text?.body || msg.caption || "";
           const mediaUrl = msg.image?.id || msg.video?.id || msg.document?.id || null;
           const mediaType = msg.type !== "text" ? msg.type : null;
 
-          // Find contact by phone
           const contact = await prisma.contact.findFirst({
             where: { phone: { contains: from.slice(-10) } },
           });
+          const tenantId = contact?.tenantId || 1;
 
           await prisma.whatsAppMessage.create({
             data: {
@@ -396,6 +402,7 @@ router.post("/webhook", async (req, res) => {
               status: "RECEIVED",
               providerMsgId: msg.id || null,
               contactId: contact?.id || null,
+              tenantId,
             },
           });
 
@@ -410,7 +417,6 @@ router.post("/webhook", async (req, res) => {
           }
         }
 
-        // Process status updates
         for (const status of statuses) {
           const statusMap = {
             sent: "SENT",
@@ -443,7 +449,6 @@ router.post("/webhook", async (req, res) => {
     }
   } catch (err) {
     console.error("WhatsApp webhook error:", err);
-    // Already sent 200
   }
 });
 

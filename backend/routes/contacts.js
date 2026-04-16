@@ -9,7 +9,7 @@ router.use(verifyToken);
 
 router.get('/', async (req, res) => {
   try {
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
     if (req.query.status) where.status = req.query.status;
     if (req.query.assignedToId) where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === 'true') where.assignedToId = null;
@@ -23,8 +23,8 @@ router.get('/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid contact ID' });
-    const contact = await prisma.contact.findUnique({
-      where: { id },
+    const contact = await prisma.contact.findFirst({
+      where: { id, tenantId: req.user.tenantId },
       include: { activities: { orderBy: { createdAt: 'desc' } }, tasks: true, deals: true, assignedTo: { select: { id: true, name: true, email: true } } }
     });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
@@ -36,7 +36,7 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    res.status(201).json(await prisma.contact.create({ data: req.body }));
+    res.status(201).json(await prisma.contact.create({ data: { ...req.body, tenantId: req.user.tenantId } }));
   } catch (err) {
     res.status(500).json({ error: 'Failed to create contact' });
   }
@@ -50,7 +50,7 @@ router.put('/bulk-assign', async (req, res) => {
       return res.status(400).json({ error: 'No contact IDs provided' });
     }
     await prisma.contact.updateMany({
-      where: { id: { in: contactIds.map(id => parseInt(id)) } },
+      where: { id: { in: contactIds.map(id => parseInt(id)) }, tenantId: req.user.tenantId },
       data: { assignedToId: assignedToId ? parseInt(assignedToId) : null }
     });
     res.json({ updated: contactIds.length, assignedToId: assignedToId || null });
@@ -61,8 +61,10 @@ router.put('/bulk-assign', async (req, res) => {
 
 router.post('/:id/activities', async (req, res) => {
   try {
+    const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
     res.status(201).json(await prisma.activity.create({
-      data: { ...req.body, contactId: parseInt(req.params.id), userId: req.user ? req.user.userId : null }
+      data: { ...req.body, contactId: contact.id, userId: req.user ? req.user.userId : null, tenantId: req.user.tenantId }
     }));
   } catch (err) {
     res.status(500).json({ error: 'Failed to create activity' });
@@ -71,7 +73,9 @@ router.post('/:id/activities', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
-    res.json(await prisma.contact.update({ where: { id: parseInt(req.params.id) }, data: req.body }));
+    const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    res.json(await prisma.contact.update({ where: { id: existing.id }, data: req.body }));
   } catch (err) {
     res.status(500).json({ error: 'Failed to update contact' });
   }
@@ -95,6 +99,7 @@ router.post('/import-csv', async (req, res) => {
           errors.push(`Row missing email: ${row.name || 'unknown'}`);
           continue;
         }
+        // email is globally unique, so any tenant collision skips
         const existing = await prisma.contact.findFirst({ where: { email: row.email } });
         if (existing) {
           skipped++;
@@ -107,6 +112,7 @@ router.post('/import-csv', async (req, res) => {
             company: row.company || '',
             title: row.title || '',
             status: row.status || 'Lead',
+            tenantId: req.user.tenantId,
           }
         });
         imported++;
@@ -125,8 +131,10 @@ router.post('/import-csv', async (req, res) => {
 router.put('/:id/assign', async (req, res) => {
   try {
     const { assignedToId } = req.body;
+    const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Contact not found' });
     const contact = await prisma.contact.update({
-      where: { id: parseInt(req.params.id) },
+      where: { id: existing.id },
       data: { assignedToId: assignedToId ? parseInt(assignedToId) : null },
       include: { assignedTo: { select: { id: true, name: true, email: true } } }
     });
@@ -139,7 +147,7 @@ router.put('/:id/assign', async (req, res) => {
 // ── Find duplicate contacts ───────────────────────────────────────
 router.get('/duplicates/find', async (req, res) => {
   try {
-    const contacts = await prisma.contact.findMany({ select: { id: true, name: true, email: true, phone: true, company: true, status: true, aiScore: true, createdAt: true } });
+    const contacts = await prisma.contact.findMany({ where: { tenantId: req.user.tenantId }, select: { id: true, name: true, email: true, phone: true, company: true, status: true, aiScore: true, createdAt: true } });
     const dupes = [];
     const seen = new Map();
 
@@ -205,13 +213,13 @@ router.post('/merge', async (req, res) => {
       return res.status(400).json({ error: 'primaryId and secondaryIds required' });
     }
 
-    const primary = await prisma.contact.findUnique({ where: { id: parseInt(primaryId) } });
+    const primary = await prisma.contact.findFirst({ where: { id: parseInt(primaryId), tenantId: req.user.tenantId } });
     if (!primary) return res.status(404).json({ error: 'Primary contact not found' });
 
     let merged = 0;
     for (const secId of secondaryIds) {
       const sid = parseInt(secId);
-      const secondary = await prisma.contact.findUnique({ where: { id: sid } });
+      const secondary = await prisma.contact.findFirst({ where: { id: sid, tenantId: req.user.tenantId } });
       if (!secondary) continue;
 
       // Move all relationships to primary
@@ -239,7 +247,7 @@ router.post('/merge', async (req, res) => {
 
       // Log the merge
       await prisma.activity.create({
-        data: { type: 'Note', description: `Merged contact "${secondary.name}" (${secondary.email}) into this record`, contactId: primary.id, userId: req.user?.id || null }
+        data: { type: 'Note', description: `Merged contact "${secondary.name}" (${secondary.email}) into this record`, contactId: primary.id, userId: req.user?.userId || null, tenantId: req.user.tenantId }
       });
 
       // Delete secondary
@@ -249,7 +257,7 @@ router.post('/merge', async (req, res) => {
     }
 
     await prisma.auditLog.create({
-      data: { action: 'MERGE', entity: 'Contact', entityId: primary.id, details: JSON.stringify({ mergedIds: secondaryIds, count: merged }), userId: req.user?.id || null }
+      data: { action: 'MERGE', entity: 'Contact', entityId: primary.id, details: JSON.stringify({ mergedIds: secondaryIds, count: merged }), userId: req.user?.userId || null, tenantId: req.user.tenantId }
     });
 
     res.json({ success: true, merged, primaryId: primary.id });
@@ -262,15 +270,19 @@ router.post('/merge', async (req, res) => {
 // ── Contact Attachments ───────────────────────────────────────────
 router.get('/:id/attachments', async (req, res) => {
   try {
-    res.json(await prisma.contactAttachment.findMany({ where: { contactId: parseInt(req.params.id) }, orderBy: { createdAt: 'desc' } }));
+    const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    res.json(await prisma.contactAttachment.findMany({ where: { contactId: contact.id, tenantId: req.user.tenantId }, orderBy: { createdAt: 'desc' } }));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch attachments' }); }
 });
 
 router.post('/:id/attachments', async (req, res) => {
   try {
+    const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
     const { filename, fileUrl, fileSize, mimeType } = req.body;
     const attachment = await prisma.contactAttachment.create({
-      data: { filename, fileUrl, fileSize: fileSize ? parseInt(fileSize) : null, mimeType, contactId: parseInt(req.params.id) }
+      data: { filename, fileUrl, fileSize: fileSize ? parseInt(fileSize) : null, mimeType, contactId: contact.id, tenantId: req.user.tenantId }
     });
     res.status(201).json(attachment);
   } catch (err) { res.status(500).json({ error: 'Failed to add attachment' }); }
@@ -278,15 +290,19 @@ router.post('/:id/attachments', async (req, res) => {
 
 router.delete('/attachments/:attachId', async (req, res) => {
   try {
-    await prisma.contactAttachment.delete({ where: { id: parseInt(req.params.attachId) } });
+    const existing = await prisma.contactAttachment.findFirst({ where: { id: parseInt(req.params.attachId), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Attachment not found' });
+    await prisma.contactAttachment.delete({ where: { id: existing.id } });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete attachment' }); }
 });
 
 router.delete('/:id', async (req, res) => {
   try {
-    await prisma.activity.deleteMany({ where: { contactId: parseInt(req.params.id) } });
-    await prisma.contact.delete({ where: { id: parseInt(req.params.id) } });
+    const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    await prisma.activity.deleteMany({ where: { contactId: existing.id } });
+    await prisma.contact.delete({ where: { id: existing.id } });
     res.json({ message: 'Deleted' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete contact' });

@@ -8,7 +8,7 @@ const prisma = new PrismaClient();
 router.get("/", async (req, res) => {
   try {
     const { status } = req.query;
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
 
     const estimates = await prisma.estimate.findMany({
@@ -23,14 +23,14 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET /api/estimates/:id — single estimate
+// GET /api/estimates/:id
 router.get("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid estimate ID" });
 
-    const estimate = await prisma.estimate.findUnique({
-      where: { id },
+    const estimate = await prisma.estimate.findFirst({
+      where: { id, tenantId: req.user.tenantId },
       include: { contact: true, deal: true, lineItems: true },
     });
     if (!estimate) return res.status(404).json({ error: "Estimate not found" });
@@ -41,7 +41,7 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// POST /api/estimates — create with line items
+// POST /api/estimates
 router.post("/", async (req, res) => {
   try {
     const { title, contactId, dealId, validUntil, notes, lineItems } = req.body;
@@ -64,6 +64,7 @@ router.post("/", async (req, res) => {
         notes: notes || null,
         contactId: contactId ? parseInt(contactId) : null,
         dealId: dealId ? parseInt(dealId) : null,
+        tenantId: req.user.tenantId,
         lineItems: {
           create: parsedLineItems.map((item) => ({
             description: item.description || "",
@@ -81,11 +82,14 @@ router.post("/", async (req, res) => {
   }
 });
 
-// PUT /api/estimates/:id — update estimate fields (not line items)
+// PUT /api/estimates/:id
 router.put("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid estimate ID" });
+
+    const existing = await prisma.estimate.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Estimate not found" });
 
     const { title, status, validUntil, notes, contactId, dealId } = req.body;
     const data = {};
@@ -97,7 +101,7 @@ router.put("/:id", async (req, res) => {
     if (dealId !== undefined) data.dealId = dealId ? parseInt(dealId) : null;
 
     const estimate = await prisma.estimate.update({
-      where: { id },
+      where: { id: existing.id },
       data,
       include: { contact: true, deal: true, lineItems: true },
     });
@@ -108,14 +112,14 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// PUT /api/estimates/:id/convert — convert estimate to invoice
+// PUT /api/estimates/:id/convert — convert to invoice
 router.put("/:id/convert", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid estimate ID" });
 
-    const estimate = await prisma.estimate.findUnique({
-      where: { id },
+    const estimate = await prisma.estimate.findFirst({
+      where: { id, tenantId: req.user.tenantId },
       include: { lineItems: true },
     });
     if (!estimate) return res.status(404).json({ error: "Estimate not found" });
@@ -139,6 +143,7 @@ router.put("/:id/convert", async (req, res) => {
           dueDate,
           contactId: estimate.contactId,
           dealId: estimate.dealId || null,
+          tenantId: req.user.tenantId,
         },
       });
 
@@ -163,7 +168,9 @@ router.delete("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid estimate ID" });
-    await prisma.estimate.delete({ where: { id } });
+    const existing = await prisma.estimate.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Estimate not found" });
+    await prisma.estimate.delete({ where: { id: existing.id } });
     res.json({ message: "Estimate deleted" });
   } catch (err) {
     console.error(err);

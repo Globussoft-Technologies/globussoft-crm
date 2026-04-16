@@ -10,11 +10,13 @@ router.get("/", verifyToken, async (req, res) => {
   try {
     const query = req.query.q || "";
     if (query.trim().length === 0) return res.json({ contacts: [], deals: [], invoices: [] });
+    const tenantId = req.user.tenantId;
 
     // Parallel federated querying across Postgres indices
     const [contacts, deals, invoices] = await Promise.all([
       prisma.contact.findMany({
         where: {
+          tenantId,
           OR: [
             { name: { contains: query } },
             { email: { contains: query } },
@@ -24,11 +26,11 @@ router.get("/", verifyToken, async (req, res) => {
         take: 5
       }),
       prisma.deal.findMany({
-        where: { title: { contains: query } },
+        where: { tenantId, title: { contains: query } },
         take: 5
       }),
       prisma.invoice.findMany({
-        where: { invoiceNum: { contains: query } },
+        where: { tenantId, invoiceNum: { contains: query } },
         take: 5,
         include: { contact: true }
       })

@@ -30,8 +30,8 @@ router.post("/draft", verifyToken, async (req, res) => {
     // Gather CRM context about the recipient if available
     let contactContext = "";
     if (contactId) {
-      const contact = await prisma.contact.findUnique({
-        where: { id: parseInt(contactId) },
+      const contact = await prisma.contact.findFirst({
+        where: { id: parseInt(contactId), tenantId: req.user.tenantId },
         include: { deals: { take: 3, orderBy: { createdAt: "desc" } }, activities: { take: 5, orderBy: { createdAt: "desc" } } },
       });
       if (contact) {
@@ -44,7 +44,7 @@ router.post("/draft", verifyToken, async (req, res) => {
 - Recent activities: ${contact.activities.map(a => `${a.type}: ${a.description.slice(0, 60)}`).join("; ") || "None"}`;
       }
     } else if (recipientEmail) {
-      const contact = await prisma.contact.findUnique({ where: { email: recipientEmail } });
+      const contact = await prisma.contact.findFirst({ where: { email: recipientEmail, tenantId: req.user.tenantId } });
       if (contact) {
         contactContext = `\nRecipient: ${contact.name} at ${contact.company || "their company"} (${contact.status}, Score: ${contact.aiScore}/100)`;
       }

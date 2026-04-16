@@ -13,6 +13,7 @@ const authenticateToken = (req, res, next) => {
   if (!token) return res.sendStatus(401);
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.sendStatus(403);
+    if (user.tenantId === undefined || user.tenantId === null) user.tenantId = 1;
     req.user = user;
     next();
   });
@@ -24,6 +25,7 @@ router.use(authenticateToken); // Protect all deal routes
 router.get("/", async (req, res) => {
   try {
     const deals = await prisma.deal.findMany({
+      where: { tenantId: req.user.tenantId },
       include: { contact: true, owner: true },
       orderBy: { createdAt: 'desc' }
     });
@@ -38,18 +40,19 @@ router.post("/", async (req, res) => {
   try {
     const { title, amount, probability, stage } = req.body;
     const deal = await prisma.deal.create({
-      data: { 
-        title, 
+      data: {
+        title,
         amount: parseFloat(amount) || 0,
         probability: parseInt(probability) || 50,
         stage: stage || 'lead',
-        ownerId: req.user.userId 
+        ownerId: req.user.userId,
+        tenantId: req.user.tenantId,
       }
     });
-    
+
     // Broadcast real-time update to all connected clients
     if(req.io) req.io.emit("deal_updated", deal);
-    
+
     res.status(201).json(deal);
   } catch (error) {
     res.status(500).json({ error: "Pipeline injection failed" });
@@ -61,8 +64,10 @@ router.put("/:id/stage", async (req, res) => {
   try {
     const { id } = req.params;
     const { stage } = req.body;
+    const existing = await prisma.deal.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Deal not found" });
     const deal = await prisma.deal.update({
-      where: { id: parseInt(id) },
+      where: { id: existing.id },
       data: { stage }
     });
     if(req.io) req.io.emit("deal_updated", deal);
@@ -75,7 +80,9 @@ router.put("/:id/stage", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await prisma.deal.delete({ where: { id: parseInt(id) } });
+    const existing = await prisma.deal.findFirst({ where: { id: parseInt(id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Deal not found" });
+    await prisma.deal.delete({ where: { id: existing.id } });
     if(req.io) req.io.emit("deal_deleted", parseInt(id));
     res.json({ success: true });
   } catch (error) {

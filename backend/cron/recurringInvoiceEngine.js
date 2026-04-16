@@ -32,7 +32,7 @@ async function processRecurringInvoices(io) {
         const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
         const newDueDate = addInterval(now, inv.recurFrequency);
 
-        // Create the new invoice
+        // Create the new invoice (inherit tenant from parent)
         await prisma.invoice.create({
           data: {
             invoiceNum: invNum,
@@ -42,6 +42,7 @@ async function processRecurringInvoices(io) {
             contactId: inv.contactId,
             dealId: inv.dealId,
             parentInvoiceId: inv.id,
+            tenantId: inv.tenantId || 1,
           },
         });
 
@@ -52,12 +53,13 @@ async function processRecurringInvoices(io) {
           data: { nextRecurDate: nextDate },
         });
 
-        // Create audit log
+        // Create audit log (inherit tenant from parent invoice)
         await prisma.auditLog.create({
           data: {
             action: "CREATE",
             entity: "Invoice",
             details: JSON.stringify({ source: "Recurring", parentInvoice: inv.invoiceNum, newInvoice: invNum }),
+            tenantId: inv.tenantId || 1,
           },
         });
 

@@ -8,7 +8,7 @@ const prisma = new PrismaClient();
 // Get all Custom Entities (Settings Schema Viewer)
 router.get("/entities", verifyToken, async (req, res) => {
   try {
-    const list = await prisma.customEntity.findMany({ include: { fields: true }});
+    const list = await prisma.customEntity.findMany({ where: { tenantId: req.user.tenantId }, include: { fields: true }});
     res.json(list);
   } catch(err) {
     res.status(500).json({ error: "Failed to read EAV entity schema mapping." });
@@ -19,12 +19,13 @@ router.get("/entities", verifyToken, async (req, res) => {
 router.post("/entities", verifyToken, async (req, res) => {
   try {
     const { name, description, fields } = req.body; // fields: [{name, type}]
-    
+
     // Prisma nested creation pipeline
     const entity = await prisma.customEntity.create({
       data: {
         name,
         description,
+        tenantId: req.user.tenantId,
         fields: {
           create: fields.map(f => ({ name: f.name, type: f.type }))
         }
@@ -40,19 +41,19 @@ router.post("/entities", verifyToken, async (req, res) => {
 // Fetch all Custom Records for a specific Entity Name mapping
 router.get("/records/:entityName", verifyToken, async (req, res) => {
   try {
-    const entity = await prisma.customEntity.findUnique({
-      where: { name: req.params.entityName },
+    const entity = await prisma.customEntity.findFirst({
+      where: { name: req.params.entityName, tenantId: req.user.tenantId },
       include: { fields: true }
     });
-    
+
     if (!entity) return res.status(404).json({ error: "Entity definition missing." });
-    
+
     // Fetch generic rows mapping values back to the EAV dictionary
     const records = await prisma.customRecord.findMany({
-      where: { entityId: entity.id },
+      where: { entityId: entity.id, tenantId: req.user.tenantId },
       include: { values: { include: { field: true } } }
     });
-    
+
     // Transformation format for React UI tables
     const formatted = records.map(r => {
       const row = { id: r.id, createdAt: r.createdAt };
@@ -62,7 +63,7 @@ router.get("/records/:entityName", verifyToken, async (req, res) => {
       });
       return row;
     });
-    
+
     res.json({ entity, records: formatted });
   } catch(err) {
     res.status(500).json({ error: "Record query compilation failed." });
@@ -72,15 +73,15 @@ router.get("/records/:entityName", verifyToken, async (req, res) => {
 // Create a new Custom Record Instance within EAV Table
 router.post("/records/:entityName", verifyToken, async (req, res) => {
   try {
-    const entity = await prisma.customEntity.findUnique({
-      where: { name: req.params.entityName },
+    const entity = await prisma.customEntity.findFirst({
+      where: { name: req.params.entityName, tenantId: req.user.tenantId },
       include: { fields: true }
     });
-    
+
     if (!entity) return res.status(404).json({ error: "Entity constraint violation." });
-    
+
     const payload = req.body; // { "License Plate": "ABC", "Wheels": 4 }
-    
+
     const valuesData = entity.fields.map(field => {
       const val = payload[field.name];
       const out = { fieldId: field.id };
@@ -93,10 +94,11 @@ router.post("/records/:entityName", verifyToken, async (req, res) => {
     const record = await prisma.customRecord.create({
       data: {
         entityId: entity.id,
+        tenantId: req.user.tenantId,
         values: { create: valuesData }
       }
     });
-    
+
     res.status(201).json(record);
   } catch(err) {
     res.status(500).json({ error: "Dynamic allocation row creation failed." });

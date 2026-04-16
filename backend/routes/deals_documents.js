@@ -22,17 +22,30 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// Helper: ensure deal belongs to current tenant
+async function ensureOwnDeal(req, res) {
+  const dealId = parseInt(req.params.dealId);
+  const deal = await prisma.deal.findFirst({ where: { id: dealId, tenantId: req.user.tenantId } });
+  if (!deal) {
+    res.status(404).json({ error: "Deal not found" });
+    return null;
+  }
+  return deal;
+}
+
 // Upload attachment
 router.post("/:dealId/upload", upload.single("file"), async (req, res) => {
   try {
-    const { dealId } = req.params;
+    const deal = await ensureOwnDeal(req, res);
+    if (!deal) return;
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     const attachment = await prisma.attachment.create({
       data: {
         filename: req.file.originalname,
         fileUrl: `/uploads/${req.file.filename}`,
-        dealId: parseInt(dealId)
+        dealId: deal.id,
+        tenantId: req.user.tenantId,
       }
     });
 
@@ -45,16 +58,18 @@ router.post("/:dealId/upload", upload.single("file"), async (req, res) => {
 // Generate dynamic PDF Quote
 router.post("/:dealId/generate-quote", async (req, res) => {
   try {
-    const { dealId } = req.params;
-    const deal = await prisma.deal.findUnique({ where: { id: parseInt(dealId) }, include: { contact: true, owner: true } });
+    const deal = await prisma.deal.findFirst({
+      where: { id: parseInt(req.params.dealId), tenantId: req.user.tenantId },
+      include: { contact: true, owner: true }
+    });
     if (!deal) return res.status(404).json({ error: "Deal not found" });
 
     const doc = new PDFDocument();
-    const pdfFilename = `quote-${dealId}-${Date.now()}.pdf`;
+    const pdfFilename = `quote-${deal.id}-${Date.now()}.pdf`;
     const pdfPath = path.join(uploadPath, pdfFilename);
 
     doc.pipe(fs.createWriteStream(pdfPath));
-    
+
     // PDF Styling
     doc.fontSize(24).text("Enterprise CRM Quote", { align: "center" });
     doc.moveDown();
@@ -65,7 +80,7 @@ router.post("/:dealId/generate-quote", async (req, res) => {
     doc.text(`Total Amount: $${(deal.amount || 0).toLocaleString()}`);
     doc.moveDown(2);
     doc.fontSize(10).fillColor('gray').text("This is an automatically generated legally binding quote valid for 30 days.", { align: "center" });
-    
+
     doc.end();
 
     // Attach to deal
@@ -73,7 +88,8 @@ router.post("/:dealId/generate-quote", async (req, res) => {
       data: {
         filename: "System Generated Quote.pdf",
         fileUrl: `/uploads/${pdfFilename}`,
-        dealId: parseInt(dealId)
+        dealId: deal.id,
+        tenantId: req.user.tenantId,
       }
     });
 
@@ -87,8 +103,12 @@ router.post("/:dealId/generate-quote", async (req, res) => {
 // Fetch deal attachments
 router.get("/:dealId/attachments", async (req, res) => {
   try {
-    const { dealId } = req.params;
-    const attachments = await prisma.attachment.findMany({ where: { dealId: parseInt(dealId) }, orderBy: { createdAt: 'desc' } });
+    const deal = await ensureOwnDeal(req, res);
+    if (!deal) return;
+    const attachments = await prisma.attachment.findMany({
+      where: { dealId: deal.id, tenantId: req.user.tenantId },
+      orderBy: { createdAt: 'desc' }
+    });
     res.json(attachments);
   } catch (err) {
     res.status(500).json({ error: "Failed to load attachments" });

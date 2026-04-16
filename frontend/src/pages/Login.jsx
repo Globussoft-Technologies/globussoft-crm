@@ -11,7 +11,7 @@ const Login = () => {
   const [forgotMessage, setForgotMessage] = useState('');
   const [forgotToken, setForgotToken] = useState('');
   const [forgotLoading, setForgotLoading] = useState(false);
-  const { setUser, setToken } = useContext(AuthContext);
+  const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
 
   const handleForgotPassword = async (e) => {
@@ -57,6 +57,7 @@ const Login = () => {
       if (response.ok) {
         setUser(data.user);
         setToken(data.token);
+        if (data.tenant && setTenant) setTenant(data.tenant);
         navigate('/dashboard');
       } else {
         setError(data.error || 'Login failed');

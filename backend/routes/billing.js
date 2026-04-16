@@ -7,10 +7,11 @@ const PDFDocument = require("pdfkit");
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Fetch all ledgers
+// Fetch all ledgers for current tenant
 router.get("/", verifyToken, async (req, res) => {
   try {
     const invoices = await prisma.invoice.findMany({
+      where: { tenantId: req.user.tenantId },
       include: { contact: true, deal: true },
       orderBy: [{ status: "desc" }, { dueDate: "asc" }]
     });
@@ -25,14 +26,15 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
   try {
     const { amount, dueDate, contactId, dealId } = req.body;
     const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
-    
+
     const invoice = await prisma.invoice.create({
       data: {
         invoiceNum: invNum,
         amount: parseFloat(amount),
         dueDate: new Date(dueDate),
         contactId: parseInt(contactId),
-        dealId: dealId ? parseInt(dealId) : null
+        dealId: dealId ? parseInt(dealId) : null,
+        tenantId: req.user.tenantId,
       },
       include: { contact: true, deal: true }
     });
@@ -45,8 +47,10 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
 // Reconcile Payment (Mark as Paid)
 router.put("/:id/pay", verifyToken, async (req, res) => {
   try {
+    const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Invoice not found" });
     const invoice = await prisma.invoice.update({
-      where: { id: parseInt(req.params.id) },
+      where: { id: existing.id },
       data: { status: "PAID" },
       include: { contact: true }
     });
@@ -59,8 +63,8 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
 // Generate Invoice PDF
 router.get("/:id/pdf", verifyToken, async (req, res) => {
   try {
-    const invoice = await prisma.invoice.findUnique({
-      where: { id: parseInt(req.params.id) },
+    const invoice = await prisma.invoice.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
       include: { contact: true },
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
@@ -130,7 +134,7 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
 router.put("/:id/recurring", verifyToken, async (req, res) => {
   try {
     const { isRecurring, recurFrequency } = req.body;
-    const invoice = await prisma.invoice.findUnique({ where: { id: parseInt(req.params.id) } });
+    const invoice = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
 
     const nextDate = isRecurring ? new Date() : null;
@@ -143,7 +147,7 @@ router.put("/:id/recurring", verifyToken, async (req, res) => {
     }
 
     const updated = await prisma.invoice.update({
-      where: { id: parseInt(req.params.id) },
+      where: { id: invoice.id },
       data: { isRecurring: !!isRecurring, recurFrequency: recurFrequency || null, nextRecurDate: nextDate },
       include: { contact: true }
     });
@@ -156,7 +160,9 @@ router.put("/:id/recurring", verifyToken, async (req, res) => {
 // Obliterate Invoice
 router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    await prisma.invoice.delete({ where: { id: parseInt(req.params.id) } });
+    const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Invoice not found" });
+    await prisma.invoice.delete({ where: { id: existing.id } });
     res.json({ success: true });
   } catch(err) {
     res.status(500).json({ error: "Ledger deletion failure" });

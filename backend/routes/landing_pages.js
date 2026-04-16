@@ -12,6 +12,7 @@ const prisma = new PrismaClient();
 router.get("/", verifyToken, async (req, res) => {
   try {
     res.json(await prisma.landingPage.findMany({
+      where: { tenantId: req.user.tenantId },
       select: { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, createdAt: true, updatedAt: true },
       orderBy: { createdAt: "desc" },
     }));
@@ -24,7 +25,7 @@ router.get("/templates/list", verifyToken, (req, res) => {
 
 router.get("/:id", verifyToken, async (req, res) => {
   try {
-    const page = await prisma.landingPage.findUnique({ where: { id: parseInt(req.params.id) } });
+    const page = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!page) return res.status(404).json({ error: "Page not found" });
     res.json(page);
   } catch (err) { res.status(500).json({ error: "Failed to fetch page" }); }
@@ -42,7 +43,7 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     const page = await prisma.landingPage.create({
-      data: { title, slug: finalSlug, templateType, content: finalContent || "[]", userId: req.user.id },
+      data: { title, slug: finalSlug, templateType, content: finalContent || "[]", userId: req.user.userId, tenantId: req.user.tenantId },
     });
     res.status(201).json(page);
   } catch (err) {
@@ -53,6 +54,8 @@ router.post("/", verifyToken, async (req, res) => {
 
 router.put("/:id", verifyToken, async (req, res) => {
   try {
+    const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Page not found" });
     const { title, content, cssOverrides, metaTitle, metaDescription, slug } = req.body;
     const data = {};
     if (title !== undefined) data.title = title;
@@ -62,32 +65,38 @@ router.put("/:id", verifyToken, async (req, res) => {
     if (metaDescription !== undefined) data.metaDescription = metaDescription;
     if (slug !== undefined) data.slug = slug;
 
-    res.json(await prisma.landingPage.update({ where: { id: parseInt(req.params.id) }, data }));
+    res.json(await prisma.landingPage.update({ where: { id: existing.id }, data }));
   } catch (err) { res.status(500).json({ error: "Failed to update page" }); }
 });
 
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
-    await prisma.landingPage.delete({ where: { id: parseInt(req.params.id) } });
+    const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Page not found" });
+    await prisma.landingPage.delete({ where: { id: existing.id } });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: "Failed to delete page" }); }
 });
 
 router.post("/:id/publish", verifyToken, async (req, res) => {
   try {
-    res.json(await prisma.landingPage.update({ where: { id: parseInt(req.params.id) }, data: { status: "PUBLISHED", publishedAt: new Date() } }));
+    const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Page not found" });
+    res.json(await prisma.landingPage.update({ where: { id: existing.id }, data: { status: "PUBLISHED", publishedAt: new Date() } }));
   } catch (err) { res.status(500).json({ error: "Failed to publish" }); }
 });
 
 router.post("/:id/unpublish", verifyToken, async (req, res) => {
   try {
-    res.json(await prisma.landingPage.update({ where: { id: parseInt(req.params.id) }, data: { status: "DRAFT" } }));
+    const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Page not found" });
+    res.json(await prisma.landingPage.update({ where: { id: existing.id }, data: { status: "DRAFT" } }));
   } catch (err) { res.status(500).json({ error: "Failed to unpublish" }); }
 });
 
 router.post("/:id/duplicate", verifyToken, async (req, res) => {
   try {
-    const orig = await prisma.landingPage.findUnique({ where: { id: parseInt(req.params.id) } });
+    const orig = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!orig) return res.status(404).json({ error: "Page not found" });
     const copy = await prisma.landingPage.create({
       data: {
@@ -98,7 +107,8 @@ router.post("/:id/duplicate", verifyToken, async (req, res) => {
         templateType: orig.templateType,
         metaTitle: orig.metaTitle,
         metaDescription: orig.metaDescription,
-        userId: req.user.id,
+        userId: req.user.userId,
+        tenantId: req.user.tenantId,
       },
     });
     res.status(201).json(copy);
@@ -107,8 +117,10 @@ router.post("/:id/duplicate", verifyToken, async (req, res) => {
 
 router.get("/:id/analytics", verifyToken, async (req, res) => {
   try {
+    const page = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!page) return res.status(404).json({ error: "Page not found" });
     const events = await prisma.landingPageAnalytics.findMany({
-      where: { landingPageId: parseInt(req.params.id) },
+      where: { landingPageId: page.id, tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
       take: 100,
     });
@@ -119,8 +131,8 @@ router.get("/:id/analytics", verifyToken, async (req, res) => {
 });
 
 // ── Public routes (no auth) ───────────────────────────────────────
+// Pages are looked up by slug (globally unique). Inferred tenantId comes from the page itself.
 
-// Serve published landing page
 publicRouter.get("/:slug", async (req, res) => {
   try {
     const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
@@ -128,7 +140,7 @@ publicRouter.get("/:slug", async (req, res) => {
 
     await prisma.landingPage.update({ where: { id: page.id }, data: { visits: { increment: 1 } } });
     await prisma.landingPageAnalytics.create({
-      data: { landingPageId: page.id, eventType: "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"], referrer: req.headers["referer"] },
+      data: { landingPageId: page.id, eventType: "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"], referrer: req.headers["referer"], tenantId: page.tenantId || 1 },
     });
 
     const html = renderPage(page);
@@ -139,11 +151,11 @@ publicRouter.get("/:slug", async (req, res) => {
   }
 });
 
-// Form submission
 publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
   try {
     const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
     if (!page) return res.status(404).json({ error: "Page not found" });
+    const tenantId = page.tenantId || 1;
 
     const { email, name, full_name, phone, company, company_name } = req.body;
     const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
@@ -160,16 +172,17 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
         status: "Lead",
         source: `Landing Page: ${page.title}`,
         aiScore: 30,
+        tenantId,
       },
     });
 
     await prisma.deal.create({
-      data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id },
+      data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id, tenantId },
     });
 
     await prisma.landingPage.update({ where: { id: page.id }, data: { submissions: { increment: 1 } } });
     await prisma.landingPageAnalytics.create({
-      data: { landingPageId: page.id, eventType: "FORM_SUBMIT", visitorIp: req.ip, metadata: JSON.stringify(req.body) },
+      data: { landingPageId: page.id, eventType: "FORM_SUBMIT", visitorIp: req.ip, metadata: JSON.stringify(req.body), tenantId },
     });
 
     if (req.io) req.io.emit("deal_updated", {});
@@ -181,13 +194,12 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
   }
 });
 
-// Tracking pixel
 publicRouter.get("/:slug/track", async (req, res) => {
   try {
     const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
     if (page) {
       await prisma.landingPageAnalytics.create({
-        data: { landingPageId: page.id, eventType: req.query.event || "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"] },
+        data: { landingPageId: page.id, eventType: req.query.event || "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"], tenantId: page.tenantId || 1 },
       });
     }
   } catch (err) { /* silent */ }

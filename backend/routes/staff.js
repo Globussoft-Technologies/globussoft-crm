@@ -7,10 +7,11 @@ const prisma = new PrismaClient();
 
 const VALID_ROLES = ["ADMIN", "MANAGER", "USER"];
 
-// GET / — list all users (exclude password)
+// GET / — list users in current tenant (exclude password)
 router.get("/", async (req, res) => {
   try {
     const users = await prisma.user.findMany({
+      where: { tenantId: req.user.tenantId },
       select: {
         id: true,
         email: true,
@@ -42,8 +43,11 @@ router.put("/:id/role", verifyRole(["ADMIN"]), async (req, res) => {
       return res.status(400).json({ error: "Cannot change your own role." });
     }
 
+    const target = await prisma.user.findFirst({ where: { id: userId, tenantId: req.user.tenantId } });
+    if (!target) return res.status(404).json({ error: "User not found." });
+
     const user = await prisma.user.update({
-      where: { id: userId },
+      where: { id: target.id },
       data: { role },
       select: {
         id: true,
@@ -72,8 +76,11 @@ router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
       return res.status(400).json({ error: "Cannot delete your own account." });
     }
 
+    const target = await prisma.user.findFirst({ where: { id: userId, tenantId: req.user.tenantId } });
+    if (!target) return res.status(404).json({ error: "User not found." });
+
     await prisma.user.delete({
-      where: { id: userId },
+      where: { id: target.id },
     });
     res.json({ message: "User deleted." });
   } catch (err) {

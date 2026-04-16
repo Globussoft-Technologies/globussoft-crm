@@ -8,7 +8,7 @@ const prisma = new PrismaClient();
 // Get all email campaigns
 router.get("/campaigns", verifyToken, async (req, res) => {
   try {
-    const campaigns = await prisma.campaign.findMany({ orderBy: { createdAt: 'desc' } });
+    const campaigns = await prisma.campaign.findMany({ where: { tenantId: req.user.tenantId }, orderBy: { createdAt: 'desc' } });
     res.json(campaigns);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch campaigns." });
@@ -20,7 +20,7 @@ router.post("/campaigns", verifyToken, async (req, res) => {
   try {
     const { name, budget } = req.body;
     const campaign = await prisma.campaign.create({
-      data: { name, budget: parseFloat(budget || 0) }
+      data: { name, budget: parseFloat(budget || 0), tenantId: req.user.tenantId }
     });
     res.status(201).json(campaign);
   } catch (err) {
@@ -30,10 +30,12 @@ router.post("/campaigns", verifyToken, async (req, res) => {
 
 
 // Public endpoint for embedded forms to POST to (CORS must be enabled in server.js)
+// NOTE: This endpoint is unauthenticated — leads default to Default Org (tenantId=1).
+// Multi-tenant routing for embedded forms can be added later via formId -> tenant lookup.
 router.post("/submit", async (req, res) => {
   try {
     const { formId, name, full_name, email, company_name } = req.body;
-    
+
     // Parse dynamic payload mapping
     const contactEmail = email || `${Date.now()}@anonymous.com`;
     const contactName = name || full_name || "Web Lead";
@@ -44,7 +46,7 @@ router.post("/submit", async (req, res) => {
     if (contactCompany.toLowerCase().includes("inc") || contactCompany.toLowerCase().includes("llc")) score += 25;
     if (contactEmail.endsWith(".edu") || contactEmail.endsWith(".gov")) score += 35;
     if (contactName.split(" ").length > 1) score += 10;
-    
+
     console.log(`[FormIngestion] Received lead from form ${formId}:`, req.body, `| Assigned AI Score: ${score}`);
 
     const contact = await prisma.contact.upsert({
@@ -56,7 +58,8 @@ router.post("/submit", async (req, res) => {
         company: contactCompany,
         status: "Lead",
         source: "Embedded Web Form",
-        aiScore: score
+        aiScore: score,
+        tenantId: 1, // default org for inbound public form submissions
       }
     });
 
@@ -65,7 +68,8 @@ router.post("/submit", async (req, res) => {
         title: `Inbound: ${contactCompany}`,
         amount: 0,
         stage: "lead",
-        contactId: contact.id
+        contactId: contact.id,
+        tenantId: contact.tenantId || 1,
       }
     });
 

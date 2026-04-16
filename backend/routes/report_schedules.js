@@ -4,10 +4,12 @@ const { PrismaClient } = require("@prisma/client");
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// List all report schedules for current user (admins see all)
+// List report schedules in current tenant (admins see all in tenant, others see own)
 router.get("/", async (req, res) => {
   try {
-    const where = req.user.role === 'ADMIN' ? {} : { userId: req.user.userId };
+    const where = req.user.role === 'ADMIN'
+      ? { tenantId: req.user.tenantId }
+      : { tenantId: req.user.tenantId, userId: req.user.userId };
     const schedules = await prisma.reportSchedule.findMany({
       where,
       include: { user: { select: { id: true, name: true, email: true } } },
@@ -36,6 +38,7 @@ router.post("/", async (req, res) => {
         format: format || 'PDF',
         enabled: enabled !== false,
         userId: req.user.userId,
+        tenantId: req.user.tenantId,
       },
       include: { user: { select: { id: true, name: true, email: true } } }
     });
@@ -50,6 +53,9 @@ router.post("/", async (req, res) => {
 router.put("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    const existing = await prisma.reportSchedule.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Schedule not found" });
+
     const { name, reportType, metrics, groupBy, frequency, cronExpression, recipients, format, enabled } = req.body;
 
     const data = {};
@@ -67,7 +73,7 @@ router.put("/:id", async (req, res) => {
     if (enabled !== undefined) data.enabled = enabled;
 
     const schedule = await prisma.reportSchedule.update({
-      where: { id },
+      where: { id: existing.id },
       data,
       include: { user: { select: { id: true, name: true, email: true } } }
     });
@@ -80,7 +86,9 @@ router.put("/:id", async (req, res) => {
 // Delete a report schedule
 router.delete("/:id", async (req, res) => {
   try {
-    await prisma.reportSchedule.delete({ where: { id: parseInt(req.params.id) } });
+    const existing = await prisma.reportSchedule.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Schedule not found" });
+    await prisma.reportSchedule.delete({ where: { id: existing.id } });
     res.json({ message: "Schedule deleted" });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete report schedule" });
@@ -91,11 +99,11 @@ router.delete("/:id", async (req, res) => {
 router.put("/:id/toggle", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const existing = await prisma.reportSchedule.findUnique({ where: { id } });
+    const existing = await prisma.reportSchedule.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Schedule not found" });
 
     const schedule = await prisma.reportSchedule.update({
-      where: { id },
+      where: { id: existing.id },
       data: { enabled: !existing.enabled },
       include: { user: { select: { id: true, name: true, email: true } } }
     });

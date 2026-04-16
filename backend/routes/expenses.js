@@ -8,7 +8,7 @@ router.get("/", async (req, res) => {
   try {
     const { status, category } = req.query;
 
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
     if (category) where.category = category;
 
@@ -31,8 +31,8 @@ router.get("/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid expense ID" });
 
-    const expense = await prisma.expense.findUnique({
-      where: { id },
+    const expense = await prisma.expense.findFirst({
+      where: { id, tenantId: req.user.tenantId },
       include: { user: true, contact: true },
     });
 
@@ -62,6 +62,7 @@ router.post("/", async (req, res) => {
         expenseDate: expenseDate ? new Date(expenseDate) : new Date(),
         userId: req.user.userId ? parseInt(req.user.userId) : null,
         contactId: contactId ? parseInt(contactId) : null,
+        tenantId: req.user.tenantId,
       },
       include: { user: true, contact: true },
     });
@@ -79,6 +80,9 @@ router.put("/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid expense ID" });
 
+    const existing = await prisma.expense.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Expense not found" });
+
     const { title, amount, category, status, notes, expenseDate, contactId, receiptUrl } = req.body;
 
     const data = {};
@@ -92,7 +96,7 @@ router.put("/:id", async (req, res) => {
     if (contactId !== undefined) data.contactId = contactId ? parseInt(contactId) : null;
 
     const expense = await prisma.expense.update({
-      where: { id },
+      where: { id: existing.id },
       data,
       include: { user: true, contact: true },
     });
@@ -110,7 +114,10 @@ router.delete("/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid expense ID" });
 
-    await prisma.expense.delete({ where: { id } });
+    const existing = await prisma.expense.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Expense not found" });
+
+    await prisma.expense.delete({ where: { id: existing.id } });
     res.json({ message: "Expense Deleted" });
   } catch (err) {
     console.error(err);

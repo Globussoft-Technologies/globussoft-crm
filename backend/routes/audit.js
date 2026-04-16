@@ -6,7 +6,7 @@ const prisma = new PrismaClient();
 router.get('/', async (req, res) => {
   try {
     const { entity, action } = req.query;
-    const where = {};
+    const where = { tenantId: req.user.tenantId };
 
     if (entity) where.entity = entity;
     if (action) where.action = action;

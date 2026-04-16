@@ -46,6 +46,9 @@ export const ThemeContext = createContext();
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [tenant, setTenant] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('tenant') || 'null'); } catch { return null; }
+  });
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
 
@@ -58,6 +61,14 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
+    if (tenant) {
+      localStorage.setItem('tenant', JSON.stringify(tenant));
+    } else {
+      localStorage.removeItem('tenant');
+    }
+  }, [tenant]);
+
+  useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('theme', theme);
   }, [theme]);
@@ -66,7 +77,7 @@ export default function App() {
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
-    <AuthContext.Provider value={{ user, setUser, token, setToken }}>
+    <AuthContext.Provider value={{ user, setUser, token, setToken, tenant, setTenant }}>
       <BrowserRouter>
         <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: 'var(--text-primary)' }}>Loading...</div>}>
           <Routes>

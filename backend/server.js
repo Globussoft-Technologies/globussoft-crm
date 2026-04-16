@@ -361,4 +361,8 @@ initSentimentCron();
 const { initDealInsightsCron } = require('./cron/dealInsightsEngine');
 initDealInsightsCron(io);
 
+// Initialize Forecast Snapshot Engine (weekly Monday 1 AM)
+const { initForecastSnapshotCron } = require('./cron/forecastSnapshotEngine');
+initForecastSnapshotCron();
+
 // nodemon restart trigger

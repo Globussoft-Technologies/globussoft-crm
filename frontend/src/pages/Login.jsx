@@ -336,9 +336,52 @@ const Login = () => {
           </div>
         )}
 
-        <div style={{ marginTop: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-          <p>Demo Credentials:</p>
-          <p>Email: admin@globussoft.com | Password: password123</p>
+        <div style={{ marginTop: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+            <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }} />
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Demo accounts — click to fill</span>
+            <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+            <button
+              type="button"
+              onClick={() => { setEmail('admin@globussoft.com'); setPassword('password123'); }}
+              style={{
+                padding: '0.6rem 0.5rem',
+                borderRadius: '8px',
+                border: '1px solid rgba(16,185,129,0.3)',
+                background: 'rgba(16,185,129,0.08)',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(16,185,129,0.15)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(16,185,129,0.08)'; }}
+            >
+              <div style={{ fontSize: '0.7rem', fontWeight: '700', color: '#10b981', textTransform: 'uppercase', marginBottom: '0.15rem' }}>Admin</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>admin@globussoft.com</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>password123</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => { setEmail('user@crm.com'); setPassword('password123'); }}
+              style={{
+                padding: '0.6rem 0.5rem',
+                borderRadius: '8px',
+                border: '1px solid rgba(59,130,246,0.3)',
+                background: 'rgba(59,130,246,0.08)',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(59,130,246,0.15)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(59,130,246,0.08)'; }}
+            >
+              <div style={{ fontSize: '0.7rem', fontWeight: '700', color: '#3b82f6', textTransform: 'uppercase', marginBottom: '0.15rem' }}>Normal User</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>user@crm.com</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>password123</div>
+            </button>
+          </div>
         </div>
         <div style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.875rem' }}>
           <span style={{ color: 'var(--text-secondary)' }}>Don't have an account? </span>

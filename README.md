@@ -1,18 +1,22 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies with glassmorphism UI, AI-powered lead scoring, dark/light theme, and 25+ fully functional modules.
+> A full-stack enterprise CRM built by Globussoft Technologies with 88 API routes, 99 data models, 76 UI pages, 12 automation engines, glassmorphism UI, AI-powered features, and omnichannel communications.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v2.0.0
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.0.0
 
 ## Tech Stack
 
 | Layer | Technologies |
 |-------|-------------|
-| Frontend | React 18, Vite, React Router v6, React.lazy() code splitting, Lucide Icons, Recharts, ReactFlow, Socket.io-client |
-| Backend | Node.js, Express.js, Prisma ORM, MySQL, Socket.io, node-cron, PDFKit, Nodemailer, express-rate-limit, Swagger UI |
-| Auth | JWT (bcryptjs), RBAC: ADMIN / MANAGER / USER |
-| Production | PM2, Nginx reverse proxy, Certbot SSL |
-| Testing | Playwright E2E (40 spec files, 313+ tests) |
+| Frontend | React 18, Vite, React Router v7, React.lazy() code splitting, Lucide Icons, Recharts, ReactFlow, React Grid Layout, Socket.io-client |
+| Backend | Node.js, Express.js, Prisma ORM, MySQL, Socket.io, node-cron, PDFKit, pdf-lib, Nodemailer, Mailgun, express-rate-limit, express-validator, Swagger UI |
+| AI | Google Gemini 2.5 (@google/generative-ai), sentiment analysis, deal insights, lead scoring, voice transcription, data enrichment |
+| Auth | JWT (bcryptjs), RBAC (ADMIN / MANAGER / USER), 2FA (speakeasy), SSO, SCIM |
+| Security | Helmet, CSRF (csurf), sanitize-html, field-level permissions, GDPR consent tracking, rate limiting |
+| Payments | Stripe, Razorpay |
+| Communications | Twilio (SMS/Voice), Mailgun, WhatsApp Cloud API, Web Push (VAPID), IMAP inbound email |
+| Production | PM2, Nginx reverse proxy, Certbot SSL, Sentry error tracking |
+| Testing | Playwright E2E (40 spec files) |
 | Styling | Vanilla CSS with glassmorphism design, dark/light theme support |
 
 ---
@@ -69,77 +73,136 @@ Schedule automated email reports with configurable **frequency (Daily, Weekly, M
 ---
 
 ### Marketplace Leads (India Market Integration)
-Auto-import leads from **IndiaMART, JustDial, and TradeIndia** — India's largest B2B/B2C marketplaces. Supports both **real-time webhooks** and **cron-based API polling** (every 5 min). Features smart deduplication (by external lead ID, email, and normalized phone), one-click or bulk import into CRM contacts, provider-wise stats dashboard, and an admin configuration panel with webhook URL display.
-
-**Key capabilities:**
-- Webhook endpoints for each provider (no-auth, push-based)
-- Scheduled API sync engine for pull-based lead fetching
-- Phone number normalization (Indian 10-digit → +91 format)
-- Duplicate detection across marketplace leads and existing contacts
-- Auto-creates Contact + Deal on import with source attribution
-- Real-time Socket.io notifications on new marketplace leads
+Auto-import leads from **IndiaMART, JustDial, and TradeIndia** -- India's largest B2B/B2C marketplaces. Supports both **real-time webhooks** and **cron-based API polling** (every 5 min). Features smart deduplication (by external lead ID, email, and normalized phone), one-click or bulk import into CRM contacts, provider-wise stats dashboard, and an admin configuration panel with webhook URL display.
 
 ---
 
-## All Modules
+## All Modules (88 Routes)
 
 ### Sales & Pipeline
-- **Dashboard** - Executive analytics (MRR, revenue, deal closures, pipeline charts)
-- **Pipeline** - Kanban drag-and-drop deal board with real-time Socket.io sync
-- **Contacts** - 360-degree B2B/B2C directory with AI scoring, phone tracking, and agent assignment
-- **Leads** - Filtered contacts (status=Lead) with agent assignment, bulk assign, and convert-to-customer
-- **Clients** - Filtered contacts (status=Customer) with search
-- **Lead Scoring** - AI-powered scoring engine running on node-cron
-- **Marketplace Leads** - Indian marketplace integration (IndiaMART, JustDial, TradeIndia) — auto-import leads via webhooks and cron-based API sync, smart deduplication, bulk import, config panel
+- **Dashboard** -- Executive analytics (MRR, revenue, deal closures, pipeline charts)
+- **Pipeline** -- Kanban drag-and-drop deal board with real-time Socket.io sync
+- **Pipelines** -- Multiple pipeline management (create, rename, reorder stages)
+- **Pipeline Stages** -- Stage configuration and customization
+- **Deals** -- Deal CRUD with stage progression and owner assignment
+- **Deal Insights** -- AI-powered deal analysis and recommendations
+- **Forecasting** -- Revenue forecasting with snapshot engine
+- **Quotas** -- Sales quota setting and tracking per rep/team
+- **Win/Loss Analysis** -- Win/loss reason tracking and analytics
+- **Playbooks** -- Sales playbook templates with progress tracking
+- **Funnel** -- Visual sales funnel analytics
+- **CPQ** -- Configure-Price-Quote builder with line-item schemas
 
-### Reports & Analytics
-- **Reports** - BI dashboard with 8 metrics, date filters, charts, data tables, PDF/CSV export
-- **Agent Reports** - Per-agent performance leaderboard (deals, calls, tasks, emails, revenue, win rate)
-- **Auto Email Reports** - Scheduled report delivery via email (daily/weekly/monthly, PDF/CSV)
+### Contacts & Leads
+- **Contacts** -- 360-degree B2B/B2C directory with AI scoring, phone tracking, agent assignment
+- **Leads** -- Filtered contacts (status=Lead) with agent assignment, bulk assign, convert-to-customer
+- **Clients** -- Filtered contacts (status=Customer)
+- **Lead Scoring** -- AI-powered scoring engine running on node-cron (every 10 min)
+- **Lead Routing** -- Automated lead assignment rules (round-robin, territory, capacity)
+- **Territories** -- Geographic/account territory management
+- **Data Enrichment** -- AI-powered contact and company data enrichment
+- **Marketplace Leads** -- IndiaMART / JustDial / TradeIndia lead ingestion with dedup engine
 
-### Automation & Communication
-- **Sequences** - Visual drip campaign builder with ReactFlow (Email, SMS, WhatsApp, Push node types)
-- **Workflows** - Automation rule engine with visual flow editor
-- **Inbox** - Omnichannel communications (Email, Calls, SMS, WhatsApp)
-- **Marketing** - Campaign management (Email, SMS, Push campaigns)
-- **SMS Campaigns** - SMS via MSG91/Twilio, DLT compliance, templates with variable substitution
-- **WhatsApp Business** - WhatsApp Cloud API, template approval workflow, chat-style inbox
-- **Indian Telephony** - Click-to-call via MyOperator/Knowlarity, call recording, CDR webhooks
-- **Push Notifications** - Web push (VAPID), CRM user + visitor subscriptions, marketing campaigns
-- **Landing Page Builder** - No-code drag-and-drop builder with 4 templates, form submissions, analytics
-- **Channels Settings** - Unified provider configuration for all communication channels
+### Marketing
+- **Marketing** -- Campaign management (Email, SMS, Push)
+- **Sequences** -- Visual drip campaign builder with ReactFlow (Email, SMS, WhatsApp, Push nodes)
+- **A/B Tests** -- Campaign A/B testing with variant tracking
+- **Attribution** -- Multi-touch marketing attribution modeling
+- **Web Visitors** -- Website visitor tracking and identification
+- **Chatbots** -- Chatbot builder with conversation management
+- **Landing Pages** -- No-code drag-and-drop page builder with templates and analytics
+- **Email Templates** -- Reusable email template library
+- **Social** -- Social media post scheduling and mention monitoring
+
+### Communication
+- **Inbox** -- Omnichannel communications hub (Email, Calls, SMS, WhatsApp)
+- **Email** -- Email compose and management with Mailgun delivery
+- **Email Inbound** -- IMAP-based inbound email processing
+- **Email Threading** -- Conversation threading for email chains
+- **Email Scheduling** -- Scheduled email send with cron engine
+- **SMS** -- SMS messaging via MSG91/Twilio with DLT compliance
+- **WhatsApp** -- WhatsApp Cloud API with template approval workflow
+- **Telephony** -- Click-to-call via MyOperator/Knowlarity with call logging
+- **Voice** -- Twilio VoIP softphone integration
+- **Voice Transcription** -- AI-powered call transcription
+- **Live Chat** -- Real-time website chat with agent routing
+- **Shared Inbox** -- Team shared inbox for collaborative email
+- **Push Notifications** -- Web push (VAPID) for CRM users and website visitors
+- **Channels Config** -- Unified provider configuration for all communication channels
+- **Notifications** -- In-app notification system with bell icon and unread badges
 
 ### Financial
-- **Billing / Invoices** - Full CRUD with mark-paid, void, PDF download, status badges
-- **Estimates** - Line-item estimates with convert-to-invoice
-- **Expenses** - Category tracking with approve/reject/reimburse workflow
-- **Contracts** - Contract lifecycle (Draft > Active > Expired > Terminated)
-- **CPQ** - Configure-Price-Quote builder with deal selection and line-item schemas
+- **Billing** -- Financial overview dashboard
+- **Invoices** -- Full CRUD with mark-paid, void, PDF download, recurring invoices
+- **Estimates** -- Line-item estimates with convert-to-invoice
+- **Expenses** -- Category tracking with approve/reject/reimburse workflow
+- **Contracts** -- Contract lifecycle (Draft > Active > Expired > Terminated)
+- **Payments** -- Stripe and Razorpay payment processing
+- **Currencies** -- Multi-currency support with exchange rates
+- **Accounting** -- Accounting sync and journal entries
 
-### Project & Task Management
-- **Projects** - Project management with budget, status, and task association
-- **Task Queue** - Priority-based task management with status tracking
+### Service & Support
+- **Tickets** -- Support ticketing with priority/status/assignee
+- **Support** -- Customer helpdesk management
+- **SLA** -- Service level agreement policies and tracking
+- **Canned Responses** -- Pre-built reply templates for support agents
+- **Surveys** -- Customer satisfaction surveys with response tracking
+- **Knowledge Base** -- KB articles organized by category
+- **Customer Portal** -- Self-service portal for customers
 
-### Support
-- **Tickets** - Support ticketing with priority/status/assignee
-- **Support** - Customer helpdesk management with knowledge base
+### Documents
+- **Document Templates** -- Template library with variable substitution
+- **Signatures** -- Electronic signature requests and tracking
+- **Document Tracking** -- Document view analytics
 
-### Platform & Developer
-- **App Builder** - Custom Objects with dynamic schemas from UI (EAV pattern)
-- **Developer Portal** - API key provisioning and webhook configuration
-- **Staff** - User directory with RBAC role management (ADMIN only)
-- **Marketplace** - Integration catalog
-- **Marketplace Leads** - IndiaMART / JustDial / TradeIndia lead ingestion with dedup engine
-- **Settings** - Organization settings, pipeline stage management, dark/light theme toggle
-- **Command Palette** - Quick navigation (Cmd+K / Ctrl+K)
-- **Softphone** - Twilio VoIP integration
-- **Real-time Presence** - Socket.io collaborative cursors
-- **Notifications** - Bell icon with dropdown, unread badge, mark-all-read
-- **Audit Log** - Entity/action tracking with user attribution
-- **CSV Import** - Bulk contact import with preview
+### Analytics & Reports
+- **Reports** -- BI dashboard with 8 metrics, date filters, charts, data tables, PDF/CSV export
+- **Agent Reports** -- Per-agent performance leaderboard
+- **Custom Reports** -- User-defined report builder
+- **Dashboards** -- Customizable dashboard layouts (React Grid Layout)
+- **Funnel** -- Visual funnel analytics
+- **Auto Email Reports** -- Scheduled report delivery (daily/weekly/monthly)
 
-### Dark / Light Theme
-Full theme support across all pages. Toggle from Settings > Appearance. Persists across sessions via localStorage. Uses CSS custom properties with `[data-theme="light"]` overrides.
+### Automation
+- **Workflows** -- Automation rule engine with visual flow editor
+- **Sequences** -- Multi-step drip campaign automation
+- **Approval Workflows** -- Multi-level approval chains
+
+### AI Features
+- **AI Drafts** -- Gemini 2.5-powered email draft generation
+- **Deal Insights** -- AI deal analysis and win probability
+- **Sentiment Analysis** -- Customer sentiment scoring from communications
+- **Data Enrichment** -- AI-powered contact/company enrichment
+- **Lead Scoring** -- Predictive lead scoring with configurable weights
+- **Voice Transcription** -- Call recording transcription
+
+### Integrations
+- **Marketplace Leads** -- IndiaMART, JustDial, TradeIndia with webhooks + API sync
+- **Zapier** -- Zapier integration triggers and actions
+- **Google Calendar** -- Calendar sync with Google
+- **Outlook Calendar** -- Calendar sync with Microsoft Outlook
+- **SSO** -- SAML/OAuth single sign-on configuration
+- **SCIM** -- SCIM user provisioning
+
+### Admin & Platform
+- **Staff** -- User directory with RBAC role management (ADMIN only)
+- **Settings** -- Organization settings, pipeline stages, theme toggle
+- **Developer Portal** -- API key provisioning and webhook configuration
+- **Audit Log** -- Entity/action tracking with user attribution
+- **Privacy / GDPR** -- Consent records, data export requests, retention policies
+- **Field Permissions** -- Field-level access control by role
+- **Sandbox** -- Snapshot-based sandbox environments for testing
+- **Industry Templates** -- Pre-built CRM configurations by industry
+- **Tenants** -- Multi-tenant workspace management
+- **Landing Page Builder** -- No-code page builder with form submissions
+- **Booking Pages** -- Online scheduling and appointment booking
+- **App Builder** -- Custom Objects with dynamic schemas (EAV pattern)
+- **Command Palette** -- Quick navigation (Cmd+K / Ctrl+K)
+- **Softphone** -- Twilio VoIP integration
+- **Real-time Presence** -- Socket.io collaborative cursors
+- **CSV Import** -- Bulk contact import with preview
+- **Search** -- Global search across all entities
+- **Integrations** -- Third-party integration catalog
 
 ## Getting Started
 
@@ -169,41 +232,57 @@ npx playwright test --project=chromium
 
 ## API
 
-35 route modules, all prefixed with `/api/`, protected by JWT auth. Public landing pages served at `/p/:slug`.
+88 route modules, all prefixed with `/api/`, protected by JWT auth. Public landing pages served at `/p/:slug`.
 
 Rate limiting: 5000 req/15min general, 1000 req/15min on auth.
 
 Interactive docs at `/api-docs` (Swagger UI).
 
+## Automation Engines (12 Cron Jobs)
+
+| Engine | Schedule | Purpose |
+|--------|----------|---------|
+| leadScoringEngine | Every 10 min | AI-powered lead score recalculation |
+| sequenceEngine | Every 5 min | Drip sequence step execution |
+| marketplaceEngine | Every 5 min | IndiaMART/JustDial/TradeIndia lead sync |
+| workflowEngine | Every 5 min | Automation rule evaluation and execution |
+| campaignEngine | Every 10 min | Marketing campaign dispatch |
+| reportEngine | Scheduled | Auto email report generation and delivery |
+| recurringInvoiceEngine | Daily | Recurring invoice generation |
+| forecastSnapshotEngine | Daily | Revenue forecast snapshot capture |
+| dealInsightsEngine | Every 30 min | AI deal insight generation |
+| sentimentEngine | Every 15 min | Customer sentiment analysis |
+| scheduledEmailEngine | Every 1 min | Scheduled email dispatch |
+| retentionEngine | Daily | Data retention policy enforcement (GDPR) |
+
+## Security Features
+
+- **Authentication** -- JWT with bcryptjs password hashing
+- **2FA** -- TOTP-based two-factor authentication (speakeasy)
+- **SSO** -- SAML/OAuth single sign-on
+- **RBAC** -- Role-based access control (Admin / Manager / User)
+- **Field Permissions** -- Field-level access restrictions by role
+- **CSRF Protection** -- csurf middleware
+- **Security Headers** -- Helmet.js
+- **Input Sanitization** -- sanitize-html + express-validator
+- **Rate Limiting** -- express-rate-limit on all endpoints
+- **GDPR Compliance** -- Consent records, data export, retention policies
+- **SCIM Provisioning** -- Automated user lifecycle management
+- **Audit Logging** -- Full entity/action audit trail
+
 ## E2E Testing
 
-40 Playwright spec files with **313 tests, 100% passing** — covering all modules, API health, responsive design, theme toggle, and navigation flows.
+40 Playwright spec files covering all modules, API health, responsive design, theme toggle, and navigation flows.
 
 ```bash
 cd e2e && npx playwright test --project=chromium
 ```
 
-### Deep Workflow Test Results
-
-10 end-to-end workflows verified against the live production deployment:
-
-| # | Workflow | Result | Details |
-|---|---------|--------|---------|
-| 1 | Lead Creation + Agent Assignment | PASS | Created lead, assigned agent via dropdown, verified on both Leads and Contacts pages |
-| 2 | Pipeline Deal Lifecycle | PASS | 6 stages rendered, 29 deals distributed, created deal via modal, opened detail view, drag-drop ready |
-| 3 | Reports: Charts + Metrics | PASS | 3 metrics tested (revenue, deal count, win rate), chart renders, aggregate total $2.89M |
-| 4 | Reports: Detailed Data Tables | PASS | 6 table types: Deals (27), Contacts (35), Tasks (21), Call Logs (17), Invoices (12), Expenses (12) |
-| 5 | Reports: PDF + CSV Export | PASS | CSV returns proper headers + data rows, PDF generates valid document |
-| 6 | Agent Reports | PASS | 6 agents in leaderboard, bar chart, stat cards, drill-down detail panel |
-| 7 | Auto Email Report Scheduling | PASS | Full CRUD: create schedule, verify in table, toggle pause, delete |
-| 8 | Forgot Password Flow | PASS | API returns reset token, password reset completes successfully |
-| 9 | Invoice + Task + Ticket Management | PASS | Invoices (10 records, Mark Paid workflow), Tasks loaded, Tickets loaded |
-| 10 | API Endpoint Health | PASS | 30/30 authenticated endpoints return 200 |
-
 ## Deployment
 
 - **Domain:** crm.globusdemos.com
 - **Architecture:** PM2 (backend) + Nginx (frontend static + reverse proxy) + Certbot SSL
+- **Monitoring:** Sentry error tracking (@sentry/node)
 - **Deploy flow:** git pull > npm install > prisma generate > vite build > copy dist to Nginx > pm2 restart
 
 ---

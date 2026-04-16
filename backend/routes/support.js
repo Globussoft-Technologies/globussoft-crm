@@ -1,23 +1,126 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
-const router = express.Router();
-const prisma = new PrismaClient();
+const { verifyToken } = require('../middleware/auth');
+const prisma = require('../lib/prisma');
 
-router.get('/', async (req, res) => {
-  res.json(await prisma.ticket.findMany({ where: { tenantId: req.user.tenantId } }));
+const router = express.Router();
+
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+    if (req.query.status) where.status = req.query.status;
+    if (req.query.priority) where.priority = req.query.priority;
+    if (req.query.assigneeId) where.assigneeId = parseInt(req.query.assigneeId);
+    const tickets = await prisma.ticket.findMany({
+      where,
+      include: { assignee: { select: { id: true, name: true, email: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(tickets);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch tickets' });
+  }
 });
-router.post('/', async (req, res) => {
-  res.status(201).json(await prisma.ticket.create({ data: { ...req.body, tenantId: req.user.tenantId } }));
+
+router.get('/stats', verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const [total, open, pending, resolved, byPriority] = await Promise.all([
+      prisma.ticket.count({ where: { tenantId } }),
+      prisma.ticket.count({ where: { tenantId, status: 'Open' } }),
+      prisma.ticket.count({ where: { tenantId, status: 'Pending' } }),
+      prisma.ticket.count({ where: { tenantId, status: 'Resolved' } }),
+      prisma.ticket.groupBy({ by: ['priority'], where: { tenantId }, _count: true }),
+    ]);
+    res.json({ total, open, pending, resolved, byPriority: byPriority.map(p => ({ priority: p.priority, count: p._count })) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch ticket stats' });
+  }
 });
-router.put('/:id', async (req, res) => {
-  const existing = await prisma.ticket.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
-  if (!existing) return res.status(404).json({ error: 'Ticket not found' });
-  res.json(await prisma.ticket.update({ where: { id: existing.id }, data: req.body }));
+
+router.get('/:id', verifyToken, async (req, res) => {
+  try {
+    const ticket = await prisma.ticket.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      include: { assignee: { select: { id: true, name: true, email: true } } },
+    });
+    if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+    res.json(ticket);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch ticket' });
+  }
 });
-router.delete('/:id', async (req, res) => {
-  const existing = await prisma.ticket.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
-  if (!existing) return res.status(404).json({ error: 'Ticket not found' });
-  await prisma.ticket.delete({ where: { id: existing.id } });
-  res.json({ message: 'Deleted' });
+
+router.post('/', verifyToken, async (req, res) => {
+  try {
+    const ticket = await prisma.ticket.create({
+      data: { ...req.body, tenantId: req.user.tenantId },
+    });
+
+    // Auto-apply SLA if policy exists for this priority
+    try {
+      const sla = await prisma.slaPolicy.findFirst({
+        where: { tenantId: req.user.tenantId, priority: ticket.priority, isActive: true },
+      });
+      if (sla) {
+        const now = new Date(ticket.createdAt);
+        await prisma.ticket.update({
+          where: { id: ticket.id },
+          data: {
+            slaResponseDue: new Date(now.getTime() + sla.responseMinutes * 60000),
+            slaResolveDue: new Date(now.getTime() + sla.resolveMinutes * 60000),
+          },
+        });
+      }
+    } catch (e) { /* SLA is non-critical */ }
+
+    if (req.io) req.io.emit('ticket_created', ticket);
+    res.status(201).json(ticket);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create ticket' });
+  }
 });
+
+router.put('/:id', verifyToken, async (req, res) => {
+  try {
+    const existing = await prisma.ticket.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Ticket not found' });
+
+    const data = { ...req.body };
+    if (req.body.status === 'Resolved' && !existing.resolvedAt) data.resolvedAt = new Date();
+    if (!existing.firstResponseAt && req.body.status && req.body.status !== 'Open') data.firstResponseAt = new Date();
+
+    const ticket = await prisma.ticket.update({ where: { id: existing.id }, data });
+    if (req.io) req.io.emit('ticket_updated', ticket);
+    res.json(ticket);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update ticket' });
+  }
+});
+
+router.put('/:id/assign', verifyToken, async (req, res) => {
+  try {
+    const existing = await prisma.ticket.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Ticket not found' });
+    const ticket = await prisma.ticket.update({
+      where: { id: existing.id },
+      data: { assigneeId: req.body.assigneeId ? parseInt(req.body.assigneeId) : null },
+      include: { assignee: { select: { id: true, name: true, email: true } } },
+    });
+    res.json(ticket);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to assign ticket' });
+  }
+});
+
+router.delete('/:id', verifyToken, async (req, res) => {
+  try {
+    const existing = await prisma.ticket.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Ticket not found' });
+    await prisma.ticket.delete({ where: { id: existing.id } });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete ticket' });
+  }
+});
+
 module.exports = router;

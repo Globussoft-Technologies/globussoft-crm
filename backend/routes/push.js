@@ -1,10 +1,9 @@
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const pushService = require("../services/pushService");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Subscribe CRM user for push notifications
 router.post("/subscribe", verifyToken, async (req, res) => {

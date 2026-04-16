@@ -9,8 +9,7 @@ require("dotenv").config({
 
 const express = require("express");
 const router = express.Router();
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 
 // Lazy-load twilio so missing env doesn't crash require()

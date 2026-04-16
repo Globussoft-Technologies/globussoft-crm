@@ -1,13 +1,12 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const crypto = require("crypto");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 
 // In-memory store for password reset tokens (token -> { userId, expiresAt })

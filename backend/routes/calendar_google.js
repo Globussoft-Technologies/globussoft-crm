@@ -3,12 +3,11 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 const { google } = require("googleapis");
 const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";

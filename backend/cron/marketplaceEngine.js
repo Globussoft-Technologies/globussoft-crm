@@ -1,8 +1,7 @@
 const cron = require("node-cron");
-const { PrismaClient } = require("@prisma/client");
 const { findDuplicateMarketplaceLead } = require("../utils/deduplication");
 
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 /**
  * Sync leads from a specific marketplace provider API.

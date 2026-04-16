@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // GET /api/projects — list with optional status filter
 router.get("/", async (req, res) => {

@@ -1,12 +1,11 @@
 const express = require("express");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
-const { PrismaClient } = require("@prisma/client");
 
 const crypto = require("crypto");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Mailgun email sending via their REST API
 const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;

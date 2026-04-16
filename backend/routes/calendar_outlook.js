@@ -3,10 +3,9 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 
 const express = require("express");
 const router = express.Router();
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken } = require("../middleware/auth");
 
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 const MS_CLIENT_ID = process.env.MS_CLIENT_ID;
 const MS_CLIENT_SECRET = process.env.MS_CLIENT_SECRET;

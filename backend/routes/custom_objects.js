@@ -1,9 +1,8 @@
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Get all Custom Entities (Settings Schema Viewer)
 router.get("/entities", verifyToken, async (req, res) => {

@@ -1,11 +1,10 @@
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken } = require("../middleware/auth");
 const { renderPage } = require("../services/landingPageRenderer");
 
 const router = express.Router();
 const publicRouter = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // ── Authenticated CRUD ────────────────────────────────────────────
 

@@ -1,12 +1,11 @@
 const express = require("express");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true }); // load root .env for GEMINI_API_KEY
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken } = require("../middleware/auth");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Load Gemini API key from root .env or backend .env
 const GEMINI_KEY = process.env.GEMINI_API_KEY;

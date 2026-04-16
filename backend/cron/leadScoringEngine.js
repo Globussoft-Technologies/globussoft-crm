@@ -1,6 +1,5 @@
 const cron = require('node-cron');
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 /**
  * Calculate a lead score (0-100) for a given contact record.

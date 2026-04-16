@@ -3,10 +3,9 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 const PDFDocument = require("pdfkit");
-const { PrismaClient } = require("@prisma/client");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Configure multer for file uploads
 const uploadPath = path.join(__dirname, "..", "uploads");

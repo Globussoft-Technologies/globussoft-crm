@@ -1,8 +1,7 @@
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // List report schedules in current tenant (admins see all in tenant, others see own)
 router.get("/", async (req, res) => {

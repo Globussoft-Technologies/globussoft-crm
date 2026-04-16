@@ -1,9 +1,8 @@
 const cron = require('node-cron');
-const { PrismaClient } = require('@prisma/client');
 const nodemailer = require('nodemailer');
 const PDFDocument = require('pdfkit');
 
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.ethereal.email',

@@ -1,8 +1,7 @@
 const router = require('express').Router();
-const { PrismaClient } = require('@prisma/client');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Admin/Manager only — audit log viewer
 router.use(verifyToken, verifyRole(["ADMIN", "MANAGER"]));

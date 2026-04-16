@@ -1,9 +1,8 @@
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 const PDFDocument = require("pdfkit");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // All queries are scoped to req.user.tenantId
 

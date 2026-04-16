@@ -1,11 +1,10 @@
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Fetch all ledgers for current tenant
 router.get("/", verifyToken, async (req, res) => {

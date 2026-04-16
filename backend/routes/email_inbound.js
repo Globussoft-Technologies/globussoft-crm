@@ -8,11 +8,10 @@
  * (whitelisted in server.js openPaths) — Mailgun is the only caller.
  */
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Mailgun POSTs as application/x-www-form-urlencoded (and multipart for
 // attachments, but the forward action gives us form-encoded fields).

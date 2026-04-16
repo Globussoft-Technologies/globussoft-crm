@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { sendTemplate, sendText, verifyWebhook } = require("../services/whatsappProvider");
 

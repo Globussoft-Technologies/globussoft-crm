@@ -1,9 +1,8 @@
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Fetch all drip sequences
 router.get("/", verifyToken, async (req, res) => {

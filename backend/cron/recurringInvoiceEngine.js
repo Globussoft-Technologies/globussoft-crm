@@ -1,7 +1,6 @@
 const cron = require("node-cron");
 const crypto = require("crypto");
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 function addInterval(date, frequency) {
   const d = new Date(date);

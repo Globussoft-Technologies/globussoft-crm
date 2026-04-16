@@ -1,8 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken } = require("../middleware/auth");
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 
@@ -57,6 +56,7 @@ router.post("/", verifyToken, async (req, res) => {
       },
       include: { contact: true, user: true },
     });
+    try { require("../lib/eventBus").emitEvent("task.created", { taskId: task.id, title: task.title, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
     res.status(201).json(task);
   } catch (err) {
     console.error(err);

@@ -1,10 +1,9 @@
 const express = require("express");
 const crypto = require("crypto");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // Generate a new secure API Key for the user
 router.post("/apikeys", verifyToken, async (req, res) => {

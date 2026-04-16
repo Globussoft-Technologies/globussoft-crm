@@ -1,8 +1,7 @@
 const express = require("express");
-const { PrismaClient } = require("@prisma/client");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 const VALID_STATUSES = ["Open", "Pending", "Resolved", "Closed"];
 const VALID_PRIORITIES = ["Low", "Medium", "High", "Urgent"];
@@ -71,6 +70,7 @@ router.post("/", async (req, res) => {
         assignee: { select: { id: true, name: true, email: true } },
       },
     });
+    try { require("../lib/eventBus").emitEvent("ticket.created", { ticketId: ticket.id, subject: ticket.subject, priority: ticket.priority, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
     res.status(201).json(ticket);
   } catch (err) {
     res.status(500).json({ error: "Failed to create ticket." });

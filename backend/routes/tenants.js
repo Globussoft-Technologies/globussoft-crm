@@ -1,10 +1,9 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 // GET /api/tenants/current — return current tenant info
 router.get("/current", verifyToken, async (req, res) => {

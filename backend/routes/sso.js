@@ -9,11 +9,10 @@ try {
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const { google } = require("googleapis");
-const { PrismaClient } = require("@prisma/client");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = require("../lib/prisma");
 
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 

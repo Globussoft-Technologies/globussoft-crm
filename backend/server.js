@@ -168,6 +168,17 @@ const cannedResponsesRoutes = require("./routes/canned_responses");
 const scimRoutes = require("./routes/scim");
 const sharedInboxRoutes = require("./routes/shared_inbox");
 const sentimentRoutes = require("./routes/sentiment");
+// Wave 4
+const liveChatRoutes = require("./routes/live_chat");
+const playbooksRoutes = require("./routes/playbooks");
+const documentViewsRoutes = require("./routes/document_views");
+const industryTemplatesRoutes = require("./routes/industry_templates");
+const socialRoutes = require("./routes/social");
+const sandboxRoutes = require("./routes/sandbox");
+const funnelRoutes = require("./routes/funnel");
+const zapierRoutes = require("./routes/zapier");
+const voiceTranscriptionRoutes = require("./routes/voice_transcription");
+const emailThreadingRoutes = require("./routes/email_threading");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -178,7 +189,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, next);
 });
@@ -265,6 +276,17 @@ app.use("/api/canned-responses", cannedResponsesRoutes);
 app.use("/api/scim", scimRoutes);
 app.use("/api/shared-inbox", sharedInboxRoutes);
 app.use("/api/sentiment", sentimentRoutes);
+// Wave 4
+app.use("/api/live-chat", liveChatRoutes);
+app.use("/api/playbooks", playbooksRoutes);
+app.use("/api/document-views", documentViewsRoutes);
+app.use("/api/industry-templates", industryTemplatesRoutes);
+app.use("/api/social", socialRoutes);
+app.use("/api/sandbox", sandboxRoutes);
+app.use("/api/funnel", funnelRoutes);
+app.use("/api/zapier", zapierRoutes);
+app.use("/api/voice-transcription", voiceTranscriptionRoutes);
+app.use("/api/email-threading", emailThreadingRoutes);
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);

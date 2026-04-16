@@ -67,6 +67,14 @@ const Payments = lazy(() => import('./pages/Payments'));
 const DealInsights = lazy(() => import('./pages/DealInsights'));
 const SharedInbox = lazy(() => import('./pages/SharedInbox'));
 const SLA = lazy(() => import('./pages/SLA'));
+const LiveChat = lazy(() => import('./pages/LiveChat'));
+const Playbooks = lazy(() => import('./pages/Playbooks'));
+const DocumentTracking = lazy(() => import('./pages/DocumentTracking'));
+const IndustryTemplates = lazy(() => import('./pages/IndustryTemplates'));
+const Social = lazy(() => import('./pages/Social'));
+const Sandbox = lazy(() => import('./pages/Sandbox'));
+const Funnel = lazy(() => import('./pages/Funnel'));
+const Zapier = lazy(() => import('./pages/Zapier'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -175,6 +183,14 @@ export default function App() {
               <Route path="deal-insights" element={<DealInsights />} />
               <Route path="shared-inbox" element={<SharedInbox />} />
               <Route path="sla" element={<SLA />} />
+              <Route path="live-chat" element={<LiveChat />} />
+              <Route path="playbooks" element={<Playbooks />} />
+              <Route path="document-tracking" element={<DocumentTracking />} />
+              <Route path="industry-templates" element={<IndustryTemplates />} />
+              <Route path="social" element={<Social />} />
+              <Route path="sandbox" element={<Sandbox />} />
+              <Route path="funnel" element={<Funnel />} />
+              <Route path="zapier" element={<Zapier />} />
             </Route>
           </Routes>
         </Suspense>

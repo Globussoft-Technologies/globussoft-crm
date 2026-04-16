@@ -1562,3 +1562,119 @@ model ScimToken {
   tenantId  Int      @default(1)
   createdAt DateTime @default(now())
 }
+
+// ── Live Chat ────────────────────────────────────────────────────
+
+model LiveChatSession {
+  id           Int      @id @default(autoincrement())
+  visitorId    String
+  visitorName  String?
+  visitorEmail String?
+  status       String   @default("OPEN") // OPEN, ASSIGNED, CLOSED
+  agentId      Int?
+  startedAt    DateTime @default(now())
+  closedAt     DateTime?
+  rating       Int?     // 1-5 satisfaction
+  tenantId     Int      @default(1)
+}
+
+model LiveChatMessage {
+  id         Int      @id @default(autoincrement())
+  sessionId  Int
+  sender     String   // "visitor", "agent", "system"
+  agentId    Int?
+  body       String   @db.Text
+  createdAt  DateTime @default(now())
+  tenantId   Int      @default(1)
+}
+
+// ── Sales Playbooks ──────────────────────────────────────────────
+
+model Playbook {
+  id        Int      @id @default(autoincrement())
+  name      String
+  stage     String   // matches deal stage: lead, contacted, proposal, etc.
+  steps     String   @db.Text // JSON array of {title, description, order}
+  isActive  Boolean  @default(true)
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PlaybookProgress {
+  id          Int      @id @default(autoincrement())
+  dealId      Int
+  playbookId  Int
+  completedSteps String? @db.Text // JSON array of step indices
+  tenantId    Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@unique([dealId, playbookId])
+}
+
+// ── Document View Tracking ───────────────────────────────────────
+
+model DocumentView {
+  id           Int      @id @default(autoincrement())
+  documentType String   // "Quote", "Estimate", "Contract", "Proposal"
+  documentId   Int
+  trackingId   String   @unique
+  viewerEmail  String?
+  viewedAt     DateTime?
+  ipAddress    String?
+  userAgent    String?  @db.Text
+  duration     Int?     // seconds spent viewing
+  tenantId     Int      @default(1)
+  createdAt    DateTime @default(now())
+}
+
+// ── Industry Templates ───────────────────────────────────────────
+
+model IndustryTemplate {
+  id          Int      @id @default(autoincrement())
+  industry    String   @unique // "real-estate", "healthcare", "education", "legal", "saas"
+  name        String
+  description String?  @db.Text
+  config      String   @db.LongText // JSON: pipelines, customFields, customObjects, sampleContacts
+  createdAt   DateTime @default(now())
+}
+
+// ── Social Media ─────────────────────────────────────────────────
+
+model SocialPost {
+  id         Int      @id @default(autoincrement())
+  platform   String   // "linkedin", "twitter", "facebook"
+  content    String   @db.Text
+  mediaUrl   String?
+  scheduledFor DateTime?
+  publishedAt DateTime?
+  externalId String?
+  status     String   @default("DRAFT") // DRAFT, SCHEDULED, PUBLISHED, FAILED
+  tenantId   Int      @default(1)
+  createdAt  DateTime @default(now())
+}
+
+model SocialMention {
+  id         Int      @id @default(autoincrement())
+  platform   String
+  authorName String?
+  authorHandle String?
+  content    String?  @db.Text
+  url        String?
+  sentiment  String?  // positive, neutral, negative
+  contactId  Int?
+  fetchedAt  DateTime @default(now())
+  tenantId   Int      @default(1)
+}
+
+// ── Sandbox ──────────────────────────────────────────────────────
+
+model SandboxSnapshot {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  data        String   @db.LongText // JSON dump of major entities
+  tenantId    Int      @default(1)
+  userId      Int?
+  createdAt   DateTime @default(now())
+}

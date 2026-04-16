@@ -97,6 +97,30 @@ const Sidebar = () => {
         <NavLink to="/sla" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <Target size={20} /> SLA Policies
         </NavLink>
+        <NavLink to="/live-chat" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <MessageSquare size={20} /> Live Chat
+        </NavLink>
+        <NavLink to="/playbooks" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <FileText size={20} /> Playbooks
+        </NavLink>
+        <NavLink to="/funnel" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <BarChart3 size={20} /> Funnel
+        </NavLink>
+        <NavLink to="/document-tracking" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Eye size={20} /> Doc Tracking
+        </NavLink>
+        <NavLink to="/social" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Send size={20} /> Social Media
+        </NavLink>
+        <NavLink to="/industry-templates" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Building2 size={20} /> Industry Templates
+        </NavLink>
+        <NavLink to="/sandbox" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Database size={20} /> Sandbox
+        </NavLink>
+        <NavLink to="/zapier" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+          <Code size={20} /> Zapier
+        </NavLink>
         <NavLink to="/tasks" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
           <CheckSquare size={20} /> Task Queue
         </NavLink>

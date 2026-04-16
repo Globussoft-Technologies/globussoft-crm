@@ -77,7 +77,6 @@ router.get("/", async (req, res) => {
   try {
     const rules = await prisma.automationRule.findMany({
       where: { tenantId: req.user.tenantId },
-      orderBy: { createdAt: "desc" },
     });
     res.json(rules);
   } catch (error) {

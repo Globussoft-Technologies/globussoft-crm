@@ -12,6 +12,13 @@ const Login = () => {
   const [forgotMessage, setForgotMessage] = useState('');
   const [forgotToken, setForgotToken] = useState('');
   const [forgotLoading, setForgotLoading] = useState(false);
+
+  // 2FA challenge state
+  const [require2FA, setRequire2FA] = useState(false);
+  const [tempToken, setTempToken] = useState('');
+  const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [twoFactorBusy, setTwoFactorBusy] = useState(false);
+
   const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
 
@@ -83,8 +90,16 @@ const Login = () => {
     setForgotLoading(false);
   };
 
+  const finalizeLogin = (data) => {
+    setUser(data.user);
+    setToken(data.token);
+    if (data.tenant && setTenant) setTenant(data.tenant);
+    navigate('/dashboard');
+  };
+
   const handleLogin = async (e) => {
     e.preventDefault();
+    setError('');
     if (!email || !password) {
       setError('Please fill out all required fields');
       return;
@@ -96,14 +111,17 @@ const Login = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
       });
-      
+
       const data = await response.json();
-      
+
       if (response.ok) {
-        setUser(data.user);
-        setToken(data.token);
-        if (data.tenant && setTenant) setTenant(data.tenant);
-        navigate('/dashboard');
+        // 2FA gate: server returns { requires2FA, tempToken } instead of final token
+        if (data.requires2FA && data.tempToken) {
+          setRequire2FA(true);
+          setTempToken(data.tempToken);
+          return;
+        }
+        finalizeLogin(data);
       } else {
         setError(data.error || 'Login failed');
       }
@@ -112,20 +130,91 @@ const Login = () => {
     }
   };
 
+  const handleVerify2FA = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!twoFactorCode || twoFactorCode.length < 6) {
+      setError('Enter the 6-digit code from your authenticator app (or an 8-char backup code).');
+      return;
+    }
+    setTwoFactorBusy(true);
+    try {
+      const response = await fetch('/api/auth/2fa/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tempToken, code: twoFactorCode })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        finalizeLogin(data);
+      } else {
+        setError(data.error || '2FA verification failed');
+      }
+    } catch (err) {
+      setError('Server error during 2FA verification.');
+    }
+    setTwoFactorBusy(false);
+  };
+
+  const cancel2FA = () => {
+    setRequire2FA(false);
+    setTempToken('');
+    setTwoFactorCode('');
+    setError('');
+  };
+
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
       <div className="card glass" style={{ width: '100%', maxWidth: '400px', padding: '2rem' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Globussoft CRM</h2>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>Sign in to your account</p>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+            {require2FA ? 'Two-factor verification required' : 'Sign in to your account'}
+          </p>
         </div>
-        
+
         {error && (
           <div style={{ backgroundColor: 'var(--danger-color)', color: 'white', padding: '0.75rem', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.875rem' }}>
             {error}
           </div>
         )}
 
+        {require2FA && (
+          <form onSubmit={handleVerify2FA}>
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                Enter the 6-digit code from your authenticator app
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={8}
+                className="input-field"
+                placeholder="123456"
+                value={twoFactorCode}
+                onChange={(e) => setTwoFactorCode(e.target.value.replace(/[^0-9A-Za-z]/g, '').toUpperCase())}
+                autoFocus
+                style={{ letterSpacing: '6px', textAlign: 'center', fontSize: '1.2rem' }}
+              />
+              <p style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                Don't have your phone? Use one of your 8-character backup codes.
+              </p>
+            </div>
+            <button type="submit" className="btn-primary" style={{ width: '100%' }} disabled={twoFactorBusy}>
+              {twoFactorBusy ? 'Verifying...' : 'Verify'}
+            </button>
+            <button
+              type="button"
+              onClick={cancel2FA}
+              style={{ width: '100%', marginTop: '0.5rem', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.85rem' }}
+            >
+              Cancel and sign in as another user
+            </button>
+          </form>
+        )}
+
+        {!require2FA && (
+        <>
         <form onSubmit={handleLogin}>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Email</label>
@@ -257,6 +346,8 @@ const Login = () => {
             Sign up
           </Link>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

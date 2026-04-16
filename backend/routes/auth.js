@@ -30,10 +30,22 @@ async function generateUniqueSlug(base) {
   return slug;
 }
 
+// Password complexity: minimum 8 chars, must contain at least one letter AND one number
+function validatePasswordComplexity(password) {
+  if (!password || typeof password !== "string") return "Password is required";
+  if (password.length < 8) return "Password must be at least 8 characters long";
+  if (!/[A-Za-z]/.test(password)) return "Password must contain at least one letter";
+  if (!/[0-9]/.test(password)) return "Password must contain at least one number";
+  return null;
+}
+
 // Register Epic — creates a new Tenant + first User (org owner)
 router.post("/register", async (req, res) => {
   try {
     const { email, password, name, organizationName } = req.body;
+
+    const pwErr = validatePasswordComplexity(password);
+    if (pwErr) return res.status(400).json({ error: pwErr });
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) return res.status(400).json({ error: "User already exists" });
@@ -69,6 +81,9 @@ router.post("/signup", async (req, res) => {
   try {
     const { email, password, name, organizationName } = req.body;
 
+    const pwErr = validatePasswordComplexity(password);
+    if (pwErr) return res.status(400).json({ error: pwErr });
+
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) return res.status(400).json({ error: "User already exists" });
 
@@ -99,19 +114,13 @@ router.post("/signup", async (req, res) => {
 });
 
 // Login Epic
+// NOTE: Login throttling is handled at the server level via express-rate-limit
+// (1000 req/15min on auth/login per server.js).
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Auth bypass for testing without actual DB population during simulation
-    if (email === "admin" && password === "admin") {
-      const token = jwt.sign({ userId: 1, role: "ADMIN", tenantId: 1 }, JWT_SECRET, { expiresIn: '7d' });
-      return res.json({
-        token,
-        user: { id: 1, email: "admin@crm.com", name: "Super Admin", role: "ADMIN" },
-        tenant: { id: 1, name: "Default Org", slug: "default-org", plan: "enterprise" }
-      });
-    }
+    // Admin/admin bypass intentionally removed for security hardening.
 
     const user = await prisma.user.findUnique({ where: { email }, include: { tenant: true } });
     if (!user) return res.status(401).json({ error: "Invalid credentials" });
@@ -120,6 +129,18 @@ router.post("/login", async (req, res) => {
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
     const tenantId = user.tenantId || 1;
+
+    // If 2FA is enabled, return short-lived temp token instead of final JWT.
+    // Frontend must POST /api/auth/2fa/verify with { tempToken, code } to complete login.
+    if (user.twoFactorEnabled) {
+      const tempToken = jwt.sign(
+        { userId: user.id, awaiting2FA: true },
+        JWT_SECRET,
+        { expiresIn: '5m' }
+      );
+      return res.json({ requires2FA: true, tempToken });
+    }
+
     const token = jwt.sign({ userId: user.id, role: user.role, tenantId }, JWT_SECRET, { expiresIn: '7d' });
 
     res.json({
@@ -224,10 +245,6 @@ router.get("/me", verifyToken, async (req, res) => {
       select: { id: true, name: true, email: true, role: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true } } }
     });
     if (!user) {
-      // Bypass admin/admin (id=1) may not be in DB during demo — fall back gracefully
-      if (req.user.userId === 1) {
-        return res.json({ id: 1, name: "Super Admin", email: "admin@crm.com", role: "ADMIN", tenant: { id: 1, name: "Default Org", slug: "default-org", plan: "enterprise" } });
-      }
       return res.status(404).json({ error: "User not found" });
     }
     res.json(user);

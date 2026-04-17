@@ -1,7 +1,24 @@
+import { useContext } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3, Code, FileDigit, Blocks, Database, Network, Target, CheckSquare, UserPlus, Building2, Receipt, Ticket, UsersRound, FileText, FileSpreadsheet, FolderKanban, DollarSign, Trophy, ShoppingBag, Radio, PanelTop, Calendar, Shield, ScrollText, GitBranch, TrendingUp, BookOpen, PenTool, ClipboardList, MessageSquare, Eye, BadgePercent, Bot, FileSignature, Award, CreditCard } from 'lucide-react';
+import { AuthContext } from '../App';
 
 const Sidebar = () => {
+  const { user } = useContext(AuthContext);
+  const role = user?.role || 'USER';
+  const isAdmin = role === 'ADMIN';
+  const isManager = role === 'ADMIN' || role === 'MANAGER';
+
+  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly }) => {
+    if (adminOnly && !isAdmin) return null;
+    if (managerOnly && !isManager) return null;
+    return (
+      <NavLink to={to} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+        <Icon size={20} /> {label}
+      </NavLink>
+    );
+  };
+
   return (
     <aside className="glass" style={{ width: '250px', height: '100vh', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', borderRadius: '0', borderLeft: 'none', borderTop: 'none', borderBottom: 'none' }}>
       <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
@@ -10,182 +27,90 @@ const Sidebar = () => {
       </div>
 
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}>
-        <NavLink to="/dashboard" end className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <LayoutDashboard size={20} /> Dashboard
-        </NavLink>
-        <NavLink to="/inbox" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <InboxIcon size={20} /> Inbox
-        </NavLink>
-        <NavLink to="/contacts" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Users size={20} /> Contacts
-        </NavLink>
-        <NavLink to="/pipeline" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Briefcase size={20} /> Pipeline
-        </NavLink>
-        <NavLink to="/pipelines" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <GitBranch size={20} /> Pipelines
-        </NavLink>
-        <NavLink to="/forecasting" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <TrendingUp size={20} /> Forecasting
-        </NavLink>
-        <NavLink to="/quotas" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Award size={20} /> Quotas
-        </NavLink>
-        <NavLink to="/win-loss" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <BadgePercent size={20} /> Win/Loss
-        </NavLink>
-        <NavLink to="/deal-insights" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Eye size={20} /> Deal Insights
-        </NavLink>
-        <NavLink to="/cpq" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <FileDigit size={20} /> CPQ
-        </NavLink>
-        <NavLink to="/marketing" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Send size={20} /> Marketing
-        </NavLink>
-        <NavLink to="/sequences" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Network size={20} /> Sequences
-        </NavLink>
-        <NavLink to="/reports" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <BarChart3 size={20} /> Reports
-        </NavLink>
-        <NavLink to="/agent-reports" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Trophy size={20} /> Agent Reports
-        </NavLink>
-        <NavLink to="/dashboards" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <LayoutDashboard size={20} /> Dashboards
-        </NavLink>
-        <NavLink to="/custom-reports" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <BarChart3 size={20} /> Custom Reports
-        </NavLink>
-        <NavLink to="/booking-pages" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Calendar size={20} /> Booking Pages
-        </NavLink>
-        <NavLink to="/signatures" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <FileSignature size={20} /> E-Signatures
-        </NavLink>
-        <NavLink to="/document-templates" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <FileText size={20} /> Doc Templates
-        </NavLink>
-        <NavLink to="/ab-tests" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <PenTool size={20} /> A/B Tests
-        </NavLink>
-        <NavLink to="/web-visitors" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Eye size={20} /> Web Visitors
-        </NavLink>
-        <NavLink to="/chatbots" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Bot size={20} /> Chatbots
-        </NavLink>
-        <NavLink to="/knowledge-base" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <BookOpen size={20} /> Knowledge Base
-        </NavLink>
-        <NavLink to="/surveys" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <ClipboardList size={20} /> Surveys (NPS/CSAT)
-        </NavLink>
-        <NavLink to="/payments" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <CreditCard size={20} /> Payments
-        </NavLink>
-        <NavLink to="/approvals" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <CheckSquare size={20} /> Approvals
-        </NavLink>
-        <NavLink to="/territories" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Network size={20} /> Territories
-        </NavLink>
-        <NavLink to="/lead-routing" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Send size={20} /> Lead Routing
-        </NavLink>
-        <NavLink to="/sla" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Target size={20} /> SLA Policies
-        </NavLink>
-        <NavLink to="/live-chat" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <MessageSquare size={20} /> Live Chat
-        </NavLink>
-        <NavLink to="/playbooks" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <FileText size={20} /> Playbooks
-        </NavLink>
-        <NavLink to="/funnel" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <BarChart3 size={20} /> Funnel
-        </NavLink>
-        <NavLink to="/document-tracking" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Eye size={20} /> Doc Tracking
-        </NavLink>
-        <NavLink to="/social" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Send size={20} /> Social Media
-        </NavLink>
-        <NavLink to="/industry-templates" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Building2 size={20} /> Industry Templates
-        </NavLink>
-        <NavLink to="/sandbox" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Database size={20} /> Sandbox
-        </NavLink>
-        <NavLink to="/zapier" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Code size={20} /> Zapier
-        </NavLink>
-        <NavLink to="/tasks" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <CheckSquare size={20} /> Task Queue
-        </NavLink>
-        <NavLink to="/lead-scoring" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Target size={20} /> Lead Scoring
-        </NavLink>
-        <NavLink to="/leads" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <UserPlus size={20} /> Leads
-        </NavLink>
-        <NavLink to="/marketplace-leads" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <ShoppingBag size={20} /> Marketplace Leads
-        </NavLink>
-        <NavLink to="/channels" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Radio size={20} /> Channels
-        </NavLink>
-        <NavLink to="/clients" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Building2 size={20} /> Clients
-        </NavLink>
-        <NavLink to="/invoices" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Receipt size={20} /> Invoices
-        </NavLink>
-        <NavLink to="/estimates" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <FileSpreadsheet size={20} /> Estimates
-        </NavLink>
-        <NavLink to="/expenses" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <DollarSign size={20} /> Expenses
-        </NavLink>
-        <NavLink to="/contracts" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <FileText size={20} /> Contracts
-        </NavLink>
-        <NavLink to="/projects" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <FolderKanban size={20} /> Projects
-        </NavLink>
-        <NavLink to="/tickets" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Ticket size={20} /> Tickets
-        </NavLink>
-        <NavLink to="/support" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <LifeBuoy size={20} /> Support
-        </NavLink>
-        <NavLink to="/objects" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Database size={20} /> App Builder
-        </NavLink>
-        <NavLink to="/landing-pages" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <PanelTop size={20} /> Landing Pages
-        </NavLink>
-        <NavLink to="/calendar-sync" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-          <Calendar size={20} /> Calendar
-        </NavLink>
-        <div style={{ paddingTop: '0.75rem', marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <NavLink to="/staff" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-            <UsersRound size={20} /> Staff
-          </NavLink>
-          <NavLink to="/audit-log" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-            <ScrollText size={20} /> Audit Log
-          </NavLink>
-          <NavLink to="/privacy" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-            <Shield size={20} /> Privacy
-          </NavLink>
-          <NavLink to="/developer" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-            <Code size={20} /> Developers
-          </NavLink>
-          <NavLink to="/settings" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-            <Settings size={20} /> Settings
-          </NavLink>
-        </div>
+        {/* Core — visible to ALL roles */}
+        <Link to="/dashboard" icon={LayoutDashboard} label="Dashboard" />
+        <Link to="/inbox" icon={InboxIcon} label="Inbox" />
+        <Link to="/contacts" icon={Users} label="Contacts" />
+        <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
+        <Link to="/leads" icon={UserPlus} label="Leads" />
+        <Link to="/clients" icon={Building2} label="Clients" />
+        <Link to="/tasks" icon={CheckSquare} label="Task Queue" />
+        <Link to="/tickets" icon={Ticket} label="Tickets" />
+        <Link to="/calendar-sync" icon={Calendar} label="Calendar" />
+        <Link to="/live-chat" icon={MessageSquare} label="Live Chat" />
+
+        {/* Sales — visible to ALL (reps need these) */}
+        <Link to="/deal-insights" icon={Eye} label="Deal Insights" />
+        <Link to="/playbooks" icon={FileText} label="Playbooks" />
+        <Link to="/booking-pages" icon={Calendar} label="Booking Pages" />
+        <Link to="/signatures" icon={FileSignature} label="E-Signatures" />
+        <Link to="/document-templates" icon={FileText} label="Doc Templates" />
+        <Link to="/document-tracking" icon={Eye} label="Doc Tracking" />
+
+        {/* Financial — visible to ALL */}
+        <Link to="/invoices" icon={Receipt} label="Invoices" />
+        <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
+        <Link to="/expenses" icon={DollarSign} label="Expenses" />
+        <Link to="/contracts" icon={FileText} label="Contracts" />
+        <Link to="/projects" icon={FolderKanban} label="Projects" />
+
+        {/* Manager+ features */}
+        <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly />
+        <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
+        <Link to="/quotas" icon={Award} label="Quotas" managerOnly />
+        <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly />
+        <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly />
+        <Link to="/reports" icon={BarChart3} label="Reports" managerOnly />
+        <Link to="/agent-reports" icon={Trophy} label="Agent Reports" managerOnly />
+        <Link to="/dashboards" icon={LayoutDashboard} label="Dashboards" managerOnly />
+        <Link to="/custom-reports" icon={BarChart3} label="Custom Reports" managerOnly />
+        <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly />
+        <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly />
+        <Link to="/territories" icon={Network} label="Territories" managerOnly />
+
+        {/* Marketing — Manager+ */}
+        <Link to="/marketing" icon={Send} label="Marketing" managerOnly />
+        <Link to="/sequences" icon={Network} label="Sequences" managerOnly />
+        <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly />
+        <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly />
+        <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly />
+        <Link to="/social" icon={Send} label="Social Media" managerOnly />
+        <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" managerOnly />
+        <Link to="/marketplace-leads" icon={ShoppingBag} label="Marketplace Leads" managerOnly />
+
+        {/* Service — Manager+ */}
+        <Link to="/support" icon={LifeBuoy} label="Support" managerOnly />
+        <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
+        <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly />
+        <Link to="/sla" icon={Target} label="SLA Policies" managerOnly />
+        <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
+        <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly />
+        <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly />
+
+        {/* Admin-only section */}
+        {isAdmin && (
+          <div style={{ paddingTop: '0.75rem', marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
+            <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
+            <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
+            <Link to="/field-permissions" icon={Shield} label="Field Permissions" adminOnly />
+            <Link to="/channels" icon={Radio} label="Channels" adminOnly />
+            <Link to="/industry-templates" icon={Building2} label="Industry Templates" adminOnly />
+            <Link to="/sandbox" icon={Database} label="Sandbox" adminOnly />
+            <Link to="/objects" icon={Database} label="App Builder" adminOnly />
+            <Link to="/currencies" icon={DollarSign} label="Currencies" adminOnly />
+            <Link to="/zapier" icon={Code} label="Zapier" adminOnly />
+            <Link to="/developer" icon={Code} label="Developers" adminOnly />
+            <Link to="/settings" icon={Settings} label="Settings" adminOnly />
+          </div>
+        )}
+
+        {/* Settings — visible to Manager too (but not regular USER) */}
+        {!isAdmin && isManager && (
+          <div style={{ paddingTop: '0.75rem', marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <Link to="/settings" icon={Settings} label="Settings" />
+          </div>
+        )}
       </nav>
     </aside>
   );

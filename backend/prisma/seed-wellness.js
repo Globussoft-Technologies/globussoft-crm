@@ -256,6 +256,19 @@ async function main() {
       } });
   console.log(`[seed-wellness] location: ${ranchi.name} (id=${ranchi.id})`);
 
+  // Backfill existing patients + visits that predate the Location model
+  const patientsBackfilled = await prisma.patient.updateMany({
+    where: { tenantId: tenant.id, locationId: null },
+    data: { locationId: ranchi.id },
+  });
+  const visitsBackfilled = await prisma.visit.updateMany({
+    where: { tenantId: tenant.id, locationId: null },
+    data: { locationId: ranchi.id },
+  });
+  if (patientsBackfilled.count || visitsBackfilled.count) {
+    console.log(`[seed-wellness] backfilled locationId on ${patientsBackfilled.count} patients, ${visitsBackfilled.count} visits`);
+  }
+
   // 2. Staff
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
   const userMap = {};

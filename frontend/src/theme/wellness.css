@@ -1,0 +1,141 @@
+/*
+ * Wellness vertical theme — modeled on Dr. Haror's Wellness brand palette.
+ * Primary: deep teal #265855 (sampled from drharorswellness.com)
+ * Accent : warm blush #CD9481
+ * Background: warm off-white / cream — premium medical-aesthetic feel
+ *
+ * Activated by adding <body data-vertical="wellness"> in App.jsx after login.
+ * All overrides are scoped under the [data-vertical="wellness"] selector so
+ * generic tenants render unchanged.
+ */
+
+[data-vertical="wellness"] {
+  --bg-color:        #FAF7F2;
+  --surface-color:   #FFFFFF;
+  --subtle-bg:       rgba(38, 88, 85, 0.04);
+  --subtle-bg-3:     rgba(38, 88, 85, 0.08);
+
+  --primary-color:   #265855;        /* deep teal */
+  --primary-hover:   #1F4845;
+  --accent-color:    #CD9481;        /* warm blush */
+  --accent-hover:    #B87E6A;
+  --accent-glow:     rgba(205, 148, 129, 0.45);
+
+  --success-color:   #4A7C59;        /* sage green */
+  --warning-color:   #D4923B;        /* warm amber */
+  --danger-color:    #A8323F;        /* burgundy red — softer than tech red */
+
+  --text-primary:    #2C2825;        /* warm charcoal, not pure black */
+  --text-secondary:  #7A6E66;        /* warm taupe */
+  --text-tertiary:   #A89E96;
+
+  --border-color:    rgba(38, 88, 85, 0.12);
+  --border-light:    rgba(38, 88, 85, 0.06);
+
+  --font-family:     "Roboto", "Inter", system-ui, -apple-system, sans-serif;
+  --font-heading:    "Playfair Display", "Georgia", serif;
+
+  --shadow-sm:       0 1px 2px rgba(38, 88, 85, 0.06);
+  --shadow-md:       0 4px 12px rgba(38, 88, 85, 0.08);
+  --shadow-lg:       0 12px 40px rgba(38, 88, 85, 0.12);
+}
+
+/* Glass cards on the warm cream background — subtle, not stark */
+[data-vertical="wellness"] .glass {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px) saturate(1.05);
+  -webkit-backdrop-filter: blur(8px) saturate(1.05);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Sidebar — tinted teal background, white text */
+[data-vertical="wellness"] aside.glass {
+  background: linear-gradient(180deg, #265855 0%, #1F4845 100%) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #F5EFE6;
+}
+[data-vertical="wellness"] aside.glass h1 { color: #FFFFFF; }
+[data-vertical="wellness"] aside.glass .nav-link {
+  color: rgba(245, 239, 230, 0.85);
+}
+[data-vertical="wellness"] aside.glass .nav-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #FFFFFF;
+}
+[data-vertical="wellness"] aside.glass .nav-link.active {
+  background: rgba(205, 148, 129, 0.25);
+  color: #FFFFFF;
+  border-left: 3px solid #CD9481;
+}
+[data-vertical="wellness"] aside.glass .nav-link svg { opacity: 0.85; }
+
+/* Section headers in sidebar — warm gold */
+[data-vertical="wellness"] aside.glass [style*="textTransform"] {
+  color: #CD9481 !important;
+}
+
+/* Header bar — warm white */
+[data-vertical="wellness"] header {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+}
+
+/* Main content background */
+[data-vertical="wellness"] main {
+  background: linear-gradient(180deg, #FAF7F2 0%, #F5F0E8 100%);
+}
+
+/* Buttons — primary teal */
+[data-vertical="wellness"] .btn-primary,
+[data-vertical="wellness"] button[type="submit"] {
+  background: var(--primary-color);
+  color: #FFFFFF;
+}
+[data-vertical="wellness"] .btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+/* Inputs — soft warm borders */
+[data-vertical="wellness"] input,
+[data-vertical="wellness"] select,
+[data-vertical="wellness"] textarea {
+  background: #FFFFFF !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+[data-vertical="wellness"] input:focus,
+[data-vertical="wellness"] select:focus,
+[data-vertical="wellness"] textarea:focus {
+  border-color: var(--primary-color) !important;
+  box-shadow: 0 0 0 3px rgba(38, 88, 85, 0.1) !important;
+}
+
+/* Tables — warm zebra stripes */
+[data-vertical="wellness"] table tbody tr:nth-child(even) {
+  background: rgba(38, 88, 85, 0.02);
+}
+[data-vertical="wellness"] table th {
+  color: var(--text-secondary) !important;
+  background: rgba(38, 88, 85, 0.05);
+  border-bottom: 1px solid var(--border-color) !important;
+}
+
+/* Tier badges — warmer colors */
+[data-vertical="wellness"] [style*="background: rgb(239, 68, 68)"],
+[data-vertical="wellness"] [style*="background: #ef4444"] {
+  background: var(--danger-color) !important;
+}
+
+/* Soft scrollbars */
+[data-vertical="wellness"] *::-webkit-scrollbar {
+  width: 8px; height: 8px;
+}
+[data-vertical="wellness"] *::-webkit-scrollbar-thumb {
+  background: rgba(38, 88, 85, 0.15);
+  border-radius: 4px;
+}
+[data-vertical="wellness"] *::-webkit-scrollbar-thumb:hover {
+  background: rgba(38, 88, 85, 0.3);
+}

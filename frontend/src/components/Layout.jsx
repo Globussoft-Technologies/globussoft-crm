@@ -10,8 +10,10 @@ import { AuthContext } from '../App';
 import { setupPush } from '../utils/pushSetup';
 
 const Layout = () => {
-  const { user, setUser, setToken, token } = useContext(AuthContext);
+  const { user, setUser, setToken, token, tenant } = useContext(AuthContext);
   const navigate = useNavigate();
+  // Wellness tenants use Callified.ai for voice — hide the built-in softphone
+  const isWellness = tenant?.vertical === 'wellness';
 
   // Auto-register push notifications after login (silent failures OK)
   useEffect(() => {
@@ -85,7 +87,7 @@ const Layout = () => {
         </main>
       </div>
       <Omnibar />
-      <Softphone />
+      {!isWellness && <Softphone />}
       <Presence />
     </div>
   );

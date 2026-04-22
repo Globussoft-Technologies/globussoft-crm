@@ -308,6 +308,32 @@ router.post("/calls", async (req, res) => {
   }
 });
 
+// PATCH /calls/:id — update a previously-pushed call (e.g. transcript landed
+// 5 min after the call ended). Idempotent; only updates fields you send.
+router.patch("/calls/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.callLog.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Call not found" });
+
+    const data = {};
+    const allowed = ["duration", "recordingUrl", "status", "notes", "providerCallId"];
+    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    if (req.body.durationSec !== undefined) data.duration = parseInt(req.body.durationSec);
+    if (req.body.status !== undefined) data.status = String(req.body.status).toUpperCase();
+    if (req.body.transcriptUrl !== undefined) {
+      // CallLog has no transcriptUrl column — append to notes instead so it's not lost
+      data.notes = `${existing.notes || ""}${existing.notes ? "\n" : ""}[transcript: ${req.body.transcriptUrl}]`;
+    }
+
+    const updated = await prisma.callLog.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[external] patch call:", e.message);
+    res.status(500).json({ error: "Failed to update call" });
+  }
+});
+
 router.post("/messages", async (req, res) => {
   try {
     const {

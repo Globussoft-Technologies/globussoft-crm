@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Landing from './pages/Landing';
 import Layout from './components/Layout';
+import './theme/wellness.css'; // wellness vertical theme overrides (scoped)
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Contacts = lazy(() => import('./pages/Contacts'));
@@ -85,6 +86,8 @@ const WellnessLocations = lazy(() => import('./pages/wellness/Locations'));
 const WellnessCalendar = lazy(() => import('./pages/wellness/Calendar'));
 const WellnessReports = lazy(() => import('./pages/wellness/Reports'));
 const WellnessPublicBooking = lazy(() => import('./pages/wellness/PublicBooking'));
+const WellnessTelecallerQueue = lazy(() => import('./pages/wellness/TelecallerQueue'));
+const WellnessPatientPortal = lazy(() => import('./pages/wellness/PatientPortal'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -118,6 +121,13 @@ export default function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  // Apply vertical-specific theme overrides (e.g. wellness gets Dr. Haror palette)
+  useEffect(() => {
+    const v = tenant?.vertical || 'generic';
+    document.documentElement.setAttribute('data-vertical', v);
+    document.body.setAttribute('data-vertical', v);
+  }, [tenant]);
+
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
 
   return (
@@ -131,6 +141,7 @@ export default function App() {
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/portal" element={<Portal />} />
             <Route path="/book/:slug" element={<WellnessPublicBooking />} />
+            <Route path="/patient-portal" element={<WellnessPatientPortal />} />
             <Route path="/" element={!token ? <Landing /> : <Navigate to="/dashboard" />} />
             <Route path="/*" element={token ? <Layout /> : <Navigate to="/login" />}>
               <Route path="dashboard" element={<Dashboard />} />
@@ -211,6 +222,7 @@ export default function App() {
               <Route path="wellness/locations" element={<WellnessLocations />} />
               <Route path="wellness/calendar" element={<WellnessCalendar />} />
               <Route path="wellness/reports" element={<WellnessReports />} />
+              <Route path="wellness/telecaller" element={<WellnessTelecallerQueue />} />
             </Route>
           </Routes>
         </Suspense>

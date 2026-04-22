@@ -676,6 +676,89 @@ async function main() {
   }
   console.log(`[seed-wellness] email templates: ${templatesCreated} created (or already existed)`);
 
+  // 8c. Knowledge Base — wellness-specific articles for staff training and patient FAQ
+  const kbCategories = [
+    { name: "Pre-procedure care", slug: "pre-procedure" },
+    { name: "Post-procedure care", slug: "post-procedure" },
+    { name: "Service guides", slug: "service-guides" },
+  ];
+  const kbCatMap = {};
+  for (const c of kbCategories) {
+    const existing = await prisma.kbCategory.findFirst({ where: { tenantId: tenant.id, slug: c.slug } });
+    const cat = existing
+      ? existing
+      : await prisma.kbCategory.create({ data: { ...c, tenantId: tenant.id } });
+    kbCatMap[c.slug] = cat.id;
+  }
+
+  const kbArticles = [
+    {
+      title: "What to expect after FUE Hair Transplant",
+      slug: "fue-aftercare",
+      categoryId: kbCatMap["post-procedure"],
+      content: "## First 48 hours\n- Sleep with head elevated at 45°.\n- Avoid touching the recipient area.\n- Use only the prescribed saline spray.\n\n## Days 3–7\n- Gentle washing as demonstrated by your doctor.\n- Tiny scabs will form — do NOT pick them.\n\n## Weeks 2–4\n- Shock loss is normal. Transplanted hair sheds, then regrows.\n\n## Month 3 onward\n- New growth becomes visible.\n- Final results: 9–12 months.\n\n**Call us immediately if:** unusual swelling, pus, or pain beyond mild soreness.",
+    },
+    {
+      title: "Botox aftercare — first 24 hours",
+      slug: "botox-aftercare",
+      categoryId: kbCatMap["post-procedure"],
+      content: "## Do\n- Stay upright for 4 hours.\n- Make exaggerated facial expressions every 30 min for the first hour (helps the toxin bind).\n- Apply ice if there's mild swelling.\n\n## Don't\n- No lying down, exercise, sauna, or alcohol for 24 hours.\n- No facial massage or facial treatments for 2 weeks.\n- No blood thinners (aspirin/ibuprofen) for 48 hours.\n\n## Onset\n- First effects: 3–5 days.\n- Full effect: 14 days.\n- Duration: 3–4 months.\n\n**Touch-up review:** 14 days after treatment if needed.",
+    },
+    {
+      title: "Pre-procedure: Hair Transplant — what to bring + avoid",
+      slug: "pre-fue",
+      categoryId: kbCatMap["pre-procedure"],
+      content: "## Stop 7 days before\n- Aspirin, ibuprofen, fish oil, vitamin E (bleeding risk).\n- Hair growth supplements that contain biotin (skews follicle visibility).\n\n## Stop 48 hours before\n- Alcohol, smoking.\n- Caffeine on the morning of surgery.\n\n## On the day\n- Wash hair the night before with the prescribed shampoo.\n- Eat a light breakfast — surgery is full-day, you'll get lunch.\n- Wear a button-down shirt (you can't pull anything over your head post-surgery).\n- Bring a cap or scarf for the journey home.\n- Arrange a driver — no driving yourself.",
+    },
+    {
+      title: "Pre-procedure: Filler / Botox visit",
+      slug: "pre-injectables",
+      categoryId: kbCatMap["pre-procedure"],
+      content: "## 2 weeks before\n- Stop fish oil, vitamin E, ginkgo biloba (bleeding risk).\n\n## 48 hours before\n- No alcohol.\n- No aspirin / ibuprofen — use paracetamol if needed.\n\n## Day of\n- Arrive with a clean face — no makeup.\n- Bring photos of the look you want (helpful for natural references).\n- Ice on the area for 10 min before helps reduce bruising.",
+    },
+    {
+      title: "What is Hydrafacial — and who is it for?",
+      slug: "hydrafacial-explained",
+      categoryId: kbCatMap["service-guides"],
+      content: "## The treatment\nA 3-step facial: cleanse + exfoliate, extract impurities, infuse hydrating + brightening serums. Uses a vortex-fusion device (no harsh peels).\n\n## Best for\n- Dull, tired skin.\n- Mild acne, blackheads.\n- Pre-event glow.\n- Anyone wanting a 60-min treat with zero downtime.\n\n## Not ideal for\n- Active rosacea / very inflamed acne (use HydraFacial Elite + LED instead).\n- Recent chemical peels (wait 2 weeks).\n\n## Frequency\nMonthly maintenance for best results.",
+    },
+    {
+      title: "Hair PRP Therapy — how it works",
+      slug: "prp-explained",
+      categoryId: kbCatMap["service-guides"],
+      content: "## How\nWe draw a small amount of your blood, spin it in a centrifuge to concentrate the platelets (and growth factors), then inject the plasma into the scalp.\n\n## Why it works\nGrowth factors stimulate hair follicles, increase blood supply, prolong the growth phase.\n\n## Sessions\nProtocol: 6 sessions, 3 weeks apart. Maintenance: every 6 months thereafter.\n\n## Combine with\n- Minoxidil 5% (topical) for compounding effect.\n- Finasteride 1mg (oral, men only) for hormonal hair loss.\n\n## Realistic expectations\nYou'll notice reduced shedding by session 3, visible thickening by session 6. PRP works best for early-to-moderate hair loss.",
+    },
+    {
+      title: "Pricing FAQ — Hair Transplant",
+      slug: "fue-pricing",
+      categoryId: kbCatMap["service-guides"],
+      content: "## What determines the price?\nNumber of grafts. We measure on consultation.\n\n## Indicative ranges\n- Small temple area: 800–1500 grafts → ₹50k–₹1L\n- Hairline + crown: 2000–3000 grafts → ₹1.2L–₹1.8L\n- Full restoration (Norwood 5+): 3500+ grafts → ₹2L+\n\n## What's included\n- Consultation\n- Procedure (full day)\n- Post-op kit (saline spray, antibiotic, painkiller)\n- 4 follow-up reviews over 12 months\n- Photos at month 3, 6, 9, 12\n\n## What's extra\n- PRP boosters (optional, ₹5,500/session)\n- Travel / accommodation\n\n## EMI\nWe offer 3 / 6 / 12 month no-cost EMI on cards.",
+    },
+    {
+      title: "Patient consent — Hair Transplant",
+      slug: "consent-fue",
+      categoryId: kbCatMap["service-guides"],
+      content: "**This is a clinical reference** — the actual consent form patients sign on the tablet during their visit captures these clauses + their signature.\n\n## Risks acknowledged\n- Temporary swelling, redness for 3–7 days.\n- Numbness in donor area, usually resolves in weeks.\n- Shock loss (transplanted hair sheds before regrowing).\n- Infection (rare, <1%).\n- Scarring at donor site (minimal with FUE).\n\n## Realistic outcomes\n- Final results visible 9–12 months post-procedure.\n- Density depends on donor area, age, and Norwood stage.\n- Touch-up sessions may be needed for higher density.\n\n## Patient responsibilities\n- Follow post-op instructions exactly.\n- Attend follow-up reviews.\n- Disclose any new medications.",
+    },
+    {
+      title: "Service category overview for new staff",
+      slug: "staff-onboarding-overview",
+      categoryId: kbCatMap["service-guides"],
+      content: "## Hair (transplant + restoration)\nHigh-ticket transplants (₹50k–₹2L+) are full-day procedures, doctor-led. Restoration treatments (PRP, GFC, Mesogrow) are multi-session, professional-led.\n\n## Skin (dermatology + surgery)\nDoctor-led consultations for acne, vitiligo, psoriasis. Surgical: mole removal, earlobe repair, cyst excision.\n\n## Aesthetics (Botox, fillers, threads)\nDoctor-only. Ranges ₹25k–₹65k per area. Highest-margin services.\n\n## Body contouring\nLiposuction (surgical, doctor-only) and CoolSculpting (non-invasive, professional-led).\n\n## Salon (in-clinic only, 3 km radius)\nHaircut, color — light services, professional-led, low ticket.\n\n## Marketing rule of thumb\nWe don't advertise haircuts to people 5km+ away — wasted spend. Hair transplant we'll target the entire state of Jharkhand.",
+    },
+  ];
+
+  let kbCreated = 0;
+  for (const a of kbArticles) {
+    const existing = await prisma.kbArticle.findFirst({ where: { tenantId: tenant.id, slug: a.slug } });
+    if (existing) continue;
+    await prisma.kbArticle.create({
+      data: { ...a, isPublished: true, tenantId: tenant.id },
+    });
+    kbCreated++;
+  }
+  console.log(`[seed-wellness] knowledge base: ${kbCreated} articles created (or already existed)`);
+
   // 9. Hand-crafted agent recommendations (always re-seeded for the demo)
   await prisma.agentRecommendation.deleteMany({ where: { tenantId: tenant.id } });
   await prisma.agentRecommendation.createMany({

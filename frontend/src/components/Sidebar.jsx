@@ -70,17 +70,15 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
       <Link to="/wellness/patients" icon={HeartPulse} label="Patients" />
       <Link to="/wellness/calendar" icon={Calendar} label="Calendar" />
       <Link to="/wellness/services" icon={Stethoscope} label="Service Catalog" />
-      <Link to="/booking-pages" icon={PanelTop} label="Booking Pages" />
-      <Link to="/signatures" icon={FileSignature} label="E-Signatures" />
 
       {/* Lead-to-revenue */}
       <div style={sectionLabel}>Leads & Revenue</div>
-      <Link to="/inbox" icon={InboxIcon} label="Inbox" />
-      <Link to="/leads" icon={UserPlus} label="Leads" />
+      <Link to="/inbox" icon={InboxIcon} label="Unified Inbox" />
+      <Link to="/wellness/telecaller" icon={PhoneCall} label="Telecaller Queue" />
+      <Link to="/leads" icon={UserPlus} label="All Leads" managerOnly />
       <Link to="/tasks" icon={CheckSquare} label="Tasks" />
       <Link to="/marketplace-leads" icon={ShoppingBag} label="Marketplace Leads" managerOnly />
-      <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly />
-      <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly />
+      <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
 
       {/* Money */}
       <div style={sectionLabel}>Finance</div>
@@ -89,21 +87,16 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
       <Link to="/expenses" icon={DollarSign} label="Expenses" />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
 
-      {/* Marketing */}
+      {/* Marketing — clinic-side comms (ad campaigns live in AdsGPT) */}
       <div style={sectionLabel}>Marketing</div>
-      <Link to="/marketing" icon={Send} label="Campaigns" managerOnly />
-      <Link to="/sequences" icon={Network} label="Sequences" managerOnly />
+      <Link to="/marketing" icon={Send} label="SMS / Email Blasts" managerOnly />
+      <Link to="/sequences" icon={Network} label="Drip Sequences" managerOnly />
       <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" managerOnly />
-      <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly />
 
-      {/* Reports */}
+      {/* Reports — wellness-tuned, generic CRM reports removed */}
       <div style={sectionLabel}>Reports</div>
-      <Link to="/wellness/reports" icon={BarChart3} label="P&L Reports" managerOnly />
-      <Link to="/reports" icon={BarChart3} label="Generic Reports" managerOnly />
-      <Link to="/agent-reports" icon={Trophy} label="Staff Reports" managerOnly />
-      <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
-      <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly />
-      <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly />
+      <Link to="/wellness/reports" icon={BarChart3} label="P&L + Attribution" managerOnly />
+      <Link to="/surveys" icon={ClipboardList} label="Patient Surveys" managerOnly />
       <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
 
       {/* Admin */}

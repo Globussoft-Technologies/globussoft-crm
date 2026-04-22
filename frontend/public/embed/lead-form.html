@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Book your appointment</title>
+  <style>
+    *,*::before,*::after { box-sizing: border-box; }
+    html,body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: transparent; color: #1a1a2e; }
+    .form { max-width: 460px; margin: 0 auto; padding: 1rem; }
+    h2 { font-size: 1.1rem; margin: 0 0 0.5rem; color: #1a1a2e; }
+    p.sub { color: #666; font-size: 0.85rem; margin: 0 0 1rem; }
+    label { display: block; font-size: 0.7rem; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; }
+    input, select, textarea { width: 100%; padding: 0.55rem 0.75rem; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 0.9rem; font-family: inherit; background: #fff; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: var(--gbs-accent, #0ea5e9); box-shadow: 0 0 0 3px rgba(14,165,233,0.1); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .field { margin-bottom: 0.5rem; }
+    button.primary { width: 100%; padding: 0.7rem 1rem; background: var(--gbs-accent, #0ea5e9); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 0.95rem; font-weight: 500; margin-top: 0.5rem; }
+    button.primary:disabled { opacity: 0.6; cursor: wait; }
+    .note { font-size: 0.7rem; color: #94a3b8; margin-top: 0.75rem; text-align: center; }
+    .ok { padding: 1.5rem; background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; border-radius: 8px; text-align: center; }
+    .err { padding: 0.5rem 0.75rem; background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 6px; font-size: 0.85rem; margin-bottom: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="form">
+    <div id="root"></div>
+    <p class="note">Powered by <strong>Globussoft CRM</strong></p>
+  </div>
+
+  <script>
+    (function () {
+      // Read configuration from URL params or window.__GBS_FORM__
+      var params = new URLSearchParams(location.search);
+      var cfg = window.__GBS_FORM__ || {};
+      var apiBase = cfg.apiBase || params.get('api') || 'https://crm.globusdemos.com';
+      var slug    = cfg.slug    || params.get('slug') || '';
+      var apiKey  = cfg.apiKey  || params.get('key') || '';
+      var title   = cfg.title   || params.get('title') || 'Book your appointment';
+      var subtitle = cfg.subtitle || params.get('sub') || 'We\u2019ll call you within 30 minutes to confirm.';
+      var accent  = cfg.accent  || params.get('color') || '#0ea5e9';
+      var services = (cfg.services || params.get('services') || '').split(',').filter(Boolean);
+
+      // Notify the parent window (when iframed) of size changes for graceful auto-resize
+      function notifySize() {
+        try { parent.postMessage({ source: 'gbs-form', type: 'size', height: document.body.scrollHeight }, '*'); } catch {}
+      }
+      var ro = new ResizeObserver(notifySize); ro.observe(document.body);
+
+      document.documentElement.style.setProperty('--gbs-accent', accent);
+
+      var root = document.getElementById('root');
+
+      function render(content) { root.innerHTML = content; setTimeout(notifySize, 0); }
+
+      function escape(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+
+      function showOk(name) {
+        render('<div class="ok"><div style="font-size:1.5rem;margin-bottom:0.5rem">\u2713</div><strong>Thanks ' + escape(name) + '!</strong><br/><span style="font-size:0.85rem;color:#047857">Your enquiry has been received. We\u2019ll be in touch shortly.</span></div>');
+      }
+
+      function buildForm(serviceList) {
+        var serviceOptions = (serviceList && serviceList.length)
+          ? '<select name="service" required><option value="">Select a service \u2026</option>' +
+            serviceList.map(function (s) { return '<option value="' + escape(s) + '">' + escape(s) + '</option>'; }).join('') +
+            '</select>'
+          : '<input name="service" placeholder="Service you\u2019re interested in (optional)" />';
+
+        return (
+          '<h2>' + escape(title) + '</h2>' +
+          '<p class="sub">' + escape(subtitle) + '</p>' +
+          '<form id="f">' +
+            '<div id="err"></div>' +
+            '<div class="row">' +
+              '<div class="field"><label>Your name *</label><input name="name" required /></div>' +
+              '<div class="field"><label>Phone *</label><input name="phone" required pattern="[0-9+\\-\\s]{10,15}" /></div>' +
+            '</div>' +
+            '<div class="field"><label>Email (optional)</label><input name="email" type="email" /></div>' +
+            '<div class="field"><label>Service</label>' + serviceOptions + '</div>' +
+            '<div class="field"><label>Message (optional)</label><textarea name="note" rows="2"></textarea></div>' +
+            '<button class="primary" type="submit" id="btn">Request a callback</button>' +
+          '</form>'
+        );
+      }
+
+      function showErr(msg) {
+        var el = document.getElementById('err');
+        if (el) el.innerHTML = '<div class="err">' + escape(msg) + '</div>';
+      }
+
+      function submit(e) {
+        e.preventDefault();
+        var btn = document.getElementById('btn');
+        btn.disabled = true; btn.textContent = 'Sending\u2026';
+        var fd = new FormData(e.target);
+        var payload = {
+          name: fd.get('name'),
+          phone: fd.get('phone'),
+          email: fd.get('email') || null,
+          source: 'website-form',
+          note: [fd.get('service') ? 'Service: ' + fd.get('service') : null, fd.get('note')].filter(Boolean).join(' | '),
+        };
+
+        // Two delivery modes:
+        //   (a) public booking page if `slug` is set (creates Patient + Visit, no key)
+        //   (b) external partner API if `key` is set (creates Contact lead)
+        var url, headers, body;
+        if (slug) {
+          url = apiBase + '/api/wellness/public/book';
+          headers = { 'Content-Type': 'application/json' };
+          // public/book wants serviceId; we don't have it in the embed form (only the name).
+          // Fall back to lead capture path: /api/marketing/submit doesn't exist for tenants here, so
+          // when slug is provided WITHOUT a key we still hit external/leads via a tenant-keyless lead
+          // intake. To keep this simple, prefer apiKey path when both are missing — show a clear error.
+        }
+        if (apiKey) {
+          url = apiBase + '/api/v1/external/leads';
+          headers = { 'Content-Type': 'application/json', 'X-API-Key': apiKey };
+          body = JSON.stringify(payload);
+        }
+        if (!url) {
+          btn.disabled = false; btn.textContent = 'Request a callback';
+          showErr('Form mis-configured: missing api key or clinic slug. See docs.');
+          return;
+        }
+
+        fetch(url, { method: 'POST', headers: headers, body: body })
+          .then(function (r) { return r.ok ? r.json() : r.json().then(function (e) { throw new Error(e.error || 'Submit failed'); }); })
+          .then(function () { showOk(payload.name); })
+          .catch(function (err) {
+            btn.disabled = false; btn.textContent = 'Request a callback';
+            showErr(err.message || 'Network error. Please try again.');
+          });
+      }
+
+      // Initial render — if a slug is given but no key, we still show the form (lead arrives via tenant tag)
+      if (services.length) {
+        render(buildForm(services));
+      } else if (slug) {
+        // Try to fetch the clinic profile to populate the service dropdown
+        fetch(apiBase + '/api/wellness/public/tenant/' + encodeURIComponent(slug))
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (profile) {
+            var names = (profile && profile.services) ? profile.services.map(function (s) { return s.name; }).slice(0, 30) : [];
+            render(buildForm(names));
+          })
+          .catch(function () { render(buildForm([])); });
+      } else {
+        render(buildForm([]));
+      }
+
+      document.addEventListener('submit', function (e) { if (e.target && e.target.id === 'f') submit(e); });
+    })();
+  </script>
+</body>
+</html>

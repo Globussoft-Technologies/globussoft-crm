@@ -10,8 +10,39 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
+const jwt = require("jsonwebtoken");
 const prisma = require("../lib/prisma");
 const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
+const {
+  renderPrescriptionPdf,
+  renderConsentPdf,
+  renderBrandedInvoicePdf,
+} = require("../services/pdfRenderer");
+
+const PORTAL_JWT_SECRET =
+  process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+
+// Patient-portal inline JWT middleware — used by /portal/* endpoints.
+// Portal endpoints bypass the global user-JWT guard (see server.js openPaths)
+// so we must verify the patient token here.
+function verifyPatientToken(req, res, next) {
+  const hdr = req.headers.authorization || "";
+  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "Missing portal token" });
+  try {
+    const decoded = jwt.verify(token, PORTAL_JWT_SECRET);
+    if (!decoded.patientId) {
+      return res.status(401).json({ error: "Invalid portal token" });
+    }
+    req.patient = {
+      id: decoded.patientId,
+      phoneLast10: decoded.phoneLast10,
+    };
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: "Invalid or expired portal token" });
+  }
+}
 
 const router = express.Router();
 
@@ -755,6 +786,57 @@ router.get("/reports/per-professional", async (req, res) => {
   }
 });
 
+router.get("/reports/attribution", async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const { from, to } = reportRange(req);
+
+    const leads = await prisma.contact.findMany({
+      where: { tenantId, createdAt: { gte: from, lte: to } },
+      select: { firstTouchSource: true, source: true, status: true },
+    });
+    const visits = await prisma.visit.findMany({
+      where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
+      select: { amountCharged: true, patient: { select: { source: true } } },
+    });
+
+    const acc = {};
+    const bucket = (src) => (src || "unknown").toLowerCase();
+    for (const l of leads) {
+      const k = bucket(l.firstTouchSource || l.source);
+      if (!acc[k]) acc[k] = { source: k, leads: 0, junk: 0, qualified: 0, revenue: 0 };
+      acc[k].leads += 1;
+      if (l.status === "Junk") acc[k].junk += 1;
+      if (l.status !== "Junk" && l.status !== "Lead") acc[k].qualified += 1;
+    }
+    for (const v of visits) {
+      const k = bucket(v.patient?.source);
+      if (!acc[k]) acc[k] = { source: k, leads: 0, junk: 0, qualified: 0, revenue: 0 };
+      acc[k].revenue += parseFloat(v.amountCharged) || 0;
+    }
+    const rows = Object.values(acc).map((r) => ({
+      ...r,
+      junkRate: r.leads ? Math.round((r.junk / r.leads) * 100) : 0,
+      conversionRate: r.leads ? Math.round((r.qualified / r.leads) * 100) : 0,
+      revenuePerLead: r.leads ? Math.round(r.revenue / r.leads) : 0,
+    })).sort((a, b) => b.revenue - a.revenue);
+
+    res.json({
+      window: { from, to },
+      totals: {
+        leads: rows.reduce((s, r) => s + r.leads, 0),
+        junk: rows.reduce((s, r) => s + r.junk, 0),
+        qualified: rows.reduce((s, r) => s + r.qualified, 0),
+        revenue: rows.reduce((s, r) => s + r.revenue, 0),
+      },
+      rows,
+    });
+  } catch (e) {
+    console.error("[reports] attribution:", e.message);
+    res.status(500).json({ error: "Failed to compute attribution" });
+  }
+});
+
 router.get("/reports/per-location", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -965,6 +1047,271 @@ router.post("/public/book", async (req, res) => {
   } catch (e) {
     console.error("[wellness] public booking failed:", e.message);
     res.status(500).json({ error: "Booking failed", detail: e.message });
+  }
+});
+
+// ── PDF exports (prescriptions / consents / branded invoices) ─────
+
+async function primaryClinic(tenantId) {
+  // Prefer active location; fall back to any location.
+  const active = await prisma.location.findFirst({
+    where: { tenantId, isActive: true },
+    orderBy: { id: "asc" },
+  });
+  if (active) return active;
+  return prisma.location.findFirst({ where: { tenantId }, orderBy: { id: "asc" } });
+}
+
+router.get("/prescriptions/:id/pdf", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const rx = await prisma.prescription.findFirst({
+      where: tenantWhere(req, { id }),
+      include: { patient: true },
+    });
+    if (!rx) return res.status(404).json({ error: "Prescription not found" });
+    const clinic = await primaryClinic(req.user.tenantId);
+    const buf = await renderPrescriptionPdf(rx, rx.patient, clinic);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="rx-${id}.pdf"`);
+    res.setHeader("Content-Length", buf.length);
+    res.send(buf);
+  } catch (e) {
+    console.error("[wellness] prescription pdf error:", e.message);
+    res.status(500).json({ error: "Failed to render prescription PDF" });
+  }
+});
+
+router.get("/consents/:id/pdf", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const consent = await prisma.consentForm.findFirst({
+      where: tenantWhere(req, { id }),
+      include: { patient: true, service: true },
+    });
+    if (!consent) return res.status(404).json({ error: "Consent not found" });
+    const clinic = await primaryClinic(req.user.tenantId);
+    const buf = await renderConsentPdf(
+      consent,
+      consent.patient,
+      consent.service,
+      clinic,
+      consent.signatureSvg,
+    );
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="consent-${id}.pdf"`);
+    res.setHeader("Content-Length", buf.length);
+    res.send(buf);
+  } catch (e) {
+    console.error("[wellness] consent pdf error:", e.message);
+    res.status(500).json({ error: "Failed to render consent PDF" });
+  }
+});
+
+// ── Telecaller queue ───────────────────────────────────────────────
+
+const DISPOSITION_STATUS = {
+  interested: "Lead",
+  "not interested": "Churned",
+  callback: "Lead",
+  booked: "Prospect",
+  "wrong number": "Junk",
+  junk: "Junk",
+};
+
+router.get("/telecaller/queue", async (req, res) => {
+  try {
+    const leads = await prisma.contact.findMany({
+      where: tenantWhere(req, {
+        assignedToId: req.user.id,
+        status: "Lead",
+      }),
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        email: true,
+        source: true,
+        aiScore: true,
+        createdAt: true,
+      },
+      take: 200,
+    });
+    res.json({ leads, count: leads.length });
+  } catch (e) {
+    console.error("[wellness] telecaller queue error:", e.message);
+    res.status(500).json({ error: "Failed to load telecaller queue" });
+  }
+});
+
+router.post("/telecaller/dispose", async (req, res) => {
+  try {
+    const { contactId, disposition, notes } = req.body || {};
+    if (!contactId || !disposition) {
+      return res
+        .status(400)
+        .json({ error: "contactId and disposition are required" });
+    }
+    const key = String(disposition).toLowerCase().trim();
+    if (!(key in DISPOSITION_STATUS)) {
+      return res.status(400).json({ error: "Unknown disposition" });
+    }
+    const contact = await prisma.contact.findFirst({
+      where: tenantWhere(req, { id: parseInt(contactId) }),
+    });
+    if (!contact) return res.status(404).json({ error: "Contact not found" });
+
+    const description = notes ? `${disposition}: ${notes}` : disposition;
+    await prisma.activity.create({
+      data: {
+        type: "CallDisposition",
+        description,
+        contactId: contact.id,
+        tenantId: req.user.tenantId,
+        userId: req.user.id,
+      },
+    });
+
+    const newStatus = DISPOSITION_STATUS[key];
+    if (newStatus !== contact.status) {
+      await prisma.contact.update({
+        where: { id: contact.id },
+        data: { status: newStatus },
+      });
+    }
+    res.json({ ok: true, status: newStatus });
+  } catch (e) {
+    console.error("[wellness] telecaller dispose error:", e.message);
+    res.status(500).json({ error: "Failed to record disposition" });
+  }
+});
+
+// ── Patient portal (public login + patient-JWT reads) ─────────────
+
+// POST /portal/login  body: {phone, otp}
+// v1: any 4-digit OTP accepted. Matches Patient by last-10-digits phone
+// globally (tenant-agnostic since the visitor has no tenant context yet).
+router.post("/portal/login", async (req, res) => {
+  try {
+    const { phone, otp } = req.body || {};
+    if (!phone || !otp) {
+      return res.status(400).json({ error: "phone and otp are required" });
+    }
+    if (!/^\d{4}$/.test(String(otp))) {
+      return res.status(400).json({ error: "OTP must be 4 digits" });
+    }
+    const digits = String(phone).replace(/\D/g, "");
+    if (digits.length < 10) {
+      return res.status(400).json({ error: "Invalid phone" });
+    }
+    const last10 = digits.slice(-10);
+
+    // Patient.phone may be stored with +91 / spaces / dashes — search by "endsWith"
+    // via contains on last-10 substring.
+    const candidates = await prisma.patient.findMany({
+      where: { phone: { contains: last10 } },
+      select: { id: true, name: true, phone: true, tenantId: true },
+      take: 5,
+    });
+    const patient = candidates.find((p) => {
+      const d = String(p.phone || "").replace(/\D/g, "");
+      return d.slice(-10) === last10;
+    });
+    if (!patient) {
+      return res.status(404).json({ error: "No patient matches that phone" });
+    }
+    const token = jwt.sign(
+      { patientId: patient.id, phoneLast10: last10 },
+      PORTAL_JWT_SECRET,
+      { expiresIn: "30d" },
+    );
+    res.json({
+      token,
+      patient: { id: patient.id, name: patient.name },
+    });
+  } catch (e) {
+    console.error("[wellness] portal login error:", e.message);
+    res.status(500).json({ error: "Portal login failed" });
+  }
+});
+
+router.get("/portal/me", verifyPatientToken, async (req, res) => {
+  try {
+    const patient = await prisma.patient.findUnique({
+      where: { id: req.patient.id },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        email: true,
+        dob: true,
+        gender: true,
+      },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+    res.json(patient);
+  } catch (e) {
+    console.error("[wellness] portal me error:", e.message);
+    res.status(500).json({ error: "Failed to load profile" });
+  }
+});
+
+router.get("/portal/visits", verifyPatientToken, async (req, res) => {
+  try {
+    const visits = await prisma.visit.findMany({
+      where: { patientId: req.patient.id },
+      orderBy: { visitDate: "desc" },
+      take: 50,
+      include: {
+        service: { select: { id: true, name: true, category: true } },
+        doctor: { select: { id: true, name: true } },
+      },
+    });
+    res.json(visits);
+  } catch (e) {
+    console.error("[wellness] portal visits error:", e.message);
+    res.status(500).json({ error: "Failed to load visits" });
+  }
+});
+
+router.get("/portal/prescriptions", verifyPatientToken, async (req, res) => {
+  try {
+    const prescriptions = await prisma.prescription.findMany({
+      where: { patientId: req.patient.id },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      include: {
+        visit: {
+          select: { id: true, visitDate: true, service: { select: { name: true } } },
+        },
+        doctor: { select: { id: true, name: true } },
+      },
+    });
+    res.json(prescriptions);
+  } catch (e) {
+    console.error("[wellness] portal prescriptions error:", e.message);
+    res.status(500).json({ error: "Failed to load prescriptions" });
+  }
+});
+
+router.get("/invoices/:id/branded-pdf", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const invoice = await prisma.invoice.findFirst({
+      where: tenantWhere(req, { id }),
+      include: { contact: true },
+    });
+    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    const clinic = await primaryClinic(req.user.tenantId);
+    const buf = await renderBrandedInvoicePdf(invoice, invoice.contact, clinic);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="invoice-${id}.pdf"`);
+    res.setHeader("Content-Length", buf.length);
+    res.send(buf);
+  } catch (e) {
+    console.error("[wellness] branded invoice pdf error:", e.message);
+    res.status(500).json({ error: "Failed to render invoice PDF" });
   }
 });
 

@@ -104,7 +104,21 @@ const FAQ_ITEMS = [
 
 export default function Pricing() {
   const [annual, setAnnual] = useState(true);
-  const [currency, setCurrency] = useState('usd');
+  // Auto-detect currency: India → INR, else USD. Manual toggle below overrides.
+  // Check stored preference first so a user who clicked the toggle stays on it.
+  const [currency, setCurrency] = useState(() => {
+    try {
+      const stored = localStorage.getItem('pricingCurrency');
+      if (stored === 'inr' || stored === 'usd') return stored;
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      const lang = (navigator.language || '').toLowerCase();
+      const isIndia = /Asia\/(Kolkata|Calcutta)/i.test(tz) || /-in\b|^hi-/.test(lang);
+      return isIndia ? 'inr' : 'usd';
+    } catch { return 'usd'; }
+  });
+
+  // Persist when the user clicks the toggle
+  React.useEffect(() => { try { localStorage.setItem('pricingCurrency', currency); } catch {} }, [currency]);
   const [openFaq, setOpenFaq] = useState(null);
 
   const prices = PRICES[currency];

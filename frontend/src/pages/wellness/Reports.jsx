@@ -7,12 +7,14 @@ const TABS = [
   { key: 'pnl', label: 'P&L by Service', icon: BarChart3 },
   { key: 'pro', label: 'Per Professional', icon: Stethoscope },
   { key: 'loc', label: 'Per Location', icon: MapPin },
+  { key: 'att', label: 'Marketing Attribution', icon: TrendingUp },
 ];
 
 const ENDPOINTS = {
   pnl: '/api/wellness/reports/pnl-by-service',
   pro: '/api/wellness/reports/per-professional',
   loc: '/api/wellness/reports/per-location',
+  att: '/api/wellness/reports/attribution',
 };
 
 const isoDay = (d) => d.toISOString().slice(0, 10);
@@ -65,6 +67,7 @@ export default function Reports() {
       {!loading && data && tab === 'pnl' && <PnlTable data={data} />}
       {!loading && data && tab === 'pro' && <ProTable data={data} />}
       {!loading && data && tab === 'loc' && <LocTable data={data} />}
+      {!loading && data && tab === 'att' && <AttTable data={data} />}
       {!loading && !data && <div className="glass" style={{ padding: '2rem', textAlign: 'center' }}>No data.</div>}
     </div>
   );
@@ -169,6 +172,37 @@ function LocTable({ data }) {
                 <td style={td}>{r.isActive ? '🟢 Active' : '⚪ Inactive'}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function AttTable({ data }) {
+  return (
+    <>
+      <Totals items={[
+        { label: 'Total leads', value: data.totals.leads.toLocaleString('en-IN') },
+        { label: 'Junk', value: data.totals.junk.toLocaleString('en-IN') },
+        { label: 'Qualified', value: data.totals.qualified.toLocaleString('en-IN') },
+        { label: 'Revenue', value: formatMoney(data.totals.revenue) },
+      ]} />
+      <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
+        <table style={tableStyle}>
+          <thead><tr>{['Source', 'Leads', 'Junk %', 'Conv %', 'Revenue', 'Rev / Lead'].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {data.rows.map((r) => (
+              <tr key={r.source}>
+                <td style={td}><strong>{r.source}</strong></td>
+                <td style={tdR}>{r.leads}</td>
+                <td style={{ ...tdR, color: r.junkRate > 70 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>{r.junkRate}%</td>
+                <td style={{ ...tdR, color: r.conversionRate > 10 ? 'var(--success-color)' : 'var(--text-secondary)', fontWeight: r.conversionRate > 10 ? 600 : 400 }}>{r.conversionRate}%</td>
+                <td style={tdR}>{formatMoney(r.revenue)}</td>
+                <td style={tdR}>{formatMoney(r.revenuePerLead)}</td>
+              </tr>
+            ))}
+            {data.rows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No leads in this window.</td></tr>}
           </tbody>
         </table>
       </div>

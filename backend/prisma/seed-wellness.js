@@ -36,19 +36,139 @@ const indianLastNames = [
   "Iyer", "Menon", "Das", "Bose", "Chatterjee", "Banerjee", "Mukherjee", "Sen",
 ];
 
+// Service catalog matched to Dr. Haror's Wellness offerings (the franchise Rishu
+// runs in Ranchi). Prices are realistic Indian market estimates; durations and
+// radii reflect the call's segmentation (salon 3km, aesthetics ~Ranchi-wide ~30km,
+// high-ticket transplants/contouring ~Jharkhand-wide ~200km).
 const services = [
-  { name: "Hair Transplant (FUE)", category: "hair", ticketTier: "high", basePrice: 100000, durationMin: 480, targetRadiusKm: null, description: "Follicular Unit Extraction hair transplant — full-day procedure" },
-  { name: "Hair PRP Therapy", category: "hair", ticketTier: "medium", basePrice: 5500, durationMin: 60, targetRadiusKm: 50, description: "Platelet-rich plasma scalp injection for hair regrowth" },
-  { name: "Botox Treatment", category: "aesthetics", ticketTier: "high", basePrice: 25000, durationMin: 45, targetRadiusKm: 30, description: "Botulinum toxin injection for facial wrinkle reduction" },
-  { name: "Dermal Fillers", category: "aesthetics", ticketTier: "high", basePrice: 28000, durationMin: 60, targetRadiusKm: 30, description: "Hyaluronic acid fillers for facial volumization" },
-  { name: "Laser Hair Removal", category: "aesthetics", ticketTier: "medium", basePrice: 8500, durationMin: 60, targetRadiusKm: 30, description: "Diode laser permanent hair reduction" },
-  { name: "Chemical Peel", category: "skin", ticketTier: "medium", basePrice: 4500, durationMin: 45, targetRadiusKm: 20, description: "Glycolic acid peel for skin brightening" },
-  { name: "HydraFacial", category: "skin", ticketTier: "medium", basePrice: 6500, durationMin: 60, targetRadiusKm: 20, description: "Multi-step facial cleanse + hydration treatment" },
-  { name: "Slimming Session", category: "slimming", ticketTier: "medium", basePrice: 3500, durationMin: 60, targetRadiusKm: 15, description: "Inch-loss slimming with ultrasonic cavitation" },
-  { name: "Ayurveda Consultation", category: "ayurveda", ticketTier: "low", basePrice: 1500, durationMin: 45, targetRadiusKm: 10, description: "Initial Ayurveda doshic assessment + plan" },
-  { name: "Shirodhara", category: "ayurveda", ticketTier: "medium", basePrice: 2500, durationMin: 75, targetRadiusKm: 10, description: "Continuous warm-oil forehead therapy for stress relief" },
-  { name: "Haircut & Styling", category: "salon", ticketTier: "low", basePrice: 500, durationMin: 30, targetRadiusKm: 3, description: "Salon haircut + blow-dry styling" },
-  { name: "Hair Color", category: "salon", ticketTier: "low", basePrice: 2500, durationMin: 90, targetRadiusKm: 3, description: "Full-head professional hair coloring" },
+  // ── Hair Transplant (high-ticket, draws from all of Jharkhand) ───────
+  { name: "Ultra Receptive Hair Transplant",      category: "hair-transplant", ticketTier: "high",   basePrice: 200000, durationMin: 540, targetRadiusKm: 200, description: "Premium custom hair transplant for advanced grade hair loss" },
+  { name: "Unshaven FUE Hair Transplant",         category: "hair-transplant", ticketTier: "high",   basePrice: 175000, durationMin: 480, targetRadiusKm: 200, description: "FUE without shaving the donor area — minimal downtime" },
+  { name: "Bio FUE Hair Transplant",              category: "hair-transplant", ticketTier: "high",   basePrice: 130000, durationMin: 480, targetRadiusKm: 200, description: "Bio-enriched FUE with growth factors for higher graft survival" },
+  { name: "Direct Hair Transplant (DHI)",         category: "hair-transplant", ticketTier: "high",   basePrice: 150000, durationMin: 480, targetRadiusKm: 200, description: "DHI implanter pen technique — no pre-made channels" },
+  { name: "Robotic Hair Transplant",              category: "hair-transplant", ticketTier: "high",   basePrice: 220000, durationMin: 540, targetRadiusKm: 200, description: "Robot-assisted graft extraction for precision" },
+  { name: "Beard & Moustache Transplant",         category: "hair-transplant", ticketTier: "high",   basePrice: 90000,  durationMin: 360, targetRadiusKm: 200, description: "Facial hair restoration for thin or patchy beard" },
+  { name: "Eyebrow Transplant",                   category: "hair-transplant", ticketTier: "high",   basePrice: 75000,  durationMin: 240, targetRadiusKm: 200, description: "Permanent natural-looking eyebrow restoration" },
+  { name: "Body Hair Transplant",                 category: "hair-transplant", ticketTier: "high",   basePrice: 180000, durationMin: 540, targetRadiusKm: 200, description: "Body hair as donor for scalp restoration" },
+  { name: "Hairline Reconstruction",              category: "hair-transplant", ticketTier: "high",   basePrice: 110000, durationMin: 360, targetRadiusKm: 200, description: "Natural hairline design + restoration" },
+  { name: "Long Hair Transplant",                 category: "hair-transplant", ticketTier: "high",   basePrice: 195000, durationMin: 540, targetRadiusKm: 200, description: "Hair transplant without shaving — see results immediately" },
+  { name: "Giga Session Hair Transplant",         category: "hair-transplant", ticketTier: "high",   basePrice: 250000, durationMin: 600, targetRadiusKm: 200, description: "Mega-session 4000+ grafts in a single sitting" },
+  { name: "Failed Hair Transplant Repair",        category: "hair-transplant", ticketTier: "high",   basePrice: 160000, durationMin: 480, targetRadiusKm: 200, description: "Corrective procedure for unsatisfactory prior transplant" },
+
+  // ── Hair Restoration (non-surgical, multi-session) ───────────────────
+  { name: "QR 678 Hair Treatment",                category: "hair-restoration", ticketTier: "medium", basePrice: 8500,  durationMin: 45, targetRadiusKm: 50,  description: "Patented growth-factor formula for hair regeneration" },
+  { name: "GFC Hair Treatment",                   category: "hair-restoration", ticketTier: "medium", basePrice: 7500,  durationMin: 45, targetRadiusKm: 50,  description: "Growth Factor Concentrate scalp injection" },
+  { name: "Hair PRP Therapy",                     category: "hair-restoration", ticketTier: "medium", basePrice: 5500,  durationMin: 60, targetRadiusKm: 50,  description: "Platelet-rich plasma scalp injection for hair regrowth" },
+  { name: "Mesogrow Therapy",                     category: "hair-restoration", ticketTier: "medium", basePrice: 6500,  durationMin: 45, targetRadiusKm: 50,  description: "Mesotherapy cocktail for scalp nourishment" },
+  { name: "Exosomes Hair Therapy",                category: "hair-restoration", ticketTier: "high",   basePrice: 18000, durationMin: 60, targetRadiusKm: 100, description: "Stem-cell derived exosome therapy for hair regrowth" },
+  { name: "Keravive Therapy",                     category: "hair-restoration", ticketTier: "medium", basePrice: 7000,  durationMin: 60, targetRadiusKm: 50,  description: "HydraFacial Keravive scalp cleansing + nourishment" },
+  { name: "Scalp Micropigmentation",              category: "hair-restoration", ticketTier: "high",   basePrice: 45000, durationMin: 240, targetRadiusKm: 100, description: "Cosmetic tattoo for hair-density illusion" },
+  { name: "Low Level Laser Light Therapy",        category: "hair-restoration", ticketTier: "low",    basePrice: 1500,  durationMin: 30, targetRadiusKm: 30,  description: "LLLT cap session for hair stimulation" },
+  { name: "Stem Cell Therapy for Hair",           category: "hair-restoration", ticketTier: "high",   basePrice: 35000, durationMin: 90, targetRadiusKm: 100, description: "Autologous stem cells for hair regeneration" },
+  { name: "Hair Thread Treatment",                category: "hair-restoration", ticketTier: "medium", basePrice: 12000, durationMin: 60, targetRadiusKm: 50,  description: "Threads to stimulate scalp circulation" },
+  { name: "Scalp Peel",                           category: "hair-restoration", ticketTier: "low",    basePrice: 2500,  durationMin: 30, targetRadiusKm: 30,  description: "Chemical scalp peel for dandruff and oil control" },
+
+  // ── Hair Concerns (consultations) ────────────────────────────────────
+  { name: "Hair Loss Consultation",               category: "hair-concern", ticketTier: "low", basePrice: 800,  durationMin: 30, targetRadiusKm: 30, description: "Initial diagnostic consultation for hair-loss concerns" },
+  { name: "Alopecia Areata Treatment",            category: "hair-concern", ticketTier: "medium", basePrice: 4500, durationMin: 30, targetRadiusKm: 50, description: "Per-session injection therapy for alopecia patches" },
+  { name: "Dandruff Treatment",                   category: "hair-concern", ticketTier: "low", basePrice: 1200,  durationMin: 30, targetRadiusKm: 30, description: "Medicated treatment for chronic dandruff" },
+  { name: "Premature Greying Treatment",          category: "hair-concern", ticketTier: "low", basePrice: 2000,  durationMin: 45, targetRadiusKm: 30, description: "Targeted therapy for early greying of hair" },
+
+  // ── Skin Concerns / Dermatology ──────────────────────────────────────
+  { name: "Dermatology Consultation",             category: "skin", ticketTier: "low",    basePrice: 800,   durationMin: 20, targetRadiusKm: 30, description: "Initial diagnostic skin consultation" },
+  { name: "Acne Vulgaris Treatment",              category: "skin", ticketTier: "medium", basePrice: 3500,  durationMin: 30, targetRadiusKm: 30, description: "Customized active-acne treatment plan" },
+  { name: "Eczema / Dermatitis Care",             category: "skin", ticketTier: "low",    basePrice: 1500,  durationMin: 30, targetRadiusKm: 30, description: "Diagnosis + topical/oral therapy for eczema" },
+  { name: "Vitiligo Treatment",                   category: "skin", ticketTier: "medium", basePrice: 4500,  durationMin: 45, targetRadiusKm: 50, description: "Excimer laser + adjunctive therapy for vitiligo" },
+  { name: "Melasma Treatment",                    category: "skin", ticketTier: "medium", basePrice: 5500,  durationMin: 45, targetRadiusKm: 30, description: "Multi-modal pigmentation correction for melasma" },
+  { name: "Psoriasis Care",                       category: "skin", ticketTier: "medium", basePrice: 4000,  durationMin: 30, targetRadiusKm: 50, description: "Long-term psoriasis management plan" },
+  { name: "PCOD Skin Care Plan",                  category: "skin", ticketTier: "medium", basePrice: 3000,  durationMin: 30, targetRadiusKm: 30, description: "PCOD-related acne and hirsutism management" },
+
+  // ── Skin Surgery ─────────────────────────────────────────────────────
+  { name: "Acne Scar Subscision",                 category: "skin-surgery", ticketTier: "medium", basePrice: 7500,  durationMin: 45, targetRadiusKm: 50,  description: "Subscision technique for atrophic acne scars" },
+  { name: "Mole Removal (Surgical)",              category: "skin-surgery", ticketTier: "medium", basePrice: 4500,  durationMin: 30, targetRadiusKm: 30,  description: "Excision of moles with cosmetic closure" },
+  { name: "Skin Tag Removal",                     category: "skin-surgery", ticketTier: "low",    basePrice: 2000,  durationMin: 20, targetRadiusKm: 30,  description: "Cautery / radiofrequency removal of skin tags" },
+  { name: "Earlobe Repair",                       category: "skin-surgery", ticketTier: "medium", basePrice: 5500,  durationMin: 45, targetRadiusKm: 50,  description: "Surgical repair of torn or stretched earlobes" },
+  { name: "Cyst / Lipoma Removal",                category: "skin-surgery", ticketTier: "medium", basePrice: 8500,  durationMin: 60, targetRadiusKm: 50,  description: "Surgical excision of cysts or lipomas" },
+  { name: "Wart / Cautery Treatment",             category: "skin-surgery", ticketTier: "low",    basePrice: 1500,  durationMin: 20, targetRadiusKm: 30,  description: "Cautery / cryotherapy for warts and DPN" },
+
+  // ── Under Eye ────────────────────────────────────────────────────────
+  { name: "Dark Circles Removal Plan",            category: "under-eye", ticketTier: "medium", basePrice: 6500,  durationMin: 45, targetRadiusKm: 30, description: "Combination therapy for periorbital pigmentation" },
+  { name: "Under Eye Fillers",                    category: "under-eye", ticketTier: "high",   basePrice: 32000, durationMin: 45, targetRadiusKm: 50, description: "HA fillers to correct hollow tear troughs" },
+  { name: "Tear Trough Correction",               category: "under-eye", ticketTier: "high",   basePrice: 28000, durationMin: 45, targetRadiusKm: 50, description: "Cannula-based tear-trough volumization" },
+  { name: "Under Eye Boosters",                   category: "under-eye", ticketTier: "medium", basePrice: 12000, durationMin: 30, targetRadiusKm: 30, description: "Skin-booster injections for under-eye texture" },
+
+  // ── Acne & Acne Scars ────────────────────────────────────────────────
+  { name: "Acne Peel",                            category: "acne", ticketTier: "low",    basePrice: 2500,  durationMin: 30, targetRadiusKm: 30, description: "Salicylic acid peel for active acne" },
+  { name: "Carbon Peel (Laser)",                  category: "acne", ticketTier: "medium", basePrice: 4500,  durationMin: 45, targetRadiusKm: 30, description: "Q-switched laser carbon peel for oily/acne skin" },
+  { name: "Chemical Peel",                        category: "acne", ticketTier: "medium", basePrice: 3500,  durationMin: 45, targetRadiusKm: 30, description: "Glycolic / TCA peel for skin renewal" },
+  { name: "Dermaroller / Microneedling",          category: "acne", ticketTier: "medium", basePrice: 4000,  durationMin: 45, targetRadiusKm: 30, description: "Microneedling for scar remodelling and skin rejuvenation" },
+  { name: "Fractional CO2 Laser",                 category: "acne", ticketTier: "high",   basePrice: 12000, durationMin: 60, targetRadiusKm: 50, description: "Fractional ablative laser for acne scars" },
+  { name: "Radiofrequency Microneedling",         category: "acne", ticketTier: "high",   basePrice: 15000, durationMin: 60, targetRadiusKm: 50, description: "RF microneedling for deep acne scars and tightening" },
+
+  // ── Pigmentation / Skin Brightening ──────────────────────────────────
+  { name: "Cosmelan Depigmentation",              category: "pigmentation", ticketTier: "high",   basePrice: 25000, durationMin: 90, targetRadiusKm: 50, description: "Professional Cosmelan mask + take-home kit" },
+  { name: "Vampire Facial (PRP)",                 category: "pigmentation", ticketTier: "medium", basePrice: 8500,  durationMin: 75, targetRadiusKm: 30, description: "Microneedling with autologous PRP" },
+  { name: "HydraFacial Basic",                    category: "pigmentation", ticketTier: "medium", basePrice: 5500,  durationMin: 60, targetRadiusKm: 30, description: "Multi-step cleanse, exfoliate, hydrate" },
+  { name: "HydraFacial Elite",                    category: "pigmentation", ticketTier: "medium", basePrice: 9500,  durationMin: 75, targetRadiusKm: 30, description: "Premium HydraFacial with boosters and LED" },
+  { name: "Skin Boosters",                        category: "pigmentation", ticketTier: "high",   basePrice: 16000, durationMin: 45, targetRadiusKm: 50, description: "Injectable hydration boosters for glow" },
+  { name: "Profhillo Bio-Remodelling",            category: "pigmentation", ticketTier: "high",   basePrice: 22000, durationMin: 45, targetRadiusKm: 50, description: "Bio-stimulating HA for skin remodelling" },
+  { name: "Glow Peel",                            category: "pigmentation", ticketTier: "low",    basePrice: 2500,  durationMin: 30, targetRadiusKm: 30, description: "Quick brightening peel for glow" },
+
+  // ── MediFacial ───────────────────────────────────────────────────────
+  { name: "Korean Glass Skin Facial",             category: "medifacial", ticketTier: "medium", basePrice: 7500,  durationMin: 75, targetRadiusKm: 30, description: "K-beauty-style hydration + glow facial" },
+  { name: "Diamond Polishing Facial",             category: "medifacial", ticketTier: "low",    basePrice: 2500,  durationMin: 45, targetRadiusKm: 20, description: "Microdermabrasion polish for smooth skin" },
+  { name: "Oxy Facial",                           category: "medifacial", ticketTier: "low",    basePrice: 2200,  durationMin: 45, targetRadiusKm: 20, description: "Pure-oxygen infusion facial" },
+  { name: "Power Glow Facial",                    category: "medifacial", ticketTier: "medium", basePrice: 4500,  durationMin: 60, targetRadiusKm: 30, description: "Signature anti-dull radiance facial" },
+  { name: "7D Lift Facial",                       category: "medifacial", ticketTier: "high",   basePrice: 12000, durationMin: 90, targetRadiusKm: 30, description: "Multi-step lifting facial with HIFU touch" },
+  { name: "Red Carpet Peel",                      category: "medifacial", ticketTier: "medium", basePrice: 4500,  durationMin: 45, targetRadiusKm: 30, description: "Quick brightening peel for events" },
+  { name: "IV Glow Drip",                         category: "medifacial", ticketTier: "high",   basePrice: 8500,  durationMin: 60, targetRadiusKm: 30, description: "IV vitamin/glutathione drip for inner glow" },
+
+  // ── Anti-Ageing / Injectables ────────────────────────────────────────
+  { name: "Botox / Anti-Wrinkle Injection",       category: "anti-ageing", ticketTier: "high", basePrice: 25000, durationMin: 30, targetRadiusKm: 30, description: "Botulinum toxin for forehead/glabellar/crow's feet" },
+  { name: "Cheek Fillers",                        category: "anti-ageing", ticketTier: "high", basePrice: 35000, durationMin: 60, targetRadiusKm: 50, description: "HA filler for cheek volumization and contour" },
+  { name: "Lip Fillers",                          category: "anti-ageing", ticketTier: "high", basePrice: 28000, durationMin: 45, targetRadiusKm: 50, description: "HA filler for lip volume and shape enhancement" },
+  { name: "Dermal Fillers (Full Face)",           category: "anti-ageing", ticketTier: "high", basePrice: 65000, durationMin: 90, targetRadiusKm: 50, description: "Multi-area HA filler liquid facelift" },
+  { name: "Thread Lift",                          category: "anti-ageing", ticketTier: "high", basePrice: 55000, durationMin: 90, targetRadiusKm: 50, description: "PDO/PLLA thread lift for sagging skin" },
+  { name: "HIFU Facelift",                        category: "anti-ageing", ticketTier: "high", basePrice: 35000, durationMin: 75, targetRadiusKm: 50, description: "High-intensity focused ultrasound non-surgical facelift" },
+  { name: "Ulthera Lift",                         category: "anti-ageing", ticketTier: "high", basePrice: 95000, durationMin: 90, targetRadiusKm: 100, description: "FDA-approved ultrasound deep skin lift" },
+  { name: "RF Skin Tightening",                   category: "anti-ageing", ticketTier: "medium", basePrice: 9500, durationMin: 60, targetRadiusKm: 30, description: "Radiofrequency skin tightening" },
+  { name: "PDRN Treatment",                       category: "anti-ageing", ticketTier: "high", basePrice: 18000, durationMin: 60, targetRadiusKm: 50, description: "Salmon DNA injectable for skin regeneration" },
+  { name: "Vampire Facelift",                     category: "anti-ageing", ticketTier: "high", basePrice: 28000, durationMin: 90, targetRadiusKm: 50, description: "PRP + filler combo for non-surgical facelift" },
+  { name: "Double Chin Reduction",                category: "anti-ageing", ticketTier: "medium", basePrice: 18000, durationMin: 45, targetRadiusKm: 50, description: "Submental fat reduction injectable" },
+  { name: "Non-Surgical Face Lift",               category: "anti-ageing", ticketTier: "high", basePrice: 45000, durationMin: 90, targetRadiusKm: 50, description: "Combination injectable + energy device facelift" },
+
+  // ── Laser Hair Removal ───────────────────────────────────────────────
+  { name: "Full Body Laser Hair Removal",         category: "laser-hair", ticketTier: "high",   basePrice: 65000, durationMin: 180, targetRadiusKm: 50, description: "Full body diode laser package (8 sessions)" },
+  { name: "Face Laser Hair Removal",              category: "laser-hair", ticketTier: "medium", basePrice: 4500,  durationMin: 30, targetRadiusKm: 30, description: "Permanent facial hair reduction" },
+  { name: "Underarm Laser Hair Removal",          category: "laser-hair", ticketTier: "low",    basePrice: 2500,  durationMin: 20, targetRadiusKm: 30, description: "Permanent underarm hair reduction" },
+  { name: "Bikini Laser Hair Removal",            category: "laser-hair", ticketTier: "medium", basePrice: 5500,  durationMin: 30, targetRadiusKm: 30, description: "Bikini-line laser hair reduction" },
+  { name: "Arms Laser Hair Removal",              category: "laser-hair", ticketTier: "medium", basePrice: 6500,  durationMin: 45, targetRadiusKm: 30, description: "Full-arm permanent hair reduction" },
+  { name: "Legs Laser Hair Removal",              category: "laser-hair", ticketTier: "medium", basePrice: 8500,  durationMin: 60, targetRadiusKm: 30, description: "Full-leg permanent hair reduction" },
+
+  // ── Laser Skin ───────────────────────────────────────────────────────
+  { name: "Tattoo Removal (Laser)",               category: "laser-skin", ticketTier: "medium", basePrice: 3500, durationMin: 30, targetRadiusKm: 50, description: "Q-switched laser per session for tattoo removal" },
+  { name: "Birthmark Removal",                    category: "laser-skin", ticketTier: "medium", basePrice: 4500, durationMin: 30, targetRadiusKm: 50, description: "Laser treatment for vascular/pigmented birthmarks" },
+  { name: "Mole Laser Removal",                   category: "laser-skin", ticketTier: "low",    basePrice: 2500, durationMin: 20, targetRadiusKm: 30, description: "Laser ablation for benign moles" },
+
+  // ── Body Contouring (very high-ticket, draws statewide) ──────────────
+  { name: "Liposuction",                          category: "body-contouring", ticketTier: "high", basePrice: 250000, durationMin: 240, targetRadiusKm: 200, description: "Surgical fat removal from targeted areas" },
+  { name: "Cryolipolysis (CoolSculpting)",        category: "body-contouring", ticketTier: "high", basePrice: 35000,  durationMin: 60,  targetRadiusKm: 100, description: "Non-invasive fat-freezing per area" },
+  { name: "Body Shaping (Cavitation)",            category: "body-contouring", ticketTier: "medium", basePrice: 5500, durationMin: 60, targetRadiusKm: 30, description: "Ultrasonic cavitation inch-loss session" },
+  { name: "Cellulite Treatment",                  category: "body-contouring", ticketTier: "medium", basePrice: 4500, durationMin: 60, targetRadiusKm: 30, description: "Combination therapy for cellulite reduction" },
+  { name: "Gynecomastia Surgery",                 category: "body-contouring", ticketTier: "high", basePrice: 95000, durationMin: 180, targetRadiusKm: 200, description: "Male breast reduction surgery" },
+  { name: "Eyelid Surgery (Blepharoplasty)",      category: "body-contouring", ticketTier: "high", basePrice: 75000, durationMin: 120, targetRadiusKm: 200, description: "Surgical correction of upper/lower eyelids" },
+  { name: "Ozempic Weight Loss Plan",             category: "body-contouring", ticketTier: "high", basePrice: 15000, durationMin: 30,  targetRadiusKm: 50,  description: "Monthly Ozempic plan with monitoring" },
+  { name: "Mounjaro Weight Loss Plan",            category: "body-contouring", ticketTier: "high", basePrice: 22000, durationMin: 30,  targetRadiusKm: 50,  description: "Monthly Mounjaro plan with monitoring" },
+  { name: "Lipolysis Injections",                 category: "body-contouring", ticketTier: "medium", basePrice: 12000, durationMin: 45, targetRadiusKm: 50, description: "Targeted injectable for stubborn fat pockets" },
+  { name: "Ear / Nose Piercing",                  category: "body-contouring", ticketTier: "low", basePrice: 1500, durationMin: 15, targetRadiusKm: 20, description: "Sterile ear and nose piercing service" },
+
+  // ── Ayurveda (Rishu mentioned this; not on Dr Haror's main site) ─────
+  { name: "Ayurveda Consultation",                category: "ayurveda", ticketTier: "low",    basePrice: 1500, durationMin: 45, targetRadiusKm: 30, description: "Initial doshic assessment and lifestyle plan" },
+  { name: "Shirodhara",                           category: "ayurveda", ticketTier: "medium", basePrice: 2500, durationMin: 75, targetRadiusKm: 30, description: "Continuous warm-oil forehead therapy" },
+
+  // ── Salon (3 km radius — Rishu's clinic includes a salon) ────────────
+  { name: "Haircut & Styling",                    category: "salon", ticketTier: "low", basePrice: 500,  durationMin: 30, targetRadiusKm: 3, description: "Salon haircut + blow-dry" },
+  { name: "Hair Color (Full Head)",               category: "salon", ticketTier: "low", basePrice: 2500, durationMin: 90, targetRadiusKm: 3, description: "Full-head professional hair coloring" },
 ];
 
 const staffSeed = [
@@ -114,6 +234,28 @@ async function main() {
   });
   console.log(`[seed-wellness] tenant id=${tenant.id} slug=${tenant.slug}`);
 
+  // 1a. Locations — Rishu currently runs only Ranchi. Multi-location is supported
+  // in the schema; future franchises just add new rows here.
+  const existingRanchi = await prisma.location.findFirst({ where: { tenantId: tenant.id, name: "Ranchi" } });
+  const ranchi = existingRanchi
+    ? await prisma.location.update({ where: { id: existingRanchi.id }, data: {
+        addressLine: "The Ikon, Tagore Hill Road, Morabadi",
+        city: "Ranchi", state: "Jharkhand", pincode: "834008", country: "India",
+        phone: "+91 9637866666", email: "ranchi@enhancedwellness.in",
+        latitude: 23.3978, longitude: 85.3192,
+        hours: JSON.stringify({ mon: ["10:00","20:00"], tue: ["10:00","20:00"], wed: ["10:00","20:00"], thu: ["10:00","20:00"], fri: ["10:00","20:00"], sat: ["10:00","20:00"], sun: ["11:00","18:00"] }),
+        isActive: true,
+      } })
+    : await prisma.location.create({ data: {
+        name: "Ranchi", addressLine: "The Ikon, Tagore Hill Road, Morabadi",
+        city: "Ranchi", state: "Jharkhand", pincode: "834008", country: "India",
+        phone: "+91 9637866666", email: "ranchi@enhancedwellness.in",
+        latitude: 23.3978, longitude: 85.3192,
+        hours: JSON.stringify({ mon: ["10:00","20:00"], tue: ["10:00","20:00"], wed: ["10:00","20:00"], thu: ["10:00","20:00"], fri: ["10:00","20:00"], sat: ["10:00","20:00"], sun: ["11:00","18:00"] }),
+        tenantId: tenant.id,
+      } });
+  console.log(`[seed-wellness] location: ${ranchi.name} (id=${ranchi.id})`);
+
   // 2. Staff
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
   const userMap = {};
@@ -169,6 +311,7 @@ async function main() {
           bloodGroup: rand(["A+", "B+", "O+", "AB+", "A-", "B-", "O-", "AB-"]),
           source: rand(["meta-ad", "google-ad", "walk-in", "referral", "whatsapp", "indiamart"]),
           tenantId: tenant.id,
+          locationId: ranchi.id,
         },
       });
       patients.push(p);
@@ -229,6 +372,7 @@ async function main() {
           doctorId: doctor.id,
           serviceId: service.id,
           tenantId: tenant.id,
+          locationId: ranchi.id,
         },
       });
       visitsCreated++;
@@ -258,6 +402,7 @@ async function main() {
           doctorId: doctor.id,
           serviceId: service.id,
           tenantId: tenant.id,
+          locationId: ranchi.id,
         },
       });
       todaySeeded++;
@@ -285,6 +430,7 @@ async function main() {
           doctorId: doctor.id,
           serviceId: service.id,
           tenantId: tenant.id,
+          locationId: ranchi.id,
         },
       });
       ydaySeeded++;
@@ -311,6 +457,7 @@ async function main() {
           doctorId: doctor.id,
           serviceId: service.id,
           tenantId: tenant.id,
+          locationId: ranchi.id,
         },
       });
       tomSeeded++;

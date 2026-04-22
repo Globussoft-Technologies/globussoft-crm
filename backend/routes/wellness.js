@@ -474,16 +474,79 @@ router.post("/recommendations/:id/reject", async (req, res) => {
   }
 });
 
+// ── Locations (multi-clinic) ───────────────────────────────────────
+
+router.get("/locations", async (req, res) => {
+  try {
+    const locations = await prisma.location.findMany({
+      where: tenantWhere(req),
+      orderBy: { name: "asc" },
+    });
+    res.json(locations);
+  } catch (e) {
+    console.error("[wellness] list locations error:", e.message);
+    res.status(500).json({ error: "Failed to list locations" });
+  }
+});
+
+router.post("/locations", async (req, res) => {
+  try {
+    const { name, addressLine, city, state, pincode, country, phone, email, latitude, longitude, hours } = req.body;
+    if (!name || !addressLine || !city) {
+      return res.status(400).json({ error: "name, addressLine, city are required" });
+    }
+    const loc = await prisma.location.create({
+      data: {
+        name, addressLine, city,
+        state: state || null,
+        pincode: pincode || null,
+        country: country || "India",
+        phone: phone || null,
+        email: email || null,
+        latitude: latitude !== undefined ? parseFloat(latitude) : null,
+        longitude: longitude !== undefined ? parseFloat(longitude) : null,
+        hours: hours ? (typeof hours === "object" ? JSON.stringify(hours) : hours) : null,
+        tenantId: req.user.tenantId,
+      },
+    });
+    res.status(201).json(loc);
+  } catch (e) {
+    console.error("[wellness] create location error:", e.message);
+    res.status(500).json({ error: "Failed to create location" });
+  }
+});
+
+router.put("/locations/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.location.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Location not found" });
+
+    const data = {};
+    const allowed = ["name", "addressLine", "city", "state", "pincode", "country", "phone", "email", "latitude", "longitude", "hours", "isActive"];
+    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+
+    const updated = await prisma.location.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] update location error:", e.message);
+    res.status(500).json({ error: "Failed to update location" });
+  }
+});
+
 // ── Owner dashboard aggregation ────────────────────────────────────
 
 router.get("/dashboard", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
     const todayStart = startOfDay();
     const todayEnd = endOfDay();
     const yesterdayStart = startOfDay(new Date(Date.now() - 86400000));
     const yesterdayEnd = endOfDay(new Date(Date.now() - 86400000));
     const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
+
+    const visitWhere = (extra = {}) => ({ tenantId, ...(locationId ? { locationId } : {}), ...extra });
 
     const [
       todayVisits,
@@ -494,13 +557,14 @@ router.get("/dashboard", async (req, res) => {
       thirtyDayVisits,
       totalPatients,
       totalServices,
+      totalLocations,
     ] = await Promise.all([
       prisma.visit.findMany({
-        where: { tenantId, visitDate: { gte: todayStart, lte: todayEnd } },
+        where: visitWhere({ visitDate: { gte: todayStart, lte: todayEnd } }),
         select: { id: true, status: true, amountCharged: true, serviceId: true },
       }),
       prisma.visit.findMany({
-        where: { tenantId, visitDate: { gte: yesterdayStart, lte: yesterdayEnd } },
+        where: visitWhere({ visitDate: { gte: yesterdayStart, lte: yesterdayEnd } }),
         select: { id: true, status: true, amountCharged: true },
       }),
       prisma.agentRecommendation.findMany({
@@ -513,11 +577,12 @@ router.get("/dashboard", async (req, res) => {
         where: { tenantId, status: "Lead", createdAt: { gte: todayStart, lte: todayEnd } },
       }),
       prisma.visit.findMany({
-        where: { tenantId, visitDate: { gte: thirtyDaysAgo } },
+        where: visitWhere({ visitDate: { gte: thirtyDaysAgo } }),
         select: { visitDate: true, amountCharged: true },
       }),
-      prisma.patient.count({ where: { tenantId } }),
+      prisma.patient.count({ where: { tenantId, ...(locationId ? { locationId } : {}) } }),
       prisma.service.count({ where: { tenantId, isActive: true } }),
+      prisma.location.count({ where: { tenantId, isActive: true } }),
     ]);
 
     const sum = (arr, k) => arr.reduce((s, x) => s + (parseFloat(x[k]) || 0), 0);
@@ -558,7 +623,7 @@ router.get("/dashboard", async (req, res) => {
       pendingRecommendations,
       activeTreatmentPlans,
       revenueTrend,
-      totals: { patients: totalPatients, services: totalServices },
+      totals: { patients: totalPatients, services: totalServices, locations: totalLocations },
     });
   } catch (e) {
     console.error("[wellness] dashboard error:", e.message);

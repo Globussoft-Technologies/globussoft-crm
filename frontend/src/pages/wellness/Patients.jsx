@@ -9,7 +9,8 @@ export default function Patients() {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ name: '', phone: '', email: '', gender: '', source: 'walk-in' });
+  const [locations, setLocations] = useState([]);
+  const [form, setForm] = useState({ name: '', phone: '', email: '', gender: '', source: 'walk-in', locationId: '' });
 
   const load = () => {
     setLoading(true);
@@ -25,11 +26,16 @@ export default function Patients() {
     return () => clearTimeout(t);
   }, [q]);
 
+  useEffect(() => {
+    fetchApi('/api/wellness/locations').then(setLocations).catch(() => setLocations([]));
+  }, []);
+
   const handleCreate = async (e) => {
     e.preventDefault();
     try {
-      await fetchApi('/api/wellness/patients', { method: 'POST', body: JSON.stringify(form) });
-      setForm({ name: '', phone: '', email: '', gender: '', source: 'walk-in' });
+      const payload = { ...form, locationId: form.locationId ? parseInt(form.locationId) : null };
+      await fetchApi('/api/wellness/patients', { method: 'POST', body: JSON.stringify(payload) });
+      setForm({ name: '', phone: '', email: '', gender: '', source: 'walk-in', locationId: locations[0]?.id || '' });
       setShowAdd(false);
       load();
     } catch (err) {
@@ -73,6 +79,12 @@ export default function Patients() {
             <option value="referral">Referral</option>
             <option value="indiamart">IndiaMART</option>
           </select>
+          {locations.length > 1 && (
+            <select value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })} style={inputStyle}>
+              <option value="">Select clinic</option>
+              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          )}
           <button type="submit" style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Save</button>
         </form>
       )}

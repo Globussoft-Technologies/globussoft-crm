@@ -74,6 +74,7 @@ model Tenant {
   treatmentPlans       TreatmentPlan[]
   serviceConsumptions  ServiceConsumption[]
   agentRecommendations AgentRecommendation[]
+  locations            Location[]
 }
 
 model User {
@@ -1785,6 +1786,10 @@ model Patient {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  // Primary clinic location (multi-location ready; nullable for now)
+  locationId Int?
+  location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
   visits         Visit[]
   prescriptions  Prescription[]
   consents       ConsentForm[]
@@ -1795,6 +1800,7 @@ model Patient {
 
   @@index([tenantId, name])
   @@index([tenantId, phone])
+  @@index([tenantId, locationId])
   @@index([contactId])
 }
 
@@ -1847,6 +1853,10 @@ model Visit {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  // Multi-location: which clinic the visit happened at
+  locationId Int?
+  location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
   prescriptions Prescription[]
   consumptions  ServiceConsumption[]
 
@@ -1856,6 +1866,7 @@ model Visit {
   @@index([tenantId, visitDate])
   @@index([patientId, visitDate])
   @@index([tenantId, status])
+  @@index([tenantId, locationId, visitDate])
 }
 
 model Prescription {
@@ -1971,4 +1982,39 @@ model AgentRecommendation {
 
   @@index([tenantId, status, priority])
   @@index([tenantId, createdAt])
+}
+
+// Multi-location support — one tenant (e.g. Enhanced Wellness) can run several
+// physical clinics (Ranchi today, Delhi/Mumbai/Pune tomorrow as franchises).
+// Patients and visits link to a Location so per-clinic occupancy and revenue
+// are reportable.
+model Location {
+  id          Int     @id @default(autoincrement())
+  name        String // Display name e.g. "Ranchi"
+  addressLine String  @db.Text
+  city        String
+  state       String?
+  pincode     String?
+  country     String  @default("India")
+  phone       String?
+  email       String?
+  latitude    Float?
+  longitude   Float?
+  timezone    String  @default("Asia/Kolkata")
+  isActive    Boolean @default(true)
+
+  // Operating hours JSON: { mon: ["09:00","20:00"], tue: ..., sun: null }
+  hours String? @db.Text
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  patients Patient[]
+  visits   Visit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, city])
 }

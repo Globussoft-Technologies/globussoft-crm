@@ -109,6 +109,7 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
       {isAdmin && (
         <>
           <div style={sectionLabel}>Admin</div>
+          <Link to="/wellness/locations" icon={Building2} label="Locations" adminOnly />
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />

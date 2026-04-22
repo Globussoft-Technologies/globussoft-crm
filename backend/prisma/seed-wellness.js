@@ -630,6 +630,52 @@ async function main() {
     }
   }
 
+  // 8b. Email templates — wellness clinic comms (idempotent)
+  const emailTemplates = [
+    {
+      name: "Booking confirmation",
+      subject: "Your {{service}} appointment is confirmed at {{clinic}}",
+      body: "Hi {{name}},\n\nYour appointment for {{service}} on {{date}} at {{time}} is confirmed at our {{location}} clinic.\n\nWhat to bring:\n- A photo ID\n- Any prior medical records\n\nAddress: {{address}}\nReschedule: reply to this email or WhatsApp us at {{phone}}.\n\nWe look forward to seeing you.\n— Team {{clinic}}",
+    },
+    {
+      name: "Pre-procedure instructions (transplant/surgery)",
+      subject: "Important pre-procedure instructions for your {{service}}",
+      body: "Hi {{name}},\n\nYour {{service}} is scheduled for {{date}}. Please follow these instructions:\n\n1. Avoid alcohol for 48 hours before\n2. No blood thinners (aspirin/ibuprofen) for 7 days before\n3. Wash your hair the night before\n4. Eat a light meal 2 hours before arrival\n5. Wear loose, comfortable clothing\n\nReach us on {{phone}} for any questions.\n— Dr. {{doctor}} & team",
+    },
+    {
+      name: "Post-treatment follow-up",
+      subject: "How are you feeling after your visit?",
+      body: "Hi {{name}},\n\nIt's been 48 hours since your {{service}} on {{date}}. We wanted to check in.\n\nHow are you feeling? Any unexpected symptoms — itching, redness beyond expected, or pain?\n\nReply to this email or WhatsApp us at {{phone}}. Your next session, if any, is on {{nextDue}}.\n\nWith care,\nDr. {{doctor}}",
+    },
+    {
+      name: "Reactivation — 60 days inactive",
+      subject: "It's been a while — limited slots open this week",
+      body: "Hi {{name}},\n\nIt's been 2 months since your last visit. We've opened a few priority slots this week if you'd like to come in for a touch-up or consultation.\n\nReply with your preferred day and time, and we'll book you in.\n— {{clinic}}",
+    },
+    {
+      name: "Birthday wishes + offer",
+      subject: "Happy birthday {{name}} — a small gift from {{clinic}}",
+      body: "Happy birthday, {{name}}!\n\nAs a small gift, we're offering 20% off any HydraFacial, peel, or cleanup treatment booked in the next 30 days. Just mention this email when you book.\n\nWith warm wishes,\n{{clinic}}",
+    },
+    {
+      name: "Treatment plan reminder",
+      subject: "Session {{sessionNumber}} of {{totalSessions}} due — {{plan}}",
+      body: "Hi {{name}},\n\nYou're partway through your {{plan}} treatment plan ({{sessionNumber}} of {{totalSessions}} sessions completed). Skipping sessions reduces results — let's keep momentum.\n\nNext session due: {{nextDue}}.\nBook: reply to this email or call {{phone}}.\n— Dr. {{doctor}}",
+    },
+  ];
+  let templatesCreated = 0;
+  for (const t of emailTemplates) {
+    const existing = await prisma.emailTemplate.findFirst({
+      where: { tenantId: tenant.id, name: t.name },
+    });
+    if (existing) continue;
+    await prisma.emailTemplate.create({
+      data: { ...t, tenantId: tenant.id },
+    });
+    templatesCreated++;
+  }
+  console.log(`[seed-wellness] email templates: ${templatesCreated} created (or already existed)`);
+
   // 9. Hand-crafted agent recommendations (always re-seeded for the demo)
   await prisma.agentRecommendation.deleteMany({ where: { tenantId: tenant.id } });
   await prisma.agentRecommendation.createMany({

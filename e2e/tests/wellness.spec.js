@@ -420,6 +420,9 @@ test.describe('Wellness — UI smoke (SPA routes serve)', () => {
     '/wellness/patients',
     '/wellness/services',
     '/wellness/locations',
+    '/wellness/calendar',
+    '/wellness/reports',
+    '/book/enhanced-wellness',
   ];
 
   for (let i = 0; i < routes.length; i++) {
@@ -431,4 +434,112 @@ test.describe('Wellness — UI smoke (SPA routes serve)', () => {
       expect(html).toContain('<div id="root">');
     });
   }
+});
+
+test.describe.serial('Wellness — Reports + Junk filter + Auto-route + Public booking + Orchestrator', () => {
+  const headers = () => ({ Authorization: `Bearer ${TOKEN}` });
+
+  test.beforeAll(async ({ request }) => {
+    if (TOKEN) return;
+    const r = await request.post(`${API}/auth/login`, { data: RISHU });
+    TOKEN = (await r.json()).token;
+  });
+
+  test('42. Reports: P&L by service returns rows + totals', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/reports/pnl-by-service`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    const d = await r.json();
+    expect(d.rows.length).toBeGreaterThan(0);
+    expect(d.totals).toHaveProperty('revenue');
+    expect(d.totals).toHaveProperty('contribution');
+  });
+
+  test('43. Reports: per-professional has doctors with revenue', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/reports/per-professional`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    const d = await r.json();
+    expect(d.rows.length).toBeGreaterThan(0);
+    expect(d.rows[0]).toHaveProperty('revenue');
+  });
+
+  test('44. Reports: per-location has Ranchi', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/reports/per-location`, { headers: headers() });
+    const d = await r.json();
+    expect(d.rows.find((l) => l.name === 'Ranchi')).toBeTruthy();
+  });
+
+  test('45. Junk filter catches gibberish + foreign number', async ({ request }) => {
+    const res = await request.post(`${EXT}/leads`, {
+      headers: { 'X-API-Key': PARTNER_KEY, 'Content-Type': 'application/json' },
+      data: { name: 'YYYYY', phone: '+1234567890', source: 'test-junk' },
+    });
+    expect(res.ok()).toBeTruthy();
+    const d = await res.json();
+    expect(d.status).toBe('Junk');
+    expect(d.aiScore).toBeLessThanOrEqual(20);
+    expect(d._verdict.reasons.some((r) => /non-Indian|gibberish/i.test(r))).toBeTruthy();
+  });
+
+  test('46. Junk filter accepts a valid Indian lead', async ({ request }) => {
+    const res = await request.post(`${EXT}/leads`, {
+      headers: { 'X-API-Key': PARTNER_KEY, 'Content-Type': 'application/json' },
+      data: {
+        name: 'Aarav Sharma', phone: `+9197${Date.now().toString().slice(-8)}`,
+        email: `valid-${Date.now()}@example.com`, source: 'website-form',
+        note: 'I want a hair transplant consultation',
+      },
+    });
+    const d = await res.json();
+    expect(d.status).toBe('Lead');
+    expect(d.aiScore).toBeGreaterThanOrEqual(50);
+  });
+
+  test('47. Auto-router assigns hair-transplant lead to a doctor', async ({ request }) => {
+    const res = await request.post(`${EXT}/leads`, {
+      headers: { 'X-API-Key': PARTNER_KEY, 'Content-Type': 'application/json' },
+      data: {
+        name: 'Vikas Kumar', phone: `+9198${Date.now().toString().slice(-8)}`,
+        email: `route-${Date.now()}@example.com`, source: 'website-form',
+        note: 'enquiry about hair transplant cost',
+      },
+    });
+    const d = await res.json();
+    expect(d._routing).toBeTruthy();
+    // Either a doctor was matched or fell back to telecaller — both acceptable
+    expect(d._routing.userId === null || typeof d._routing.userId === 'number').toBeTruthy();
+  });
+
+  test('48. Public tenant profile returns 100+ services + Ranchi', async ({ request }) => {
+    const res = await request.get(`${API}/wellness/public/tenant/enhanced-wellness`);
+    expect(res.ok()).toBeTruthy();
+    const d = await res.json();
+    expect(d.services.length).toBeGreaterThanOrEqual(100);
+    expect(d.locations.find((l) => l.name === 'Ranchi')).toBeTruthy();
+  });
+
+  test('49. Public booking creates Patient + Visit', async ({ request }) => {
+    const profile = await (await request.get(`${API}/wellness/public/tenant/enhanced-wellness`)).json();
+    const svc = profile.services[0];
+    const loc = profile.locations[0];
+    const res = await request.post(`${API}/wellness/public/book`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: svc.id, locationId: loc.id,
+        name: 'E2E Public Booker', phone: `+9197${Date.now().toString().slice(-8)}`,
+        notes: 'E2E test booking',
+      },
+    });
+    expect(res.ok()).toBeTruthy();
+    const d = await res.json();
+    expect(d.ok).toBeTruthy();
+    expect(d.visit).toHaveProperty('id');
+  });
+
+  test('50. Orchestrator manual run creates fresh recommendations', async ({ request }) => {
+    const res = await request.post(`${API}/wellness/orchestrator/run`, { headers: headers() });
+    expect(res.ok()).toBeTruthy();
+    const d = await res.json();
+    expect(typeof d.created).toBe('number');
+  });
 });

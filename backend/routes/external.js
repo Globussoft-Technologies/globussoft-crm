@@ -20,6 +20,7 @@ const express = require("express");
 const prisma = require("../lib/prisma");
 const externalAuth = require("../middleware/externalAuth");
 const { classifyLead } = require("../lib/leadJunkFilter");
+const { pickAssignee } = require("../lib/leadAutoRouter");
 
 const router = express.Router();
 
@@ -207,6 +208,15 @@ router.post("/leads", async (req, res) => {
       name, phone, email, source,
     });
 
+    // Auto-route to a specialist / telecaller (skip junk leads — they go nowhere)
+    let assignee = { userId: null, reason: "junk skipped routing" };
+    if (!verdict.isJunk) {
+      assignee = await pickAssignee({
+        tenantId: req.tenantId,
+        name, phone, email, source, note,
+      });
+    }
+
     const contact = await prisma.contact.create({
       data: {
         name: name || (phone ? `Caller ${phone}` : "Unknown caller"),
@@ -216,6 +226,7 @@ router.post("/leads", async (req, res) => {
         source: source || "callified",
         firstTouchSource: source || "callified",
         aiScore: verdict.score,
+        assignedToId: assignee.userId,
         tenantId: req.tenantId,
       },
     });
@@ -237,7 +248,7 @@ router.post("/leads", async (req, res) => {
       });
     }
 
-    res.status(201).json({ ...contact, _verdict: verdict });
+    res.status(201).json({ ...contact, _verdict: verdict, _routing: assignee });
   } catch (e) {
     console.error("[external] create lead:", e.message);
     // Unique-violation on email → return the existing contact so partner can continue

@@ -175,24 +175,55 @@ async function main() {
     }
     console.log(`[seed-wellness] patients created: ${patients.length}`);
 
-    // 5. Visits (200) over last 90 days
+    // 5. Visits — historical (~165 over last 90 days, completed only)
     const allServices = Object.values(serviceMap);
+    const noteByCategory = {
+      hair: [
+        "FUE session went smoothly. ~2200 grafts harvested, even density across recipient area. Post-op care explained, follow-up in 7 days.",
+        "PRP injection completed. Patient tolerated procedure well, minor scalp tenderness expected for 24h. Next session in 4 weeks.",
+        "Hair growth assessment: visible improvement in temples. Continue minoxidil + finasteride. Photos saved.",
+      ],
+      aesthetics: [
+        "Botox 30 units administered to forehead and glabellar lines. Patient comfortable. Expect onset 5-7 days, full effect at 14 days.",
+        "Dermal filler (1ml HA) injected — cheek volumization. Massaged to even out, mild swelling expected for 48h.",
+        "Combined Botox + filler treatment. Discussed maintenance schedule (every 4-6 months for Botox, 12 months for filler).",
+      ],
+      skin: [
+        "Glycolic peel applied (30%). Mild stinging during procedure, expected. Patient given post-care kit. Avoid sun for 1 week.",
+        "HydraFacial completed — excellent results, patient very happy. Skin visibly brighter. Recommended monthly maintenance.",
+        "Acne consultation + LED therapy session. Started on prescribed regimen, review in 4 weeks.",
+      ],
+      slimming: [
+        "Cavitation session (60 min) — abdomen + flanks. 1.2cm reduction noted. 3 more sessions planned.",
+        "Inch-loss measurement: down 2.5cm from baseline. Patient adhering to diet plan. Continue weekly.",
+      ],
+      ayurveda: [
+        "Initial doshic assessment — Pitta-Vata constitution. Recommended dietary changes + herbal supplements. Follow-up in 3 weeks.",
+        "Shirodhara session for stress. Patient reported deep relaxation. Weekly sessions for 6 weeks recommended.",
+      ],
+      salon: [
+        "Haircut + styling completed. Patient satisfied with the new look.",
+        "Hair color refresh — covered grays, root touch-up, blow-dry finish.",
+      ],
+    };
+    const sourceWeighted = ["meta-ad", "meta-ad", "meta-ad", "meta-ad", "google-ad", "google-ad", "google-ad", "walk-in", "walk-in", "referral", "whatsapp", "indiamart"];
+
     let visitsCreated = 0;
-    for (let i = 0; i < 200; i++) {
+    // Historical visits (last 90 days, NOT today/yesterday/tomorrow — those are scheduled separately)
+    for (let i = 0; i < 165; i++) {
       const patient = rand(patients);
       const service = rand(allServices);
       const doctor = rand(doctors);
+      const visitDate = randomVisitDate(90);
+      // Skip if visit lands on today/yesterday — we'll seed those explicitly
+      const daysFromNow = Math.floor((Date.now() - visitDate) / 86400000);
+      if (daysFromNow < 2) continue;
+      const cat = service.category || "general";
       await prisma.visit.create({
         data: {
-          visitDate: randomVisitDate(90),
+          visitDate,
           status: "completed",
-          notes: rand([
-            "Patient responded well to treatment. Recommended follow-up in 4 weeks.",
-            "Mild redness post-procedure, expected to subside in 24h.",
-            "Discussed maintenance regime. Patient happy with progress.",
-            "Recommended additional sessions for optimal results.",
-            "Initial consultation. Plan agreed: 3 sessions, 2 weeks apart.",
-          ]),
+          notes: rand(noteByCategory[cat] || ["Visit completed successfully."]),
           amountCharged: service.basePrice * (0.9 + Math.random() * 0.2),
           patientId: patient.id,
           doctorId: doctor.id,
@@ -202,7 +233,89 @@ async function main() {
       });
       visitsCreated++;
     }
-    console.log(`[seed-wellness] visits created: ${visitsCreated}`);
+    console.log(`[seed-wellness] historical visits created: ${visitsCreated}`);
+
+    // Today's appointments — mix of completed (morning) and in-progress/booked (afternoon)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayApptHours = [9, 9, 10, 10, 11, 11, 12, 14, 14, 15, 15, 16, 16, 17, 17, 18];
+    const now = new Date();
+    let todaySeeded = 0;
+    for (let i = 0; i < todayApptHours.length; i++) {
+      const slot = new Date(today);
+      slot.setHours(todayApptHours[i], (i % 4) * 15, 0, 0);
+      const patient = rand(patients);
+      const service = rand(allServices);
+      const doctor = rand(doctors);
+      const status = slot < now ? "completed" : (slot.getTime() - now.getTime() < 60 * 60 * 1000 ? "in-treatment" : "booked");
+      await prisma.visit.create({
+        data: {
+          visitDate: slot,
+          status,
+          notes: status === "completed" ? rand(noteByCategory[service.category] || ["Visit completed."]) : null,
+          amountCharged: status === "completed" ? service.basePrice * (0.95 + Math.random() * 0.1) : service.basePrice,
+          patientId: patient.id,
+          doctorId: doctor.id,
+          serviceId: service.id,
+          tenantId: tenant.id,
+        },
+      });
+      todaySeeded++;
+    }
+    console.log(`[seed-wellness] today's appointments: ${todaySeeded}`);
+
+    // Yesterday — all completed
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const ydayHours = [9, 10, 10, 11, 11, 12, 12, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19];
+    let ydaySeeded = 0;
+    for (let i = 0; i < ydayHours.length; i++) {
+      const slot = new Date(yesterday);
+      slot.setHours(ydayHours[i], (i % 4) * 15, 0, 0);
+      const patient = rand(patients);
+      const service = rand(allServices);
+      const doctor = rand(doctors);
+      await prisma.visit.create({
+        data: {
+          visitDate: slot,
+          status: "completed",
+          notes: rand(noteByCategory[service.category] || ["Visit completed."]),
+          amountCharged: service.basePrice * (0.95 + Math.random() * 0.1),
+          patientId: patient.id,
+          doctorId: doctor.id,
+          serviceId: service.id,
+          tenantId: tenant.id,
+        },
+      });
+      ydaySeeded++;
+    }
+    console.log(`[seed-wellness] yesterday's visits: ${ydaySeeded}`);
+
+    // Tomorrow — booked appointments only
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomHours = [9, 10, 10, 11, 12, 14, 14, 15, 15, 16, 17, 17];
+    let tomSeeded = 0;
+    for (let i = 0; i < tomHours.length; i++) {
+      const slot = new Date(tomorrow);
+      slot.setHours(tomHours[i], (i % 4) * 15, 0, 0);
+      const patient = rand(patients);
+      const service = rand(allServices);
+      const doctor = rand(doctors);
+      await prisma.visit.create({
+        data: {
+          visitDate: slot,
+          status: "booked",
+          amountCharged: service.basePrice,
+          patientId: patient.id,
+          doctorId: doctor.id,
+          serviceId: service.id,
+          tenantId: tenant.id,
+        },
+      });
+      tomSeeded++;
+    }
+    console.log(`[seed-wellness] tomorrow's bookings: ${tomSeeded}`);
 
     // 6. Treatment plans (10 active multi-session)
     const planServices = [
@@ -275,9 +388,17 @@ async function main() {
     where: { tenantId: tenant.id, status: "Lead" },
   });
   if (existingLeadCount < 5) {
-    const sources = ["meta-ad", "google-ad", "whatsapp", "indiamart", "justdial", "walk-in"];
-    for (let i = 0; i < 30; i++) {
+    // Weighted to match the client's reality: ~60% Meta, ~20% Google, rest mixed
+    const sources = [
+      "meta-ad", "meta-ad", "meta-ad", "meta-ad", "meta-ad", "meta-ad",
+      "google-ad", "google-ad",
+      "whatsapp", "indiamart", "justdial", "walk-in", "referral",
+    ];
+    let leadsCreated = 0;
+    for (let i = 0; i < 35; i++) {
       const name = randomName();
+      const ageHours = Math.floor(Math.random() * 72); // last 3 days
+      const createdAt = new Date(Date.now() - ageHours * 3600000);
       try {
         await prisma.contact.create({
           data: {
@@ -287,14 +408,16 @@ async function main() {
             status: "Lead",
             source: rand(sources),
             firstTouchSource: rand(sources),
+            createdAt,
             tenantId: tenant.id,
           },
         });
+        leadsCreated++;
       } catch (e) {
         // unique-violation → skip
       }
     }
-    console.log("[seed-wellness] leads created: 30");
+    console.log(`[seed-wellness] leads created: ${leadsCreated}`);
   }
 
   // 9. Hand-crafted agent recommendations (always re-seeded for the demo)

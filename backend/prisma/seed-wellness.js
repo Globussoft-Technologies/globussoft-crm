@@ -52,6 +52,9 @@ const services = [
 ];
 
 const staffSeed = [
+  // Demo accounts — easy to remember for live demos
+  { email: "admin@wellness.demo", name: "Demo Admin", role: "ADMIN", wellnessRole: null },
+  { email: "user@wellness.demo", name: "Demo User", role: "USER", wellnessRole: "professional" },
   // Doctors
   { email: "rishu@enhancedwellness.in", name: "Rishu Agarwal (Owner)", role: "ADMIN", wellnessRole: null },
   { email: "drharsh@enhancedwellness.in", name: "Dr. Harsh Kumar", role: "USER", wellnessRole: "doctor" },
@@ -331,6 +334,10 @@ async function main() {
 
   console.log("\n[seed-wellness] DONE");
   console.log("\nLogin to Enhanced Wellness with:");
+  console.log("  ── Demo accounts (use these for the live walkthrough) ──");
+  console.log("  Demo admin:   admin@wellness.demo / password123");
+  console.log("  Demo user:    user@wellness.demo / password123");
+  console.log("  ── Real staff accounts ──");
   console.log("  Owner:        rishu@enhancedwellness.in / password123");
   console.log("  Doctor:       drharsh@enhancedwellness.in / password123");
   console.log("  Manager:      manager@enhancedwellness.in / password123");

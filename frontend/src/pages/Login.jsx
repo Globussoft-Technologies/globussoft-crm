@@ -98,25 +98,22 @@ const Login = () => {
     navigate(landing);
   };
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  const performLogin = async (loginEmail, loginPassword) => {
     setError('');
-    if (!email || !password) {
+    if (!loginEmail || !loginPassword) {
       setError('Please fill out all required fields');
       return;
     }
     try {
-      // In development, we'll mock the backend call
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email: loginEmail, password: loginPassword })
       });
 
       const data = await response.json();
 
       if (response.ok) {
-        // 2FA gate: server returns { requires2FA, tempToken } instead of final token
         if (data.requires2FA && data.tempToken) {
           setRequire2FA(true);
           setTempToken(data.tempToken);
@@ -129,6 +126,17 @@ const Login = () => {
     } catch (err) {
       setError('Server error. Ensure backend is running.');
     }
+  };
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    performLogin(email, password);
+  };
+
+  const quickLogin = (qEmail, qPassword) => {
+    setEmail(qEmail);
+    setPassword(qPassword);
+    performLogin(qEmail, qPassword);
   };
 
   const handleVerify2FA = async (e) => {
@@ -337,53 +345,17 @@ const Login = () => {
           </div>
         )}
 
-        <div style={{ marginTop: '1.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-            <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }} />
-            <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Demo accounts — click to fill</span>
-            <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }} />
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-            <button
-              type="button"
-              onClick={() => { setEmail('admin@globussoft.com'); setPassword('password123'); }}
-              style={{
-                padding: '0.6rem 0.5rem',
-                borderRadius: '8px',
-                border: '1px solid rgba(16,185,129,0.3)',
-                background: 'rgba(16,185,129,0.08)',
-                cursor: 'pointer',
-                textAlign: 'left',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(16,185,129,0.15)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(16,185,129,0.08)'; }}
-            >
-              <div style={{ fontSize: '0.7rem', fontWeight: '700', color: '#10b981', textTransform: 'uppercase', marginBottom: '0.15rem' }}>Admin</div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>admin@globussoft.com</div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>password123</div>
-            </button>
-            <button
-              type="button"
-              onClick={() => { setEmail('user@crm.com'); setPassword('password123'); }}
-              style={{
-                padding: '0.6rem 0.5rem',
-                borderRadius: '8px',
-                border: '1px solid rgba(59,130,246,0.3)',
-                background: 'rgba(59,130,246,0.08)',
-                cursor: 'pointer',
-                textAlign: 'left',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(59,130,246,0.15)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(59,130,246,0.08)'; }}
-            >
-              <div style={{ fontSize: '0.7rem', fontWeight: '700', color: '#3b82f6', textTransform: 'uppercase', marginBottom: '0.15rem' }}>Normal User</div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-primary)', fontFamily: 'monospace' }}>user@crm.com</div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>password123</div>
-            </button>
-          </div>
-        </div>
+        <QuickLoginSection title="Generic CRM" accounts={[
+          { label: 'Admin',   email: 'admin@globussoft.com', color: '#10b981' },
+          { label: 'Manager', email: 'manager@crm.com',      color: '#f59e0b' },
+          { label: 'User',    email: 'user@crm.com',         color: '#3b82f6' },
+        ]} onLogin={quickLogin} />
+
+        <QuickLoginSection title="Enhanced Wellness — Demo" accounts={[
+          { label: 'Owner (Rishu)',  email: 'rishu@enhancedwellness.in', color: '#a855f7' },
+          { label: 'Demo Admin',     email: 'admin@wellness.demo',       color: '#a855f7' },
+          { label: 'Demo User',      email: 'user@wellness.demo',        color: '#ec4899' },
+        ]} onLogin={quickLogin} />
         <div style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.875rem' }}>
           <span style={{ color: 'var(--text-secondary)' }}>Don't have an account? </span>
           <Link to="/signup" style={{ color: 'var(--primary-color)', textDecoration: 'none', fontWeight: '500' }}>
@@ -396,5 +368,56 @@ const Login = () => {
     </div>
   );
 };
+
+function QuickLoginSection({ title, accounts, onLogin }) {
+  return (
+    <div style={{ marginTop: '1.25rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+        <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }} />
+        <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {title} — click to log in
+        </span>
+        <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${accounts.length}, 1fr)`, gap: '0.4rem' }}>
+        {accounts.map((a) => {
+          const colorRgb = a.color === '#10b981' ? '16,185,129'
+            : a.color === '#3b82f6' ? '59,130,246'
+            : a.color === '#f59e0b' ? '245,158,11'
+            : a.color === '#a855f7' ? '168,85,247'
+            : a.color === '#ec4899' ? '236,72,153'
+            : '100,100,100';
+          return (
+            <button
+              key={a.email}
+              type="button"
+              onClick={() => onLogin(a.email, 'password123')}
+              style={{
+                padding: '0.55rem 0.45rem',
+                borderRadius: '8px',
+                border: `1px solid rgba(${colorRgb}, 0.3)`,
+                background: `rgba(${colorRgb}, 0.08)`,
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.15s',
+                minWidth: 0,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `rgba(${colorRgb}, 0.18)`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `rgba(${colorRgb}, 0.08)`; }}
+              title={`Log in as ${a.email}`}
+            >
+              <div style={{ fontSize: '0.65rem', fontWeight: 700, color: a.color, textTransform: 'uppercase', marginBottom: '0.15rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {a.label}
+              </div>
+              <div style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', fontFamily: 'monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {a.email}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export default Login;

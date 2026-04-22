@@ -13,6 +13,7 @@
  */
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 
 const prisma = new PrismaClient();
 
@@ -578,6 +579,35 @@ async function main() {
       }
     }
     console.log(`[seed-wellness] leads created: ${leadsCreated}`);
+  }
+
+  // 8a. External API keys for partner products (Callified.ai, Globus Phone)
+  // Idempotent: keep existing keys if present so the partners' env vars stay valid.
+  const adminUser = userMap["admin@wellness.demo"] || userMap["rishu@enhancedwellness.in"];
+  if (adminUser) {
+    const partners = [
+      { name: "Callified.ai (demo key)" },
+      { name: "Globus Phone (demo key)" },
+    ];
+    const printedKeys = [];
+    for (const p of partners) {
+      const existing = await prisma.apiKey.findFirst({
+        where: { tenantId: tenant.id, name: p.name },
+      });
+      if (existing) {
+        printedKeys.push({ name: p.name, key: existing.keySecret, fresh: false });
+      } else {
+        const rawKey = `glbs_${crypto.randomBytes(24).toString("hex")}`;
+        await prisma.apiKey.create({
+          data: { name: p.name, keySecret: rawKey, userId: adminUser.id, tenantId: tenant.id },
+        });
+        printedKeys.push({ name: p.name, key: rawKey, fresh: true });
+      }
+    }
+    console.log("[seed-wellness] partner API keys (give these to the respective teams):");
+    for (const k of printedKeys) {
+      console.log(`  ${k.fresh ? "[NEW]    " : "[exists] "}${k.name.padEnd(32)} ${k.key}`);
+    }
   }
 
   // 9. Hand-crafted agent recommendations (always re-seeded for the demo)

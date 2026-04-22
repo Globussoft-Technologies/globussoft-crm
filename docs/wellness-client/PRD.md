@@ -4,7 +4,7 @@
 **Vendor:** Globussoft Technologies
 **Source call:** Apr 15, 2026 — Discussion with Rishu (Sourav, Sumit, Kritica from Globussoft)
 **Status:** v1 draft, demo overdue
-**Owner:** Sumit (sumit@chingari.io)
+**Owner:** Globussoft CRM team
 
 ---
 

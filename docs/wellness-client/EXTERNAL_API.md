@@ -420,5 +420,5 @@ curl -s -X POST "$BASE/appointments" \
 
 ## 8. Contact
 
-API issues / contract changes / new endpoint requests: **sumit@chingari.io**.
+API issues / contract changes / new endpoint requests: reach out to the Globussoft CRM team via your account manager.
 Source of truth for these endpoints: [`backend/routes/external.js`](../../backend/routes/external.js) on the `globussoft-crm` repo.

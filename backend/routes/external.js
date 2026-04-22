@@ -21,6 +21,13 @@ const prisma = require("../lib/prisma");
 const externalAuth = require("../middleware/externalAuth");
 
 const router = express.Router();
+
+// Public endpoint (no auth) — lets partners verify the API is reachable
+// before they configure their key. Must be declared before externalAuth.
+router.get("/health", (_req, res) => {
+  res.json({ status: "ok", apiVersion: "v1" });
+});
+
 router.use(externalAuth);
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -431,12 +438,6 @@ router.post("/appointments", async (req, res) => {
     console.error("[external] create appointment:", e.message);
     res.status(500).json({ error: "Failed to create appointment", detail: e.message });
   }
-});
-
-// ── Health ─────────────────────────────────────────────────────────
-
-router.get("/health", (_req, res) => {
-  res.json({ status: "ok", apiVersion: "v1" });
 });
 
 module.exports = router;

@@ -1,10 +1,10 @@
 # Enhanced Wellness — Build Status
 
-**Companion to:** [PRD.md](PRD.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
+**Companion to:** [PRD.md](PRD.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EXTERNAL_API.md](EXTERNAL_API.md)
 **Last updated:** 2026-04-22
 **Live at:** https://crm.globusdemos.com
 **Tenant:** `enhanced-wellness` (id 2, vertical `wellness`)
-**Production HEAD:** `ab82241`
+**Production HEAD:** `ce6139a`
 
 ---
 
@@ -116,6 +116,22 @@ Both env-overridable, both opening in new tabs with an external-link icon:
 | AdsGPT | https://adsgpt.io (`VITE_ADSGPT_URL`) | Sister Globussoft product for ad creation. Visible to all roles in both generic + wellness sidebars. |
 | Callified | https://callified.ai (`VITE_CALLIFIED_URL`) | Sister Globussoft product for voice + WhatsApp. Replaces all CRM voice/WhatsApp/chatbot work. |
 
+### External Partner API (v1) — `/api/v1/external/*`
+
+Built so **Callified.ai** and **Globus Phone** can drive the lead-to-call-to-recording flow:
+
+```
+Website → POST /leads → CRM stores
+Callified → GET /leads?since=… → AI auto-dials
+Callified → POST /calls (with recordingUrl) → CRM user plays back inline
+```
+
+- **Auth:** `X-API-Key: glbs_…` per request, scoped to a tenant
+- **Endpoints:** `/health`, `/me`, `/leads`, `/contacts/lookup`, `/contacts/:id`, `/patients/lookup`, `/patients/:id`, `/calls`, `/messages`, `/services`, `/staff`, `/locations`, `/appointments`
+- **Demo keys (seeded automatically):** "Callified.ai (demo key)" and "Globus Phone (demo key)" — printed at end of `node prisma/seed-wellness.js` output
+- **Partner reference:** [EXTERNAL_API.md](EXTERNAL_API.md) with cURL quickstart
+- Smoke-tested end-to-end: lead push → poll → contact lookup → call recording back, all working on production
+
 ### Auth response shape
 
 `/api/auth/login`, `/api/auth/me`, `/api/auth/2fa/verify`, `/api/auth/register`, `/api/auth/signup` all now include `tenant.vertical` in the response so the frontend can route to the right landing page and render the right sidebar.
@@ -201,6 +217,9 @@ From the Implementation Plan, in priority order:
 | `899532d` | feat(login): one-click quick-login buttons grouped by tenant |
 | `f13450d` | feat(wellness): Dr. Haror's full service catalog (80+ services) + multi-location support |
 | `ab82241` | fix(seed): backfill locationId on existing patients + visits |
+| `bdcc793` | docs(wellness): add STATUS.md |
+| `4ccfc9d` | feat(api): external partner API v1 for Callified + Globus Phone |
+| `ce6139a` | fix(external-api): mount /health before auth middleware |
 
 ---
 

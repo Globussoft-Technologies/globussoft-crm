@@ -221,19 +221,39 @@ const randomVisitDate = (daysAgoMax = 90) => {
 async function main() {
   console.log("[seed-wellness] starting…");
 
-  // 1. Tenant
+  // 1. Tenant — country/currency/locale is what makes invoicing happen in INR
   const tenant = await prisma.tenant.upsert({
     where: { slug: TENANT_SLUG },
-    update: { vertical: "wellness", name: "Enhanced Wellness", ownerEmail: "rishu@enhancedwellness.in" },
+    update: {
+      vertical: "wellness",
+      name: "Enhanced Wellness",
+      ownerEmail: "rishu@enhancedwellness.in",
+      country: "IN", defaultCurrency: "INR", locale: "en-IN",
+    },
     create: {
       slug: TENANT_SLUG,
       name: "Enhanced Wellness",
       vertical: "wellness",
       plan: "professional",
       ownerEmail: "rishu@enhancedwellness.in",
+      country: "IN", defaultCurrency: "INR", locale: "en-IN",
     },
   });
-  console.log(`[seed-wellness] tenant id=${tenant.id} slug=${tenant.slug}`);
+  console.log(`[seed-wellness] tenant id=${tenant.id} slug=${tenant.slug} currency=${tenant.defaultCurrency}`);
+
+  // Backfill any pre-existing Deal/Payment rows for this tenant that were created
+  // before defaultCurrency rolled out — they default to USD which is wrong for India.
+  const dealsBackfilled = await prisma.deal.updateMany({
+    where: { tenantId: tenant.id, currency: "USD" },
+    data: { currency: "INR" },
+  });
+  const paymentsBackfilled = await prisma.payment.updateMany({
+    where: { tenantId: tenant.id, currency: "USD" },
+    data: { currency: "INR" },
+  });
+  if (dealsBackfilled.count || paymentsBackfilled.count) {
+    console.log(`[seed-wellness] backfilled USD→INR on ${dealsBackfilled.count} deals, ${paymentsBackfilled.count} payments`);
+  }
 
   // 1a. Locations — Rishu currently runs only Ranchi. Multi-location is supported
   // in the schema; future franchises just add new rows here.

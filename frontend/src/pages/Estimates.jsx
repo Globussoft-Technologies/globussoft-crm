@@ -23,9 +23,8 @@ function StatusBadge({ status }) {
   );
 }
 
-function formatCurrency(value) {
-  return Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+import { formatMoney, currencySymbol } from '../utils/money';
+const formatCurrency = (v) => formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
 const EMPTY_LINE_ITEM = { description: '', quantity: 1, unitPrice: 0 };
 
@@ -167,7 +166,7 @@ export default function Estimates() {
           background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={14} /> Total Value: ${formatCurrency(stats.totalValue)}
+          <DollarSign size={14} /> Total Value: {formatCurrency(stats.totalValue)}
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem',
@@ -226,7 +225,7 @@ export default function Estimates() {
               >
                 <option value="">-- No Deal --</option>
                 {deals.map(d => (
-                  <option key={d.id} value={d.id}>{d.title} - ${Number(d.amount).toLocaleString()}</option>
+                  <option key={d.id} value={d.id}>{d.title} - {formatCurrency(d.amount)}</option>
                 ))}
               </select>
             </div>
@@ -302,7 +301,7 @@ export default function Estimates() {
                     <div style={{ flex: 0.5, textAlign: 'right' }}>
                       <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Total</label>
                       <span style={{ fontSize: '0.85rem', fontWeight: '600', color: '#10b981' }}>
-                        ${formatCurrency((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}
+                        {formatCurrency((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}
                       </span>
                     </div>
                     <button
@@ -340,7 +339,7 @@ export default function Estimates() {
               }}>
                 <span style={{ fontWeight: '600', fontSize: '0.9rem' }}>Grand Total</span>
                 <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#10b981' }}>
-                  ${formatCurrency(grandTotal)}
+                  {formatCurrency(grandTotal)}
                 </span>
               </div>
             </div>

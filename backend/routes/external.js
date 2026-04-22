@@ -60,6 +60,9 @@ router.get("/me", async (req, res) => {
       slug: req.tenant.slug,
       vertical: req.tenant.vertical || "generic",
       plan: req.tenant.plan,
+      country: req.tenant.country || "US",
+      defaultCurrency: req.tenant.defaultCurrency || "USD",
+      locale: req.tenant.locale || "en-US",
     },
     apiKey: { id: req.apiKey.id, name: req.apiKey.name, lastUsed: req.apiKey.lastUsed },
     capabilities: {

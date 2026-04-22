@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
+import { formatMoney, currencySymbol } from '../utils/money';
 import { Receipt, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucide-react';
 
 const CATEGORY_OPTIONS = ['General', 'Travel', 'Software', 'Office', 'Marketing', 'Other'];
@@ -175,7 +176,7 @@ export default function Expenses() {
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Amount ($)</label>
+              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Amount ({currencySymbol()})</label>
               <input type="number" step="0.01" min="0" required className="input-field" placeholder="0.00"
                 value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
             </div>

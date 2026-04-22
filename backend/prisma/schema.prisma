@@ -8,15 +8,20 @@ datasource db {
 }
 
 model Tenant {
-  id         Int      @id @default(autoincrement())
-  name       String
-  slug       String   @unique
-  plan       String   @default("starter") // starter, professional, enterprise
-  vertical   String   @default("generic") // generic, wellness (more verticals later)
-  isActive   Boolean  @default(true)
-  ownerEmail String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id              Int      @id @default(autoincrement())
+  name            String
+  slug            String   @unique
+  plan            String   @default("starter") // starter, professional, enterprise
+  vertical        String   @default("generic") // generic, wellness (more verticals later)
+  // Geographic + monetary defaults — used to default currency on Deal/Payment
+  // and to drive money formatting in the UI. ISO-3166-1-alpha-2 + ISO-4217.
+  country         String   @default("US")
+  defaultCurrency String   @default("USD")
+  locale          String   @default("en-US") // BCP-47 for date/number formatting
+  isActive        Boolean  @default(true)
+  ownerEmail      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   users                User[]
   contacts             Contact[]

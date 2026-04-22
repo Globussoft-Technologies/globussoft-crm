@@ -66,7 +66,7 @@ router.post("/register", async (req, res) => {
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
-      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic" }
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US" }
     });
 
   } catch (error) {
@@ -103,7 +103,7 @@ router.post("/signup", async (req, res) => {
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
-      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic" }
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US" }
     });
 
   } catch (error) {
@@ -145,7 +145,7 @@ router.post("/login", async (req, res) => {
     res.json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
-      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic" } : null
+      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US" } : null
     });
   } catch (error) {
     console.error("[auth] login error:", error);
@@ -241,7 +241,7 @@ router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true } } }
+      select: { id: true, name: true, email: true, role: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true } } }
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });

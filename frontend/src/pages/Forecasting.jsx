@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import { TrendingUp, DollarSign, Target, Save } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { formatMoney, formatMoneyCompact } from '../utils/money';
 
 // ─── Period helpers ─────────────────────────────────────────────
 function currentQuarter() {
@@ -22,8 +23,7 @@ function thisYear() {
   return `${new Date().getFullYear()}`;
 }
 
-const fmt = (v) =>
-  '$' + (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+const fmt = (v) => formatMoney(Number(v) || 0, { maximumFractionDigits: 0 });
 
 const PERIOD_OPTIONS = [
   { value: currentQuarter(), label: `Current Quarter (${currentQuarter()})` },
@@ -222,7 +222,7 @@ export default function Forecasting() {
                 <BarChart data={repBars}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, rgba(255,255,255,0.1))" vertical={false} />
                   <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-                  <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={(v) => `$${Math.round(v / 1000)}k`} />
+                  <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={(v) => formatMoneyCompact(v)} />
                   <Tooltip
                     formatter={(v) => fmt(v)}
                     contentStyle={{ background: 'rgba(20,20,30,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }}
@@ -256,7 +256,7 @@ export default function Forecasting() {
                 <LineChart data={trend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, rgba(255,255,255,0.1))" vertical={false} />
                   <XAxis dataKey="month" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-                  <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={(v) => `$${Math.round(v / 1000)}k`} />
+                  <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={(v) => formatMoneyCompact(v)} />
                   <Tooltip
                     formatter={(v) => fmt(v)}
                     contentStyle={{ background: 'rgba(20,20,30,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }}

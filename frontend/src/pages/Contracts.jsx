@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FileText, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { formatMoney, currencySymbol } from '../utils/money';
 
 const STATUS_STYLES = {
   Draft:      { bg: 'rgba(100,116,139,0.12)', color: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
@@ -139,7 +140,7 @@ export default function Contracts() {
           background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
           display: 'flex', alignItems: 'center', gap: '0.3rem',
         }}>
-          <DollarSign size={14} /> {activeValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} active value
+          <DollarSign size={14} /> {formatMoney(activeValue, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} active value
         </span>
       </div>
 
@@ -185,13 +186,13 @@ export default function Contracts() {
               >
                 <option value="">-- No Deal --</option>
                 {deals.map(d => (
-                  <option key={d.id} value={d.id}>{d.title} - ${d.amount?.toLocaleString() ?? '0'}</option>
+                  <option key={d.id} value={d.id}>{d.title} - {formatMoney(d.amount || 0)}</option>
                 ))}
               </select>
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Value ($)</label>
+              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Value ({currencySymbol()})</label>
               <input
                 type="number" step="0.01" className="input-field" placeholder="0.00"
                 value={form.value}
@@ -274,7 +275,7 @@ export default function Contracts() {
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
                         <DollarSign size={14} color="var(--success-color)" />
-                        {(c.value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatMoney(c.value || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem' }}>
                         <StatusBadge status={c.status} />

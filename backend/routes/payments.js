@@ -263,10 +263,17 @@ router.post("/create-stripe-intent", async (req, res) => {
     if (!stripe) return res.status(503).json({ error: "Stripe not configured" });
 
     const tenantId = tenantOf(req);
-    const { invoiceId, amount, currency = "USD" } = req.body || {};
+    const { invoiceId, amount } = req.body || {};
+    let { currency } = req.body || {};
 
     if (!amount || isNaN(Number(amount))) {
       return res.status(400).json({ error: "amount is required" });
+    }
+
+    // Default currency from tenant if not provided
+    if (!currency) {
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { defaultCurrency: true } });
+      currency = tenant?.defaultCurrency || "USD";
     }
 
     // Stripe expects integer in smallest currency unit (cents/paise)

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
+import { formatMoney } from '../utils/money';
 import {
   Eye, AlertTriangle, Lightbulb, ArrowRight, Check,
   RefreshCw, Sparkles, CheckCircle2,
@@ -224,7 +225,7 @@ export default function DealInsights() {
                     <ArrowRight size={14} color="var(--text-secondary)" />
                   </div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                    {deal ? `${deal.stage} · $${(deal.amount || 0).toLocaleString()} · ${deal.contact?.name || 'No contact'}` : 'Deal details unavailable'}
+                    {deal ? `${deal.stage} · ${formatMoney(deal.amount || 0, { currency: deal.currency })} · ${deal.contact?.name || 'No contact'}` : 'Deal details unavailable'}
                   </div>
                 </div>
                 <span style={{

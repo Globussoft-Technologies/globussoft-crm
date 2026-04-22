@@ -131,7 +131,12 @@ router.post("/", async (req, res) => {
     if (contactId) data.contactId = parseInt(contactId);
     if (pipelineId) data.pipelineId = parseInt(pipelineId);
     if (expectedClose) data.expectedClose = new Date(expectedClose);
-    if (currency) data.currency = currency;
+    if (currency) {
+      data.currency = currency;
+    } else {
+      const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { defaultCurrency: true } });
+      data.currency = tenant?.defaultCurrency || "USD";
+    }
 
     const deal = await prisma.deal.create({ data, include: { contact: true, owner: true } });
 
@@ -141,7 +146,7 @@ router.post("/", async (req, res) => {
         await prisma.activity.create({
           data: {
             type: "Deal",
-            description: `Deal created: "${deal.title}" ($${deal.amount})`,
+            description: `Deal created: "${deal.title}" (${deal.currency} ${deal.amount})`,
             contactId: deal.contactId,
             tenantId: req.user.tenantId,
             userId: req.user.userId,

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Users, DollarSign, Activity, Calendar, TrendingUp } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { formatMoney, formatMoneyCompact } from '../utils/money';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 
@@ -47,8 +48,8 @@ export default function Dashboard() {
   ];
 
   const stats = [
-    { label: 'Closed Revenue', value: `$${totalRevenue.toLocaleString()}`, increase: '+14%', icon: <DollarSign size={24} />, color: 'var(--accent-color)' },
-    { label: 'Expected Revenue', value: `$${expectedRevenue.toLocaleString()}`, increase: '+8%', icon: <Activity size={24} />, color: 'var(--success-color)' },
+    { label: 'Closed Revenue', value: formatMoney(totalRevenue), increase: '+14%', icon: <DollarSign size={24} />, color: 'var(--accent-color)' },
+    { label: 'Expected Revenue', value: formatMoney(expectedRevenue), increase: '+8%', icon: <Activity size={24} />, color: 'var(--success-color)' },
     { label: 'Total Contacts', value: activeLeads.toString(), increase: '+5%', icon: <Users size={24} />, color: '#3b82f6' },
     { label: 'Conversion Rate', value: `${conversionRate}%`, increase: '+1.2%', icon: <TrendingUp size={24} />, color: 'var(--warning-color)' },
     { label: 'Total Deals', value: filteredDeals.length.toString(), increase: '+22%', icon: <Calendar size={24} />, color: '#a855f7' }
@@ -107,7 +108,7 @@ export default function Dashboard() {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `$${value/1000}k`} />
+                <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatMoneyCompact(value)} />
                 <Tooltip 
                   contentStyle={{ backgroundColor: 'var(--tooltip-bg)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px' }}
                   itemStyle={{ color: 'var(--text-primary)' }}

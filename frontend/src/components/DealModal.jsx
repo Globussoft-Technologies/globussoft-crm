@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, FileText, UploadCloud, Download, FileSignature } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { formatMoney } from '../utils/money';
 import CPQBuilder from './CPQBuilder';
 
 const API_BASE = "";
@@ -84,7 +85,7 @@ export default function DealModal({ deal, onClose }) {
         <header style={{ padding: '2rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--subtle-bg-2)' }}>
           <div>
             <h2 style={{ fontSize: '1.75rem', fontWeight: 'bold' }}>{deal.title}</h2>
-            <p style={{ color: 'var(--text-secondary)' }}>{deal.company} • ${(deal.amount || 0).toLocaleString()} • Stage: {deal.stage.toUpperCase()}</p>
+            <p style={{ color: 'var(--text-secondary)' }}>{deal.company} • {formatMoney(deal.amount || 0, { currency: deal.currency })} • Stage: {deal.stage.toUpperCase()}</p>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', transition: 'color 0.2s' }}>
             <X size={24} />

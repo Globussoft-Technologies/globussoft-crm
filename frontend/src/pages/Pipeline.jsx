@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Zap, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { formatMoney, currencySymbol } from '../utils/money';
 import { io } from 'socket.io-client';
 import DealModal from '../components/DealModal';
 
@@ -183,7 +184,7 @@ const Pipeline = () => {
                     <span style={{ fontSize: '0.75rem', padding: '2px 8px', background: 'var(--subtle-bg-3)', borderRadius: '12px' }}>{stageDeals.length}</span>
                   </h3>
                   <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem', fontWeight: '500' }}>
-                    ${totalValue.toLocaleString()}
+                    {formatMoney(totalValue)}
                   </p>
                 </div>
                 
@@ -209,7 +210,7 @@ const Pipeline = () => {
                         </div>
                       </div>
                       <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '0.75rem' }}>
-                        ${(deal.amount || 0).toLocaleString()}
+                        {formatMoney(deal.amount || 0, { currency: deal.currency })}
                       </p>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '500' }}>{deal.company || deal.contactName || 'Unknown'}</span>
@@ -252,7 +253,7 @@ const Pipeline = () => {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '1rem' }}>
-                <input type="number" placeholder="Amount ($)" required className="input-field" value={newDeal.amount} onChange={e => setNewDeal({...newDeal, amount: e.target.value})} />
+                <input type="number" placeholder={`Amount (${currencySymbol()})`} required className="input-field" value={newDeal.amount} onChange={e => setNewDeal({...newDeal, amount: e.target.value})} />
                 <input type="number" placeholder="Probability (%)" required className="input-field" value={newDeal.probability} onChange={e => setNewDeal({...newDeal, probability: e.target.value})} />
               </div>
               <select className="input-field" value={newDeal.stage} onChange={e => setNewDeal({...newDeal, stage: e.target.value})}>

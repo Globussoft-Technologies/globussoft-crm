@@ -21,9 +21,8 @@ function StatusBadge({ status }) {
   );
 }
 
-function formatCurrency(value) {
-  return Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+import { formatMoney, currencySymbol } from '../utils/money';
+const formatCurrency = (v) => formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
 export default function Invoices() {
   const [invoices, setInvoices] = useState([]);
@@ -166,14 +165,14 @@ export default function Invoices() {
           background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={14} /> Outstanding: ${formatCurrency(stats.totalOutstanding)}
+          <DollarSign size={14} /> Outstanding: {formatCurrency(stats.totalOutstanding)}
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
           background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <CheckCircle2 size={14} /> Paid This Month: ${formatCurrency(stats.totalPaidThisMonth)}
+          <CheckCircle2 size={14} /> Paid This Month: {formatCurrency(stats.totalPaidThisMonth)}
         </span>
         {stats.overdueCount > 0 && (
           <span style={{
@@ -244,14 +243,14 @@ export default function Invoices() {
               >
                 <option value="">-- No Deal --</option>
                 {deals.map(d => (
-                  <option key={d.id} value={d.id}>{d.title} - ${Number(d.amount).toLocaleString()}</option>
+                  <option key={d.id} value={d.id}>{d.title} - {formatCurrency(d.amount)}</option>
                 ))}
               </select>
             </div>
 
             <div style={{ display: 'flex', gap: '1rem' }}>
               <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Amount ($)</label>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Amount ({currencySymbol()})</label>
                 <input
                   type="number"
                   step="0.01"

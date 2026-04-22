@@ -1,8 +1,25 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies with 88 API routes, 99 data models, 76 UI pages, 12 automation engines, glassmorphism UI, AI-powered features, and omnichannel communications.
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 15 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. 124+ E2E tests passing on production.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.0.0
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.1.0
+**Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md)
+
+## What's new in v3.1 (April 2026)
+
+- **Wellness vertical** — first vertical productization. New tenant config (`tenant.vertical = "wellness"`) flips the sidebar, theme, and routing for clinics. Built for the [Enhanced Wellness](https://drharorswellness.com) (Dr. Haror's franchise) demo.
+- **External Partner API** — `/api/v1/external/*` lets sister products (Callified.ai for voice/WhatsApp, AdsGPT for ads, Globus Phone for softphone) push leads, calls, messages, and book appointments into the CRM via API key.
+- **Embeddable lead-capture widget** — drop-in `<script>` for any website. Lives at `/embed/widget.js` and `/embed/lead-form.html`.
+- **Tenant-driven currency** — `Tenant.country` + `defaultCurrency` + `locale` drive money formatting everywhere. Indian tenants see ₹ (with Lakh/Crore notation), US sees $, etc.
+- **AI orchestration engine** — daily cron generates 1–3 prioritised "do this" cards (campaign boost, occupancy alert, lead follow-up) for the owner; approval triggers an action dispatcher (queue SMS blast, create task, flag leads).
+- **Junk-lead filter** — multi-stage classifier on every inbound lead: hard rules (non-Indian mobile, dup-7d) → soft heuristics (gibberish names, disposable emails) → optional Gemini fallback. Tags `status="Junk"` with reasons.
+- **Auto-router** — keyword → service category → assigns lead to the right specialist (doctor / professional / telecaller).
+- **PDF generation** — branded prescriptions, signed consent forms, branded invoices via pdfkit.
+- **Patient portal** at `/patient-portal` — phone+OTP login, view own visits/Rx, download PDFs.
+- **Multi-location** — `Location` model + per-clinic dashboard rollup, ready for franchise expansion.
+- **India-aware Pricing page** — auto-defaults to INR for Indian visitors based on timezone + locale; manual toggle persists.
+
+---
 
 ## Tech Stack
 
@@ -77,7 +94,68 @@ Auto-import leads from **IndiaMART, JustDial, and TradeIndia** -- India's larges
 
 ---
 
-## All Modules (88 Routes)
+## Wellness Vertical (v3.1 — first vertical productization)
+
+A focused configuration of the CRM for **clinics, salons, and aesthetics businesses**. Activates automatically when `tenant.vertical = "wellness"`. Built first for Dr. Haror's Wellness Ranchi franchise.
+
+| Module | Path | What it does |
+|---|---|---|
+| Owner Dashboard | `/wellness` | Today's snapshot, occupancy %, revenue, pending recommendations, 30-day trend, location switcher |
+| Recommendations | `/wellness/recommendations` | AI agent's daily action cards — Approve fires the dispatcher (campaign boost / SMS blast / task / lead flag) |
+| Patients | `/wellness/patients` | Search + add; click for case history timeline + 7 tabs (visits, Rx pad, consent canvas, treatment plans, photos, inventory, log visit) |
+| Calendar | `/wellness/calendar` | Day-grid by doctor, hour rows 9–7, status-coloured chips |
+| Service Catalog | `/wellness/services` | 106 services (Dr. Haror's full catalog); per-card edit + soft-delete; Packages tab calculator |
+| Telecaller Queue | `/wellness/telecaller` | Assigned leads + SLA timer (green<5 / yellow / red>30) + 6 disposition buttons + auto-refresh |
+| Reports | `/wellness/reports` | 4 tabs: P&L by Service, Per-Professional, Per-Location, Marketing Attribution |
+| Locations | `/wellness/locations` | Multi-clinic CRUD (Ranchi today; ready for franchise) |
+| Public Booking | `/book/:slug` | Branded 3-step booking page (service → location → details) — no auth |
+| Patient Portal | `/patient-portal` | Patient-side login (phone+OTP), view own visits/Rx, download PDFs |
+
+**New Prisma models:** `Patient`, `Visit`, `Prescription`, `ConsentForm`, `TreatmentPlan`, `Service`, `ServiceConsumption`, `AgentRecommendation`, `Location` + `Tenant.vertical/country/defaultCurrency/locale` + `User.wellnessRole`.
+
+**Tenant-aware sidebar** — generic CRM keeps the full 50+ item layout; wellness gets a slim 25-item clinic-focused layout that hides Pipeline / Deal Insights / Tickets / CPQ / Live Chat / Chatbots / etc. Switches automatically based on `tenant.vertical`.
+
+**Brand theme** ([frontend/src/theme/wellness.css](frontend/src/theme/wellness.css)) — deep teal `#265855`, warm blush `#CD9481`, cream background — sampled from drharorswellness.com. Scoped under `[data-vertical="wellness"]` so generic tenants render unchanged.
+
+---
+
+## External Partner API
+
+`/api/v1/external/*` — sister Globussoft products push data into the CRM via API key (`X-API-Key: glbs_…`).
+
+| Endpoint | Purpose | Used by |
+|---|---|---|
+| `POST /leads` | Push a new lead (junk filter + auto-router run inline) | Callified, AdsGPT, website forms |
+| `GET /leads?since=…` | Poll for new leads | Callified |
+| `POST /calls` | Log a call + recording URL | Callified, Globus Phone |
+| `PATCH /calls/:id` | Update call after the fact (e.g. transcript landed) | Callified |
+| `POST /messages` | Log WhatsApp/SMS exchange | Callified |
+| `POST /appointments` | Book a slot after qualifying | Callified |
+| `GET /contacts/lookup?phone=` | Identify caller on inbound | Callified, Globus Phone |
+| `GET /patients/lookup?phone=` | Same, wellness tenants | Callified |
+| `GET /services`, `/staff`, `/locations` | Catalog reads | Both |
+
+Full reference + cURL quickstart: [docs/wellness-client/EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md).
+
+---
+
+## Embeddable Lead-Capture Widget
+
+Drop-in form for any external website. No backend code needed on the website side.
+
+```html
+<div data-gbs-form
+     data-key="glbs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     data-title="Book a free consultation"
+     data-color="#7c3aed"></div>
+<script async src="https://crm.globusdemos.com/embed/widget.js"></script>
+```
+
+Three integration options: drop-in script, pure iframe, direct API POST. Full guide: [docs/wellness-client/EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md).
+
+---
+
+## All Modules (102 Routes)
 
 ### Sales & Pipeline
 - **Dashboard** -- Executive analytics (MRR, revenue, deal closures, pipeline charts)
@@ -224,36 +302,56 @@ npx playwright test --project=chromium
 
 ## Demo Credentials
 
+The Login page has **one-click quick-login buttons** grouped by tenant — no typing.
+
+### Generic CRM tenant (USD)
 | Role | Email | Password |
 |------|-------|----------|
 | Admin | admin@globussoft.com | password123 |
 | Manager | manager@crm.com | password123 |
 | User | user@crm.com | password123 |
 
+### Enhanced Wellness tenant (INR, vertical=wellness)
+| Role | Email | Password | Lands on |
+|------|-------|----------|----------|
+| Owner (Rishu) | rishu@enhancedwellness.in | password123 | `/wellness` |
+| Demo Admin | admin@wellness.demo | password123 | `/wellness` |
+| Demo User | user@wellness.demo | password123 | `/wellness` |
+| Manager | manager@enhancedwellness.in | password123 | `/wellness` |
+| Doctor | drharsh@enhancedwellness.in | password123 | `/wellness` |
+
+Wellness tenants land on `/wellness` after login (vs `/dashboard` for generic).
+
 ## API
 
-88 route modules, all prefixed with `/api/`, protected by JWT auth. Public landing pages served at `/p/:slug`.
+102 route modules, all prefixed with `/api/`, protected by JWT auth. Public landing pages served at `/p/:slug`.
+
+The **External Partner API** (`/api/v1/external/*`) uses API-key auth instead of JWT — see [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md).
 
 Rate limiting: 5000 req/15min general, 1000 req/15min on auth.
 
 Interactive docs at `/api-docs` (Swagger UI).
 
-## Automation Engines (12 Cron Jobs)
+## Automation Engines (15 Cron Jobs)
 
 | Engine | Schedule | Purpose |
 |--------|----------|---------|
 | leadScoringEngine | Every 10 min | AI-powered lead score recalculation |
 | sequenceEngine | Every 5 min | Drip sequence step execution |
 | marketplaceEngine | Every 5 min | IndiaMART/JustDial/TradeIndia lead sync |
-| workflowEngine | Every 5 min | Automation rule evaluation and execution |
-| campaignEngine | Every 10 min | Marketing campaign dispatch |
+| workflowEngine | Event-driven | Automation rule evaluation via eventBus |
+| campaignEngine | Every 1 min | Marketing campaign dispatch |
 | reportEngine | Scheduled | Auto email report generation and delivery |
 | recurringInvoiceEngine | Daily | Recurring invoice generation |
-| forecastSnapshotEngine | Daily | Revenue forecast snapshot capture |
-| dealInsightsEngine | Every 30 min | AI deal insight generation |
+| forecastSnapshotEngine | Weekly | Revenue forecast snapshot capture |
+| dealInsightsEngine | Every 6 hr | AI deal insight generation |
 | sentimentEngine | Every 15 min | Customer sentiment analysis |
 | scheduledEmailEngine | Every 1 min | Scheduled email dispatch |
-| retentionEngine | Daily | Data retention policy enforcement (GDPR) |
+| retentionEngine | Daily 03:00 | Data retention policy enforcement (GDPR) |
+| backupEngine | Daily 02:00 | Automated mysqldump backup |
+| **orchestratorEngine** | Daily 07:00 IST | **Wellness AI orchestration — generates Owner Dashboard recommendation cards** |
+| **appointmentRemindersEngine** | Every 15 min | **Queue SMS reminders 24h + 1h before each booked visit (wellness)** |
+| **wellnessOpsEngine** | Hourly | **NPS survey 72h post-visit + 90-day junk-lead retention purge (wellness)** |
 
 ## Security Features
 
@@ -272,10 +370,14 @@ Interactive docs at `/api-docs` (Swagger UI).
 
 ## E2E Testing
 
-40 Playwright spec files covering all modules, API health, responsive design, theme toggle, and navigation flows.
+**124+ tests passing on production** across 40+ spec files.
+
+- `tests/ship-readiness.spec.js` — 74 tests: auth, 50 API endpoints, security (CORS, tenantId injection), public endpoints, UI page serving
+- `tests/wellness.spec.js` — 50 tests: tenant + currency segregation, dashboard data, patient/visit/Rx/consent create flow, recommendations approval, full external API flow (lead → poll → lookup → call recording back), reports (P&L + per-pro + per-location + attribution), junk filter, auto-router, public booking, orchestrator manual run, SPA route smoke
+- Plus 30+ legacy specs for individual modules
 
 ```bash
-cd e2e && npx playwright test --project=chromium
+cd e2e && BASE_URL=https://crm.globusdemos.com npx playwright test --project=chromium
 ```
 
 ## Deployment

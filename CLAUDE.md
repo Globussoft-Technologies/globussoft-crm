@@ -2,11 +2,22 @@
 
 ## Overview
 
-Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI.
+Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.0.0
+- **Version:** v3.1.0 (wellness vertical + external partner API + embed widget)
 - **Branch:** main (single-branch workflow)
+
+## Verticals
+
+Tenant.vertical ∈ `{generic, wellness}` drives:
+
+- **Sidebar layout** — wellness gets a slim clinic-focused nav (~25 items); generic gets the full 50+ item enterprise sidebar
+- **Theme** — wellness uses Dr. Haror's palette (teal `#265855`, blush `#CD9481`, cream bg) via scoped CSS under `[data-vertical="wellness"]`
+- **Landing route** — wellness users land on `/wellness`, generic on `/dashboard`
+- **Currency defaults** — tenant.defaultCurrency (INR/USD/EUR/etc.) + locale feed the `formatMoney()` helper everywhere
+
+Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `render<Vertical>Nav()` function in Sidebar, add a themed CSS file, seed + new pages as needed. No forks.
 
 ## Tech Stack
 
@@ -40,38 +51,55 @@ Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM 
 - Global auth guard protects all routes except /auth/login, /auth/signup, /auth/register, /health, /marketplace-leads/webhook
 - Rate limiting: 5000 req/15min general, 1000 req/15min on auth/login
 
-### Cron Engines (backend/cron/) -- 12 engines
+### Cron Engines (backend/cron/) -- 15 engines
 
 | Engine | File | Purpose |
 |--------|------|---------|
 | Lead Scoring | leadScoringEngine.js | AI lead score recalculation (every 10 min) |
 | Sequence | sequenceEngine.js | Drip sequence step execution |
 | Marketplace | marketplaceEngine.js | IndiaMART/JustDial/TradeIndia lead sync (every 5 min) |
-| Workflow | workflowEngine.js | Automation rule evaluation |
+| Workflow | workflowEngine.js | Automation rule evaluation (event-driven via eventBus) |
 | Campaign | campaignEngine.js | Marketing campaign dispatch |
 | Report | reportEngine.js | Scheduled report generation and email delivery |
 | Recurring Invoice | recurringInvoiceEngine.js | Recurring invoice generation (daily) |
-| Forecast Snapshot | forecastSnapshotEngine.js | Revenue forecast snapshots (daily) |
-| Deal Insights | dealInsightsEngine.js | AI deal insight generation |
-| Sentiment | sentimentEngine.js | Customer sentiment analysis |
-| Scheduled Email | scheduledEmailEngine.js | Scheduled email dispatch |
-| Retention | retentionEngine.js | GDPR data retention enforcement |
+| Forecast Snapshot | forecastSnapshotEngine.js | Revenue forecast snapshots (weekly) |
+| Deal Insights | dealInsightsEngine.js | AI deal insight generation (6 hr) |
+| Sentiment | sentimentEngine.js | Customer sentiment analysis (15 min) |
+| Scheduled Email | scheduledEmailEngine.js | Scheduled email dispatch (every 1 min) |
+| Retention | retentionEngine.js | GDPR data retention enforcement (daily 03:00) |
+| Backup | backupEngine.js | Automated mysqldump (daily 02:00) |
+| **Orchestrator** (v3.1) | orchestratorEngine.js | Wellness AI orchestration — daily 07:00 IST, generates Owner Dashboard recommendation cards |
+| **Appointment Reminders** (v3.1) | appointmentRemindersEngine.js | Every 15 min, queue SMS T-24h + T-1h before each booked wellness visit |
+| **Wellness Ops** (v3.1) | wellnessOpsEngine.js | Hourly, NPS survey 72h post-visit + 90-day junk-lead retention purge |
 
-### Services (backend/services/) -- 5 services
 
-- **smsProvider.js** -- SMS delivery via MSG91/Twilio
-- **whatsappProvider.js** -- WhatsApp Cloud API messaging
-- **telephonyProvider.js** -- Click-to-call via MyOperator/Knowlarity
-- **pushService.js** -- Web push notification delivery (VAPID)
-- **landingPageRenderer.js** -- Server-side landing page rendering
-
-### Libraries (backend/lib/) -- 5 modules
+### Libraries (backend/lib/) -- 8 modules
 
 - **prisma.js** -- Shared Prisma client instance
 - **eventBus.js** -- In-process event bus for decoupled modules
 - **notificationService.js** -- Notification creation and delivery
 - **webhookDelivery.js** -- Outbound webhook dispatch with retry
 - **sentry.js** -- Sentry error tracking initialization
+- **leadJunkFilter.js** (v3.1) -- Multi-stage junk-lead classifier: rules + optional Gemini fallback
+- **leadAutoRouter.js** (v3.1) -- Keyword → service category → assigned specialist (doctor / professional / telecaller)
+- **fieldEncryption.js** (v3.1) -- AES-256-GCM helper for patient PII fields. Opt-in via `WELLNESS_FIELD_KEY` env var
+
+### Services (backend/services/) -- 6 services
+
+- **smsProvider.js** -- SMS delivery via MSG91/Twilio
+- **whatsappProvider.js** -- WhatsApp Cloud API messaging
+- **telephonyProvider.js** -- Click-to-call via MyOperator/Knowlarity
+- **pushService.js** -- Web push notification delivery (VAPID)
+- **landingPageRenderer.js** -- Server-side landing page rendering
+- **pdfRenderer.js** (v3.1) -- pdfkit-based PDFs: prescription, consent (with embedded signature), branded invoice
+
+### External Partner API (v3.1) -- /api/v1/external
+
+API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globussoft products (Callified.ai for voice/WhatsApp, AdsGPT for ads, Globus Phone for softphone).
+
+- **middleware/externalAuth.js** -- Reads X-API-Key, validates against ApiKey model, aliases req.user so tenantWhere helpers keep working
+- **routes/external.js** -- `/health`, `/me`, `/leads` (POST + GET poll), `/calls` (POST + PATCH for late transcripts), `/messages`, `/appointments`, `/contacts/lookup`, `/patients/lookup`, `/services`, `/staff`, `/locations`
+- Docs: docs/wellness-client/EXTERNAL_API.md
 
 ### Routes (backend/routes/) -- 88 route files
 
@@ -99,6 +127,10 @@ Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM 
 
 **Admin & Platform:** auth.js, auth_2fa.js, staff.js, developer.js, audit.js, audit_viewer.js, gdpr.js, field_permissions.js, sandbox.js, industry_templates.js, tenants.js, booking_pages.js, custom_objects.js, search.js, tasks.js, projects.js, settings (via server.js)
 
+**Wellness vertical (v3.1):** wellness.js (patients, visits, prescriptions, consents, treatments, services, locations, recommendations, dashboard, reports/pnl-by-service, /per-professional, /per-location, /attribution, photos, inventory, telecaller/queue + /dispose, portal/login + /me + /visits + /prescriptions, orchestrator/run, public/tenant/:slug + public/book)
+
+**External Partner API (v3.1):** external.js (/api/v1/external/* — health, me, leads, calls, messages, appointments, contacts/lookup, patients/lookup, services, staff, locations)
+
 ### Frontend (frontend/src/)
 
 - **App.jsx** -- AuthContext provider, React Router, Suspense + React.lazy() for 76 page components (code-split)
@@ -108,7 +140,7 @@ Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM 
 
 CPQBuilder, CommandPalette, DealModal, EmailSignatureEditor, LanguageSwitcher, Layout, NotificationBell, Omnibar, Presence, Sidebar, Softphone
 
-### Frontend Pages (frontend/src/pages/) -- 76 pages
+### Frontend Pages (frontend/src/pages/) -- 90+ pages
 
 **Sales:** Dashboard, Pipeline, Pipelines, Forecasting, Quotas, WinLoss, Playbooks, Funnel, DealInsights, CPQ
 
@@ -134,18 +166,49 @@ CPQBuilder, CommandPalette, DealModal, EmailSignatureEditor, LanguageSwitcher, L
 
 **Platform:** CustomObjects, CustomObjectView, BookingPages, Marketplace, Zapier, CalendarSync, Landing, Pricing, Portal
 
-**Auth:** Login, Signup, Placeholder
+**Auth:** Login (with quick-login buttons grouped by tenant), Signup, Placeholder
 
-### Prisma Models (99)
+**Wellness vertical (v3.1, frontend/src/pages/wellness/):** OwnerDashboard, Recommendations, Patients, PatientDetail (7 tabs: history, Rx, consent canvas, treatment plans, log visit, photos, inventory), Services (catalog + packages builder + inline edit), Calendar (day-grid by doctor), Reports (4 tabs: P&L, Per-Pro, Per-Location, Attribution), Locations, TelecallerQueue (SLA timer + 6 disposition buttons), PatientPortal (public, phone+OTP), PublicBooking (`/book/:slug`, no auth)
 
-AbTest, AccountingSync, Activity, ApiKey, ApprovalRequest, Attachment, AuditLog, AutomationRule, Booking, BookingPage, CalendarEvent, CalendarIntegration, CallLog, Campaign, CannedResponse, Chatbot, ChatbotConversation, ConsentRecord, Contact, ContactAttachment, Contract, Currency, CustomEntity, CustomField, CustomRecord, CustomReport, CustomValue, Dashboard, DataExportRequest, Deal, DealInsight, DocumentTemplate, DocumentView, EmailMessage, EmailTemplate, EmailTracking, Estimate, EstimateLineItem, Expense, FieldPermission, Forecast, IndustryTemplate, Integration, Invoice, KbArticle, KbCategory, LandingPage, LandingPageAnalytics, LeadRoutingRule, LiveChatMessage, LiveChatSession, MarketplaceConfig, MarketplaceLead, Notification, Payment, Pipeline, PipelineStage, Playbook, PlaybookProgress, Product, Project, PushNotification, PushSubscription, PushTemplate, Quota, Quote, QuoteLineItem, ReportSchedule, RetentionPolicy, SandboxSnapshot, ScheduledEmail, ScimToken, Sequence, SequenceEnrollment, SharedInbox, SignatureRequest, SlaPolicy, SmsConfig, SmsMessage, SmsTemplate, SocialMention, SocialPost, SsoConfig, Survey, SurveyResponse, Task, TelephonyConfig, Tenant, Territory, Ticket, Touchpoint, User, VoiceSession, WebVisitor, Webhook, WhatsAppConfig, WhatsAppMessage, WhatsAppTemplate, WinLossReason
+**Embed widget (v3.1, frontend/public/embed/):** widget.js (drop-in script), lead-form.html (iframe target)
+
+**Wellness theme (v3.1):** theme/wellness.css — scoped under `[data-vertical="wellness"]`. Activated in App.jsx by setting `data-vertical` on body based on tenant.vertical.
+
+### Prisma Models (110 total)
+
+Generic (99): AbTest, AccountingSync, Activity, ApiKey, ApprovalRequest, Attachment, AuditLog, AutomationRule, Booking, BookingPage, CalendarEvent, CalendarIntegration, CallLog, Campaign, CannedResponse, Chatbot, ChatbotConversation, ConsentRecord, Contact, ContactAttachment, Contract, Currency, CustomEntity, CustomField, CustomRecord, CustomReport, CustomValue, Dashboard, DataExportRequest, Deal, DealInsight, DocumentTemplate, DocumentView, EmailMessage, EmailTemplate, EmailTracking, Estimate, EstimateLineItem, Expense, FieldPermission, Forecast, IndustryTemplate, Integration, Invoice, KbArticle, KbCategory, LandingPage, LandingPageAnalytics, LeadRoutingRule, LiveChatMessage, LiveChatSession, MarketplaceConfig, MarketplaceLead, Notification, Payment, Pipeline, PipelineStage, Playbook, PlaybookProgress, Product, Project, PushNotification, PushSubscription, PushTemplate, Quota, Quote, QuoteLineItem, ReportSchedule, RetentionPolicy, SandboxSnapshot, ScheduledEmail, ScimToken, Sequence, SequenceEnrollment, SharedInbox, SignatureRequest, SlaPolicy, SmsConfig, SmsMessage, SmsTemplate, SocialMention, SocialPost, SsoConfig, Survey, SurveyResponse, Task, TelephonyConfig, Tenant, Territory, Ticket, Touchpoint, User, VoiceSession, WebVisitor, Webhook, WhatsAppConfig, WhatsAppMessage, WhatsAppTemplate, WinLossReason
+
+Wellness vertical (9 new, v3.1): **Patient, Visit, Prescription, ConsentForm, TreatmentPlan, Service, ServiceConsumption, AgentRecommendation, Location**
+
+Extended fields (v3.1):
+- `Tenant.vertical` (generic | wellness), `Tenant.country` (IN/US/…), `Tenant.defaultCurrency` (INR/USD/…), `Tenant.locale` (en-IN/en-US/…)
+- `User.wellnessRole` (doctor | professional | telecaller | helper) — orthogonal to the RBAC role
+- `Patient.locationId`, `Visit.locationId` — multi-clinic support
 
 ## Demo Credentials
 
+Login page has one-click quick-login buttons grouped by tenant — no typing required.
+
+### Generic CRM tenant (USD, `vertical=generic`)
 - **Admin:** admin@globussoft.com / password123
 - **Manager:** manager@crm.com / password123
 - **User:** user@crm.com / password123
-- **Test bypass:** admin / admin (hardcoded in routes/auth.js)
+
+### Enhanced Wellness tenant (INR, `vertical=wellness`) — lands on `/wellness`
+- **Owner (Rishu):** rishu@enhancedwellness.in / password123
+- **Demo Admin:** admin@wellness.demo / password123
+- **Demo User:** user@wellness.demo / password123
+- **Manager:** manager@enhancedwellness.in / password123
+- **Doctor:** drharsh@enhancedwellness.in / password123
+
+Plus 12 professionals, 2 helpers, 1 telecaller (see `prisma/seed-wellness.js`).
+
+### External Partner API (v3.1)
+- **Callified.ai demo key:** printed by `node prisma/seed-wellness.js`
+- **Globus Phone demo key:** same
+- Scoped to the Enhanced Wellness tenant. POSTs via `X-API-Key: glbs_…`.
+
+**Note:** the old `admin/admin` bypass was removed for security hardening. All test credentials now use real bcrypt-hashed passwords.
 
 ## Deployment
 
@@ -173,10 +236,14 @@ AbTest, AccountingSync, Activity, ApiKey, ApprovalRequest, Attachment, AuditLog,
 Tests live in `e2e/` using Playwright. Run with:
 
 ```bash
-cd e2e && npx playwright test --project=chromium
+cd e2e && BASE_URL=https://crm.globusdemos.com npx playwright test --project=chromium
 ```
 
-40 spec files covering: auth, dashboard, contacts, pipeline, navigation, inbox, marketing, reports, billing, settings, developer, sequences, custom-objects, responsive, api-health, tasks, lead-scoring, leads, clients, invoices, tickets, staff, expenses, contracts, estimates, projects, and more.
+- `tests/ship-readiness.spec.js` — 74 tests covering auth, 50 API endpoints, security, public endpoints, UI page serving
+- `tests/wellness.spec.js` — 50+ wellness-specific tests: tenant + currency, dashboard, patients/visits/Rx/consent flow, recommendations, full external API flow, reports, junk filter, auto-router, public booking, orchestrator, SPA route smoke
+- Plus 30+ legacy spec files per module
+
+**124+ tests currently passing on production.**
 
 ## GitHub
 

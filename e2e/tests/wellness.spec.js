@@ -543,3 +543,550 @@ test.describe.serial('Wellness — Reports + Junk filter + Auto-route + Public b
     expect(typeof d.created).toBe('number');
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// Full endpoint coverage — every route in routes/wellness.js + external.js
+// ═════════════════════════════════════════════════════════════════════
+
+test.describe.serial('Wellness — Patient + Visit UPDATE + reads', () => {
+  const headers = () => ({ Authorization: `Bearer ${TOKEN}` });
+  let patientId, visitId;
+
+  test.beforeAll(async ({ request }) => {
+    if (!TOKEN) {
+      const r = await request.post(`${API}/auth/login`, { data: RISHU });
+      TOKEN = (await r.json()).token;
+    }
+    // Create a fresh patient for these tests
+    const pr = await request.post(`${API}/wellness/patients`, {
+      headers: headers(), data: {
+        name: 'Coverage Patient', phone: `+9198${Date.now().toString().slice(-8)}`,
+        email: `cov-${Date.now()}@test.local`, gender: 'F', source: 'referral',
+      },
+    });
+    patientId = (await pr.json()).id;
+    const vr = await request.post(`${API}/wellness/visits`, {
+      headers: headers(), data: { patientId, notes: 'Coverage visit', status: 'completed', amountCharged: 1000 },
+    });
+    visitId = (await vr.json()).id;
+  });
+
+  test('51. PUT /patients/:id updates allowed fields', async ({ request }) => {
+    const r = await request.put(`${API}/wellness/patients/${patientId}`, {
+      headers: headers(), data: { bloodGroup: 'O+', notes: 'Updated via E2E' },
+    });
+    expect(r.ok()).toBeTruthy();
+    const p = await r.json();
+    expect(p.bloodGroup).toBe('O+');
+  });
+
+  test('52. PUT /patients/:id 404s on non-existent patient', async ({ request }) => {
+    const r = await request.put(`${API}/wellness/patients/999999`, {
+      headers: headers(), data: { notes: 'x' },
+    });
+    expect(r.status()).toBe(404);
+  });
+
+  test('53. GET /visits/:id returns visit with patient + service', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/visits/${visitId}`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    const v = await r.json();
+    expect(v.id).toBe(visitId);
+    expect(v).toHaveProperty('patient');
+  });
+
+  test('54. PUT /visits/:id updates status', async ({ request }) => {
+    const r = await request.put(`${API}/wellness/visits/${visitId}`, {
+      headers: headers(), data: { status: 'completed', notes: 'Notes updated' },
+    });
+    expect(r.ok()).toBeTruthy();
+  });
+
+  test('55. GET /visits?doctorId= filters properly', async ({ request }) => {
+    const staff = await (await request.get(`${API}/staff`, { headers: headers() })).json();
+    const doctor = staff.find((u) => u.wellnessRole === 'doctor');
+    if (!doctor) test.skip();
+    const r = await request.get(`${API}/wellness/visits?doctorId=${doctor.id}&limit=5`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+  });
+
+  test('56. GET /visits?from=&to= date-range filter', async ({ request }) => {
+    const from = new Date(Date.now() - 30 * 86400000).toISOString();
+    const to = new Date().toISOString();
+    const r = await request.get(`${API}/wellness/visits?from=${from}&to=${to}&limit=5`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+  });
+
+  test('57. POST /wellness/visits requires patientId', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/visits`, {
+      headers: headers(), data: { notes: 'no patient' },
+    });
+    expect(r.status()).toBe(400);
+  });
+
+  test('58. GET /visits/:id/consumptions returns array', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/visits/${visitId}/consumptions`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    expect(Array.isArray(await r.json())).toBeTruthy();
+  });
+
+  test('59. POST /visits/:id/consumptions adds an inventory row', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/visits/${visitId}/consumptions`, {
+      headers: headers(), data: { productName: 'E2E Product', qty: 2, unitCost: 150 },
+    });
+    expect(r.ok()).toBeTruthy();
+    const c = await r.json();
+    expect(c.productName).toBe('E2E Product');
+    expect(c.qty).toBe(2);
+  });
+
+  test('60. POST /visits/:id/consumptions 400 on missing productName', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/visits/${visitId}/consumptions`, {
+      headers: headers(), data: { qty: 1 },
+    });
+    expect(r.status()).toBe(400);
+  });
+
+  test('61. DELETE /visits/:id/photos handles empty URL gracefully', async ({ request }) => {
+    const r = await request.delete(`${API}/wellness/visits/${visitId}/photos`, {
+      headers: headers(), data: { url: '/nonexistent', kind: 'before' },
+    });
+    expect(r.ok()).toBeTruthy();
+  });
+});
+
+test.describe.serial('Wellness — Prescriptions + Consents + Treatments + PDFs', () => {
+  const headers = () => ({ Authorization: `Bearer ${TOKEN}` });
+  let prescriptionId, consentId;
+
+  test.beforeAll(async ({ request }) => {
+    if (!TOKEN) {
+      const r = await request.post(`${API}/auth/login`, { data: RISHU });
+      TOKEN = (await r.json()).token;
+    }
+  });
+
+  test('62. GET /prescriptions returns list', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/prescriptions?limit=5`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    const list = await r.json();
+    expect(Array.isArray(list)).toBeTruthy();
+    if (list.length) prescriptionId = list[0].id;
+  });
+
+  test('63. GET /prescriptions/:id/pdf returns PDF content-type', async ({ request }) => {
+    if (!prescriptionId) test.skip();
+    const r = await request.get(`${API}/wellness/prescriptions/${prescriptionId}/pdf`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    expect(r.headers()['content-type']).toContain('application/pdf');
+  });
+
+  test('64. GET /prescriptions/:id/pdf 404 on bad id', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/prescriptions/999999/pdf`, { headers: headers() });
+    expect(r.status()).toBe(404);
+  });
+
+  test('65. GET /consents returns list', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/consents?limit=5`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    const list = await r.json();
+    expect(Array.isArray(list)).toBeTruthy();
+    if (list.length) consentId = list[0].id;
+  });
+
+  test('66. POST /consents 400 missing templateName', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/consents`, {
+      headers: headers(), data: { patientId: 1 },
+    });
+    expect(r.status()).toBe(400);
+  });
+
+  test('67. GET /consents/:id/pdf returns PDF', async ({ request }) => {
+    if (!consentId) test.skip();
+    const r = await request.get(`${API}/wellness/consents/${consentId}/pdf`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    expect(r.headers()['content-type']).toContain('application/pdf');
+  });
+
+  test('68. GET /treatments returns active plans', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/treatments?status=active`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+  });
+
+  test('69. POST /treatments creates a multi-session plan', async ({ request }) => {
+    const patients = await (await request.get(`${API}/wellness/patients?limit=1`, { headers: headers() })).json();
+    const services = await (await request.get(`${API}/wellness/services?limit=1`, { headers: headers() })).json();
+    const r = await request.post(`${API}/wellness/treatments`, {
+      headers: headers(), data: {
+        name: 'E2E Package', totalSessions: 6, totalPrice: 25000,
+        patientId: patients.patients[0].id, serviceId: services[0].id,
+      },
+    });
+    expect(r.ok()).toBeTruthy();
+    const tp = await r.json();
+    expect(tp.totalSessions).toBe(6);
+  });
+
+  test('70. POST /treatments 400 missing name', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/treatments`, {
+      headers: headers(), data: { totalSessions: 4, patientId: 1 },
+    });
+    expect(r.status()).toBe(400);
+  });
+});
+
+test.describe.serial('Wellness — Services CRUD + Locations CRUD', () => {
+  const headers = () => ({ Authorization: `Bearer ${TOKEN}` });
+  let createdServiceId, createdLocationId;
+
+  test.beforeAll(async ({ request }) => {
+    if (!TOKEN) {
+      const r = await request.post(`${API}/auth/login`, { data: RISHU });
+      TOKEN = (await r.json()).token;
+    }
+  });
+
+  test('71. POST /services creates a new service', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/services`, {
+      headers: headers(), data: {
+        name: `E2E Service ${Date.now()}`, category: 'aesthetics',
+        ticketTier: 'medium', basePrice: 4500, durationMin: 45, targetRadiusKm: 30,
+      },
+    });
+    expect(r.ok()).toBeTruthy();
+    createdServiceId = (await r.json()).id;
+  });
+
+  test('72. POST /services 400 missing name', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/services`, {
+      headers: headers(), data: { basePrice: 500 },
+    });
+    expect(r.status()).toBe(400);
+  });
+
+  test('73. PUT /services/:id updates price', async ({ request }) => {
+    const r = await request.put(`${API}/wellness/services/${createdServiceId}`, {
+      headers: headers(), data: { basePrice: 5500 },
+    });
+    expect(r.ok()).toBeTruthy();
+    expect((await r.json()).basePrice).toBe(5500);
+  });
+
+  test('74. PUT /services/:id soft-deletes via isActive=false', async ({ request }) => {
+    const r = await request.put(`${API}/wellness/services/${createdServiceId}`, {
+      headers: headers(), data: { isActive: false },
+    });
+    expect(r.ok()).toBeTruthy();
+    // After soft-delete, GET /services should not include it
+    const list = await (await request.get(`${API}/wellness/services`, { headers: headers() })).json();
+    expect(list.find((s) => s.id === createdServiceId)).toBeFalsy();
+  });
+
+  test('75. POST /locations creates a second location', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/locations`, {
+      headers: headers(), data: {
+        name: `E2E Branch ${Date.now()}`, addressLine: '1 Test Rd',
+        city: 'Delhi', state: 'Delhi', pincode: '110001', phone: '+911123456',
+      },
+    });
+    expect(r.ok()).toBeTruthy();
+    createdLocationId = (await r.json()).id;
+  });
+
+  test('76. POST /locations 400 missing city', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/locations`, {
+      headers: headers(), data: { name: 'Bad', addressLine: 'x' },
+    });
+    expect(r.status()).toBe(400);
+  });
+
+  test('77. PUT /locations/:id deactivates', async ({ request }) => {
+    const r = await request.put(`${API}/wellness/locations/${createdLocationId}`, {
+      headers: headers(), data: { isActive: false },
+    });
+    expect(r.ok()).toBeTruthy();
+  });
+});
+
+test.describe.serial('Wellness — Telecaller + Patient Portal + Orchestrator', () => {
+  const headers = () => ({ Authorization: `Bearer ${TOKEN}` });
+  let portalToken, portalPhone;
+
+  test.beforeAll(async ({ request }) => {
+    if (!TOKEN) {
+      const r = await request.post(`${API}/auth/login`, { data: RISHU });
+      TOKEN = (await r.json()).token;
+    }
+    // Create a Patient whose phone we'll use for portal login
+    portalPhone = `+9198${Date.now().toString().slice(-8)}`;
+    await request.post(`${API}/wellness/patients`, {
+      headers: headers(), data: { name: 'Portal Tester', phone: portalPhone, source: 'walk-in' },
+    });
+  });
+
+  test('78. GET /telecaller/queue returns assigned leads', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/telecaller/queue`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    const q = await r.json();
+    expect(Array.isArray(q) || Array.isArray(q.leads) || Array.isArray(q.data)).toBeTruthy();
+  });
+
+  test('79. POST /telecaller/dispose records outcome', async ({ request }) => {
+    // Ensure there's at least one lead assigned to this user
+    const contacts = await (await request.get(`${API}/contacts?limit=1`, { headers: headers() })).json();
+    if (!contacts.length) test.skip();
+    const r = await request.post(`${API}/wellness/telecaller/dispose`, {
+      headers: headers(), data: { contactId: contacts[0].id, disposition: 'callback', notes: 'E2E' },
+    });
+    // Some dispatch implementations return 200, 201, 204 — accept < 400
+    expect(r.status()).toBeLessThan(400);
+  });
+
+  test('80. POST /portal/login with any 4-digit OTP succeeds for known phone', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/portal/login`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: { phone: portalPhone, otp: '1234' },
+    });
+    expect(r.ok()).toBeTruthy();
+    const d = await r.json();
+    expect(d.token).toBeTruthy();
+    portalToken = d.token;
+  });
+
+  test('81. POST /portal/login 404 for unknown phone', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/portal/login`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: { phone: '+910000000000', otp: '1234' },
+    });
+    expect(r.status()).toBe(404);
+  });
+
+  test('82. GET /portal/me returns patient profile', async ({ request }) => {
+    if (!portalToken) test.skip();
+    const r = await request.get(`${API}/wellness/portal/me`, {
+      headers: { Authorization: `Bearer ${portalToken}` },
+    });
+    expect(r.ok()).toBeTruthy();
+    const me = await r.json();
+    expect(me).toHaveProperty('name');
+  });
+
+  test('83. GET /portal/visits lists own visits', async ({ request }) => {
+    if (!portalToken) test.skip();
+    const r = await request.get(`${API}/wellness/portal/visits`, {
+      headers: { Authorization: `Bearer ${portalToken}` },
+    });
+    expect(r.ok()).toBeTruthy();
+    expect(Array.isArray(await r.json())).toBeTruthy();
+  });
+
+  test('84. GET /portal/prescriptions lists own Rx', async ({ request }) => {
+    if (!portalToken) test.skip();
+    const r = await request.get(`${API}/wellness/portal/prescriptions`, {
+      headers: { Authorization: `Bearer ${portalToken}` },
+    });
+    expect(r.ok()).toBeTruthy();
+  });
+
+  test('85. /portal/me without token → 401', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/portal/me`);
+    expect(r.status()).toBe(401);
+  });
+
+  test('86. POST /recommendations/:id/reject works', async ({ request }) => {
+    const recs = await (await request.get(`${API}/wellness/recommendations?status=all`, { headers: headers() })).json();
+    if (recs.length === 0) test.skip();
+    const id = recs[recs.length - 1].id;
+    const r = await request.post(`${API}/wellness/recommendations/${id}/reject`, { headers: headers() });
+    expect(r.ok()).toBeTruthy();
+    expect((await r.json()).status).toBe('rejected');
+  });
+});
+
+test.describe.serial('External API — full endpoint coverage', () => {
+  const H = () => ({ 'X-API-Key': PARTNER_KEY });
+  let extContactId, extCallId;
+
+  test.beforeAll(async ({ request }) => {
+    if (TOKEN) return;
+    const r = await request.post(`${API}/auth/login`, { data: RISHU });
+    TOKEN = (await r.json()).token;
+  });
+
+  test('87. POST /external/appointments creates a visit', async ({ request }) => {
+    // Need a patient first
+    const patients = await (await request.get(`${API}/wellness/patients?limit=1`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })).json();
+    const services = await (await request.get(`${API}/wellness/services?limit=1`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })).json();
+    const r = await request.post(`${EXT}/appointments`, {
+      headers: { ...H(), 'Content-Type': 'application/json' },
+      data: {
+        patientId: patients.patients[0].id, serviceId: services[0].id,
+        slotStart: new Date(Date.now() + 86400000).toISOString(),
+        notes: 'E2E external booking',
+      },
+    });
+    expect(r.ok()).toBeTruthy();
+    expect((await r.json()).id).toBeTruthy();
+  });
+
+  test('88. POST /external/appointments 400 missing slotStart', async ({ request }) => {
+    const r = await request.post(`${EXT}/appointments`, {
+      headers: { ...H(), 'Content-Type': 'application/json' },
+      data: { patientId: 1 },
+    });
+    expect(r.status()).toBe(400);
+  });
+
+  test('89. GET /external/appointments?date=today', async ({ request }) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const r = await request.get(`${EXT}/appointments?date=${today}`, { headers: H() });
+    expect(r.ok()).toBeTruthy();
+    expect((await r.json()).data).toBeDefined();
+  });
+
+  test('90. POST /external/leads then GET /contacts/:id returns full detail', async ({ request }) => {
+    const create = await request.post(`${EXT}/leads`, {
+      headers: { ...H(), 'Content-Type': 'application/json' },
+      data: { name: 'E2E Fetch', phone: `+9197${Date.now().toString().slice(-8)}`, email: `fe-${Date.now()}@test.local` },
+    });
+    const c = await create.json();
+    extContactId = c.id;
+    const det = await request.get(`${EXT}/contacts/${extContactId}`, { headers: H() });
+    expect(det.ok()).toBeTruthy();
+    expect((await det.json()).id).toBe(extContactId);
+  });
+
+  test('91. GET /external/contacts/:id 404 on bad id', async ({ request }) => {
+    const r = await request.get(`${EXT}/contacts/999999`, { headers: H() });
+    expect(r.status()).toBe(404);
+  });
+
+  test('92. POST /external/calls creates + records id, PATCH updates', async ({ request }) => {
+    if (!extContactId) test.skip();
+    const create = await request.post(`${EXT}/calls`, {
+      headers: { ...H(), 'Content-Type': 'application/json' },
+      data: {
+        contactId: extContactId, direction: 'OUTBOUND', status: 'COMPLETED',
+        durationSec: 60, recordingUrl: 'https://callified.ai/rec/e2e-patch.mp3',
+        providerCallId: `e2e-patch-${Date.now()}`,
+      },
+    });
+    extCallId = (await create.json()).id;
+    expect(extCallId).toBeTruthy();
+    const patch = await request.patch(`${EXT}/calls/${extCallId}`, {
+      headers: { ...H(), 'Content-Type': 'application/json' },
+      data: { transcriptUrl: 'https://callified.ai/tx/e2e.txt', durationSec: 75 },
+    });
+    expect(patch.ok()).toBeTruthy();
+    expect((await patch.json()).duration).toBe(75);
+  });
+
+  test('93. PATCH /external/calls/:id 404 on bad id', async ({ request }) => {
+    const r = await request.patch(`${EXT}/calls/999999`, {
+      headers: { ...H(), 'Content-Type': 'application/json' },
+      data: { durationSec: 10 },
+    });
+    expect(r.status()).toBe(404);
+  });
+
+  test('94. GET /external/patients/:id returns visits + Rx + plans', async ({ request }) => {
+    const list = await (await request.get(`${EXT}/patients/lookup?phone=9876543210`, { headers: H() })).json().catch(() => null);
+    // If no match, pull from internal
+    let pid;
+    if (list && list.id) pid = list.id;
+    else {
+      const internal = await (await request.get(`${API}/wellness/patients?limit=1`, {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      })).json();
+      pid = internal.patients[0].id;
+    }
+    const r = await request.get(`${EXT}/patients/${pid}`, { headers: H() });
+    expect(r.ok()).toBeTruthy();
+    const p = await r.json();
+    expect(p).toHaveProperty('visits');
+  });
+
+  test('95. POST /external/leads idempotency on duplicate email', async ({ request }) => {
+    const email = `dup-${Date.now()}@test.local`;
+    const r1 = await request.post(`${EXT}/leads`, {
+      headers: { ...H(), 'Content-Type': 'application/json' },
+      data: { name: 'Dup Test', phone: `+9196${Date.now().toString().slice(-8)}`, email },
+    });
+    expect(r1.ok()).toBeTruthy();
+    const r2 = await request.post(`${EXT}/leads`, {
+      headers: { ...H(), 'Content-Type': 'application/json' },
+      data: { name: 'Dup Test 2', phone: `+9195${Date.now().toString().slice(-8)}`, email },
+    });
+    // Dup returns 200 with _deduped flag OR the original contact
+    expect(r2.status()).toBeLessThan(300);
+    const d = await r2.json();
+    expect(d._deduped === true || d.email === email).toBeTruthy();
+  });
+
+  test('96. Junk-filter flags foreign-number lead via /external/leads', async ({ request }) => {
+    const r = await request.post(`${EXT}/leads`, {
+      headers: { ...H(), 'Content-Type': 'application/json' },
+      data: { name: 'Valid Name', phone: '+447700900000', email: `uk-${Date.now()}@test.local` },
+    });
+    const d = await r.json();
+    expect(d.status).toBe('Junk');
+  });
+});
+
+test.describe('Auth response shape (verticals)', () => {
+  test('97. Wellness login payload contains all currency fields', async ({ request }) => {
+    const r = await request.post(`${API}/auth/login`, { data: ADMIN });
+    expect(r.ok()).toBeTruthy();
+    const d = await r.json();
+    expect(d.tenant.vertical).toBe('wellness');
+    expect(d.tenant.country).toBe('IN');
+    expect(d.tenant.defaultCurrency).toBe('INR');
+    expect(d.tenant.locale).toBe('en-IN');
+  });
+
+  test('98. Manager login (wellness) still returns wellness vertical', async ({ request }) => {
+    const r = await request.post(`${API}/auth/login`, {
+      data: { email: 'manager@enhancedwellness.in', password: 'password123' },
+    });
+    expect(r.ok()).toBeTruthy();
+    const d = await r.json();
+    expect(d.user.role).toBe('MANAGER');
+    expect(d.tenant.vertical).toBe('wellness');
+  });
+
+  test('99. Unauthenticated /wellness/dashboard returns 403', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/dashboard`);
+    expect(r.status()).toBe(403);
+  });
+
+  test('100. Bad JWT returns 401/403 on /wellness/patients', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/patients`, {
+      headers: { Authorization: 'Bearer bogus.bogus.bogus' },
+    });
+    expect([401, 403]).toContain(r.status());
+  });
+});
+
+test.describe('Embed widget + public assets', () => {
+  test('101. /embed/widget.js served as JS', async ({ request }) => {
+    const r = await request.get(`${BASE_URL}/embed/widget.js`);
+    expect(r.ok()).toBeTruthy();
+    expect((r.headers()['content-type'] || '').toLowerCase()).toMatch(/javascript/);
+  });
+
+  test('102. /embed/lead-form.html served as HTML', async ({ request }) => {
+    const r = await request.get(`${BASE_URL}/embed/lead-form.html`);
+    expect(r.ok()).toBeTruthy();
+    const html = await r.text();
+    expect(html).toContain('<form');
+  });
+
+  test('103. Pricing page serves (India detection is client-side)', async ({ request }) => {
+    const r = await request.get(`${BASE_URL}/pricing`);
+    expect(r.ok()).toBeTruthy();
+  });
+});

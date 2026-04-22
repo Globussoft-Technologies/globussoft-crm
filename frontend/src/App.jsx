@@ -75,6 +75,12 @@ const Social = lazy(() => import('./pages/Social'));
 const Sandbox = lazy(() => import('./pages/Sandbox'));
 const Funnel = lazy(() => import('./pages/Funnel'));
 const Zapier = lazy(() => import('./pages/Zapier'));
+// Wellness vertical
+const WellnessOwnerDashboard = lazy(() => import('./pages/wellness/OwnerDashboard'));
+const WellnessRecommendations = lazy(() => import('./pages/wellness/Recommendations'));
+const WellnessPatients = lazy(() => import('./pages/wellness/Patients'));
+const WellnessPatientDetail = lazy(() => import('./pages/wellness/PatientDetail'));
+const WellnessServices = lazy(() => import('./pages/wellness/Services'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -191,6 +197,12 @@ export default function App() {
               <Route path="sandbox" element={<Sandbox />} />
               <Route path="funnel" element={<Funnel />} />
               <Route path="zapier" element={<Zapier />} />
+              {/* Wellness vertical */}
+              <Route path="wellness" element={<WellnessOwnerDashboard />} />
+              <Route path="wellness/recommendations" element={<WellnessRecommendations />} />
+              <Route path="wellness/patients" element={<WellnessPatients />} />
+              <Route path="wellness/patients/:id" element={<WellnessPatientDetail />} />
+              <Route path="wellness/services" element={<WellnessServices />} />
             </Route>
           </Routes>
         </Suspense>

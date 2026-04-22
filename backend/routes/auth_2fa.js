@@ -217,8 +217,8 @@ router.post("/verify", async (req, res) => {
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
       tenant: user.tenant
-        ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan }
-        : { id: tenantId },
+        ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic" }
+        : { id: tenantId, vertical: "generic" },
       backupCodeUsed: consumedBackupCode,
     });
   } catch (err) {

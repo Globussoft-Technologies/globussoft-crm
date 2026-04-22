@@ -1,0 +1,455 @@
+import React, { useEffect, useState, useRef } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus } from 'lucide-react';
+import { fetchApi } from '../../utils/api';
+
+const tabStyle = (active) => ({
+  padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
+  color: active ? '#fff' : 'var(--text-primary)', cursor: 'pointer', borderRadius: 8, fontSize: '0.85rem',
+  display: 'flex', alignItems: 'center', gap: '0.35rem',
+});
+
+export default function PatientDetail() {
+  const { id } = useParams();
+  const [patient, setPatient] = useState(null);
+  const [services, setServices] = useState([]);
+  const [doctors, setDoctors] = useState([]);
+  const [tab, setTab] = useState('history');
+  const [loading, setLoading] = useState(true);
+
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      fetchApi(`/api/wellness/patients/${id}`),
+      fetchApi('/api/wellness/services'),
+      fetchApi('/api/staff').catch(() => []),
+    ]).then(([p, s, staff]) => {
+      setPatient(p);
+      setServices(s);
+      setDoctors((Array.isArray(staff) ? staff : []).filter((u) => u.wellnessRole === 'doctor'));
+    }).catch(() => setPatient(null)).finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, [id]);
+
+  if (loading) return <div style={{ padding: '2rem' }}>Loading…</div>;
+  if (!patient) return <div style={{ padding: '2rem' }}>Patient not found.</div>;
+
+  return (
+    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <Link to="/wellness/patients" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', textDecoration: 'none', marginBottom: '1rem', fontSize: '0.85rem' }}>
+        <ArrowLeft size={14} /> Back to patients
+      </Link>
+
+      {/* Patient header */}
+      <div className="glass" style={{ padding: '1.5rem', marginBottom: '1rem', display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 600, color: '#fff' }}>
+          {patient.name[0]}
+        </div>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 600 }}>{patient.name}</h1>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+            {patient.phone && <>📞 {patient.phone}</>} {patient.email && <> • {patient.email}</>}
+            {patient.gender && <> • {patient.gender}</>}
+            {patient.bloodGroup && <> • Blood group {patient.bloodGroup}</>}
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+          <span>Source: <strong style={{ color: 'var(--text-primary)' }}>{patient.source || '—'}</strong></span>
+          <span>{patient.visits.length} visits • {patient.prescriptions.length} Rx • {patient.treatmentPlans.length} treatment plans</span>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        <button style={tabStyle(tab === 'history')} onClick={() => setTab('history')}><Calendar size={14} /> Case history</button>
+        <button style={tabStyle(tab === 'prescribe')} onClick={() => setTab('prescribe')}><FileText size={14} /> New prescription</button>
+        <button style={tabStyle(tab === 'consent')} onClick={() => setTab('consent')}><FileSignature size={14} /> Consent form</button>
+        <button style={tabStyle(tab === 'plans')} onClick={() => setTab('plans')}><ClipboardList size={14} /> Treatment plans</button>
+        <button style={tabStyle(tab === 'visit')} onClick={() => setTab('visit')}><Plus size={14} /> Log visit</button>
+      </div>
+
+      {tab === 'history' && <CaseHistoryTab patient={patient} />}
+      {tab === 'prescribe' && <PrescribeTab patient={patient} onSaved={load} />}
+      {tab === 'consent' && <ConsentTab patient={patient} services={services} onSaved={load} />}
+      {tab === 'plans' && <PlansTab patient={patient} services={services} onSaved={load} />}
+      {tab === 'visit' && <LogVisitTab patient={patient} services={services} doctors={doctors} onSaved={load} />}
+    </div>
+  );
+}
+
+// ── Case history tab ──────────────────────────────────────────────
+
+function CaseHistoryTab({ patient }) {
+  const events = [
+    ...patient.visits.map((v) => ({ kind: 'visit', date: v.visitDate, data: v })),
+    ...patient.prescriptions.map((p) => ({ kind: 'rx', date: p.createdAt, data: p })),
+    ...patient.consents.map((c) => ({ kind: 'consent', date: c.signedAt, data: c })),
+  ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  if (events.length === 0) return <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history yet.</div>;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      {events.map((e, i) => (
+        <div key={i} className="glass" style={{ padding: '1rem', display: 'flex', gap: '0.75rem' }}>
+          <div style={{ width: 8, background: kindColor(e.kind), borderRadius: 4, flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                {kindIcon(e.kind)}
+                <strong style={{ textTransform: 'capitalize' }}>{kindLabel(e.kind)}</strong>
+                {e.kind === 'visit' && e.data.service?.name && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.service.name}</span>}
+                {e.kind === 'consent' && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.templateName}</span>}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(e.date).toLocaleString('en-IN')}</div>
+            </div>
+            {e.kind === 'visit' && (
+              <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                {e.data.notes || 'No notes'}
+                {e.data.amountCharged && <> • <strong style={{ color: 'var(--success-color)' }}>₹{Math.round(e.data.amountCharged).toLocaleString('en-IN')}</strong></>}
+              </div>
+            )}
+            {e.kind === 'rx' && (
+              <RxSummary drugs={e.data.drugs} />
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const kindColor = (k) => ({ visit: 'var(--accent-color)', rx: '#a855f7', consent: '#10b981' })[k] || '#64748b';
+const kindLabel = (k) => ({ visit: 'Visit', rx: 'Prescription', consent: 'Consent signed' })[k] || k;
+const kindIcon = (k) => {
+  const size = 14;
+  if (k === 'visit') return <Stethoscope size={size} />;
+  if (k === 'rx') return <FileText size={size} />;
+  if (k === 'consent') return <FileSignature size={size} />;
+  return null;
+};
+
+function RxSummary({ drugs }) {
+  let parsed = [];
+  try { parsed = typeof drugs === 'string' ? JSON.parse(drugs) : drugs; } catch { return <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{String(drugs).slice(0, 120)}</div>; }
+  if (!Array.isArray(parsed)) return null;
+  return (
+    <ul style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, paddingLeft: '1rem' }}>
+      {parsed.slice(0, 3).map((d, i) => (
+        <li key={i}>{d.name} — {d.dosage}, {d.frequency}{d.duration ? `, ${d.duration}` : ''}</li>
+      ))}
+      {parsed.length > 3 && <li>+ {parsed.length - 3} more</li>}
+    </ul>
+  );
+}
+
+// ── Prescribe tab ─────────────────────────────────────────────────
+
+function PrescribeTab({ patient, onSaved }) {
+  const [visitId, setVisitId] = useState(patient.visits[0]?.id || '');
+  const [drugs, setDrugs] = useState([{ name: '', dosage: '', frequency: '', duration: '' }]);
+  const [instructions, setInstructions] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const setDrug = (i, k, v) => {
+    const next = [...drugs]; next[i] = { ...next[i], [k]: v }; setDrugs(next);
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!visitId) { alert('Pick a visit this prescription belongs to (or log a visit first).'); return; }
+    setSaving(true);
+    try {
+      await fetchApi('/api/wellness/prescriptions', {
+        method: 'POST',
+        body: JSON.stringify({
+          visitId, patientId: patient.id,
+          drugs: drugs.filter((d) => d.name),
+          instructions,
+        }),
+      });
+      setDrugs([{ name: '', dosage: '', frequency: '', duration: '' }]);
+      setInstructions('');
+      onSaved();
+      alert('Prescription saved.');
+    } catch (err) {
+      alert(`Failed: ${err.message}`);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
+      <h3 style={{ marginBottom: '1rem' }}>New prescription</h3>
+
+      <div style={{ marginBottom: '1rem' }}>
+        <label style={labelStyle}>Tied to visit</label>
+        <select value={visitId} onChange={(e) => setVisitId(e.target.value)} style={inputStyle} required>
+          <option value="">— select visit —</option>
+          {patient.visits.map((v) => (
+            <option key={v.id} value={v.id}>
+              {new Date(v.visitDate).toLocaleDateString('en-IN')} — {v.service?.name || 'Consultation'}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ marginBottom: '0.5rem' }}><label style={labelStyle}>Drugs</label></div>
+      {drugs.map((d, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
+          <input placeholder="Drug name" value={d.name} onChange={(e) => setDrug(i, 'name', e.target.value)} style={inputStyle} />
+          <input placeholder="Dosage" value={d.dosage} onChange={(e) => setDrug(i, 'dosage', e.target.value)} style={inputStyle} />
+          <input placeholder="Frequency" value={d.frequency} onChange={(e) => setDrug(i, 'frequency', e.target.value)} style={inputStyle} />
+          <input placeholder="Duration" value={d.duration} onChange={(e) => setDrug(i, 'duration', e.target.value)} style={inputStyle} />
+        </div>
+      ))}
+      <button type="button" onClick={() => setDrugs([...drugs, { name: '', dosage: '', frequency: '', duration: '' }])} style={{ background: 'transparent', border: '1px dashed rgba(255,255,255,0.15)', color: 'var(--text-secondary)', padding: '0.4rem 0.75rem', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', marginBottom: '1rem' }}>
+        + Add drug
+      </button>
+
+      <div style={{ marginBottom: '1rem' }}>
+        <label style={labelStyle}>Instructions</label>
+        <textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
+      </div>
+
+      <button type="submit" disabled={saving} style={{ padding: '0.55rem 1.25rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+        {saving ? 'Saving…' : 'Save prescription'}
+      </button>
+    </form>
+  );
+}
+
+// ── Consent tab with signature canvas ─────────────────────────────
+
+function ConsentTab({ patient, services, onSaved }) {
+  const canvasRef = useRef(null);
+  const [templateName, setTemplateName] = useState('hair-transplant');
+  const [serviceId, setServiceId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [isDrawing, setIsDrawing] = useState(false);
+
+  const startDraw = (e) => {
+    setIsDrawing(true);
+    const ctx = canvasRef.current.getContext('2d');
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    const { x, y } = getCoords(e);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  };
+  const draw = (e) => {
+    if (!isDrawing) return;
+    const ctx = canvasRef.current.getContext('2d');
+    const { x, y } = getCoords(e);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
+  const endDraw = () => setIsDrawing(false);
+  const getCoords = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  };
+  const clearSig = () => {
+    const c = canvasRef.current;
+    c.getContext('2d').clearRect(0, 0, c.width, c.height);
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const signatureSvg = canvasRef.current.toDataURL('image/png');
+      await fetchApi('/api/wellness/consents', {
+        method: 'POST',
+        body: JSON.stringify({
+          patientId: patient.id,
+          serviceId: serviceId || null,
+          templateName,
+          signatureSvg,
+        }),
+      });
+      clearSig();
+      onSaved();
+      alert('Consent captured.');
+    } catch (err) {
+      alert(`Failed: ${err.message}`);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
+      <h3 style={{ marginBottom: '1rem' }}>Capture consent</h3>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
+        <div>
+          <label style={labelStyle}>Template</label>
+          <select value={templateName} onChange={(e) => setTemplateName(e.target.value)} style={inputStyle}>
+            <option value="hair-transplant">Hair Transplant</option>
+            <option value="botox-fillers">Botox / Fillers</option>
+            <option value="laser">Laser Treatment</option>
+            <option value="chemical-peel">Chemical Peel</option>
+            <option value="general">General Procedure</option>
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Service (optional)</label>
+          <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
+            <option value="">— none —</option>
+            {services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: '1rem' }}>
+        <label style={labelStyle}>Patient signature (sign below)</label>
+        <canvas
+          ref={canvasRef}
+          width={600}
+          height={180}
+          style={{ width: '100%', maxWidth: 600, height: 180, background: 'rgba(255,255,255,0.04)', border: '1px dashed rgba(255,255,255,0.15)', borderRadius: 8, touchAction: 'none', cursor: 'crosshair' }}
+          onMouseDown={startDraw}
+          onMouseMove={draw}
+          onMouseUp={endDraw}
+          onMouseLeave={endDraw}
+          onTouchStart={startDraw}
+          onTouchMove={draw}
+          onTouchEnd={endDraw}
+        />
+        <button type="button" onClick={clearSig} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: 'var(--text-secondary)', padding: '0.3rem 0.75rem', borderRadius: 8, cursor: 'pointer', fontSize: '0.75rem', marginTop: '0.5rem' }}>
+          Clear signature
+        </button>
+      </div>
+
+      <button type="submit" disabled={saving} style={{ padding: '0.55rem 1.25rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+        {saving ? 'Saving…' : 'Save consent'}
+      </button>
+    </form>
+  );
+}
+
+// ── Treatment plans tab ───────────────────────────────────────────
+
+function PlansTab({ patient, services, onSaved }) {
+  const [name, setName] = useState('');
+  const [totalSessions, setTotalSessions] = useState(4);
+  const [totalPrice, setTotalPrice] = useState(0);
+  const [serviceId, setServiceId] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    try {
+      await fetchApi('/api/wellness/treatments', {
+        method: 'POST',
+        body: JSON.stringify({
+          patientId: patient.id,
+          name, totalSessions, totalPrice, serviceId: serviceId || null,
+        }),
+      });
+      setName(''); setTotalPrice(0); setServiceId('');
+      onSaved();
+    } catch (err) { alert(`Failed: ${err.message}`); }
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: '1rem', display: 'grid', gap: '0.5rem' }}>
+        {patient.treatmentPlans.length === 0 && (
+          <div className="glass" style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No treatment plans yet.</div>
+        )}
+        {patient.treatmentPlans.map((tp) => (
+          <div key={tp.id} className="glass" style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontWeight: 500 }}>{tp.name}</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                {tp.service?.name && <>{tp.service.name} • </>}
+                Session {tp.completedSessions}/{tp.totalSessions}
+                {tp.totalPrice > 0 && <> • ₹{Math.round(tp.totalPrice).toLocaleString('en-IN')}</>}
+              </div>
+            </div>
+            <div style={{ width: 100, background: 'rgba(255,255,255,0.05)', borderRadius: 20, height: 6, overflow: 'hidden' }}>
+              <div style={{ width: `${Math.round((tp.completedSessions / tp.totalSessions) * 100)}%`, background: 'var(--success-color)', height: '100%' }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <form onSubmit={submit} className="glass" style={{ padding: '1.25rem' }}>
+        <h4 style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>New treatment plan</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: '0.5rem' }}>
+          <input placeholder="Plan name (e.g. PRP 6-session package)" value={name} onChange={(e) => setName(e.target.value)} required style={inputStyle} />
+          <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
+            <option value="">Service</option>
+            {services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <input type="number" placeholder="Sessions" min={1} value={totalSessions} onChange={(e) => setTotalSessions(parseInt(e.target.value) || 1)} style={inputStyle} />
+          <input type="number" placeholder="Total price ₹" value={totalPrice} onChange={(e) => setTotalPrice(parseFloat(e.target.value) || 0)} style={inputStyle} />
+          <button type="submit" style={{ padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Add</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ── Log visit tab ──────────────────────────────────────────────────
+
+function LogVisitTab({ patient, services, doctors, onSaved }) {
+  const [serviceId, setServiceId] = useState('');
+  const [doctorId, setDoctorId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [amount, setAmount] = useState(0);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    try {
+      await fetchApi('/api/wellness/visits', {
+        method: 'POST',
+        body: JSON.stringify({
+          patientId: patient.id,
+          serviceId: serviceId || null,
+          doctorId: doctorId || null,
+          notes, amountCharged: amount, status: 'completed',
+        }),
+      });
+      setServiceId(''); setDoctorId(''); setNotes(''); setAmount(0);
+      onSaved();
+      alert('Visit logged.');
+    } catch (err) { alert(`Failed: ${err.message}`); }
+  };
+
+  return (
+    <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
+      <h3 style={{ marginBottom: '1rem' }}>Log a visit</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+        <div>
+          <label style={labelStyle}>Service</label>
+          <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
+            <option value="">— select —</option>
+            {services.map((s) => <option key={s.id} value={s.id}>{s.name} — ₹{s.basePrice}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Doctor</label>
+          <select value={doctorId} onChange={(e) => setDoctorId(e.target.value)} style={inputStyle}>
+            <option value="">— select —</option>
+            {doctors.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ marginBottom: '0.75rem' }}>
+        <label style={labelStyle}>Visit notes</label>
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} style={{ ...inputStyle, resize: 'vertical' }} />
+      </div>
+      <div style={{ marginBottom: '1rem', width: 200 }}>
+        <label style={labelStyle}>Amount charged (₹)</label>
+        <input type="number" value={amount} onChange={(e) => setAmount(parseFloat(e.target.value) || 0)} style={inputStyle} />
+      </div>
+      <button type="submit" style={{ padding: '0.55rem 1.25rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Save visit</button>
+    </form>
+  );
+}
+
+const labelStyle = { display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' };
+const inputStyle = { width: '100%', padding: '0.55rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };

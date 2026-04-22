@@ -58,3 +58,8 @@ test-results/
 # Build artifacts
 frontend/dist.zip
 screenshot77.png
+
+# Local scratch (Fathom transcript dumps, etc.)
+e2e/fathom_*.txt
+e2e/fathom_*.html
+e2e/fetch_fathom.js

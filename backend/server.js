@@ -190,6 +190,8 @@ const funnelRoutes = require("./routes/funnel");
 const zapierRoutes = require("./routes/zapier");
 const voiceTranscriptionRoutes = require("./routes/voice_transcription");
 const emailThreadingRoutes = require("./routes/email_threading");
+// Wellness vertical (Enhanced Wellness, future clinic clients)
+const wellnessRoutes = require("./routes/wellness");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -302,6 +304,8 @@ app.use("/api/funnel", funnelRoutes);
 app.use("/api/zapier", zapierRoutes);
 app.use("/api/voice-transcription", voiceTranscriptionRoutes);
 app.use("/api/email-threading", emailThreadingRoutes);
+// Wellness vertical
+app.use("/api/wellness", wellnessRoutes);
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);

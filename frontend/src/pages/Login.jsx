@@ -94,7 +94,8 @@ const Login = () => {
     setUser(data.user);
     setToken(data.token);
     if (data.tenant && setTenant) setTenant(data.tenant);
-    navigate('/dashboard');
+    const landing = data.tenant?.vertical === 'wellness' ? '/wellness' : '/dashboard';
+    navigate(landing);
   };
 
   const handleLogin = async (e) => {

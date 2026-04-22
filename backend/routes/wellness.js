@@ -7,9 +7,30 @@
  * Mounted at: /api/wellness
  */
 const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const prisma = require("../lib/prisma");
+const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
 
 const router = express.Router();
+
+// Multer storage for visit photos: uploads/wellness/visits/<visitId>/<filename>
+const photoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const visitId = req.params.id;
+      const dir = path.join(__dirname, "..", "uploads", "wellness", "visits", String(visitId));
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (_req, file, cb) => {
+      const safe = `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      cb(null, safe);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per photo
+});
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -227,6 +248,86 @@ router.put("/visits/:id", async (req, res) => {
   } catch (e) {
     console.error("[wellness] update visit error:", e.message);
     res.status(500).json({ error: "Failed to update visit" });
+  }
+});
+
+// ── Visit photos (before/after) ────────────────────────────────────
+
+router.post("/visits/:id/photos", photoUpload.array("photos", 10), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const visit = await prisma.visit.findFirst({ where: tenantWhere(req, { id }) });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+
+    const which = req.body.kind === "after" ? "photosAfter" : "photosBefore";
+    const existing = visit[which] ? JSON.parse(visit[which]) : [];
+    const added = (req.files || []).map((f) => `/uploads/wellness/visits/${id}/${path.basename(f.path)}`);
+    const merged = [...existing, ...added];
+
+    const updated = await prisma.visit.update({
+      where: { id },
+      data: { [which]: JSON.stringify(merged) },
+    });
+    res.status(201).json({ kind: which, urls: merged, added });
+  } catch (e) {
+    console.error("[wellness] photo upload error:", e.message);
+    res.status(500).json({ error: "Photo upload failed" });
+  }
+});
+
+router.delete("/visits/:id/photos", async (req, res) => {
+  // Body: { url, kind }
+  try {
+    const id = parseInt(req.params.id);
+    const { url, kind = "before" } = req.body;
+    const visit = await prisma.visit.findFirst({ where: tenantWhere(req, { id }) });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+    const field = kind === "after" ? "photosAfter" : "photosBefore";
+    const existing = visit[field] ? JSON.parse(visit[field]) : [];
+    const next = existing.filter((u) => u !== url);
+    await prisma.visit.update({ where: { id }, data: { [field]: JSON.stringify(next) } });
+    res.json({ ok: true, urls: next });
+  } catch (e) {
+    res.status(500).json({ error: "Photo delete failed" });
+  }
+});
+
+// ── Inventory consumption per visit ────────────────────────────────
+
+router.get("/visits/:id/consumptions", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const items = await prisma.serviceConsumption.findMany({
+      where: tenantWhere(req, { visitId: id }),
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(items);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to list consumption items" });
+  }
+});
+
+router.post("/visits/:id/consumptions", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const visit = await prisma.visit.findFirst({ where: tenantWhere(req, { id }) });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+
+    const { productName, qty = 1, unitCost = 0, productId } = req.body;
+    if (!productName) return res.status(400).json({ error: "productName required" });
+
+    const c = await prisma.serviceConsumption.create({
+      data: {
+        productName, qty: parseInt(qty) || 1, unitCost: parseFloat(unitCost) || 0,
+        visitId: id,
+        productId: productId ? parseInt(productId) : null,
+        tenantId: req.user.tenantId,
+      },
+    });
+    res.status(201).json(c);
+  } catch (e) {
+    console.error("[wellness] consumption add error:", e.message);
+    res.status(500).json({ error: "Failed to add consumption item" });
   }
 });
 
@@ -451,10 +552,25 @@ router.post("/recommendations/:id/approve", async (req, res) => {
       where: { id },
       data: { status: "approved", resolvedById: req.user.id, resolvedAt: new Date() },
     });
-    res.json(updated);
+    // Dispatch the approved action (best-effort — don't block the response)
+    let actionResult = null;
+    try { actionResult = await executeApproved(updated, { actorUserId: req.user.id }); }
+    catch (e) { console.error("[orchestrator] dispatch failed:", e.message); }
+    res.json({ ...updated, _actionResult: actionResult });
   } catch (e) {
     console.error("[wellness] approve recommendation error:", e.message);
     res.status(500).json({ error: "Failed to approve" });
+  }
+});
+
+// Manual orchestrator trigger — useful for demos and testing
+router.post("/orchestrator/run", async (req, res) => {
+  try {
+    const result = await runForTenant(req.user.tenantId);
+    res.json(result);
+  } catch (e) {
+    console.error("[orchestrator] manual run failed:", e.message);
+    res.status(500).json({ error: "Failed to run orchestrator", detail: e.message });
   }
 });
 
@@ -531,6 +647,152 @@ router.put("/locations/:id", async (req, res) => {
   } catch (e) {
     console.error("[wellness] update location error:", e.message);
     res.status(500).json({ error: "Failed to update location" });
+  }
+});
+
+// ── Reports: P&L per service / per-professional / per-location ─────
+//
+// All reports accept ?from=&to=&locationId= filters. Default window: last 30 days.
+
+const reportRange = (req) => {
+  const to = req.query.to ? new Date(req.query.to) : new Date();
+  const from = req.query.from ? new Date(req.query.from) : new Date(Date.now() - 30 * 86400000);
+  return { from, to };
+};
+
+router.get("/reports/pnl-by-service", async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const { from, to } = reportRange(req);
+    const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
+
+    const visitWhere = { tenantId, visitDate: { gte: from, lte: to }, status: "completed" };
+    if (locationId) visitWhere.locationId = locationId;
+
+    const visits = await prisma.visit.findMany({
+      where: visitWhere,
+      select: { serviceId: true, amountCharged: true, doctorId: true },
+    });
+    const services = await prisma.service.findMany({
+      where: { tenantId },
+      select: { id: true, name: true, category: true, ticketTier: true, basePrice: true },
+    });
+    const consumptions = await prisma.serviceConsumption.findMany({
+      where: { tenantId, createdAt: { gte: from, lte: to } },
+      select: { visitId: true, qty: true, unitCost: true },
+    });
+    const visitIdToCost = {};
+    for (const c of consumptions) {
+      visitIdToCost[c.visitId] = (visitIdToCost[c.visitId] || 0) + (c.qty * c.unitCost);
+    }
+
+    const acc = {};
+    for (const v of visits) {
+      if (!v.serviceId) continue;
+      const s = services.find((x) => x.id === v.serviceId);
+      if (!s) continue;
+      if (!acc[s.id]) acc[s.id] = { id: s.id, name: s.name, category: s.category, ticketTier: s.ticketTier, count: 0, revenue: 0, productCost: 0 };
+      acc[s.id].count += 1;
+      acc[s.id].revenue += parseFloat(v.amountCharged) || 0;
+      acc[s.id].productCost += visitIdToCost[v.id || -1] || 0;
+    }
+    const rows = Object.values(acc)
+      .map((r) => ({ ...r, contribution: r.revenue - r.productCost }))
+      .sort((a, b) => b.revenue - a.revenue);
+
+    res.json({
+      window: { from, to, locationId: locationId || null },
+      totals: {
+        visits: rows.reduce((s, r) => s + r.count, 0),
+        revenue: rows.reduce((s, r) => s + r.revenue, 0),
+        productCost: rows.reduce((s, r) => s + r.productCost, 0),
+        contribution: rows.reduce((s, r) => s + r.contribution, 0),
+      },
+      rows,
+    });
+  } catch (e) {
+    console.error("[reports] pnl-by-service:", e.message);
+    res.status(500).json({ error: "Failed to compute P&L" });
+  }
+});
+
+router.get("/reports/per-professional", async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const { from, to } = reportRange(req);
+    const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
+
+    const visitWhere = { tenantId, visitDate: { gte: from, lte: to }, status: "completed" };
+    if (locationId) visitWhere.locationId = locationId;
+
+    const visits = await prisma.visit.findMany({
+      where: visitWhere,
+      select: { doctorId: true, amountCharged: true, serviceId: true },
+    });
+    const doctors = await prisma.user.findMany({
+      where: { tenantId },
+      select: { id: true, name: true, email: true, role: true, wellnessRole: true },
+    });
+
+    const acc = {};
+    for (const v of visits) {
+      if (!v.doctorId) continue;
+      const d = doctors.find((x) => x.id === v.doctorId);
+      if (!d) continue;
+      if (!acc[d.id]) acc[d.id] = { id: d.id, name: d.name, role: d.role, wellnessRole: d.wellnessRole, visits: 0, revenue: 0 };
+      acc[d.id].visits += 1;
+      acc[d.id].revenue += parseFloat(v.amountCharged) || 0;
+    }
+    const rows = Object.values(acc).sort((a, b) => b.revenue - a.revenue);
+    res.json({
+      window: { from, to, locationId: locationId || null },
+      totals: { visits: rows.reduce((s, r) => s + r.visits, 0), revenue: rows.reduce((s, r) => s + r.revenue, 0) },
+      rows,
+    });
+  } catch (e) {
+    console.error("[reports] per-professional:", e.message);
+    res.status(500).json({ error: "Failed to compute per-professional report" });
+  }
+});
+
+router.get("/reports/per-location", async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const { from, to } = reportRange(req);
+
+    const visits = await prisma.visit.findMany({
+      where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
+      select: { locationId: true, amountCharged: true },
+    });
+    const patients = await prisma.patient.groupBy({
+      by: ["locationId"], where: { tenantId }, _count: { _all: true },
+    });
+    const locations = await prisma.location.findMany({
+      where: { tenantId }, select: { id: true, name: true, city: true, state: true, isActive: true },
+    });
+
+    const visitAcc = {};
+    for (const v of visits) {
+      const k = v.locationId ?? 0;
+      if (!visitAcc[k]) visitAcc[k] = { visits: 0, revenue: 0 };
+      visitAcc[k].visits += 1;
+      visitAcc[k].revenue += parseFloat(v.amountCharged) || 0;
+    }
+    const rows = locations.map((l) => ({
+      id: l.id, name: l.name, city: l.city, state: l.state, isActive: l.isActive,
+      visits: visitAcc[l.id]?.visits || 0,
+      revenue: visitAcc[l.id]?.revenue || 0,
+      patients: patients.find((p) => p.locationId === l.id)?._count?._all || 0,
+    })).sort((a, b) => b.revenue - a.revenue);
+
+    res.json({
+      window: { from, to },
+      totals: { visits: rows.reduce((s, r) => s + r.visits, 0), revenue: rows.reduce((s, r) => s + r.revenue, 0) },
+      rows,
+    });
+  } catch (e) {
+    console.error("[reports] per-location:", e.message);
+    res.status(500).json({ error: "Failed to compute per-location report" });
   }
 });
 
@@ -628,6 +890,81 @@ router.get("/dashboard", async (req, res) => {
   } catch (e) {
     console.error("[wellness] dashboard error:", e.message);
     res.status(500).json({ error: "Failed to load dashboard" });
+  }
+});
+
+// ── Public booking endpoints (no auth) ─────────────────────────────
+// Mounted at /api/wellness/public/* in server.js after these routes get split out.
+// These specific 3 endpoints are added to the open paths list so they bypass
+// the JWT guard.
+
+router.get("/public/tenant/:slug", async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: req.params.slug },
+      select: { id: true, name: true, slug: true, vertical: true, country: true, defaultCurrency: true, locale: true },
+    });
+    if (!tenant || tenant.vertical !== "wellness") return res.status(404).json({ error: "Clinic not found" });
+
+    const [services, locations] = await Promise.all([
+      prisma.service.findMany({
+        where: { tenantId: tenant.id, isActive: true },
+        select: { id: true, name: true, category: true, basePrice: true, durationMin: true, description: true, ticketTier: true },
+        orderBy: [{ category: "asc" }, { name: "asc" }],
+      }),
+      prisma.location.findMany({
+        where: { tenantId: tenant.id, isActive: true },
+        select: { id: true, name: true, addressLine: true, city: true, state: true, pincode: true, phone: true, hours: true },
+      }),
+    ]);
+    res.json({ tenant, services, locations });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load clinic profile" });
+  }
+});
+
+router.post("/public/book", async (req, res) => {
+  try {
+    const { tenantSlug, serviceId, locationId, name, phone, email, preferredSlot, notes } = req.body;
+    if (!tenantSlug || !serviceId || !name || !phone) {
+      return res.status(400).json({ error: "tenantSlug, serviceId, name, phone required" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+    if (!tenant || tenant.vertical !== "wellness") return res.status(404).json({ error: "Clinic not found" });
+    const service = await prisma.service.findFirst({ where: { id: parseInt(serviceId), tenantId: tenant.id } });
+    if (!service) return res.status(400).json({ error: "Invalid service" });
+
+    // Create or find a Patient by phone
+    let patient = await prisma.patient.findFirst({
+      where: { tenantId: tenant.id, phone: { contains: phone.slice(-10) } },
+    });
+    if (!patient) {
+      patient = await prisma.patient.create({
+        data: {
+          name, phone, email: email || null,
+          source: "public-booking",
+          tenantId: tenant.id,
+          locationId: locationId ? parseInt(locationId) : null,
+        },
+      });
+    }
+    // Create the visit (status=booked)
+    const visit = await prisma.visit.create({
+      data: {
+        visitDate: preferredSlot ? new Date(preferredSlot) : new Date(Date.now() + 24 * 3600000),
+        status: "booked",
+        notes: notes || null,
+        patientId: patient.id,
+        serviceId: service.id,
+        locationId: locationId ? parseInt(locationId) : (await prisma.location.findFirst({ where: { tenantId: tenant.id, isActive: true } }))?.id || null,
+        amountCharged: service.basePrice,
+        tenantId: tenant.id,
+      },
+    });
+    res.status(201).json({ ok: true, visit, patient: { id: patient.id, name: patient.name } });
+  } catch (e) {
+    console.error("[wellness] public booking failed:", e.message);
+    res.status(500).json({ error: "Booking failed", detail: e.message });
   }
 });
 

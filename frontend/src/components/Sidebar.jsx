@@ -68,8 +68,8 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
       {/* Clinical */}
       <div style={sectionLabel}>Clinical</div>
       <Link to="/wellness/patients" icon={HeartPulse} label="Patients" />
+      <Link to="/wellness/calendar" icon={Calendar} label="Calendar" />
       <Link to="/wellness/services" icon={Stethoscope} label="Service Catalog" />
-      <Link to="/calendar-sync" icon={Calendar} label="Calendar" />
       <Link to="/booking-pages" icon={PanelTop} label="Booking Pages" />
       <Link to="/signatures" icon={FileSignature} label="E-Signatures" />
 
@@ -98,7 +98,8 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
 
       {/* Reports */}
       <div style={sectionLabel}>Reports</div>
-      <Link to="/reports" icon={BarChart3} label="Reports" managerOnly />
+      <Link to="/wellness/reports" icon={BarChart3} label="P&L Reports" managerOnly />
+      <Link to="/reports" icon={BarChart3} label="Generic Reports" managerOnly />
       <Link to="/agent-reports" icon={Trophy} label="Staff Reports" managerOnly />
       <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
       <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly />

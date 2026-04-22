@@ -82,6 +82,9 @@ const WellnessPatients = lazy(() => import('./pages/wellness/Patients'));
 const WellnessPatientDetail = lazy(() => import('./pages/wellness/PatientDetail'));
 const WellnessServices = lazy(() => import('./pages/wellness/Services'));
 const WellnessLocations = lazy(() => import('./pages/wellness/Locations'));
+const WellnessCalendar = lazy(() => import('./pages/wellness/Calendar'));
+const WellnessReports = lazy(() => import('./pages/wellness/Reports'));
+const WellnessPublicBooking = lazy(() => import('./pages/wellness/PublicBooking'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -127,6 +130,7 @@ export default function App() {
             <Route path="/signup" element={!token ? <Signup /> : <Navigate to="/dashboard" />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/portal" element={<Portal />} />
+            <Route path="/book/:slug" element={<WellnessPublicBooking />} />
             <Route path="/" element={!token ? <Landing /> : <Navigate to="/dashboard" />} />
             <Route path="/*" element={token ? <Layout /> : <Navigate to="/login" />}>
               <Route path="dashboard" element={<Dashboard />} />
@@ -205,6 +209,8 @@ export default function App() {
               <Route path="wellness/patients/:id" element={<WellnessPatientDetail />} />
               <Route path="wellness/services" element={<WellnessServices />} />
               <Route path="wellness/locations" element={<WellnessLocations />} />
+              <Route path="wellness/calendar" element={<WellnessCalendar />} />
+              <Route path="wellness/reports" element={<WellnessReports />} />
             </Route>
           </Routes>
         </Suspense>

@@ -19,6 +19,7 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
 const externalAuth = require("../middleware/externalAuth");
+const { classifyLead } = require("../lib/leadJunkFilter");
 
 const router = express.Router();
 
@@ -200,31 +201,43 @@ router.post("/leads", async (req, res) => {
       return res.status(400).json({ error: "name, phone, or email required", code: "INSUFFICIENT_IDENTITY" });
     }
 
+    // Run the junk filter before persisting (rules + optional Gemini AI)
+    const verdict = await classifyLead({
+      tenantId: req.tenantId,
+      name, phone, email, source,
+    });
+
     const contact = await prisma.contact.create({
       data: {
         name: name || (phone ? `Caller ${phone}` : "Unknown caller"),
         email: email || `lead-${Date.now()}@inbound.local`,
         phone: phone || null,
-        status: "Lead",
+        status: verdict.isJunk ? "Junk" : "Lead",
         source: source || "callified",
         firstTouchSource: source || "callified",
+        aiScore: verdict.score,
         tenantId: req.tenantId,
       },
     });
 
-    // Attach an activity so the CRM's inbox shows the origin
-    if (note || utm) {
+    // Attach an activity so the CRM's inbox shows the origin + junk verdict
+    const activityBits = [
+      note,
+      utm && `utm=${JSON.stringify(utm)}`,
+      verdict.reasons.length && `junk-filter: ${verdict.reasons.join("; ")}`,
+    ].filter(Boolean);
+    if (activityBits.length) {
       await prisma.activity.create({
         data: {
-          type: "Note",
-          description: [note, utm && `utm=${JSON.stringify(utm)}`].filter(Boolean).join(" | "),
+          type: verdict.isJunk ? "JunkFilter" : "Note",
+          description: activityBits.join(" | "),
           contactId: contact.id,
           tenantId: req.tenantId,
         },
       });
     }
 
-    res.status(201).json(contact);
+    res.status(201).json({ ...contact, _verdict: verdict });
   } catch (e) {
     console.error("[external] create lead:", e.message);
     // Unique-violation on email → return the existing contact so partner can continue

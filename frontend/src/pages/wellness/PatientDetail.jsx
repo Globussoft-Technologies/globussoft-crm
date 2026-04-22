@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus } from 'lucide-react';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 
 const tabStyle = (active) => ({
@@ -67,6 +67,8 @@ export default function PatientDetail() {
         <button style={tabStyle(tab === 'consent')} onClick={() => setTab('consent')}><FileSignature size={14} /> Consent form</button>
         <button style={tabStyle(tab === 'plans')} onClick={() => setTab('plans')}><ClipboardList size={14} /> Treatment plans</button>
         <button style={tabStyle(tab === 'visit')} onClick={() => setTab('visit')}><Plus size={14} /> Log visit</button>
+        <button style={tabStyle(tab === 'photos')} onClick={() => setTab('photos')}><Camera size={14} /> Photos</button>
+        <button style={tabStyle(tab === 'inventory')} onClick={() => setTab('inventory')}><Package size={14} /> Inventory used</button>
       </div>
 
       {tab === 'history' && <CaseHistoryTab patient={patient} />}
@@ -74,6 +76,8 @@ export default function PatientDetail() {
       {tab === 'consent' && <ConsentTab patient={patient} services={services} onSaved={load} />}
       {tab === 'plans' && <PlansTab patient={patient} services={services} onSaved={load} />}
       {tab === 'visit' && <LogVisitTab patient={patient} services={services} doctors={doctors} onSaved={load} />}
+      {tab === 'photos' && <PhotosTab patient={patient} onSaved={load} />}
+      {tab === 'inventory' && <InventoryTab patient={patient} onSaved={load} />}
     </div>
   );
 }
@@ -448,6 +452,194 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
       </div>
       <button type="submit" style={{ padding: '0.55rem 1.25rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Save visit</button>
     </form>
+  );
+}
+
+// ── Photos tab — before/after upload per visit ────────────────────
+
+function PhotosTab({ patient, onSaved }) {
+  const [visitId, setVisitId] = useState(patient.visits[0]?.id || '');
+  const [kind, setKind] = useState('before');
+  const [uploading, setUploading] = useState(false);
+
+  const visit = patient.visits.find((v) => v.id === parseInt(visitId));
+  const before = visit?.photosBefore ? JSON.parse(visit.photosBefore) : [];
+  const after  = visit?.photosAfter  ? JSON.parse(visit.photosAfter)  : [];
+
+  const upload = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !visitId) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      for (const f of files) fd.append('photos', f);
+      fd.append('kind', kind);
+      const token = localStorage.getItem('token');
+      const r = await fetch(`/api/wellness/visits/${visitId}/photos`, {
+        method: 'POST', body: fd,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) throw new Error(await r.text());
+      e.target.value = '';
+      onSaved();
+    } catch (err) { alert(`Upload failed: ${err.message}`); }
+    setUploading(false);
+  };
+
+  const remove = async (url, k) => {
+    if (!confirm('Delete this photo?')) return;
+    await fetchApi(`/api/wellness/visits/${visitId}/photos`, {
+      method: 'DELETE', body: JSON.stringify({ url, kind: k }),
+    });
+    onSaved();
+  };
+
+  return (
+    <div className="glass" style={{ padding: '1.5rem' }}>
+      <h3 style={{ marginBottom: '1rem' }}>Visit photos</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr auto', gap: '0.5rem', marginBottom: '1rem', alignItems: 'end' }}>
+        <div>
+          <label style={labelStyle}>Visit</label>
+          <select value={visitId} onChange={(e) => setVisitId(e.target.value)} style={inputStyle}>
+            <option value="">— select visit —</option>
+            {patient.visits.map((v) => (
+              <option key={v.id} value={v.id}>
+                {new Date(v.visitDate).toLocaleDateString('en-IN')} — {v.service?.name || 'Consultation'}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Type</label>
+          <select value={kind} onChange={(e) => setKind(e.target.value)} style={inputStyle}>
+            <option value="before">Before</option>
+            <option value="after">After</option>
+          </select>
+        </div>
+        <label style={{ padding: '0.55rem 1rem', background: 'var(--accent-color)', color: '#fff', borderRadius: 8, cursor: 'pointer', display: 'inline-block' }}>
+          {uploading ? 'Uploading…' : 'Upload photos'}
+          <input type="file" multiple accept="image/*" onChange={upload} style={{ display: 'none' }} disabled={!visitId || uploading} />
+        </label>
+      </div>
+
+      {visit && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+          <PhotoColumn title="Before" urls={before} onRemove={(u) => remove(u, 'before')} />
+          <PhotoColumn title="After"  urls={after}  onRemove={(u) => remove(u, 'after')} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PhotoColumn({ title, urls, onRemove }) {
+  return (
+    <div>
+      <h4 style={{ marginBottom: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{title} ({urls.length})</h4>
+      {urls.length === 0 && <div style={{ padding: '1rem', textAlign: 'center', background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: 8, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No photos yet.</div>}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '0.5rem' }}>
+        {urls.map((u) => (
+          <div key={u} style={{ position: 'relative' }}>
+            <img src={u} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }} />
+            <button onClick={() => onRemove(u)} style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.7)', border: 'none', color: '#fff', borderRadius: 4, padding: '2px 4px', cursor: 'pointer' }}>
+              <Trash2 size={10} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Inventory consumption tab ─────────────────────────────────────
+
+function InventoryTab({ patient, onSaved }) {
+  const [visitId, setVisitId] = useState(patient.visits[0]?.id || '');
+  const [items, setItems] = useState([]);
+  const [form, setForm] = useState({ productName: '', qty: 1, unitCost: 0 });
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!visitId) { setItems([]); return; }
+    setLoading(true);
+    fetchApi(`/api/wellness/visits/${visitId}/consumptions`)
+      .then(setItems).catch(() => setItems([])).finally(() => setLoading(false));
+  }, [visitId]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!visitId || !form.productName) return;
+    try {
+      await fetchApi(`/api/wellness/visits/${visitId}/consumptions`, {
+        method: 'POST', body: JSON.stringify(form),
+      });
+      setForm({ productName: '', qty: 1, unitCost: 0 });
+      const next = await fetchApi(`/api/wellness/visits/${visitId}/consumptions`);
+      setItems(next);
+    } catch (err) { alert(`Failed: ${err.message}`); }
+  };
+
+  const totalCost = items.reduce((s, i) => s + i.qty * i.unitCost, 0);
+
+  return (
+    <div className="glass" style={{ padding: '1.5rem' }}>
+      <h3 style={{ marginBottom: '1rem' }}>Inventory used</h3>
+      <div style={{ marginBottom: '1rem' }}>
+        <label style={labelStyle}>Visit</label>
+        <select value={visitId} onChange={(e) => setVisitId(e.target.value)} style={inputStyle}>
+          <option value="">— select visit —</option>
+          {patient.visits.map((v) => (
+            <option key={v.id} value={v.id}>
+              {new Date(v.visitDate).toLocaleDateString('en-IN')} — {v.service?.name || 'Consultation'}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {visitId && (
+        <>
+          {loading && <div>Loading…</div>}
+          {!loading && (
+            <div className="glass" style={{ padding: 0, marginBottom: '1rem', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                    <th style={{ ...labelStyle, padding: '0.6rem 1rem', textAlign: 'left' }}>Product</th>
+                    <th style={{ ...labelStyle, padding: '0.6rem 1rem', textAlign: 'right' }}>Qty</th>
+                    <th style={{ ...labelStyle, padding: '0.6rem 1rem', textAlign: 'right' }}>Unit cost</th>
+                    <th style={{ ...labelStyle, padding: '0.6rem 1rem', textAlign: 'right' }}>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((i) => (
+                    <tr key={i.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem' }}>{i.productName}</td>
+                      <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem', textAlign: 'right' }}>{i.qty}</td>
+                      <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem', textAlign: 'right' }}>₹{i.unitCost.toLocaleString('en-IN')}</td>
+                      <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem', textAlign: 'right', fontWeight: 500 }}>₹{(i.qty * i.unitCost).toLocaleString('en-IN')}</td>
+                    </tr>
+                  ))}
+                  {items.length === 0 && <tr><td colSpan={4} style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No products logged for this visit.</td></tr>}
+                  {items.length > 0 && (
+                    <tr style={{ borderTop: '2px solid rgba(255,255,255,0.08)' }}>
+                      <td colSpan={3} style={{ padding: '0.6rem 1rem', fontWeight: 600, textAlign: 'right' }}>Total cost</td>
+                      <td style={{ padding: '0.6rem 1rem', fontWeight: 600, textAlign: 'right' }}>₹{totalCost.toLocaleString('en-IN')}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <form onSubmit={submit} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '0.5rem', alignItems: 'end' }}>
+            <input placeholder="Product name (e.g. Botox vial 100u)" required value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} style={inputStyle} />
+            <input type="number" min={1} value={form.qty} onChange={(e) => setForm({ ...form, qty: parseInt(e.target.value) || 1 })} style={inputStyle} placeholder="Qty" />
+            <input type="number" min={0} step={0.01} value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: parseFloat(e.target.value) || 0 })} style={inputStyle} placeholder="Unit cost ₹" />
+            <button type="submit" style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Add</button>
+          </form>
+        </>
+      )}
+    </div>
   );
 }
 

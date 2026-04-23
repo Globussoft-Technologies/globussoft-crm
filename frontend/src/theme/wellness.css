@@ -50,30 +50,47 @@
   box-shadow: var(--shadow-sm);
 }
 
-/* Sidebar — tinted teal background, white text */
+/* Sidebar — tinted teal background, cream text.
+ * Overriding the CSS custom properties INSIDE the aside scope means any
+ * `color: var(--text-primary)` inline style (e.g. on NavLink) resolves to
+ * the cream value here, while the rest of the app keeps warm charcoal.
+ * This is the correct fix for the inline-style-wins-over-class problem.
+ */
 [data-vertical="wellness"] aside.glass {
   background: linear-gradient(180deg, #265855 0%, #1F4845 100%) !important;
-  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.10) !important;
+  /* Sidebar-scoped text vars — light on dark teal */
+  --text-primary:   #F5EFE6;
+  --text-secondary: rgba(245, 239, 230, 0.72);
+  --text-tertiary:  rgba(245, 239, 230, 0.50);
+  --border-color:   rgba(255, 255, 255, 0.10);
   color: #F5EFE6;
 }
 [data-vertical="wellness"] aside.glass h1 { color: #FFFFFF; }
+[data-vertical="wellness"] aside.glass a,
 [data-vertical="wellness"] aside.glass .nav-link {
-  color: rgba(245, 239, 230, 0.85);
+  color: #F5EFE6 !important;
 }
-[data-vertical="wellness"] aside.glass .nav-link:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #FFFFFF;
+[data-vertical="wellness"] aside.glass .nav-link svg,
+[data-vertical="wellness"] aside.glass a svg {
+  color: rgba(245, 239, 230, 0.85);
+  stroke: currentColor;
+}
+[data-vertical="wellness"] aside.glass .nav-link:hover,
+[data-vertical="wellness"] aside.glass a:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: #FFFFFF !important;
 }
 [data-vertical="wellness"] aside.glass .nav-link.active {
-  background: rgba(205, 148, 129, 0.25);
-  color: #FFFFFF;
+  background: rgba(205, 148, 129, 0.28);
+  color: #FFFFFF !important;
   border-left: 3px solid #CD9481;
 }
-[data-vertical="wellness"] aside.glass .nav-link svg { opacity: 0.85; }
 
-/* Section headers in sidebar — warm gold */
+/* Section headers in sidebar (CLINICAL / LEADS & REVENUE / etc.) — warm gold */
 [data-vertical="wellness"] aside.glass [style*="textTransform"] {
-  color: #CD9481 !important;
+  color: #E0A68B !important;
+  font-weight: 700 !important;
 }
 
 /* Header bar — warm white */

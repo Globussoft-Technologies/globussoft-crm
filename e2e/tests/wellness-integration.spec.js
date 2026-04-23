@@ -74,8 +74,8 @@ test.describe.serial('Wellness integration — Concurrent race conditions', () =
     expect(v.id).toBeTruthy();
 
     const [r1, r2] = await Promise.all([
-      request.put(`${API}/wellness/visits/${v.id}`, { headers: auth(), data: { status: 'completed', notes: 'writer-A' } }),
-      request.put(`${API}/wellness/visits/${v.id}`, { headers: auth(), data: { status: 'cancelled', notes: 'writer-B' } }),
+      request.put(`${API}/wellness/visits/${v.id}`, { headers: auth(), data: { status: 'completed', notes: 'Patient completed PRP session, took aftercare kit' } }),
+      request.put(`${API}/wellness/visits/${v.id}`, { headers: auth(), data: { status: 'cancelled', notes: 'Patient cancelled — rescheduled for next week' } }),
     ]);
     // At least one should succeed
     expect(r1.ok() || r2.ok()).toBeTruthy();
@@ -83,15 +83,15 @@ test.describe.serial('Wellness integration — Concurrent race conditions', () =
     // Final DB state must be exactly one of the two posted combos — no merge
     const final = await (await request.get(`${API}/wellness/visits/${v.id}`, { headers: auth() })).json();
     expect(['completed', 'cancelled']).toContain(final.status);
-    // notes should match the status (writer-A ↔ completed, writer-B ↔ cancelled)
+    // notes should match the status (Patient completed PRP session, took aftercare kit ↔ completed, Patient cancelled — rescheduled for next week ↔ cancelled)
     // OR at minimum be one of the two writers (no merged string)
-    expect(['writer-A', 'writer-B']).toContain(final.notes);
+    expect(['Patient completed PRP session, took aftercare kit', 'Patient cancelled — rescheduled for next week']).toContain(final.notes);
   });
 
   test('3. Two parallel external/leads with same email → both point to same contact.id (dedupe)', async ({ request }) => {
     const email = `dup-${Date.now()}@racecond.test`;
     const body = {
-      name: 'Dedupe Race',
+      name: 'Ananya Joshi',
       phone: `+9198${Date.now().toString().slice(-8)}`,
       email,
       source: 'website-form',
@@ -188,7 +188,7 @@ test.describe('Wellness integration — Error response shape', () => {
   test('7. POST /v1/external/leads without X-API-Key → 401 JSON', async ({ request }) => {
     const r = await request.post(`${EXT}/leads`, {
       headers: { 'Content-Type': 'application/json' },
-      data: { name: 'no-key', phone: '+919812345678' },
+      data: { name: 'Ishaan Verma', phone: '+919812345678' },
     });
     expect([401, 403]).toContain(r.status());
     expectJsonError(r);

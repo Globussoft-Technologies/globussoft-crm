@@ -134,7 +134,7 @@ test.describe.serial('Wellness auth edge — concurrency + 5xx hygiene', () => {
     const phone = `+9197${Date.now().toString().slice(-8)}`;
     const created = await request.post(`${API}/wellness/patients`, {
       headers,
-      data: { name: 'Dispose Race Patient', phone, source: 'website-form' },
+      data: { name: 'Reyansh Kumar', phone, source: 'website-form' },
     });
     expect(created.ok()).toBeTruthy();
 

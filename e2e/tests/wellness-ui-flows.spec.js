@@ -216,14 +216,14 @@ test('6. Public booking flow on /book/enhanced-wellness completes', async ({ pag
 
   // Step 3 — fill name + phone, confirm
   await expect(page.getByText(/Your details/i)).toBeVisible({ timeout: 10000 });
-  await page.locator('input[placeholder*="Your name"]').fill('E2E UI Booker');
+  await page.locator('input[placeholder*="Your name"]').fill('Aarav Sharma');
   await page.locator('input[placeholder*="Phone"]').fill(`98765${Date.now().toString().slice(-5)}`);
 
   await page.getByRole('button', { name: /Confirm booking/i }).click();
 
   // Either the green check-mark confirmation or the "Booking confirmed" heading
   await expect(page.getByRole('heading', { name: /Booking confirmed/i })).toBeVisible({ timeout: 20000 });
-  await expect(page.getByText(/E2E UI Booker/i)).toBeVisible();
+  await expect(page.getByText(/Aarav Sharma/i)).toBeVisible();
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -235,12 +235,12 @@ test('7. Embed lead-form submission shows the Thanks message', async ({ page }) 
   await page.waitForLoadState('domcontentloaded');
 
   await expect(page.getByRole('heading', { name: /UI Flow Embed/i })).toBeVisible({ timeout: 10000 });
-  await page.locator('input[name="name"]').fill('E2E Embed Submitter');
+  await page.locator('input[name="name"]').fill('Diya Verma');
   await page.locator('input[name="phone"]').fill(`97${Date.now().toString().slice(-8)}`);
   await page.getByRole('button', { name: /Request a callback/i }).click();
 
   // The success card uses "Thanks <name>!" — assert that copy appears
-  await expect(page.getByText(/Thanks E2E Embed Submitter/i)).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText(/Thanks Diya Verma/i)).toBeVisible({ timeout: 15000 });
 });
 
 // ─────────────────────────────────────────────────────────────────────

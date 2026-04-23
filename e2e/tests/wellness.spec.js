@@ -201,9 +201,9 @@ test.describe.serial('Wellness — Patient + Visit + Prescription create flow', 
     const res = await request.post(`${API}/wellness/patients`, {
       headers: headers(),
       data: {
-        name: 'E2E Patient',
+        name: 'Aarav Sharma',
         phone: `+9198999${Date.now().toString().slice(-5)}`,
-        email: `e2e-patient-${Date.now()}@test.local`,
+        email: `aarav.sharma.${Date.now()}@gmail.com`,
         gender: 'M',
         source: 'website-form',
       },
@@ -211,7 +211,7 @@ test.describe.serial('Wellness — Patient + Visit + Prescription create flow', 
     expect(res.ok()).toBeTruthy();
     const p = await res.json();
     expect(p.id).toBeTruthy();
-    expect(p.name).toBe('E2E Patient');
+    expect(p.name).toBe('Aarav Sharma');
     createdPatientId = p.id;
   });
 
@@ -223,7 +223,7 @@ test.describe.serial('Wellness — Patient + Visit + Prescription create flow', 
       data: {
         patientId: createdPatientId,
         serviceId: services[0].id,
-        notes: 'E2E test visit',
+        notes: 'Initial consultation. Patient considering PRP for early hair thinning. Discussed 6-session protocol.',
         amountCharged: 1500,
         status: 'completed',
       },
@@ -240,8 +240,11 @@ test.describe.serial('Wellness — Patient + Visit + Prescription create flow', 
       data: {
         visitId: createdVisitId,
         patientId: createdPatientId,
-        drugs: [{ name: 'Test Drug', dosage: '1 tablet', frequency: 'daily', duration: '7 days' }],
-        instructions: 'Take with water',
+        drugs: [
+          { name: 'Minoxidil 5%', dosage: '1 ml', frequency: 'twice daily', duration: '12 weeks' },
+          { name: 'Finasteride 1mg', dosage: '1 tablet', frequency: 'once daily after meals', duration: '12 weeks' },
+        ],
+        instructions: 'Apply minoxidil to dry scalp morning + night. Take finasteride after dinner. Avoid scratching.',
       },
     });
     expect(res.ok()).toBeTruthy();
@@ -314,7 +317,7 @@ test.describe.serial('Wellness — External Partner API (Callified flow)', () =>
     const res = await request.post(`${EXT}/leads`, {
       headers: { 'X-API-Key': PARTNER_KEY, 'Content-Type': 'application/json' },
       data: {
-        name: 'E2E Inbound Lead',
+        name: 'Vivaan Patel',
         phone: '+919876511234',
         email: `e2e-ext-${Date.now()}@test.local`,
         source: 'website-form',
@@ -526,8 +529,8 @@ test.describe.serial('Wellness — Reports + Junk filter + Auto-route + Public b
       data: {
         tenantSlug: 'enhanced-wellness',
         serviceId: svc.id, locationId: loc.id,
-        name: 'E2E Public Booker', phone: `+9197${Date.now().toString().slice(-8)}`,
-        notes: 'E2E test booking',
+        name: 'Anika Singh', phone: `+9197${Date.now().toString().slice(-8)}`,
+        notes: 'Saw your Instagram post about HydraFacial. Would prefer weekend.',
       },
     });
     expect(res.ok()).toBeTruthy();
@@ -560,13 +563,13 @@ test.describe.serial('Wellness — Patient + Visit UPDATE + reads', () => {
     // Create a fresh patient for these tests
     const pr = await request.post(`${API}/wellness/patients`, {
       headers: headers(), data: {
-        name: 'Coverage Patient', phone: `+9198${Date.now().toString().slice(-8)}`,
-        email: `cov-${Date.now()}@test.local`, gender: 'F', source: 'referral',
+        name: 'Sneha Iyer', phone: `+9198${Date.now().toString().slice(-8)}`,
+        email: `sneha.iyer.${Date.now()}@gmail.com`, gender: 'F', source: 'referral',
       },
     });
     patientId = (await pr.json()).id;
     const vr = await request.post(`${API}/wellness/visits`, {
-      headers: headers(), data: { patientId, notes: 'Coverage visit', status: 'completed', amountCharged: 1000 },
+      headers: headers(), data: { patientId, notes: 'Skin consultation — discussed HydraFacial regimen for monthly maintenance.', status: 'completed', amountCharged: 1000 },
     });
     visitId = (await vr.json()).id;
   });
@@ -718,7 +721,7 @@ test.describe.serial('Wellness — Prescriptions + Consents + Treatments + PDFs'
     const services = await (await request.get(`${API}/wellness/services?limit=1`, { headers: headers() })).json();
     const r = await request.post(`${API}/wellness/treatments`, {
       headers: headers(), data: {
-        name: 'E2E Package', totalSessions: 6, totalPrice: 25000,
+        name: 'Hair PRP — 6 session bundle', totalSessions: 6, totalPrice: 25000,
         patientId: patients.patients[0].id, serviceId: services[0].id,
       },
     });
@@ -749,7 +752,7 @@ test.describe.serial('Wellness — Services CRUD + Locations CRUD', () => {
   test('71. POST /services creates a new service', async ({ request }) => {
     const r = await request.post(`${API}/wellness/services`, {
       headers: headers(), data: {
-        name: `E2E Service ${Date.now()}`, category: 'aesthetics',
+        name: `Glow Boost Facial ${Date.now()}`, category: 'aesthetics',
         ticketTier: 'medium', basePrice: 4500, durationMin: 45, targetRadiusKm: 30,
       },
     });
@@ -820,7 +823,7 @@ test.describe.serial('Wellness — Telecaller + Patient Portal + Orchestrator', 
     // Create a Patient whose phone we'll use for portal login
     portalPhone = `+9198${Date.now().toString().slice(-8)}`;
     await request.post(`${API}/wellness/patients`, {
-      headers: headers(), data: { name: 'Portal Tester', phone: portalPhone, source: 'walk-in' },
+      headers: headers(), data: { name: 'Kavita Reddy', phone: portalPhone, source: 'walk-in' },
     });
   });
 
@@ -951,7 +954,7 @@ test.describe.serial('External API — full endpoint coverage', () => {
   test('90. POST /external/leads then GET /contacts/:id returns full detail', async ({ request }) => {
     const create = await request.post(`${EXT}/leads`, {
       headers: { ...H(), 'Content-Type': 'application/json' },
-      data: { name: 'E2E Fetch', phone: `+9197${Date.now().toString().slice(-8)}`, email: `fe-${Date.now()}@test.local` },
+      data: { name: 'Arjun Mehta', phone: `+9197${Date.now().toString().slice(-8)}`, email: `arjun.mehta.${Date.now()}@gmail.com` },
     });
     const c = await create.json();
     extContactId = c.id;
@@ -1014,12 +1017,12 @@ test.describe.serial('External API — full endpoint coverage', () => {
     const email = `dup-${Date.now()}@test.local`;
     const r1 = await request.post(`${EXT}/leads`, {
       headers: { ...H(), 'Content-Type': 'application/json' },
-      data: { name: 'Dup Test', phone: `+9196${Date.now().toString().slice(-8)}`, email },
+      data: { name: 'Saanvi Joshi', phone: `+9196${Date.now().toString().slice(-8)}`, email },
     });
     expect(r1.ok()).toBeTruthy();
     const r2 = await request.post(`${EXT}/leads`, {
       headers: { ...H(), 'Content-Type': 'application/json' },
-      data: { name: 'Dup Test 2', phone: `+9195${Date.now().toString().slice(-8)}`, email },
+      data: { name: 'Saanvi Joshi (re-submit)', phone: `+9195${Date.now().toString().slice(-8)}`, email },
     });
     // Dup returns 200 with _deduped flag OR the original contact
     expect(r2.status()).toBeLessThan(300);

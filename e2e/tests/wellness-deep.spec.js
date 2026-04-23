@@ -227,11 +227,11 @@ test.describe.serial('Wellness deep — Visit photo upload', () => {
     // Create a fresh patient + visit
     const p = await (await request.post(`${API}/wellness/patients`, {
       headers: auth(),
-      data: { name: 'Photo Tester', phone: `+9197${Date.now().toString().slice(-8)}`, source: 'walk-in' },
+      data: { name: 'Diya Sharma', phone: `+9197${Date.now().toString().slice(-8)}`, source: 'walk-in' },
     })).json();
     const v = await (await request.post(`${API}/wellness/visits`, {
       headers: auth(),
-      data: { patientId: p.id, notes: 'Photo test', status: 'completed' },
+      data: { patientId: p.id, notes: 'Botox 30u to forehead. Photographed for before/after.', status: 'completed' },
     })).json();
     visitId = v.id;
   });
@@ -343,7 +343,7 @@ test.describe('Wellness deep — Lead auto-router fallbacks', () => {
     const r = await request.post(`${EXT}/leads`, {
       headers: { 'X-API-Key': PARTNER_KEY, 'Content-Type': 'application/json' },
       data: {
-        name: 'Specialist Match',
+        name: 'Vihaan Gupta',
         phone: `+9198${Date.now().toString().slice(-8)}`,
         email: `spec-${Date.now()}@test.local`,
         source: 'website-form',
@@ -363,7 +363,7 @@ test.describe('Wellness deep — Lead auto-router fallbacks', () => {
     const r = await request.post(`${EXT}/leads`, {
       headers: { 'X-API-Key': PARTNER_KEY, 'Content-Type': 'application/json' },
       data: {
-        name: 'Generic Enquiry',
+        name: 'Pari Nair',
         phone: `+9197${Date.now().toString().slice(-8)}`,
         email: `gen-${Date.now()}@test.local`,
         source: 'whatsapp',

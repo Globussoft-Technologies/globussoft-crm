@@ -18,6 +18,9 @@ model Tenant {
   country         String   @default("US")
   defaultCurrency String   @default("USD")
   locale          String   @default("en-US") // BCP-47 for date/number formatting
+  // Agent C: white-label branding
+  logoUrl         String? // path to uploaded logo, e.g. /uploads/branding/tenant-2/logo.png
+  brandColor      String? // hex like #265855, overrides theme accent when set
   isActive        Boolean  @default(true)
   ownerEmail      String?
   createdAt       DateTime @default(now())
@@ -80,6 +83,11 @@ model Tenant {
   serviceConsumptions  ServiceConsumption[]
   agentRecommendations AgentRecommendation[]
   locations            Location[]
+  // Agent B: waitlist
+  waitlists            Waitlist[]
+  // Agent D: loyalty + referrals
+  loyaltyTransactions  LoyaltyTransaction[]
+  referrals            Referral[]
 }
 
 model User {
@@ -506,14 +514,17 @@ model SequenceEnrollment {
 }
 
 model Product {
-  id          Int             @id @default(autoincrement())
-  name        String
-  sku         String?         @unique
-  description String?
-  price       Float
-  isRecurring Boolean         @default(true) // true = MRR, false = One-Time
-  createdAt   DateTime        @default(now())
-  lineItems   QuoteLineItem[]
+  id           Int             @id @default(autoincrement())
+  name         String
+  sku          String?         @unique
+  description  String?
+  price        Float
+  isRecurring  Boolean         @default(true) // true = MRR, false = One-Time
+  // Agent A: low stock support — threshold=0 disables alerting per product
+  threshold    Int             @default(0)
+  currentStock Int             @default(0)
+  createdAt    DateTime        @default(now())
+  lineItems    QuoteLineItem[]
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1795,10 +1806,15 @@ model Patient {
   locationId Int?
   location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
-  visits         Visit[]
-  prescriptions  Prescription[]
-  consents       ConsentForm[]
-  treatmentPlans TreatmentPlan[]
+  visits              Visit[]
+  prescriptions       Prescription[]
+  consents            ConsentForm[]
+  treatmentPlans      TreatmentPlan[]
+  // Agent B: waitlist back-relation
+  waitlists           Waitlist[]
+  // Agent D: loyalty + referrals back-relations
+  loyaltyTransactions LoyaltyTransaction[]
+  referrals           Referral[]           @relation("ReferrerOf")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1842,6 +1858,9 @@ model Visit {
   photosBefore  String?  @db.Text // JSON array of URLs
   photosAfter   String?  @db.Text // JSON array of URLs
   amountCharged Float?
+
+  // Agent B: telehealth — Jitsi room name (e.g. "gbs-123-john-doe")
+  videoRoom String?
 
   patientId Int
   patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -2022,4 +2041,99 @@ model Location {
 
   @@index([tenantId, isActive])
   @@index([tenantId, city])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Agent A: low stock support
+// Prisma can't extend a model from outside its block, so the actual fields
+// (`threshold`, `currentStock`) are added inline on the existing Product
+// model. Engine: backend/cron/lowStockEngine.js (daily 09:00 IST, wellness).
+// ─────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────
+// Agent B: waitlist
+// Patients who couldn't be slotted on their preferred date go on a
+// waitlist. When a Visit is cancelled, the cancellation hook in
+// PUT /visits/:id finds the first matching waitlist entry (same
+// serviceId, status=waiting) and transitions it to "offered" while
+// queueing an outbound SMS via the existing SmsMessage table.
+// ─────────────────────────────────────────────────────────────────────
+model Waitlist {
+  id                 Int       @id @default(autoincrement())
+  patientId          Int
+  patient            Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  serviceId          Int?
+  locationId         Int?
+  preferredDateRange String? // ISO range "2026-04-25..2026-05-05" or "asap"
+  status             String    @default("waiting") // waiting, offered, booked, expired, cancelled
+  notes              String?   @db.Text
+  offeredAt          DateTime?
+  expiresAt          DateTime?
+  tenantId           Int       @default(1)
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([tenantId, status])
+  @@index([patientId])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Agent B: patient portal OTP
+// Stores 4-digit one-time codes issued via /portal/login/request-otp
+// and validated by /portal/login/verify-otp. Plaintext is acceptable
+// for v1 (10-min expiry, single-use). Indexed by phone+otp for the
+// hot lookup path during verify, and by tenantId+expiresAt for any
+// future cleanup cron.
+// ─────────────────────────────────────────────────────────────────────
+model PatientOtp {
+  id        Int      @id @default(autoincrement())
+  phone     String
+  otp       String // 4-digit code (plaintext OK for v1)
+  used      Boolean  @default(false)
+  expiresAt DateTime
+  tenantId  Int      @default(1)
+  createdAt DateTime @default(now())
+
+  @@index([phone, otp])
+  @@index([tenantId, expiresAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Agent D: loyalty points + referral tracking
+// LoyaltyTransaction is an append-only ledger; balance = SUM(points).
+// Referral lifecycle: pending -> signed_up -> first_visit -> rewarded.
+// ─────────────────────────────────────────────────────────────────────
+model LoyaltyTransaction {
+  id        Int      @id @default(autoincrement())
+  patientId Int
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  type      String // earned, redeemed, expired, referral_bonus, manual_credit
+  points    Int // positive = credit, negative = redemption
+  reason    String? // human description
+  visitId   Int? // optional link to Visit that earned the points
+  tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, patientId, createdAt])
+}
+
+model Referral {
+  id                Int       @id @default(autoincrement())
+  referrerPatientId Int
+  referrer          Patient   @relation("ReferrerOf", fields: [referrerPatientId], references: [id], onDelete: Cascade)
+  referredName      String
+  referredPhone     String
+  referredEmail     String?
+  referredPatientId Int? // populated when referred patient signs up
+  status            String    @default("pending") // pending, signed_up, first_visit, rewarded
+  rewardPoints      Int? // populated when rewarded
+  tenantId          Int       @default(1)
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt         DateTime  @default(now())
+  rewardedAt        DateTime?
+
+  @@index([referrerPatientId])
+  @@index([tenantId, status])
 }

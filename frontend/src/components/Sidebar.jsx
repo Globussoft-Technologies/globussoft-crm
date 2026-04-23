@@ -6,7 +6,7 @@ import {
   UsersRound, FileText, FileSpreadsheet, FolderKanban, DollarSign, Trophy, ShoppingBag, Radio,
   PanelTop, Calendar, Shield, ScrollText, GitBranch, TrendingUp, BookOpen, PenTool, ClipboardList,
   MessageSquare, Eye, BadgePercent, Bot, FileSignature, Award, CreditCard, Sparkles, ExternalLink,
-  PhoneCall, Stethoscope, HeartPulse, Bell,
+  PhoneCall, Stethoscope, HeartPulse, Bell, Clock,
 } from 'lucide-react';
 import { AuthContext } from '../App';
 
@@ -17,6 +17,13 @@ const Sidebar = () => {
   const isManager = role === 'ADMIN' || role === 'MANAGER';
   const isWellness = tenant?.vertical === 'wellness';
   const brand = tenant?.name || 'Globussoft';
+  const logoUrl = tenant?.logoUrl || null;
+  const brandColor = tenant?.brandColor || null;
+  // Inline style applied to wellness section labels — overrides the gold
+  // accent (#E0A68B) defined in wellness.css when a tenant brand color is set.
+  const sectionLabelStyle = brandColor
+    ? { ...sectionLabel, color: brandColor }
+    : sectionLabel;
 
   const Link = ({ to, icon: Icon, label, adminOnly, managerOnly }) => {
     if (adminOnly && !isAdmin) return null;
@@ -41,14 +48,22 @@ const Sidebar = () => {
   return (
     <aside className="glass" style={{ width: '250px', height: '100vh', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', borderRadius: '0', borderLeft: 'none', borderTop: 'none', borderBottom: 'none' }}>
       <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
-        <div style={{ width: '32px', height: '32px', backgroundColor: 'var(--accent-color)', borderRadius: '8px', boxShadow: '0 0 15px var(--accent-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
-          {isWellness ? <HeartPulse size={18} /> : null}
-        </div>
+        {logoUrl ? (
+          <img
+            src={logoUrl}
+            alt={brand}
+            style={{ width: 32, height: 32, borderRadius: 6, objectFit: 'cover' }}
+          />
+        ) : (
+          <div style={{ width: '32px', height: '32px', backgroundColor: brandColor || 'var(--accent-color)', borderRadius: '8px', boxShadow: '0 0 15px var(--accent-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+            {isWellness ? <HeartPulse size={18} /> : null}
+          </div>
+        )}
         <h1 style={{ fontSize: '1.1rem', fontWeight: 'bold', fontFamily: 'var(--font-family)', lineHeight: 1.1 }}>{brand}</h1>
       </div>
 
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}>
-        {isWellness ? renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager }) : renderGenericNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager })}
+        {isWellness ? renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) : renderGenericNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager })}
       </nav>
     </aside>
   );
@@ -56,7 +71,8 @@ const Sidebar = () => {
 
 // ── Wellness sidebar — slim, clinic-focused ───────────────────────
 
-function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager }) {
+function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) {
+  const labelStyle = sectionLabelStyle || sectionLabel;
   return (
     <>
       {/* Daily essentials */}
@@ -66,13 +82,14 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
       <ExtLink href={callifiedUrl} icon={PhoneCall} label="Callified" />
 
       {/* Clinical */}
-      <div style={sectionLabel}>Clinical</div>
+      <div style={labelStyle}>Clinical</div>
       <Link to="/wellness/patients" icon={HeartPulse} label="Patients" />
       <Link to="/wellness/calendar" icon={Calendar} label="Calendar" />
+      <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" />
       <Link to="/wellness/services" icon={Stethoscope} label="Service Catalog" />
 
       {/* Lead-to-revenue */}
-      <div style={sectionLabel}>Leads & Revenue</div>
+      <div style={labelStyle}>Leads & Revenue</div>
       <Link to="/inbox" icon={InboxIcon} label="Unified Inbox" />
       <Link to="/wellness/telecaller" icon={PhoneCall} label="Telecaller Queue" />
       <Link to="/leads" icon={UserPlus} label="All Leads" managerOnly />
@@ -81,27 +98,29 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
       <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
 
       {/* Money — clinic-side, in INR for Indian wellness tenants */}
-      <div style={sectionLabel}>Finance</div>
+      <div style={labelStyle}>Finance</div>
       <Link to="/invoices" icon={Receipt} label="Invoices" />
       <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
 
       {/* Marketing — clinic-side comms (ad campaigns live in AdsGPT) */}
-      <div style={sectionLabel}>Marketing</div>
+      <div style={labelStyle}>Marketing</div>
       <Link to="/marketing" icon={Send} label="SMS / Email Blasts" managerOnly />
       <Link to="/sequences" icon={Network} label="Drip Sequences" managerOnly />
       <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" managerOnly />
 
       {/* Reports — wellness-tuned, generic CRM reports removed */}
-      <div style={sectionLabel}>Reports</div>
+      <div style={labelStyle}>Reports</div>
       <Link to="/wellness/reports" icon={BarChart3} label="P&L + Attribution" managerOnly />
+      <Link to="/wellness/per-location" icon={Building2} label="Per-Location" managerOnly />
+      <Link to="/wellness/loyalty" icon={Award} label="Loyalty + Referrals" managerOnly />
       <Link to="/surveys" icon={ClipboardList} label="Patient Surveys" managerOnly />
       <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
 
       {/* Admin */}
       {isAdmin && (
         <>
-          <div style={sectionLabel}>Admin</div>
+          <div style={labelStyle}>Admin</div>
           <Link to="/wellness/locations" icon={Building2} label="Locations" adminOnly />
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
@@ -112,7 +131,7 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
 
       {!isAdmin && isManager && (
         <>
-          <div style={sectionLabel}>Settings</div>
+          <div style={labelStyle}>Settings</div>
           <Link to="/settings" icon={Settings} label="Settings" />
         </>
       )}

@@ -112,6 +112,9 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
 function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChanged }) {
   return (
     <>
+      {/* Visually-hidden section heading so screen readers see h1 -> h2 hierarchy
+          before the per-service h3 cards (a11y: heading-order). */}
+      <h2 style={srOnly}>Available services</h2>
       {showAdd && (
         <form onSubmit={submit} className="glass" style={{ padding: '1rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem' }}>
           <input placeholder="Service name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
@@ -284,9 +287,9 @@ function PackageBuilder({ services }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}>
       <div className="glass" style={{ padding: '1.5rem' }}>
-        <h3 style={{ fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '1rem' }}>
+        <h2 style={{ fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '1rem' }}>
           <Package size={16} /> Build a package
-        </h3>
+        </h2>
 
         <label style={labelStyle}>Service</label>
         <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
@@ -334,7 +337,7 @@ function PackageBuilder({ services }) {
       </div>
 
       <div className="glass" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem' }}>Package summary</h3>
+        <h2 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem' }}>Package summary</h2>
 
         {!service ? (
           <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Pick a service to see pricing.</div>
@@ -425,4 +428,17 @@ const labelStyle = {
   marginBottom: '0.35rem',
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
+};
+
+// Visually-hidden style for screen-reader-only headings (a11y heading hierarchy).
+const srOnly = {
+  position: 'absolute',
+  width: '1px',
+  height: '1px',
+  padding: 0,
+  margin: '-1px',
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
 };

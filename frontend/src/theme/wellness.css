@@ -25,9 +25,9 @@
   --warning-color:   #D4923B;        /* warm amber */
   --danger-color:    #A8323F;        /* burgundy red — softer than tech red */
 
-  --text-primary:    #2C2825;        /* warm charcoal, not pure black */
-  --text-secondary:  #7A6E66;        /* warm taupe */
-  --text-tertiary:   #A89E96;
+  --text-primary:    #2C2825;        /* warm charcoal, not pure black — ~13.4:1 on #FAF7F2 */
+  --text-secondary:  #5C5046;        /* warm dark taupe — ~7.1:1 on #FAF7F2, clears WCAG AAA */
+  --text-tertiary:   #7A6E66;        /* original secondary, used for de-emphasis only (large text) */
 
   --border-color:    rgba(38, 88, 85, 0.12);
   --border-light:    rgba(38, 88, 85, 0.06);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2 } from 'lucide-react';
+import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { ThemeContext, AuthContext } from '../App';
 
@@ -14,12 +14,71 @@ export default function Settings() {
   const [stagesLoading, setStagesLoading] = useState(true);
   const [tenant, setTenantState] = useState(ctxTenant || null);
   const [tenantSaving, setTenantSaving] = useState(false);
+  // Branding (logo + brand color) — backed by /api/wellness/branding
+  const [branding, setBranding] = useState({ logoUrl: null, brandColor: '' });
+  const [brandingSaving, setBrandingSaving] = useState(false);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [brandingMsg, setBrandingMsg] = useState('');
 
   useEffect(() => {
     fetchApi('/api/tenants/current')
       .then((res) => { setTenantState(res); if (setTenant) setTenant(res); })
       .catch(() => { /* tenant endpoint may not be reachable */ });
+    // Branding lives under /api/wellness/branding (works for any tenant — only the
+    // sidebar conditionally surfaces it on wellness verticals today).
+    fetchApi('/api/wellness/branding')
+      .then((res) => setBranding({ logoUrl: res.logoUrl || null, brandColor: res.brandColor || '' }))
+      .catch(() => { /* branding endpoint may be unavailable for non-wellness tenants */ });
   }, []);
+
+  const handleUploadLogo = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setLogoUploading(true);
+    setBrandingMsg('');
+    try {
+      const fd = new FormData();
+      fd.append('logo', file);
+      const token = localStorage.getItem('token');
+      const resp = await fetch('/api/wellness/branding/logo', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(json.error || 'Upload failed');
+      setBranding((b) => ({ ...b, logoUrl: json.logoUrl }));
+      // Reflect into sidebar instantly
+      if (setTenant && ctxTenant) setTenant({ ...ctxTenant, logoUrl: json.logoUrl });
+      setBrandingMsg('Logo updated.');
+    } catch (err) {
+      setBrandingMsg(err.message || 'Logo upload failed');
+    } finally {
+      setLogoUploading(false);
+    }
+  };
+
+  const handleSaveBrandColor = async () => {
+    setBrandingSaving(true);
+    setBrandingMsg('');
+    try {
+      const value = branding.brandColor || '';
+      if (value && !/^#[0-9a-fA-F]{6}$/.test(value)) {
+        throw new Error('Brand color must be a 6-digit hex (e.g. #265855).');
+      }
+      const res = await fetchApi('/api/wellness/branding/color', {
+        method: 'PUT',
+        body: JSON.stringify({ brandColor: value || null }),
+      });
+      setBranding((b) => ({ ...b, brandColor: res.brandColor || '' }));
+      if (setTenant && ctxTenant) setTenant({ ...ctxTenant, brandColor: res.brandColor || null });
+      setBrandingMsg('Brand color saved.');
+    } catch (err) {
+      setBrandingMsg(err.message || 'Failed to save brand color');
+    } finally {
+      setBrandingSaving(false);
+    }
+  };
 
   const handleSaveTenant = async (e) => {
     e.preventDefault();
@@ -192,6 +251,86 @@ export default function Settings() {
               Switch to {theme === 'dark' ? 'Light' : 'Dark'} Mode
             </button>
           </div>
+        </div>
+
+        {/* Branding Card */}
+        <div className="card" style={{ padding: '2rem' }}>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Palette size={20} color="var(--accent-color)" /> Branding
+          </h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+            Upload your clinic logo and pick a brand color. These appear in the sidebar and on branded PDFs.
+          </p>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', alignItems: 'start' }}>
+            {/* Logo */}
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                <ImageIcon size={14} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} /> Logo
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem' }}>
+                {branding.logoUrl ? (
+                  <img
+                    src={branding.logoUrl}
+                    alt="Current logo"
+                    style={{ width: 56, height: 56, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border-color)' }}
+                  />
+                ) : (
+                  <div style={{ width: 56, height: 56, borderRadius: 8, border: '1px dashed var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+                    <ImageIcon size={20} />
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+                  onChange={handleUploadLogo}
+                  disabled={logoUploading}
+                  style={{ flex: 1, fontSize: '0.85rem' }}
+                />
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                PNG, JPG, GIF, WEBP or SVG. Max 2 MB. Square works best.
+              </p>
+            </div>
+
+            {/* Brand color */}
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                <Palette size={14} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} /> Brand color
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                <input
+                  type="color"
+                  value={/^#[0-9a-fA-F]{6}$/.test(branding.brandColor || '') ? branding.brandColor : '#265855'}
+                  onChange={(e) => setBranding({ ...branding, brandColor: e.target.value })}
+                  style={{ width: 48, height: 40, border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer', padding: 2, background: 'var(--input-bg)' }}
+                />
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="#265855"
+                  value={branding.brandColor || ''}
+                  onChange={(e) => setBranding({ ...branding, brandColor: e.target.value })}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={brandingSaving}
+                  onClick={handleSaveBrandColor}
+                >
+                  {brandingSaving ? 'Saving...' : 'Save color'}
+                </button>
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                6-digit hex. Leave blank to fall back to the default theme accent.
+              </p>
+            </div>
+          </div>
+
+          {brandingMsg && (
+            <p style={{ marginTop: '1rem', fontSize: '0.85rem', color: 'var(--accent-color)' }}>{brandingMsg}</p>
+          )}
         </div>
 
         {/* Pipeline Stages Card */}

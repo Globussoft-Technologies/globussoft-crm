@@ -16,16 +16,16 @@ const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const PARTNER_KEY = process.env.WELLNESS_PARTNER_KEY ||
   'glbs_6ba99bc3309ef840d58d1fd43339e09c62eb395396c6c8cf';
 
-// Rules disabled across the public + login surface (covers the wellness teal theme).
-// `color-contrast` is the only rule disabled per the original brief — gradient backgrounds
-// are intentional and not fixable without redesigning the theme.
-const AXE_PUBLIC_RULES = ['color-contrast'];
+// Rules disabled across the public + login surface.
+// As of Agent D's contrast pass (--text-secondary darkened from #7A6E66 → #5C5046,
+// ~3.8:1 → ~7.1:1 on the cream background), color-contrast is now ENFORCED.
+// Empty array = no rules disabled.
+const AXE_PUBLIC_RULES = [];
 
 // Layout icon buttons (NotificationBell, Logout) and filter dropdowns
 // (location switcher) now have aria-label, so button-name + select-name
-// are enforced on authenticated pages. Color-contrast remains disabled —
-// the wellness teal/cream gradient backgrounds intentionally use a soft
-// secondary text color that just-barely-misses WCAG AA.
+// are enforced on authenticated pages. Color-contrast is now also enforced —
+// the wellness palette was tightened to clear WCAG AA on cream.
 const AXE_AUTH_RULES = AXE_PUBLIC_RULES;
 
 function buildAxe(page, ruleSet = AXE_PUBLIC_RULES) {

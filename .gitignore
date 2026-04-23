@@ -63,3 +63,6 @@ screenshot77.png
 e2e/fathom_*.txt
 e2e/fathom_*.html
 e2e/fetch_fathom.js
+
+# Claude session runtime
+.claude/

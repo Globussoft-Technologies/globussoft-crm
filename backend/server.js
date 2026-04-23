@@ -430,4 +430,8 @@ initAppointmentRemindersCron();
 const { initWellnessOpsCron } = require('./cron/wellnessOpsEngine');
 initWellnessOpsCron();
 
+// Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
+const { initLowStockCron } = require('./cron/lowStockEngine');
+initLowStockCron();
+
 // nodemon restart trigger

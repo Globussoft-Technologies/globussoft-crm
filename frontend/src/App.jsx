@@ -88,6 +88,9 @@ const WellnessReports = lazy(() => import('./pages/wellness/Reports'));
 const WellnessPublicBooking = lazy(() => import('./pages/wellness/PublicBooking'));
 const WellnessTelecallerQueue = lazy(() => import('./pages/wellness/TelecallerQueue'));
 const WellnessPatientPortal = lazy(() => import('./pages/wellness/PatientPortal'));
+const WellnessPerLocation = lazy(() => import('./pages/wellness/PerLocationDashboard'));
+const WellnessLoyalty = lazy(() => import('./pages/wellness/Loyalty'));
+const WellnessWaitlist = lazy(() => import('./pages/wellness/Waitlist'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -223,6 +226,9 @@ export default function App() {
               <Route path="wellness/calendar" element={<WellnessCalendar />} />
               <Route path="wellness/reports" element={<WellnessReports />} />
               <Route path="wellness/telecaller" element={<WellnessTelecallerQueue />} />
+              <Route path="wellness/per-location" element={<WellnessPerLocation />} />
+              <Route path="wellness/loyalty" element={<WellnessLoyalty />} />
+              <Route path="wellness/waitlist" element={<WellnessWaitlist />} />
             </Route>
           </Routes>
         </Suspense>

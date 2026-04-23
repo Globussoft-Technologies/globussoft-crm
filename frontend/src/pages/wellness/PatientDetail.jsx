@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2 } from 'lucide-react';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 
 const tabStyle = (active) => ({
@@ -60,6 +60,9 @@ export default function PatientDetail() {
         </div>
       </div>
 
+      {/* Agent D: loyalty card — sits above the tab list, NOT inside it. */}
+      <LoyaltyCard patientId={patient.id} />
+
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <button style={tabStyle(tab === 'history')} onClick={() => setTab('history')}><Calendar size={14} /> Case history</button>
@@ -69,6 +72,8 @@ export default function PatientDetail() {
         <button style={tabStyle(tab === 'visit')} onClick={() => setTab('visit')}><Plus size={14} /> Log visit</button>
         <button style={tabStyle(tab === 'photos')} onClick={() => setTab('photos')}><Camera size={14} /> Photos</button>
         <button style={tabStyle(tab === 'inventory')} onClick={() => setTab('inventory')}><Package size={14} /> Inventory used</button>
+        {/* Agent B: telehealth tab */}
+        <button style={tabStyle(tab === 'telehealth')} onClick={() => setTab('telehealth')}><Video size={14} /> Telehealth</button>
       </div>
 
       {tab === 'history' && <CaseHistoryTab patient={patient} />}
@@ -78,6 +83,7 @@ export default function PatientDetail() {
       {tab === 'visit' && <LogVisitTab patient={patient} services={services} doctors={doctors} onSaved={load} />}
       {tab === 'photos' && <PhotosTab patient={patient} onSaved={load} />}
       {tab === 'inventory' && <InventoryTab patient={patient} onSaved={load} />}
+      {tab === 'telehealth' && <TelehealthTab patient={patient} onSaved={load} />}
     </div>
   );
 }
@@ -645,3 +651,286 @@ function InventoryTab({ patient, onSaved }) {
 
 const labelStyle = { display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' };
 const inputStyle = { width: '100%', padding: '0.55rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };
+
+// ── Agent D: Loyalty card + modal ─────────────────────────────────
+
+function LoyaltyCard({ patientId }) {
+  const [data, setData] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+
+  const refresh = () => {
+    fetchApi(`/api/wellness/loyalty/${patientId}`)
+      .then(setData)
+      .catch(() => setData(null));
+  };
+
+  useEffect(() => { refresh(); }, [patientId]);
+
+  if (!data) return null;
+
+  return (
+    <>
+      <button
+        onClick={() => setShowModal(true)}
+        className="glass"
+        style={{
+          width: '100%',
+          padding: '0.85rem 1.25rem',
+          marginBottom: '1rem',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          background: 'linear-gradient(90deg, rgba(205,148,129,0.10), rgba(205,148,129,0.04))',
+          border: '1px solid rgba(205,148,129,0.25)',
+          borderRadius: 10,
+          cursor: 'pointer',
+          color: 'var(--text-primary)',
+          textAlign: 'left',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <Award size={20} color="var(--accent-color)" />
+          <div>
+            <strong style={{ fontSize: '0.95rem' }}>Loyalty: {data.balance} points</strong>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginLeft: '0.5rem' }}>
+              · {data.earnedThisMonth} earned this month
+            </span>
+          </div>
+        </div>
+        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>View history →</span>
+      </button>
+
+      {showModal && (
+        <LoyaltyModal patientId={patientId} data={data} onClose={() => setShowModal(false)} onChange={refresh} />
+      )}
+    </>
+  );
+}
+
+function LoyaltyModal({ patientId, data, onClose, onChange }) {
+  const [redeemPoints, setRedeemPoints] = useState(50);
+  const [redeemReason, setRedeemReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const redeem = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await fetchApi(`/api/wellness/loyalty/${patientId}/redeem`, {
+        method: 'POST',
+        body: JSON.stringify({ points: redeemPoints, reason: redeemReason || 'Redemption' }),
+      });
+      setRedeemReason('');
+      onChange();
+    } catch (err) { alert(`Redeem failed: ${err.message}`); }
+    setBusy(false);
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="glass"
+        style={{
+          width: '90%', maxWidth: 600, maxHeight: '85vh', overflow: 'auto',
+          padding: '1.5rem', background: 'var(--surface-color, #fff)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <Award size={18} /> Loyalty history
+          </h2>
+          <button onClick={onClose} aria-label="Close" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Current balance</div>
+          <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--accent-color)' }}>{data.balance} pts</div>
+        </div>
+
+        <form onSubmit={redeem} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 8, marginBottom: '1rem', display: 'grid', gridTemplateColumns: '1fr 2fr auto', gap: '0.4rem', alignItems: 'end' }}>
+          <div>
+            <label style={labelStyle}><Minus size={11} /> Redeem</label>
+            <input type="number" min={1} max={data.balance} value={redeemPoints} onChange={(e) => setRedeemPoints(parseInt(e.target.value) || 0)} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Reason</label>
+            <input value={redeemReason} onChange={(e) => setRedeemReason(e.target.value)} placeholder="e.g. ₹500 service discount" style={inputStyle} />
+          </div>
+          <button type="submit" disabled={busy || data.balance < redeemPoints} style={{ padding: '0.55rem 1rem', background: data.balance < redeemPoints ? 'var(--text-tertiary)' : 'var(--warning-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: data.balance < redeemPoints ? 'not-allowed' : 'pointer' }}>
+            {busy ? '…' : 'Redeem'}
+          </button>
+        </form>
+
+        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem' }}>Recent transactions</h3>
+        {data.transactions.length === 0 ? (
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '1rem', textAlign: 'center' }}>No transactions yet.</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Date</th>
+                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Type</th>
+                <th style={{ textAlign: 'right', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Pts</th>
+                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.transactions.map((tx) => (
+                <tr key={tx.id} style={{ borderTop: '1px solid var(--border-color)' }}>
+                  <td style={{ padding: '0.4rem' }}>{new Date(tx.createdAt).toLocaleDateString('en-IN')}</td>
+                  <td style={{ padding: '0.4rem' }}>{tx.type}</td>
+                  <td style={{ padding: '0.4rem', textAlign: 'right', color: tx.points >= 0 ? 'var(--success-color)' : 'var(--warning-color)', fontWeight: 600 }}>{tx.points >= 0 ? '+' : ''}{tx.points}</td>
+                  <td style={{ padding: '0.4rem', color: 'var(--text-secondary)' }}>{tx.reason || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Agent B: Telehealth tab (Jitsi-embedded video consults) ───────
+function slugifyName(n) {
+  return String(n || 'patient')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'patient';
+}
+
+function TelehealthTab({ patient, onSaved }) {
+  const [activeRoom, setActiveRoom] = useState(null); // string room name
+  const [busyVisitId, setBusyVisitId] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const visits = (patient.visits || []).slice().sort(
+    (a, b) => new Date(b.visitDate) - new Date(a.visitDate),
+  );
+
+  const startOrJoin = async (visit) => {
+    let room = visit.videoRoom;
+    if (!room) {
+      room = `gbs-${visit.id}-${slugifyName(patient.name)}`;
+      setBusyVisitId(visit.id);
+      try {
+        await fetchApi(`/api/wellness/visits/${visit.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ videoRoom: room }),
+        });
+        if (onSaved) onSaved();
+      } catch (e) {
+        alert('Failed to start consult: ' + (e.message || 'unknown error'));
+        setBusyVisitId(null);
+        return;
+      }
+      setBusyVisitId(null);
+    }
+    setActiveRoom(room);
+    setCopied(false);
+  };
+
+  const shareUrl = activeRoom ? `https://meet.jit.si/${activeRoom}` : '';
+
+  const copyLink = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = shareUrl;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+  };
+
+  if (visits.length === 0) {
+    return (
+      <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+        No visits yet — log a visit first to start a video consult.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div className="glass" style={{ padding: '1rem' }}>
+        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+          Each visit can host one video room. Patients join the same link from the patient portal.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {visits.map((v) => {
+            const has = !!v.videoRoom;
+            const isActive = activeRoom && v.videoRoom === activeRoom;
+            return (
+              <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.6rem 0.75rem', background: 'rgba(255,255,255,0.04)', borderRadius: 8, border: isActive ? '1px solid var(--accent-color)' : '1px solid transparent' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 500 }}>
+                    {v.service?.name || 'Visit'} <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>— {new Date(v.visitDate).toLocaleString('en-IN')}</span>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    Status: {v.status}
+                    {has && <> • Room: <code style={{ color: 'var(--accent-color)' }}>{v.videoRoom}</code></>}
+                  </div>
+                </div>
+                <button
+                  onClick={() => startOrJoin(v)}
+                  disabled={busyVisitId === v.id}
+                  style={{ padding: '0.45rem 0.85rem', background: has ? 'var(--success-color)' : 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                >
+                  <Video size={14} />
+                  {busyVisitId === v.id ? 'Starting…' : has ? 'Join video' : 'Start video consult'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {activeRoom && (
+        <div className="glass" style={{ padding: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              Live consult — room <code style={{ color: 'var(--text-primary)' }}>{activeRoom}</code>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button
+                onClick={copyLink}
+                style={{ padding: '0.4rem 0.75rem', background: 'rgba(255,255,255,0.08)', color: 'var(--text-primary)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, cursor: 'pointer', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+              >
+                <Copy size={13} /> {copied ? 'Copied!' : 'Share with patient'}
+              </button>
+              <button
+                onClick={() => setActiveRoom(null)}
+                style={{ padding: '0.4rem 0.75rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', wordBreak: 'break-all' }}>
+            {shareUrl}
+          </div>
+          <iframe
+            title="Telehealth video consult"
+            src={shareUrl}
+            allow="camera; microphone; fullscreen; display-capture; autoplay"
+            style={{ width: '100%', height: 600, border: 0, borderRadius: 8, background: '#000' }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}

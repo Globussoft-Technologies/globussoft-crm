@@ -74,6 +74,8 @@ router.get("/me", async (req, res) => {
       country: req.tenant.country || "US",
       defaultCurrency: req.tenant.defaultCurrency || "USD",
       locale: req.tenant.locale || "en-US",
+      logoUrl: req.tenant.logoUrl,
+      brandColor: req.tenant.brandColor,
     },
     apiKey: { id: req.apiKey.id, name: req.apiKey.name, lastUsed: req.apiKey.lastUsed },
     capabilities: {

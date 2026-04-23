@@ -39,17 +39,49 @@ function Login({ onSuccess }) {
   const [stage, setStage] = useState('phone'); // phone, otp
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // Agent B: real SMS-based OTP — resend cooldown (seconds remaining).
+  const [resendIn, setResendIn] = useState(0);
 
-  const sendOtp = (e) => {
-    e.preventDefault();
+  // Tick the resend cooldown.
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn((s) => Math.max(0, s - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
+
+  const requestOtp = async () => {
     setErr('');
     const digits = phone.replace(/\D/g, '');
     if (digits.length < 10) {
       setErr('Enter a valid 10-digit phone number');
-      return;
+      return false;
     }
-    // v1: mock OTP dispatch — no backend send. Just move to OTP entry.
-    setStage('otp');
+    setBusy(true);
+    try {
+      await portalFetch('/api/wellness/portal/login/request-otp', null, {
+        method: 'POST',
+        body: JSON.stringify({ phone }),
+      });
+      setResendIn(30);
+      return true;
+    } catch (ex) {
+      setErr(ex.message || 'Failed to send code');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendOtp = async (e) => {
+    e.preventDefault();
+    const ok = await requestOtp();
+    if (ok) setStage('otp');
+  };
+
+  const resend = async () => {
+    if (resendIn > 0 || busy) return;
+    setOtp('');
+    await requestOtp();
   };
 
   const verify = async (e) => {
@@ -61,7 +93,7 @@ function Login({ onSuccess }) {
     setBusy(true);
     setErr('');
     try {
-      const d = await portalFetch('/api/wellness/portal/login', null, {
+      const d = await portalFetch('/api/wellness/portal/login/verify-otp', null, {
         method: 'POST',
         body: JSON.stringify({ phone, otp }),
       });
@@ -69,7 +101,13 @@ function Login({ onSuccess }) {
       localStorage.setItem(PORTAL_NAME_KEY, d.patient?.name || '');
       onSuccess(d.token, d.patient);
     } catch (ex) {
-      setErr(ex.message || 'Login failed');
+      // Friendly message for the most common failure modes.
+      const msg = ex.message || '';
+      if (/expired|invalid/i.test(msg)) {
+        setErr('Invalid or expired code. Try resending.');
+      } else {
+        setErr(msg || 'Login failed');
+      }
     } finally {
       setBusy(false);
     }
@@ -118,14 +156,16 @@ function Login({ onSuccess }) {
               style={inputStyle}
             />
             {err && <div style={errStyle}>{err}</div>}
-            <button type="submit" style={btnStyle}>Send code</button>
+            <button type="submit" disabled={busy} style={btnStyle}>
+              {busy ? 'Sending…' : 'Send code'}
+            </button>
           </form>
         )}
 
         {stage === 'otp' && (
           <form onSubmit={verify}>
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-              Code sent to <strong>{phone}</strong>. Enter any 4-digit code (demo).
+              Enter the 4-digit code we sent to <strong>{phone}</strong>.
             </div>
             <label
               style={{
@@ -149,6 +189,24 @@ function Login({ onSuccess }) {
             <button type="submit" disabled={busy} style={btnStyle}>
               {busy ? 'Verifying…' : 'Verify & enter'}
             </button>
+            {/* Agent B: Resend OTP with 30s cooldown */}
+            <button
+              type="button"
+              onClick={resend}
+              disabled={resendIn > 0 || busy}
+              style={{
+                marginTop: '0.5rem',
+                width: '100%',
+                padding: '0.5rem',
+                background: 'transparent',
+                border: 'none',
+                color: resendIn > 0 ? 'var(--text-secondary)' : 'var(--accent-color)',
+                fontSize: '0.85rem',
+                cursor: resendIn > 0 || busy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend OTP'}
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -157,7 +215,7 @@ function Login({ onSuccess }) {
                 setErr('');
               }}
               style={{
-                marginTop: '0.5rem',
+                marginTop: '0.25rem',
                 width: '100%',
                 padding: '0.5rem',
                 background: 'transparent',

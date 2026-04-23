@@ -159,6 +159,33 @@ router.post("/patients", async (req, res) => {
         tenantId: req.user.tenantId,
       },
     });
+
+    // Agent D: when a patient is created with source=referral, link the matching
+    // pending Referral row by phone (last-10-digit match) and advance its status.
+    if (source === "referral" && phone) {
+      try {
+        const last10 = String(phone).replace(/\D/g, "").slice(-10);
+        if (last10.length === 10) {
+          const pending = await prisma.referral.findFirst({
+            where: {
+              tenantId: req.user.tenantId,
+              status: "pending",
+              referredPhone: { endsWith: last10 },
+            },
+            orderBy: { createdAt: "desc" },
+          });
+          if (pending) {
+            await prisma.referral.update({
+              where: { id: pending.id },
+              data: { referredPatientId: patient.id, status: "signed_up" },
+            });
+          }
+        }
+      } catch (refErr) {
+        console.error("[wellness] referral auto-link error:", refErr.message);
+      }
+    }
+
     res.status(201).json(patient);
   } catch (e) {
     console.error("[wellness] create patient error:", e.message);
@@ -280,11 +307,24 @@ router.put("/visits/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Visit not found" });
 
     const data = {};
-    const allowed = ["status", "vitals", "notes", "photosBefore", "photosAfter", "amountCharged"];
+    // Agent B: added videoRoom (telehealth Jitsi room name)
+    const allowed = ["status", "vitals", "notes", "photosBefore", "photosAfter", "amountCharged", "videoRoom"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.visitDate !== undefined) data.visitDate = new Date(req.body.visitDate);
 
     const updated = await prisma.visit.update({ where: { id }, data });
+
+    // Agent B: when a visit transitions to "cancelled", auto-offer the slot
+    // to the first matching waitlist entry (same serviceId, status=waiting).
+    // Failures here MUST NOT fail the original update — log and continue.
+    if (data.status === "cancelled" && existing.status !== "cancelled") {
+      try {
+        await offerWaitlistSlotForCancelledVisit(updated, req.user.tenantId);
+      } catch (hookErr) {
+        console.error("[wellness] waitlist auto-offer hook failed:", hookErr.message);
+      }
+    }
+
     res.json(updated);
   } catch (e) {
     console.error("[wellness] update visit error:", e.message);
@@ -641,6 +681,24 @@ router.post("/ops/run", async (req, res) => {
   } catch (e) {
     console.error("[wellness-ops] manual run failed:", e.message);
     res.status(500).json({ error: "Failed to run ops", detail: e.message });
+  }
+});
+
+// Manual trigger for the low-stock inventory alert engine.
+// Returns the per-tenant breakdown { products, notifications, emails }.
+router.post("/inventory/low-stock/run", async (req, res) => {
+  try {
+    const { runLowStockForTenant } = require("../cron/lowStockEngine");
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { id: true, slug: true, ownerEmail: true },
+    });
+    if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+    const result = await runLowStockForTenant(tenant);
+    res.json(result);
+  } catch (e) {
+    console.error("[low-stock] manual run failed:", e.message);
+    res.status(500).json({ error: "Failed to run low-stock alerts", detail: e.message });
   }
 });
 
@@ -1351,6 +1409,638 @@ router.get("/invoices/:id/branded-pdf", async (req, res) => {
   } catch (e) {
     console.error("[wellness] branded invoice pdf error:", e.message);
     res.status(500).json({ error: "Failed to render invoice PDF" });
+  }
+});
+
+// ── Agent C: White-label branding (logo + brand color) ─────────────
+//
+// Logos stored under uploads/branding/tenant-<id>/logo.<ext>.
+// Limit: 2 MB, common image types only. ADMIN only for mutations; GET is
+// readable by any authenticated tenant user (sidebar + login flows).
+
+const brandingLogoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const dir = path.join(
+        __dirname, "..", "uploads", "branding", `tenant-${req.user.tenantId}`
+      );
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (_req, file, cb) => {
+      const ext = (path.extname(file.originalname) || ".png")
+        .toLowerCase()
+        .replace(/[^.a-z0-9]/g, "");
+      cb(null, `logo${ext || ".png"}`);
+    },
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2 MB
+  fileFilter: (_req, file, cb) => {
+    const ok = /^image\/(png|jpe?g|gif|webp|svg\+xml)$/i.test(file.mimetype || "");
+    if (!ok) return cb(new Error("Logo must be an image (png/jpg/gif/webp/svg)"));
+    cb(null, true);
+  },
+});
+
+function requireTenantAdmin(req, res, next) {
+  if (!req.user || req.user.role !== "ADMIN") {
+    return res.status(403).json({ error: "Tenant ADMIN required" });
+  }
+  next();
+}
+
+router.post(
+  "/branding/logo",
+  requireTenantAdmin,
+  (req, res, next) => {
+    brandingLogoUpload.single("logo")(req, res, (err) => {
+      if (err) {
+        const msg = err.code === "LIMIT_FILE_SIZE"
+          ? "Logo file too large (max 2 MB)"
+          : (err.message || "Logo upload failed");
+        return res.status(400).json({ error: msg });
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No logo file provided (field 'logo')" });
+      const logoUrl = `/uploads/branding/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
+      await prisma.tenant.update({
+        where: { id: req.user.tenantId },
+        data: { logoUrl },
+      });
+      res.json({ logoUrl });
+    } catch (e) {
+      console.error("[wellness] branding logo error:", e.message);
+      res.status(500).json({ error: "Failed to save logo" });
+    }
+  }
+);
+
+router.put("/branding/color", requireTenantAdmin, async (req, res) => {
+  try {
+    const { brandColor } = req.body || {};
+    if (brandColor !== null && brandColor !== "" && !/^#[0-9a-fA-F]{6}$/.test(brandColor || "")) {
+      return res.status(400).json({ error: "brandColor must be a 6-digit hex like #265855" });
+    }
+    const tenant = await prisma.tenant.update({
+      where: { id: req.user.tenantId },
+      data: { brandColor: brandColor || null },
+    });
+    res.json({ brandColor: tenant.brandColor });
+  } catch (e) {
+    console.error("[wellness] branding color error:", e.message);
+    res.status(500).json({ error: "Failed to save brand color" });
+  }
+});
+
+router.get("/branding", async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { logoUrl: true, brandColor: true, name: true, defaultCurrency: true },
+    });
+    if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+    res.json(tenant);
+  } catch (e) {
+    console.error("[wellness] branding get error:", e.message);
+    res.status(500).json({ error: "Failed to load branding" });
+  }
+});
+
+// ── Agent D: Loyalty + Referrals ─────────────────────────────────────
+//
+// Loyalty model: append-only ledger of LoyaltyTransaction rows (positive
+// for credits, negative for redemptions). Balance is SUM(points). Default
+// earn rule (applied client-side / by future cron): 10% of amountCharged
+// rounded down. We do NOT auto-earn here on visit creation — keeps the
+// route surface explicit; managers/staff credit via /loyalty/:id/credit.
+//
+// Referral lifecycle: pending -> signed_up -> first_visit -> rewarded.
+// /referrals/:id/reward writes the bonus points + flips status atomically.
+
+function requireManagerPlus(req, res, next) {
+  const role = req.user?.role;
+  if (role === "ADMIN" || role === "MANAGER") return next();
+  return res.status(403).json({ error: "Manager or admin role required" });
+}
+
+router.get("/loyalty/:patientId", async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.patientId, 10);
+    if (Number.isNaN(patientId)) {
+      return res.status(400).json({ error: "patientId must be an integer" });
+    }
+    // Confirm patient is in this tenant
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true, name: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const [agg, transactions, monthAgg] = await Promise.all([
+      prisma.loyaltyTransaction.aggregate({
+        where: { tenantId: req.user.tenantId, patientId },
+        _sum: { points: true },
+      }),
+      prisma.loyaltyTransaction.findMany({
+        where: { tenantId: req.user.tenantId, patientId },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      }),
+      prisma.loyaltyTransaction.aggregate({
+        where: {
+          tenantId: req.user.tenantId,
+          patientId,
+          points: { gt: 0 },
+          createdAt: { gte: startOfDay(new Date(new Date().getFullYear(), new Date().getMonth(), 1)) },
+        },
+        _sum: { points: true },
+      }),
+    ]);
+
+    res.json({
+      patient,
+      balance: agg._sum.points || 0,
+      earnedThisMonth: monthAgg._sum.points || 0,
+      transactions,
+    });
+  } catch (e) {
+    console.error("[wellness] loyalty get error:", e.message);
+    res.status(500).json({ error: "Failed to load loyalty" });
+  }
+});
+
+router.post("/loyalty/:patientId/credit", requireManagerPlus, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.patientId, 10);
+    if (Number.isNaN(patientId)) {
+      return res.status(400).json({ error: "patientId must be an integer" });
+    }
+    const points = parseInt(req.body.points, 10);
+    const reason = req.body.reason || "Manual credit";
+    if (Number.isNaN(points) || points <= 0) {
+      return res.status(400).json({ error: "points must be a positive integer" });
+    }
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const tx = await prisma.loyaltyTransaction.create({
+      data: {
+        patientId,
+        tenantId: req.user.tenantId,
+        type: "manual_credit",
+        points,
+        reason,
+      },
+    });
+    res.status(201).json(tx);
+  } catch (e) {
+    console.error("[wellness] loyalty credit error:", e.message);
+    res.status(500).json({ error: "Failed to credit loyalty" });
+  }
+});
+
+router.post("/loyalty/:patientId/redeem", async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.patientId, 10);
+    if (Number.isNaN(patientId)) {
+      return res.status(400).json({ error: "patientId must be an integer" });
+    }
+    const points = parseInt(req.body.points, 10);
+    const reason = req.body.reason || "Redemption";
+    if (Number.isNaN(points) || points <= 0) {
+      return res.status(400).json({ error: "points must be a positive integer" });
+    }
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const agg = await prisma.loyaltyTransaction.aggregate({
+      where: { tenantId: req.user.tenantId, patientId },
+      _sum: { points: true },
+    });
+    const balance = agg._sum.points || 0;
+    if (balance < points) {
+      return res.status(400).json({
+        error: `Insufficient balance: ${balance} points available, ${points} requested`,
+        code: "INSUFFICIENT_BALANCE",
+        balance,
+      });
+    }
+
+    const tx = await prisma.loyaltyTransaction.create({
+      data: {
+        patientId,
+        tenantId: req.user.tenantId,
+        type: "redeemed",
+        points: -points,
+        reason,
+      },
+    });
+    res.status(201).json({ ...tx, balanceAfter: balance - points });
+  } catch (e) {
+    console.error("[wellness] loyalty redeem error:", e.message);
+    res.status(500).json({ error: "Failed to redeem loyalty" });
+  }
+});
+
+router.get("/referrals", requireManagerPlus, async (req, res) => {
+  try {
+    const { status, limit = 100, offset = 0 } = req.query;
+    const where = { tenantId: req.user.tenantId };
+    if (status) where.status = status;
+    const [referrals, total] = await Promise.all([
+      prisma.referral.findMany({
+        where,
+        take: Math.min(parseInt(limit, 10) || 100, 500),
+        skip: parseInt(offset, 10) || 0,
+        orderBy: { createdAt: "desc" },
+        include: {
+          referrer: { select: { id: true, name: true, phone: true } },
+        },
+      }),
+      prisma.referral.count({ where }),
+    ]);
+    res.json({ referrals, total });
+  } catch (e) {
+    console.error("[wellness] list referrals error:", e.message);
+    res.status(500).json({ error: "Failed to list referrals" });
+  }
+});
+
+router.post("/referrals", async (req, res) => {
+  try {
+    const { referrerPatientId, referredName, referredPhone, referredEmail } = req.body;
+    if (!referrerPatientId || !referredName || !referredPhone) {
+      return res.status(400).json({
+        error: "referrerPatientId, referredName, and referredPhone are required",
+      });
+    }
+    const referrer = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: parseInt(referrerPatientId, 10) }),
+      select: { id: true },
+    });
+    if (!referrer) return res.status(404).json({ error: "Referrer not found in tenant" });
+
+    const referral = await prisma.referral.create({
+      data: {
+        referrerPatientId: referrer.id,
+        referredName,
+        referredPhone,
+        referredEmail: referredEmail || null,
+        tenantId: req.user.tenantId,
+      },
+    });
+    res.status(201).json(referral);
+  } catch (e) {
+    console.error("[wellness] create referral error:", e.message);
+    res.status(500).json({ error: "Failed to create referral" });
+  }
+});
+
+router.put("/referrals/:id/reward", requireManagerPlus, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const rewardPoints = parseInt(req.body.rewardPoints || 100, 10);
+    if (Number.isNaN(rewardPoints) || rewardPoints <= 0) {
+      return res.status(400).json({ error: "rewardPoints must be a positive integer" });
+    }
+    const referral = await prisma.referral.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!referral) return res.status(404).json({ error: "Referral not found" });
+    if (referral.status === "rewarded") {
+      return res.status(400).json({ error: "Referral already rewarded" });
+    }
+
+    // Atomically reward + ledger entry
+    const [updated, tx] = await prisma.$transaction([
+      prisma.referral.update({
+        where: { id: referral.id },
+        data: {
+          status: "rewarded",
+          rewardPoints,
+          rewardedAt: new Date(),
+        },
+      }),
+      prisma.loyaltyTransaction.create({
+        data: {
+          patientId: referral.referrerPatientId,
+          tenantId: req.user.tenantId,
+          type: "referral_bonus",
+          points: rewardPoints,
+          reason: `Referral bonus — ${referral.referredName}`,
+        },
+      }),
+    ]);
+
+    res.json({ referral: updated, transaction: tx });
+  } catch (e) {
+    console.error("[wellness] reward referral error:", e.message);
+    res.status(500).json({ error: "Failed to reward referral" });
+  }
+});
+
+// Loyalty leaderboard — top patients by points earned this calendar month.
+router.get("/loyalty/leaderboard/month", requireManagerPlus, async (req, res) => {
+  try {
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const grouped = await prisma.loyaltyTransaction.groupBy({
+      by: ["patientId"],
+      where: {
+        tenantId: req.user.tenantId,
+        points: { gt: 0 },
+        createdAt: { gte: monthStart },
+      },
+      _sum: { points: true },
+      orderBy: { _sum: { points: "desc" } },
+      take: 10,
+    });
+    const ids = grouped.map((g) => g.patientId);
+    const patients = ids.length
+      ? await prisma.patient.findMany({
+          where: { id: { in: ids }, tenantId: req.user.tenantId },
+          select: { id: true, name: true, phone: true },
+        })
+      : [];
+    const byId = Object.fromEntries(patients.map((p) => [p.id, p]));
+    res.json(
+      grouped.map((g) => ({
+        patient: byId[g.patientId] || { id: g.patientId, name: "—" },
+        earned: g._sum.points || 0,
+      })),
+    );
+  } catch (e) {
+    console.error("[wellness] loyalty leaderboard error:", e.message);
+    res.status(500).json({ error: "Failed to load leaderboard" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Agent B: Waitlist + auto-fill on cancellation
+// ─────────────────────────────────────────────────────────────────────
+
+// Helper: when a visit is cancelled, find the first matching waitlist
+// entry (same serviceId, status=waiting) for the same tenant, mark it
+// "offered" with offeredAt=now, and queue an SMS via SmsMessage. The
+// outbound-SMS cron / smsProvider already drains the queue.
+async function offerWaitlistSlotForCancelledVisit(visit, tenantId) {
+  if (!visit.serviceId) return null; // no service → no waitlist match
+  const candidate = await prisma.waitlist.findFirst({
+    where: {
+      tenantId,
+      status: "waiting",
+      serviceId: visit.serviceId,
+    },
+    orderBy: { createdAt: "asc" }, // FIFO
+    include: {
+      patient: { select: { id: true, name: true, phone: true } },
+    },
+  });
+  if (!candidate) return null;
+
+  const service = await prisma.service.findUnique({
+    where: { id: visit.serviceId },
+    select: { name: true },
+  });
+  const serviceName = service?.name || "your appointment";
+  const patientName = candidate.patient?.name || "there";
+  const phone = candidate.patient?.phone || "";
+
+  const offerExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h hold
+
+  await prisma.waitlist.update({
+    where: { id: candidate.id },
+    data: { status: "offered", offeredAt: new Date(), expiresAt: offerExpires },
+  });
+
+  if (phone) {
+    await prisma.smsMessage.create({
+      data: {
+        to: phone,
+        body: `Hi ${patientName}, a slot just opened for ${serviceName}. Reply YES to book.`,
+        direction: "OUTBOUND",
+        status: "QUEUED",
+        tenantId,
+      },
+    });
+  }
+
+  return candidate.id;
+}
+
+// GET /waitlist?status=waiting
+router.get("/waitlist", async (req, res) => {
+  try {
+    const where = tenantWhere(req);
+    if (req.query.status) where.status = String(req.query.status);
+    const items = await prisma.waitlist.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      include: {
+        patient: { select: { id: true, name: true, phone: true } },
+      },
+      take: 200,
+    });
+    res.json(items);
+  } catch (e) {
+    console.error("[wellness] list waitlist error:", e.message);
+    res.status(500).json({ error: "Failed to list waitlist" });
+  }
+});
+
+// POST /waitlist  body: {patientId, serviceId?, locationId?, preferredDateRange?, notes?}
+router.post("/waitlist", async (req, res) => {
+  try {
+    const { patientId, serviceId, locationId, preferredDateRange, notes } = req.body || {};
+    if (!patientId) return res.status(400).json({ error: "patientId is required" });
+
+    // Verify the patient belongs to this tenant
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: parseInt(patientId) }),
+      select: { id: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const created = await prisma.waitlist.create({
+      data: {
+        patientId: patient.id,
+        serviceId: serviceId ? parseInt(serviceId) : null,
+        locationId: locationId ? parseInt(locationId) : null,
+        preferredDateRange: preferredDateRange || null,
+        notes: notes || null,
+        tenantId: req.user.tenantId,
+      },
+    });
+    res.status(201).json(created);
+  } catch (e) {
+    console.error("[wellness] create waitlist error:", e.message);
+    res.status(500).json({ error: "Failed to create waitlist entry" });
+  }
+});
+
+// PUT /waitlist/:id  body: {status?, notes?, preferredDateRange?, expiresAt?, offeredAt?}
+router.put("/waitlist/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.waitlist.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Waitlist entry not found" });
+
+    const data = {};
+    const allowed = ["status", "notes", "preferredDateRange"];
+    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    if (req.body.expiresAt !== undefined) {
+      data.expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
+    }
+    if (req.body.offeredAt !== undefined) {
+      data.offeredAt = req.body.offeredAt ? new Date(req.body.offeredAt) : null;
+    }
+
+    const updated = await prisma.waitlist.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] update waitlist error:", e.message);
+    res.status(500).json({ error: "Failed to update waitlist entry" });
+  }
+});
+
+// DELETE /waitlist/:id
+router.delete("/waitlist/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.waitlist.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Waitlist entry not found" });
+    await prisma.waitlist.delete({ where: { id } });
+    res.status(204).end();
+  } catch (e) {
+    console.error("[wellness] delete waitlist error:", e.message);
+    res.status(500).json({ error: "Failed to delete waitlist entry" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Agent B: Patient-portal real SMS-OTP login
+// /portal/login (the legacy mock endpoint above) is left intact for
+// backward compat. New flow: request-otp → verify-otp.
+// Both endpoints DO NOT leak whether a phone exists (always return
+// {ok:true} on request-otp). They are public (under /wellness/portal,
+// already on server.js openPaths allowlist).
+// ─────────────────────────────────────────────────────────────────────
+
+router.post("/portal/login/request-otp", async (req, res) => {
+  try {
+    const { phone } = req.body || {};
+    if (!phone) return res.status(400).json({ error: "phone is required" });
+
+    const digits = String(phone).replace(/\D/g, "");
+    if (digits.length < 10) {
+      return res.status(400).json({ error: "Invalid phone" });
+    }
+    const last10 = digits.slice(-10);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Patient lookup is tenant-agnostic (visitor has no tenant context).
+    const candidates = await prisma.patient.findMany({
+      where: { phone: { contains: last10 } },
+      select: { id: true, name: true, phone: true, tenantId: true },
+      take: 5,
+    });
+    const patient = candidates.find((p) => {
+      const d = String(p.phone || "").replace(/\D/g, "");
+      return d.slice(-10) === last10;
+    });
+
+    if (patient) {
+      const otp = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
+      await prisma.patientOtp.create({
+        data: {
+          phone: last10,
+          otp,
+          expiresAt,
+          tenantId: patient.tenantId,
+        },
+      });
+      // Queue an outbound SMS via SmsMessage table (drained by smsProvider).
+      await prisma.smsMessage.create({
+        data: {
+          to: patient.phone || last10,
+          body: `Your verification code is ${otp}. Valid for 10 minutes.`,
+          direction: "OUTBOUND",
+          status: "QUEUED",
+          tenantId: patient.tenantId,
+        },
+      });
+    }
+
+    // Always return ok:true — don't leak whether the phone is registered.
+    res.json({ ok: true, expiresAt });
+  } catch (e) {
+    console.error("[wellness] portal request-otp error:", e.message);
+    res.status(500).json({ error: "Failed to request OTP" });
+  }
+});
+
+router.post("/portal/login/verify-otp", async (req, res) => {
+  try {
+    const { phone, otp } = req.body || {};
+    if (!phone || !otp) return res.status(400).json({ error: "phone and otp are required" });
+    if (!/^\d{4}$/.test(String(otp))) {
+      return res.status(400).json({ error: "OTP must be 4 digits" });
+    }
+    const digits = String(phone).replace(/\D/g, "");
+    if (digits.length < 10) return res.status(400).json({ error: "Invalid phone" });
+    const last10 = digits.slice(-10);
+
+    const record = await prisma.patientOtp.findFirst({
+      where: {
+        phone: last10,
+        otp: String(otp),
+        used: false,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!record) {
+      return res.status(401).json({ error: "Invalid or expired code" });
+    }
+
+    // Resolve the patient by last-10-digit phone (tenant-agnostic).
+    const candidates = await prisma.patient.findMany({
+      where: { phone: { contains: last10 } },
+      select: { id: true, name: true, phone: true, tenantId: true },
+      take: 5,
+    });
+    const patient = candidates.find((p) => {
+      const d = String(p.phone || "").replace(/\D/g, "");
+      return d.slice(-10) === last10;
+    });
+    if (!patient) {
+      return res.status(401).json({ error: "Invalid or expired code" });
+    }
+
+    // Mark OTP used (single-use).
+    await prisma.patientOtp.update({ where: { id: record.id }, data: { used: true } });
+
+    const token = jwt.sign(
+      { patientId: patient.id, phoneLast10: last10 },
+      PORTAL_JWT_SECRET,
+      { expiresIn: "30d" },
+    );
+    res.json({
+      token,
+      patient: { id: patient.id, name: patient.name },
+    });
+  } catch (e) {
+    console.error("[wellness] portal verify-otp error:", e.message);
+    res.status(500).json({ error: "Failed to verify OTP" });
   }
 });
 

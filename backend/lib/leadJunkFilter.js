@@ -136,7 +136,7 @@ async function aiClassify({ name, phone, email, source, reasons }) {
   const { GoogleGenerativeAI } = require("@google/generative-ai");
   if (!process.env.GEMINI_API_KEY) return null;
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-2.0-flash" });
   const prompt = `Classify the following inbound CRM lead as either "junk" or "good".
 Return ONLY a JSON object: {"verdict":"junk"|"good","confidence":0.0-1.0,"reason":"short string"}.
 

@@ -82,7 +82,7 @@ async function executeApproved(rec, { actorUserId } = {}) {
       await prisma.task.create({
         data: {
           title: `Marketer: ${rec.title}`,
-          description: `${rec.body}\n\nApproved by user #${actorUserId} on ${new Date().toISOString()}`,
+          notes: `${rec.body}\n\nApproved by user #${actorUserId} on ${new Date().toISOString()}`,
           status: "OPEN",
           priority: "HIGH",
           tenantId: rec.tenantId,
@@ -121,7 +121,7 @@ async function executeApproved(rec, { actorUserId } = {}) {
       await prisma.task.create({
         data: {
           title: rec.title,
-          description: rec.body,
+          notes: rec.body,
           status: "OPEN",
           priority: "HIGH",
           tenantId: rec.tenantId,
@@ -224,7 +224,7 @@ async function generateProposals(ctx) {
   if (!GoogleGenerativeAI || !process.env.GEMINI_API_KEY) return null;
   try {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-2.0-flash" });
     const prompt = `You are an AI orchestrator for a hair/skin/aesthetics clinic. Today's reality:
 ${ctx.summary}
 Top performing services this week: ${ctx.topServices.map((s) => s.name).join(", ") || "none"}

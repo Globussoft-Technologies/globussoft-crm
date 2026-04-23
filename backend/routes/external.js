@@ -228,19 +228,39 @@ router.post("/leads", async (req, res) => {
       });
     }
 
-    const contact = await prisma.contact.create({
-      data: {
-        name: name || (phone ? `Caller ${phone}` : "Unknown caller"),
-        email: email || `lead-${Date.now()}@inbound.local`,
-        phone: phone || null,
-        status: verdict.isJunk ? "Junk" : "Lead",
-        source: source || "callified",
-        firstTouchSource: source || "callified",
-        aiScore: verdict.score,
-        assignedToId: assignee.userId,
-        tenantId: req.tenantId,
-      },
-    });
+    // Dedupe: if a real email was supplied and a contact already exists under
+    // this tenant, reuse it (the Contact_email_tenantId_key constraint would
+    // otherwise throw P2002 on every duplicate Meta/Google webhook delivery).
+    // Contacts without an email get a synthetic unique address, so they can
+    // never collide and always create fresh.
+    const resolvedEmail = email || `lead-${Date.now()}@inbound.local`;
+    const contactData = {
+      name: name || (phone ? `Caller ${phone}` : "Unknown caller"),
+      email: resolvedEmail,
+      phone: phone || null,
+      status: verdict.isJunk ? "Junk" : "Lead",
+      source: source || "callified",
+      firstTouchSource: source || "callified",
+      aiScore: verdict.score,
+      assignedToId: assignee.userId,
+      tenantId: req.tenantId,
+    };
+    let contact;
+    let deduped = false;
+    if (email) {
+      // Upsert on the compound unique key (email + tenantId)
+      const existing = await prisma.contact.findFirst({
+        where: { email, tenantId: req.tenantId },
+      });
+      if (existing) {
+        contact = existing;
+        deduped = true;
+      } else {
+        contact = await prisma.contact.create({ data: contactData });
+      }
+    } else {
+      contact = await prisma.contact.create({ data: contactData });
+    }
 
     // Attach an activity so the CRM's inbox shows the origin + junk verdict
     const activityBits = [
@@ -259,10 +279,16 @@ router.post("/leads", async (req, res) => {
       });
     }
 
-    res.status(201).json({ ...contact, _verdict: verdict, _routing: assignee });
+    res.status(deduped ? 200 : 201).json({
+      ...contact,
+      _verdict: verdict,
+      _routing: assignee,
+      ...(deduped ? { _deduped: true } : {}),
+    });
   } catch (e) {
     console.error("[external] create lead:", e.message);
-    // Unique-violation on email → return the existing contact so partner can continue
+    // Belt-and-braces: if a race slipped through the explicit dedupe above
+    // and we still hit P2002, return the existing row.
     if (e.code === "P2002" && req.body.email) {
       const existing = await prisma.contact.findFirst({
         where: tenantWhere(req, { email: req.body.email }),

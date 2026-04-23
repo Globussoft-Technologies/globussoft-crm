@@ -14,6 +14,15 @@ const verifyToken = (req, res, next) => {
   const token = authHeader.split(" ")[1];
   try {
     const verified = jwt.verify(token, JWT_SECRET);
+
+    // Block portal (patient) tokens from reaching staff endpoints.
+    // Portal tokens carry `patientId` instead of `userId` — they must not
+    // be accepted by this middleware even if signed with the same secret.
+    // Guard both ways: presence of patientId, AND absence of userId.
+    if (verified.patientId || !verified.userId) {
+      return res.status(401).json({ error: "Invalid staff token (portal tokens are not allowed here)" });
+    }
+
     // Backwards compat: tokens issued before multi-tenancy lack tenantId — default to 1 (Default Org)
     if (verified.tenantId === undefined || verified.tenantId === null) {
       verified.tenantId = 1;

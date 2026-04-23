@@ -117,7 +117,13 @@ router.post("/signup", async (req, res) => {
 // (1000 req/15min on auth/login per server.js).
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
+
+    // Input validation — without this, an empty body crashes findUnique with
+    // PrismaClientValidationError (email: undefined). Return 400 instead.
+    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+      return res.status(400).json({ error: "email and password are required" });
+    }
 
     // Admin/admin bypass intentionally removed for security hardening.
 

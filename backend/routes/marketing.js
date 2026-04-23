@@ -479,8 +479,12 @@ router.post("/submit", async (req, res) => {
 
     console.log(`[FormIngestion] Received lead from form ${formId}:`, req.body, `| Assigned AI Score: ${score}`);
 
+    // Contact's unique key is compound (email + tenantId), not email alone.
+    // Using `where: { email }` on upsert raises PrismaClientValidationError
+    // since v3.1 made tenants multi-hosted. Use the compound key helper.
+    const FORM_TENANT_ID = 1; // default org for inbound public form submissions
     const contact = await prisma.contact.upsert({
-      where: { email: contactEmail },
+      where: { email_tenantId: { email: contactEmail, tenantId: FORM_TENANT_ID } },
       update: { source: "Embedded Web Form" },
       create: {
         name: contactName,
@@ -489,7 +493,7 @@ router.post("/submit", async (req, res) => {
         status: "Lead",
         source: "Embedded Web Form",
         aiScore: score,
-        tenantId: 1, // default org for inbound public form submissions
+        tenantId: FORM_TENANT_ID,
       }
     });
 

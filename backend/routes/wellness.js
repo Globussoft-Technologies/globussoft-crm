@@ -629,15 +629,28 @@ router.post("/recommendations/:id/approve", async (req, res) => {
     const id = parseInt(req.params.id);
     const rec = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
     if (!rec) return res.status(404).json({ error: "Recommendation not found" });
-    const updated = await prisma.agentRecommendation.update({
-      where: { id },
+
+    // Race-safe transition: only flip pending→approved. `updateMany` with a
+    // status precondition is the atomic gate — if count=0 we lost the race
+    // and must NOT fire the dispatcher (double-dispatch would e.g. send
+    // the SMS blast twice or create duplicate Tasks).
+    const flip = await prisma.agentRecommendation.updateMany({
+      where: { id, tenantId: req.user.tenantId, status: "pending" },
       data: { status: "approved", resolvedById: req.user.id, resolvedAt: new Date() },
     });
-    // Dispatch the approved action (best-effort — don't block the response)
+    const current = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
+
+    if (flip.count === 0) {
+      // Another request already resolved this card. Return current state
+      // without firing the dispatcher again. The final status is authoritative.
+      return res.json({ ...current, _alreadyResolved: true });
+    }
+
+    // We won the race — safe to dispatch the approved action
     let actionResult = null;
-    try { actionResult = await executeApproved(updated, { actorUserId: req.user.id }); }
+    try { actionResult = await executeApproved(current, { actorUserId: req.user.id }); }
     catch (e) { console.error("[orchestrator] dispatch failed:", e.message); }
-    res.json({ ...updated, _actionResult: actionResult });
+    res.json({ ...current, _actionResult: actionResult });
   } catch (e) {
     console.error("[wellness] approve recommendation error:", e.message);
     res.status(500).json({ error: "Failed to approve" });

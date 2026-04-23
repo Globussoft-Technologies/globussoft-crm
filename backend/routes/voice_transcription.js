@@ -19,9 +19,9 @@ function ensureGemini() {
   try {
     const { GoogleGenerativeAI } = require("@google/generative-ai");
     genAI = new GoogleGenerativeAI(key);
-    geminiTextModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    // gemini-1.5-flash supports audio inline_data on v1beta
-    geminiAudioModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    geminiTextModel = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-2.5-flash" });
+    // gemini-2.0-flash+ support audio inline_data (1.5-flash was deprecated April 2026).
+    geminiAudioModel = genAI.getGenerativeModel({ model: process.env.GEMINI_AUDIO_MODEL || "gemini-2.0-flash" });
     console.log("[VoiceTranscription] Gemini initialized");
     return genAI;
   } catch (err) {

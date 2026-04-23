@@ -851,7 +851,7 @@ model SmsTemplate {
 
 model SmsConfig {
   id          Int      @id @default(autoincrement())
-  provider    String // "msg91", "twilio"
+  provider    String // "msg91", "twilio", "fast2sms"
   apiKey      String?
   authToken   String?
   senderId    String?

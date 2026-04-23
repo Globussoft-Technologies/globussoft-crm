@@ -27,23 +27,26 @@ function substituteVars(template, contact) {
 }
 
 /**
- * Send SMS via MSG91 or Twilio
+ * Send SMS via MSG91, Twilio, or Fast2SMS
  * @param {Object} opts
  * @param {string} opts.to - Recipient phone number
  * @param {string} opts.body - Message body
- * @param {string} opts.provider - "msg91" or "twilio"
- * @param {string} opts.apiKey - Provider API key (MSG91 authkey or Twilio Account SID)
- * @param {string} opts.senderId - Sender ID (MSG91) or Twilio phone number
+ * @param {string} opts.provider - "msg91" | "twilio" | "fast2sms"
+ * @param {string} opts.apiKey - Provider API key
+ * @param {string} opts.senderId - Sender ID (Twilio: from-number; Fast2SMS: 6-char ID like "FSTSMS")
  * @param {string} [opts.authToken] - Twilio auth token
+ * @param {string} [opts.dltTemplateId] - Required for Fast2SMS DLT route (production India SMS)
  * @returns {Promise<{success: boolean, providerMsgId?: string, error?: string}>}
  */
-async function sendSms({ to, body, provider, apiKey, senderId, authToken }) {
+async function sendSms({ to, body, provider, apiKey, senderId, authToken, dltTemplateId }) {
   const normalizedTo = normalizePhone(to);
 
   if (provider === "msg91") {
     return sendViaMSG91({ to: normalizedTo, body, apiKey, senderId });
   } else if (provider === "twilio") {
     return sendViaTwilio({ to: normalizedTo, body, accountSid: apiKey, authToken, from: senderId });
+  } else if (provider === "fast2sms") {
+    return sendViaFast2SMS({ to: normalizedTo, body, apiKey, senderId, dltTemplateId });
   } else {
     return { success: false, error: `Unsupported SMS provider: ${provider}` };
   }
@@ -172,4 +175,82 @@ function sendViaTwilio({ to, body, accountSid, authToken, from }) {
   });
 }
 
-module.exports = { normalizePhone, substituteVars, sendSms };
+/**
+ * Send SMS via Fast2SMS (fast2sms.com) — Indian SMS gateway.
+ *
+ * Uses the `q` (Quick SMS) route by default, which doesn't require DLT
+ * registration and is suitable for OTPs, appointment reminders on dev
+ * accounts, and all non-bulk wellness flows. For true bulk marketing SMS
+ * in production, pass `dltTemplateId` and the route flips to `dlt`.
+ *
+ * Fast2SMS requires 10-digit Indian numbers WITHOUT the "91" country code
+ * (the opposite of MSG91). We strip the "91" here before hitting the API.
+ *
+ * API docs: https://docs.fast2sms.com/
+ */
+function sendViaFast2SMS({ to, body, apiKey, senderId, dltTemplateId }) {
+  return new Promise((resolve) => {
+    // Fast2SMS wants 10-digit numbers. normalizePhone() prepends 91 — strip it.
+    const digits = (to || "").replace(/\D/g, "");
+    const last10 = digits.length > 10 ? digits.slice(-10) : digits;
+    if (last10.length !== 10) {
+      return resolve({ success: false, error: `Fast2SMS needs 10-digit Indian number, got "${to}"` });
+    }
+
+    const useDlt = Boolean(dltTemplateId);
+    const payload = {
+      route: useDlt ? "dlt" : "q",
+      message: body,
+      numbers: last10,
+      language: "english",
+      flash: 0,
+      sender_id: senderId || "FSTSMS",
+    };
+    if (useDlt) payload.template_id = dltTemplateId;
+    const bodyStr = JSON.stringify(payload);
+
+    const options = {
+      hostname: "www.fast2sms.com",
+      path: "/dev/bulkV2",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        authorization: apiKey,
+        "Content-Length": Buffer.byteLength(bodyStr),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          // Fast2SMS responds with { return: true|false, request_id, message: [...] }
+          // Successful send: { return: true, request_id: "abc", message: ["Sent"] }
+          // Failure:        { return: false, status_code: N, message: "..." }
+          if (parsed.return === true && parsed.request_id) {
+            resolve({ success: true, providerMsgId: String(parsed.request_id) });
+          } else {
+            const errMsg = Array.isArray(parsed.message) ? parsed.message.join("; ") : (parsed.message || `HTTP ${res.statusCode}`);
+            resolve({ success: false, error: errMsg });
+          }
+        } catch {
+          resolve({
+            success: false,
+            error: data || `HTTP ${res.statusCode}: unparseable response`,
+          });
+        }
+      });
+    });
+
+    req.on("error", (err) => {
+      resolve({ success: false, error: err.message });
+    });
+
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
+module.exports = { normalizePhone, substituteVars, sendSms, sendViaFast2SMS };

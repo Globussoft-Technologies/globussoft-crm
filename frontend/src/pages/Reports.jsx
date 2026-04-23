@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { fetchApi } from '../utils/api';
+import { formatMoney } from '../utils/money';
 import { PieChart as PieChartIcon, Download, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
@@ -211,7 +212,7 @@ export default function Reports() {
             <div style={{ marginTop: 'auto', padding: '1.5rem', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.5rem' }}>Aggregate Total</p>
               <h2 style={{ fontSize: '1.75rem', fontWeight: 'bold', color: 'var(--accent-color)' }}>
-                {metric === 'revenue' || metric === 'invoices' || metric === 'expenses' ? `$${totalValue.toLocaleString()}` : totalValue}
+                {metric === 'revenue' || metric === 'invoices' || metric === 'expenses' ? formatMoney(totalValue) : totalValue}
               </h2>
             </div>
           </div>
@@ -235,7 +236,7 @@ export default function Reports() {
                     <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                       <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={val => metric === 'revenue' ? `$${val / 1000}k` : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
                       <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {data.map((entry, index) => (
@@ -262,7 +263,7 @@ export default function Reports() {
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                       <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={val => metric === 'revenue' ? `$${val / 1000}k` : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
                       <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
                       <Area type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorVal)" />
                     </AreaChart>
@@ -321,7 +322,7 @@ export default function Reports() {
                     <tr key={row.id || i} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                       {detailType === 'deals' && <>
                         <td style={tdStyle}>{row.title}</td>
-                        <td style={{ ...tdStyle, fontWeight: '600', color: 'var(--success-color)' }}>${(row.amount || 0).toLocaleString()}</td>
+                        <td style={{ ...tdStyle, fontWeight: '600', color: 'var(--success-color)' }}>{formatMoney(row.amount || 0)}</td>
                         <td style={tdStyle}><StageBadge stage={row.stage} /></td>
                         <td style={tdStyle}>{row.owner?.name || '—'}</td>
                         <td style={tdStyle}>{row.contact?.name || '—'}</td>
@@ -352,14 +353,14 @@ export default function Reports() {
                       </>}
                       {detailType === 'invoices' && <>
                         <td style={tdStyle}>{row.invoiceNum}</td>
-                        <td style={{ ...tdStyle, fontWeight: '600' }}>${(row.amount || 0).toLocaleString()}</td>
+                        <td style={{ ...tdStyle, fontWeight: '600' }}>{formatMoney(row.amount || 0)}</td>
                         <td style={tdStyle}><StatusBadge status={row.status} /></td>
                         <td style={tdStyle}>{row.contact?.name || '—'}</td>
                         <td style={tdStyle}>{fmtDate(row.dueDate)}</td>
                       </>}
                       {detailType === 'expenses' && <>
                         <td style={tdStyle}>{row.title}</td>
-                        <td style={{ ...tdStyle, fontWeight: '600' }}>${(row.amount || 0).toLocaleString()}</td>
+                        <td style={{ ...tdStyle, fontWeight: '600' }}>{formatMoney(row.amount || 0)}</td>
                         <td style={tdStyle}>{row.category}</td>
                         <td style={tdStyle}><StatusBadge status={row.status} /></td>
                         <td style={tdStyle}>{row.user?.name || '—'}</td>

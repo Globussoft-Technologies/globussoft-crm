@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { fetchApi } from '../utils/api';
+import { formatMoney } from '../utils/money';
 import { Trophy, Users, TrendingUp, Phone, Mail, CheckSquare, Download, Calendar } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
@@ -114,7 +115,7 @@ export default function AgentReports() {
       {!loading && agents.length > 0 && (
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
           <StatCard icon={Users} label="Total Agents" value={agents.length} color="#3b82f6" />
-          <StatCard icon={TrendingUp} label="Total Revenue" value={`$${agents.reduce((s, a) => s + a.revenue, 0).toLocaleString()}`} color="#10b981" />
+          <StatCard icon={TrendingUp} label="Total Revenue" value={formatMoney(agents.reduce((s, a) => s + a.revenue, 0))} color="#10b981" />
           <StatCard icon={Trophy} label="Deals Won" value={agents.reduce((s, a) => s + a.dealsWon, 0)} color="#f59e0b" />
           <StatCard icon={Phone} label="Total Calls" value={agents.reduce((s, a) => s + a.callsMade, 0)} color="#a855f7" />
           <StatCard icon={Mail} label="Emails Sent" value={agents.reduce((s, a) => s + a.emailsSent, 0)} color="#ec4899" />
@@ -199,9 +200,9 @@ export default function AgentReports() {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={leaderboard.slice(0, 6)} layout="vertical" margin={{ left: 10, right: 20, top: 5, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" horizontal={false} />
-                  <XAxis type="number" stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={v => leaderMetric === 'revenue' ? `$${v / 1000}k` : v} />
+                  <XAxis type="number" stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={v => leaderMetric === 'revenue' ? formatMoney(v, { maximumFractionDigits: 0 }) : v} />
                   <YAxis dataKey="name" type="category" stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={80} tick={{ fontSize: 11 }} />
-                  <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} formatter={v => leaderMetric === 'revenue' ? `$${v.toLocaleString()}` : v} />
+                  <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} formatter={v => leaderMetric === 'revenue' ? formatMoney(v) : v} />
                   <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                     {leaderboard.slice(0, 6).map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Bar>

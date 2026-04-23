@@ -80,11 +80,10 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
       <Link to="/marketplace-leads" icon={ShoppingBag} label="Marketplace Leads" managerOnly />
       <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
 
-      {/* Money */}
+      {/* Money — clinic-side, in INR for Indian wellness tenants */}
       <div style={sectionLabel}>Finance</div>
       <Link to="/invoices" icon={Receipt} label="Invoices" />
       <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
-      <Link to="/expenses" icon={DollarSign} label="Expenses" />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
 
       {/* Marketing — clinic-side comms (ad campaigns live in AdsGPT) */}

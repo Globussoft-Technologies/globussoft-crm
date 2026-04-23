@@ -1,4 +1,4 @@
-import { useContext } from 'react';
+import { useContext, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3,
@@ -6,9 +6,10 @@ import {
   UsersRound, FileText, FileSpreadsheet, FolderKanban, DollarSign, Trophy, ShoppingBag, Radio,
   PanelTop, Calendar, Shield, ScrollText, GitBranch, TrendingUp, BookOpen, PenTool, ClipboardList,
   MessageSquare, Eye, BadgePercent, Bot, FileSignature, Award, CreditCard, Sparkles, ExternalLink,
-  PhoneCall, Stethoscope, HeartPulse, Bell, Clock,
+  PhoneCall, Stethoscope, HeartPulse, Bell, Clock, Loader2,
 } from 'lucide-react';
 import { AuthContext } from '../App';
+import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
 
 const Sidebar = () => {
   const { user, tenant } = useContext(AuthContext);
@@ -42,7 +43,41 @@ const Sidebar = () => {
     </a>
   );
 
-  const adsGptUrl = import.meta.env.VITE_ADSGPT_URL || 'https://adsgpt.io';
+  // SSO-authenticated AdsGPT launcher — does the same token + Redis-key
+  // handoff as the wellness OwnerDashboard card. If the SSO flow fails
+  // (network / provider down), degrade to opening the plain dashboard URL
+  // so the link is never dead.
+  const [adsLoading, setAdsLoading] = useState(false);
+  const AdsGptLink = ({ icon: Icon = Sparkles, label = 'AdsGPT' }) => {
+    const handleClick = async (e) => {
+      e.preventDefault();
+      if (adsLoading) return;
+      setAdsLoading(true);
+      try {
+        await launchAdsGptAs(ADSGPT_DEMO_LOGIN);
+      } catch (err) {
+        console.warn('[Sidebar] AdsGPT SSO failed, opening plain dashboard:', err.message);
+        window.open(ADSGPT_DASHBOARD, '_blank', 'noopener,noreferrer');
+      } finally {
+        setAdsLoading(false);
+      }
+    };
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={adsLoading}
+        className="nav-link"
+        aria-label={`Open AdsGPT as ${ADSGPT_DEMO_LOGIN}`}
+        style={{ ...navStyle, background: 'transparent', border: 'none', width: '100%', textAlign: 'left', cursor: adsLoading ? 'wait' : 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}
+      >
+        {adsLoading ? <Loader2 size={20} className="spin" /> : <Icon size={20} />}
+        <span style={{ flex: 1 }}>{label}</span>
+        <ExternalLink size={14} style={{ opacity: 0.6 }} />
+      </button>
+    );
+  };
+
   const callifiedUrl = import.meta.env.VITE_CALLIFIED_URL || 'https://callified.ai';
 
   return (
@@ -63,7 +98,7 @@ const Sidebar = () => {
       </div>
 
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}>
-        {isWellness ? renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) : renderGenericNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager })}
+        {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) : renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager })}
       </nav>
     </aside>
   );
@@ -71,14 +106,14 @@ const Sidebar = () => {
 
 // ── Wellness sidebar — slim, clinic-focused ───────────────────────
 
-function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) {
+function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   return (
     <>
       {/* Daily essentials */}
       <Link to="/wellness" icon={LayoutDashboard} label="Owner Dashboard" />
       <Link to="/wellness/recommendations" icon={Sparkles} label="Recommendations" />
-      <ExtLink href={adsGptUrl} icon={Sparkles} label="AdsGPT" />
+      <AdsGptLink icon={Sparkles} label="AdsGPT" />
       <ExtLink href={callifiedUrl} icon={PhoneCall} label="Callified" />
 
       {/* Clinical */}
@@ -141,12 +176,12 @@ function renderWellnessNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, is
 
 // ── Generic sidebar (preserved unchanged) ─────────────────────────
 
-function renderGenericNav({ Link, ExtLink, adsGptUrl, callifiedUrl, isAdmin, isManager }) {
+function renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager }) {
   return (
     <>
       {/* Core — visible to ALL roles */}
       <Link to="/dashboard" icon={LayoutDashboard} label="Dashboard" />
-      <ExtLink href={adsGptUrl} icon={Sparkles} label="AdsGPT" />
+      <AdsGptLink icon={Sparkles} label="AdsGPT" />
       <ExtLink href={callifiedUrl} icon={PhoneCall} label="Callified" />
       <Link to="/inbox" icon={InboxIcon} label="Inbox" />
       <Link to="/contacts" icon={Users} label="Contacts" />

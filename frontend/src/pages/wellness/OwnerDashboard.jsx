@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, Calendar, IndianRupee, Sparkles, TrendingUp, Users, Bell, ArrowRight, Stethoscope } from 'lucide-react';
+import { Activity, Calendar, IndianRupee, Sparkles, TrendingUp, Users, Bell, ArrowRight, Stethoscope, Megaphone, ExternalLink } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { fetchApi } from '../../utils/api';
+import { AuthContext } from '../../App';
+import { launchAdsGptAs, ADSGPT_DEMO_LOGIN } from '../../utils/adsgpt';
 
 const formatRupees = (n) => `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
 
@@ -17,10 +19,23 @@ const StatCard = ({ icon: Icon, label, value, sub, color }) => (
 );
 
 export default function OwnerDashboard() {
+  const { user, tenant } = useContext(AuthContext);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState('');
+  const [adsGptStatus, setAdsGptStatus] = useState({ state: 'idle', msg: '' });
+
+  const handleLaunchAdsGpt = async () => {
+    setAdsGptStatus({ state: 'loading', msg: 'Signing you into AdsGPT…' });
+    try {
+      await launchAdsGptAs(ADSGPT_DEMO_LOGIN);
+      setAdsGptStatus({ state: 'ok', msg: `Opened AdsGPT as ${ADSGPT_DEMO_LOGIN}` });
+      setTimeout(() => setAdsGptStatus({ state: 'idle', msg: '' }), 3000);
+    } catch (err) {
+      setAdsGptStatus({ state: 'error', msg: err.message || 'AdsGPT launch failed' });
+    }
+  };
 
   useEffect(() => {
     fetchApi('/api/wellness/locations').then(setLocations).catch(() => setLocations([]));
@@ -105,6 +120,63 @@ export default function OwnerDashboard() {
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No pending recommendations.</div>
           )}
         </div>
+      </div>
+
+      {/* AdsGPT launch — one-click SSO impersonation into the linked AdsGPT
+          account (login: sumitgh2050 by default; override with
+          VITE_ADSGPT_DEMO_LOGIN). Uses the real socket.adsgpt.io +
+          dashboard.adsgpt.io flow. */}
+      <div className="glass" style={{ padding: '1.25rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 260 }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: 10,
+            background: 'linear-gradient(135deg, #f472b6, #8b5cf6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', flexShrink: 0,
+          }}>
+            <Megaphone size={22} />
+          </div>
+          <div>
+            <div style={{ fontSize: '1rem', fontWeight: 600 }}>AdsGPT</div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+              Linked account: <strong>{ADSGPT_DEMO_LOGIN}</strong>
+              {tenant?.name ? <> • {tenant.name}</> : null}
+            </div>
+            {adsGptStatus.state !== 'idle' && (
+              <div
+                role="status"
+                style={{
+                  fontSize: '0.8rem',
+                  marginTop: 6,
+                  color: adsGptStatus.state === 'error' ? '#f87171'
+                    : adsGptStatus.state === 'ok' ? '#34d399'
+                    : 'var(--text-secondary)',
+                }}
+              >
+                {adsGptStatus.msg}
+              </div>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleLaunchAdsGpt}
+          disabled={adsGptStatus.state === 'loading'}
+          aria-label={`Open AdsGPT as ${ADSGPT_DEMO_LOGIN}`}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+            padding: '0.65rem 1rem', borderRadius: 10,
+            background: 'linear-gradient(135deg, #a855f7, #6366f1)',
+            color: '#fff', border: 'none',
+            fontSize: '0.9rem', fontWeight: 500,
+            boxShadow: '0 8px 20px rgba(139, 92, 246, 0.3)',
+            cursor: adsGptStatus.state === 'loading' ? 'wait' : 'pointer',
+            opacity: adsGptStatus.state === 'loading' ? 0.7 : 1,
+          }}
+        >
+          {adsGptStatus.state === 'loading' ? 'Signing in…' : 'Open AdsGPT'}
+          <ExternalLink size={14} />
+        </button>
       </div>
 
       {/* Revenue trend */}

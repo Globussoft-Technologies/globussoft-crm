@@ -69,6 +69,7 @@ const Layout = () => {
           <button
             onClick={handleLogout}
             title="Logout"
+            aria-label="Log out of your account"
             style={{
               display: 'flex', alignItems: 'center', gap: '5px',
               background: 'none', border: 'none', cursor: 'pointer',

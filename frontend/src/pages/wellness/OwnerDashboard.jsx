@@ -49,6 +49,7 @@ export default function OwnerDashboard() {
         </div>
         {locations.length > 1 && (
           <select value={locationId} onChange={(e) => setLocationId(e.target.value)}
+            aria-label="Filter dashboard by clinic location"
             style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem' }}>
             <option value="">All locations</option>
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}

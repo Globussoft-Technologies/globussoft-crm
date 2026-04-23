@@ -30,6 +30,15 @@ router.get("/health", (_req, res) => {
   res.json({ status: "ok", apiVersion: "v1" });
 });
 
+// Reject non-numeric :id params with 400 instead of falling through to Prisma.
+router.param("id", (req, res, next, id) => {
+  const n = parseInt(id, 10);
+  if (Number.isNaN(n) || n < 1) {
+    return res.status(400).json({ error: "id must be a positive integer", code: "INVALID_ID" });
+  }
+  next();
+});
+
 router.use(externalAuth);
 
 // ── Helpers ────────────────────────────────────────────────────────

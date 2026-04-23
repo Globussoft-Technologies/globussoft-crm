@@ -65,6 +65,16 @@ const photoUpload = multer({
 
 // ── Helpers ────────────────────────────────────────────────────────
 
+// Reject non-numeric :id params with 400 instead of letting Prisma blow up
+// later with "Invalid value provided. Expected Int, provided NaN" → 500.
+router.param("id", (req, res, next, id) => {
+  const n = parseInt(id, 10);
+  if (Number.isNaN(n) || n < 1) {
+    return res.status(400).json({ error: "id must be a positive integer", code: "INVALID_ID" });
+  }
+  next();
+});
+
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
 const startOfDay = (d = new Date()) => {

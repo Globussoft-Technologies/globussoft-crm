@@ -61,10 +61,10 @@
 
       function buildForm(serviceList) {
         var serviceOptions = (serviceList && serviceList.length)
-          ? '<select name="service" required><option value="">Select a service \u2026</option>' +
+          ? '<select id="gbs-service" name="service" required aria-label="Service"><option value="">Select a service \u2026</option>' +
             serviceList.map(function (s) { return '<option value="' + escape(s) + '">' + escape(s) + '</option>'; }).join('') +
             '</select>'
-          : '<input name="service" placeholder="Service you\u2019re interested in (optional)" />';
+          : '<input id="gbs-service" name="service" aria-label="Service you are interested in" placeholder="Service you\u2019re interested in (optional)" />';
 
         return (
           '<h2>' + escape(title) + '</h2>' +
@@ -72,12 +72,12 @@
           '<form id="f">' +
             '<div id="err"></div>' +
             '<div class="row">' +
-              '<div class="field"><label>Your name *</label><input name="name" required /></div>' +
-              '<div class="field"><label>Phone *</label><input name="phone" required pattern="[0-9+\\-\\s]{10,15}" /></div>' +
+              '<div class="field"><label for="gbs-name">Your name *</label><input id="gbs-name" name="name" required autocomplete="name" /></div>' +
+              '<div class="field"><label for="gbs-phone">Phone *</label><input id="gbs-phone" name="phone" type="tel" required pattern="[0-9+\\-\\s]{10,15}" autocomplete="tel" /></div>' +
             '</div>' +
-            '<div class="field"><label>Email (optional)</label><input name="email" type="email" /></div>' +
-            '<div class="field"><label>Service</label>' + serviceOptions + '</div>' +
-            '<div class="field"><label>Message (optional)</label><textarea name="note" rows="2"></textarea></div>' +
+            '<div class="field"><label for="gbs-email">Email (optional)</label><input id="gbs-email" name="email" type="email" autocomplete="email" /></div>' +
+            '<div class="field"><label for="gbs-service">Service</label>' + serviceOptions + '</div>' +
+            '<div class="field"><label for="gbs-note">Message (optional)</label><textarea id="gbs-note" name="note" rows="2"></textarea></div>' +
             '<button class="primary" type="submit" id="btn">Request a callback</button>' +
           '</form>'
         );

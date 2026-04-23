@@ -21,17 +21,12 @@ const PARTNER_KEY = process.env.WELLNESS_PARTNER_KEY ||
 // are intentional and not fixable without redesigning the theme.
 const AXE_PUBLIC_RULES = ['color-contrast'];
 
-// Rules additionally disabled on AUTHENTICATED owner pages (Layout + Sidebar + filter
-// dropdowns). These are known frontend a11y debt that requires React changes to fix:
-//   - `button-name`  → icon-only buttons in <NotificationBell> and <Sidebar> collapse
-//                      toggle render without aria-label / visible text.
-//   - `select-name`  → filter dropdowns (location, date range) ship without an
-//                      associated <label> or aria-label.
-// They are surfaced but non-blocking so the rest of the page (region landmarks,
-// link-name, image-alt, ARIA roles, keyboard tab order) is still enforced.
-// TODO(frontend): add aria-label to layout buttons + <label> to filter selects, then
-// drop these from the disabled list.
-const AXE_AUTH_RULES = [...AXE_PUBLIC_RULES, 'button-name', 'select-name'];
+// Layout icon buttons (NotificationBell, Logout) and filter dropdowns
+// (location switcher) now have aria-label, so button-name + select-name
+// are enforced on authenticated pages. Color-contrast remains disabled —
+// the wellness teal/cream gradient backgrounds intentionally use a soft
+// secondary text color that just-barely-misses WCAG AA.
+const AXE_AUTH_RULES = AXE_PUBLIC_RULES;
 
 function buildAxe(page, ruleSet = AXE_PUBLIC_RULES) {
   return new AxeBuilder({ page }).disableRules(ruleSet);

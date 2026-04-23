@@ -100,6 +100,8 @@ const NotificationBell = () => {
     <div ref={ref} style={{ position: 'relative' }}>
       <button
         onClick={() => setOpen(!open)}
+        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+        aria-expanded={open}
         style={{
           background: 'none',
           border: 'none',

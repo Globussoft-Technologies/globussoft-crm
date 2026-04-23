@@ -343,6 +343,24 @@ app.get("/", (req, res) => {
   res.json({ message: "Enterprise CRM API Core Online", version: "2.0.0" });
 });
 
+// Global JSON error handler — must come AFTER all routes.
+// Catches express.json() body-parse errors, Prisma exceptions, and anything
+// uncaught downstream. Returns JSON instead of Express's default HTML page
+// so API consumers (browsers, Callified, AdsGPT) always get a parseable body.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err && (err.type === "entity.parse.failed" || err instanceof SyntaxError)) {
+    return res.status(400).json({ error: "Invalid JSON body", detail: err.message });
+  }
+  if (err && err.type === "entity.too.large") {
+    return res.status(413).json({ error: "Payload too large" });
+  }
+  console.error("[server] unhandled error:", err && err.stack ? err.stack : err);
+  res.status(err && err.status ? err.status : 500).json({
+    error: (err && err.message) || "Internal server error",
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`[Backend] Enterprise Express Server running securely on port ${PORT}`);

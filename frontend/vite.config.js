@@ -16,5 +16,11 @@ export default defineConfig({
       }
     },
     chunkSizeWarningLimit: 800
-  }
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./vitest.setup.js'],
+    css: false,
+  },
 })

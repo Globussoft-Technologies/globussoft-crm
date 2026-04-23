@@ -60,6 +60,18 @@ module.exports = defineConfig({
       dependencies: ['setup'],
     },
 
+    // WebKit (Safari engine) — mirrors firefox setup
+    {
+      name: 'webkit',
+      testDir: './tests',
+      testIgnore: /.*(auth|api-health)\.spec\.js/,
+      use: {
+        ...devices['Desktop Safari'],
+        storageState: AUTH_STATE_PATH,
+      },
+      dependencies: ['setup'],
+    },
+
     // Mobile viewport
     {
       name: 'mobile-chrome',

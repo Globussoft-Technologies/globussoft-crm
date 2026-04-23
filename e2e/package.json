@@ -19,6 +19,7 @@
     "setup:auth": "playwright test auth.setup.js"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.2",
     "@playwright/test": "^1.49.0"
   },
   "dependencies": {

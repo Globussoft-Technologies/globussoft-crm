@@ -20,9 +20,11 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.2",
-    "@playwright/test": "^1.49.0"
+    "@playwright/test": "^1.49.0",
+    "jsonwebtoken": "^9.0.3"
   },
   "dependencies": {
+    "mysql2": "^3.15.0",
     "pdf-parse": "^2.4.5"
   }
 }

@@ -14,6 +14,11 @@ module.exports = defineConfig({
     timeout: 15000,
   },
 
+  // Runs once after ALL tests finish. Deletes E2E-flavored rows from the DB
+  // so the wellness Owner Dashboard doesn't accumulate fake patients/leads
+  // across re-runs. Set E2E_SKIP_SCRUB=1 to opt out. See ./global-teardown.js.
+  globalTeardown: require.resolve('./global-teardown.js'),
+
   reporter: [
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
     ['junit', { outputFile: 'playwright-report/junit.xml' }],

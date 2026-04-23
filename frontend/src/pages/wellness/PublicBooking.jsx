@@ -135,15 +135,25 @@ export default function PublicBooking() {
   );
 }
 
+// Public booking is shown to cold visitors who have no authenticated theme
+// context, so the page hardcodes its own palette instead of inheriting
+// --app-bg / --text-primary (which were producing dark-on-dark text and
+// failing axe contrast on /book/:slug). Colors: cream bg + deep teal text,
+// ~18:1 contrast (WCAG AAA).
+const PUB_BG       = '#FDF6EC';
+const PUB_TEXT     = '#111827';
+const PUB_CARD_BG  = '#ffffff';
+const PUB_BORDER   = 'rgba(17, 24, 39, 0.12)';
+
 function FullPage({ children }) {
   return (
-    <div style={{ minHeight: '100vh', padding: '2rem 1rem', display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'var(--app-bg, #0a0a0f)', color: 'var(--text-primary)' }}>
+    <div style={{ minHeight: '100vh', padding: '2rem 1rem', display: 'flex', flexDirection: 'column', alignItems: 'center', background: PUB_BG, color: PUB_TEXT }}>
       <div style={{ width: '100%', maxWidth: '880px' }}>{children}</div>
     </div>
   );
 }
 
-const sectionH = { fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-primary)' };
-const cardBtn = { padding: '1rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, cursor: 'pointer', textAlign: 'left', color: 'var(--text-primary)', transition: 'all 0.15s' };
-const input = { padding: '0.6rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none', width: '100%' };
+const sectionH = { fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: PUB_TEXT };
+const cardBtn = { padding: '1rem', background: PUB_CARD_BG, border: `1px solid ${PUB_BORDER}`, borderRadius: 12, cursor: 'pointer', textAlign: 'left', color: PUB_TEXT, transition: 'all 0.15s' };
+const input = { padding: '0.6rem 0.75rem', background: PUB_CARD_BG, border: `1px solid ${PUB_BORDER}`, borderRadius: 8, color: PUB_TEXT, fontSize: '0.9rem', outline: 'none', width: '100%' };
 const confirmCard = { padding: '2.5rem', textAlign: 'center', maxWidth: '520px', margin: '4rem auto' };

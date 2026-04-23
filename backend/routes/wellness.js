@@ -605,6 +605,35 @@ router.post("/orchestrator/run", async (req, res) => {
   }
 });
 
+// Manual triggers for the other 2 crons — for testing + demo replay.
+// Restricted to ADMIN/MANAGER (verify role via req.user.role check).
+router.post("/reminders/run", async (req, res) => {
+  try {
+    const { processTenant } = require("../cron/appointmentRemindersEngine");
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { id: true, name: true, slug: true },
+    });
+    const result = await processTenant(tenant);
+    res.json(result);
+  } catch (e) {
+    console.error("[reminders] manual run failed:", e.message);
+    res.status(500).json({ error: "Failed to run reminders", detail: e.message });
+  }
+});
+
+router.post("/ops/run", async (req, res) => {
+  try {
+    const { runNpsForTenant, runRetentionForTenant } = require("../cron/wellnessOpsEngine");
+    const npsSent = await runNpsForTenant(req.user.tenantId);
+    const purged = await runRetentionForTenant(req.user.tenantId);
+    res.json({ npsSent, purged });
+  } catch (e) {
+    console.error("[wellness-ops] manual run failed:", e.message);
+    res.status(500).json({ error: "Failed to run ops", detail: e.message });
+  }
+});
+
 router.post("/recommendations/:id/reject", async (req, res) => {
   try {
     const id = parseInt(req.params.id);

@@ -224,7 +224,7 @@ export default function Softphone() {
         </div>
       )}
 
-      <button onClick={togglePhone} style={{ width: '64px', height: '64px', borderRadius: '50%', background: isOpen ? '#ef4444' : 'var(--accent-color)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', cursor: 'pointer', boxShadow: '0 10px 25px rgba(0,0,0,0.5)', transition: 'all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)', transform: isOpen ? 'rotate(135deg) scale(0.9)' : 'rotate(0deg) scale(1)' }}>
+      <button onClick={togglePhone} aria-label={isOpen ? 'Close softphone dialer' : 'Open softphone dialer'} aria-expanded={isOpen} style={{ width: '64px', height: '64px', borderRadius: '50%', background: isOpen ? '#ef4444' : 'var(--accent-color)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', cursor: 'pointer', boxShadow: '0 10px 25px rgba(0,0,0,0.5)', transition: 'all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)', transform: isOpen ? 'rotate(135deg) scale(0.9)' : 'rotate(0deg) scale(1)' }}>
         <Phone size={28} />
       </button>
 

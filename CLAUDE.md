@@ -5,7 +5,7 @@
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.1.0 (wellness vertical + external partner API + embed widget)
+- **Version:** v3.2.0 (production-ready wellness: field encryption, telehealth, loyalty, white-label)
 - **Branch:** main (single-branch workflow)
 
 ## Verticals

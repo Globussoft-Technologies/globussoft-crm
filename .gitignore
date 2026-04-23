@@ -1,6 +1,7 @@
 node_modules
 .env
 .env.*
+local.env
 dev.db
 dev.db-journal
 dist

@@ -2,7 +2,7 @@
 
 > A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 15 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. 124+ E2E tests passing on production.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.1.0
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.0
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md)
 
 ## What's new in v3.1 (April 2026)

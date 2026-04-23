@@ -1,7 +1,7 @@
 openapi: 3.0.0
 info:
   title: Globussoft Enterprise CRM API
-  version: 2.0.0
+  version: 3.2.0
   description: Public REST API for third-party developer integrations. Use Webhooks for streaming external state events and REST endpoints for CRUD fetching.
 servers:
   - url: http://localhost:5000/api

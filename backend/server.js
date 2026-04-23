@@ -332,7 +332,7 @@ app.get("/api/health", async (req, res) => {
 
   res.json({
     status: dbStatus === "connected" ? "healthy" : "degraded",
-    version: "2.0.0",
+    version: "3.2.0",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     database: dbStatus,
@@ -340,7 +340,7 @@ app.get("/api/health", async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.json({ message: "Enterprise CRM API Core Online", version: "2.0.0" });
+  res.json({ message: "Enterprise CRM API Core Online", version: "3.2.0" });
 });
 
 // Global JSON error handler — must come AFTER all routes.

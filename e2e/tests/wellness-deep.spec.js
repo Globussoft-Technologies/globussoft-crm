@@ -10,9 +10,14 @@
  *        npx playwright test tests/wellness-deep.spec.js --project=chromium
  */
 const { test, expect } = require('@playwright/test');
-const pdfParse = require('pdf-parse');
+const pdfParseMod = require('pdf-parse');
+const pdfParse = pdfParseMod.default || pdfParseMod;
 const path = require('path');
 const crypto = require('crypto');
+
+// Direct require of backend lib for unit-level tests inside the E2E runner.
+// Resolved relative to this file so it works on both Win + Linux.
+const fieldEncryption = require(path.resolve(__dirname, '..', '..', 'backend', 'lib', 'fieldEncryption'));
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const API = `${BASE_URL}/api`;
@@ -274,40 +279,53 @@ test.describe.serial('Wellness deep — Visit photo upload', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 test.describe('Wellness deep — Field encryption helper', () => {
-  // We can't directly call backend lib code from the test runner, so we
-  // re-implement the contract here and assert the same shape. The actual
-  // backend lib is unit-tested by exec'ing it via a node one-liner.
-  const { execSync } = require('child_process');
-  const backendDir = path.resolve(__dirname, '..', '..', 'backend');
-
-  function runJs(script) {
-    return execSync(`node -e "${script.replace(/"/g, '\\"')}"`, {
-      cwd: backendDir, encoding: 'utf8', timeout: 8000,
-    }).trim();
+  // Direct require of the backend lib. We toggle WELLNESS_FIELD_KEY between
+  // tests + re-require the module fresh so the cached _key is reset.
+  function withKey(keyHex, fn) {
+    if (keyHex) process.env.WELLNESS_FIELD_KEY = keyHex;
+    else delete process.env.WELLNESS_FIELD_KEY;
+    // Bust the require cache so the module re-evaluates getKey()
+    const modPath = path.resolve(__dirname, '..', '..', 'backend', 'lib', 'fieldEncryption');
+    delete require.cache[require.resolve(modPath)];
+    const mod = require(modPath);
+    return fn(mod);
   }
 
   test('15. encrypt() is no-op when WELLNESS_FIELD_KEY missing', () => {
-    delete process.env.WELLNESS_FIELD_KEY;
-    const out = runJs('delete process.env.WELLNESS_FIELD_KEY; const {encrypt} = require("./lib/fieldEncryption"); console.log(encrypt("hello world"))');
-    expect(out).toBe('hello world');
+    withKey(null, ({ encrypt, isEncrypted }) => {
+      const out = encrypt('hello world');
+      expect(out).toBe('hello world');
+      expect(isEncrypted(out)).toBe(false);
+    });
   });
 
   test('16. encrypt → decrypt round-trip preserves plaintext', () => {
     const key = crypto.randomBytes(32).toString('hex');
-    const out = runJs(`process.env.WELLNESS_FIELD_KEY='${key}'; const {encrypt,decrypt}=require("./lib/fieldEncryption"); const c=encrypt("Patient is allergic to penicillin"); console.log(decrypt(c))`);
-    expect(out).toBe('Patient is allergic to penicillin');
+    withKey(key, ({ encrypt, decrypt }) => {
+      const cipher = encrypt('Patient is allergic to penicillin');
+      expect(cipher.startsWith('ENC:v1:')).toBe(true);
+      const back = decrypt(cipher);
+      expect(back).toBe('Patient is allergic to penicillin');
+    });
   });
 
   test('17. isEncrypted() detects the ENC:v1: prefix', () => {
     const key = crypto.randomBytes(32).toString('hex');
-    const out = runJs(`process.env.WELLNESS_FIELD_KEY='${key}'; const {encrypt,isEncrypted}=require("./lib/fieldEncryption"); const c=encrypt("secret"); console.log(isEncrypted(c) && c.startsWith("ENC:v1:"))`);
-    expect(out).toBe('true');
+    withKey(key, ({ encrypt, isEncrypted }) => {
+      const cipher = encrypt('secret');
+      expect(isEncrypted(cipher)).toBe(true);
+      expect(isEncrypted('plain text')).toBe(false);
+      expect(isEncrypted(null)).toBe(false);
+    });
   });
 
   test('18. encrypt() is idempotent (does not double-encrypt)', () => {
     const key = crypto.randomBytes(32).toString('hex');
-    const out = runJs(`process.env.WELLNESS_FIELD_KEY='${key}'; const {encrypt}=require("./lib/fieldEncryption"); const a=encrypt("x"); const b=encrypt(a); console.log(a===b)`);
-    expect(out).toBe('true');
+    withKey(key, ({ encrypt }) => {
+      const a = encrypt('x');
+      const b = encrypt(a);
+      expect(a).toBe(b);
+    });
   });
 });
 
@@ -372,6 +390,9 @@ test.describe('Wellness deep — Lead auto-router fallbacks', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 test.describe.serial('Wellness deep — Real browser UI flows', () => {
+  // Use a clean storage state so we always start from a logged-out browser
+  test.use({ storageState: { cookies: [], origins: [] } });
+
   test('22. Login as wellness admin → land on /wellness with KPI cards visible', async ({ page }) => {
     await page.goto(`${BASE_URL}/login`);
     await page.waitForLoadState('domcontentloaded');
@@ -454,6 +475,8 @@ test.describe.serial('Wellness deep — Real browser UI flows', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 test.describe('Wellness deep — Theme', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
   test('27. After wellness login, body has data-vertical="wellness"', async ({ page }) => {
     await page.goto(`${BASE_URL}/login`);
     await page.getByRole('button', { name: /Demo Admin/i }).click();

@@ -37,12 +37,13 @@ async function runNpsForTenant(tenantId) {
     if (!v.patient?.phone) continue;
     // Have we already created a survey for this visit? We tag the survey title.
     const tag = `nps-visit-${v.id}`;
-    const existing = await prisma.survey.findFirst({ where: { tenantId, title: tag } });
+    const existing = await prisma.survey.findFirst({ where: { tenantId, name: tag } });
     if (existing) continue;
 
     const survey = await prisma.survey.create({
       data: {
-        title: tag,
+        name: tag,
+        type: "NPS",
         question: `How was your ${v.service?.name || "visit"} with us? Reply 0-10 (10 = loved it).`,
         tenantId,
       },

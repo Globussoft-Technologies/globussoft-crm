@@ -19,6 +19,25 @@ vi.mock('recharts', async () => {
 
 import { fetchApi } from '../utils/api';
 import OwnerDashboard from '../pages/wellness/OwnerDashboard';
+import { AuthContext } from '../App';
+
+// The component reads tenant + user from AuthContext for the AdsGPT SSO
+// card. Wrap every render in a provider so useContext doesn't destructure
+// undefined. Returns a small wrapper component the tests use.
+function renderDashboard() {
+  return render(
+    <AuthContext.Provider value={{
+      user: { id: 1, name: 'Test User', email: 'test@x.test', role: 'ADMIN' },
+      setUser: () => {},
+      token: 't',
+      setToken: () => {},
+      tenant: { id: 2, name: 'Enhanced Wellness', slug: 'enhanced-wellness', vertical: 'wellness', defaultCurrency: 'INR' },
+      setTenant: () => {},
+    }}>
+      <MemoryRouter><OwnerDashboard /></MemoryRouter>
+    </AuthContext.Provider>
+  );
+}
 
 const dashboardJson = {
   today: { visits: 12, completed: 5, expectedRevenue: 84500, occupancyPct: 72, newLeads: 9 },
@@ -47,7 +66,7 @@ describe('<OwnerDashboard />', () => {
 
   it('renders KPI tile labels after the dashboard JSON loads', async () => {
     setupFetch([{ id: 1, name: 'Ranchi' }]);
-    render(<MemoryRouter><OwnerDashboard /></MemoryRouter>);
+    renderDashboard();
 
     await waitFor(() => expect(screen.getByText(/Today's appointments/i)).toBeInTheDocument());
     expect(screen.getByText(/Today's expected revenue/i)).toBeInTheDocument();
@@ -59,7 +78,7 @@ describe('<OwnerDashboard />', () => {
 
   it('formatRupees output appears (₹84,500 today, ₹92,300 yesterday)', async () => {
     setupFetch([{ id: 1, name: 'Ranchi' }]);
-    render(<MemoryRouter><OwnerDashboard /></MemoryRouter>);
+    renderDashboard();
 
     await waitFor(() => expect(screen.getByText(/₹84,500/)).toBeInTheDocument());
     expect(screen.getByText(/₹92,300/)).toBeInTheDocument();
@@ -68,7 +87,7 @@ describe('<OwnerDashboard />', () => {
 
   it('Recommendations link is present', async () => {
     setupFetch([{ id: 1, name: 'Ranchi' }]);
-    render(<MemoryRouter><OwnerDashboard /></MemoryRouter>);
+    renderDashboard();
 
     await waitFor(() => expect(screen.getByText(/Boost Diwali campaign/i)).toBeInTheDocument());
     const links = screen.getAllByRole('link');
@@ -77,7 +96,7 @@ describe('<OwnerDashboard />', () => {
 
   it('does NOT show the location switcher when only 1 location exists', async () => {
     setupFetch([{ id: 1, name: 'Ranchi' }]);
-    render(<MemoryRouter><OwnerDashboard /></MemoryRouter>);
+    renderDashboard();
 
     await waitFor(() => expect(screen.getByText(/Today's appointments/i)).toBeInTheDocument());
     expect(screen.queryByRole('option', { name: /All locations/i })).not.toBeInTheDocument();
@@ -85,7 +104,7 @@ describe('<OwnerDashboard />', () => {
 
   it('SHOWS the location switcher when locations.length > 1', async () => {
     setupFetch([{ id: 1, name: 'Ranchi' }, { id: 2, name: 'Patna' }]);
-    render(<MemoryRouter><OwnerDashboard /></MemoryRouter>);
+    renderDashboard();
 
     await waitFor(() => expect(screen.getByText(/Today's appointments/i)).toBeInTheDocument());
     expect(screen.getByRole('option', { name: /All locations/i })).toBeInTheDocument();

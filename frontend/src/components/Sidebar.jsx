@@ -128,6 +128,7 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, i
       <Link to="/inbox" icon={InboxIcon} label="Unified Inbox" />
       <Link to="/wellness/telecaller" icon={PhoneCall} label="Telecaller Queue" />
       <Link to="/leads" icon={UserPlus} label="All Leads" managerOnly />
+      <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" managerOnly />
       <Link to="/tasks" icon={CheckSquare} label="Tasks" />
       <Link to="/marketplace-leads" icon={ShoppingBag} label="Marketplace Leads" managerOnly />
       <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
@@ -187,6 +188,7 @@ function renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, is
       <Link to="/contacts" icon={Users} label="Contacts" />
       <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
       <Link to="/leads" icon={UserPlus} label="Leads" />
+      <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" />
       <Link to="/clients" icon={Building2} label="Clients" />
       <Link to="/tasks" icon={CheckSquare} label="Task Queue" />
       <Link to="/tickets" icon={Ticket} label="Tickets" />

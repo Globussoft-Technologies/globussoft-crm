@@ -30,6 +30,7 @@ const Staff = lazy(() => import('./pages/Staff'));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const LeadScoring = lazy(() => import('./pages/LeadScoring'));
 const Leads = lazy(() => import('./pages/Leads'));
+const ConvertedLeads = lazy(() => import('./pages/ConvertedLeads'));
 const Clients = lazy(() => import('./pages/Clients'));
 const Expenses = lazy(() => import('./pages/Expenses'));
 const Contracts = lazy(() => import('./pages/Contracts'));
@@ -179,6 +180,7 @@ export default function App() {
               <Route path="projects" element={<Projects />} />
               <Route path="clients" element={<Clients />} />
               <Route path="leads" element={<Leads />} />
+              <Route path="converted-leads" element={<ConvertedLeads />} />
               <Route path="staff" element={<Staff />} />
               <Route path="profile" element={<Profile />} />
               <Route path="profile/2fa" element={<Profile2FA />} />

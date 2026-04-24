@@ -67,3 +67,6 @@ e2e/fetch_fathom.js
 
 # Claude session runtime
 .claude/
+
+.env
+.env.docker

@@ -2,9 +2,13 @@ const express = require('express');
 const { verifyToken } = require('../middleware/auth');
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const audienceController = require("../controllers/audienceController")
+
 
 // Protect all contact routes
 router.use(verifyToken);
+router.get("/by-status", audienceController.getContactsByStatus)
+
 
 router.get('/', async (req, res) => {
   try {
@@ -309,5 +313,6 @@ router.delete('/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete contact' });
   }
 });
+
 
 module.exports = router;

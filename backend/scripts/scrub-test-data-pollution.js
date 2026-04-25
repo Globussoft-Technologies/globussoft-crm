@@ -143,17 +143,20 @@ async function scrubEmails() {
 }
 
 async function scrubCallLogs() {
+  // CallLog has no `summary` field — notes is the closest free-text. Transcript
+  // URL is stored under recordingUrl (the schema doesn't have transcriptUrl).
   const all = await prisma.callLog.findMany({
-    select: { id: true, summary: true, transcriptUrl: true, tenantId: true },
+    select: { id: true, notes: true, recordingUrl: true, tenantId: true },
     take: 5000,
   });
   const bad = all.filter((r) =>
-    isTestName(r.summary) ||
-    (r.transcriptUrl && /\/e2e\.txt$/i.test(r.transcriptUrl))
+    isTestName(r.notes) ||
+    (r.recordingUrl && /\/e2e\.txt$/i.test(r.recordingUrl)) ||
+    (r.notes && /E2E smoke test|callified\.ai\/tx\/e2e\.txt/i.test(r.notes))
   );
   console.log(`CallLogs (first 5000): ${bad.length} are test rows`);
   if (bad.length) {
-    previewRows(bad, (r) => `call ${r.id} (tenant ${r.tenantId}): "${r.summary || "(no summary)"}"`);
+    previewRows(bad, (r) => `call ${r.id} (tenant ${r.tenantId}): "${(r.notes || "(no notes)").slice(0, 60)}"`);
     if (APPLY) {
       const r = await prisma.callLog.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
       console.log(`     → DELETED ${r.count} call logs`);

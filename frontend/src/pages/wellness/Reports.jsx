@@ -180,19 +180,25 @@ function LocTable({ data }) {
 }
 
 function AttTable({ data }) {
+  // #156: defensive defaults — if the API ever returns a partial response (e.g.
+  // missing totals or rows), render "No data" instead of crashing the whole page
+  // on `undefined.toLocaleString()`. Reproducer wasn't found in dry-runs, but
+  // the cost of guarding is zero.
+  const totals = data?.totals || { leads: 0, junk: 0, qualified: 0, revenue: 0 };
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
   return (
     <>
       <Totals items={[
-        { label: 'Total leads', value: data.totals.leads.toLocaleString('en-IN') },
-        { label: 'Junk', value: data.totals.junk.toLocaleString('en-IN') },
-        { label: 'Qualified', value: data.totals.qualified.toLocaleString('en-IN') },
-        { label: 'Revenue', value: formatMoney(data.totals.revenue) },
+        { label: 'Total leads', value: (totals.leads || 0).toLocaleString('en-IN') },
+        { label: 'Junk', value: (totals.junk || 0).toLocaleString('en-IN') },
+        { label: 'Qualified', value: (totals.qualified || 0).toLocaleString('en-IN') },
+        { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
       ]} />
       <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
         <table style={tableStyle}>
           <thead><tr>{['Source', 'Leads', 'Junk %', 'Conv %', 'Revenue', 'Rev / Lead'].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
           <tbody>
-            {data.rows.map((r) => (
+            {rows.map((r) => (
               <tr key={r.source}>
                 <td style={td}><strong>{r.source}</strong></td>
                 <td style={tdR}>{r.leads}</td>
@@ -202,7 +208,7 @@ function AttTable({ data }) {
                 <td style={tdR}>{formatMoney(r.revenuePerLead)}</td>
               </tr>
             ))}
-            {data.rows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No leads in this window.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No leads in this window.</td></tr>}
           </tbody>
         </table>
       </div>

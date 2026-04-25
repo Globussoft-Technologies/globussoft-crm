@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react';
+import { useContext, useState, useRef, useLayoutEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3,
@@ -17,6 +17,19 @@ const Sidebar = () => {
   const isAdmin = role === 'ADMIN';
   const isManager = role === 'ADMIN' || role === 'MANAGER';
   const isWellness = tenant?.vertical === 'wellness';
+
+  // #151: persist sidebar scroll across re-renders. The browser usually does this
+  // for free, but route-driven re-renders sometimes cause the nav to reset to top
+  // (reproducible via items in the lower part of the sidebar). useLayoutEffect
+  // restores the saved scrollTop synchronously after every render, so users keep
+  // the position they last scrolled to.
+  const navRef = useRef(null);
+  const scrollRef = useRef(0);
+  useLayoutEffect(() => {
+    if (navRef.current && scrollRef.current > 0) {
+      navRef.current.scrollTop = scrollRef.current;
+    }
+  });
   const brand = tenant?.name || 'Globussoft';
   const logoUrl = tenant?.logoUrl || null;
   const brandColor = tenant?.brandColor || null;
@@ -97,7 +110,11 @@ const Sidebar = () => {
         <h1 style={{ fontSize: '1.1rem', fontWeight: 'bold', fontFamily: 'var(--font-family)', lineHeight: 1.1 }}>{brand}</h1>
       </div>
 
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <nav
+        ref={navRef}
+        onScroll={(e) => { scrollRef.current = e.currentTarget.scrollTop; }}
+        style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}
+      >
         {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) : renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager })}
       </nav>
     </aside>

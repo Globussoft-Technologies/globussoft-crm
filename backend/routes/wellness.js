@@ -627,6 +627,20 @@ router.post("/services", async (req, res) => {
     if (!Number.isFinite(price) || price <= 0) {
       return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
     }
+    // #149: durationMin must be positive; targetRadiusKm must be non-negative
+    // when supplied (null = unlimited is fine).
+    if (durationMin !== undefined && durationMin !== null) {
+      const d = Number(durationMin);
+      if (!Number.isFinite(d) || d <= 0) {
+        return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
+      }
+    }
+    if (targetRadiusKm !== undefined && targetRadiusKm !== null && targetRadiusKm !== "") {
+      const r = Number(targetRadiusKm);
+      if (!Number.isFinite(r) || r < 0) {
+        return res.status(400).json({ error: "targetRadiusKm cannot be negative", code: "RADIUS_INVALID" });
+      }
+    }
     const svc = await prisma.service.create({
       data: {
         name,
@@ -659,6 +673,19 @@ router.put("/services/:id", async (req, res) => {
       const price = Number(data.basePrice);
       if (!Number.isFinite(price) || price <= 0) {
         return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
+      }
+    }
+    // #149: same duration / radius guards on edit.
+    if (data.durationMin !== undefined && data.durationMin !== null) {
+      const d = Number(data.durationMin);
+      if (!Number.isFinite(d) || d <= 0) {
+        return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
+      }
+    }
+    if (data.targetRadiusKm !== undefined && data.targetRadiusKm !== null && data.targetRadiusKm !== "") {
+      const r = Number(data.targetRadiusKm);
+      if (!Number.isFinite(r) || r < 0) {
+        return res.status(400).json({ error: "targetRadiusKm cannot be negative", code: "RADIUS_INVALID" });
       }
     }
     const updated = await prisma.service.update({ where: { id }, data });

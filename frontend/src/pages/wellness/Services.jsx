@@ -197,15 +197,35 @@ function ServiceCard({ service, onChanged }) {
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
+    // #149: validate before submit. Backend rejects basePrice<=0 (batch 1 #115)
+    // but the rejection was silently swallowed, AND duration / radius accepted
+    // negatives because the backend doesn't check those.
+    const price = parseFloat(draft.basePrice);
+    const duration = parseInt(draft.durationMin);
+    const radius = draft.targetRadiusKm === '' || draft.targetRadiusKm == null
+      ? null
+      : parseInt(draft.targetRadiusKm);
+    if (!Number.isFinite(price) || price <= 0) {
+      alert('Base price must be greater than 0.');
+      return;
+    }
+    if (!Number.isFinite(duration) || duration <= 0) {
+      alert('Duration must be greater than 0 minutes.');
+      return;
+    }
+    if (radius !== null && (!Number.isFinite(radius) || radius < 0)) {
+      alert('Marketing radius cannot be negative. Leave blank for unlimited.');
+      return;
+    }
     setSaving(true);
     try {
       await fetchApi(`/api/wellness/services/${service.id}`, {
         method: 'PUT',
         body: JSON.stringify({
           name: draft.name, category: draft.category, ticketTier: draft.ticketTier,
-          basePrice: parseFloat(draft.basePrice) || 0,
-          durationMin: parseInt(draft.durationMin) || 30,
-          targetRadiusKm: draft.targetRadiusKm ? parseInt(draft.targetRadiusKm) : null,
+          basePrice: price,
+          durationMin: duration,
+          targetRadiusKm: radius,
           description: draft.description || null,
           isActive: draft.isActive !== false,
         }),
@@ -239,9 +259,10 @@ function ServiceCard({ service, onChanged }) {
           </select>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.4rem' }}>
-          <input type="number" value={draft.basePrice} onChange={(e) => setDraft({ ...draft, basePrice: e.target.value })} style={inputStyle} placeholder="₹ price" />
-          <input type="number" value={draft.durationMin} onChange={(e) => setDraft({ ...draft, durationMin: e.target.value })} style={inputStyle} placeholder="min" />
-          <input type="number" value={draft.targetRadiusKm || ''} onChange={(e) => setDraft({ ...draft, targetRadiusKm: e.target.value })} style={inputStyle} placeholder="km radius" />
+          {/* #149: min attrs are HTML5 hints; save() also re-validates so users can't bypass via paste. */}
+          <input type="number" min="1" step="1" value={draft.basePrice} onChange={(e) => setDraft({ ...draft, basePrice: e.target.value })} style={inputStyle} placeholder="₹ price" />
+          <input type="number" min="1" step="1" value={draft.durationMin} onChange={(e) => setDraft({ ...draft, durationMin: e.target.value })} style={inputStyle} placeholder="min" />
+          <input type="number" min="0" step="1" value={draft.targetRadiusKm || ''} onChange={(e) => setDraft({ ...draft, targetRadiusKm: e.target.value })} style={inputStyle} placeholder="km radius" />
         </div>
         <textarea value={draft.description || ''} onChange={(e) => setDraft({ ...draft, description: e.target.value })} rows={2} style={{ ...inputStyle, resize: 'vertical' }} placeholder="Description" />
         <div style={{ display: 'flex', gap: '0.4rem' }}>

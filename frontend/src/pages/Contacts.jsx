@@ -185,7 +185,11 @@ const Contacts = () => {
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <div>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Contacts</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Manage your leads and customers</p>
+          {/* #143: surface the total count so the user knows what they're looking at,
+              matching the parity that /wellness/patients already has. */}
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+            {contacts.length.toLocaleString()} contact{contacts.length === 1 ? '' : 's'} · manage your leads and customers
+          </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <button

@@ -31,8 +31,11 @@ router.get("/", async (req, res) => {
       if (to) where.createdAt.lte = new Date(to);
     }
 
+    // #172: pagination support (was ignored entirely pre-fix).
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
     const deals = await prisma.deal.findMany({
-      where,
+      where, take: limit, skip: offset,
       include: { contact: true, owner: true },
       orderBy: { createdAt: "desc" },
     });
@@ -114,11 +117,36 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+// #162 #173: stages used as a closed enum across pipeline analytics. Match the
+// values seeded in pipeline_stages + already used in code: lead, contacted,
+// proposal, negotiation, won, lost. Lowercase matches existing seed data.
+const ALLOWED_DEAL_STAGES = new Set(["lead", "contacted", "proposal", "negotiation", "won", "lost"]);
+const { ensureNumberInRange, ensureEnum } = require("../lib/validators");
+
+function validateDealInput(body, { isUpdate = false } = {}) {
+  if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
+    const e = ensureNumberInRange(body.amount, { min: 0, max: 1e12, field: "amount", code: "INVALID_AMOUNT" });
+    if (e) return e;
+  }
+  if (body.probability !== undefined && body.probability !== null && body.probability !== "") {
+    const e = ensureNumberInRange(body.probability, { min: 0, max: 100, field: "probability", code: "INVALID_PROBABILITY" });
+    if (e) return e;
+  }
+  if (body.stage !== undefined && body.stage !== null && body.stage !== "") {
+    const e = ensureEnum(body.stage, ALLOWED_DEAL_STAGES, { field: "stage", code: "INVALID_STAGE" });
+    if (e) return e;
+  }
+  return null;
+}
+
 // ─── POST / — create deal ────────────────────────────────────────────
 router.post("/", async (req, res) => {
   try {
     const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
+    // #162: validate amount, probability, stage so bad inputs return 400.
+    const inputErr = validateDealInput(req.body, { isUpdate: false });
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const data = {
       title,
@@ -175,6 +203,10 @@ router.put("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Deal not found" });
 
     const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId } = req.body;
+    // #168 #173: same validation as POST — PUT can no longer accept negative
+    // amount / out-of-range probability / unknown stage.
+    const inputErr = validateDealInput(req.body, { isUpdate: true });
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
     const data = {};
 
     if (title !== undefined) data.title = title;

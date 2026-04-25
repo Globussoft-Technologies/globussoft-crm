@@ -2,7 +2,29 @@ const express = require('express');
 const { verifyToken } = require('../middleware/auth');
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const audienceController = require("../controllers/audienceController")
+const audienceController = require("../controllers/audienceController");
+const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, conflictFromPrisma } = require("../lib/validators");
+
+// #160 #166 #168: shared validator for create + update payloads on Contact.
+function validateContactInput(body, { isUpdate = false } = {}) {
+  // Email — required on create, optional on update; if present, must parse.
+  const emailErr = ensureEmail(body.email, { required: !isUpdate });
+  if (emailErr) return emailErr;
+  // Name — string length cap, prevents Prisma column-overflow 500s (#165).
+  const nameErr = ensureStringLength(body.name, { max: 200, field: "name" });
+  if (nameErr) return nameErr;
+  // aiScore — bounded 0–100; UI renders "X/100" so anything else is broken (#166).
+  if (body.aiScore !== undefined && body.aiScore !== null) {
+    const scoreErr = ensureNumberInRange(body.aiScore, { min: 0, max: 100, field: "aiScore", code: "INVALID_AISCORE" });
+    if (scoreErr) return scoreErr;
+  }
+  // status — keep open enum but reject obvious junk like "C" (importer #154 already does this).
+  if (body.status !== undefined && body.status !== null && body.status !== "") {
+    const stErr = ensureEnum(body.status, ["Lead", "Prospect", "Customer", "Churned", "Junk"], { field: "status" });
+    if (stErr) return stErr;
+  }
+  return null;
+}
 
 
 // Protect all contact routes
@@ -16,7 +38,16 @@ router.get('/', async (req, res) => {
     if (req.query.status) where.status = req.query.status;
     if (req.query.assignedToId) where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === 'true') where.assignedToId = null;
-    res.json(await prisma.contact.findMany({ where, include: { activities: true, tasks: true, assignedTo: { select: { id: true, name: true, email: true } } } }));
+    // #172: honor limit / offset query params with sensible defaults + a hard cap.
+    // Pre-fix the API silently returned the entire dataset, breaking pagination
+    // and exposing a perf/DoS surface.
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
+    res.json(await prisma.contact.findMany({
+      where, take: limit, skip: offset,
+      orderBy: { id: 'desc' },
+      include: { activities: true, tasks: true, assignedTo: { select: { id: true, name: true, email: true } } },
+    }));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
   }
@@ -39,10 +70,17 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
+    // clear code instead of a 500 from the DB layer.
+    const inputErr = validateContactInput(req.body, { isUpdate: false });
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
     const contact = await prisma.contact.create({ data: { ...req.body, tenantId: req.user.tenantId } });
     try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (e) { /* event bus optional */ }
     res.status(201).json(contact);
   } catch (err) {
+    // #178: duplicate email should be 409 Conflict, not 500.
+    const conflict = conflictFromPrisma(err);
+    if (conflict) return res.status(conflict.status).json(conflict);
     res.status(500).json({ error: 'Failed to create contact' });
   }
 });
@@ -80,8 +118,13 @@ router.put('/:id', async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    // #168: same input checks as create so PUT can't bypass POST validation.
+    const inputErr = validateContactInput(req.body, { isUpdate: true });
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
     res.json(await prisma.contact.update({ where: { id: existing.id }, data: req.body }));
   } catch (err) {
+    const conflict = conflictFromPrisma(err);
+    if (conflict) return res.status(conflict.status).json(conflict);
     res.status(500).json({ error: 'Failed to update contact' });
   }
 });

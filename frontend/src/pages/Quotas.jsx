@@ -67,16 +67,14 @@ export default function Quotas() {
   };
 
   const loadUsers = async () => {
+    // #175: removed `/api/users` fallback — that endpoint doesn't exist on this
+    // backend (the canonical route is `/api/staff`), and the fallback only ran
+    // on errors so it spammed the network tab with 404s. Now stop on first failure.
     try {
       const data = await fetchApi('/api/staff');
       setUsers(Array.isArray(data) ? data : []);
-    } catch (e) {
-      try {
-        const fallback = await fetchApi('/api/users');
-        setUsers(Array.isArray(fallback) ? fallback : []);
-      } catch {
-        setUsers([]);
-      }
+    } catch {
+      setUsers([]);
     }
   };
 

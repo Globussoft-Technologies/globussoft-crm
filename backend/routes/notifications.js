@@ -92,27 +92,44 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// POST / — create + deliver notification (admin)
+// #169: enforce a type enum so callers can't store arbitrary strings.
+const ALLOWED_NOTIFICATION_TYPES = new Set(["info", "success", "warning", "error", "system", "deal", "task", "ticket"]);
+
+// POST / — create + deliver notification (admin-only for broadcast / cross-user)
 router.post("/", async (req, res) => {
   try {
     const { userId, title, message, type, link, channels } = req.body;
     if (!title || !message) {
       return res.status(400).json({ error: "title and message are required" });
     }
+    // #169: validate type so "INVALID_TYPE_ZZZ" can't be persisted.
+    if (type !== undefined && type !== null && type !== "" && !ALLOWED_NOTIFICATION_TYPES.has(type)) {
+      return res.status(400).json({
+        error: `type must be one of: ${[...ALLOWED_NOTIFICATION_TYPES].join(", ")}`,
+        code: "INVALID_NOTIFICATION_TYPE",
+      });
+    }
 
     const tenantId = req.user.tenantId;
+    const isAdmin = req.user.role === "ADMIN";
+    const callerId = req.user.userId;
     const io = req.io || null;
 
-    let result;
-    if (userId) {
-      // Single user
-      result = await notify({ userId: parseInt(userId), tenantId, title, message, type, link, channels, io });
-      res.status(201).json({ delivered: 1, notification: result });
-    } else {
-      // Broadcast to entire tenant
-      result = await notifyTenant({ tenantId, title, message, type, link, channels, io });
-      res.status(201).json({ delivered: result.length, notifications: result });
+    // #169: tighten authorization so a non-admin can't spam every user in the tenant.
+    //   - With a userId targeting another user → admin only.
+    //   - Without a userId (broadcast) → admin only.
+    //   - With userId === own userId → self-notify allowed for any role.
+    if (!userId) {
+      if (!isAdmin) return res.status(403).json({ error: "Only admins can broadcast notifications", code: "BROADCAST_FORBIDDEN" });
+      const result = await notifyTenant({ tenantId, title, message, type, link, channels, io });
+      return res.status(201).json({ delivered: result.length, notifications: result });
     }
+    const targetId = parseInt(userId);
+    if (targetId !== callerId && !isAdmin) {
+      return res.status(403).json({ error: "Only admins can notify other users", code: "CROSS_USER_FORBIDDEN" });
+    }
+    const result = await notify({ userId: targetId, tenantId, title, message, type, link, channels, io });
+    res.status(201).json({ delivered: 1, notification: result });
   } catch (err) {
     console.error("[Notifications] Create/deliver error:", err);
     res.status(500).json({ error: "Failed to create notification" });

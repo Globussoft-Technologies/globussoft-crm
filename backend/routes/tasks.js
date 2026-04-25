@@ -2,8 +2,32 @@ const express = require("express");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
+const { ensureEnum, ensureDateInRange } = require("../lib/validators");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+// #163: enums used elsewhere in the app — surfaced as strict checks instead of
+// silent coercion to "Pending".
+const ALLOWED_TASK_STATUSES = new Set(["Pending", "In Progress", "Completed", "Cancelled"]);
+const ALLOWED_TASK_PRIORITIES = new Set(["Low", "Medium", "High", "Critical"]);
+
+function validateTaskInput(body) {
+  if (body.priority !== undefined && body.priority !== null && body.priority !== "") {
+    const e = ensureEnum(body.priority, ALLOWED_TASK_PRIORITIES, { field: "priority", code: "INVALID_PRIORITY" });
+    if (e) return e;
+  }
+  if (body.status !== undefined && body.status !== null && body.status !== "") {
+    const e = ensureEnum(body.status, ALLOWED_TASK_STATUSES, { field: "status", code: "INVALID_STATUS" });
+    if (e) return e;
+  }
+  if (body.dueDate !== undefined && body.dueDate !== null && body.dueDate !== "") {
+    // Reject obviously bogus dates (year < 2000 or > 2100). We allow past
+    // dueDates because users do legitimately log overdue work, but a 1900 or
+    // 2999 timestamp is always wrong and was silently accepted pre-fix.
+    const e = ensureDateInRange(body.dueDate, { minYear: 2000, maxYear: 2100, field: "dueDate", code: "INVALID_DUEDATE" });
+    if (e) return e;
+  }
+  return null;
+}
 
 // GET /api/tasks — with optional filters
 router.get("/", verifyToken, async (req, res) => {
@@ -19,8 +43,11 @@ router.get("/", verifyToken, async (req, res) => {
       where.status = "Pending";
     }
 
+    // #172: pagination
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
     const tasks = await prisma.task.findMany({
-      where,
+      where, take: limit, skip: offset,
       include: { contact: true, user: true },
       orderBy: { createdAt: "desc" },
     });
@@ -43,6 +70,9 @@ router.post("/", verifyToken, async (req, res) => {
   try {
     const { title, dueDate, contactId, userId, notes, priority } = req.body;
     if (!title) return res.status(400).json({ error: "title is required" });
+    // #163: reject invalid status / priority instead of silently coercing.
+    const inputErr = validateTaskInput(req.body);
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const task = await prisma.task.create({
       data: {
@@ -72,6 +102,10 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Task not found" });
+
+    // #168: same validation on update path.
+    const inputErr = validateTaskInput(req.body);
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const { title, notes, dueDate, priority, status } = req.body;
     const data = {};

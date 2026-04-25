@@ -24,13 +24,32 @@ router.get("/", verifyToken, async (req, res) => {
 router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const { amount, dueDate, contactId, dealId } = req.body;
+    // #158 #177: validate amount > 0 and within sane cap, dueDate >= today.
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be greater than 0", code: "INVALID_AMOUNT" });
+    }
+    if (amt > 1e10) {
+      return res.status(400).json({ error: "amount exceeds maximum allowed", code: "AMOUNT_TOO_HIGH" });
+    }
+    const due = dueDate ? new Date(dueDate) : null;
+    if (!due || Number.isNaN(due.getTime())) {
+      return res.status(400).json({ error: "dueDate is required and must be a valid date", code: "INVALID_DUE_DATE" });
+    }
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    if (due < todayStart) {
+      return res.status(400).json({ error: "dueDate cannot be in the past", code: "DUE_DATE_IN_PAST" });
+    }
+    if (!contactId) {
+      return res.status(400).json({ error: "contactId is required", code: "CONTACT_REQUIRED" });
+    }
     const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 
     const invoice = await prisma.invoice.create({
       data: {
         invoiceNum: invNum,
-        amount: parseFloat(amount),
-        dueDate: new Date(dueDate),
+        amount: amt,
+        dueDate: due,
         contactId: parseInt(contactId),
         dealId: dealId ? parseInt(dealId) : null,
         tenantId: req.user.tenantId,
@@ -40,6 +59,21 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
     res.status(201).json(invoice);
   } catch (err) {
     res.status(500).json({ error: "Invoice compilation and issuance failed" });
+  }
+});
+
+// #177: POST /:id/pay alias for the existing PUT /:id/pay so older clients
+// (and the bug reporter's POST attempts) work without the API contract gymnastics.
+router.post("/:id/pay", verifyToken, async (req, res) => {
+  try {
+    const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Invoice not found" });
+    const data = { status: "PAID" };
+    if (existing.status !== "PAID") data.paidAt = new Date();
+    const invoice = await prisma.invoice.update({ where: { id: existing.id }, data, include: { contact: true } });
+    res.json(invoice);
+  } catch (err) {
+    res.status(500).json({ error: "Payment reconciliation operation failed" });
   }
 });
 

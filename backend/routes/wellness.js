@@ -160,13 +160,29 @@ function isValidPhoneOrEmpty(p) {
   return digits.length >= 10 && digits.length <= 15;
 }
 
+const { ensureEmail, ensureDob, ensureVisitDate, ensureEnum, ensureStringLength } = require("../lib/validators");
+
+// #159 #160 #165 #170 #178: shared validation for Patient create + update.
+function validatePatientInput(body, { isUpdate = false } = {}) {
+  const nameErr = ensureStringLength(body.name, { max: 200, field: "name", required: !isUpdate });
+  if (nameErr) return nameErr;
+  const emailErr = ensureEmail(body.email);
+  if (emailErr) return emailErr;
+  if (!isValidPhoneOrEmpty(body.phone)) {
+    return { status: 400, error: "phone must contain 10–15 digits", code: "INVALID_PHONE" };
+  }
+  const dobErr = ensureDob(body.dob);
+  if (dobErr) return dobErr;
+  return null;
+}
+
+const ALLOWED_VISIT_STATUSES = new Set(["booked", "arrived", "in-treatment", "completed", "no-show", "cancelled"]);
+
 router.post("/patients", async (req, res) => {
   try {
     const { name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId } = req.body;
-    if (!name) return res.status(400).json({ error: "name is required" });
-    if (!isValidPhoneOrEmpty(phone)) {
-      return res.status(400).json({ error: "phone must contain 10–15 digits", code: "INVALID_PHONE" });
-    }
+    const inputErr = validatePatientInput(req.body, { isUpdate: false });
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
     const patient = await prisma.patient.create({
       data: {
         name,
@@ -221,9 +237,9 @@ router.put("/patients/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     const existing = await prisma.patient.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Patient not found" });
-    if (req.body.phone !== undefined && !isValidPhoneOrEmpty(req.body.phone)) {
-      return res.status(400).json({ error: "phone must contain 10–15 digits", code: "INVALID_PHONE" });
-    }
+    // #178: full validation on update mirrors create — phone/email/dob all checked.
+    const inputErr = validatePatientInput(req.body, { isUpdate: true });
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const data = {};
     const allowed = ["name", "email", "phone", "gender", "bloodGroup", "allergies", "notes", "source", "photoUrl"];
@@ -295,6 +311,17 @@ router.post("/visits", async (req, res) => {
   try {
     const { patientId, serviceId, doctorId, visitDate, status, vitals, notes, amountCharged, treatmentPlanId } = req.body;
     if (!patientId) return res.status(400).json({ error: "patientId is required" });
+    // #170: visitDate must be a valid date in [now-5y, now+1y]. Pre-fix the
+    // route accepted year 1800 / 3000 (silent 201) and 500'd on bogus strings.
+    if (visitDate !== undefined) {
+      const dateErr = ensureVisitDate(visitDate);
+      if (dateErr) return res.status(dateErr.status).json(dateErr);
+    }
+    // #170: status restricted to the documented enum (no more "COMPLETELY_BOGUS").
+    if (status !== undefined && status !== null && status !== "") {
+      const statusErr = ensureEnum(status, ALLOWED_VISIT_STATUSES, { field: "status", code: "STATUS_INVALID" });
+      if (statusErr) return res.status(statusErr.status).json(statusErr);
+    }
     // #109: a "completed" visit (the default the UI submits) must have a service
     // and doctor — anonymous "ghost visits" corrupt revenue/per-pro reports.
     // Booked/cancelled/no-show statuses can be partial since the visit hasn't happened.

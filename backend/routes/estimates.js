@@ -10,8 +10,11 @@ router.get("/", async (req, res) => {
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
 
+    // #172: pagination
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
     const estimates = await prisma.estimate.findMany({
-      where,
+      where, take: limit, skip: offset,
       include: { contact: true, deal: true, lineItems: true },
       orderBy: { createdAt: "desc" },
     });
@@ -40,6 +43,10 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+// #174: cap line items per estimate to prevent the unbounded-array DoS surface.
+// 200 is plenty for any real-world quote and keeps payloads small.
+const MAX_LINE_ITEMS = 200;
+
 // POST /api/estimates
 router.post("/", async (req, res) => {
   try {
@@ -49,13 +56,32 @@ router.post("/", async (req, res) => {
     const estimateNum = `EST-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 
     const parsedLineItems = Array.isArray(lineItems) ? lineItems : [];
-    // #123: reject negative qty / unit price. Two negatives multiplied also produce
-    // a fake "positive" total (-999 * -500 = 499,500), so check each side individually.
+    // #164: empty estimates clutter the ledger with ₹0 rows; require at least one line.
+    if (parsedLineItems.length === 0) {
+      return res.status(400).json({ error: "At least one line item is required", code: "LINE_ITEMS_REQUIRED" });
+    }
+    // #174: hard cap on line item count.
+    if (parsedLineItems.length > MAX_LINE_ITEMS) {
+      return res.status(400).json({ error: `lineItems cannot exceed ${MAX_LINE_ITEMS} entries`, code: "LINE_ITEMS_LIMIT_EXCEEDED" });
+    }
+    // #178: validUntil cannot be before today (1900-01-01 was being accepted).
+    if (validUntil) {
+      const vu = new Date(validUntil);
+      if (Number.isNaN(vu.getTime())) {
+        return res.status(400).json({ error: "validUntil is not a valid date", code: "INVALID_VALID_UNTIL" });
+      }
+      // Allow today; reject anything strictly before today's start-of-day.
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      if (vu < todayStart) {
+        return res.status(400).json({ error: "validUntil cannot be in the past", code: "VALID_UNTIL_IN_PAST" });
+      }
+    }
+    // #123 + #164: reject negative qty/price AND zero qty (a 0-quantity row is meaningless).
     for (const [i, item] of parsedLineItems.entries()) {
       const q = Number(item.quantity);
       const p = Number(item.unitPrice);
-      if (Number.isFinite(q) && q < 0) {
-        return res.status(400).json({ error: `Line item ${i + 1}: quantity cannot be negative`, code: "NEGATIVE_QUANTITY" });
+      if (Number.isFinite(q) && q < 1) {
+        return res.status(400).json({ error: `Line item ${i + 1}: quantity must be at least 1`, code: "INVALID_QUANTITY" });
       }
       if (Number.isFinite(p) && p < 0) {
         return res.status(400).json({ error: `Line item ${i + 1}: unit price cannot be negative`, code: "NEGATIVE_PRICE" });

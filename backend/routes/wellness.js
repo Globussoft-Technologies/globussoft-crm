@@ -762,7 +762,9 @@ router.post("/recommendations/:id/approve", async (req, res) => {
     if (flip.count === 0) {
       // Another request already resolved this card. Return current state
       // without firing the dispatcher again. The final status is authoritative.
-      return res.json({ ...current, _alreadyResolved: true });
+      // #185: surface explicit `idempotent` flag so callers can distinguish a
+      // first-approve from a re-approve (the dispatcher only fires once).
+      return res.json({ ...current, idempotent: true, _alreadyResolved: true });
     }
 
     // We won the race — safe to dispatch the approved action

@@ -58,7 +58,11 @@ router.put("/read-all", async (req, res) => {
 });
 
 // PUT /:id/read
-router.put("/:id/read", async (req, res) => {
+// #185: external clients (and the bug report repros) tested POST /:id/read,
+// POST /mark-all-read, and POST /read-all — all returning 404 because only
+// PUT was wired. Add POST aliases that delegate to the same handlers so the
+// API matches typical mark-as-read conventions.
+async function markReadHandler(req, res) {
   try {
     const existing = await prisma.notification.findFirst({
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
@@ -74,7 +78,25 @@ router.put("/:id/read", async (req, res) => {
     console.error("[Notifications] Mark read error:", err);
     res.status(500).json({ error: "Failed to mark notification as read" });
   }
-});
+}
+router.put("/:id/read", markReadHandler);
+router.post("/:id/read", markReadHandler);
+
+async function markAllReadHandler(req, res) {
+  try {
+    const { count } = await prisma.notification.updateMany({
+      where: { userId: req.user.userId, tenantId: req.user.tenantId, isRead: false },
+      data: { isRead: true },
+    });
+    if (req.io) req.io.emit("notifications_cleared", { userId: req.user.userId });
+    res.json({ message: "All notifications marked as read", updated: count });
+  } catch (err) {
+    console.error("[Notifications] Mark all read error:", err);
+    res.status(500).json({ error: "Failed to mark all as read" });
+  }
+}
+router.post("/mark-all-read", markAllReadHandler);
+router.post("/read-all", markAllReadHandler);
 
 // DELETE /:id
 router.delete("/:id", async (req, res) => {

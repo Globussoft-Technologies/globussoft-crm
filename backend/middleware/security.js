@@ -1,5 +1,4 @@
 const helmet = require('helmet');
-const sanitizeHtml = require('sanitize-html');
 
 // 1. Helmet with CRM-appropriate config
 const helmetMiddleware = helmet({
@@ -17,7 +16,15 @@ const helmetMiddleware = helmet({
   crossOriginEmbedderPolicy: false, // needed for external images in landing pages
 });
 
-// 2. Sanitize req.body strings recursively (prevent stored XSS)
+// 2. Sanitize req.body strings recursively. #187 — the previous version called
+// sanitize-html with `allowedTags: []` which both stripped anything between
+// `<` and `>` AND HTML-encoded ampersands ("A & B" → "A &amp; B"), corrupting
+// ordinary user input ("Q3 Plan: <budget>" → "Q3 Plan: "). The right XSS
+// defense is output encoding (React already escapes by default), not
+// pre-storage mutation. Replaced with a narrow regex that only strips truly
+// dangerous tags as defense-in-depth.
+const DANGEROUS_TAG_RE = /<\/?(script|iframe|object|embed|style|link|meta|form|svg)\b[^>]*>/gi;
+
 function sanitizeBody(req, res, next) {
   if (req.body && typeof req.body === 'object') {
     sanitizeObject(req.body);
@@ -28,11 +35,9 @@ function sanitizeBody(req, res, next) {
 function sanitizeObject(obj) {
   for (const key of Object.keys(obj)) {
     if (typeof obj[key] === 'string') {
-      // Don't sanitize known HTML fields (landing page content, KB articles, email body, doc templates)
-      const htmlFields = ['body', 'content', 'terms', 'description', 'notes', 'cssOverrides', 'flow', 'steps', 'layout', 'config', 'availability', 'rawPayload', 'data'];
-      if (!htmlFields.includes(key)) {
-        obj[key] = sanitizeHtml(obj[key], { allowedTags: [], allowedAttributes: {} }); // strip ALL HTML
-      }
+      // Strip dangerous tags but preserve raw text (incl. ampersands and
+      // angle-bracket tokens like "<budget>") verbatim.
+      obj[key] = obj[key].replace(DANGEROUS_TAG_RE, '');
     } else if (typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key])) {
       sanitizeObject(obj[key]);
     }

@@ -1,4 +1,5 @@
 import { fetchApi } from '../utils/api';
+import { formatMoney } from '../utils/money';
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Phone, Mail, Calendar, Paperclip, Upload, Trash2, FileText, Download, Target } from 'lucide-react';
@@ -54,7 +55,15 @@ const ContactDetail = () => {
               {contact.name.charAt(0)}
             </div>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{contact.name}</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>{contact.title} at {contact.company}</p>
+            {/* #189B: skip the "at <company>" subtitle when company/title are empty
+                so we don't render an orphan preposition. */}
+            {(contact.title || contact.company) && (
+              <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                {contact.title}
+                {contact.title && contact.company ? ' at ' : ''}
+                {contact.company}
+              </p>
+            )}
 
             <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
               <span style={{ padding: '0.2rem 0.6rem', borderRadius: '12px', fontSize: '0.7rem', fontWeight: '600', background: contact.status === 'Customer' ? 'rgba(16,185,129,0.1)' : contact.status === 'Lead' ? 'rgba(59,130,246,0.1)' : 'rgba(245,158,11,0.1)', color: contact.status === 'Customer' ? '#10b981' : contact.status === 'Lead' ? '#3b82f6' : '#f59e0b' }}>
@@ -86,7 +95,10 @@ const ContactDetail = () => {
                 {contact.deals.map(d => (
                   <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.375rem 0', fontSize: '0.8rem' }}>
                     <span>{d.title}</span>
-                    <span style={{ color: d.stage === 'won' ? '#10b981' : 'var(--text-secondary)' }}>${d.amount.toLocaleString()}</span>
+                    {/* #189A: deals carry their own currency; format with that
+                        instead of hardcoding "$". formatMoney falls back to
+                        tenant default when no currency override is provided. */}
+                    <span style={{ color: d.stage === 'won' ? '#10b981' : 'var(--text-secondary)' }}>{formatMoney(d.amount, { currency: d.currency })}</span>
                   </div>
                 ))}
               </div>

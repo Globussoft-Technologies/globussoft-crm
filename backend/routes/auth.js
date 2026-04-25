@@ -128,7 +128,16 @@ router.post("/login", async (req, res) => {
     // Admin/admin bypass intentionally removed for security hardening.
 
     const user = await prisma.user.findUnique({ where: { email }, include: { tenant: true } });
-    if (!user) return res.status(401).json({ error: "Invalid credentials" });
+    // #192: when the email isn't found, run a dummy bcrypt compare against a
+    // fixed-cost hash so the unknown-email path takes the same wall time as
+    // the known-email-wrong-password path. Closes the timing-oracle that let
+    // attackers enumerate valid emails without sending an "is this a user?"
+    // request that would show up in IDS.
+    if (!user) {
+      // 2b$10 hash of "_no_user_dummy_" — never matches a real password.
+      await bcrypt.compare(password, "$2b$10$CwTycUXWue0Thq9StjUM0uJ8jSxR0rfP3hXqDB0SEovQbYdcKqGVC");
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });

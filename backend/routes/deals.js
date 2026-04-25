@@ -6,6 +6,18 @@ const router = express.Router();
 
 router.use(verifyToken);
 
+// #188: short-circuit non-numeric :id so requests like GET /api/deals/funnel
+// return 400 cleanly instead of crashing the by-id handler with a 500.
+// Until literal analytics routes (/funnel, /leaderboard, etc.) are
+// implemented, treating them as "bad id" is the correct disposition.
+router.param("id", (req, res, next, id) => {
+  const n = parseInt(id, 10);
+  if (Number.isNaN(n) || n < 1) {
+    return res.status(400).json({ error: "id must be a positive integer", code: "INVALID_ID" });
+  }
+  next();
+});
+
 // ─── Helper: audit log ───────────────────────────────────────────────
 async function audit(action, entityId, userId, tenantId, details) {
   try {

@@ -32,9 +32,16 @@ export default function CalendarGrid() {
     setLoading(true);
     const dStr = isoDay(date);
     try {
+      // #112: pass an explicit IST offset (+05:30) so the backend's `new Date(from)`
+      // resolves to the IST calendar day regardless of the server's local TZ
+      // (production runs in UTC). Pre-fix the query window was shifted by 5h30,
+      // so all genuine IST visits fell outside the requested range and the
+      // calendar appeared empty even though the dashboard showed the correct counts.
+      const fromQ = `${dStr}T00:00:00+05:30`;
+      const toQ = `${dStr}T23:59:59+05:30`;
       const [staff, vs] = await Promise.all([
         fetchApi('/api/staff').catch(() => []),
-        fetchApi(`/api/wellness/visits?from=${dStr}T00:00:00&to=${dStr}T23:59:59&limit=500`),
+        fetchApi(`/api/wellness/visits?from=${encodeURIComponent(fromQ)}&to=${encodeURIComponent(toQ)}&limit=500`),
       ]);
       const docs = (Array.isArray(staff) ? staff : []).filter((u) => u.wellnessRole === 'doctor');
       setDoctors(docs.length ? docs : (Array.isArray(staff) ? staff.slice(0, 4) : []));

@@ -65,6 +65,9 @@ describe('<TelecallerQueue />', () => {
   });
 
   it('clicking "Junk" POSTs to /telecaller/dispose with disposition=junk', async () => {
+    // #129: Junk and Wrong number now confirm() before firing — auto-accept here
+    // so the existing assertion on the POST body still works.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<MemoryRouter><TelecallerQueue /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
@@ -81,5 +84,8 @@ describe('<TelecallerQueue />', () => {
       expect(body.disposition).toBe('junk');
       expect(body.contactId).toBe(1);
     });
+
+    expect(confirmSpy).toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });

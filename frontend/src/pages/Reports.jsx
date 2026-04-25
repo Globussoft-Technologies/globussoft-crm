@@ -133,6 +133,10 @@ export default function Reports() {
   };
 
   const handleDeleteSchedule = async (id) => {
+    // #129: confirm before destructive action
+    const sched = schedules.find(s => s.id === id);
+    const name = sched?.name || `schedule #${id}`;
+    if (!window.confirm(`Delete scheduled email report "${name}"?\n\nThis cancels future deliveries to its recipients. The action cannot be undone.`)) return;
     await fetchApi(`/api/report-schedules/${id}`, { method: 'DELETE' });
     fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => {});
   };

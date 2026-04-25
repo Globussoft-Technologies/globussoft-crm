@@ -26,6 +26,13 @@ export default function Recommendations() {
   useEffect(() => { load(); }, [filter]);
 
   const handleAction = async (id, action) => {
+    // #129: confirm before reject — recommendations feed campaign-spend decisions,
+    // a misclick should never silently drop a proposal from the queue.
+    if (action === 'reject') {
+      const rec = items.find(r => r.id === id);
+      const title = rec?.title || `recommendation #${id}`;
+      if (!window.confirm(`Reject "${title}"?\n\nIt will move to the rejected list and stop influencing the queue.`)) return;
+    }
     try {
       await fetchApi(`/api/wellness/recommendations/${id}/${action}`, { method: 'POST' });
       load();

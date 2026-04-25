@@ -72,6 +72,15 @@ export default function TelecallerQueue() {
   }, [load]);
 
   const dispose = async (contactId, disposition) => {
+    // #129: confirm before destructive dispositions. Junk + wrong-number drop the
+    // lead out of the queue permanently; the others are softer scheduling actions.
+    const destructive = disposition === 'junk' || disposition === 'wrong number';
+    if (destructive) {
+      const lead = leads.find((l) => l.id === contactId);
+      const name = lead?.name || `lead #${contactId}`;
+      const verb = disposition === 'junk' ? 'mark as junk' : 'mark as wrong number';
+      if (!window.confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} for "${name}"?\n\nThis removes them from the telecaller queue. Misclassified leads are hard to recover.`)) return;
+    }
     setDisposing((s) => ({ ...s, [contactId]: disposition }));
     try {
       await fetchApi('/api/wellness/telecaller/dispose', {

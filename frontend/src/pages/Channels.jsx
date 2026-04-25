@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Radio, MessageSquare, MessageCircle, Phone, Bell, Plus, Save, Trash2, Copy, CheckCircle2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const TABS = [
   { key: 'sms', label: 'SMS', icon: MessageSquare, color: '#10b981' },
@@ -10,6 +11,7 @@ const TABS = [
 ];
 
 export default function Channels() {
+  const notify = useNotify();
   const [activeTab, setActiveTab] = useState('sms');
   const [templates, setTemplates] = useState([]);
   const [showCreate, setShowCreate] = useState(false);
@@ -31,8 +33,8 @@ export default function Channels() {
   const handleSaveConfig = async (provider, endpoint) => {
     try {
       await fetchApi(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...configForm, isActive: configForm.isActive ?? false }) });
-      alert('Configuration saved!');
-    } catch { alert('Failed to save'); }
+      notify.success('Configuration saved!');
+    } catch { notify.error('Failed to save'); }
   };
 
   const handleCreateTemplate = async () => {
@@ -42,7 +44,7 @@ export default function Channels() {
       setShowCreate(false);
       setForm({});
       loadTemplates();
-    } catch { alert('Failed to create template'); }
+    } catch { notify.error('Failed to create template'); }
   };
 
   const handleDeleteTemplate = async (id) => {

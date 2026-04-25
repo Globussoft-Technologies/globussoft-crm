@@ -4,6 +4,7 @@ import {
   Copy, X, Power, PowerOff, Target, ListChecks,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const STAGES = [
   { value: 'lead',      label: 'Lead',      color: '#94a3b8' },
@@ -66,6 +67,7 @@ function StageBadge({ stage }) {
 const EMPTY_FORM = { name: '', stage: 'lead', steps: [{ title: '', description: '' }], isActive: true };
 
 export default function Playbooks() {
+  const notify = useNotify();
   const [playbooks, setPlaybooks] = useState([]);
   const [stats, setStats] = useState(null);
   const [stageFilter, setStageFilter] = useState('');
@@ -148,11 +150,11 @@ export default function Playbooks() {
   const closeEditor = () => { setEditorOpen(false); setEditing(null); };
 
   const savePlaybook = async () => {
-    if (!form.name.trim()) { alert('Name is required'); return; }
+    if (!form.name.trim()) { notify.error('Name is required'); return; }
     const cleanSteps = form.steps
       .filter((s) => (s.title || '').trim())
       .map((s, i) => ({ title: s.title.trim(), description: (s.description || '').trim(), order: i }));
-    if (cleanSteps.length === 0) { alert('At least one step is required'); return; }
+    if (cleanSteps.length === 0) { notify.error('At least one step is required'); return; }
     const payload = { name: form.name.trim(), stage: form.stage, steps: cleanSteps, isActive: form.isActive };
     try {
       if (editing) {
@@ -164,17 +166,17 @@ export default function Playbooks() {
       loadAll();
     } catch (err) {
       console.error('save', err);
-      alert('Failed to save playbook');
+      notify.error('Failed to save playbook');
     }
   };
 
   const deletePlaybook = async (id) => {
-    if (!window.confirm('Delete this playbook? Existing progress will be removed.')) return;
+    if (!await notify.confirm('Delete this playbook? Existing progress will be removed.')) return;
     try {
       await fetchApi(`/api/playbooks/${id}`, { method: 'DELETE' });
       loadAll();
     } catch (err) {
-      alert('Failed to delete');
+      notify.error('Failed to delete');
     }
   };
 
@@ -183,7 +185,7 @@ export default function Playbooks() {
       await fetchApi(`/api/playbooks/${id}/duplicate`, { method: 'POST' });
       loadAll();
     } catch (err) {
-      alert('Failed to duplicate');
+      notify.error('Failed to duplicate');
     }
   };
 
@@ -194,7 +196,7 @@ export default function Playbooks() {
       });
       loadAll();
     } catch (err) {
-      alert('Failed to toggle');
+      notify.error('Failed to toggle');
     }
   };
 
@@ -235,7 +237,7 @@ export default function Playbooks() {
       });
       loadDealPlaybooks();
     } catch (err) {
-      alert('Failed to update step');
+      notify.error('Failed to update step');
     }
   };
 

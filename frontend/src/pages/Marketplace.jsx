@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Blocks, CheckCircle2, CloudLightning, MessageSquare, CreditCard, Mail } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const apps = [
   { id: 'slack', name: 'Slack Native', icon: <MessageSquare size={32} color="#ec4899" />, desc: 'Post push telemetry into #sales-wins instantly when Deals migrate to Won states.' },
@@ -10,6 +11,7 @@ const apps = [
 ];
 
 export default function Marketplace() {
+  const notify = useNotify();
   const [integrations, setIntegrations] = useState([]);
 
   useEffect(() => {
@@ -34,7 +36,7 @@ export default function Marketplace() {
       });
       loadIntegrations();
     } catch(err) {
-      alert("Encountered OAuth Handshake constraint.");
+      notify.error("Encountered OAuth Handshake constraint.");
     }
   };
 

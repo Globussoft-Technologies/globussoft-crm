@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Key, Globe, Plus, Trash2, Copy, CheckCircle2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 export default function Developer() {
+  const notify = useNotify();
   const [keys, setKeys] = useState([]);
   const [hooks, setHooks] = useState([]);
   const [copiedId, setCopiedId] = useState(null);
@@ -31,16 +33,16 @@ export default function Developer() {
     if (!newKeyName) return;
     try {
       const { rawKey } = await fetchApi('/api/developer/apikeys', { method: 'POST', body: JSON.stringify({ name: newKeyName }) });
-      alert(`ATTENTION: This is the ONLY time this key will be displayed.\n\nSave this in a secure vault immediately:\n\n${rawKey}`);
+      notify.success(`ATTENTION: This is the ONLY time this key will be displayed.\n\nSave this in a secure vault immediately:\n\n${rawKey}`, { ttl: 30000 });
       setNewKeyName('');
       loadDevData();
     } catch(err) {
-      alert("Failed to create key.");
+      notify.error("Failed to create key.");
     }
   };
 
   const deleteKey = async (id) => {
-    if (window.confirm("WARNING: Revoking this API Key will immediately sever all integrations relying upon it. Proceed?")) {
+    if (await notify.confirm("WARNING: Revoking this API Key will immediately sever all integrations relying upon it. Proceed?")) {
       await fetchApi(`/api/developer/apikeys/${id}`, { method: 'DELETE' });
       loadDevData();
     }
@@ -54,7 +56,7 @@ export default function Developer() {
       setNewHook({ event: 'deal.created', targetUrl: '' });
       loadDevData();
     } catch(err) {
-      alert("Failed to register webhook");
+      notify.error("Failed to register webhook");
     }
   };
 

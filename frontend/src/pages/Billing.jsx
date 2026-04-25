@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { CreditCard, Plus, CheckCircle2, Clock, Trash2, FileText, DollarSign } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 export default function Billing() {
+  const notify = useNotify();
   const [invoices, setInvoices] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
@@ -35,7 +37,7 @@ export default function Billing() {
       setNewInvoice({ amount: '', dueDate: '', contactId: '', dealId: '' });
       loadData();
     } catch(err) {
-      alert("Failed to issue invoice");
+      notify.error("Failed to issue invoice");
     }
   };
 
@@ -45,10 +47,15 @@ export default function Billing() {
   };
 
   const deleteInvoice = async (id) => {
-    if (window.confirm("WARNING: Are you absolutely certain you wish to void this ledger entry? This cannot be undone.")) {
-      await fetchApi(`/api/billing/${id}`, { method: 'DELETE' });
-      loadData();
-    }
+    const ok = await notify.confirm({
+      title: 'Void ledger entry',
+      message: 'WARNING: Are you absolutely certain you wish to void this ledger entry? This cannot be undone.',
+      confirmText: 'Void',
+      destructive: true,
+    });
+    if (!ok) return;
+    await fetchApi(`/api/billing/${id}`, { method: 'DELETE' });
+    loadData();
   };
 
   return (

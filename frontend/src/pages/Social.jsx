@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Send, Calendar, AtSign, Link as LinkIcon, Settings, Hash, Globe, Share2, Trash2, Plus, RefreshCw, Check, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const PLATFORMS = [
   { id: 'linkedin', name: 'LinkedIn', icon: Globe,  color: '#0a66c2', max: 2200 },
@@ -26,6 +27,7 @@ function platformMeta(id) {
 }
 
 export default function Social() {
+  const notify = useNotify();
   const [tab, setTab] = useState('compose');
   const [posts, setPosts] = useState([]);
   const [mentions, setMentions] = useState([]);
@@ -73,9 +75,9 @@ export default function Social() {
   };
 
   const submitPost = async (publishNow) => {
-    if (!content.trim()) { alert('Content is required'); return; }
-    if (selectedPlatforms.length === 0) { alert('Select at least one platform'); return; }
-    if (overLimit) { alert(`Content exceeds ${charLimit} character limit`); return; }
+    if (!content.trim()) { notify.error('Content is required'); return; }
+    if (selectedPlatforms.length === 0) { notify.error('Select at least one platform'); return; }
+    if (overLimit) { notify.error(`Content exceeds ${charLimit} character limit`); return; }
 
     setBusy(true);
     try {
@@ -93,10 +95,10 @@ export default function Social() {
           try {
             const r = await fetchApi(`/api/social/posts/${p.id}/publish`, { method: 'POST' });
             if (!r.success) {
-              alert(`Failed to publish to ${p.platform}: ${r.error || 'unknown error'}`);
+              notify.error(`Failed to publish to ${p.platform}: ${r.error || 'unknown error'}`);
             }
           } catch (e) {
-            alert(`Failed to publish to ${p.platform}: ${e.message}`);
+            notify.error(`Failed to publish to ${p.platform}: ${e.message}`);
           }
         }
       }
@@ -104,13 +106,13 @@ export default function Social() {
       loadAll();
       setTab(publishNow ? 'compose' : 'scheduled');
     } catch (e) {
-      alert(`Failed to create post: ${e.message}`);
+      notify.error(`Failed to create post: ${e.message}`);
     }
     setBusy(false);
   };
 
   const cancelScheduled = async (id) => {
-    if (!window.confirm('Cancel this scheduled post?')) return;
+    if (!await notify.confirm('Cancel this scheduled post?')) return;
     await fetchApi(`/api/social/posts/${id}`, { method: 'DELETE' });
     loadAll();
   };
@@ -124,13 +126,13 @@ export default function Social() {
       });
       loadAll();
     } catch (e) {
-      alert(`Fetch failed: ${e.message}`);
+      notify.error(`Fetch failed: ${e.message}`);
     }
     setBusy(false);
   };
 
   const linkMentionToContact = async (mentionId) => {
-    const idStr = window.prompt('Enter Contact ID to link:');
+    const idStr = await notify.prompt('Enter Contact ID to link:');
     if (!idStr) return;
     try {
       await fetchApi(`/api/social/mentions/${mentionId}/link-contact`, {
@@ -139,12 +141,12 @@ export default function Social() {
       });
       loadAll();
     } catch (e) {
-      alert(`Link failed: ${e.message}`);
+      notify.error(`Link failed: ${e.message}`);
     }
   };
 
   const submitConnect = async () => {
-    if (!connectToken.trim()) { alert('Access token required'); return; }
+    if (!connectToken.trim()) { notify.error('Access token required'); return; }
     try {
       await fetchApi(`/api/social/accounts/${connectModal}/connect`, {
         method: 'POST',
@@ -153,12 +155,12 @@ export default function Social() {
       setConnectModal(null); setConnectToken(''); setConnectSecret('');
       loadAll();
     } catch (e) {
-      alert(`Connect failed: ${e.message}`);
+      notify.error(`Connect failed: ${e.message}`);
     }
   };
 
   const disconnect = async (platform) => {
-    if (!window.confirm(`Disconnect ${platform}?`)) return;
+    if (!await notify.confirm(`Disconnect ${platform}?`)) return;
     await fetchApi(`/api/social/accounts/${platform}`, { method: 'DELETE' });
     loadAll();
   };

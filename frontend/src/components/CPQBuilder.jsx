@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { Plus, Calculator, FileCheck, Layers, Package, Trash2 } from 'lucide-react';
 
 export default function CPQBuilder({ dealId }) {
+  const notify = useNotify();
   const [quotes, setQuotes] = useState([]);
   const [products, setProducts] = useState([]);
   const [isBuilding, setIsBuilding] = useState(false);
@@ -47,7 +49,10 @@ export default function CPQBuilder({ dealId }) {
   };
 
   const saveQuote = async () => {
-    if (!newQuote.title) return alert("Quote needs a string title mapping.");
+    if (!newQuote.title) {
+      notify.error("Quote needs a string title mapping.");
+      return;
+    }
     try {
       await fetchApi('/api/cpq/quotes', {
         method: 'POST',
@@ -57,7 +62,7 @@ export default function CPQBuilder({ dealId }) {
       setNewQuote({ title: '', lineItems: [] });
       loadQuotes();
     } catch(err) {
-      alert("Failed to build CPQ Quote Database Array");
+      notify.error("Failed to build CPQ Quote Database Array");
     }
   };
 

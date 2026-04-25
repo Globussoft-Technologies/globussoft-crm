@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { Receipt, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucide-react';
 
@@ -48,6 +49,7 @@ function CategoryBadge({ category }) {
 }
 
 export default function Expenses() {
+  const notify = useNotify();
   const [expenses, setExpenses] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [form, setForm] = useState({
@@ -83,7 +85,7 @@ export default function Expenses() {
       setForm({ title: '', amount: '', category: 'General', expenseDate: '', notes: '', contactId: '' });
       loadData();
     } catch (err) {
-      alert('Failed to create expense');
+      notify.error('Failed to create expense');
     }
   };
 
@@ -100,7 +102,7 @@ export default function Expenses() {
   };
 
   const deleteExpense = async (id) => {
-    if (!window.confirm('Delete this expense? This action cannot be undone.')) return;
+    if (!await notify.confirm('Delete this expense? This action cannot be undone.')) return;
     try {
       await fetchApi(`/api/expenses/${id}`, { method: 'DELETE' });
       loadData();

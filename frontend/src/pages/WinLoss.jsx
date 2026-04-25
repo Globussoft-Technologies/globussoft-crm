@@ -4,6 +4,7 @@ import {
   ResponsiveContainer, Legend,
 } from 'recharts';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import {
   BadgePercent, Trophy, X, DollarSign, Calendar, Plus, Trash2,
 } from 'lucide-react';
@@ -22,6 +23,7 @@ function defaultRange() {
 }
 
 export default function WinLoss() {
+  const notify = useNotify();
   const initial = useMemo(defaultRange, []);
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
@@ -68,17 +70,22 @@ export default function WinLoss() {
       setShowReasonModal(false);
       await loadReasons();
     } catch (err) {
-      alert(err.message || 'Failed to create reason');
+      notify.error(err.message || 'Failed to create reason');
     }
   };
 
   const deleteReason = async (id) => {
-    if (!window.confirm('Delete this reason?')) return;
+    if (!await notify.confirm({
+      title: 'Delete reason',
+      message: 'Delete this reason?',
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
     try {
       await fetchApi(`/api/win-loss/reasons/${id}`, { method: 'DELETE' });
       await loadReasons();
     } catch (err) {
-      alert(err.message || 'Delete failed');
+      notify.error(err.message || 'Delete failed');
     }
   };
 

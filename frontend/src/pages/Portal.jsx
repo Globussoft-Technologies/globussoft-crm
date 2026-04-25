@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ShieldAlert, Book, Ticket as TicketFIcon, Send, ChevronDown, ChevronUp } from 'lucide-react';
+import { useNotify } from '../utils/notify';
 
 const articles = [
   {
@@ -39,6 +40,7 @@ function renderBoldText(text) {
 }
 
 export default function Portal() {
+  const notify = useNotify();
   const [form, setForm] = useState({ subject: '', description: '', priority: 'Medium' });
   const [submitted, setSubmitted] = useState(false);
   const [expandedArticle, setExpandedArticle] = useState(null);
@@ -54,7 +56,7 @@ export default function Portal() {
       setSubmitted(true);
       setForm({ subject: '', description: '', priority: 'Medium' });
     } catch(err) {
-      alert("Portal failure communicating with Core API.");
+      notify.error("Portal failure communicating with Core API.");
     }
   };
 

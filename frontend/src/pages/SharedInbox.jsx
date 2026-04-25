@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Inbox as InboxIcon, Plus, Users, UserCheck, X, Mail, ArrowLeft, Trash2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const AVATAR_COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
 
@@ -18,6 +19,7 @@ function initials(nameOrEmail) {
 }
 
 export default function SharedInbox() {
+  const notify = useNotify();
   const [inboxes, setInboxes] = useState([]);
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -71,12 +73,12 @@ export default function SharedInbox() {
       setForm({ name: '', emailAddress: '', members: [] });
       reload();
     } catch (err) {
-      alert(err.message || 'Failed to create shared inbox.');
+      notify.error(err.message || 'Failed to create shared inbox.');
     }
   };
 
   const handleDelete = async (inbox) => {
-    if (!window.confirm(`Delete shared inbox "${inbox.name}"? This cannot be undone.`)) return;
+    if (!await notify.confirm(`Delete shared inbox "${inbox.name}"? This cannot be undone.`)) return;
     await fetchApi(`/api/shared-inbox/${inbox.id}`, { method: 'DELETE' });
     if (selected && selected.id === inbox.id) {
       setSelected(null);
@@ -98,7 +100,7 @@ export default function SharedInbox() {
         prev.map((t) => (t.threadKey === thread.threadKey ? { ...t, assignedUserId: userId ? Number(userId) : null } : t))
       );
     } catch (err) {
-      alert('Failed to assign thread.');
+      notify.error('Failed to assign thread.');
     }
   };
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FileText, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 
 const STATUS_STYLES = {
@@ -35,6 +36,7 @@ const EMPTY_FORM = {
 };
 
 export default function Contracts() {
+  const notify = useNotify();
   const [contracts, setContracts] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
@@ -67,7 +69,7 @@ export default function Contracts() {
       setForm(EMPTY_FORM);
       loadData();
     } catch (err) {
-      alert('Failed to create contract');
+      notify.error('Failed to create contract');
     }
   };
 
@@ -96,7 +98,12 @@ export default function Contracts() {
   };
 
   const deleteContract = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this contract? This cannot be undone.')) return;
+    if (!await notify.confirm({
+      title: 'Delete contract',
+      message: 'Are you sure you want to delete this contract? This cannot be undone.',
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
     try {
       await fetchApi(`/api/contracts/${id}`, { method: 'DELETE' });
       loadData();

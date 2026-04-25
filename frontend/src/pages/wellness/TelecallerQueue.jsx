@@ -12,6 +12,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 
 const DISPOSITIONS = [
   { key: 'interested', label: 'Interested', icon: CheckCircle2, color: '#10b981' },
@@ -48,6 +49,7 @@ const slaFor = (iso) => {
 };
 
 export default function TelecallerQueue() {
+  const notify = useNotify();
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [disposing, setDisposing] = useState({});
@@ -79,7 +81,12 @@ export default function TelecallerQueue() {
       const lead = leads.find((l) => l.id === contactId);
       const name = lead?.name || `lead #${contactId}`;
       const verb = disposition === 'junk' ? 'mark as junk' : 'mark as wrong number';
-      if (!window.confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} for "${name}"?\n\nThis removes them from the telecaller queue. Misclassified leads are hard to recover.`)) return;
+      const ok = await notify.confirm({
+        message: `${verb.charAt(0).toUpperCase() + verb.slice(1)} for "${name}"?\n\nThis removes them from the telecaller queue. Misclassified leads are hard to recover.`,
+        destructive: true,
+        confirmText: verb.charAt(0).toUpperCase() + verb.slice(1),
+      });
+      if (!ok) return;
     }
     setDisposing((s) => ({ ...s, [contactId]: disposition }));
     try {
@@ -98,7 +105,7 @@ export default function TelecallerQueue() {
         return copy;
       });
     } catch (err) {
-      alert(`Failed: ${err.message}`);
+      notify.error(`Failed: ${err.message}`);
     } finally {
       setDisposing((s) => {
         const copy = { ...s };

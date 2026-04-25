@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FileSignature, Plus, Send, Eye, X, Check } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const STATUS_STYLES = {
   PENDING:  { bg: 'rgba(245,158,11,0.12)', color: '#f59e0b', border: 'rgba(245,158,11,0.3)' },
@@ -37,6 +38,7 @@ const ENDPOINT_FOR_TYPE = {
 };
 
 export default function Signatures() {
+  const notify = useNotify();
   const [requests, setRequests] = useState([]);
   const [docOptions, setDocOptions] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -73,7 +75,7 @@ export default function Signatures() {
 
   const submitCreate = async (e) => {
     e.preventDefault();
-    if (!form.documentId) return alert('Pick a document to send for signature');
+    if (!form.documentId) return notify.error('Pick a document to send for signature');
     setLoading(true);
     try {
       await fetchApi('/api/signatures', {
@@ -88,7 +90,7 @@ export default function Signatures() {
       setShowCreate(false);
       loadRequests();
     } catch (err) {
-      alert('Failed to create signature request');
+      notify.error('Failed to create signature request');
     } finally {
       setLoading(false);
     }
@@ -97,19 +99,19 @@ export default function Signatures() {
   const resend = async (id) => {
     try {
       await fetchApi(`/api/signatures/${id}/resend`, { method: 'POST' });
-      alert('Reminder email sent');
+      notify.success('Reminder email sent');
     } catch (err) {
-      alert('Failed to resend signature request');
+      notify.error('Failed to resend signature request');
     }
   };
 
   const cancel = async (id) => {
-    if (!window.confirm('Cancel this signature request? This cannot be undone.')) return;
+    if (!await notify.confirm('Cancel this signature request? This cannot be undone.')) return;
     try {
       await fetchApi(`/api/signatures/${id}`, { method: 'DELETE' });
       loadRequests();
     } catch (err) {
-      alert('Failed to cancel request');
+      notify.error('Failed to cancel request');
     }
   };
 

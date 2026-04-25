@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Send, Plus, Trash2, Edit2, Play, X, ToggleLeft, ToggleRight, Filter } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const ASSIGN_TYPES = [
   { value: 'round_robin', label: 'Round Robin (all users)' },
@@ -83,6 +84,7 @@ function formatConditions(conds) {
 }
 
 export default function LeadRouting() {
+  const notify = useNotify();
   const [rules, setRules] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -176,7 +178,7 @@ export default function LeadRouting() {
   };
 
   const deleteRule = async (rule) => {
-    if (!window.confirm(`Delete rule "${rule.name}"?`)) return;
+    if (!await notify.confirm(`Delete rule "${rule.name}"?`)) return;
     try {
       await fetchApi(`/api/lead-routing/${rule.id}`, { method: 'DELETE' });
       showToast('Rule deleted');

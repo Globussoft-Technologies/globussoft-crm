@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
+import { useNotify } from '../utils/notify';
 import { CheckSquare, Check, X, Clock, Plus, Eye, Filter } from 'lucide-react';
 
 const STATUS_CONFIG = {
@@ -28,6 +29,7 @@ function StatusBadge({ status }) {
 const EMPTY_NEW = { entity: 'Deal', entityId: '', reason: '' };
 
 export default function Approvals() {
+  const notify = useNotify();
   const { user: ctxUser } = useContext(AuthContext) || {};
   const [me, setMe] = useState(ctxUser || null);
   const [tab, setTab] = useState('my'); // my | toApprove | all
@@ -90,7 +92,7 @@ export default function Approvals() {
   const submitCreate = async (e) => {
     e.preventDefault();
     if (!newReq.entity.trim() || !newReq.entityId) {
-      alert('Entity and Entity ID are required.');
+      notify.error('Entity and Entity ID are required.');
       return;
     }
     try {
@@ -107,7 +109,7 @@ export default function Approvals() {
       setNewReq(EMPTY_NEW);
       if (tab !== 'my') setTab('my'); else loadData();
     } catch (err) {
-      alert(err.message || 'Failed to create request.');
+      notify.error(err.message || 'Failed to create request.');
     } finally {
       setSubmitting(false);
     }
@@ -125,7 +127,7 @@ export default function Approvals() {
       setComment('');
       loadData();
     } catch (err) {
-      alert(err.message || 'Failed to approve.');
+      notify.error(err.message || 'Failed to approve.');
     } finally {
       setSubmitting(false);
     }
@@ -134,7 +136,7 @@ export default function Approvals() {
   const submitReject = async () => {
     if (!rejectTarget) return;
     if (!comment.trim()) {
-      alert('A rejection comment is required.');
+      notify.error('A rejection comment is required.');
       return;
     }
     try {
@@ -147,7 +149,7 @@ export default function Approvals() {
       setComment('');
       loadData();
     } catch (err) {
-      alert(err.message || 'Failed to reject.');
+      notify.error(err.message || 'Failed to reject.');
     } finally {
       setSubmitting(false);
     }

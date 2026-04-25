@@ -4,6 +4,7 @@ import {
 } from 'recharts';
 import { PenTool, Play, Trophy, BarChart3, X, Plus, Trash2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const glassCard = {
   background: 'var(--glass-bg, rgba(255,255,255,0.06))',
@@ -364,6 +365,7 @@ function TestCard({ test, onClick }) {
 
 // ── Main component ───────────────────────────────────────────────
 export default function AbTests() {
+  const notify = useNotify();
   const [tests, setTests] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -407,7 +409,7 @@ export default function AbTests() {
           body: JSON.stringify({ winner: test.winner }),
         });
       } else if (action === 'delete') {
-        if (!window.confirm('Delete this A/B test?')) return;
+        if (!await notify.confirm('Delete this A/B test?')) return;
         await fetchApi(`/api/ab-tests/${test.id}`, { method: 'DELETE' });
         setDetail(null);
         load();
@@ -418,7 +420,7 @@ export default function AbTests() {
       const refreshed = await fetchApi(`/api/ab-tests/${test.id}`).catch(() => null);
       if (refreshed) setDetail(refreshed);
     } catch (err) {
-      alert(err.message || 'Action failed');
+      notify.error(err.message || 'Action failed');
     }
   };
 

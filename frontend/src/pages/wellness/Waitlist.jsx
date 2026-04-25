@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, CheckCircle2, Clock, XCircle, UserPlus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All', icon: null },
@@ -12,6 +13,7 @@ const STATUS_OPTIONS = [
 ];
 
 export default function Waitlist() {
+  const notify = useNotify();
   const [items, setItems] = useState([]);
   const [patients, setPatients] = useState([]);
   const [services, setServices] = useState([]);
@@ -48,7 +50,7 @@ export default function Waitlist() {
   const submit = async (e) => {
     e.preventDefault();
     if (!form.patientId) {
-      alert('Please pick a patient');
+      notify.error('Please pick a patient');
       return;
     }
     setSaving(true);
@@ -66,7 +68,7 @@ export default function Waitlist() {
       setForm({ patientId: '', serviceId: '', preferredDateRange: '', notes: '' });
       load();
     } catch (err) {
-      alert(`Failed: ${err.message}`);
+      notify.error(`Failed: ${err.message}`);
     } finally {
       setSaving(false);
     }
@@ -79,15 +81,15 @@ export default function Waitlist() {
         body: JSON.stringify({ status }),
       });
       load();
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   const remove = async (id) => {
-    if (!window.confirm('Remove this waitlist entry?')) return;
+    if (!await notify.confirm({ message: 'Remove this waitlist entry?', destructive: true, confirmText: 'Remove' })) return;
     try {
       await fetchApi(`/api/wellness/waitlist/${id}`, { method: 'DELETE' });
       load();
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   const serviceName = (id) => services.find((s) => s.id === id)?.name || '—';

@@ -7,6 +7,7 @@ import {
   PieChart, Pie, Cell, LineChart, Line, Legend
 } from 'recharts';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 
@@ -91,6 +92,7 @@ const btnStyle = (variant = 'primary') => ({
 });
 
 export default function CustomReports() {
+  const notify = useNotify();
   const [reports, setReports] = useState([]);
   const [config, setConfig] = useState(defaultConfig());
   const [editingId, setEditingId] = useState(null);
@@ -174,12 +176,12 @@ export default function CustomReports() {
   };
 
   const deleteReport = async (id) => {
-    if (!window.confirm('Delete this report?')) return;
+    if (!await notify.confirm('Delete this report?')) return;
     try {
       await fetchApi(`/api/custom-reports/${id}`, { method: 'DELETE' });
       if (editingId === id) { setEditingId(null); setConfig(defaultConfig()); }
       loadReports();
-    } catch (e) { alert(e.message); }
+    } catch (e) { notify.error(e.message); }
   };
 
   const newReport = () => {
@@ -218,7 +220,7 @@ export default function CustomReports() {
       }
       setShowSaveModal(false);
       loadReports();
-    } catch (e) { alert(e.message); }
+    } catch (e) { notify.error(e.message); }
     finally { setSaving(false); }
   };
 

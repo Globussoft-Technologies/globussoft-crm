@@ -5,6 +5,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { Save, Play, Zap, Database, Mail } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const initialNodes = [
   { id: '1', type: 'input', data: { label: 'TRIGGER: Deal Stage → Won' }, position: { x: 250, y: 50 }, style: { background: '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 'bold' } },
@@ -12,6 +13,7 @@ const initialNodes = [
 const initialEdges = [];
 
 export default function Workflows() {
+  const notify = useNotify();
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
   const [saving, setSaving] = useState(false);
@@ -53,9 +55,9 @@ export default function Workflows() {
         method: 'POST',
         body: JSON.stringify(rule)
       });
-      alert('Algorithmic Rule Boolean compiled to Postgres Schema successfully!');
+      notify.success('Algorithmic Rule Boolean compiled to Postgres Schema successfully!');
     } catch(err) {
-      alert("System compilation failed during structural export.");
+      notify.error("System compilation failed during structural export.");
     }
     setSaving(false);
   };

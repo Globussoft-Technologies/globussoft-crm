@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { UsersRound, Trash2, Shield } from 'lucide-react';
 
 const ROLE_CONFIG = {
@@ -22,6 +23,7 @@ function RoleBadge({ role }) {
 }
 
 export default function Staff() {
+  const notify = useNotify();
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -44,17 +46,17 @@ export default function Staff() {
       await fetchApi(`/api/staff/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
       loadStaff();
     } catch (err) {
-      alert(err.message || 'Failed to update role.');
+      notify.error(err.message || 'Failed to update role.');
     }
   };
 
   const deleteUser = async (id, name) => {
-    if (!window.confirm(`Are you sure you want to delete ${name || 'this user'}? This action cannot be undone.`)) return;
+    if (!await notify.confirm(`Are you sure you want to delete ${name || 'this user'}? This action cannot be undone.`)) return;
     try {
       await fetchApi(`/api/staff/${id}`, { method: 'DELETE' });
       loadStaff();
     } catch (err) {
-      alert(err.message || 'Failed to delete user.');
+      notify.error(err.message || 'Failed to delete user.');
     }
   };
 

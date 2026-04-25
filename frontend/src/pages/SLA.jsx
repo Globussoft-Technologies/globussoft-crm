@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Target, Clock, AlertTriangle, MessageSquare, Plus, Edit, Trash2, X, RefreshCw, Play } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const PRIORITIES = ['Low', 'Medium', 'High', 'Urgent'];
 const PRIORITY_COLORS = {
@@ -24,6 +25,7 @@ const formatMinutes = (m) => {
 };
 
 const SLA = () => {
+  const notify = useNotify();
   const [tab, setTab] = useState('policies');
   const [stats, setStats] = useState({ activePolicies: 0, breachesToday: 0, avgResponseMinutes: 0, avgResolveMinutes: 0 });
 
@@ -129,23 +131,23 @@ const SLA = () => {
       await fetchApi(`/api/sla/policies/${p.id}`, { method: 'PUT', body: JSON.stringify({ isActive: !p.isActive }) });
       loadPolicies();
       loadStats();
-    } catch (e) { alert(e.message || 'Toggle failed'); }
+    } catch (e) { notify.error(e.message || 'Toggle failed'); }
   };
   const deletePolicy = async (p) => {
-    if (!window.confirm(`Delete policy "${p.name}"?`)) return;
+    if (!await notify.confirm(`Delete policy "${p.name}"?`)) return;
     try {
       await fetchApi(`/api/sla/policies/${p.id}`, { method: 'DELETE' });
       loadPolicies();
       loadStats();
-    } catch (e) { alert(e.message || 'Delete failed'); }
+    } catch (e) { notify.error(e.message || 'Delete failed'); }
   };
   const applyAll = async () => {
     try {
       const r = await fetchApi('/api/sla/apply-all', { method: 'POST' });
-      alert(`Applied to ${r.applied || 0} ticket(s). Skipped ${r.skipped || 0}.`);
+      notify.success(`Applied to ${r.applied || 0} ticket(s). Skipped ${r.skipped || 0}.`);
       loadBreaches();
       loadStats();
-    } catch (e) { alert(e.message || 'Apply-all failed'); }
+    } catch (e) { notify.error(e.message || 'Apply-all failed'); }
   };
 
   // ─── Canned handlers ───────────────────────────────────────────────────
@@ -177,11 +179,11 @@ const SLA = () => {
     } catch (e) { setError(e.message || 'Save failed'); }
   };
   const deleteCanned = async (c) => {
-    if (!window.confirm(`Delete "${c.name}"?`)) return;
+    if (!await notify.confirm(`Delete "${c.name}"?`)) return;
     try {
       await fetchApi(`/api/canned-responses/${c.id}`, { method: 'DELETE' });
       loadCanned();
-    } catch (e) { alert(e.message || 'Delete failed'); }
+    } catch (e) { notify.error(e.message || 'Delete failed'); }
   };
 
   // ─── Render helpers ────────────────────────────────────────────────────

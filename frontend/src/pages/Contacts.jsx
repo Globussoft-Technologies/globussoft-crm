@@ -1,4 +1,5 @@
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -51,6 +52,7 @@ function validateCsvRow(row) {
 }
 
 const Contacts = () => {
+  const notify = useNotify();
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -84,7 +86,7 @@ const Contacts = () => {
       });
       handleFindDupes();
       fetchContacts();
-    } catch { alert('Merge failed'); }
+    } catch { notify.error('Merge failed'); }
     setMerging(false);
   };
 
@@ -174,10 +176,14 @@ const Contacts = () => {
   };
 
   const handleDelete = async (id) => {
-    if (window.confirm("Are you sure you want to delete this contact?")) {
-      await fetchApi(`/api/contacts/${id}`, { method: 'DELETE' });
-      fetchContacts();
-    }
+    if (!await notify.confirm({
+      title: 'Delete contact',
+      message: 'Are you sure you want to delete this contact?',
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
+    await fetchApi(`/api/contacts/${id}`, { method: 'DELETE' });
+    fetchContacts();
   };
 
   return (

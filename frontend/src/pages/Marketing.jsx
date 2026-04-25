@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Copy, Code, Layout, Blocks, CheckCircle2, Megaphone, Plus, BarChart, Send, MousePointerClick } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 export default function Marketing() {
+  const notify = useNotify();
   const [activeTab, setActiveTab] = useState('campaigns'); // 'campaigns', 'forms', 'sms', 'push'
   
   // Forms State
@@ -41,7 +43,7 @@ export default function Marketing() {
       setShowCreateCampaign(false);
       loadCampaigns();
     } catch (err) {
-      alert("Failed to create campaign");
+      notify.error("Failed to create campaign");
     }
   };
 

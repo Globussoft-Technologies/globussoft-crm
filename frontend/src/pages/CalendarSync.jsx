@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Calendar, RefreshCw, ExternalLink, Check, Plug, Trash2, Users, Video } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const PROVIDERS = [
   {
@@ -56,6 +57,7 @@ function attendeeCount(att) {
 }
 
 export default function CalendarSync() {
+  const notify = useNotify();
   const [status, setStatus] = useState({
     google: { connected: false, lastSyncAt: null },
     outlook: { connected: false, lastSyncAt: null },
@@ -142,7 +144,7 @@ export default function CalendarSync() {
   };
 
   const handleDisconnect = async (provider) => {
-    if (!window.confirm(`Disconnect ${provider} Calendar? Synced events will remain.`)) return;
+    if (!await notify.confirm(`Disconnect ${provider} Calendar? Synced events will remain.`)) return;
     setBusy((b) => ({ ...b, [provider]: true }));
     try {
       await fetchApi(`/api/calendar/${provider}/disconnect`, { method: 'DELETE' });

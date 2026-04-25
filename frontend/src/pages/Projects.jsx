@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FolderKanban, Plus, Trash2, DollarSign, CheckCircle2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const STATUS_CONFIG = {
   Planning:   { color: '#94a3b8', bg: 'rgba(148,163,184,0.15)' },
@@ -61,6 +62,7 @@ const INITIAL_FORM = {
 };
 
 export default function Projects() {
+  const notify = useNotify();
   const [projects, setProjects] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
@@ -115,7 +117,7 @@ export default function Projects() {
       setForm(INITIAL_FORM);
       loadData();
     } catch {
-      alert('Failed to create project');
+      notify.error('Failed to create project');
     }
   };
 
@@ -127,17 +129,17 @@ export default function Projects() {
       });
       loadData();
     } catch {
-      alert('Failed to update project status');
+      notify.error('Failed to update project status');
     }
   };
 
   const deleteProject = async (id) => {
-    if (!window.confirm('Delete this project? This cannot be undone.')) return;
+    if (!await notify.confirm('Delete this project? This cannot be undone.')) return;
     try {
       await fetchApi(`/api/projects/${id}`, { method: 'DELETE' });
       loadData();
     } catch {
-      alert('Failed to delete project');
+      notify.error('Failed to delete project');
     }
   };
 

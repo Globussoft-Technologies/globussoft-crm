@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { PanelTop, Plus, Eye, Copy, Trash2, Globe, FileEdit, BarChart3 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { Link, useNavigate } from 'react-router-dom';
 
 const STATUS_COLORS = { DRAFT: { bg: 'rgba(59,130,246,0.1)', color: '#3b82f6' }, PUBLISHED: { bg: 'rgba(16,185,129,0.1)', color: '#10b981' }, ARCHIVED: { bg: 'rgba(107,114,128,0.1)', color: '#6b7280' } };
 
 export default function LandingPages() {
+  const notify = useNotify();
   const [pages, setPages] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -31,7 +33,7 @@ export default function LandingPages() {
       });
       setShowTemplatePicker(false);
       navigate(`/landing-pages/builder/${page.id}`);
-    } catch { alert('Failed to create page'); }
+    } catch { notify.error('Failed to create page'); }
   };
 
   const handlePublish = async (id, action) => {
@@ -45,7 +47,7 @@ export default function LandingPages() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this landing page?')) return;
+    if (!await notify.confirm('Delete this landing page?')) return;
     await fetchApi(`/api/landing-pages/${id}`, { method: 'DELETE' });
     loadPages();
   };

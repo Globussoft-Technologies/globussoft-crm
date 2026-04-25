@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Plus, Copy, Edit, Trash2, Clock, Check, X as XIcon, Link as LinkIcon } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const DAYS = [
   { key: 'monday', label: 'Mon' },
@@ -33,6 +34,7 @@ function parseAvail(raw) {
 }
 
 export default function BookingPages() {
+  const notify = useNotify();
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -65,12 +67,12 @@ export default function BookingPages() {
       setCopied(slug);
       setTimeout(() => setCopied(null), 1500);
     } catch {
-      window.prompt('Copy this URL:', publicUrl(slug));
+      await notify.prompt('Copy this URL:', publicUrl(slug));
     }
   };
 
   const handleDelete = async (page) => {
-    if (!window.confirm(`Delete booking page "${page.title}"? All bookings will be removed.`)) return;
+    if (!await notify.confirm(`Delete booking page "${page.title}"? All bookings will be removed.`)) return;
     await fetchApi(`/api/booking-pages/${page.id}`, { method: 'DELETE' });
     if (selected && selected.id === page.id) setSelected(null);
     load();
@@ -78,7 +80,7 @@ export default function BookingPages() {
 
   const cancelBooking = async (bookingId) => {
     if (!selected) return;
-    if (!window.confirm('Cancel this booking?')) return;
+    if (!await notify.confirm('Cancel this booking?')) return;
     await fetchApi(`/api/booking-pages/${selected.id}/cancel/${bookingId}`, { method: 'POST' });
     const list = await fetchApi(`/api/booking-pages/${selected.id}/bookings`);
     setBookings(Array.isArray(list) ? list : []);
@@ -209,6 +211,7 @@ export default function BookingPages() {
 // ── Create modal ─────────────────────────────────────────────────
 
 function CreateModal({ onClose, onCreated }) {
+  const notify = useNotify();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [durationMins, setDurationMins] = useState(30);
@@ -230,7 +233,7 @@ function CreateModal({ onClose, onCreated }) {
       });
       onCreated();
     } catch {
-      alert('Failed to create booking page');
+      notify.error('Failed to create booking page');
       setSubmitting(false);
     }
   };
@@ -283,6 +286,7 @@ function CreateModal({ onClose, onCreated }) {
 // ── Edit drawer with availability + bookings ─────────────────────
 
 function EditDrawer({ page, bookings, onClose, onSaved, onCancelBooking, onCopyUrl, copied }) {
+  const notify = useNotify();
   const [title, setTitle] = useState(page.title);
   const [description, setDescription] = useState(page.description || '');
   const [durationMins, setDurationMins] = useState(page.durationMins);
@@ -330,7 +334,7 @@ function EditDrawer({ page, bookings, onClose, onSaved, onCancelBooking, onCopyU
       });
       onSaved(updated);
     } catch {
-      alert('Failed to save changes');
+      notify.error('Failed to save changes');
     } finally {
       setSaving(false);
     }

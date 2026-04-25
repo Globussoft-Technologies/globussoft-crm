@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, Phone, ArrowRight, User, Send, Clock, Play, Calendar, MessageSquare, MessageCircle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 export default function Inbox() {
+  const notify = useNotify();
   const [emails, setEmails] = useState([]);
   const [calls, setCalls] = useState([]);
   const [smsMessages, setSmsMessages] = useState([]);
@@ -43,7 +45,7 @@ export default function Inbox() {
     e.preventDefault();
     await fetchApi('/api/communications/send-email', { method: 'POST', body: JSON.stringify(composeData) });
     
-    alert(`Email Sent Successfully!\n\n[Epic #104] Tracking Pixel Active: You will be notified the instant ${composeData.to} opens or clicks links in this message.`);
+    notify.success(`Email Sent Successfully!\n\n[Epic #104] Tracking Pixel Active: You will be notified the instant ${composeData.to} opens or clicks links in this message.`);
     
     setShowCompose(false);
     setComposeData({ to: '', subject: '', body: '' });
@@ -54,7 +56,7 @@ export default function Inbox() {
 
   const handleScheduleMeeting = async (e) => {
     e.preventDefault();
-    if (!meetData.contactId) { alert("Please select a contact from the dropdown."); return; }
+    if (!meetData.contactId) { notify.error("Please select a contact from the dropdown."); return; }
     try {
       await fetchApi(`/api/contacts/${meetData.contactId}/activities`, {
         method: 'POST',
@@ -63,12 +65,12 @@ export default function Inbox() {
           description: `Scheduled Calendar Meeting for ${meetData.date} at ${meetData.time}. Topic: ${meetData.description}`
         })
       });
-      alert("Calendar Synced!\n\n[Epic #101] Meeting invite autonomously dispatched to the contact's inbox and added to your unified Google/Outlook calendar bindings.");
+      notify.success("Calendar Synced!\n\n[Epic #101] Meeting invite autonomously dispatched to the contact's inbox and added to your unified Google/Outlook calendar bindings.");
       setShowMeet(false);
       setMeetData({ contactId: '', date: '', time: '', description: '' });
     } catch(err) {
       console.error(err);
-      alert("Failed to schedule meeting.");
+      notify.error("Failed to schedule meeting.");
     }
   };
 
@@ -78,7 +80,7 @@ export default function Inbox() {
 
   const handleAIGenerate = async () => {
     if (!composeData.subject) {
-      alert("Please enter a subject so the AI knows what to write about.");
+      notify.error("Please enter a subject so the AI knows what to write about.");
       return;
     }
     setAiLoading(true);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Eye, Plus, Copy, ExternalLink, Clock, X, Check, FileText } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const VALID_TYPES = ['Quote', 'Estimate', 'Contract', 'Proposal'];
 
@@ -37,6 +38,7 @@ function formatDuration(secs) {
 }
 
 export default function DocumentTracking() {
+  const notify = useNotify();
   const [views, setViews] = useState([]);
   const [stats, setStats] = useState({ documentsTracked: 0, totalViews: 0, uniqueViewers: 0, avgViewDuration: 0 });
   const [loading, setLoading] = useState(true);
@@ -121,7 +123,7 @@ export default function DocumentTracking() {
 
   const submitCreate = async (e) => {
     e.preventDefault();
-    if (!form.documentId) return alert('Pick a document to track');
+    if (!form.documentId) return notify.error('Pick a document to track');
     setCreating(true);
     try {
       const result = await fetchApi('/api/document-views/create', {
@@ -135,7 +137,7 @@ export default function DocumentTracking() {
       setGenerated(result);
       loadAll();
     } catch (err) {
-      alert('Failed to create tracking link');
+      notify.error('Failed to create tracking link');
     } finally {
       setCreating(false);
     }
@@ -147,7 +149,7 @@ export default function DocumentTracking() {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      alert('Copy failed — please copy the URL manually.');
+      notify.error('Copy failed — please copy the URL manually.');
     }
   };
 

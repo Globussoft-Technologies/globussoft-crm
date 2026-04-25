@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { FileText, Plus, Edit, Eye, Send, Copy, Trash2, X, Save, Code } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const TYPES = ['PROPOSAL', 'NDA', 'CONTRACT', 'EMAIL'];
 
@@ -29,6 +30,7 @@ const AVAILABLE_VARS = [
 const EMPTY_TMPL = { name: '', type: 'PROPOSAL', content: '' };
 
 export default function DocumentTemplates() {
+  const notify = useNotify();
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState('');
@@ -75,7 +77,7 @@ export default function DocumentTemplates() {
 
   const saveTemplate = async () => {
     if (!editor.name?.trim() || !editor.content?.trim()) {
-      alert('Name and content are required'); return;
+      notify.error('Name and content are required'); return;
     }
     setBusy(true);
     try {
@@ -90,7 +92,7 @@ export default function DocumentTemplates() {
       }
       closeEditor();
       load();
-    } catch (e) { alert('Save failed: ' + e.message); }
+    } catch (e) { notify.error('Save failed: ' + e.message); }
     finally { setBusy(false); }
   };
 
@@ -102,16 +104,16 @@ export default function DocumentTemplates() {
         body: JSON.stringify({ name: `${t.name} (copy)`, type: t.type, content: t.content })
       });
       load();
-    } catch (e) { alert('Duplicate failed'); }
+    } catch (e) { notify.error('Duplicate failed'); }
     finally { setBusy(false); }
   };
 
   const deleteTemplate = async (id) => {
-    if (!window.confirm('Delete this template?')) return;
+    if (!await notify.confirm('Delete this template?')) return;
     try {
       await fetchApi(`/api/document-templates/${id}`, { method: 'DELETE' });
       load();
-    } catch { alert('Delete failed'); }
+    } catch { notify.error('Delete failed'); }
   };
 
   const openPreview = (t) => setPreviewState({ template: t, html: '', contactId: '' });
@@ -125,7 +127,7 @@ export default function DocumentTemplates() {
         method: 'POST', body: JSON.stringify(body)
       });
       setPreviewState(p => ({ ...p, html: data.html || '' }));
-    } catch (e) { alert('Preview failed: ' + e.message); }
+    } catch (e) { notify.error('Preview failed: ' + e.message); }
     finally { setBusy(false); }
   };
 
@@ -139,17 +141,21 @@ export default function DocumentTemplates() {
   };
 
   const sendEmail = async () => {
-    if (!sendForm.contactId) { alert('Select a recipient contact'); return; }
-    if (!sendForm.subject?.trim()) { alert('Subject is required'); return; }
+    if (!sendForm.contactId) { notify.error('Select a recipient contact'); return; }
+    if (!sendForm.subject?.trim()) { notify.error('Subject is required'); return; }
     setBusy(true);
     try {
       const result = await fetchApi(`/api/document-templates/${sendForm.templateId}/send-email`, {
         method: 'POST',
         body: JSON.stringify({ contactId: parseInt(sendForm.contactId), subject: sendForm.subject }),
       });
-      alert(result.delivered ? 'Email delivered.' : 'Email saved (delivery skipped — Mailgun not configured).');
+      if (result.delivered) {
+        notify.success('Email delivered.');
+      } else {
+        notify.info('Email saved (delivery skipped — Mailgun not configured).');
+      }
       setSendForm(null);
-    } catch (e) { alert('Send failed: ' + e.message); }
+    } catch (e) { notify.error('Send failed: ' + e.message); }
     finally { setBusy(false); }
   };
 

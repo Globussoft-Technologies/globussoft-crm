@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Zap, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { io } from 'socket.io-client';
 import DealModal from '../components/DealModal';
@@ -13,6 +14,7 @@ const defaultStages = [
 ];
 
 const Pipeline = () => {
+  const notify = useNotify();
   const [deals, setDeals] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [stages, setStages] = useState(defaultStages);
@@ -28,7 +30,7 @@ const Pipeline = () => {
       const data = await fetchApi(`/api/ai_scoring/score/${dealId}`);
       setAiScoreModal(data);
     } catch(err) {
-      alert("Failed to connect to AI Predictor.");
+      notify.error("Failed to connect to AI Predictor.");
     }
   };
 
@@ -118,9 +120,13 @@ const Pipeline = () => {
 
   const handleDelete = async (e, id) => {
     e.stopPropagation();
-    if (window.confirm("Delete this deal?")) {
-      await fetchApi(`/api/deals/${id}`, { method: 'DELETE' });
-    }
+    if (!await notify.confirm({
+      title: 'Delete deal',
+      message: 'Delete this deal?',
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
+    await fetchApi(`/api/deals/${id}`, { method: 'DELETE' });
   };
 
   const handleDragStart = (e, id) => {

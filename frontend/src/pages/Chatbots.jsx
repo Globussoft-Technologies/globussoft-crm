@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bot, Plus, Edit, Play, Power, Trash2, Copy, X, ChevronUp, ChevronDown, Send, MessageCircle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const NODE_TYPES = [
   { value: 'message', label: 'Message', help: 'Send a static message' },
@@ -28,6 +29,7 @@ function defaultFlow() {
 }
 
 export default function Chatbots() {
+  const notify = useNotify();
   const [bots, setBots] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // bot being edited
@@ -67,7 +69,7 @@ export default function Chatbots() {
       await load();
       setEditing(bot);
     } catch (e) {
-      alert('Create failed: ' + e.message);
+      notify.error('Create failed: ' + e.message);
     }
   };
 
@@ -75,15 +77,15 @@ export default function Chatbots() {
     try {
       await fetchApi(`/api/chatbots/${bot.id}/${bot.isActive ? 'deactivate' : 'activate'}`, { method: 'POST' });
       load();
-    } catch (e) { alert('Toggle failed'); }
+    } catch (e) { notify.error('Toggle failed'); }
   };
 
   const deleteBot = async (bot) => {
-    if (!window.confirm(`Delete bot "${bot.name}"? All conversations will be removed.`)) return;
+    if (!await notify.confirm(`Delete bot "${bot.name}"? All conversations will be removed.`)) return;
     try {
       await fetchApi(`/api/chatbots/${bot.id}`, { method: 'DELETE' });
       load();
-    } catch (e) { alert('Delete failed'); }
+    } catch (e) { notify.error('Delete failed'); }
   };
 
   return (
@@ -202,6 +204,7 @@ export default function Chatbots() {
 
 // ── Flow Editor ─────────────────────────────────────────────────────
 function FlowEditor({ bot, tenantId, onClose, onSaved }) {
+  const notify = useNotify();
   const [name, setName] = useState(bot.name);
   const [nodes, setNodes] = useState(bot.flow && bot.flow.nodes ? bot.flow.nodes : []);
   const [edges] = useState(bot.flow && bot.flow.edges ? bot.flow.edges : []);
@@ -258,7 +261,7 @@ function FlowEditor({ bot, tenantId, onClose, onSaved }) {
       });
       onSaved();
     } catch (e) {
-      alert('Save failed: ' + e.message);
+      notify.error('Save failed: ' + e.message);
     } finally {
       setSaving(false);
     }

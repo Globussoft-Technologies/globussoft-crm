@@ -2,8 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, Plus, Users, Phone, Mail } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 
 export default function Patients() {
+  const notify = useNotify();
   const [patients, setPatients] = useState([]);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState('');
@@ -42,7 +44,7 @@ export default function Patients() {
   const handleCreate = async (e) => {
     e.preventDefault();
     if (!isValidPhone(form.phone)) {
-      alert('Phone number is invalid. Enter 10–15 digits (formatting characters like +, -, spaces, and parentheses are allowed).');
+      notify.error('Phone number is invalid. Enter 10–15 digits (formatting characters like +, -, spaces, and parentheses are allowed).');
       return;
     }
     try {
@@ -52,7 +54,7 @@ export default function Patients() {
       setShowAdd(false);
       load();
     } catch (err) {
-      alert(`Failed: ${err.message}`);
+      notify.error(`Failed: ${err.message}`);
     }
   };
 

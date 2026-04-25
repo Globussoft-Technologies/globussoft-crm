@@ -2,9 +2,11 @@ import React, { useState, useEffect, useRef, useContext, useCallback } from 'rea
 import { MessageSquare, Send, X, UserPlus, Star, User, Circle } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 
 export default function LiveChat() {
+  const notify = useNotify();
   const { user, tenant } = useContext(AuthContext);
   const tenantId = tenant?.id || 1;
 
@@ -133,7 +135,7 @@ export default function LiveChat() {
       });
     } catch (err) {
       console.error('[LiveChat] send error:', err);
-      alert('Failed to send message');
+      notify.error('Failed to send message');
     }
   };
 

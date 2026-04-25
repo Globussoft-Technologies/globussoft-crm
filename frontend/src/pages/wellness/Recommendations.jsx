@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Sparkles, Check, X, Clock, AlertCircle } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 
 const priorityColor = { high: '#ef4444', medium: '#f59e0b', low: '#64748b' };
 const typeLabel = {
@@ -11,6 +12,7 @@ const typeLabel = {
 };
 
 export default function Recommendations() {
+  const notify = useNotify();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('pending');
@@ -31,13 +33,18 @@ export default function Recommendations() {
     if (action === 'reject') {
       const rec = items.find(r => r.id === id);
       const title = rec?.title || `recommendation #${id}`;
-      if (!window.confirm(`Reject "${title}"?\n\nIt will move to the rejected list and stop influencing the queue.`)) return;
+      const ok = await notify.confirm({
+        message: `Reject "${title}"?\n\nIt will move to the rejected list and stop influencing the queue.`,
+        destructive: true,
+        confirmText: 'Reject',
+      });
+      if (!ok) return;
     }
     try {
       await fetchApi(`/api/wellness/recommendations/${id}/${action}`, { method: 'POST' });
       load();
     } catch (e) {
-      alert(`Failed to ${action}: ${e.message}`);
+      notify.error(`Failed to ${action}: ${e.message}`);
     }
   };
 

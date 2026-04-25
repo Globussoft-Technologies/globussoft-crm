@@ -8,6 +8,7 @@ import {
   LayoutDashboard, Plus, Edit, Save, X, Trash2, Star, RefreshCw,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
 
@@ -211,6 +212,7 @@ function renderWidget(widget, data) {
 // ─── Main Component ────────────────────────────────────────────────
 
 export default function Dashboards() {
+  const notify = useNotify();
   const [dashboards, setDashboards] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [active, setActive] = useState(null);
@@ -269,7 +271,7 @@ export default function Dashboards() {
       setActiveId(created.id);
       setEditMode(true);
     } catch (e) {
-      alert('Failed to create dashboard');
+      notify.error('Failed to create dashboard');
     }
   };
 
@@ -283,13 +285,13 @@ export default function Dashboards() {
       setEditMode(false);
       await loadActive(active.id);
     } catch (e) {
-      alert('Failed to save layout');
+      notify.error('Failed to save layout');
     }
   };
 
   const handleDelete = async () => {
     if (!active) return;
-    if (!window.confirm(`Delete dashboard "${active.name}"?`)) return;
+    if (!await notify.confirm(`Delete dashboard "${active.name}"?`)) return;
     try {
       await fetchApi(`/api/dashboards/${active.id}`, { method: 'DELETE' });
       setActiveId(null);
@@ -297,7 +299,7 @@ export default function Dashboards() {
       setLayout([]);
       await loadDashboards();
     } catch (e) {
-      alert('Failed to delete');
+      notify.error('Failed to delete');
     }
   };
 
@@ -308,7 +310,7 @@ export default function Dashboards() {
       await loadDashboards();
       await loadActive(active.id);
     } catch (e) {
-      alert('Only admins can set tenant default');
+      notify.error('Only admins can set tenant default');
     }
   };
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import {
   Database, Camera, Download, Trash2, AlertTriangle, RotateCcw, X, Plus, ShieldAlert,
 } from 'lucide-react';
@@ -37,6 +38,7 @@ function getRole() {
 }
 
 export default function Sandbox() {
+  const notify = useNotify();
   const role = getRole();
   const isAdmin = role === 'ADMIN';
 
@@ -82,7 +84,7 @@ export default function Sandbox() {
       setShowCreate(false);
       await load();
     } catch (err) {
-      alert('Failed to create snapshot: ' + (err.message || 'unknown'));
+      notify.error('Failed to create snapshot: ' + (err.message || 'unknown'));
     } finally {
       setCreating(false);
     }
@@ -105,23 +107,23 @@ export default function Sandbox() {
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      alert('Download failed: ' + (err.message || 'unknown'));
+      notify.error('Download failed: ' + (err.message || 'unknown'));
     }
   };
 
   const handleDelete = async (snap) => {
-    if (!window.confirm(`Permanently delete snapshot "${snap.name}"? This cannot be undone.`)) return;
+    if (!await notify.confirm(`Permanently delete snapshot "${snap.name}"? This cannot be undone.`)) return;
     try {
       await fetchApi(`/api/sandbox/${snap.id}`, { method: 'DELETE' });
       await load();
     } catch (err) {
-      alert('Delete failed: ' + (err.message || 'unknown'));
+      notify.error('Delete failed: ' + (err.message || 'unknown'));
     }
   };
 
   const handleRestore = async () => {
     if (restoreConfirmText !== 'RESTORE') {
-      alert('You must type RESTORE exactly to confirm.');
+      notify.error('You must type RESTORE exactly to confirm.');
       return;
     }
     setRestoring(true);
@@ -133,12 +135,12 @@ export default function Sandbox() {
       const summary = Object.entries(counts)
         .map(([k, v]) => `  ${k}: ${v}`)
         .join('\n');
-      alert(`Restore complete.\n\nRestored:\n${summary}`);
+      notify.success(`Restore complete.\n\nRestored:\n${summary}`);
       setRestoreTarget(null);
       setRestoreConfirmText('');
       await load();
     } catch (err) {
-      alert('Restore failed: ' + (err.message || 'unknown'));
+      notify.error('Restore failed: ' + (err.message || 'unknown'));
     } finally {
       setRestoring(false);
     }
@@ -146,7 +148,7 @@ export default function Sandbox() {
 
   const handleReset = async () => {
     if (resetConfirmText !== 'DELETE_EVERYTHING') {
-      alert('You must type DELETE_EVERYTHING exactly to confirm.');
+      notify.error('You must type DELETE_EVERYTHING exactly to confirm.');
       return;
     }
     setResetting(true);
@@ -155,12 +157,12 @@ export default function Sandbox() {
         method: 'POST',
         body: JSON.stringify({ confirm: 'DELETE_EVERYTHING' }),
       });
-      alert('All tenant data has been wiped.');
+      notify.success('All tenant data has been wiped.');
       setShowReset(false);
       setResetConfirmText('');
       await load();
     } catch (err) {
-      alert('Reset failed: ' + (err.message || 'unknown'));
+      notify.error('Reset failed: ' + (err.message || 'unknown'));
     } finally {
       setResetting(false);
     }

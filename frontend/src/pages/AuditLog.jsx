@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { ScrollText, Filter, Download, ChevronDown, User } from 'lucide-react';
 
 const ACTION_COLOR = {
@@ -68,6 +69,7 @@ function prettyDetails(raw) {
 }
 
 export default function AuditLog() {
+  const notify = useNotify();
   const [logs, setLogs] = useState([]);
   const [stats, setStats] = useState(null);
   const [page, setPage] = useState(1);
@@ -148,7 +150,7 @@ export default function AuditLog() {
       })
       .catch(err => {
         console.error('[AuditLog] export failed', err);
-        alert('Failed to export CSV');
+        notify.error('Failed to export CSV');
       });
   };
 

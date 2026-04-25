@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Shield, Download, Trash2, Clock, AlertTriangle, CheckCircle2, Save } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 
 const RETENTION_ENTITIES = [
@@ -12,6 +13,7 @@ const RETENTION_ENTITIES = [
 ];
 
 export default function Privacy() {
+  const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
 
@@ -72,7 +74,7 @@ export default function Privacy() {
       setExportSuccess(true);
       setTimeout(() => setExportSuccess(false), 4000);
     } catch (err) {
-      alert('Failed to export data: ' + err.message);
+      notify.error('Failed to export data: ' + err.message);
     } finally {
       setExporting(false);
     }
@@ -97,7 +99,7 @@ export default function Privacy() {
       setTimeout(() => setSavedFlash(false), 3000);
       loadPolicies();
     } catch (err) {
-      alert('Failed to save policies: ' + err.message);
+      notify.error('Failed to save policies: ' + err.message);
     } finally {
       setSavingPolicies(false);
     }
@@ -105,7 +107,7 @@ export default function Privacy() {
 
   const handleAccountDeletion = async () => {
     if (deleteConfirmText !== 'DELETE') {
-      alert('Please type DELETE to confirm');
+      notify.error('Please type DELETE to confirm');
       return;
     }
     setDeleting(true);
@@ -121,11 +123,11 @@ export default function Privacy() {
           source: 'account_deletion_request',
         }),
       }).catch(() => {});
-      alert('Your account deletion request has been submitted. An administrator will review and complete the anonymization within 30 days.');
+      notify.success('Your account deletion request has been submitted. An administrator will review and complete the anonymization within 30 days.');
       setShowDeleteModal(false);
       setDeleteConfirmText('');
     } catch (err) {
-      alert('Failed to submit deletion request: ' + err.message);
+      notify.error('Failed to submit deletion request: ' + err.message);
     } finally {
       setDeleting(false);
     }

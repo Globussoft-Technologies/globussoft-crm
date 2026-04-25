@@ -10,6 +10,7 @@ import {
   Download,
   Calendar as CalendarIcon,
 } from 'lucide-react';
+import { useNotify } from '../../utils/notify';
 
 const PORTAL_TOKEN_KEY = 'patientPortalToken';
 const PORTAL_NAME_KEY = 'patientPortalName';
@@ -235,6 +236,7 @@ function Login({ onSuccess }) {
 }
 
 function Dashboard({ token, onLogout }) {
+  const notify = useNotify();
   const [tab, setTab] = useState('visits');
   const [me, setMe] = useState(null);
   const [visits, setVisits] = useState([]);
@@ -279,7 +281,7 @@ function Dashboard({ token, onLogout }) {
       a.remove();
       URL.revokeObjectURL(url);
     } catch (ex) {
-      alert(`Could not download: ${ex.message}`);
+      notify.error(`Could not download: ${ex.message}`);
     }
   };
 

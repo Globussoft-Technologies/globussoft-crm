@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame } from 'lucide-react';
 
 const PRIORITY_CONFIG = {
@@ -31,6 +32,7 @@ function isOverdue(task) {
 }
 
 export default function Tasks() {
+  const notify = useNotify();
   const [tasks, setTasks] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [newTask, setNewTask] = useState({ title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium' });
@@ -57,7 +59,7 @@ export default function Tasks() {
       setNewTask({ title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium' });
       loadData();
     } catch (err) {
-      alert('Failed to enqueue task');
+      notify.error('Failed to enqueue task');
     }
   };
 

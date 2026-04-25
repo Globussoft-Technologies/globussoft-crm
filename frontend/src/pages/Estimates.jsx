@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FileSpreadsheet, Plus, Trash2, DollarSign, ArrowRightLeft, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const STATUS_CONFIG = {
   Draft:     { color: '#94a3b8', bg: 'rgba(148,163,184,0.15)' },
@@ -37,6 +38,7 @@ const INITIAL_FORM = {
 };
 
 export default function Estimates() {
+  const notify = useNotify();
   const [estimates, setEstimates] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
@@ -107,7 +109,7 @@ export default function Estimates() {
   const createEstimate = async (e) => {
     e.preventDefault();
     if (hasInvalidLine) {
-      alert('Fix the negative quantity or unit price in the line items before saving.');
+      notify.error('Fix the negative quantity or unit price in the line items before saving.');
       return;
     }
     try {
@@ -126,27 +128,32 @@ export default function Estimates() {
       setLineItems([{ ...EMPTY_LINE_ITEM }]);
       loadData();
     } catch {
-      alert('Failed to create estimate');
+      notify.error('Failed to create estimate');
     }
   };
 
   const convertToInvoice = async (id) => {
-    if (!window.confirm('Convert this estimate to an invoice?')) return;
+    if (!await notify.confirm('Convert this estimate to an invoice?')) return;
     try {
       await fetchApi(`/api/estimates/${id}/convert`, { method: 'PUT' });
       loadData();
     } catch {
-      alert('Failed to convert estimate. Make sure the estimate has a contact assigned.');
+      notify.error('Failed to convert estimate. Make sure the estimate has a contact assigned.');
     }
   };
 
   const deleteEstimate = async (id) => {
-    if (!window.confirm('Delete this estimate? This cannot be undone.')) return;
+    if (!await notify.confirm({
+      title: 'Delete estimate',
+      message: 'Delete this estimate? This cannot be undone.',
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
     try {
       await fetchApi(`/api/estimates/${id}`, { method: 'DELETE' });
       loadData();
     } catch {
-      alert('Failed to delete estimate');
+      notify.error('Failed to delete estimate');
     }
   };
 

@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Database, Plus, ArrowLeft, Download, Filter } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 export default function CustomObjectView() {
+  const notify = useNotify();
   const { entityName } = useParams();
   const [entity, setEntity] = useState(null);
   const [records, setRecords] = useState([]);
@@ -40,7 +42,7 @@ export default function CustomObjectView() {
       });
       setShowAdd(false);
       loadData();
-    } catch(err) { alert("Failed to log dynamic payload to EAV relational map."); }
+    } catch(err) { notify.error("Failed to log dynamic payload to EAV relational map."); }
   };
 
   if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Compiling metadata array matrix for {entityName}...</div>;

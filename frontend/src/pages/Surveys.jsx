@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { ClipboardList, Send, Plus, BarChart3, X, ArrowLeft, MessageSquare, Users } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
@@ -40,6 +41,7 @@ function avgColor(avg) {
 }
 
 export default function Surveys() {
+  const notify = useNotify();
   const [surveys, setSurveys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -112,7 +114,7 @@ export default function Surveys() {
 
   const deleteSurvey = async (id, e) => {
     e.stopPropagation();
-    if (!window.confirm('Delete this survey and all its responses?')) return;
+    if (!await notify.confirm('Delete this survey and all its responses?')) return;
     try {
       await fetchApi(`/api/surveys/${id}`, { method: 'DELETE' });
       await loadSurveys();

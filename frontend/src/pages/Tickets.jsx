@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { Ticket, Plus, Trash2, AlertTriangle } from 'lucide-react';
 
 const PRIORITY_CONFIG = {
@@ -32,6 +33,7 @@ function Badge({ label, config }) {
 const EMPTY_FORM = { subject: '', description: '', priority: 'Medium', assigneeId: '' };
 
 export default function Tickets() {
+  const notify = useNotify();
   const [tickets, setTickets] = useState([]);
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -70,7 +72,7 @@ export default function Tickets() {
       setForm(EMPTY_FORM);
       loadData();
     } catch (err) {
-      alert('Failed to create ticket.');
+      notify.error('Failed to create ticket.');
     }
   };
 
@@ -84,7 +86,12 @@ export default function Tickets() {
   };
 
   const deleteTicket = async (id) => {
-    if (!window.confirm('Delete this ticket?')) return;
+    if (!await notify.confirm({
+      title: 'Delete ticket',
+      message: 'Delete this ticket?',
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
     try {
       await fetchApi(`/api/tickets/${id}`, { method: 'DELETE' });
       loadData();

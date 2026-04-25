@@ -6,9 +6,17 @@ import CPQBuilder from '../components/CPQBuilder';
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({ fetchApi: (...args) => fetchApiMock(...args) }));
 
+// Migration #129/Native-popup-cleanup: CPQBuilder switched alert() → notify.error().
+// Mock the notify hook so tests can assert against notifyMock.error instead of window.alert.
+const notifyMock = { error: vi.fn(), success: vi.fn(), info: vi.fn(), confirm: vi.fn(), prompt: vi.fn() };
+vi.mock('../utils/notify', () => ({ useNotify: () => notifyMock, NotifyProvider: ({ children }) => children }));
+
 describe('CPQBuilder', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
+    notifyMock.error.mockReset();
+    notifyMock.success.mockReset();
+    notifyMock.info.mockReset();
   });
 
   it('loads quotes + products on mount, shows empty state', async () => {
@@ -44,11 +52,10 @@ describe('CPQBuilder', () => {
 
   it('saveQuote alerts if title is missing', async () => {
     fetchApiMock.mockResolvedValue([]);
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
     render(<CPQBuilder dealId={1} />);
     fireEvent.click(await screen.findByText(/Mint SaaS Quote/i));
     fireEvent.click(screen.getByText(/Commit Active CPQ Engine/i));
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringMatching(/title/i));
+    expect(notifyMock.error).toHaveBeenCalledWith(expect.stringMatching(/title/i));
   });
 
   it('saveQuote posts to /api/cpq/quotes when title is provided', async () => {
@@ -73,12 +80,11 @@ describe('CPQBuilder', () => {
       if (opts?.method === 'POST') return Promise.reject(new Error('nope'));
       return Promise.resolve([]);
     });
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
     render(<CPQBuilder dealId={7} />);
     fireEvent.click(await screen.findByText(/Mint SaaS Quote/i));
     fireEvent.change(screen.getByPlaceholderText(/Quote Contract Title/), { target: { value: 'My Quote' } });
     fireEvent.click(screen.getByText(/Commit Active CPQ Engine/i));
-    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expect.stringMatching(/failed/i)));
+    await waitFor(() => expect(notifyMock.error).toHaveBeenCalledWith(expect.stringMatching(/failed/i)));
   });
 
   it('renders a quote card when quotes list has entries', async () => {

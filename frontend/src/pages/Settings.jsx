@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { ThemeContext, AuthContext } from '../App';
 
 export default function Settings() {
+  const notify = useNotify();
   const { theme, toggleTheme } = useContext(ThemeContext);
   const { tenant: ctxTenant, setTenant } = useContext(AuthContext);
   const [users, setUsers] = useState([]);
@@ -91,7 +93,7 @@ export default function Settings() {
       setTenantState(updated);
       if (setTenant) setTenant(updated);
     } catch (err) {
-      alert('Failed to update organization');
+      notify.error('Failed to update organization');
     }
     setTenantSaving(false);
   };
@@ -120,12 +122,12 @@ export default function Settings() {
       setNewStage({ name: '', color: '#3b82f6' });
       fetchStages();
     } catch (err) {
-      alert('Failed to add stage');
+      notify.error('Failed to add stage');
     }
   };
 
   const handleDeleteStage = async (id) => {
-    if (window.confirm('Delete this pipeline stage?')) {
+    if (await notify.confirm('Delete this pipeline stage?')) {
       await fetchApi(`/api/pipeline_stages/${id}`, { method: 'DELETE' });
       fetchStages();
     }
@@ -160,12 +162,12 @@ export default function Settings() {
       setUsers(data);
       setNewUser({ name: '', email: '', password: '', role: 'USER' });
     } catch (err) {
-      alert("Failed to create user.");
+      notify.error("Failed to create user.");
     }
   };
 
   const handleDelete = async (id) => {
-    if (window.confirm("Delete this user?")) {
+    if (await notify.confirm("Delete this user?")) {
       await fetchApi(`/api/auth/users/${id}`, { method: 'DELETE' });
       setUsers(users.filter(u => u.id !== id));
     }

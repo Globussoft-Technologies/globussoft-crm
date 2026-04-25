@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Code, Plug, Zap, ChevronRight, Trash2, ExternalLink, Eye, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 export default function Zapier() {
+  const notify = useNotify();
   const [triggers, setTriggers] = useState([]);
   const [actions, setActions] = useState([]);
   const [subs, setSubs] = useState([]);
@@ -36,17 +38,17 @@ export default function Zapier() {
       const data = await fetchApi(`/api/zapier/test/${key}`);
       setSample({ key, data });
     } catch (err) {
-      alert('Failed to load sample data');
+      notify.error('Failed to load sample data');
     }
   };
 
   const removeSubscription = async (id) => {
-    if (!window.confirm('Disconnect this Zap subscription?')) return;
+    if (!await notify.confirm('Disconnect this Zap subscription?')) return;
     try {
       await fetchApi(`/api/zapier/subscribe/${id}`, { method: 'DELETE' });
       loadAll();
     } catch (err) {
-      alert('Failed to remove subscription');
+      notify.error('Failed to remove subscription');
     }
   };
 

@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Network, Plus, Trash2, Edit2, X, MapPin, Users, Eye, ArrowLeft } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 export default function Territories() {
+  const notify = useNotify();
   const [territories, setTerritories] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -82,7 +84,7 @@ export default function Territories() {
   };
 
   const remove = async (t) => {
-    if (!window.confirm(`Delete territory "${t.name}"? Contacts will be unassigned.`)) return;
+    if (!await notify.confirm(`Delete territory "${t.name}"? Contacts will be unassigned.`)) return;
     try {
       await fetchApi(`/api/territories/${t.id}`, { method: 'DELETE' });
       showToast('Territory deleted');

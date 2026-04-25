@@ -14,10 +14,12 @@ import {
   Save,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 
 const tierColor = { high: '#ef4444', medium: '#f59e0b', low: '#64748b' };
 
 export default function Services() {
+  const notify = useNotify();
   const [tab, setTab] = useState('catalog'); // catalog | packages
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -37,7 +39,7 @@ export default function Services() {
       setShowAdd(false);
       setForm({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: 0, durationMin: 60, targetRadiusKm: 30, description: '' });
       load();
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   return (
@@ -110,6 +112,7 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
 }
 
 function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChanged }) {
+  const notify = useNotify();
   return (
     <>
       {/* Visually-hidden section heading so screen readers see h1 -> h2 hierarchy
@@ -122,7 +125,7 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
         const onSubmit = (e) => {
           if (!valid) {
             e.preventDefault();
-            alert('Please enter a service name, a base price greater than ₹0, and a positive duration.');
+            notify.error('Please enter a service name, a base price greater than ₹0, and a positive duration.');
             return;
           }
           submit(e);
@@ -192,6 +195,7 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
 }
 
 function ServiceCard({ service, onChanged }) {
+  const notify = useNotify();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(service);
   const [saving, setSaving] = useState(false);
@@ -206,15 +210,15 @@ function ServiceCard({ service, onChanged }) {
       ? null
       : parseInt(draft.targetRadiusKm);
     if (!Number.isFinite(price) || price <= 0) {
-      alert('Base price must be greater than 0.');
+      notify.error('Base price must be greater than 0.');
       return;
     }
     if (!Number.isFinite(duration) || duration <= 0) {
-      alert('Duration must be greater than 0 minutes.');
+      notify.error('Duration must be greater than 0 minutes.');
       return;
     }
     if (radius !== null && (!Number.isFinite(radius) || radius < 0)) {
-      alert('Marketing radius cannot be negative. Leave blank for unlimited.');
+      notify.error('Marketing radius cannot be negative. Leave blank for unlimited.');
       return;
     }
     setSaving(true);
@@ -232,18 +236,18 @@ function ServiceCard({ service, onChanged }) {
       });
       setEditing(false);
       onChanged && onChanged();
-    } catch (err) { alert(`Save failed: ${err.message}`); }
+    } catch (err) { notify.error(`Save failed: ${err.message}`); }
     setSaving(false);
   };
 
   const remove = async () => {
-    if (!confirm(`Deactivate "${service.name}"? It won't show in the catalog or booking page.`)) return;
+    if (!await notify.confirm({ message: `Deactivate "${service.name}"? It won't show in the catalog or booking page.`, destructive: true, confirmText: 'Deactivate' })) return;
     try {
       await fetchApi(`/api/wellness/services/${service.id}`, {
         method: 'PUT', body: JSON.stringify({ isActive: false }),
       });
       onChanged && onChanged();
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   if (editing) {
@@ -305,6 +309,7 @@ function ServiceCard({ service, onChanged }) {
 const iconBtn = { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text-secondary)', padding: '0.25rem', borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };
 
 function PackageBuilder({ services }) {
+  const notify = useNotify();
   // Prefer high-tier services for packages, fall back to all.
   const eligible = useMemo(() => {
     const hi = services.filter((s) => s.ticketTier === 'high');
@@ -346,7 +351,7 @@ function PackageBuilder({ services }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       } catch {
-        alert('Could not copy');
+        notify.error('Could not copy');
       }
       ta.remove();
     }

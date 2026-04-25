@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Landing from './pages/Landing';
 import Layout from './components/Layout';
+import { NotifyProvider } from './utils/notify';
 import './theme/wellness.css'; // wellness vertical theme overrides (scoped)
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -163,6 +164,7 @@ export default function App() {
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
     <AuthContext.Provider value={{ user, setUser, token, setToken, tenant, setTenant }}>
+    <NotifyProvider>
       <BrowserRouter>
         <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: 'var(--text-primary)' }}>Loading...</div>}>
           <Routes>
@@ -261,6 +263,7 @@ export default function App() {
           </Routes>
         </Suspense>
       </BrowserRouter>
+    </NotifyProvider>
     </AuthContext.Provider>
     </ThemeContext.Provider>
   );

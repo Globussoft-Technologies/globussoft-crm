@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download, RefreshCw } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const STATUS_CONFIG = {
   PAID:    { color: '#10b981', bg: 'rgba(16,185,129,0.15)', label: 'Paid' },
@@ -26,6 +27,7 @@ import { formatMoney, currencySymbol } from '../utils/money';
 const formatCurrency = (v) => formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
 export default function Invoices() {
+  const notify = useNotify();
   const [invoices, setInvoices] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
@@ -113,7 +115,7 @@ export default function Invoices() {
       setNewInvoice({ invoiceNum: '', contactId: '', dealId: '', amount: '', dueDate: '', status: 'UNPAID' });
       loadData();
     } catch (err) {
-      alert('Failed to create invoice');
+      notify.error('Failed to create invoice');
     }
   };
 
@@ -122,7 +124,7 @@ export default function Invoices() {
       await fetchApi(`/api/billing/${id}/pay`, { method: 'PUT' });
       loadData();
     } catch (err) {
-      alert('Failed to mark invoice as paid');
+      notify.error('Failed to mark invoice as paid');
     }
   };
 
@@ -142,21 +144,24 @@ export default function Invoices() {
         link.click();
         URL.revokeObjectURL(link.href);
       })
-      .catch(() => alert('Failed to download PDF'));
+      .catch(() => notify.error('Failed to download PDF'));
   };
 
   const voidInvoice = async (inv) => {
     const num = inv.invoiceNum || `#${inv.id}`;
-    if (!window.confirm(
-      `Void invoice ${num}?\n\n` +
-      `This marks the invoice as VOIDED and removes it from Outstanding totals. ` +
-      `The invoice row and audit trail are preserved (no data loss).`
-    )) return;
+    if (!await notify.confirm({
+      title: `Void invoice ${num}?`,
+      message:
+        `This marks the invoice as VOIDED and removes it from Outstanding totals. ` +
+        `The invoice row and audit trail are preserved (no data loss).`,
+      confirmText: 'Void',
+      destructive: true,
+    })) return;
     try {
       await fetchApi(`/api/billing/${inv.id}/void`, { method: 'PUT' });
       loadData();
     } catch (err) {
-      alert('Failed to void invoice');
+      notify.error('Failed to void invoice');
     }
   };
 
@@ -506,7 +511,7 @@ export default function Invoices() {
                     setRecurInvoice(null);
                     loadData();
                   } catch (err) {
-                    alert(`Failed to ${isStopping ? 'stop' : 'activate'} recurring billing: ${err.message || err}`);
+                    notify.error(`Failed to ${isStopping ? 'stop' : 'activate'} recurring billing: ${err.message || err}`);
                   }
                 }}
                 style={{

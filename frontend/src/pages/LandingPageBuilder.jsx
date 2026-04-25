@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Save, Eye, Globe, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Columns } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const COMPONENT_TYPES = [
   { type: 'heading', label: 'Heading', icon: Type, defaultProps: { text: 'Your Headline Here', level: 'h2', align: 'center', color: '#1e293b' } },
@@ -15,6 +16,7 @@ const COMPONENT_TYPES = [
 ];
 
 export default function LandingPageBuilder() {
+  const notify = useNotify();
   const { id } = useParams();
   const [page, setPage] = useState(null);
   const [components, setComponents] = useState([]);
@@ -36,7 +38,7 @@ export default function LandingPageBuilder() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: page.title, content: JSON.stringify(components) })
       });
-    } catch { alert('Save failed'); }
+    } catch { notify.error('Save failed'); }
     setSaving(false);
   };
 

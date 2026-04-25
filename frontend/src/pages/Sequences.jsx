@@ -3,12 +3,14 @@ import ReactFlow, { MiniMap, Controls, Background, addEdge, applyNodeChanges, ap
 import 'reactflow/dist/style.css';
 import { Network, Play, Plus, Save, Clock, Mail, Trash2, Users, RefreshCw, MessageSquare, MessageCircle, Bell } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const initialNodes = [
   { id: '1', type: 'input', data: { label: 'TRIGGER: Contact Subscribed' }, position: { x: 250, y: 50 }, style: { background: '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 'bold', width: 220, textAlign: 'center' } },
 ];
 
 export default function Sequences() {
+  const notify = useNotify();
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -81,7 +83,7 @@ export default function Sequences() {
 
   const deleteSequence = async (id, e) => {
     e.stopPropagation();
-    if (!window.confirm('Delete this sequence?')) return;
+    if (!await notify.confirm('Delete this sequence?')) return;
     try {
       await fetchApi(`/api/sequences/${id}`, { method: 'DELETE' });
       if (activeSeqId === id) {

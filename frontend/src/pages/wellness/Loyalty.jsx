@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Award, Trophy, Search, Plus, Minus, Users, Gift, CheckCircle2, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 
 /**
  * Loyalty + Referrals — manager view.
@@ -130,6 +131,7 @@ function Stat({ label, value, color }) {
 // ── Search / lookup tab ───────────────────────────────────────────
 
 function SearchTab({ onCreditChange }) {
+  const notify = useNotify();
   const [q, setQ] = useState('');
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -161,7 +163,7 @@ function SearchTab({ onCreditChange }) {
       const r = await fetchApi(`/api/wellness/loyalty/${p.id}`);
       setLoyalty(r);
     } catch (err) {
-      alert(`Failed to load loyalty: ${err.message}`);
+      notify.error(`Failed to load loyalty: ${err.message}`);
     }
   };
 
@@ -175,7 +177,7 @@ function SearchTab({ onCreditChange }) {
       setCreditReason('');
       await loadLoyalty(selected);
       onCreditChange && onCreditChange();
-    } catch (err) { alert(`Credit failed: ${err.message}`); }
+    } catch (err) { notify.error(`Credit failed: ${err.message}`); }
   };
 
   const redeem = async (e) => {
@@ -188,7 +190,7 @@ function SearchTab({ onCreditChange }) {
       setRedeemReason('');
       await loadLoyalty(selected);
       onCreditChange && onCreditChange();
-    } catch (err) { alert(`Redeem failed: ${err.message}`); }
+    } catch (err) { notify.error(`Redeem failed: ${err.message}`); }
   };
 
   return (
@@ -299,6 +301,7 @@ function SearchTab({ onCreditChange }) {
 // ── Referrals tab ─────────────────────────────────────────────────
 
 function ReferralsTab({ referrals, onChanged }) {
+  const notify = useNotify();
   const [filter, setFilter] = useState('all');
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ referrerPatientId: '', referredName: '', referredPhone: '', referredEmail: '' });
@@ -309,17 +312,17 @@ function ReferralsTab({ referrals, onChanged }) {
   }, [referrals, filter]);
 
   const reward = async (id) => {
-    const ptsStr = prompt('Reward points (default 100):', '100');
+    const ptsStr = await notify.prompt('Reward points (default 100):', '100');
     if (!ptsStr) return;
     const pts = parseInt(ptsStr, 10);
-    if (Number.isNaN(pts) || pts <= 0) return alert('Invalid points');
+    if (Number.isNaN(pts) || pts <= 0) { notify.error('Invalid points'); return; }
     try {
       await fetchApi(`/api/wellness/referrals/${id}/reward`, {
         method: 'PUT',
         body: JSON.stringify({ rewardPoints: pts }),
       });
       onChanged();
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   const submit = async (e) => {
@@ -338,7 +341,7 @@ function ReferralsTab({ referrals, onChanged }) {
       setForm({ referrerPatientId: '', referredName: '', referredPhone: '', referredEmail: '' });
       setShowAdd(false);
       onChanged();
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   return (

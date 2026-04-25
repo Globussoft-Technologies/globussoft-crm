@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { fetchApi } from '../utils/api';
 import { formatMoney, currencySymbol } from '../utils/money';
+import { useNotify } from '../utils/notify';
 import { PieChart as PieChartIcon, Download, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
@@ -33,6 +34,7 @@ const DETAIL_TYPES = [
 ];
 
 export default function Reports() {
+  const notify = useNotify();
   const [data, setData] = useState([]);
   const [metric, setMetric] = useState('revenue');
   const [groupBy, setGroupBy] = useState('stage');
@@ -104,12 +106,12 @@ export default function Reports() {
     e.preventDefault();
     const recipients = newSchedule.recipients.split(',').map(r => r.trim()).filter(Boolean);
     if (recipients.length === 0) {
-      alert('Add at least one recipient email.');
+      notify.error('Add at least one recipient email.');
       return;
     }
     const invalid = recipients.filter(r => !EMAIL_RE.test(r));
     if (invalid.length) {
-      alert(`Invalid email address(es): ${invalid.join(', ')}\n\nFix these before creating the schedule.`);
+      notify.error(`Invalid email address(es): ${invalid.join(', ')}\n\nFix these before creating the schedule.`);
       return;
     }
     try {
@@ -119,7 +121,7 @@ export default function Reports() {
         body: JSON.stringify({ ...newSchedule, recipients }),
       });
     } catch (err) {
-      alert(`Failed to create schedule: ${err.message || err}`);
+      notify.error(`Failed to create schedule: ${err.message || err}`);
       return;
     }
     setNewSchedule({ name: '', reportType: 'deals', frequency: 'weekly', recipients: '', format: 'PDF' });
@@ -136,7 +138,7 @@ export default function Reports() {
     // #129: confirm before destructive action
     const sched = schedules.find(s => s.id === id);
     const name = sched?.name || `schedule #${id}`;
-    if (!window.confirm(`Delete scheduled email report "${name}"?\n\nThis cancels future deliveries to its recipients. The action cannot be undone.`)) return;
+    if (!await notify.confirm(`Delete scheduled email report "${name}"?\n\nThis cancels future deliveries to its recipients. The action cannot be undone.`)) return;
     await fetchApi(`/api/report-schedules/${id}`, { method: 'DELETE' });
     fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => {});
   };
@@ -162,7 +164,7 @@ export default function Reports() {
         link.click();
         URL.revokeObjectURL(link.href);
       })
-      .catch(() => alert(`Failed to export ${format.toUpperCase()}`));
+      .catch(() => notify.error(`Failed to export ${format.toUpperCase()}`));
   };
 
   const needsGroupBy = metric === 'revenue' || metric === 'count';

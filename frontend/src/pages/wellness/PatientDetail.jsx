@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 
 const tabStyle = (active) => ({
   padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
@@ -157,6 +158,7 @@ function RxSummary({ drugs }) {
 // ── Prescribe tab ─────────────────────────────────────────────────
 
 function PrescribeTab({ patient, onSaved }) {
+  const notify = useNotify();
   const [visitId, setVisitId] = useState(patient.visits[0]?.id || '');
   const [drugs, setDrugs] = useState([{ name: '', dosage: '', frequency: '', duration: '' }]);
   const [instructions, setInstructions] = useState('');
@@ -173,9 +175,9 @@ function PrescribeTab({ patient, onSaved }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!visitId) { alert('Pick a visit this prescription belongs to (or log a visit first).'); return; }
+    if (!visitId) { notify.error('Pick a visit this prescription belongs to (or log a visit first).'); return; }
     if (validDrugs.length === 0) {
-      alert('At least one drug name is required to save a prescription.');
+      notify.error('At least one drug name is required to save a prescription.');
       return;
     }
     setSaving(true);
@@ -191,9 +193,9 @@ function PrescribeTab({ patient, onSaved }) {
       setDrugs([{ name: '', dosage: '', frequency: '', duration: '' }]);
       setInstructions('');
       onSaved();
-      alert('Prescription saved.');
+      notify.success('Prescription saved.');
     } catch (err) {
-      alert(`Failed: ${err.message}`);
+      notify.error(`Failed: ${err.message}`);
     } finally { setSaving(false); }
   };
 
@@ -252,6 +254,7 @@ function PrescribeTab({ patient, onSaved }) {
 // ── Consent tab with signature canvas ─────────────────────────────
 
 function ConsentTab({ patient, services, onSaved }) {
+  const notify = useNotify();
   const canvasRef = useRef(null);
   const [templateName, setTemplateName] = useState('hair-transplant');
   const [serviceId, setServiceId] = useState('');
@@ -296,7 +299,7 @@ function ConsentTab({ patient, services, onSaved }) {
   const submit = async (e) => {
     e.preventDefault();
     if (!hasStrokes) {
-      alert('Please capture the patient signature before saving the consent.');
+      notify.error('Please capture the patient signature before saving the consent.');
       return;
     }
     setSaving(true);
@@ -313,9 +316,9 @@ function ConsentTab({ patient, services, onSaved }) {
       });
       clearSig();
       onSaved();
-      alert('Consent captured.');
+      notify.success('Consent captured.');
     } catch (err) {
-      alert(`Failed: ${err.message}`);
+      notify.error(`Failed: ${err.message}`);
     } finally { setSaving(false); }
   };
 
@@ -384,6 +387,7 @@ function ConsentTab({ patient, services, onSaved }) {
 // ── Treatment plans tab ───────────────────────────────────────────
 
 function PlansTab({ patient, services, onSaved }) {
+  const notify = useNotify();
   const [name, setName] = useState('');
   const [totalSessions, setTotalSessions] = useState(4);
   const [totalPrice, setTotalPrice] = useState(0);
@@ -401,7 +405,7 @@ function PlansTab({ patient, services, onSaved }) {
       });
       setName(''); setTotalPrice(0); setServiceId('');
       onSaved();
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   return (
@@ -447,6 +451,7 @@ function PlansTab({ patient, services, onSaved }) {
 // ── Log visit tab ──────────────────────────────────────────────────
 
 function LogVisitTab({ patient, services, doctors, onSaved }) {
+  const notify = useNotify();
   const [serviceId, setServiceId] = useState('');
   const [doctorId, setDoctorId] = useState('');
   const [notes, setNotes] = useState('');
@@ -458,7 +463,7 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
   const submit = async (e) => {
     e.preventDefault();
     if (!valid) {
-      alert('Please select a Service and Doctor, and enter an amount of 0 or more.');
+      notify.error('Please select a Service and Doctor, and enter an amount of 0 or more.');
       return;
     }
     try {
@@ -473,8 +478,8 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
       });
       setServiceId(''); setDoctorId(''); setNotes(''); setAmount(0);
       onSaved();
-      alert('Visit logged.');
-    } catch (err) { alert(`Failed: ${err.message}`); }
+      notify.success('Visit logged.');
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   return (
@@ -532,6 +537,7 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
 // ── Photos tab — before/after upload per visit ────────────────────
 
 function PhotosTab({ patient, onSaved }) {
+  const notify = useNotify();
   const [visitId, setVisitId] = useState(patient.visits[0]?.id || '');
   const [kind, setKind] = useState('before');
   const [uploading, setUploading] = useState(false);
@@ -556,12 +562,12 @@ function PhotosTab({ patient, onSaved }) {
       if (!r.ok) throw new Error(await r.text());
       e.target.value = '';
       onSaved();
-    } catch (err) { alert(`Upload failed: ${err.message}`); }
+    } catch (err) { notify.error(`Upload failed: ${err.message}`); }
     setUploading(false);
   };
 
   const remove = async (url, k) => {
-    if (!confirm('Delete this photo?')) return;
+    if (!await notify.confirm('Delete this photo?')) return;
     await fetchApi(`/api/wellness/visits/${visitId}/photos`, {
       method: 'DELETE', body: JSON.stringify({ url, kind: k }),
     });
@@ -628,6 +634,7 @@ function PhotoColumn({ title, urls, onRemove }) {
 // ── Inventory consumption tab ─────────────────────────────────────
 
 function InventoryTab({ patient, onSaved }) {
+  const notify = useNotify();
   const [visitId, setVisitId] = useState(patient.visits[0]?.id || '');
   const [items, setItems] = useState([]);
   const [form, setForm] = useState({ productName: '', qty: 1, unitCost: 0 });
@@ -645,11 +652,11 @@ function InventoryTab({ patient, onSaved }) {
     if (!visitId || !form.productName) return;
     // #125: surface validation errors instead of silently failing on negatives.
     if (Number(form.qty) <= 0) {
-      alert('Quantity must be at least 1.');
+      notify.error('Quantity must be at least 1.');
       return;
     }
     if (Number(form.unitCost) < 0) {
-      alert('Unit cost cannot be negative.');
+      notify.error('Unit cost cannot be negative.');
       return;
     }
     try {
@@ -659,7 +666,7 @@ function InventoryTab({ patient, onSaved }) {
       setForm({ productName: '', qty: 1, unitCost: 0 });
       const next = await fetchApi(`/api/wellness/visits/${visitId}/consumptions`);
       setItems(next);
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   const totalCost = items.reduce((s, i) => s + i.qty * i.unitCost, 0);
@@ -785,6 +792,7 @@ function LoyaltyCard({ patientId }) {
 }
 
 function LoyaltyModal({ patientId, data, onClose, onChange }) {
+  const notify = useNotify();
   const [redeemPoints, setRedeemPoints] = useState(50);
   const [redeemReason, setRedeemReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -799,7 +807,7 @@ function LoyaltyModal({ patientId, data, onClose, onChange }) {
       });
       setRedeemReason('');
       onChange();
-    } catch (err) { alert(`Redeem failed: ${err.message}`); }
+    } catch (err) { notify.error(`Redeem failed: ${err.message}`); }
     setBusy(false);
   };
 
@@ -887,6 +895,7 @@ function slugifyName(n) {
 }
 
 function TelehealthTab({ patient, onSaved }) {
+  const notify = useNotify();
   const [activeRoom, setActiveRoom] = useState(null); // string room name
   const [busyVisitId, setBusyVisitId] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -907,7 +916,7 @@ function TelehealthTab({ patient, onSaved }) {
         });
         if (onSaved) onSaved();
       } catch (e) {
-        alert('Failed to start consult: ' + (e.message || 'unknown error'));
+        notify.error('Failed to start consult: ' + (e.message || 'unknown error'));
         setBusyVisitId(null);
         return;
       }

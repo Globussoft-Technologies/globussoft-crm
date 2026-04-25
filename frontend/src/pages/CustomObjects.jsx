@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Database, Plus, Trash2, Layers, CheckCircle2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 export default function CustomObjects() {
+  const notify = useNotify();
   const [entities, setEntities] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [newEntity, setNewEntity] = useState({ name: '', description: '', fields: [{ name: 'DefaultProperty', type: 'Text' }] });
@@ -29,7 +31,7 @@ export default function CustomObjects() {
       setShowAdd(false);
       setNewEntity({ name: '', description: '', fields: [{ name: 'DefaultProperty', type: 'Text' }] });
       loadEntities();
-    } catch(err) { alert("Failed to generate EAV dynamic database boundary constraints"); }
+    } catch(err) { notify.error("Failed to generate EAV dynamic database boundary constraints"); }
   };
 
   const addField = () => setNewEntity({ ...newEntity, fields: [...newEntity.fields, { name: 'NewProperty', type: 'Text' }] });

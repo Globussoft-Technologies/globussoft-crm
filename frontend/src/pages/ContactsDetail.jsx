@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, User, Mail, Building, Briefcase, Phone, Clock, FileText } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 export default function ContactsDetail() {
+  const notify = useNotify();
   const { id } = useParams();
   const navigate = useNavigate();
   const [contact, setContact] = useState(null);
@@ -24,7 +26,7 @@ export default function ContactsDetail() {
       await fetchApi(`/api/contacts/${id}/activities`, { method: 'POST', body: JSON.stringify(newActivity) });
       setNewActivity({ type: 'Note', description: '' });
       loadData();
-    } catch (err) { alert('Failed to log activity'); }
+    } catch (err) { notify.error('Failed to log activity'); }
   };
 
   if (loading) {

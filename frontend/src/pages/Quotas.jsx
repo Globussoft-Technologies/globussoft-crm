@@ -3,6 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import {
   Award, Plus, Edit2, Trash2, Trophy, Table as TableIcon, BarChart3, Target,
 } from 'lucide-react';
@@ -38,6 +39,7 @@ function attainmentColor(pct) {
 }
 
 export default function Quotas() {
+  const notify = useNotify();
   const periodOptions = useMemo(buildPeriodOptions, []);
   const [period, setPeriod] = useState(periodOptions[0].value);
   const [view, setView] = useState('table'); // table | leaderboard
@@ -121,12 +123,17 @@ export default function Quotas() {
   };
 
   const deleteQuota = async (row) => {
-    if (!window.confirm(`Delete quota for ${row.name}?`)) return;
+    if (!await notify.confirm({
+      title: 'Delete quota',
+      message: `Delete quota for ${row.name}?`,
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
     try {
       await fetchApi(`/api/quotas/${row.quotaId}`, { method: 'DELETE' });
       await loadAttainment();
     } catch (e) {
-      alert(e.message || 'Delete failed');
+      notify.error(e.message || 'Delete failed');
     }
   };
 

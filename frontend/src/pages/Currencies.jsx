@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { DollarSign, Plus, Edit, Star, Trash2, RefreshCw, X, TrendingUp } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { formatCurrency } from '../utils/currency';
 
 export default function Currencies() {
+  const notify = useNotify();
   const [currencies, setCurrencies] = useState([]);
   const [pivot, setPivot] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -37,11 +39,11 @@ export default function Currencies() {
     try {
       await fetchApi('/api/currencies/seed', { method: 'POST' });
       load();
-    } catch (e) { alert(e.message || 'Failed to initialize defaults'); }
+    } catch (e) { notify.error(e.message || 'Failed to initialize defaults'); }
   };
 
   const handleAdd = async () => {
-    if (!form.code || !form.symbol || !form.name) return alert('Code, symbol, and name are required');
+    if (!form.code || !form.symbol || !form.name) return notify.error('Code, symbol, and name are required');
     try {
       await fetchApi('/api/currencies', {
         method: 'POST',
@@ -50,22 +52,22 @@ export default function Currencies() {
       setShowAdd(false);
       setForm({ code: '', symbol: '', name: '', exchangeRate: 1.0, isBase: false });
       load();
-    } catch (e) { alert(e.message || 'Failed to create currency'); }
+    } catch (e) { notify.error(e.message || 'Failed to create currency'); }
   };
 
   const handleSetBase = async (id) => {
     try {
       await fetchApi(`/api/currencies/${id}/set-base`, { method: 'POST' });
       load();
-    } catch (e) { alert(e.message || 'Failed to set base'); }
+    } catch (e) { notify.error(e.message || 'Failed to set base'); }
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this currency?')) return;
+    if (!await notify.confirm('Delete this currency?')) return;
     try {
       await fetchApi(`/api/currencies/${id}`, { method: 'DELETE' });
       load();
-    } catch (e) { alert(e.message || 'Failed to delete'); }
+    } catch (e) { notify.error(e.message || 'Failed to delete'); }
   };
 
   const startEdit = (c) => { setEditingId(c.id); setEditRate(String(c.exchangeRate)); };
@@ -77,7 +79,7 @@ export default function Currencies() {
       });
       setEditingId(null);
       load();
-    } catch (e) { alert(e.message || 'Failed to update rate'); }
+    } catch (e) { notify.error(e.message || 'Failed to update rate'); }
   };
 
   const baseCurrency = currencies.find((c) => c.isBase) || currencies[0];

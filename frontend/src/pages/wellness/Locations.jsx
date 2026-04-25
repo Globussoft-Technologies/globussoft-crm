@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { MapPin, Plus, Phone, Mail, Building2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 
 export default function Locations() {
+  const notify = useNotify();
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -23,7 +25,7 @@ export default function Locations() {
       setShowAdd(false);
       setForm({ name: '', addressLine: '', city: '', state: '', pincode: '', phone: '', email: '' });
       load();
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
     setSaving(false);
   };
 
@@ -31,7 +33,7 @@ export default function Locations() {
     try {
       await fetchApi(`/api/wellness/locations/${loc.id}`, { method: 'PUT', body: JSON.stringify({ isActive: !loc.isActive }) });
       load();
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { notify.error(`Failed: ${err.message}`); }
   };
 
   return (

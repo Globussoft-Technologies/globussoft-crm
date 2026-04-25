@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { GitBranch, Plus, Edit, Trash2, Check, ExternalLink, Star, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const emptyForm = { name: '', description: '', isDefault: false };
 
 const Pipelines = () => {
+  const notify = useNotify();
   const [pipelines, setPipelines] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -82,17 +84,22 @@ const Pipelines = () => {
       await fetchApi(`/api/pipelines/${id}/set-default`, { method: 'POST' });
       fetchPipelines();
     } catch (e) {
-      alert(e.message || 'Failed to set default');
+      notify.error(e.message || 'Failed to set default');
     }
   };
 
   const handleDelete = async (p) => {
-    if (!window.confirm(`Delete pipeline "${p.name}"? This cannot be undone.`)) return;
+    if (!await notify.confirm({
+      title: 'Delete pipeline',
+      message: `Delete pipeline "${p.name}"? This cannot be undone.`,
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
     try {
       await fetchApi(`/api/pipelines/${p.id}`, { method: 'DELETE' });
       fetchPipelines();
     } catch (e) {
-      alert(e.message || 'Delete failed');
+      notify.error(e.message || 'Delete failed');
     }
   };
 

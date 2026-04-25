@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BookOpen, Plus, Edit, Trash2, Eye, FolderTree, Save, X, Globe } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const EMPTY_ARTICLE = {
   title: '',
@@ -11,6 +12,7 @@ const EMPTY_ARTICLE = {
 };
 
 export default function KnowledgeBase() {
+  const notify = useNotify();
   const [categories, setCategories] = useState([]);
   const [articles, setArticles] = useState([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState(null);
@@ -62,7 +64,7 @@ export default function KnowledgeBase() {
   const saveArticle = async (e) => {
     e.preventDefault();
     if (!form.title.trim()) {
-      alert('Title is required');
+      notify.error('Title is required');
       return;
     }
     setLoading(true);
@@ -88,14 +90,14 @@ export default function KnowledgeBase() {
       cancelEdit();
       loadAll();
     } catch (err) {
-      alert('Failed to save article');
+      notify.error('Failed to save article');
     } finally {
       setLoading(false);
     }
   };
 
   const deleteArticle = async (id) => {
-    if (!window.confirm('Delete this article? This cannot be undone.')) return;
+    if (!await notify.confirm('Delete this article? This cannot be undone.')) return;
     try {
       await fetchApi(`/api/knowledge-base/articles/${id}`, { method: 'DELETE' });
       loadAll();
@@ -123,12 +125,12 @@ export default function KnowledgeBase() {
       setNewCategoryName('');
       loadAll();
     } catch (err) {
-      alert('Failed to create category');
+      notify.error('Failed to create category');
     }
   };
 
   const deleteCategory = async (id) => {
-    if (!window.confirm('Delete this category? Articles in it will be uncategorized.')) return;
+    if (!await notify.confirm('Delete this category? Articles in it will be uncategorized.')) return;
     try {
       await fetchApi(`/api/knowledge-base/categories/${id}`, { method: 'DELETE' });
       if (selectedCategoryId === id) setSelectedCategoryId(null);

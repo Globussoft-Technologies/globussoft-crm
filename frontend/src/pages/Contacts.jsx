@@ -19,10 +19,36 @@ const parseCSV = (text) => {
     }
     values.push(current.trim());
     const row = {};
+    // #154: track column-count mismatch so the preview can flag short/long rows
+    row.__columnCount = values.length;
+    row.__expectedCount = headers.length;
     headers.forEach((h, i) => { row[h] = values[i] || ''; });
     return row;
   });
 };
+
+// #154: same validation rules as backend, run client-side so the user sees row
+// errors in the preview before clicking Import.
+const ALLOWED_STATUSES = new Set(['Lead', 'Prospect', 'Customer', 'Churned', 'Junk']);
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
+
+function validateCsvRow(row) {
+  const issues = [];
+  if (row.__columnCount !== row.__expectedCount) {
+    issues.push(`column count ${row.__columnCount} vs expected ${row.__expectedCount}`);
+  }
+  const email = String(row.email || row.Email || '').trim();
+  if (!email) issues.push('missing email');
+  else if (!EMAIL_RE.test(email)) issues.push('invalid email');
+  const status = String(row.status || row.Status || 'Lead').trim();
+  if (!ALLOWED_STATUSES.has(status)) issues.push(`invalid status "${status}"`);
+  const name = String(row.name || row.Name || '');
+  const company = String(row.company || row.Company || '');
+  if (FORMULA_INJECTION_RE.test(name)) issues.push('name starts with formula char (will be sanitized)');
+  if (FORMULA_INJECTION_RE.test(company)) issues.push('company starts with formula char (will be sanitized)');
+  return issues;
+}
 
 const Contacts = () => {
   const [contacts, setContacts] = useState([]);
@@ -297,41 +323,66 @@ const Contacts = () => {
               </label>
             </div>
 
-            {csvRows.length > 0 && !importResult && (
-              <>
-                <div style={{ marginBottom: '1rem' }}>
-                  <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                    Detected columns: <strong>{csvHeaders.join(', ')}</strong>
-                  </p>
-                  <p style={{ fontSize: '0.875rem', color: 'var(--text-primary)' }}>
-                    {csvRows.length} row{csvRows.length !== 1 ? 's' : ''} found — previewing first {Math.min(5, csvRows.length)}:
-                  </p>
-                </div>
-                <div style={{ overflowX: 'auto', marginBottom: '1.5rem' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-                        {csvHeaders.map(h => (
-                          <th key={h} style={{ padding: '0.5rem', textAlign: 'left', color: 'var(--text-secondary)', fontWeight: '500' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {csvRows.slice(0, 5).map((row, i) => (
-                        <tr key={i} style={{ borderBottom: '1px solid var(--border-color)' }}>
+            {csvRows.length > 0 && !importResult && (() => {
+              // #154: validate each row up front so the user sees what'll be rejected.
+              const rowIssues = csvRows.map(validateCsvRow);
+              const validCount = rowIssues.filter(i => i.length === 0).length;
+              const invalidCount = csvRows.length - validCount;
+              const allInvalid = validCount === 0;
+              return (
+                <>
+                  <div style={{ marginBottom: '1rem' }}>
+                    <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                      Detected columns: <strong>{csvHeaders.join(', ')}</strong>
+                    </p>
+                    <p style={{ fontSize: '0.875rem', color: 'var(--text-primary)' }}>
+                      {csvRows.length} row{csvRows.length !== 1 ? 's' : ''} found — {validCount} valid, {invalidCount > 0 && (
+                        <span style={{ color: '#ef4444', fontWeight: 600 }}>{invalidCount} invalid (will be skipped)</span>
+                      )}{invalidCount === 0 && <span style={{ color: 'var(--success-color)' }}>0 invalid</span>}. Previewing first {Math.min(5, csvRows.length)}:
+                    </p>
+                  </div>
+                  <div style={{ overflowX: 'auto', marginBottom: '1.5rem' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          <th style={{ padding: '0.5rem', textAlign: 'left', color: 'var(--text-secondary)', fontWeight: '500', width: 32 }}>#</th>
                           {csvHeaders.map(h => (
-                            <td key={h} style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>{row[h]}</td>
+                            <th key={h} style={{ padding: '0.5rem', textAlign: 'left', color: 'var(--text-secondary)', fontWeight: '500' }}>{h}</th>
                           ))}
+                          <th style={{ padding: '0.5rem', textAlign: 'left', color: 'var(--text-secondary)', fontWeight: '500' }}>status</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <button onClick={handleImport} disabled={importing} className="btn-primary" style={{ width: '100%', opacity: importing ? 0.7 : 1 }}>
-                  {importing ? 'Importing...' : `Import ${csvRows.length} Contact${csvRows.length !== 1 ? 's' : ''}`}
-                </button>
-              </>
-            )}
+                      </thead>
+                      <tbody>
+                        {csvRows.slice(0, 5).map((row, i) => {
+                          const issues = rowIssues[i];
+                          const bad = issues.length > 0;
+                          return (
+                            <tr key={i} style={{ borderBottom: '1px solid var(--border-color)', background: bad ? 'rgba(239,68,68,0.05)' : undefined }}>
+                              <td style={{ padding: '0.5rem', color: bad ? '#ef4444' : 'var(--text-secondary)' }}>{i + 1}</td>
+                              {csvHeaders.map(h => (
+                                <td key={h} style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>{row[h]}</td>
+                              ))}
+                              <td style={{ padding: '0.5rem', color: bad ? '#ef4444' : '#10b981', fontSize: '0.75rem' }}>
+                                {bad ? issues.join('; ') : 'OK'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <button
+                    onClick={handleImport}
+                    disabled={importing || allInvalid}
+                    className="btn-primary"
+                    title={allInvalid ? 'No valid rows to import' : ''}
+                    style={{ width: '100%', opacity: (importing || allInvalid) ? 0.5 : 1, cursor: allInvalid ? 'not-allowed' : 'pointer' }}
+                  >
+                    {importing ? 'Importing...' : `Import ${validCount} valid Contact${validCount !== 1 ? 's' : ''}${invalidCount > 0 ? ` (${invalidCount} skipped)` : ''}`}
+                  </button>
+                </>
+              );
+            })()}
 
             {importResult && !importResult.error && (
               <div style={{ padding: '1.5rem', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>

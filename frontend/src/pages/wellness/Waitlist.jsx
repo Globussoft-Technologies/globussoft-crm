@@ -33,7 +33,10 @@ export default function Waitlist() {
     ])
       .then(([w, p, s]) => {
         setItems(Array.isArray(w) ? w : []);
-        setPatients(Array.isArray(p) ? p : []);
+        // #126: GET /api/wellness/patients returns { patients, total } (paginated),
+        // not a raw array. Pre-fix the dropdown was always empty because Array.isArray(p)
+        // was false on the object response.
+        setPatients(Array.isArray(p) ? p : Array.isArray(p?.patients) ? p.patients : []);
         setServices(Array.isArray(s) ? s : []);
       })
       .catch(() => setItems([]))

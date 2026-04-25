@@ -6,13 +6,28 @@ const prisma = require("../lib/prisma");
 
 // All queries are scoped to req.user.tenantId
 
-// ─── Helper: Date range filter (with tenant) ───
-function buildWhere(req, startDate, endDate, extra = {}) {
+// #117: reject inverted date ranges with a 400 instead of silently ignoring them.
+// Returns null on valid input; returns an error object the caller can short-circuit on.
+function validateDateRange(startDate, endDate) {
+  if (!startDate || !endDate) return null;
+  const s = new Date(startDate);
+  const e = new Date(endDate);
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) {
+    return { status: 400, error: "startDate or endDate is not a valid date", code: "INVALID_DATE" };
+  }
+  if (s > e) {
+    return { status: 400, error: "startDate must be on or before endDate", code: "INVERTED_RANGE" };
+  }
+  return null;
+}
+
+// ─── Helper: Date range filter (with tenant). Filters on `field` (default createdAt). ───
+function buildWhere(req, startDate, endDate, extra = {}, field = "createdAt") {
   const where = { tenantId: req.user.tenantId, ...extra };
   if (startDate || endDate) {
-    where.createdAt = {};
-    if (startDate) where.createdAt.gte = new Date(startDate);
-    if (endDate) where.createdAt.lte = new Date(endDate + 'T23:59:59.999Z');
+    where[field] = {};
+    if (startDate) where[field].gte = new Date(startDate);
+    if (endDate) where[field].lte = new Date(endDate + 'T23:59:59.999Z');
   }
   return where;
 }
@@ -22,6 +37,8 @@ router.get("/query", async (req, res) => {
   try {
     const { metric = "revenue", groupBy = "stage", startDate, endDate } = req.query;
     const tenantId = req.user.tenantId;
+    const dateErr = validateDateRange(startDate, endDate);
+    if (dateErr) return res.status(dateErr.status).json(dateErr);
 
     if (metric === "revenue") {
       const data = await prisma.deal.groupBy({
@@ -92,9 +109,10 @@ router.get("/query", async (req, res) => {
     }
 
     if (metric === "invoices") {
+      // #117: invoice dates live in issuedDate (no createdAt on the model).
       const data = await prisma.invoice.groupBy({
         by: ['status'],
-        where: { tenantId },
+        where: buildWhere(req, startDate, endDate, {}, 'issuedDate'),
         _sum: { amount: true },
         _count: { id: true }
       });
@@ -231,6 +249,8 @@ router.get("/detailed/:type", async (req, res) => {
     const { type } = req.params;
     const { startDate, endDate, ownerId, status, limit = '100' } = req.query;
     const tenantId = req.user.tenantId;
+    const dateErr = validateDateRange(startDate, endDate);
+    if (dateErr) return res.status(dateErr.status).json(dateErr);
     const baseWhere = buildWhere(req, startDate, endDate);
     const take = Math.min(parseInt(limit), 500);
 
@@ -277,7 +297,8 @@ router.get("/detailed/:type", async (req, res) => {
     }
 
     if (type === 'invoices') {
-      const where = { tenantId };
+      // #117: filter on issuedDate for invoices (the model has no createdAt).
+      const where = buildWhere(req, startDate, endDate, {}, 'issuedDate');
       if (status) where.status = status;
       const data = await prisma.invoice.findMany({
         where, take, orderBy: { issuedDate: 'desc' },

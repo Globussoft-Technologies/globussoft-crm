@@ -65,8 +65,11 @@ export default function Invoices() {
       .filter(inv => inv.status !== 'PAID' && inv.status !== 'VOIDED')
       .reduce((sum, inv) => sum + Number(inv.amount), 0);
 
+    // #119: filter on paidAt (set by /pay route). Fall back to issuedDate for legacy
+    // rows from before paidAt existed — at worst they count toward the issuance month
+    // rather than the (unknown) payment month.
     const totalPaidThisMonth = invoices
-      .filter(inv => inv.status === 'PAID' && new Date(inv.updatedAt || inv.createdAt) >= startOfMonth)
+      .filter(inv => inv.status === 'PAID' && new Date(inv.paidAt || inv.issuedDate) >= startOfMonth)
       .reduce((sum, inv) => sum + Number(inv.amount), 0);
 
     const overdueCount = invoices.filter(inv => inv.status === 'OVERDUE').length;
@@ -355,7 +358,8 @@ export default function Invoices() {
                         </span>
                       </td>
                       <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
-                        {new Date(inv.createdAt).toLocaleDateString()}
+                        {/* #111: Invoice schema uses issuedDate, not createdAt. */}
+                        {inv.issuedDate ? new Date(inv.issuedDate).toLocaleDateString() : '—'}
                       </td>
                       <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {inv.contact?.name || 'Unknown'}

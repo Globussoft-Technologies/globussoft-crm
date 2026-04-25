@@ -49,6 +49,18 @@ router.post("/", async (req, res) => {
     const estimateNum = `EST-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 
     const parsedLineItems = Array.isArray(lineItems) ? lineItems : [];
+    // #123: reject negative qty / unit price. Two negatives multiplied also produce
+    // a fake "positive" total (-999 * -500 = 499,500), so check each side individually.
+    for (const [i, item] of parsedLineItems.entries()) {
+      const q = Number(item.quantity);
+      const p = Number(item.unitPrice);
+      if (Number.isFinite(q) && q < 0) {
+        return res.status(400).json({ error: `Line item ${i + 1}: quantity cannot be negative`, code: "NEGATIVE_QUANTITY" });
+      }
+      if (Number.isFinite(p) && p < 0) {
+        return res.status(400).json({ error: `Line item ${i + 1}: unit price cannot be negative`, code: "NEGATIVE_PRICE" });
+      }
+    }
     const totalAmount = parsedLineItems.reduce(
       (sum, item) => sum + (Number(item.quantity) || 1) * (Number(item.unitPrice) || 0),
       0

@@ -74,6 +74,18 @@ export default function Estimates() {
     [lineItems]
   );
 
+  // #123: any negative qty or unit price taints the estimate. Two negatives can
+  // multiply to a fake-positive total, so we check each side independently and
+  // block submit + flag totals red whenever any line is bad.
+  const hasInvalidLine = useMemo(() =>
+    lineItems.some(item => {
+      const q = Number(item.quantity);
+      const p = Number(item.unitPrice);
+      return (Number.isFinite(q) && q < 0) || (Number.isFinite(p) && p < 0);
+    }),
+    [lineItems]
+  );
+
   const handleFormChange = (field, value) => {
     setForm(prev => ({ ...prev, [field]: value }));
   };
@@ -94,6 +106,10 @@ export default function Estimates() {
 
   const createEstimate = async (e) => {
     e.preventDefault();
+    if (hasInvalidLine) {
+      alert('Fix the negative quantity or unit price in the line items before saving.');
+      return;
+    }
     try {
       await fetchApi('/api/estimates', {
         method: 'POST',
@@ -300,9 +316,16 @@ export default function Estimates() {
                     </div>
                     <div style={{ flex: 0.5, textAlign: 'right' }}>
                       <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Total</label>
-                      <span style={{ fontSize: '0.85rem', fontWeight: '600', color: '#10b981' }}>
-                        {formatCurrency((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}
-                      </span>
+                      {(() => {
+                        const q = Number(item.quantity) || 0;
+                        const p = Number(item.unitPrice) || 0;
+                        const lineInvalid = q < 0 || p < 0;
+                        return (
+                          <span style={{ fontSize: '0.85rem', fontWeight: '600', color: lineInvalid ? '#ef4444' : '#10b981' }}>
+                            {formatCurrency(q * p)}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <button
                       type="button"
@@ -331,20 +354,36 @@ export default function Estimates() {
                 + Add Line Item
               </button>
 
-              {/* Grand Total */}
+              {/* Grand Total — red whenever any line is invalid (negative qty/price) */}
               <div style={{
                 marginTop: '1rem', padding: '0.75rem 1rem', borderRadius: '8px',
-                background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)',
+                background: hasInvalidLine ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)',
+                border: `1px solid ${hasInvalidLine ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.2)'}`,
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               }}>
                 <span style={{ fontWeight: '600', fontSize: '0.9rem' }}>Grand Total</span>
-                <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#10b981' }}>
+                <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: hasInvalidLine ? '#ef4444' : '#10b981' }}>
                   {formatCurrency(grandTotal)}
                 </span>
               </div>
+              {hasInvalidLine && (
+                <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px', color: '#ef4444', fontSize: '0.75rem' }}>
+                  One or more line items has a negative quantity or unit price. Fix them before creating the estimate.
+                </div>
+              )}
             </div>
 
-            <button type="submit" className="btn-primary" style={{ padding: '1rem', marginTop: '0.5rem' }}>
+            <button
+              type="submit"
+              className="btn-primary"
+              disabled={hasInvalidLine}
+              title={hasInvalidLine ? 'Fix negative quantity / unit price first' : ''}
+              style={{
+                padding: '1rem', marginTop: '0.5rem',
+                opacity: hasInvalidLine ? 0.5 : 1,
+                cursor: hasInvalidLine ? 'not-allowed' : 'pointer',
+              }}
+            >
               Create Estimate
             </button>
           </form>

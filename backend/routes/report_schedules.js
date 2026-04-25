@@ -3,6 +3,19 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 
+// #127: validate recipient lists before persisting. The cron mailer would
+// otherwise try to deliver to junk like "@@@" and harm sender reputation.
+// Pragmatic regex (RFC-5322 lite); we tolerate plus-addressing and dots.
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+function validateRecipients(recipients) {
+  if (recipients == null) return null; // allowed (server falls back to req.user.email)
+  const list = Array.isArray(recipients) ? recipients : [];
+  if (list.length === 0) return { error: "At least one recipient is required", code: "RECIPIENTS_REQUIRED" };
+  const bad = list.map((r) => String(r).trim()).filter((r) => !EMAIL_RE.test(r));
+  if (bad.length) return { error: `Invalid email address(es): ${bad.join(", ")}`, code: "INVALID_RECIPIENT" };
+  return null;
+}
+
 // List report schedules in current tenant (admins see all in tenant, others see own)
 router.get("/", async (req, res) => {
   try {
@@ -24,6 +37,9 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const { name, reportType, metrics, groupBy, frequency, cronExpression, recipients, format, enabled } = req.body;
+
+    const recipErr = validateRecipients(recipients);
+    if (recipErr) return res.status(400).json(recipErr);
 
     const schedule = await prisma.reportSchedule.create({
       data: {
@@ -67,7 +83,11 @@ router.put("/:id", async (req, res) => {
       if (!cronExpression) data.cronExpression = getCronFromFrequency(frequency);
     }
     if (cronExpression !== undefined) data.cronExpression = cronExpression;
-    if (recipients !== undefined) data.recipients = JSON.stringify(recipients);
+    if (recipients !== undefined) {
+      const recipErr = validateRecipients(recipients);
+      if (recipErr) return res.status(400).json(recipErr);
+      data.recipients = JSON.stringify(recipients);
+    }
     if (format !== undefined) data.format = format;
     if (enabled !== undefined) data.enabled = enabled;
 

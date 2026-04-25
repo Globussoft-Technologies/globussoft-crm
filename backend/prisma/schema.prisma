@@ -403,9 +403,10 @@ model Invoice {
   id              Int       @id @default(autoincrement())
   invoiceNum      String    @unique
   amount          Float
-  status          String    @default("UNPAID") // UNPAID, PAID, OVERDUE, VOID
+  status          String    @default("UNPAID") // UNPAID, PAID, OVERDUE, VOIDED
   dueDate         DateTime
   issuedDate      DateTime  @default(now())
+  paidAt          DateTime? // set by /pay route when status flips to PAID — drives "Paid This Month" KPI
   isRecurring     Boolean   @default(false)
   recurFrequency  String? // "monthly", "quarterly", "yearly"
   nextRecurDate   DateTime?

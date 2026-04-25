@@ -48,9 +48,13 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
   try {
     const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Invoice not found" });
+    // #119: stamp paidAt so "Paid This Month" KPI can filter on it. Don't overwrite
+    // if already paid (preserves the original payment date).
+    const data = { status: "PAID" };
+    if (existing.status !== "PAID") data.paidAt = new Date();
     const invoice = await prisma.invoice.update({
       where: { id: existing.id },
-      data: { status: "PAID" },
+      data,
       include: { contact: true }
     });
     res.json(invoice);

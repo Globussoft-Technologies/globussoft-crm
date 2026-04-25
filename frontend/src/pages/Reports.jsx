@@ -47,7 +47,12 @@ export default function Reports() {
   const [schedules, setSchedules] = useState([]);
   const [newSchedule, setNewSchedule] = useState({ name: '', reportType: 'deals', frequency: 'weekly', recipients: '', format: 'PDF' });
 
+  // #117: skip queries entirely if the range is inverted — the backend rejects
+  // these now, but bailing on the client also avoids spurious red flashes.
+  const rangeInverted = !!(startDate && endDate && new Date(startDate) > new Date(endDate));
+
   const dateParams = () => {
+    if (rangeInverted) return '';
     let params = '';
     if (startDate) params += `&startDate=${startDate}`;
     if (endDate) params += `&endDate=${endDate}`;
@@ -91,14 +96,31 @@ export default function Reports() {
     fetchApi('/api/report-schedules').then(data => setSchedules(data)).catch(() => {});
   }, []);
 
+  // #127: pragmatic email check — same regex used server-side in report_schedules.js
+  const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+
   const handleCreateSchedule = async (e) => {
     e.preventDefault();
     const recipients = newSchedule.recipients.split(',').map(r => r.trim()).filter(Boolean);
-    await fetchApi('/api/report-schedules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...newSchedule, recipients }),
-    });
+    if (recipients.length === 0) {
+      alert('Add at least one recipient email.');
+      return;
+    }
+    const invalid = recipients.filter(r => !EMAIL_RE.test(r));
+    if (invalid.length) {
+      alert(`Invalid email address(es): ${invalid.join(', ')}\n\nFix these before creating the schedule.`);
+      return;
+    }
+    try {
+      await fetchApi('/api/report-schedules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...newSchedule, recipients }),
+      });
+    } catch (err) {
+      alert(`Failed to create schedule: ${err.message || err}`);
+      return;
+    }
     setNewSchedule({ name: '', reportType: 'deals', frequency: 'weekly', recipients: '', format: 'PDF' });
     fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => {});
     setShowScheduleModal(false);
@@ -148,11 +170,18 @@ export default function Reports() {
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Business intelligence dashboard — real-time revenue, pipeline, and deal analytics.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Calendar size={16} color="var(--text-secondary)" />
-            <input type="date" className="input-field" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem' }} />
-            <span style={{ color: 'var(--text-secondary)' }}>to</span>
-            <input type="date" className="input-field" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Calendar size={16} color="var(--text-secondary)" />
+              <input type="date" className="input-field" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
+              <span style={{ color: 'var(--text-secondary)' }}>to</span>
+              <input type="date" className="input-field" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
+            </div>
+            {rangeInverted && (
+              <span style={{ color: '#ef4444', fontSize: '0.7rem', alignSelf: 'flex-start' }}>
+                Start date must be on or before end date
+              </span>
+            )}
           </div>
           <button className="btn-secondary" onClick={() => exportFile('csv')} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Download size={16} /> CSV

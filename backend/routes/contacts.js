@@ -87,42 +87,77 @@ router.put('/:id', async (req, res) => {
 });
 
 // CSV Import — accepts pre-parsed rows
+// #154: validation hardening
+//   - reject rows with missing/invalid email
+//   - reject rows whose status is not in the allowed set
+//   - sanitize CSV-injection prefixes (=, +, -, @) on name/company so the row
+//     can't execute as a formula if the data is later re-exported and opened in Excel
+//   - cap max rows at 5000 to prevent DoS via huge uploads
+const ALLOWED_STATUSES = new Set(["Lead", "Prospect", "Customer", "Churned", "Junk"]);
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
+const MAX_IMPORT_ROWS = 5000;
+
+function sanitizeCellForExport(v) {
+  if (typeof v !== "string" || v.length === 0) return v;
+  // Prefix with single quote so spreadsheet apps treat it as text. Doing this
+  // on import (rather than only on export) means stored data is also safe if
+  // exported via any other path.
+  return FORMULA_INJECTION_RE.test(v) ? `'${v}` : v;
+}
+
 router.post('/import-csv', async (req, res) => {
   try {
     const { contacts } = req.body;
     if (!Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({ error: 'No contacts provided' });
     }
+    if (contacts.length > MAX_IMPORT_ROWS) {
+      return res.status(413).json({ error: `Too many rows. Max ${MAX_IMPORT_ROWS} per import.`, code: "TOO_MANY_ROWS" });
+    }
 
     let imported = 0;
     let skipped = 0;
     const errors = [];
 
-    for (const row of contacts) {
+    for (let i = 0; i < contacts.length; i++) {
+      const row = contacts[i];
+      const rowNum = i + 1; // human-friendly (1-based, matches CSV preview)
       try {
-        if (!row.email) {
-          errors.push(`Row missing email: ${row.name || 'unknown'}`);
+        const email = String(row.email || "").trim();
+        if (!email) {
+          errors.push(`Row ${rowNum}: missing email`);
           continue;
         }
+        if (!EMAIL_RE.test(email)) {
+          errors.push(`Row ${rowNum}: invalid email (${email})`);
+          continue;
+        }
+        const status = String(row.status || "Lead").trim();
+        if (!ALLOWED_STATUSES.has(status)) {
+          errors.push(`Row ${rowNum}: invalid status "${status}" (allowed: ${[...ALLOWED_STATUSES].join(", ")})`);
+          continue;
+        }
+
         // email is globally unique, so any tenant collision skips
-        const existing = await prisma.contact.findFirst({ where: { email: row.email } });
+        const existing = await prisma.contact.findFirst({ where: { email } });
         if (existing) {
           skipped++;
           continue;
         }
         await prisma.contact.create({
           data: {
-            name: row.name || '',
-            email: row.email,
-            company: row.company || '',
-            title: row.title || '',
-            status: row.status || 'Lead',
+            name: sanitizeCellForExport(String(row.name || "").trim()),
+            email,
+            company: sanitizeCellForExport(String(row.company || "").trim()),
+            title: String(row.title || "").trim(),
+            status,
             tenantId: req.user.tenantId,
           }
         });
         imported++;
       } catch (rowErr) {
-        errors.push(`Failed to import ${row.email}: ${rowErr.message}`);
+        errors.push(`Row ${rowNum} (${row.email || "no email"}): ${rowErr.message}`);
       }
     }
 

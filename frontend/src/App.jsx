@@ -1,4 +1,4 @@
-import React, { useState, createContext, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useContext, createContext, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
@@ -96,8 +96,26 @@ const WellnessWaitlist = lazy(() => import('./pages/wellness/Waitlist'));
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
 
+// Route guard: bounces wellness tenants away from generic-CRM-only pages.
+// The generic Enterprise Overview, deal pipeline, forecasting, etc. don't apply
+// to a clinic — wellness has its own /wellness Owner Dashboard. Without this
+// guard, typing /dashboard in the URL bar (or following a stale bookmark) would
+// surface "Pipeline Analytics" + "Recent Deals" panels that confuse the user.
+function GenericOnly({ children }) {
+  const { tenant } = useContext(AuthContext);
+  if (tenant?.vertical === 'wellness') {
+    return <Navigate to="/wellness" replace />;
+  }
+  return children;
+}
+
 export default function App() {
-  const [user, setUser] = useState(null);
+  // #116: persist user across reloads. Pre-fix, user started as null on every
+  // page load (token + tenant were restored, but not user), so the header showed
+  // "User" / "?" even though login had succeeded.
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
+  });
   const [tenant, setTenant] = useState(() => {
     try { return JSON.parse(localStorage.getItem('tenant') || 'null'); } catch { return null; }
   });
@@ -111,6 +129,14 @@ export default function App() {
       localStorage.removeItem('token');
     }
   }, [token]);
+
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem('user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('user');
+    }
+  }, [user]);
 
   useEffect(() => {
     if (tenant) {
@@ -148,10 +174,10 @@ export default function App() {
             <Route path="/patient-portal" element={<WellnessPatientPortal />} />
             <Route path="/" element={!token ? <Landing /> : <Navigate to="/dashboard" />} />
             <Route path="/*" element={token ? <Layout /> : <Navigate to="/login" />}>
-              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="dashboard" element={<GenericOnly><Dashboard /></GenericOnly>} />
               <Route path="contacts" element={<Contacts />} />
               <Route path="contacts/:id" element={<ContactDetail />} />
-              <Route path="pipeline" element={<Pipeline />} />
+              <Route path="pipeline" element={<GenericOnly><Pipeline /></GenericOnly>} />
               <Route path="inbox" element={<Inbox />} />
               <Route path="marketing" element={<Marketing />} />
               <Route path="reports" element={<Reports />} />
@@ -187,8 +213,8 @@ export default function App() {
               <Route path="audit-log" element={<AuditLog />} />
               <Route path="privacy" element={<Privacy />} />
               <Route path="calendar-sync" element={<CalendarSync />} />
-              <Route path="pipelines" element={<Pipelines />} />
-              <Route path="forecasting" element={<Forecasting />} />
+              <Route path="pipelines" element={<GenericOnly><Pipelines /></GenericOnly>} />
+              <Route path="forecasting" element={<GenericOnly><Forecasting /></GenericOnly>} />
               <Route path="dashboards" element={<Dashboards />} />
               <Route path="custom-reports" element={<CustomReports />} />
               <Route path="booking-pages" element={<BookingPages />} />
@@ -198,8 +224,8 @@ export default function App() {
               <Route path="field-permissions" element={<FieldPermissions />} />
               <Route path="lead-routing" element={<LeadRouting />} />
               <Route path="territories" element={<Territories />} />
-              <Route path="quotas" element={<Quotas />} />
-              <Route path="win-loss" element={<WinLoss />} />
+              <Route path="quotas" element={<GenericOnly><Quotas /></GenericOnly>} />
+              <Route path="win-loss" element={<GenericOnly><WinLoss /></GenericOnly>} />
               <Route path="ab-tests" element={<AbTests />} />
               <Route path="web-visitors" element={<WebVisitors />} />
               <Route path="chatbots" element={<Chatbots />} />
@@ -207,7 +233,7 @@ export default function App() {
               <Route path="document-templates" element={<DocumentTemplates />} />
               <Route path="surveys" element={<Surveys />} />
               <Route path="payments" element={<Payments />} />
-              <Route path="deal-insights" element={<DealInsights />} />
+              <Route path="deal-insights" element={<GenericOnly><DealInsights /></GenericOnly>} />
               <Route path="shared-inbox" element={<SharedInbox />} />
               <Route path="sla" element={<SLA />} />
               <Route path="live-chat" element={<LiveChat />} />
@@ -216,7 +242,7 @@ export default function App() {
               <Route path="industry-templates" element={<IndustryTemplates />} />
               <Route path="social" element={<Social />} />
               <Route path="sandbox" element={<Sandbox />} />
-              <Route path="funnel" element={<Funnel />} />
+              <Route path="funnel" element={<GenericOnly><Funnel /></GenericOnly>} />
               <Route path="zapier" element={<Zapier />} />
               {/* Wellness vertical */}
               <Route path="wellness" element={<WellnessOwnerDashboard />} />

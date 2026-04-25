@@ -139,19 +139,30 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, i
       <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
 
-      {/* Marketing — clinic-side comms (ad campaigns live in AdsGPT) */}
-      <div style={labelStyle}>Marketing</div>
-      <Link to="/marketing" icon={Send} label="SMS / Email Blasts" managerOnly />
-      <Link to="/sequences" icon={Network} label="Drip Sequences" managerOnly />
-      <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" managerOnly />
+      {/* Marketing — clinic-side comms (ad campaigns live in AdsGPT). All items are
+          managerOnly, so the whole section is hidden for plain users — otherwise the
+          header rendered as an orphan with no children (#107). */}
+      {isManager && (
+        <>
+          <div style={labelStyle}>Marketing</div>
+          <Link to="/marketing" icon={Send} label="SMS / Email Blasts" managerOnly />
+          <Link to="/sequences" icon={Network} label="Drip Sequences" managerOnly />
+          <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" managerOnly />
+        </>
+      )}
 
-      {/* Reports — wellness-tuned, generic CRM reports removed */}
-      <div style={labelStyle}>Reports</div>
-      <Link to="/wellness/reports" icon={BarChart3} label="P&L + Attribution" managerOnly />
-      <Link to="/wellness/per-location" icon={Building2} label="Per-Location" managerOnly />
-      <Link to="/wellness/loyalty" icon={Award} label="Loyalty + Referrals" managerOnly />
-      <Link to="/surveys" icon={ClipboardList} label="Patient Surveys" managerOnly />
-      <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
+      {/* Reports — wellness-tuned, generic CRM reports removed. Same orphan-header
+          fix as Marketing above. */}
+      {isManager && (
+        <>
+          <div style={labelStyle}>Reports</div>
+          <Link to="/wellness/reports" icon={BarChart3} label="P&L + Attribution" managerOnly />
+          <Link to="/wellness/per-location" icon={Building2} label="Per-Location" managerOnly />
+          <Link to="/wellness/loyalty" icon={Award} label="Loyalty + Referrals" managerOnly />
+          <Link to="/surveys" icon={ClipboardList} label="Patient Surveys" managerOnly />
+          <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
+        </>
+      )}
 
       {/* Admin */}
       {isAdmin && (

@@ -37,6 +37,11 @@ export default function Invoices() {
     dueDate: '',
     status: 'UNPAID',
   });
+  // #124: replace the old prompt() flow with a proper modal so the user can
+  // pick frequency, see what they're about to activate, and stop recurring
+  // explicitly instead of guessing the toggle.
+  const [recurInvoice, setRecurInvoice] = useState(null);
+  const [recurFreq, setRecurFreq] = useState('monthly');
 
   useEffect(() => {
     loadData();
@@ -327,7 +332,9 @@ export default function Invoices() {
                     <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Due Date</th>
                     <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Issued</th>
                     <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Contact</th>
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Actions</th>
+                    {/* #119 polish: sticky right-edge so action buttons are always
+                        visible regardless of horizontal scroll position. */}
+                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right', position: 'sticky', right: 0, background: 'var(--card-bg, var(--surface-bg))', boxShadow: '-4px 0 8px -4px rgba(0,0,0,0.15)' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -364,7 +371,7 @@ export default function Invoices() {
                       <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {inv.contact?.name || 'Unknown'}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
+                      <td style={{ padding: '1rem 0.5rem', textAlign: 'right', position: 'sticky', right: 0, background: 'var(--card-bg, var(--surface-bg))', boxShadow: '-4px 0 8px -4px rgba(0,0,0,0.15)' }}>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                           <button
                             onClick={() => downloadPdf(inv.id, inv.invoiceNum)}
@@ -396,14 +403,9 @@ export default function Invoices() {
                             </button>
                           )}
                           <button
-                            onClick={async () => {
-                              const freq = inv.isRecurring ? null : prompt('Recurring frequency: monthly, quarterly, or yearly', 'monthly');
-                              if (!inv.isRecurring && !freq) return;
-                              await fetchApi(`/api/billing/${inv.id}/recurring`, {
-                                method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ isRecurring: !inv.isRecurring, recurFrequency: freq })
-                              });
-                              loadData();
+                            onClick={() => {
+                              setRecurInvoice(inv);
+                              setRecurFreq(inv.recurFrequency || 'monthly');
                             }}
                             style={{
                               background: inv.isRecurring ? 'rgba(139,92,246,0.1)' : 'transparent',
@@ -441,6 +443,85 @@ export default function Invoices() {
           )}
         </div>
       </div>
+
+      {/* #124: Recur modal — replaces the old prompt(). */}
+      {recurInvoice && (
+        <div
+          onClick={() => setRecurInvoice(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="card"
+            style={{ background: 'var(--surface-bg)', padding: '1.5rem', borderRadius: '12px', minWidth: '380px', maxWidth: '460px' }}
+          >
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+              {recurInvoice.isRecurring ? 'Stop recurring billing' : 'Set up recurring billing'}
+            </h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+              Invoice {recurInvoice.invoiceNum} · {formatCurrency(recurInvoice.amount)}
+            </p>
+
+            {recurInvoice.isRecurring ? (
+              <p style={{ fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+                This invoice currently recurs <strong>{recurInvoice.recurFrequency}</strong>. Stopping it will prevent any further auto-generated invoices.
+              </p>
+            ) : (
+              <>
+                <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Frequency</label>
+                <select
+                  value={recurFreq}
+                  onChange={(e) => setRecurFreq(e.target.value)}
+                  className="input-field"
+                  style={{ width: '100%', padding: '0.55rem', marginBottom: '1rem' }}
+                >
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                  A new invoice will be auto-generated every {recurFreq.replace('ly', '')} starting from this invoice's due date.
+                </p>
+              </>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button
+                onClick={() => setRecurInvoice(null)}
+                style={{ padding: '0.5rem 1rem', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)', borderRadius: '6px', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const isStopping = recurInvoice.isRecurring;
+                  try {
+                    await fetchApi(`/api/billing/${recurInvoice.id}/recurring`, {
+                      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        isRecurring: !isStopping,
+                        recurFrequency: isStopping ? null : recurFreq,
+                      })
+                    });
+                    setRecurInvoice(null);
+                    loadData();
+                  } catch (err) {
+                    alert(`Failed to ${isStopping ? 'stop' : 'activate'} recurring billing: ${err.message || err}`);
+                  }
+                }}
+                style={{
+                  padding: '0.5rem 1rem',
+                  background: recurInvoice.isRecurring ? '#ef4444' : 'var(--accent-color)',
+                  color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer',
+                  fontWeight: 500,
+                }}
+              >
+                {recurInvoice.isRecurring ? 'Stop recurring' : `Activate ${recurFreq}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }`}</style>
     </div>

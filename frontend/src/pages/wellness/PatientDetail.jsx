@@ -643,6 +643,15 @@ function InventoryTab({ patient, onSaved }) {
   const submit = async (e) => {
     e.preventDefault();
     if (!visitId || !form.productName) return;
+    // #125: surface validation errors instead of silently failing on negatives.
+    if (Number(form.qty) <= 0) {
+      alert('Quantity must be at least 1.');
+      return;
+    }
+    if (Number(form.unitCost) < 0) {
+      alert('Unit cost cannot be negative.');
+      return;
+    }
     try {
       await fetchApi(`/api/wellness/visits/${visitId}/consumptions`, {
         method: 'POST', body: JSON.stringify(form),
@@ -678,10 +687,12 @@ function InventoryTab({ patient, onSaved }) {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                    <th style={{ ...labelStyle, padding: '0.6rem 1rem', textAlign: 'left' }}>Product</th>
-                    <th style={{ ...labelStyle, padding: '0.6rem 1rem', textAlign: 'right' }}>Qty</th>
-                    <th style={{ ...labelStyle, padding: '0.6rem 1rem', textAlign: 'right' }}>Unit cost</th>
-                    <th style={{ ...labelStyle, padding: '0.6rem 1rem', textAlign: 'right' }}>Total</th>
+                    {/* #125: labelStyle has `display: block` (it's meant for <label>),
+                        which made every <th> stack vertically. Force table-cell here. */}
+                    <th style={{ ...labelStyle, display: 'table-cell', padding: '0.6rem 1rem', textAlign: 'left' }}>Product</th>
+                    <th style={{ ...labelStyle, display: 'table-cell', padding: '0.6rem 1rem', textAlign: 'right' }}>Qty</th>
+                    <th style={{ ...labelStyle, display: 'table-cell', padding: '0.6rem 1rem', textAlign: 'right' }}>Unit cost</th>
+                    <th style={{ ...labelStyle, display: 'table-cell', padding: '0.6rem 1rem', textAlign: 'right' }}>Total</th>
                   </tr>
                 </thead>
                 <tbody>

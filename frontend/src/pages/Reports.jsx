@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { fetchApi } from '../utils/api';
-import { formatMoney } from '../utils/money';
+import { formatMoney, currencySymbol } from '../utils/money';
 import { PieChart as PieChartIcon, Download, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 
+// #127 followup: respect tenant currency rather than hard-coding "$".
 const METRIC_OPTIONS = [
-  { value: 'revenue', label: 'Revenue ($)', group: 'Deals' },
+  { value: 'revenue', label: `Revenue (${currencySymbol()})`, group: 'Deals' },
   { value: 'count', label: 'Deal Count (#)', group: 'Deals' },
   { value: 'win_rate', label: 'Win Rate', group: 'Deals' },
   { value: 'tasks', label: 'Task Status', group: 'Activity' },
@@ -441,13 +442,18 @@ export default function Reports() {
                         {s.enabled ? 'Active' : 'Paused'}
                       </span>
                     </td>
-                    <td style={{ ...tdStyle, textAlign: 'right', display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-                      <button onClick={() => handleToggleSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-color)', fontSize: '0.8rem' }}>
-                        {s.enabled ? 'Pause' : 'Enable'}
-                      </button>
-                      <button onClick={() => handleDeleteSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '0.8rem' }}>
-                        Delete
-                      </button>
+                    {/* #127 polish: was `display: flex` directly on the <td>, which
+                        breaks the table layout (the row collapses). Move flex onto a
+                        wrapping div so the cell still behaves as a table cell. */}
+                    <td style={{ ...tdStyle, textAlign: 'right' }}>
+                      <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                        <button onClick={() => handleToggleSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-color)', fontSize: '0.8rem' }}>
+                          {s.enabled ? 'Pause' : 'Enable'}
+                        </button>
+                        <button onClick={() => handleDeleteSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '0.8rem' }}>
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

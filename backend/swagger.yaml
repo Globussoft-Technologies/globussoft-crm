@@ -19,7 +19,7 @@ paths:
       security:
         - ApiKeyAuth: []
       responses:
-        '200':
+        "200":
           description: A JSON array of deals alongside relational sub-nodes.
   /contacts:
     get:
@@ -27,5 +27,32 @@ paths:
       security:
         - ApiKeyAuth: []
       responses:
-        '200':
+        "200":
           description: Contact dataset
+  /contacts/by-status:
+    get:
+      summary: Retrieve Contacts By Status
+      description: Returns contacts filtered by status. Default status is Customer.
+      security:
+        - ApiKeyAuth: []
+
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum:
+              - Lead
+              - Prospect
+              - Customer
+              - Churned
+            default: Customer
+          description: Contact status
+
+      responses:
+        "200":
+          description: Contacts fetched successfully
+
+        "500":
+          description: Internal server error

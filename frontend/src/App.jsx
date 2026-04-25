@@ -256,6 +256,8 @@ export default function App() {
               <Route path="wellness/calendar" element={<WellnessCalendar />} />
               <Route path="wellness/reports" element={<WellnessReports />} />
               <Route path="wellness/telecaller" element={<WellnessTelecallerQueue />} />
+              {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
+              <Route path="telecaller" element={<Navigate to="/wellness/telecaller" replace />} />
               <Route path="wellness/per-location" element={<WellnessPerLocation />} />
               <Route path="wellness/loyalty" element={<WellnessLoyalty />} />
               <Route path="wellness/waitlist" element={<WellnessWaitlist />} />

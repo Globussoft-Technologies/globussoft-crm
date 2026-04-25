@@ -1172,7 +1172,9 @@ router.get("/dashboard", async (req, res) => {
       const key = v.visitDate.toISOString().slice(0, 10);
       if (key in dayBuckets) dayBuckets[key] += parseFloat(v.amountCharged) || 0;
     }
-    const revenueTrend = Object.entries(dayBuckets).map(([date, revenue]) => ({ date, revenue }));
+    // #181: round to 2 decimals — float accumulation on amountCharged was producing
+    // 14-digit fractional rupees in the dashboard chart axis labels.
+    const revenueTrend = Object.entries(dayBuckets).map(([date, revenue]) => ({ date, revenue: Math.round(revenue * 100) / 100 }));
 
     // Rough occupancy: completed visits today / theoretical capacity (assume 8 slots/day)
     const completedToday = todayVisits.filter((v) => v.status === "completed").length;

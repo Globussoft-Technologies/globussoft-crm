@@ -157,6 +157,25 @@ router.put("/:id/recurring", verifyToken, async (req, res) => {
 });
 
 // Obliterate Invoice
+// Void invoice — soft-void: status flips to VOIDED, row + audit trail preserved.
+// This is what the UI's "Void" button now calls. The hard DELETE below remains
+// for admin/cleanup use but is no longer reachable from the standard ledger UI.
+router.put("/:id/void", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Invoice not found" });
+    if (existing.status === "PAID") return res.status(400).json({ error: "Cannot void a paid invoice" });
+    const invoice = await prisma.invoice.update({
+      where: { id: existing.id },
+      data: { status: "VOIDED" },
+      include: { contact: true, deal: true }
+    });
+    res.json(invoice);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to void invoice" });
+  }
+});
+
 router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });

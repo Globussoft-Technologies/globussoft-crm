@@ -166,16 +166,25 @@ function PrescribeTab({ patient, onSaved }) {
     const next = [...drugs]; next[i] = { ...next[i], [k]: v }; setDrugs(next);
   };
 
+  // #114: at least one drug must have a name. Empty Rx rows previously saved as
+  // a phantom prescription (Rx counter incremented but no medication recorded).
+  const validDrugs = drugs.filter((d) => d.name && d.name.trim());
+  const canSave = !!visitId && validDrugs.length > 0;
+
   const submit = async (e) => {
     e.preventDefault();
     if (!visitId) { alert('Pick a visit this prescription belongs to (or log a visit first).'); return; }
+    if (validDrugs.length === 0) {
+      alert('At least one drug name is required to save a prescription.');
+      return;
+    }
     setSaving(true);
     try {
       await fetchApi('/api/wellness/prescriptions', {
         method: 'POST',
         body: JSON.stringify({
           visitId, patientId: patient.id,
-          drugs: drugs.filter((d) => d.name),
+          drugs: validDrugs,
           instructions,
         }),
       });
@@ -222,7 +231,18 @@ function PrescribeTab({ patient, onSaved }) {
         <textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
       </div>
 
-      <button type="submit" disabled={saving} style={{ padding: '0.55rem 1.25rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+      <button
+        type="submit"
+        disabled={saving || !canSave}
+        title={!canSave ? 'Pick a visit and enter at least one drug name' : ''}
+        style={{
+          padding: '0.55rem 1.25rem',
+          background: canSave ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
+          color: '#fff', border: 'none', borderRadius: 8,
+          cursor: canSave && !saving ? 'pointer' : 'not-allowed',
+          opacity: canSave ? 1 : 0.6,
+        }}
+      >
         {saving ? 'Saving…' : 'Save prescription'}
       </button>
     </form>
@@ -237,9 +257,14 @@ function ConsentTab({ patient, services, onSaved }) {
   const [serviceId, setServiceId] = useState('');
   const [saving, setSaving] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
+  // Track whether the patient has actually drawn anything on the canvas. Without
+  // this guard, canvas.toDataURL() always returns a valid (but empty) PNG and the
+  // server stores a blank "signature" — a legal/compliance issue (#118).
+  const [hasStrokes, setHasStrokes] = useState(false);
 
   const startDraw = (e) => {
     setIsDrawing(true);
+    setHasStrokes(true);
     const ctx = canvasRef.current.getContext('2d');
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 2;
@@ -265,10 +290,15 @@ function ConsentTab({ patient, services, onSaved }) {
   const clearSig = () => {
     const c = canvasRef.current;
     c.getContext('2d').clearRect(0, 0, c.width, c.height);
+    setHasStrokes(false);
   };
 
   const submit = async (e) => {
     e.preventDefault();
+    if (!hasStrokes) {
+      alert('Please capture the patient signature before saving the consent.');
+      return;
+    }
     setSaving(true);
     try {
       const signatureSvg = canvasRef.current.toDataURL('image/png');
@@ -333,7 +363,18 @@ function ConsentTab({ patient, services, onSaved }) {
         </button>
       </div>
 
-      <button type="submit" disabled={saving} style={{ padding: '0.55rem 1.25rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+      <button
+        type="submit"
+        disabled={saving || !hasStrokes}
+        title={!hasStrokes ? 'Patient must sign before saving' : ''}
+        style={{
+          padding: '0.55rem 1.25rem',
+          background: hasStrokes ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
+          color: '#fff', border: 'none', borderRadius: 8,
+          cursor: hasStrokes && !saving ? 'pointer' : 'not-allowed',
+          opacity: hasStrokes ? 1 : 0.6,
+        }}
+      >
         {saving ? 'Saving…' : 'Save consent'}
       </button>
     </form>
@@ -411,15 +452,22 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
   const [notes, setNotes] = useState('');
   const [amount, setAmount] = useState(0);
 
+  // #109: Service + Doctor required; amount must be >= 0. Save disabled until valid.
+  const valid = !!serviceId && !!doctorId && Number(amount) >= 0;
+
   const submit = async (e) => {
     e.preventDefault();
+    if (!valid) {
+      alert('Please select a Service and Doctor, and enter an amount of 0 or more.');
+      return;
+    }
     try {
       await fetchApi('/api/wellness/visits', {
         method: 'POST',
         body: JSON.stringify({
           patientId: patient.id,
-          serviceId: serviceId || null,
-          doctorId: doctorId || null,
+          serviceId,
+          doctorId,
           notes, amountCharged: amount, status: 'completed',
         }),
       });
@@ -434,15 +482,15 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
       <h3 style={{ marginBottom: '1rem' }}>Log a visit</h3>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
         <div>
-          <label style={labelStyle}>Service</label>
-          <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
+          <label style={labelStyle}>Service <span style={{ color: '#ef4444' }}>*</span></label>
+          <select required value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
             <option value="">— select —</option>
             {services.map((s) => <option key={s.id} value={s.id}>{s.name} — ₹{s.basePrice}</option>)}
           </select>
         </div>
         <div>
-          <label style={labelStyle}>Doctor</label>
-          <select value={doctorId} onChange={(e) => setDoctorId(e.target.value)} style={inputStyle}>
+          <label style={labelStyle}>Doctor <span style={{ color: '#ef4444' }}>*</span></label>
+          <select required value={doctorId} onChange={(e) => setDoctorId(e.target.value)} style={inputStyle}>
             <option value="">— select —</option>
             {doctors.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
@@ -454,9 +502,29 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
       </div>
       <div style={{ marginBottom: '1rem', width: 200 }}>
         <label style={labelStyle}>Amount charged (₹)</label>
-        <input type="number" value={amount} onChange={(e) => setAmount(parseFloat(e.target.value) || 0)} style={inputStyle} />
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={amount}
+          onChange={(e) => setAmount(parseFloat(e.target.value) || 0)}
+          style={inputStyle}
+        />
       </div>
-      <button type="submit" style={{ padding: '0.55rem 1.25rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Save visit</button>
+      <button
+        type="submit"
+        disabled={!valid}
+        title={!valid ? 'Select Service and Doctor; amount must be 0 or more' : ''}
+        style={{
+          padding: '0.55rem 1.25rem',
+          background: valid ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
+          color: '#fff', border: 'none', borderRadius: 8,
+          cursor: valid ? 'pointer' : 'not-allowed',
+          opacity: valid ? 1 : 0.6,
+        }}
+      >
+        Save visit
+      </button>
     </form>
   );
 }

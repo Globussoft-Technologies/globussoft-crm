@@ -20,7 +20,11 @@ const NotificationBell = () => {
   const fetchNotifications = useCallback(async () => {
     try {
       const data = await fetchApi('/api/notifications');
-      setNotifications(data);
+      // Backend returns { notifications, total, page, limit, pages }; tolerate the
+      // older array shape too in case any other consumer is still on it. Crashed the
+      // whole app pre-fix when state became an object and .map() was called on it (#113).
+      const list = Array.isArray(data) ? data : Array.isArray(data?.notifications) ? data.notifications : [];
+      setNotifications(list);
     } catch (err) {
       // silently fail
     }

@@ -30,8 +30,21 @@ export default function Patients() {
     fetchApi('/api/wellness/locations').then(setLocations).catch(() => setLocations([]));
   }, []);
 
+  // #108: phone may be optional, but if present must look like a real phone number
+  // (10–15 digits after stripping +, -, spaces, parens). Pre-fix the form accepted
+  // arbitrary text like "abc123notaphone".
+  const isValidPhone = (p) => {
+    if (!p || !p.trim()) return true; // optional
+    const digits = p.replace(/\D/g, '');
+    return digits.length >= 10 && digits.length <= 15;
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
+    if (!isValidPhone(form.phone)) {
+      alert('Phone number is invalid. Enter 10–15 digits (formatting characters like +, -, spaces, and parentheses are allowed).');
+      return;
+    }
     try {
       const payload = { ...form, locationId: form.locationId ? parseInt(form.locationId) : null };
       await fetchApi('/api/wellness/patients', { method: 'POST', body: JSON.stringify(payload) });

@@ -6,6 +6,7 @@ const STATUS_CONFIG = {
   PAID:    { color: '#10b981', bg: 'rgba(16,185,129,0.15)', label: 'Paid' },
   UNPAID:  { color: '#f59e0b', bg: 'rgba(245,158,11,0.15)', label: 'Unpaid' },
   OVERDUE: { color: '#ef4444', bg: 'rgba(239,68,68,0.15)', label: 'Overdue' },
+  VOIDED:  { color: '#6b7280', bg: 'rgba(107,114,128,0.15)', label: 'Voided' },
 };
 
 function StatusBadge({ status }) {
@@ -61,7 +62,7 @@ export default function Invoices() {
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
     const totalOutstanding = invoices
-      .filter(inv => inv.status !== 'PAID')
+      .filter(inv => inv.status !== 'PAID' && inv.status !== 'VOIDED')
       .reduce((sum, inv) => sum + Number(inv.amount), 0);
 
     const totalPaidThisMonth = invoices
@@ -136,14 +137,18 @@ export default function Invoices() {
       .catch(() => alert('Failed to download PDF'));
   };
 
-  const deleteInvoice = async (id) => {
-    if (window.confirm('Are you sure you want to void this invoice? This action cannot be undone.')) {
-      try {
-        await fetchApi(`/api/billing/${id}`, { method: 'DELETE' });
-        loadData();
-      } catch (err) {
-        alert('Failed to delete invoice');
-      }
+  const voidInvoice = async (inv) => {
+    const num = inv.invoiceNum || `#${inv.id}`;
+    if (!window.confirm(
+      `Void invoice ${num}?\n\n` +
+      `This marks the invoice as VOIDED and removes it from Outstanding totals. ` +
+      `The invoice row and audit trail are preserved (no data loss).`
+    )) return;
+    try {
+      await fetchApi(`/api/billing/${inv.id}/void`, { method: 'PUT' });
+      loadData();
+    } catch (err) {
+      alert('Failed to void invoice');
     }
   };
 
@@ -371,7 +376,7 @@ export default function Invoices() {
                           >
                             <Download size={14} /> PDF
                           </button>
-                          {inv.status !== 'PAID' && (
+                          {inv.status !== 'PAID' && inv.status !== 'VOIDED' && (
                             <button
                               onClick={() => markPaid(inv.id)}
                               className="btn-secondary"
@@ -406,20 +411,22 @@ export default function Invoices() {
                           >
                             <RefreshCw size={14} /> {inv.isRecurring ? `${inv.recurFrequency}` : 'Recur'}
                           </button>
-                          <button
-                            onClick={() => deleteInvoice(inv.id)}
-                            style={{
-                              background: 'transparent', border: '1px solid rgba(239,68,68,0.3)',
-                              color: 'var(--text-secondary)', cursor: 'pointer',
-                              display: 'flex', alignItems: 'center', gap: '0.3rem',
-                              fontSize: '0.8rem', padding: '0.4rem 0.75rem', borderRadius: '6px',
-                            }}
-                            onMouseOver={e => e.currentTarget.style.color = '#ef4444'}
-                            onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'}
-                            aria-label={`Delete invoice ${inv.invoiceNum}`}
-                          >
-                            <Trash2 size={14} /> Void
-                          </button>
+                          {inv.status !== 'VOIDED' && (
+                            <button
+                              onClick={() => voidInvoice(inv)}
+                              style={{
+                                background: 'transparent', border: '1px solid rgba(239,68,68,0.3)',
+                                color: 'var(--text-secondary)', cursor: 'pointer',
+                                display: 'flex', alignItems: 'center', gap: '0.3rem',
+                                fontSize: '0.8rem', padding: '0.4rem 0.75rem', borderRadius: '6px',
+                              }}
+                              onMouseOver={e => e.currentTarget.style.color = '#ef4444'}
+                              onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'}
+                              aria-label={`Void invoice ${inv.invoiceNum}`}
+                            >
+                              <Trash2 size={14} /> Void
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

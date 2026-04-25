@@ -115,23 +115,70 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
       {/* Visually-hidden section heading so screen readers see h1 -> h2 hierarchy
           before the per-service h3 cards (a11y: heading-order). */}
       <h2 style={srOnly}>Available services</h2>
-      {showAdd && (
-        <form onSubmit={submit} className="glass" style={{ padding: '1rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem' }}>
-          <input placeholder="Service name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
-          <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={inputStyle}>
-            {['hair', 'skin', 'aesthetics', 'slimming', 'ayurveda', 'salon'].map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <select value={form.ticketTier} onChange={(e) => setForm({ ...form, ticketTier: e.target.value })} style={inputStyle}>
-            <option value="low">Low tier</option>
-            <option value="medium">Medium tier</option>
-            <option value="high">High tier</option>
-          </select>
-          <input type="number" placeholder="Base price ₹" value={form.basePrice} onChange={(e) => setForm({ ...form, basePrice: parseFloat(e.target.value) || 0 })} style={inputStyle} />
-          <input type="number" placeholder="Duration (min)" value={form.durationMin} onChange={(e) => setForm({ ...form, durationMin: parseInt(e.target.value) || 30 })} style={inputStyle} />
-          <input type="number" placeholder="Target radius (km, blank = unlimited)" value={form.targetRadiusKm || ''} onChange={(e) => setForm({ ...form, targetRadiusKm: e.target.value ? parseInt(e.target.value) : null })} style={inputStyle} />
-          <button type="submit" style={{ padding: '0.5rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', gridColumn: 'span 2' }}>Save</button>
-        </form>
-      )}
+      {showAdd && (() => {
+        // #115: visible labels for every field; basePrice must be > 0 before save.
+        const fieldLabel = { display: 'block', fontSize: '0.7rem', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' };
+        const valid = !!form.name?.trim() && Number(form.basePrice) > 0 && Number(form.durationMin) > 0;
+        const onSubmit = (e) => {
+          if (!valid) {
+            e.preventDefault();
+            alert('Please enter a service name, a base price greater than ₹0, and a positive duration.');
+            return;
+          }
+          submit(e);
+        };
+        return (
+          <form onSubmit={onSubmit} className="glass" style={{ padding: '1rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+            <div>
+              <label style={fieldLabel}>Service name <span style={{ color: '#ef4444' }}>*</span></label>
+              <input placeholder="e.g. Hair Transplant" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
+            </div>
+            <div>
+              <label style={fieldLabel}>Category</label>
+              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={inputStyle}>
+                {['hair', 'skin', 'aesthetics', 'slimming', 'ayurveda', 'salon'].map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={fieldLabel}>Ticket tier</label>
+              <select value={form.ticketTier} onChange={(e) => setForm({ ...form, ticketTier: e.target.value })} style={inputStyle}>
+                <option value="low">Low tier</option>
+                <option value="medium">Medium tier</option>
+                <option value="high">High tier</option>
+              </select>
+            </div>
+            <div>
+              <label style={fieldLabel}>Base price (₹) <span style={{ color: '#ef4444' }}>*</span></label>
+              <input type="number" min="1" step="1" placeholder="e.g. 5000" value={form.basePrice} onChange={(e) => setForm({ ...form, basePrice: parseFloat(e.target.value) || 0 })} style={inputStyle} />
+            </div>
+            <div>
+              <label style={fieldLabel}>Duration (min)</label>
+              <input type="number" min="1" placeholder="e.g. 60" value={form.durationMin} onChange={(e) => setForm({ ...form, durationMin: parseInt(e.target.value) || 30 })} style={inputStyle} />
+            </div>
+            <div>
+              <label style={fieldLabel}>Marketing radius (km)</label>
+              <input type="number" min="0" placeholder="blank = unlimited" value={form.targetRadiusKm || ''} onChange={(e) => setForm({ ...form, targetRadiusKm: e.target.value ? parseInt(e.target.value) : null })} style={inputStyle} />
+            </div>
+            <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-end' }}>
+              <button
+                type="submit"
+                disabled={!valid}
+                title={!valid ? 'Name + base price > 0 are required' : ''}
+                style={{
+                  padding: '0.55rem 1rem',
+                  background: valid ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
+                  color: '#fff', border: 'none', borderRadius: 8,
+                  cursor: valid ? 'pointer' : 'not-allowed',
+                  opacity: valid ? 1 : 0.6,
+                  width: '100%',
+                }}
+              >
+                Save
+              </button>
+            </div>
+          </form>
+        );
+      })()}
 
       {loading && <div>Loading…</div>}
 

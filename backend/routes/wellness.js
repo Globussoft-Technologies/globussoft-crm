@@ -150,10 +150,23 @@ router.get("/patients/:id", async (req, res) => {
   }
 });
 
+// #108: a phone is optional, but if supplied must contain 10–15 digits after
+// stripping formatting (+, -, spaces, parens). Pre-fix the field accepted any
+// text like "abc123notaphone" which then broke dialer / WhatsApp integration.
+function isValidPhoneOrEmpty(p) {
+  if (p == null || p === "") return true;
+  if (typeof p !== "string") return false;
+  const digits = p.replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15;
+}
+
 router.post("/patients", async (req, res) => {
   try {
     const { name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId } = req.body;
     if (!name) return res.status(400).json({ error: "name is required" });
+    if (!isValidPhoneOrEmpty(phone)) {
+      return res.status(400).json({ error: "phone must contain 10–15 digits", code: "INVALID_PHONE" });
+    }
     const patient = await prisma.patient.create({
       data: {
         name,
@@ -208,6 +221,9 @@ router.put("/patients/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     const existing = await prisma.patient.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Patient not found" });
+    if (req.body.phone !== undefined && !isValidPhoneOrEmpty(req.body.phone)) {
+      return res.status(400).json({ error: "phone must contain 10–15 digits", code: "INVALID_PHONE" });
+    }
 
     const data = {};
     const allowed = ["name", "email", "phone", "gender", "bloodGroup", "allergies", "notes", "source", "photoUrl"];
@@ -279,6 +295,16 @@ router.post("/visits", async (req, res) => {
   try {
     const { patientId, serviceId, doctorId, visitDate, status, vitals, notes, amountCharged, treatmentPlanId } = req.body;
     if (!patientId) return res.status(400).json({ error: "patientId is required" });
+    // #109: a "completed" visit (the default the UI submits) must have a service
+    // and doctor — anonymous "ghost visits" corrupt revenue/per-pro reports.
+    // Booked/cancelled/no-show statuses can be partial since the visit hasn't happened.
+    const isCompleted = !status || status === "completed" || status === "in-treatment";
+    if (isCompleted && !serviceId) return res.status(400).json({ error: "serviceId is required for a completed visit", code: "SERVICE_REQUIRED" });
+    if (isCompleted && !doctorId) return res.status(400).json({ error: "doctorId is required for a completed visit", code: "DOCTOR_REQUIRED" });
+    // #109: amount must be non-negative — negative charges distort revenue analytics.
+    if (amountCharged != null && amountCharged !== "" && Number(amountCharged) < 0) {
+      return res.status(400).json({ error: "amountCharged must be 0 or greater", code: "AMOUNT_NEGATIVE" });
+    }
 
     const visit = await prisma.visit.create({
       data: {
@@ -448,15 +474,23 @@ router.get("/prescriptions", async (req, res) => {
 router.post("/prescriptions", async (req, res) => {
   try {
     const { visitId, patientId, doctorId, drugs, instructions } = req.body;
-    if (!visitId || !patientId || !drugs) {
-      return res.status(400).json({ error: "visitId, patientId, drugs are required" });
+    if (!visitId || !patientId) {
+      return res.status(400).json({ error: "visitId and patientId are required" });
+    }
+    // #114: drugs must be a non-empty array with at least one named drug.
+    // Pre-fix, the UI sent `drugs: []` (filtered empty) and `!drugs` was false
+    // (empty array is truthy), so phantom prescriptions saved with no medication.
+    const drugList = Array.isArray(drugs) ? drugs : [];
+    const namedDrugs = drugList.filter((d) => d && typeof d.name === "string" && d.name.trim());
+    if (namedDrugs.length === 0) {
+      return res.status(400).json({ error: "At least one drug name is required", code: "DRUG_NAME_REQUIRED" });
     }
     const rx = await prisma.prescription.create({
       data: {
         visitId: parseInt(visitId),
         patientId: parseInt(patientId),
         doctorId: doctorId ? parseInt(doctorId) : req.user.id,
-        drugs: typeof drugs === "object" ? JSON.stringify(drugs) : drugs,
+        drugs: JSON.stringify(namedDrugs),
         instructions,
         tenantId: req.user.tenantId,
       },
@@ -496,6 +530,13 @@ router.post("/consents", async (req, res) => {
     const { patientId, serviceId, templateName, signatureSvg } = req.body;
     if (!patientId || !templateName) {
       return res.status(400).json({ error: "patientId and templateName are required" });
+    }
+    // Defense-in-depth (#118): reject blank/missing signatures even if the UI
+    // is bypassed. A blank 600x180 PNG data-URL is ~220 chars; a real signature
+    // with strokes is several KB. 500 chars is well above the empty floor and
+    // well below any genuine capture.
+    if (!signatureSvg || typeof signatureSvg !== "string" || signatureSvg.length < 500) {
+      return res.status(400).json({ error: "Patient signature is required and cannot be blank", code: "SIGNATURE_REQUIRED" });
     }
     const consent = await prisma.consentForm.create({
       data: {
@@ -578,7 +619,14 @@ router.get("/services", async (req, res) => {
 router.post("/services", async (req, res) => {
   try {
     const { name, category, ticketTier, basePrice, durationMin, targetRadiusKm, description } = req.body;
-    if (!name) return res.status(400).json({ error: "name required" });
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
+    // #115: refuse zero-priced services from the catalog. Existing ₹0 rows
+    // (e.g. seed-only "spa") stay visible until manually corrected — only
+    // new creations are blocked.
+    const price = Number(basePrice);
+    if (!Number.isFinite(price) || price <= 0) {
+      return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
+    }
     const svc = await prisma.service.create({
       data: {
         name,
@@ -606,6 +654,13 @@ router.put("/services/:id", async (req, res) => {
     const data = {};
     const allowed = ["name", "category", "ticketTier", "basePrice", "durationMin", "targetRadiusKm", "description", "isActive"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    // #115: same price guard on edit — can't update a service to ₹0.
+    if (data.basePrice !== undefined) {
+      const price = Number(data.basePrice);
+      if (!Number.isFinite(price) || price <= 0) {
+        return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
+      }
+    }
     const updated = await prisma.service.update({ where: { id }, data });
     res.json(updated);
   } catch (e) {

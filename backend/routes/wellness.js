@@ -19,8 +19,13 @@ const {
   renderBrandedInvoicePdf,
 } = require("../services/pdfRenderer");
 
+// Portal tokens carry { patientId } and are issued/verified separately from staff
+// tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
+// can't forge staff tokens; fall back to JWT_SECRET when unset for transition.
 const PORTAL_JWT_SECRET =
-  process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+  process.env.PORTAL_JWT_SECRET ||
+  process.env.JWT_SECRET ||
+  "enterprise_super_secret_key_2026";
 
 // Patient-portal inline JWT middleware — used by /portal/* endpoints.
 // Portal endpoints bypass the global user-JWT guard (see server.js openPaths)
@@ -77,15 +82,20 @@ router.param("id", (req, res, next, id) => {
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
+// Day boundaries in IST (UTC+05:30). Wellness clinics are India-based, so
+// "today" must mean the IST calendar day — using server-local hours would
+// shift the window by 5h30 on UTC servers (the production default), making
+// 00:00–05:30 IST visits land on the previous day.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const startOfDay = (d = new Date()) => {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  ist.setUTCHours(0, 0, 0, 0);
+  return new Date(ist.getTime() - IST_OFFSET_MS);
 };
 const endOfDay = (d = new Date()) => {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  ist.setUTCHours(23, 59, 59, 999);
+  return new Date(ist.getTime() - IST_OFFSET_MS);
 };
 
 // ── Patients ───────────────────────────────────────────────────────

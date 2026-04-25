@@ -1,6 +1,17 @@
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true }); // load root .env for API keys (Gemini, Mailgun, etc.)
 
+// Fail fast in production if JWT secrets are missing — refuses to boot rather than
+// silently fall back to the dev secret baked into the source.
+if (process.env.NODE_ENV === "production") {
+  if (!process.env.JWT_SECRET) {
+    throw new Error("FATAL: JWT_SECRET must be set in production. Refusing to start with the dev fallback secret.");
+  }
+  if (!process.env.PORTAL_JWT_SECRET) {
+    console.warn("[startup] PORTAL_JWT_SECRET not set — patient portal tokens will reuse JWT_SECRET. Set a separate value for defense in depth.");
+  }
+}
+
 const { initSentry } = require("./lib/sentry");
 
 const express = require("express");
@@ -318,8 +329,7 @@ app.use("/p", landingPagesPublic);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Health Check Endpoint
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = require("./lib/prisma");
 
 app.get("/api/health", async (req, res) => {
   let dbStatus = "disconnected";

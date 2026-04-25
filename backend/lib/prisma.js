@@ -1,19 +1,60 @@
 const { PrismaClient } = require('@prisma/client');
-const { decrypt, isEncrypted } = require('./fieldEncryption');
+const { encrypt, decrypt, isEncrypted } = require('./fieldEncryption');
 
 // Singleton pattern — single PrismaClient across the app
 // Fixes "Too many connections" errors from each route creating its own client
 const globalForPrisma = global;
 
-// Map of model name -> array of fields to transparently decrypt on read.
-// Wellness PII fields. When WELLNESS_FIELD_KEY is missing, decrypt() is a
-// pass-through, so this extension is effectively a no-op.
+// Map of model name -> array of fields to transparently encrypt on write and
+// decrypt on read. When WELLNESS_FIELD_KEY is missing, encrypt()/decrypt() are
+// pass-throughs, so this extension is effectively a no-op.
+//
+// Safe to extend: route handlers in wellness.js use only flat (non-nested)
+// writes for these models, so the root $extends hooks catch every call site.
+// If you ever introduce a nested write like
+//   prisma.patient.create({ data: { ..., visits: { create: { notes: ... } } } })
+// the inner notes will NOT be auto-encrypted — Prisma routes nested ops through
+// the parent model's hook only. Use sequential creates instead, or expand the
+// encryptInput logic to walk relations.
 const ENCRYPTED_FIELDS = {
   Patient: ['allergies', 'notes'],
   Visit: ['notes', 'vitals'],
   Prescription: ['drugs', 'instructions'],
   ConsentForm: ['signatureSvg'],
 };
+
+function encryptInput(modelName, data) {
+  if (!data || typeof data !== 'object') return data;
+  const fields = ENCRYPTED_FIELDS[modelName];
+  if (!fields) return data;
+  for (const f of fields) {
+    if (!(f in data)) continue;
+    const v = data[f];
+    // Plain string assignment: { allergies: "penicillin" }
+    if (typeof v === 'string') {
+      data[f] = encrypt(v);
+    } else if (v && typeof v === 'object' && typeof v.set === 'string') {
+      // Prisma update operator: { allergies: { set: "penicillin" } }
+      data[f] = { set: encrypt(v.set) };
+    }
+    // null / undefined / non-string atoms: leave alone (encrypt is a no-op anyway)
+  }
+  return data;
+}
+
+function encryptArgs(modelName, args) {
+  if (!args) return args;
+  if (args.data) {
+    if (Array.isArray(args.data)) {
+      args.data = args.data.map((d) => encryptInput(modelName, { ...d }));
+    } else {
+      args.data = encryptInput(modelName, { ...args.data });
+    }
+  }
+  if (args.create) args.create = encryptInput(modelName, { ...args.create });
+  if (args.update) args.update = encryptInput(modelName, { ...args.update });
+  return args;
+}
 
 function decryptRecord(modelName, record) {
   if (!record || typeof record !== 'object') return record;
@@ -42,14 +83,15 @@ function buildClient() {
     log: process.env.NODE_ENV === 'production' ? ['error'] : ['warn', 'error'],
   });
 
-  // Use $extends (Prisma 5+/6) for transparent decryption on all reads.
-  // Covers: findUnique, findUniqueOrThrow, findFirst, findFirstOrThrow,
-  // findMany. Writes are NOT auto-encrypted — callers/backfill script handle
-  // encryption explicitly via fieldEncryption.encrypt().
+  // $extends (Prisma 5+/6) intercepts queries for transparent PII handling.
+  // Reads → decrypt on the way out. Writes → encrypt on the way in.
+  // Both sides are no-ops when WELLNESS_FIELD_KEY is unset, so this extension
+  // is safe to deploy before flipping the encryption switch.
   return base.$extends({
-    name: 'wellness-pii-decrypt',
+    name: 'wellness-pii',
     query: {
       $allModels: {
+        // Reads — decrypt outputs
         async findUnique({ model, args, query }) {
           const r = await query(args); return decryptResult(model, r);
         },
@@ -64,6 +106,28 @@ function buildClient() {
         },
         async findMany({ model, args, query }) {
           const r = await query(args); return decryptResult(model, r);
+        },
+        // Writes — encrypt inputs, decrypt the returned record so callers
+        // immediately see plaintext (matches read-side behaviour)
+        async create({ model, args, query }) {
+          const r = await query(encryptArgs(model, args));
+          return decryptResult(model, r);
+        },
+        async createMany({ model, args, query }) {
+          // createMany returns { count }, no record to decrypt
+          return query(encryptArgs(model, args));
+        },
+        async update({ model, args, query }) {
+          const r = await query(encryptArgs(model, args));
+          return decryptResult(model, r);
+        },
+        async updateMany({ model, args, query }) {
+          // updateMany returns { count }
+          return query(encryptArgs(model, args));
+        },
+        async upsert({ model, args, query }) {
+          const r = await query(encryptArgs(model, args));
+          return decryptResult(model, r);
         },
       },
     },

@@ -77,10 +77,10 @@ router.post("/register", async (req, res) => {
       data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
     });
 
-    const token = signSessionToken({ userId: user.id, role: user.role, tenantId: tenant.id });
+    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id });
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
       tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
     });
 
@@ -114,10 +114,10 @@ router.post("/signup", async (req, res) => {
       data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
     });
 
-    const token = signSessionToken({ userId: user.id, role: user.role, tenantId: tenant.id });
+    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id });
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
       tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
     });
 
@@ -170,11 +170,14 @@ router.post("/login", async (req, res) => {
       return res.json({ requires2FA: true, tempToken });
     }
 
-    const token = signSessionToken({ userId: user.id, role: user.role, tenantId });
+    // Issue #207/#214/#216: include wellnessRole on the JWT so verifyWellnessRole
+    // (orthogonal to verifyRole) can gate clinical / operational endpoints
+    // without re-reading the user row on every request.
+    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId });
 
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
       tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor } : null
     });
   } catch (error) {
@@ -306,7 +309,7 @@ router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      select: { id: true, name: true, email: true, role: true, wellnessRole: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });

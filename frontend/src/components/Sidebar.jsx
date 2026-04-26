@@ -127,18 +127,25 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, i
   const labelStyle = sectionLabelStyle || sectionLabel;
   return (
     <>
-      {/* Daily essentials */}
-      <Link to="/wellness" icon={LayoutDashboard} label="Owner Dashboard" />
-      <Link to="/wellness/recommendations" icon={Sparkles} label="Recommendations" />
+      {/* Daily essentials — Owner Dashboard + Recommendations are management
+          views over org-wide P&L / pending recommendation cards (#207/#216).
+          Clinical staff (doctor/professional/telecaller/helper) should not see
+          them in the nav. AdsGPT and Callified are external tools the whole
+          team uses, so they stay visible for everyone. */}
+      <Link to="/wellness" icon={LayoutDashboard} label="Owner Dashboard" managerOnly />
+      <Link to="/wellness/recommendations" icon={Sparkles} label="Recommendations" managerOnly />
       <AdsGptLink icon={Sparkles} label="AdsGPT" />
       <ExtLink href={callifiedUrl} icon={PhoneCall} label="Callified" />
 
-      {/* Clinical */}
+      {/* Clinical — Patients, Calendar, Waitlist visible to all wellness staff
+          (clinical staff need their patients + day grid). Service Catalog is a
+          pricing/duration config — clinical staff read it but only managers
+          edit it, so we hide the nav link for non-management. */}
       <div style={labelStyle}>Clinical</div>
       <Link to="/wellness/patients" icon={HeartPulse} label="Patients" />
       <Link to="/wellness/calendar" icon={Calendar} label="Calendar" />
       <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" />
-      <Link to="/wellness/services" icon={Stethoscope} label="Service Catalog" />
+      <Link to="/wellness/services" icon={Stethoscope} label="Service Catalog" managerOnly />
 
       {/* Lead-to-revenue */}
       <div style={labelStyle}>Leads & Revenue</div>

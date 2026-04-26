@@ -90,11 +90,28 @@ const Login = () => {
     setForgotLoading(false);
   };
 
+  // Issue #207/#214: wellness staff have role=USER + a wellnessRole orthogonal
+  // claim. Owner Dashboard is for ADMIN/MANAGER only — clinical / telecaller
+  // staff need their own landing pages so they don't see org-wide P&L on login.
+  const wellnessLandingFor = (user) => {
+    if (!user) return '/wellness';
+    if (user.role === 'ADMIN' || user.role === 'MANAGER') return '/wellness';
+    switch (user.wellnessRole) {
+      case 'telecaller':   return '/wellness/telecaller';
+      case 'doctor':       return '/wellness/calendar';
+      case 'professional': return '/wellness/calendar';
+      case 'helper':       return '/wellness/patients';
+      default:             return '/wellness/calendar'; // safe read-only fallback
+    }
+  };
+
   const finalizeLogin = (data) => {
     setUser(data.user);
     setToken(data.token);
     if (data.tenant && setTenant) setTenant(data.tenant);
-    const landing = data.tenant?.vertical === 'wellness' ? '/wellness' : '/dashboard';
+    const landing = data.tenant?.vertical === 'wellness'
+      ? wellnessLandingFor(data.user)
+      : '/dashboard';
     navigate(landing);
   };
 

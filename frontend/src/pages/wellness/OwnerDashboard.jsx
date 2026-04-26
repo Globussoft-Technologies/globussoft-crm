@@ -1,10 +1,23 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Activity, Calendar, IndianRupee, Sparkles, TrendingUp, Users, Bell, ArrowRight, Stethoscope, Megaphone, ExternalLink } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
 import { launchAdsGptAs, ADSGPT_DEMO_LOGIN } from '../../utils/adsgpt';
+
+// #207/#214: clinical staff (doctor/professional/telecaller/helper) must not
+// land on the Owner Dashboard. Mirror the Login redirect logic so a direct
+// URL nav also bounces them to the right page for their wellnessRole.
+function landingForClinicalStaff(user) {
+  switch (user?.wellnessRole) {
+    case 'telecaller':   return '/wellness/telecaller';
+    case 'doctor':       return '/wellness/calendar';
+    case 'professional': return '/wellness/calendar';
+    case 'helper':       return '/wellness/patients';
+    default:             return '/wellness/calendar';
+  }
+}
 
 const formatRupees = (n) => `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
 
@@ -20,11 +33,23 @@ const StatCard = ({ icon: Icon, label, value, sub, color }) => (
 
 export default function OwnerDashboard() {
   const { user, tenant } = useContext(AuthContext);
+  const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState('');
   const [adsGptStatus, setAdsGptStatus] = useState({ state: 'idle', msg: '' });
+
+  // #207/#214: redirect non-management away from the Owner Dashboard.
+  // Direct URL nav by a doctor/telecaller/helper/professional now bounces
+  // to the page that fits their daily work (matches the post-login landing
+  // logic in Login.jsx).
+  useEffect(() => {
+    if (!user) return;
+    if (tenant?.vertical !== 'wellness') return;
+    if (user.role === 'ADMIN' || user.role === 'MANAGER') return;
+    navigate(landingForClinicalStaff(user), { replace: true });
+  }, [user, tenant, navigate]);
 
   const handleLaunchAdsGpt = async () => {
     setAdsGptStatus({ state: 'loading', msg: 'Signing you into AdsGPT…' });

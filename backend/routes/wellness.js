@@ -19,6 +19,13 @@ const {
   renderBrandedInvoicePdf,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
+// Issue #207/#214/#216: wellness users carry both `role` (ADMIN/MANAGER/USER)
+// and an orthogonal `wellnessRole` (doctor/professional/telecaller/helper).
+// verifyRole only knows about the former, so a USER+doctor could hit Owner-
+// Dashboard / financial / catalog mutation endpoints. verifyWellnessRole adds
+// the second axis: allow lists like ["doctor","admin"] gate clinical writes,
+// ["admin","manager"] gates org-wide reports + catalog edits.
+const { verifyWellnessRole } = require("../middleware/wellnessRole");
 
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
@@ -650,7 +657,10 @@ router.get("/prescriptions", async (req, res) => {
   }
 });
 
-router.post("/prescriptions", async (req, res) => {
+// #207/#216: only doctors (or admin owner override) may write prescriptions.
+// Managers operate the clinic but don't prescribe; telecallers/helpers/professionals
+// have no clinical mandate.
+router.post("/prescriptions", verifyWellnessRole(["doctor", "admin"]), async (req, res) => {
   try {
     const { visitId, patientId, doctorId, drugs, instructions } = req.body;
     if (!visitId || !patientId) {
@@ -694,7 +704,10 @@ router.post("/prescriptions", async (req, res) => {
 // ADMIN — anyone else gets 403. drugs (when supplied) must keep the
 // non-empty-with-name invariant of the create path. Hard-delete is NOT
 // exposed: clinical records must persist for the medico-legal trail.
-router.put("/prescriptions/:id", async (req, res) => {
+// #207/#216: same clinical gate on amend. The body still enforces "only the
+// original prescriber or an ADMIN" — this gate just keeps non-clinicals out
+// before the row lookup.
+router.put("/prescriptions/:id", verifyWellnessRole(["doctor", "admin"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.prescription.findFirst({ where: tenantWhere(req, { id }) });
@@ -760,7 +773,10 @@ router.get("/consents", async (req, res) => {
   }
 });
 
-router.post("/consents", async (req, res) => {
+// #207/#216: consent capture is performed by the clinician (doctor) or the
+// professional running the visit; admin owner override allowed. Telecallers
+// and helpers cannot record consent.
+router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"]), async (req, res) => {
   try {
     const { patientId, serviceId, templateName, signatureSvg } = req.body;
     if (!patientId || !templateName) {
@@ -800,7 +816,10 @@ router.post("/consents", async (req, res) => {
 // #194: amend a consent form — only the templateName + serviceId metadata
 // can be corrected. The signatureSvg is captured-at-signing and is never
 // editable post-hoc: that's a forgery vector, not an amendment. ADMIN only.
-router.put("/consents/:id", async (req, res) => {
+// #207/#216: consent metadata edits are admin-only (matches existing body
+// check). The verifyWellnessRole gate just produces a clean 403 with the
+// shared WELLNESS_ROLE_FORBIDDEN code before we touch the DB.
+router.put("/consents/:id", verifyWellnessRole(["admin"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.consentForm.findFirst({ where: tenantWhere(req, { id }) });
@@ -884,7 +903,10 @@ router.get("/services", async (req, res) => {
   }
 });
 
-router.post("/services", async (req, res) => {
+// #216: service-catalog mutations are operational, not clinical. Lock to
+// admin/manager — clinical staff (doctors/professionals) read the catalog
+// but don't define pricing or duration.
+router.post("/services", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const { name, category, ticketTier, basePrice, durationMin, targetRadiusKm, description } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
@@ -941,7 +963,7 @@ router.post("/services", async (req, res) => {
   }
 });
 
-router.put("/services/:id", async (req, res) => {
+router.put("/services/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.service.findFirst({ where: tenantWhere(req, { id }) });
@@ -1012,7 +1034,10 @@ router.get("/recommendations", async (req, res) => {
 // approved/rejected the body is locked — the resolved record is the audit
 // artefact for the dispatched action and shouldn't be re-written. ADMIN /
 // MANAGER only since recommendations are operational, not clinical.
-router.put("/recommendations/:id", async (req, res) => {
+// #216: recommendations are owner-dashboard cards — only admin/manager can
+// amend or resolve. Existing body still enforces ADMIN/MANAGER on /amend;
+// the gate just makes the 403 match the rest of the wellness shape.
+router.put("/recommendations/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
@@ -1041,7 +1066,7 @@ router.put("/recommendations/:id", async (req, res) => {
   }
 });
 
-router.post("/recommendations/:id/approve", async (req, res) => {
+router.post("/recommendations/:id/approve", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const rec = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
@@ -1153,7 +1178,7 @@ router.post("/inventory/low-stock/run", async (req, res) => {
   }
 });
 
-router.post("/recommendations/:id/reject", async (req, res) => {
+router.post("/recommendations/:id/reject", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const rec = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
@@ -1216,7 +1241,8 @@ router.get("/locations", async (req, res) => {
   }
 });
 
-router.post("/locations", async (req, res) => {
+// #216: clinic locations are operational config — admin/manager only.
+router.post("/locations", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const { name, addressLine, city, state, pincode, country, phone, email, latitude, longitude, hours } = req.body;
     if (!name || !addressLine || !city) {
@@ -1243,7 +1269,7 @@ router.post("/locations", async (req, res) => {
   }
 });
 
-router.put("/locations/:id", async (req, res) => {
+router.put("/locations/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.location.findFirst({ where: tenantWhere(req, { id }) });
@@ -1288,7 +1314,10 @@ const reportRange = (req) => {
   return { from, to };
 };
 
-router.get("/reports/pnl-by-service", async (req, res) => {
+// #207/#216: org-wide financial reports must not leak to clinical staff.
+// Doctors / professionals see their own slice via /per-professional? but
+// the unfiltered P&L view stays admin/manager.
+router.get("/reports/pnl-by-service", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
@@ -1353,7 +1382,7 @@ router.get("/reports/pnl-by-service", async (req, res) => {
   }
 });
 
-router.get("/reports/per-professional", async (req, res) => {
+router.get("/reports/per-professional", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
@@ -1392,7 +1421,7 @@ router.get("/reports/per-professional", async (req, res) => {
   }
 });
 
-router.get("/reports/attribution", async (req, res) => {
+router.get("/reports/attribution", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
@@ -1443,7 +1472,7 @@ router.get("/reports/attribution", async (req, res) => {
   }
 });
 
-router.get("/reports/per-location", async (req, res) => {
+router.get("/reports/per-location", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
@@ -1486,7 +1515,11 @@ router.get("/reports/per-location", async (req, res) => {
 
 // ── Owner dashboard aggregation ────────────────────────────────────
 
-router.get("/dashboard", async (req, res) => {
+// #207/#216: the Owner Dashboard data endpoint exposes org-wide P&L,
+// pending-approvals counts, revenue trend, and recommendations. A doctor
+// or telecaller hitting this directly (or via stale frontend cache) sees
+// the full clinic financials. Lock to admin/manager.
+router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
@@ -1758,7 +1791,10 @@ const DISPOSITION_STATUS = {
   junk: "Junk",
 };
 
-router.get("/telecaller/queue", async (req, res) => {
+// #214: the queue is the telecaller's daily worklist. Telecaller, manager,
+// or admin only — clinical staff (doctor/professional/helper) shouldn't see
+// inbound lead pipeline.
+router.get("/telecaller/queue", verifyWellnessRole(["telecaller", "admin", "manager"]), async (req, res) => {
   try {
     const leads = await prisma.contact.findMany({
       where: tenantWhere(req, {
@@ -1784,7 +1820,7 @@ router.get("/telecaller/queue", async (req, res) => {
   }
 });
 
-router.post("/telecaller/dispose", async (req, res) => {
+router.post("/telecaller/dispose", verifyWellnessRole(["telecaller", "admin", "manager"]), async (req, res) => {
   try {
     const { contactId, disposition, notes } = req.body || {};
     if (!contactId || !disposition) {

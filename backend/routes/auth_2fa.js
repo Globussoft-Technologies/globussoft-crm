@@ -208,16 +208,18 @@ router.post("/verify", async (req, res) => {
 
     const tenantId = user.tenantId || 1;
     // Issue #180: include unique jti so this session can be revoked individually.
+    // Issue #207/#214/#216: also embed wellnessRole so verifyWellnessRole gates
+    // work post-2FA login the same as plain /login.
     const jti = crypto.randomBytes(16).toString("hex");
     const token = jwt.sign(
-      { userId: user.id, role: user.role, tenantId, jti },
+      { userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId, jti },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
 
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
       tenant: user.tenant
         ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor }
         : { id: tenantId, vertical: "generic", country: "US", defaultCurrency: "USD", locale: "en-US", logoUrl: null, brandColor: null },

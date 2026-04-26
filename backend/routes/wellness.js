@@ -178,6 +178,20 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
 
 const ALLOWED_VISIT_STATUSES = new Set(["booked", "arrived", "in-treatment", "completed", "no-show", "cancelled"]);
 
+// #197: visit status state machine. Terminal statuses (completed, cancelled,
+// no-show) are not freely re-openable from a PUT — re-opening requires an
+// explicit /reopen endpoint (TODO if needed). The matrix below allows the
+// natural forward progression and a few corrective backward transitions
+// (e.g. accidentally marking arrived → back to booked).
+const VISIT_TRANSITIONS = {
+  "booked":       new Set(["booked", "arrived", "in-treatment", "completed", "no-show", "cancelled"]),
+  "arrived":      new Set(["arrived", "booked", "in-treatment", "completed", "no-show", "cancelled"]),
+  "in-treatment": new Set(["in-treatment", "arrived", "completed", "cancelled"]),
+  "completed":    new Set(["completed"]), // terminal
+  "no-show":      new Set(["no-show", "booked"]), // allow rebook
+  "cancelled":    new Set(["cancelled"]), // terminal
+};
+
 router.post("/patients", async (req, res) => {
   try {
     const { name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId } = req.body;
@@ -375,6 +389,25 @@ router.put("/visits/:id", async (req, res) => {
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.visitDate !== undefined) data.visitDate = new Date(req.body.visitDate);
 
+    // #197: enforce status enum + transition matrix. A junk status like 'frog'
+    // can no longer slip through, and terminal statuses (completed/cancelled)
+    // cannot be silently regressed.
+    if (data.status !== undefined) {
+      if (!ALLOWED_VISIT_STATUSES.has(data.status)) {
+        return res.status(400).json({
+          error: `status must be one of: ${[...ALLOWED_VISIT_STATUSES].join(", ")}`,
+          code: "INVALID_VISIT_STATUS",
+        });
+      }
+      const allowedNext = VISIT_TRANSITIONS[existing.status] || ALLOWED_VISIT_STATUSES;
+      if (!allowedNext.has(data.status)) {
+        return res.status(422).json({
+          error: `cannot transition visit from '${existing.status}' to '${data.status}'`,
+          code: "INVALID_VISIT_TRANSITION",
+        });
+      }
+    }
+
     const updated = await prisma.visit.update({ where: { id }, data });
 
     // Agent B: when a visit transitions to "cancelled", auto-offer the slot
@@ -529,6 +562,36 @@ router.post("/prescriptions", async (req, res) => {
   }
 });
 
+// #194: amend a prescription. Restricted to the original prescriber or an
+// ADMIN — anyone else gets 403. drugs (when supplied) must keep the
+// non-empty-with-name invariant of the create path. Hard-delete is NOT
+// exposed: clinical records must persist for the medico-legal trail.
+router.put("/prescriptions/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.prescription.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Prescription not found" });
+    if (existing.doctorId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json({ error: "Only the prescriber or an admin can amend this prescription", code: "AMEND_FORBIDDEN" });
+    }
+    const data = {};
+    if (req.body.drugs !== undefined) {
+      const drugList = Array.isArray(req.body.drugs) ? req.body.drugs : [];
+      const namedDrugs = drugList.filter((d) => d && typeof d.name === "string" && d.name.trim());
+      if (namedDrugs.length === 0) {
+        return res.status(400).json({ error: "At least one drug name is required", code: "DRUG_NAME_REQUIRED" });
+      }
+      data.drugs = JSON.stringify(namedDrugs);
+    }
+    if (req.body.instructions !== undefined) data.instructions = req.body.instructions;
+    const updated = await prisma.prescription.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] amend prescription error:", e.message);
+    res.status(500).json({ error: "Failed to amend prescription" });
+  }
+});
+
 // ── Consent forms ──────────────────────────────────────────────────
 
 router.get("/consents", async (req, res) => {
@@ -578,6 +641,31 @@ router.post("/consents", async (req, res) => {
   } catch (e) {
     console.error("[wellness] create consent error:", e.message);
     res.status(500).json({ error: "Failed to create consent" });
+  }
+});
+
+// #194: amend a consent form — only the templateName + serviceId metadata
+// can be corrected. The signatureSvg is captured-at-signing and is never
+// editable post-hoc: that's a forgery vector, not an amendment. ADMIN only.
+router.put("/consents/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.consentForm.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Consent not found" });
+    if (req.user.role !== "ADMIN") {
+      return res.status(403).json({ error: "Only an admin can amend consent metadata", code: "AMEND_FORBIDDEN" });
+    }
+    const data = {};
+    if (req.body.templateName !== undefined) data.templateName = req.body.templateName;
+    if (req.body.serviceId !== undefined) data.serviceId = req.body.serviceId ? parseInt(req.body.serviceId) : null;
+    if (req.body.signatureSvg !== undefined) {
+      return res.status(400).json({ error: "signatureSvg cannot be edited after signing", code: "SIGNATURE_IMMUTABLE" });
+    }
+    const updated = await prisma.consentForm.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] amend consent error:", e.message);
+    res.status(500).json({ error: "Failed to amend consent" });
   }
 });
 
@@ -743,11 +831,56 @@ router.get("/recommendations", async (req, res) => {
   }
 });
 
+// #194: amend a recommendation while it's still pending. Once a card is
+// approved/rejected the body is locked — the resolved record is the audit
+// artefact for the dispatched action and shouldn't be re-written. ADMIN /
+// MANAGER only since recommendations are operational, not clinical.
+router.put("/recommendations/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Recommendation not found" });
+    if (req.user.role !== "ADMIN" && req.user.role !== "MANAGER") {
+      return res.status(403).json({ error: "Only ADMIN or MANAGER can amend recommendations", code: "AMEND_FORBIDDEN" });
+    }
+    if (existing.status !== "pending" && existing.status !== "snoozed") {
+      return res.status(422).json({
+        error: `Cannot amend a recommendation in status '${existing.status}'`,
+        code: "AMEND_TERMINAL",
+        currentStatus: existing.status,
+      });
+    }
+    const data = {};
+    const allowed = ["title", "body", "priority", "expectedImpact", "goalContext", "payload"];
+    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    if (data.priority !== undefined && !["low", "medium", "high"].includes(data.priority)) {
+      return res.status(400).json({ error: "priority must be one of: low, medium, high", code: "INVALID_PRIORITY" });
+    }
+    const updated = await prisma.agentRecommendation.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] amend recommendation error:", e.message);
+    res.status(500).json({ error: "Failed to amend recommendation" });
+  }
+});
+
 router.post("/recommendations/:id/approve", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const rec = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
     if (!rec) return res.status(404).json({ error: "Recommendation not found" });
+
+    // #195: an already-rejected card cannot be approved without an explicit
+    // /reopen flow. An already-approved card returns idempotently below
+    // (count=0 path) — that branch is correct because the dispatcher must
+    // not fire twice.
+    if (rec.status === "rejected") {
+      return res.status(422).json({
+        error: "Cannot approve a rejected recommendation",
+        code: "INVALID_RECOMMENDATION_TRANSITION",
+        currentStatus: rec.status,
+      });
+    }
 
     // Race-safe transition: only flip pending→approved. `updateMany` with a
     // status precondition is the atomic gate — if count=0 we lost the race
@@ -841,11 +974,36 @@ router.post("/recommendations/:id/reject", async (req, res) => {
     const id = parseInt(req.params.id);
     const rec = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
     if (!rec) return res.status(404).json({ error: "Recommendation not found" });
-    const updated = await prisma.agentRecommendation.update({
-      where: { id },
+
+    // #195: enforce one-way lifecycle pending → approved | rejected. Terminal
+    // statuses cannot be flipped back without an explicit /reopen flow.
+    if (rec.status === "rejected") {
+      return res.status(200).json({ ...rec, idempotent: true });
+    }
+    if (rec.status === "approved") {
+      return res.status(422).json({
+        error: "Cannot reject an already-approved recommendation",
+        code: "INVALID_RECOMMENDATION_TRANSITION",
+        currentStatus: rec.status,
+      });
+    }
+    if (rec.status !== "pending" && rec.status !== "snoozed") {
+      return res.status(422).json({
+        error: `Cannot reject from status '${rec.status}'`,
+        code: "INVALID_RECOMMENDATION_TRANSITION",
+        currentStatus: rec.status,
+      });
+    }
+    // Race-safe transition mirroring the /approve handler.
+    const flip = await prisma.agentRecommendation.updateMany({
+      where: { id, tenantId: req.user.tenantId, status: { in: ["pending", "snoozed"] } },
       data: { status: "rejected", resolvedById: req.user.id, resolvedAt: new Date() },
     });
-    res.json(updated);
+    const current = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
+    if (flip.count === 0) {
+      return res.json({ ...current, idempotent: true });
+    }
+    res.json(current);
   } catch (e) {
     console.error("[wellness] reject recommendation error:", e.message);
     res.status(500).json({ error: "Failed to reject" });

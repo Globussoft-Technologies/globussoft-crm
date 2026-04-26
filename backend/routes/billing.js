@@ -20,6 +20,20 @@ router.get("/", verifyToken, async (req, res) => {
   }
 });
 
+// #196: deep-link / portal / SMS-link load — fetch a single invoice by id.
+router.get("/:id", verifyToken, async (req, res) => {
+  try {
+    const invoice = await prisma.invoice.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      include: { contact: true, deal: true }
+    });
+    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    res.json(invoice);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch invoice" });
+  }
+});
+
 // Draft new Invoice
 router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
@@ -31,6 +45,13 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
     }
     if (amt > 1e10) {
       return res.status(400).json({ error: "amount exceeds maximum allowed", code: "AMOUNT_TOO_HIGH" });
+    }
+    // #198: reject sub-paise precision. The smallest currency unit is 0.01 —
+    // anything finer drifts under aggregation and breaks GST filings. The
+    // 1e-9 epsilon swallows JS float noise (0.1+0.2 type artefacts) while
+    // still catching genuine 6-decimal inputs like 123.456789.
+    if (Math.abs(amt - Math.round(amt * 100) / 100) > 1e-9) {
+      return res.status(400).json({ error: "amount must have at most 2 decimal places", code: "INVALID_AMOUNT_PRECISION" });
     }
     const due = dueDate ? new Date(dueDate) : null;
     if (!due || Number.isNaN(due.getTime())) {
@@ -48,7 +69,7 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
     const invoice = await prisma.invoice.create({
       data: {
         invoiceNum: invNum,
-        amount: amt,
+        amount: Math.round(amt * 100) / 100, // #198: store to-the-paise; reject was above
         dueDate: due,
         contactId: parseInt(contactId),
         dealId: dealId ? parseInt(dealId) : null,
@@ -194,15 +215,14 @@ router.put("/:id/recurring", verifyToken, async (req, res) => {
   }
 });
 
-// Obliterate Invoice
-// Void invoice — soft-void: status flips to VOIDED, row + audit trail preserved.
-// This is what the UI's "Void" button now calls. The hard DELETE below remains
-// for admin/cleanup use but is no longer reachable from the standard ledger UI.
-router.put("/:id/void", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+// Soft-void: status flips to VOIDED, row + audit trail preserved.
+// This is what the UI's "Void" button calls.
+async function voidInvoiceHandler(req, res) {
   try {
     const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Invoice not found" });
-    if (existing.status === "PAID") return res.status(400).json({ error: "Cannot void a paid invoice" });
+    if (existing.status === "PAID") return res.status(400).json({ error: "Cannot void a paid invoice — use /refund instead", code: "INVOICE_ALREADY_PAID" });
+    if (existing.status === "VOIDED") return res.json({ ...existing, idempotent: true });
     const invoice = await prisma.invoice.update({
       where: { id: existing.id },
       data: { status: "VOIDED" },
@@ -212,17 +232,76 @@ router.put("/:id/void", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (re
   } catch (err) {
     res.status(500).json({ error: "Failed to void invoice" });
   }
-});
+}
+router.put("/:id/void", verifyToken, verifyRole(["ADMIN", "MANAGER"]), voidInvoiceHandler);
+// #193: POST alias so callers that follow REST conventions (POST for actions) work.
+router.post("/:id/void", verifyToken, verifyRole(["ADMIN", "MANAGER"]), voidInvoiceHandler);
 
-router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+// #193: refund a PAID invoice. Status flips to REFUNDED; original paidAt
+// preserved so we still know when money came in. Partial refunds are not
+// supported here yet — for partial reversals issue a credit-note instead.
+router.post("/:id/refund", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Invoice not found" });
-    await prisma.invoice.delete({ where: { id: existing.id } });
-    res.json({ success: true });
-  } catch(err) {
-    res.status(500).json({ error: "Ledger deletion failure" });
+    if (existing.status !== "PAID") {
+      return res.status(400).json({ error: "Only PAID invoices can be refunded", code: "INVOICE_NOT_PAID" });
+    }
+    const invoice = await prisma.invoice.update({
+      where: { id: existing.id },
+      data: { status: "REFUNDED" },
+      include: { contact: true, deal: true }
+    });
+    res.json(invoice);
+  } catch (err) {
+    console.error("[billing] refund error:", err);
+    res.status(500).json({ error: "Failed to refund invoice" });
   }
 });
+
+// #193: GST-compliant credit note — creates a NEW invoice with a negative
+// amount, linked back to the original via parentInvoiceId. The original row
+// is left as-is (PAID stays PAID), the credit note carries its own CN- number
+// and shows up alongside the original in the ledger.
+router.post("/:id/credit-note", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const original = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!original) return res.status(404).json({ error: "Invoice not found" });
+    if (original.status === "VOIDED") return res.status(400).json({ error: "Cannot issue credit note against a voided invoice", code: "INVOICE_VOIDED" });
+
+    const requestedAmount = req.body.amount !== undefined ? Number(req.body.amount) : Number(original.amount);
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+      return res.status(400).json({ error: "credit-note amount must be greater than 0", code: "INVALID_AMOUNT" });
+    }
+    if (requestedAmount > Number(original.amount) + 1e-9) {
+      return res.status(400).json({ error: "credit-note amount cannot exceed the original invoice amount", code: "AMOUNT_EXCEEDS_ORIGINAL" });
+    }
+    const cnAmount = -1 * (Math.round(requestedAmount * 100) / 100);
+    const cnNum = `CN-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+
+    const creditNote = await prisma.invoice.create({
+      data: {
+        invoiceNum: cnNum,
+        amount: cnAmount,
+        dueDate: original.dueDate,
+        contactId: original.contactId,
+        dealId: original.dealId,
+        parentInvoiceId: original.id,
+        status: "CREDIT_NOTE",
+        tenantId: req.user.tenantId,
+      },
+      include: { contact: true, deal: true }
+    });
+    res.status(201).json({ creditNote, originalInvoiceId: original.id, reason: req.body.reason || null });
+  } catch (err) {
+    console.error("[billing] credit-note error:", err);
+    res.status(500).json({ error: "Failed to issue credit note" });
+  }
+});
+
+// #122 reopen: DELETE was a hard delete that destroyed billing records. Now
+// it's a soft-void — same code path as PUT/POST /:id/void. The verb stays
+// for backwards-compat with any old client, but the data is preserved.
+router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), voidInvoiceHandler);
 
 module.exports = router;

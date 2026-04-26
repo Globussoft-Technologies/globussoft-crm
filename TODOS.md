@@ -35,25 +35,20 @@ Last updated: 2026-04-26
 
 ---
 
-### [ ] #7 — Sequence reply detection
-**Status: NOW UNBLOCKED.** Prerequisite #20 (workflow conditions) shipped in 8b6bb49.
-**Diagnosis:** `sequenceEngine.js` never reads inbound EmailMessage rows. Replies don't pause drips. Customer replies, drip keeps firing.
-**Recommendation:**
-- Mailgun inbound webhook should already exist at `/api/email/inbound` — verify.
-- Engine watches for inbound EmailMessage rows whose `threadId` starts with `seq-` (the threadId convention shipped in commit c214099 via gap #10). When matched, look up enrollment by parsed enrollment id, set `status='Paused'`.
-- Configurable per rule via condition: `pauseOnReply: true | false` using the now-live workflow conditions evaluator.
-
-**Effort:** ~1-2 days. **Prerequisite met:** #20 done.
+### [x] ~~#7 — Sequence reply detection~~
+**Closed in cd197dc** — `processInboundReplies()` in cron/sequenceEngine.js scans inbound EmailMessage rows where `threadId LIKE 'seq-%' AND sequenceReplyHandled IS NULL` (new dedup column). Parses enrollment id from threadId. Pauses enrollment if its current step has `pauseOnReply=true` (legacy engine: pauses unconditionally — no per-step setting). routes/email_inbound.js fires the scan synchronously on each inbound webhook when threadId matches `^seq-\d+$`. Cron tick is the safety net. Verified live: e2e/tests/sequences-step-list.spec.js test "inbound reply with threadId=seq-<enrollmentId> pauses the enrollment" passes against the deployed engine.
 
 ---
 
 ## 🚫 Don't patch — rethink
 
-### [ ] #9 — Sequences ignore EmailTemplate; ReactFlow canvas is half-baked
-**Diagnosis:** `sequenceEngine.js processNode()` synthesises hard-coded fake emails (`from: 'system@crm.com'`, body: "This is an automated drip email…"). No link to `EmailTemplate` rows. The ReactFlow canvas allows the user to design steps, but whatever they design is ignored at send time. Also missing: condition branches, A/B, drop-out tracking.
-**Recommendation:** Don't patch. Rebuild the drip experience around an explicit step-list referencing `EmailTemplate` rows (which exist + already have variable interpolation). 1-2 weeks. Sets up clean foundation for #7 (reply detection) and unifies with the existing email template system.
-
-**Effort:** ~1-2 weeks. **Trigger:** when a customer wants a real drip campaign.
+### [x] ~~#9 — Sequences ignore EmailTemplate; ReactFlow canvas is half-baked~~
+**Closed in cd197dc** — engine + editor rebuilt:
+- New `SequenceStep` model: position-ordered rows with kind ∈ {email, sms, wait, condition}, FK to EmailTemplate, optional smsBody / delayMinutes / conditionJson + trueNextPosition / falseNextPosition / pauseOnReply.
+- `cron/sequenceEngine.js` rebuilt (372 lines): `processStep()` dispatches by kind; emails render the EmailTemplate subject + body via `renderTemplate` from lib/eventBus.js (real `{{contact.name}}` interpolation, NOT the synth `system@crm.com` stub). Condition steps use `evaluateCondition()` (#20). Best-effort Mailgun delivery alongside the persisted EmailMessage row with `threadId='seq-<enrollmentId>'`.
+- Legacy ReactFlow canvas + `processLegacyEnrollment()` preserved verbatim — runs only when `Sequence.steps` is empty so existing canvas-driven sequences keep working.
+- New API: `GET/POST /:id/steps`, `PUT/DELETE /steps/:id`. New `frontend/src/pages/SequenceBuilder.jsx` (332 lines, `/sequences/:id/builder`): explicit step list, side-panel editor with EmailTemplate dropdown, SMS textarea, delay numeric, condition JSON textarea, `pauseOnReply` toggle. Sequences.jsx canvas page kept; new ListOrdered link added per sequence card pointing at the builder.
+- 7 e2e tests in sequences-step-list.spec.js all pass live.
 
 ---
 

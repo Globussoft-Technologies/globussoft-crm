@@ -42,7 +42,12 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "email and password are required" });
     }
 
-    const contact = await prisma.contact.findUnique({ where: { email } });
+    // Contact.email is not @unique in schema (multi-tenant — same email can
+    // belong to contacts in different tenants). findUnique throws a Prisma
+    // validation error, caught by the catch block as a 500. findFirst returns
+    // the first match by id (deterministic) and 401s when there's no portal
+    // user with this email.
+    const contact = await prisma.contact.findFirst({ where: { email } });
     if (!contact || !contact.portalPasswordHash) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
@@ -82,7 +87,8 @@ router.post("/set-password", async (req, res) => {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
 
-    const contact = await prisma.contact.findUnique({ where: { email } });
+    // findFirst not findUnique — Contact.email isn't unique in schema.
+    const contact = await prisma.contact.findFirst({ where: { email } });
     if (!contact) return res.status(404).json({ error: "Contact not found" });
 
     if (contact.portalPasswordHash) {
@@ -112,7 +118,8 @@ router.post("/forgot", async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "email is required" });
 
-    const contact = await prisma.contact.findUnique({ where: { email } });
+    // findFirst not findUnique — Contact.email isn't unique in schema.
+    const contact = await prisma.contact.findFirst({ where: { email } });
     // Always return success to prevent enumeration
     if (contact) {
       const token = crypto.randomBytes(32).toString("hex");

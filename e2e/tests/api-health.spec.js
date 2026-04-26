@@ -281,16 +281,14 @@ test.describe('API Health — Developer endpoints', () => {
 // ============================================================
 
 test.describe('API Health — Marketing endpoints', () => {
-  test('GET /api/campaigns returns 200', async ({ request }) => {
-    const response = await authGet(request, '/api/campaigns');
-
-    // Accept 200 or 404 (endpoint may not exist yet)
-    expect([200, 404]).toContain(response.status());
-
-    if (response.status() === 200) {
-      const body = await response.json();
-      expect(Array.isArray(body)).toBe(true);
-    }
+  test('GET /api/marketing/campaigns returns array', async ({ request }) => {
+    // Campaigns are nested under /api/marketing — the previous version of this
+    // test hit /api/campaigns (which returns 404) and accepted 404 as a pass,
+    // so it never actually verified the endpoint. Audit script flagged it.
+    const response = await authGet(request, '/api/marketing/campaigns');
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+    expect(Array.isArray(body)).toBe(true);
   });
 });
 

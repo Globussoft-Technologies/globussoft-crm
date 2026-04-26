@@ -207,8 +207,10 @@ router.post("/verify", async (req, res) => {
     }
 
     const tenantId = user.tenantId || 1;
+    // Issue #180: include unique jti so this session can be revoked individually.
+    const jti = crypto.randomBytes(16).toString("hex");
     const token = jwt.sign(
-      { userId: user.id, role: user.role, tenantId },
+      { userId: user.id, role: user.role, tenantId, jti },
       JWT_SECRET,
       { expiresIn: "7d" }
     );

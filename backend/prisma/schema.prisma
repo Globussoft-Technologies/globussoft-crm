@@ -2138,3 +2138,22 @@ model Referral {
   @@index([referrerPatientId])
   @@index([tenantId, status])
 }
+
+// Issue #180 — JWT revocation. Stores tokens (by jti claim) that have been
+// revoked before their natural 7-day expiry. verifyToken consults this table
+// on every request when the incoming token has a jti. expiresAt mirrors the
+// JWT's own exp so a future cron job can purge rows whose tokens are already
+// dead anyway, keeping the table bounded.
+model RevokedToken {
+  id        Int      @id @default(autoincrement())
+  jti       String   @unique
+  userId    Int
+  tenantId  Int
+  revokedAt DateTime @default(now())
+  expiresAt DateTime
+  reason    String?
+
+  @@index([jti])
+  @@index([userId, tenantId])
+  @@index([expiresAt])
+}

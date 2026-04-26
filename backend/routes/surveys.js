@@ -128,6 +128,95 @@ router.post("/respond/:token", async (req, res) => {
   }
 });
 
+// ── Public ID-based endpoints (NO auth) ───────────────────────────
+// Used by the customer-facing /survey/:id page. Mounted under /api/surveys;
+// openPaths includes "/surveys/public" so these bypass the global guard.
+//
+// GET /public/:id?p=<patientId>  → minimal public-facing survey payload
+// POST /public/:id/respond       → record one response, optionally tied to patientId
+
+router.get("/public/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(404).json({ error: "Survey not found." });
+    const survey = await prisma.survey.findUnique({ where: { id } });
+    if (!survey) return res.status(404).json({ error: "Survey not found." });
+    if (!survey.isActive) return res.status(410).json({ error: "This survey is no longer active." });
+
+    // Resolve tenant brand for the public page title (no internal product name leak).
+    let brand = null;
+    try {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: survey.tenantId },
+        select: { name: true, vertical: true },
+      });
+      if (tenant) brand = { name: tenant.name, vertical: tenant.vertical };
+    } catch (_) { /* non-fatal */ }
+
+    // Only return public-facing fields; never leak tenantId/owner/internal status.
+    res.json({
+      id: survey.id,
+      name: survey.name,
+      type: survey.type,
+      question: survey.question,
+      brand,
+    });
+  } catch (err) {
+    console.error("[Surveys] public GET error:", err);
+    res.status(500).json({ error: "Failed to load survey." });
+  }
+});
+
+router.post("/public/:id/respond", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(404).json({ error: "Survey not found." });
+    const survey = await prisma.survey.findUnique({ where: { id } });
+    if (!survey) return res.status(404).json({ error: "Survey not found." });
+    if (!survey.isActive) return res.status(410).json({ error: "This survey is no longer active." });
+
+    const { score, comment, p } = req.body || {};
+    const numericScore = Number(score);
+    const maxScore = survey.type === "CSAT" ? 5 : 10;
+    if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > maxScore) {
+      return res.status(400).json({ error: `Score must be a number between 0 and ${maxScore}.` });
+    }
+
+    // Optional patient token from URL ?p= or body.p — used to attribute the response.
+    // Patient model lives in the wellness vertical; we resolve to a contactId only if
+    // the patient actually belongs to this survey's tenant. No-op for generic tenants.
+    const rawToken = (req.query && req.query.p) || p;
+    let contactId = null;
+    if (rawToken !== undefined && rawToken !== null && String(rawToken).trim() !== "") {
+      const patientId = parseInt(rawToken, 10);
+      if (Number.isFinite(patientId)) {
+        try {
+          const patient = await prisma.patient.findFirst({
+            where: { id: patientId, tenantId: survey.tenantId },
+            select: { id: true, contactId: true },
+          });
+          if (patient) contactId = patient.contactId || null;
+        } catch (_) { /* non-fatal — survey can still be recorded anonymously */ }
+      }
+    }
+
+    const created = await prisma.surveyResponse.create({
+      data: {
+        surveyId: survey.id,
+        contactId,
+        score: Math.round(numericScore),
+        comment: comment ? String(comment).slice(0, 5000) : null,
+        tenantId: survey.tenantId,
+      },
+    });
+
+    res.json({ success: true, id: created.id, message: "Thank you for your feedback!" });
+  } catch (err) {
+    console.error("[Surveys] public POST error:", err);
+    res.status(500).json({ error: "Failed to record response." });
+  }
+});
+
 // ── Authenticated endpoints ───────────────────────────────────────
 
 // GET / — list surveys (with response counts)

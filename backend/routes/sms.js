@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
-const { normalizePhone, substituteVars, sendSms } = require("../services/smsProvider");
+const { normalizePhone, substituteVars, sendSms, resolveProviderConfig } = require("../services/smsProvider");
 
 // ─── Send SMS ────────────────────────────────────────────────────────────────
 router.post("/send", verifyToken, async (req, res) => {
@@ -266,6 +266,112 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
   } catch (err) {
     console.error("SMS config upsert error:", err);
     res.status(500).json({ error: "Failed to update config" });
+  }
+});
+
+// ─── Drain QUEUED messages (ADMIN only) ─────────────────────────────────────
+// Issue #182: messages queued by cron engines (orchestrator, appointment
+// reminders, NPS) sat in QUEUED forever when no provider was configured.
+// This endpoint:
+//   1. resolves an SMS provider (DB SmsConfig → env-var fallback)
+//   2. if no provider → marks every QUEUED row FAILED with a clear reason
+//   3. otherwise sends each via the provider, updating SENT/FAILED inline
+// Returns { queued, sent, failed, errors[] } — admins can call it from the
+// Inbox UI as the manual escape hatch the issue asked for.
+router.post("/drain", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const queuedMsgs = await prisma.smsMessage.findMany({
+      where: { tenantId, status: "QUEUED", direction: "OUTBOUND" },
+      orderBy: { createdAt: "asc" },
+    });
+
+    if (queuedMsgs.length === 0) {
+      return res.json({ queued: 0, sent: 0, failed: 0, errors: [] });
+    }
+
+    const cfg = await resolveProviderConfig(prisma, tenantId);
+
+    // No provider configured: fail-fast every QUEUED row so they stop piling
+    // up silently and the operator sees a clear errorMessage in the inbox.
+    if (!cfg) {
+      const reason = "No SMS provider configured for tenant";
+      console.warn(`[sms/drain] tenant ${tenantId}: ${reason} — marking ${queuedMsgs.length} QUEUED messages FAILED`);
+      await prisma.smsMessage.updateMany({
+        where: { tenantId, status: "QUEUED", direction: "OUTBOUND" },
+        data: { status: "FAILED", errorMessage: reason },
+      });
+      return res.json({
+        queued: queuedMsgs.length,
+        sent: 0,
+        failed: queuedMsgs.length,
+        errors: [reason],
+      });
+    }
+
+    let sent = 0;
+    let failed = 0;
+    const errors = [];
+
+    for (const m of queuedMsgs) {
+      try {
+        const result = await sendSms({
+          to: m.to,
+          body: m.body,
+          provider: cfg.provider,
+          apiKey: cfg.apiKey,
+          senderId: cfg.senderId,
+          authToken: cfg.authToken,
+          dltTemplateId: m.dltTemplateId || undefined,
+        });
+        if (result.success) {
+          await prisma.smsMessage.update({
+            where: { id: m.id },
+            data: {
+              status: "SENT",
+              provider: cfg.provider,
+              providerMsgId: result.providerMsgId || null,
+              errorMessage: null,
+            },
+          });
+          sent++;
+        } else {
+          await prisma.smsMessage.update({
+            where: { id: m.id },
+            data: {
+              status: "FAILED",
+              provider: cfg.provider,
+              errorMessage: result.error || "send failed",
+            },
+          });
+          failed++;
+          if (errors.length < 25) errors.push({ id: m.id, error: result.error || "send failed" });
+        }
+      } catch (e) {
+        await prisma.smsMessage.update({
+          where: { id: m.id },
+          data: {
+            status: "FAILED",
+            provider: cfg.provider,
+            errorMessage: e.message || "exception during send",
+          },
+        });
+        failed++;
+        if (errors.length < 25) errors.push({ id: m.id, error: e.message });
+      }
+    }
+
+    res.json({
+      queued: queuedMsgs.length,
+      sent,
+      failed,
+      errors,
+      providerSource: cfg.source,
+      provider: cfg.provider,
+    });
+  } catch (err) {
+    console.error("SMS drain error:", err);
+    res.status(500).json({ error: "Failed to drain SMS queue", detail: err.message });
   }
 });
 

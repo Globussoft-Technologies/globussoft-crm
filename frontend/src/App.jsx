@@ -93,6 +93,8 @@ const WellnessPatientPortal = lazy(() => import('./pages/wellness/PatientPortal'
 const WellnessPerLocation = lazy(() => import('./pages/wellness/PerLocationDashboard'));
 const WellnessLoyalty = lazy(() => import('./pages/wellness/Loyalty'));
 const WellnessWaitlist = lazy(() => import('./pages/wellness/Waitlist'));
+// Public customer-facing survey page (no admin chrome — see /survey/:id route below)
+const SurveyPublic = lazy(() => import('./pages/SurveyPublic'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -174,6 +176,8 @@ export default function App() {
             <Route path="/portal" element={<Portal />} />
             <Route path="/book/:slug" element={<WellnessPublicBooking />} />
             <Route path="/patient-portal" element={<WellnessPatientPortal />} />
+            {/* #184: customer-facing survey landing page from SMS — no auth, no admin chrome */}
+            <Route path="/survey/:id" element={<SurveyPublic />} />
             <Route path="/" element={!token ? <Landing /> : <Navigate to="/dashboard" />} />
             <Route path="/*" element={token ? <Layout /> : <Navigate to="/login" />}>
               <Route path="dashboard" element={<GenericOnly><Dashboard /></GenericOnly>} />

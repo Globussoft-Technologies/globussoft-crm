@@ -253,4 +253,76 @@ function sendViaFast2SMS({ to, body, apiKey, senderId, dltTemplateId }) {
   });
 }
 
-module.exports = { normalizePhone, substituteVars, sendSms, sendViaFast2SMS };
+/**
+ * Resolve an active SMS provider config for a tenant.
+ *
+ * Resolution order:
+ *  1. Active row in `SmsConfig` table for the tenant (preferred — per-tenant)
+ *  2. Env-var fallback — MSG91_AUTH_KEY + MSG91_SENDER_ID, then
+ *     TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_FROM, then
+ *     FAST2SMS_API_KEY (+ optional FAST2SMS_SENDER_ID).
+ *
+ * Returns `null` when nothing is configured. Callers should treat that as
+ * "fail the message immediately" rather than re-queueing — see issue #182.
+ *
+ * @param {Object} prisma - Prisma client
+ * @param {number} tenantId
+ * @returns {Promise<{provider:string,apiKey:string,senderId?:string,authToken?:string,source:'db'|'env'}|null>}
+ */
+async function resolveProviderConfig(prisma, tenantId) {
+  try {
+    const cfg = await prisma.smsConfig.findFirst({
+      where: { isActive: true, tenantId },
+    });
+    if (cfg && cfg.apiKey) {
+      return {
+        provider: cfg.provider,
+        apiKey: cfg.apiKey,
+        senderId: cfg.senderId || "",
+        authToken: cfg.authToken || "",
+        source: "db",
+      };
+    }
+  } catch (e) {
+    // fall through to env-var resolution
+  }
+
+  if (process.env.MSG91_AUTH_KEY && process.env.MSG91_SENDER_ID) {
+    return {
+      provider: "msg91",
+      apiKey: process.env.MSG91_AUTH_KEY,
+      senderId: process.env.MSG91_SENDER_ID,
+      source: "env",
+    };
+  }
+  if (
+    process.env.TWILIO_ACCOUNT_SID &&
+    process.env.TWILIO_AUTH_TOKEN &&
+    process.env.TWILIO_FROM
+  ) {
+    return {
+      provider: "twilio",
+      apiKey: process.env.TWILIO_ACCOUNT_SID,
+      authToken: process.env.TWILIO_AUTH_TOKEN,
+      senderId: process.env.TWILIO_FROM,
+      source: "env",
+    };
+  }
+  if (process.env.FAST2SMS_API_KEY) {
+    return {
+      provider: "fast2sms",
+      apiKey: process.env.FAST2SMS_API_KEY,
+      senderId: process.env.FAST2SMS_SENDER_ID || "FSTSMS",
+      source: "env",
+    };
+  }
+  return null;
+}
+
+module.exports = {
+  normalizePhone,
+  substituteVars,
+  sendSms,
+  sendViaFast2SMS,
+  resolveProviderConfig,
+};

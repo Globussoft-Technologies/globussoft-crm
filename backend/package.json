@@ -1,11 +1,14 @@
 {
   "name": "globussoft-crm-backend",
-  "version": "3.2.0",
+  "version": "3.2.2",
   "description": "Backend API for Globussoft CRM",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "coverage:start": "DISABLE_CRONS=1 PORT=5098 c8 node server.js",
+    "coverage:report": "c8 report",
+    "coverage:check": "c8 check-coverage --lines 50 --functions 40 --branches 50 --statements 50"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -48,6 +51,7 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.1",
-    "prisma": "^6.4.1"
+    "prisma": "^6.4.1",
+    "c8": "^11.0.0"
   }
 }

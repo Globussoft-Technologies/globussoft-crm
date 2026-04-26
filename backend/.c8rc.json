@@ -1,0 +1,26 @@
+{
+  "//": "Coverage gate config for the side-by-side c8 instance pattern. The current baseline (wellness-only) is 33%. Aspirational target is 100%; gate climbs each release. See TODOS.md 'Coverage policy'.",
+  "all": false,
+  "exclude": [
+    "node_modules/**",
+    "coverage/**",
+    "scripts/**",
+    "prisma/seed*.js",
+    "prisma/migrations/**",
+    "**/*.spec.js",
+    "**/*.test.js"
+  ],
+  "reporter": [
+    "text-summary",
+    "json-summary",
+    "lcov",
+    "html"
+  ],
+  "temp-directory": "./.c8tmp",
+  "reports-dir": "./coverage",
+  "check-coverage": false,
+  "lines": 50,
+  "functions": 40,
+  "branches": 50,
+  "statements": 50
+}

@@ -118,10 +118,24 @@ test.describe.serial('No-show risk widget (PRD §6.8)', () => {
     expect(data.today.noShowRisk.count).toBeLessThanOrEqual(data.today.noShowRisk.totalUpcoming);
   });
 
-  test('6. Owner Dashboard renders the No-show risk StatCard', async ({ page }) => {
+  test('6. Owner Dashboard renders the No-show risk StatCard', async ({ page, request }) => {
+    // Use API login + token injection (matches the wellness-real-user-journeys
+    // pattern). The Login page's quick-login buttons have accessible names
+    // like "Log in as admin@wellness.demo" which has historically drifted.
+    const loginRes = await request.post(`${API}/auth/login`, {
+      data: { email: 'admin@wellness.demo', password: 'password123' },
+    });
+    expect(loginRes.ok()).toBeTruthy();
+    const { token, tenant } = await loginRes.json();
+
     await page.goto(`${BASE_URL}/login`);
-    await page.getByRole('button', { name: /Demo Admin/i }).click();
-    await page.waitForURL(/\/wellness/, { timeout: 15000 });
+    await page.evaluate(({ t, ten }) => {
+      localStorage.setItem('token', t);
+      if (ten) localStorage.setItem('tenant', JSON.stringify(ten));
+    }, { t: token, ten: tenant });
+    await page.goto(`${BASE_URL}/wellness`);
+    await page.waitForLoadState('networkidle', { timeout: 20000 });
+
     // The card label is "No-show risk".
     await expect(page.getByText(/No-show risk/i).first()).toBeVisible({ timeout: 15000 });
     // Sub-line shows "of N upcoming"

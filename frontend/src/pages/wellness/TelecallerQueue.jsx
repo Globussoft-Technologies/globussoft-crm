@@ -14,13 +14,69 @@ import {
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 
+// #215: every disposition goes through one consistent flow — confirm modal,
+// optionally with a follow-up form for the three appointment-booking-ish ones
+// (booked / callback / interested). The modal text + extras adapt by disposition.
 const DISPOSITIONS = [
-  { key: 'interested', label: 'Interested', icon: CheckCircle2, color: '#10b981' },
-  { key: 'not interested', label: 'Not interested', icon: XCircle, color: '#ef4444' },
-  { key: 'callback', label: 'Callback', icon: Clock3, color: '#f59e0b' },
-  { key: 'booked', label: 'Booked', icon: CalendarCheck, color: '#3b82f6' },
-  { key: 'wrong number', label: 'Wrong number', icon: Ban, color: '#6b7280' },
-  { key: 'junk', label: 'Junk', icon: Trash2, color: '#64748b' },
+  {
+    key: 'interested',
+    label: 'Interested',
+    icon: CheckCircle2,
+    color: '#10b981',
+    confirmText: 'Mark Interested',
+    title: 'Mark as Interested?',
+    message: "They'll stay in your queue for follow-up. Add any notes you want stamped on the contact.",
+    form: 'interested', // optional notes textarea
+  },
+  {
+    key: 'callback',
+    label: 'Callback',
+    icon: Clock3,
+    color: '#f59e0b',
+    confirmText: 'Schedule Callback',
+    title: 'Schedule a callback?',
+    message: 'Pick when to call them back. A task will be created for that time.',
+    form: 'callback', // required when datetime
+  },
+  {
+    key: 'booked',
+    label: 'Booked',
+    icon: CalendarCheck,
+    color: '#3b82f6',
+    confirmText: 'Mark Booked',
+    title: 'Mark as Booked?',
+    message: 'Optionally fill in the appointment details now. You can also book the visit later.',
+    form: 'booked', // optional appt + service
+  },
+  {
+    key: 'not interested',
+    label: 'Not interested',
+    icon: XCircle,
+    color: '#ef4444',
+    confirmText: 'Mark Not Interested',
+    title: 'Mark as Not interested?',
+    message: 'They stay in the system but drop out of your queue. You can re-engage later.',
+  },
+  {
+    key: 'wrong number',
+    label: 'Wrong number',
+    icon: Ban,
+    color: '#6b7280',
+    confirmText: 'Mark Wrong Number',
+    title: 'Mark as Wrong number?',
+    message: 'This removes them from the telecaller queue. Misclassified leads are hard to recover.',
+    destructive: true,
+  },
+  {
+    key: 'junk',
+    label: 'Junk',
+    icon: Trash2,
+    color: '#64748b',
+    confirmText: 'Mark Junk',
+    title: 'Mark as Junk?',
+    message: 'This removes them from the telecaller queue. Misclassified leads are hard to recover.',
+    destructive: true,
+  },
 ];
 
 const scoreColor = (score) => {
@@ -48,12 +104,188 @@ const slaFor = (iso) => {
   return { color: '#ef4444', label: 'SLA breach' };
 };
 
+// Small inline form modal used for the 3 dispositions that gain extra fields.
+// Plain confirm-only dispositions go through useNotify().confirm() instead.
+function DispositionFormModal({ disp, lead, services, onCancel, onSubmit }) {
+  const [notes, setNotes] = useState('');
+  const [callbackAt, setCallbackAt] = useState('');
+  const [appointmentAt, setAppointmentAt] = useState('');
+  const [serviceId, setServiceId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const Icon = disp.icon;
+
+  const handleSubmit = async (e) => {
+    e?.preventDefault?.();
+    if (disp.form === 'callback' && !callbackAt) {
+      setError('Please pick a callback time.');
+      return;
+    }
+    setError('');
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        notes: notes.trim() || undefined,
+        callbackAt: callbackAt || undefined,
+        appointmentAt: appointmentAt || undefined,
+        serviceId: serviceId || undefined,
+      });
+    } catch (err) {
+      setError(err?.message || 'Failed');
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      data-testid={`telecaller-form-modal-${disp.key.replace(/\s+/g, '-')}`}
+      onClick={onCancel}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 10001,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '1rem',
+        backdropFilter: 'blur(2px)',
+      }}
+    >
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={handleSubmit}
+        style={{
+          background: 'var(--surface-bg, #ffffff)',
+          color: 'var(--text-primary, #1f2937)',
+          padding: '1.5rem',
+          borderRadius: 12,
+          minWidth: 360,
+          maxWidth: 480,
+          width: '100%',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+          border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <Icon size={16} color={disp.color} /> {disp.title}
+        </h3>
+        <p style={{ margin: 0, marginBottom: '1rem', color: 'var(--text-secondary, #6b7280)', fontSize: '0.9rem', lineHeight: 1.45 }}>
+          {disp.message} {lead?.name ? `(${lead.name})` : ''}
+        </p>
+
+        {disp.form === 'callback' && (
+          <label style={{ display: 'block', marginBottom: '1rem', fontSize: '0.85rem', fontWeight: 500 }}>
+            When? *
+            <input
+              type="datetime-local"
+              required
+              value={callbackAt}
+              onChange={(e) => setCallbackAt(e.target.value)}
+              style={inputStyle}
+            />
+          </label>
+        )}
+
+        {disp.form === 'booked' && (
+          <>
+            <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.85rem', fontWeight: 500 }}>
+              Appointment date/time (optional)
+              <input
+                type="datetime-local"
+                value={appointmentAt}
+                onChange={(e) => setAppointmentAt(e.target.value)}
+                style={inputStyle}
+              />
+            </label>
+            <label style={{ display: 'block', marginBottom: '1rem', fontSize: '0.85rem', fontWeight: 500 }}>
+              Service (optional)
+              <select
+                value={serviceId}
+                onChange={(e) => setServiceId(e.target.value)}
+                style={inputStyle}
+              >
+                <option value="">— Select a service —</option>
+                {(services || []).map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
+
+        <label style={{ display: 'block', marginBottom: '1rem', fontSize: '0.85rem', fontWeight: 500 }}>
+          Notes {disp.form === 'interested' ? '(optional)' : '(optional)'}
+          <textarea
+            rows={3}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Anything worth stamping on the contact…"
+            style={{ ...inputStyle, resize: 'vertical' }}
+          />
+        </label>
+
+        {error && (
+          <div style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: '0.75rem' }}>{error}</div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={submitting}
+            style={{
+              padding: '0.5rem 1rem',
+              background: 'transparent',
+              border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
+              color: 'var(--text-primary, #1f2937)',
+              borderRadius: 8,
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              fontSize: '0.9rem',
+            }}
+          >Cancel</button>
+          <button
+            type="submit"
+            disabled={submitting}
+            style={{
+              padding: '0.5rem 1rem',
+              background: disp.color,
+              border: 'none',
+              color: '#fff',
+              borderRadius: 8,
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              fontSize: '0.9rem',
+              fontWeight: 500,
+            }}
+          >{submitting ? 'Working…' : disp.confirmText}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+const inputStyle = {
+  display: 'block',
+  width: '100%',
+  marginTop: '0.35rem',
+  padding: '0.55rem 0.75rem',
+  borderRadius: 8,
+  border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
+  background: 'var(--input-bg, rgba(0,0,0,0.03))',
+  color: 'var(--text-primary, #1f2937)',
+  fontSize: '0.9rem',
+  outline: 'none',
+  fontFamily: 'inherit',
+};
+
 export default function TelecallerQueue() {
   const notify = useNotify();
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [disposing, setDisposing] = useState({});
-  const [notes, setNotes] = useState({});
+  const [services, setServices] = useState([]);
+  // Inline modal state for the 3 form-bearing dispositions. Plain ones use
+  // notify.confirm() instead, which doesn't need its own state.
+  const [formModal, setFormModal] = useState(null); // { disp, lead }
   const timerRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -67,43 +299,72 @@ export default function TelecallerQueue() {
     }
   }, []);
 
+  // Lazy-load services once — only used by the Booked form.
+  const ensureServices = useCallback(async () => {
+    if (services.length) return;
+    try {
+      const d = await fetchApi('/api/wellness/services');
+      setServices(d.services || d || []);
+    } catch (_) {
+      // Non-fatal; the dropdown just stays empty.
+    }
+  }, [services.length]);
+
   useEffect(() => {
     load();
     timerRef.current = setInterval(load, 30000);
     return () => clearInterval(timerRef.current);
   }, [load]);
 
-  const dispose = async (contactId, disposition) => {
-    // #129: confirm before destructive dispositions. Junk + wrong-number drop the
-    // lead out of the queue permanently; the others are softer scheduling actions.
-    const destructive = disposition === 'junk' || disposition === 'wrong number';
-    if (destructive) {
-      const lead = leads.find((l) => l.id === contactId);
-      const name = lead?.name || `lead #${contactId}`;
-      const verb = disposition === 'junk' ? 'mark as junk' : 'mark as wrong number';
-      const ok = await notify.confirm({
-        message: `${verb.charAt(0).toUpperCase() + verb.slice(1)} for "${name}"?\n\nThis removes them from the telecaller queue. Misclassified leads are hard to recover.`,
-        destructive: true,
-        confirmText: verb.charAt(0).toUpperCase() + verb.slice(1),
-      });
-      if (!ok) return;
-    }
-    setDisposing((s) => ({ ...s, [contactId]: disposition }));
+  // Core dispose call. Pulled out so both the simple-confirm path and the
+  // form-modal path share one network code path.
+  const doDispose = async (lead, disp, extras = {}) => {
+    const contactId = lead.id;
+    setDisposing((s) => ({ ...s, [contactId]: disp.key }));
     try {
+      // 1. Stamp the disposition. notes can be packed with structured extras
+      //    so the backend stores them on the contact even though the route
+      //    only formally accepts { contactId, disposition, notes }.
+      const stampedNotes = (() => {
+        const parts = [];
+        if (extras.notes) parts.push(extras.notes);
+        if (extras.callbackAt) parts.push(`Callback scheduled for ${new Date(extras.callbackAt).toLocaleString()}`);
+        if (extras.appointmentAt) parts.push(`Appointment ${new Date(extras.appointmentAt).toLocaleString()}`);
+        return parts.join(' · ') || undefined;
+      })();
+
       await fetchApi('/api/wellness/telecaller/dispose', {
         method: 'POST',
         body: JSON.stringify({
           contactId,
-          disposition,
-          notes: (notes[contactId] || '').trim() || undefined,
+          disposition: disp.key,
+          notes: stampedNotes,
         }),
       });
+
+      // 2. For Booked + filled appointment, also POST a Visit. The dispose
+      //    endpoint already flips contact status; this just creates the
+      //    actual appointment record.
+      if (disp.key === 'booked' && extras.appointmentAt) {
+        try {
+          await fetchApi('/api/wellness/visits', {
+            method: 'POST',
+            body: JSON.stringify({
+              contactId,
+              scheduledAt: new Date(extras.appointmentAt).toISOString(),
+              serviceId: extras.serviceId || undefined,
+              status: 'scheduled',
+            }),
+          });
+        } catch (visitErr) {
+          // Don't unwind the dispose — just warn. The user can log the
+          // visit manually from the contact page.
+          notify.error(`Disposition saved, but visit creation failed: ${visitErr.message}`);
+        }
+      }
+
       setLeads((prev) => prev.filter((l) => l.id !== contactId));
-      setNotes((n) => {
-        const copy = { ...n };
-        delete copy[contactId];
-        return copy;
-      });
+      notify.success(`${disp.label}: ${lead.name || `lead #${contactId}`}`);
     } catch (err) {
       notify.error(`Failed: ${err.message}`);
     } finally {
@@ -113,6 +374,24 @@ export default function TelecallerQueue() {
         return copy;
       });
     }
+  };
+
+  // Entry point from the disposition button. Routes to either notify.confirm()
+  // (simple dispositions) or the inline form modal (booked / callback / interested).
+  const startDispose = async (lead, disp) => {
+    if (disp.form) {
+      if (disp.form === 'booked') ensureServices();
+      setFormModal({ disp, lead });
+      return;
+    }
+    const ok = await notify.confirm({
+      title: disp.title,
+      message: `${disp.message}${lead?.name ? `\n\n— ${lead.name}` : ''}`,
+      confirmText: disp.confirmText,
+      destructive: !!disp.destructive,
+    });
+    if (!ok) return;
+    await doDispose(lead, disp);
   };
 
   return (
@@ -270,21 +549,6 @@ export default function TelecallerQueue() {
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No phone on file</div>
               )}
 
-              <input
-                placeholder="Add a note (optional)"
-                value={notes[l.id] || ''}
-                onChange={(e) => setNotes({ ...notes, [l.id]: e.target.value })}
-                style={{
-                  padding: '0.5rem 0.75rem',
-                  background: 'rgba(255,255,255,0.05)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  borderRadius: 8,
-                  color: 'var(--text-primary)',
-                  fontSize: '0.85rem',
-                  outline: 'none',
-                }}
-              />
-
               <div
                 style={{
                   display: 'grid',
@@ -298,7 +562,7 @@ export default function TelecallerQueue() {
                     <button
                       key={d.key}
                       disabled={busy}
-                      onClick={() => dispose(l.id, d.key)}
+                      onClick={() => startDispose(l, d)}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -323,6 +587,20 @@ export default function TelecallerQueue() {
           );
         })}
       </div>
+
+      {formModal && (
+        <DispositionFormModal
+          disp={formModal.disp}
+          lead={formModal.lead}
+          services={services}
+          onCancel={() => setFormModal(null)}
+          onSubmit={async (extras) => {
+            const { disp, lead } = formModal;
+            setFormModal(null);
+            await doDispose(lead, disp, extras);
+          }}
+        />
+      )}
     </div>
   );
 }

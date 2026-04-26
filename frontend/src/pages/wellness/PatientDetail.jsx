@@ -352,7 +352,12 @@ function ConsentTab({ patient, services, onSaved }) {
           ref={canvasRef}
           width={600}
           height={180}
-          style={{ width: '100%', maxWidth: 600, height: 180, background: 'rgba(255,255,255,0.04)', border: '1px dashed rgba(255,255,255,0.15)', borderRadius: 8, touchAction: 'none', cursor: 'crosshair' }}
+          // #204: previous styles used white alpha (rgba(255,255,255,0.04)
+          // bg + 0.15 border) leftover from the dark theme; on the wellness
+          // cream background the canvas was effectively invisible. Use the
+          // theme variables for the surface + border so it adapts to either
+          // theme, with a dashed border that contrasts on cream/teal too.
+          style={{ width: '100%', maxWidth: 600, height: 180, background: 'var(--card-bg, rgba(0,0,0,0.04))', border: '2px dashed var(--accent-color, #265855)', borderRadius: 8, touchAction: 'none', cursor: 'crosshair' }}
           onMouseDown={startDraw}
           onMouseMove={draw}
           onMouseUp={endDraw}

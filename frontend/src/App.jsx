@@ -176,6 +176,12 @@ export default function App() {
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/portal" element={<Portal />} />
             <Route path="/book/:slug" element={<WellnessPublicBooking />} />
+            {/* #208: wellness patient portal lives under /wellness/portal so it
+                inherits the wellness theme + namespace. The generic /portal route
+                above stays as the Knowledge Base / customer portal for non-wellness
+                tenants. /patient-portal kept as a back-compat alias. */}
+            <Route path="/wellness/portal" element={<WellnessPatientPortal />} />
+            <Route path="/wellness/portal/login" element={<WellnessPatientPortal />} />
             <Route path="/patient-portal" element={<WellnessPatientPortal />} />
             {/* #184: customer-facing survey landing page from SMS — no auth, no admin chrome */}
             <Route path="/survey/:id" element={<SurveyPublic />} />

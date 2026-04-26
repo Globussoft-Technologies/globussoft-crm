@@ -221,6 +221,7 @@ const accountingRoutes = require("./routes/accounting");
 const dealInsightsRoutes = require("./routes/deal_insights");
 const dataEnrichmentRoutes = require("./routes/data_enrichment");
 const slaRoutes = require("./routes/sla");
+const leadSlaRoutes = require("./routes/lead_sla");
 const cannedResponsesRoutes = require("./routes/canned_responses");
 // Tier 3
 const scimRoutes = require("./routes/scim");
@@ -337,6 +338,7 @@ app.use("/api/accounting", accountingRoutes);
 app.use("/api/deal-insights", dealInsightsRoutes);
 app.use("/api/data-enrichment", dataEnrichmentRoutes);
 app.use("/api/sla", slaRoutes);
+app.use("/api/lead-sla", leadSlaRoutes);
 app.use("/api/canned-responses", cannedResponsesRoutes);
 // Tier 3
 app.use("/api/scim", scimRoutes);
@@ -483,5 +485,10 @@ initLowStockCron();
 // Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
 const { initSlaBreachCron } = require('./cron/slaBreachEngine');
 initSlaBreachCron();
+
+// Initialize Lead-side SLA Breach Engine (every 2 min — flips Contact.slaBreached
+// + emits 'lead.sla_breached' for the PRD §6.4 lead first-response SLA)
+const { initLeadSlaCron } = require('./cron/leadSlaEngine');
+initLeadSlaCron();
 
 // nodemon restart trigger

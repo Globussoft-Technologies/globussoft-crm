@@ -176,6 +176,17 @@ model Contact {
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
   deletedAt DateTime?
 
+  // PRD §6.4: Lead-side SLA timer ("first response in <5 min for high-ticket
+  // services"). Stamped at lead-create time using the matched service tier
+  // (see backend/cron/leadSlaEngine.js + backend/lib/leadSla.js). When an
+  // Activity is logged against the contact, firstResponseAt is set; the cron
+  // flips slaBreached + slaBreachedAt for any past-due lead that still has
+  // firstResponseAt IS NULL. Idempotent on the slaBreached=false gate.
+  firstResponseDueAt DateTime?
+  firstResponseAt    DateTime?
+  slaBreached        Boolean   @default(false)
+  slaBreachedAt      DateTime?
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -204,6 +215,7 @@ model Contact {
   @@index([tenantId, createdAt])
   @@index([tenantId, assignedToId])
   @@index([tenantId, deletedAt])
+  @@index([tenantId, status, slaBreached])
 }
 
 model Activity {
@@ -321,22 +333,22 @@ model AutomationRule {
 }
 
 model EmailMessage {
-  id             Int      @id @default(autoincrement())
-  subject        String
-  body           String   @db.Text
-  from           String
-  to             String
-  direction      String   @default("INBOUND") // INBOUND, OUTBOUND
-  read           Boolean  @default(false)
-  sentiment      String? // positive, neutral, negative
-  sentimentScore Float? // -1 to 1
-  threadId       String? // for conversation threading
+  id                   Int       @id @default(autoincrement())
+  subject              String
+  body                 String    @db.Text
+  from                 String
+  to                   String
+  direction            String    @default("INBOUND") // INBOUND, OUTBOUND
+  read                 Boolean   @default(false)
+  sentiment            String? // positive, neutral, negative
+  sentimentScore       Float? // -1 to 1
+  threadId             String? // for conversation threading
   // #7 — set by sequenceEngine.processInboundReplies() once an inbound row
   // matching a `seq-<enrollmentId>` thread has paused its enrollment. Acts
   // as the dedup gate so a single reply only pauses once, even if the cron
   // tick fires repeatedly.
   sequenceReplyHandled DateTime?
-  createdAt      DateTime @default(now())
+  createdAt            DateTime  @default(now())
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -547,31 +559,31 @@ model SequenceEnrollment {
 // falls back to the legacy JSON canvas for that sequence — both flows
 // coexist during the rollout.
 model SequenceStep {
-  id              Int      @id @default(autoincrement())
-  sequenceId      Int
-  sequence        Sequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  id         Int      @id @default(autoincrement())
+  sequenceId Int
+  sequence   Sequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
 
-  position        Int      // ordering within the sequence (0, 1, 2, …)
-  kind            String   // 'email' | 'sms' | 'wait' | 'condition'
+  position Int // ordering within the sequence (0, 1, 2, …)
+  kind     String // 'email' | 'sms' | 'wait' | 'condition'
 
   // For kind='email' / 'sms':
   emailTemplateId Int?
   emailTemplate   EmailTemplate? @relation(fields: [emailTemplateId], references: [id], onDelete: SetNull)
-  smsBody         String?  @db.Text
+  smsBody         String?        @db.Text
 
   // For kind='wait':
-  delayMinutes    Int?     // total delay before advancing past this step
+  delayMinutes Int? // total delay before advancing past this step
 
   // For kind='condition' — same evaluator as workflowEngine #20.
   conditionJson     String? @db.Text // e.g. [{"field":"contact.status","op":"eq","value":"Lead"}]
-  trueNextPosition  Int?    // jump target on true (default: position+1)
-  falseNextPosition Int?    // jump target on false (default: position+1)
+  trueNextPosition  Int? // jump target on true (default: position+1)
+  falseNextPosition Int? // jump target on false (default: position+1)
 
   // Engine pauses the enrollment if an inbound EmailMessage with
   // threadId='seq-<enrollmentId>' arrives while parked on this step.
-  pauseOnReply    Boolean  @default(true)
+  pauseOnReply Boolean @default(true)
 
-  createdAt       DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([sequenceId, position])
   @@index([sequenceId])

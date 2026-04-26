@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const { sendSms } = require("../services/smsProvider");
+const { computeFirstResponseDueAt } = require("../lib/leadSla");
 
 const router = express.Router();
 
@@ -483,6 +484,21 @@ router.post("/submit", async (req, res) => {
     // Using `where: { email }` on upsert raises PrismaClientValidationError
     // since v3.1 made tenants multi-hosted. Use the compound key helper.
     const FORM_TENANT_ID = 1; // default org for inbound public form submissions
+
+    // PRD §6.4: stamp lead-side SLA timer at form-ingest time. Tier is
+    // detected from the form text (name + company); falls back to medium
+    // (30 min) when no service keyword matches.
+    let firstResponseDueAt = null;
+    try {
+      const slaMeta = await computeFirstResponseDueAt({
+        tenantId: FORM_TENANT_ID,
+        text: `${contactName} ${contactCompany}`,
+      });
+      firstResponseDueAt = slaMeta.dueAt;
+    } catch (slaErr) {
+      console.error("[FormIngestion] lead SLA compute failed:", slaErr.message);
+    }
+
     const contact = await prisma.contact.upsert({
       where: { email_tenantId: { email: contactEmail, tenantId: FORM_TENANT_ID } },
       update: { source: "Embedded Web Form" },
@@ -493,6 +509,7 @@ router.post("/submit", async (req, res) => {
         status: "Lead",
         source: "Embedded Web Form",
         aiScore: score,
+        firstResponseDueAt,
         tenantId: FORM_TENANT_ID,
       }
     });

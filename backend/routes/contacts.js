@@ -5,6 +5,7 @@ const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
 const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, conflictFromPrisma } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 
 // #167: soft-delete helper. Aggregations / reports / merge / internal joins
 // (e.g. activities, deals, sequenceEnrollments) are NOT yet filtered by
@@ -123,9 +124,14 @@ router.post('/:id/activities', async (req, res) => {
   try {
     const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
-    res.status(201).json(await prisma.activity.create({
+    const activity = await prisma.activity.create({
       data: { ...req.body, contactId: contact.id, userId: req.user ? req.user.userId : null, tenantId: req.user.tenantId }
-    }));
+    });
+    // PRD §6.4: lead-side SLA — first activity logged against a Lead stamps
+    // firstResponseAt, stopping the SLA clock. Best-effort: any failure
+    // here MUST NOT break the activity write.
+    try { await markFirstResponseIfNeeded({ contactId: contact.id }); } catch (e) { /* ignore */ }
+    res.status(201).json(activity);
   } catch (err) {
     res.status(500).json({ error: 'Failed to create activity' });
   }

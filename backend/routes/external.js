@@ -21,6 +21,7 @@ const prisma = require("../lib/prisma");
 const externalAuth = require("../middleware/externalAuth");
 const { classifyLead } = require("../lib/leadJunkFilter");
 const { pickAssignee } = require("../lib/leadAutoRouter");
+const { computeFirstResponseDueAt, markFirstResponseIfNeeded } = require("../lib/leadSla");
 
 const router = express.Router();
 
@@ -228,6 +229,24 @@ router.post("/leads", async (req, res) => {
       });
     }
 
+    // PRD §6.4: stamp the lead-side SLA timer at create time. We feed the
+    // lead text into the same keyword classifier the auto-router uses; tier
+    // → SLA minutes is hardcoded in lib/leadSla.js. Junk leads still get a
+    // due date — it's harmless (cron won't notify on Junk-status rows because
+    // the breach query gates on status='Lead').
+    const slaText = [name, source, note].filter(Boolean).join(" ");
+    let firstResponseDueAt = null;
+    let slaMeta = null;
+    try {
+      slaMeta = await computeFirstResponseDueAt({
+        tenantId: req.tenantId,
+        text: slaText,
+      });
+      firstResponseDueAt = slaMeta.dueAt;
+    } catch (slaErr) {
+      console.error("[external] lead SLA compute failed:", slaErr.message);
+    }
+
     // Dedupe: if a real email was supplied and a contact already exists under
     // this tenant, reuse it (the Contact_email_tenantId_key constraint would
     // otherwise throw P2002 on every duplicate Meta/Google webhook delivery).
@@ -243,6 +262,7 @@ router.post("/leads", async (req, res) => {
       firstTouchSource: source || "callified",
       aiScore: verdict.score,
       assignedToId: assignee.userId,
+      firstResponseDueAt,
       tenantId: req.tenantId,
     };
     let contact;
@@ -262,7 +282,11 @@ router.post("/leads", async (req, res) => {
       contact = await prisma.contact.create({ data: contactData });
     }
 
-    // Attach an activity so the CRM's inbox shows the origin + junk verdict
+    // Attach an activity so the CRM's inbox shows the origin + junk verdict.
+    // NOTE: this is a *system* activity, not a real human first-response —
+    // we deliberately do NOT call markFirstResponseIfNeeded here. The SLA
+    // clock starts now and only stops when staff actually log a Call/SMS/
+    // Email/Note from the CRM UI (see contacts.js POST /:id/activities).
     const activityBits = [
       note,
       utm && `utm=${JSON.stringify(utm)}`,
@@ -283,6 +307,7 @@ router.post("/leads", async (req, res) => {
       ...contact,
       _verdict: verdict,
       _routing: assignee,
+      _sla: slaMeta,
       ...(deduped ? { _deduped: true } : {}),
     });
   } catch (e) {

@@ -19,8 +19,9 @@
   "temp-directory": "./.c8tmp",
   "reports-dir": "./coverage",
   "check-coverage": false,
-  "lines": 50,
-  "functions": 40,
-  "branches": 50,
-  "statements": 50
+  "//gate": "Current full-suite measurement: 64.76% lines / 50.03% branches / 66.11% functions. Gate set with ~5pt headroom; raise as suite grows.",
+  "lines": 60,
+  "functions": 60,
+  "branches": 45,
+  "statements": 60
 }

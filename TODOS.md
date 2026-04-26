@@ -2,7 +2,83 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-26 (afternoon doc-sync at HEAD 3e6e829 — v3.2.2 form autosave / billing patch / telecaller polish / c8 coverage measured)
+Last updated: 2026-04-26 (evening — full-suite c8 coverage run completed at 64.76 % lines)
+
+---
+
+## 📌 NEXT SESSION — pick up here
+
+State at end of 2026-04-26 session (HEAD `fb3d63e` + 3 commits queued during evening run):
+
+### Backend coverage — measured + gated
+- **64.76 % lines** (21,484 / 33,170) — full 1056-test suite, c8 against side-by-side instance on :5098
+- **50.03 % branches** (just over the 50 % gate)
+- **66.11 % functions** / 64.76 % statements
+- Aspirational target: **100 %**. Current gate (`backend/.c8rc.json`): 50 % across the board. **Bump to 60 % next push** — we're 5 pts over and want headroom.
+- HTML report on the server: `~/globussoft-crm/backend/coverage/lcov-report/index.html`. Re-run via `npm run coverage:start` + run e2e suite + `kill -TERM <pid>` + `npm run coverage:report`.
+
+### Top 5 files to test next (will lift coverage 8-12 pts combined)
+1. **`routes/reports.js`** — 14.17 % (70 / 494) — owner-side reporting endpoints; biggest single gap
+2. **`routes/marketing.js`** — 28.20 % (152 / 539) — campaign + form-ingest paths
+3. **`routes/voice_transcription.js`** — 29.55 % (73 / 247) — Gemini audio transcription branches
+4. **`routes/sms.js`** — 31.05 % (141 / 454) — DLT compliance branches; Fast2SMS now routed through here
+5. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151) — ticket SLA breach cron, recent feature
+
+Each one needs ~1 spec file (~150 lines) using the patterns from `e2e/tests/eventbus-actions.spec.js` or `e2e/tests/billing-update.spec.js`.
+
+### What's open on GitHub (8 issues at session end)
+- **Multi-day**: #228 (mobile responsive overhaul), #227 (CSV/PDF export across 4 reports tabs), #137 (external-integrations test sandbox infra)
+- **Product decision**: #200 / #201 / #211 (login quick-login chips + cred prefill — keep / env-gate / remove?)
+- **Vague — need fresh repro**: #141 / #142 / #147 / #150 / #152 / #153 — paste the repro-request template from session log into each
+
+### External-blocked (can't fix from inside CRM)
+- **Callified webhook + silent SSO** — biggest demo-narrative gap. Our `/api/v1/external/leads` already accepts X-API-Key POSTs. Their team owes the contract.
+- **AdsGPT "Back to CRM" link** — our SSO impersonation works one-way; their side pending
+- **Rishu inputs** — Superphone + Zylu CSVs (data migration), Aadhaar/PAN scans (Android Play Store resubmit)
+
+### Recommended order tomorrow
+1. **15 min** — pull, verify clean tree, glance at any overnight commits
+2. **2 hours** — close `routes/reports.js` coverage (14 % → 80 %+); will lift global by ~3 pts
+3. **30 min** — bump `.c8rc.json` gate from 50 % → 60 %, re-run, confirm green
+4. **Rest** — pick from #228 / #227 / Callified chase / vague-issue triage based on priority
+
+### Recent commits worth knowing about
+- `fb3d63e docs: refresh all 6 doc files for v3.2.2`
+- `fff1dd6 test(e2e): cover lib/eventBus.js + services/landingPageRenderer.js` — 5 new specs (4 eventBus + 1 landing page); jumped lib from 67 % → 80.59 %, services from 51 % → 63.15 %
+- `d947e65 chore(coverage): wire c8 gate config + scripts; bump backend to v3.2.2` — `.c8rc.json` + npm scripts (`coverage:start`, `coverage:report`, `coverage:check`)
+- `3e6e829 chore(server): graceful SIGTERM/SIGINT shutdown` — required for V8 coverage to flush
+- `0c0cf3f chore(server): DISABLE_CRONS=1 env switch for side-by-side instances`
+
+### Coverage run pattern (cheat-sheet for tomorrow)
+```bash
+# On the server (163.227.174.141):
+cd ~/globussoft-crm
+git pull origin main
+
+# Free port + clean
+ss -tlnp | grep ':5098' | grep -oE 'pid=[0-9]+' | cut -d= -f2 | xargs -r kill -TERM
+cd backend && rm -rf coverage .c8tmp && mkdir -p coverage .c8tmp
+
+# Boot c8 backend in background
+nohup env DISABLE_CRONS=1 PORT=5098 node_modules/.bin/c8 \
+  --reporter=json-summary --reporter=text-summary --reporter=lcov \
+  --temp-directory=./.c8tmp --reports-dir=./coverage \
+  --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js,prisma/migrations/**' \
+  node server.js > /tmp/cov.log 2>&1 &
+
+# Wait healthy, run suite
+until curl -s http://127.0.0.1:5098/api/health | grep -q healthy; do sleep 2; done
+cd ../e2e
+echo '{"cookies":[],"origins":[]}' > playwright/.auth/user.json
+E2E_SKIP_SCRUB=1 BASE_URL=http://localhost:5098 \
+  npx playwright test --project=chromium --no-deps --reporter=list
+
+# Stop + report
+kill -TERM $(ss -tlnp | grep ':5098' | grep -oE 'pid=[0-9]+' | cut -d= -f2)
+sleep 5
+cd ../backend && node_modules/.bin/c8 report --temp-directory=./.c8tmp --reports-dir=./coverage \
+  --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js,prisma/migrations/**'
+```
 
 ---
 

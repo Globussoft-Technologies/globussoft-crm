@@ -33,10 +33,10 @@ A focused afternoon pass closing the remaining frontend UI cluster from the morn
 
 ### Test coverage
 
-- **Backend line coverage measured for the first time: 33.20%** (10,858 / 32,700 lines) via `c8` against the wellness-only spec set. This is a baseline only — the full 121-spec suite under coverage is queued for the next pass.
+- **Backend line coverage measured under the full suite: 64.76%** (21,484 / 33,170 lines) via `c8` against all 1,056 backend tests (14.5 min run, includes new eventBus + landingPageRenderer specs). Initial wellness-only baseline was 33.20%; the full-suite number lands materially higher.
 - **Coverage targets set as policy this release:**
   - **Aspirational target: 100%** — everything tested, everything safe.
-  - **CI gate: 50% to start** — current baseline + buffer; ratchets up each release.
+  - **CI gate: 60% lines / 45% branches** — set with ~5pt headroom over the 64.76% baseline; ratchets up each release.
   - **Critical-path floor: 70%** — `routes/auth.js`, `routes/external.js`, `routes/billing.js`, `routes/wellness.js`, all `middleware/*`, all `lib/*` (exempting `lib/eventBus.js` and `services/landingPageRenderer.js` until their dedicated test files land — both queued for this release).
 - **13 pre-existing e2e flakes resolved** — admin/admin → admin@globussoft.com migration; SIDEBAR_ROUTES rebuild against the v3.2.1 sidebar; theme localStorage seed pattern. Pass rate now 96%+ on the navigation/notifications/theme cluster.
 
@@ -45,7 +45,7 @@ A focused afternoon pass closing the remaining frontend UI cluster from the morn
 - **Mobile responsive overhaul** (#228) — multi-day frontend rewrite (breakpoints, hamburger drawer, ARIA, focus trap, all wellness pages tested at 375px). Not in this release.
 - **Reports CSV/PDF export** (#227) — backend export endpoints + per-tab export buttons across the 4 Reports tabs. Estimated 1-2 days; deferred.
 - **Login quick-login chips / pre-fill** (#211 / #201 / #200) — product decision pending: keep, env-gate (`NODE_ENV !== 'production'`), or remove entirely. Not a bug; documented as a UX/security tradeoff.
-- **Full-suite c8 coverage measurement** — the 33.20% number is wellness-only. Running all 121 specs under `c8` is queued (estimated full-suite number is materially higher; will land next release).
+- **Full-suite c8 coverage measurement landed: 64.76% lines / 50.03% branches / 66.11% functions** across 1,056 backend tests. Top under-covered files queued for next release: `routes/reports.js` (14.17%), `routes/marketing.js` (28.20%), `routes/voice_transcription.js` (29.55%), `routes/sms.js` (31.05%), `cron/slaBreachEngine.js` (24.50%).
 - **Dedicated test files for `lib/eventBus.js` (currently 20%) and `services/landingPageRenderer.js` (currently 2%)** — both targeted for this release; until they ship, the critical-path 70% floor exempts them.
 - **AdsGPT silent SSO "Back to CRM" link** — still pending with AdsGPT team.
 - **Callified silent SSO + back-link + lead webhook** — still pending with Callified team.

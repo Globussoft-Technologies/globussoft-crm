@@ -90,7 +90,14 @@ These were filed during cron runs and tagged `[cron-skip]` because they need des
 ## 📋 Test infrastructure
 
 - [ ] Add a backend coverage tool. Currently we have ~93% e2e pass rate but no real line coverage. Wire `c8` to instrument `pm2` on the dev server to get a coverage % during e2e runs. ~3 hours.
-- [ ] `e2e/global-teardown.js` says "mysql2 not installed — skipping scrub." E2E rows tagged `E2E_FLOW_<ts>` are accumulating. `cd e2e && npm i -D mysql2` and re-test.
+- [x] ~~`e2e/global-teardown.js` says "mysql2 not installed — skipping scrub." E2E rows tagged `E2E_FLOW_<ts>` are accumulating.~~ **Closed in 4361074** — mysql2 installed as devDependency; PAT_REGEX + EMAIL_REGEX extended to match `E2E_FLOW_<ts>` / `E2E_AUDIT_<ts>` tags. Local runs log "MySQL connect failed" because the dev DB isn't reachable over the public internet — only effective in CI on the same network as the DB.
+
+---
+
+## 🧹 One-time prod data fixes (run on dev server)
+
+- [x] **Deal stage migration** (#190) — `node scripts/migrate-deal-stage-lowercase.js` run on prod 2026-04-26. 32 deals scanned, 1 unmappable ('NotARealStage') skipped, no negative amounts.
+- [x] **Corrupt service cleanup** (#218) — `node scripts/cleanup-corrupt-services.js` run on prod 2026-04-26. Deleted 16 test-pollution rows (15 'Test Consultation' with 6030 min duration + 'Z' with ₹1e15 price). NOTE: an earlier run with a too-tight 480-min cap also deleted 5 legitimate Hair Transplant services (540-600 min); fixed by re-running `seed-wellness.js` and bumping the validator cap to 720 min in 64540fe.
 
 ---
 

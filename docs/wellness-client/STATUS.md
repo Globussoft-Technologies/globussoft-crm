@@ -1,10 +1,10 @@
 # Enhanced Wellness — Build Status
 
 **Companion to:** [PRD.md](PRD.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EXTERNAL_API.md](EXTERNAL_API.md)
-**Last updated:** 2026-04-22
+**Last updated:** 2026-04-26
 **Live at:** https://crm.globusdemos.com
 **Tenant:** `enhanced-wellness` (id 2, vertical `wellness`)
-**Production HEAD:** `ce6139a`
+**Production HEAD:** `35d728c5`
 
 ---
 
@@ -175,6 +175,34 @@ Callified → POST /calls (with recordingUrl) → CRM user plays back inline
 
 Each service carries `category`, `ticketTier` (low/medium/high), realistic Indian-market `basePrice`, `durationMin`, and **`targetRadiusKm`** (3 km salon / 30 km aesthetics / 50–100 km specialty / 200 km hair-transplant + body-contouring) so the future campaign engine can target right-sized audiences.
 
+### Compliance & security (added in v3.2 / v3.2.1)
+
+- **Field-level encryption** on patient PII — AES-256-GCM on `Patient.allergies`, `Visit.notes`, `Prescription.*`, `ConsentForm.signatureSvg`. Transparent decrypt-on-read via Prisma `$extends`; opt-in per environment via `WELLNESS_FIELD_KEY`. One-shot backfill at `scripts/encrypt-existing-pii.js`. Decryption is recursive across nested relations as of v3.2.1 (#224).
+- **JWT revocation** (v3.2.1) — `RevokedToken` model + `jti` minted on every login. New endpoints: `POST /auth/logout`, `GET /auth/sessions`, `DELETE /auth/sessions/:jti`. Verify checks the table on every request (fail-open on DB error).
+- **wellnessRole RBAC gates** (v3.2.1) — orthogonal `verifyWellnessRole(allowed)` middleware. JWT carries the `wellnessRole` claim. 18 backend endpoints gated (Owner Dashboard, reports, recommendation approve/reject/edit, service catalog POST/PUT, location POST/PUT, prescription POST/PUT, consent POST/PUT, telecaller queue + dispose). Frontend: login redirects by wellnessRole; OwnerDashboard render-time guard; sidebar hides management modules from clinical staff. **20/20 RBAC e2e tests pass live.**
+- **Clinical no-delete policy** (v3.2.1, #21) — Patient, Visit, Prescription, ConsentForm, AgentRecommendation, ServiceConsumption are PERMANENT. No DELETE endpoints, no `deletedAt`, no soft-delete. Corrections via PUT/PATCH (amendment trail in audit log). Compliance basis: HIPAA 164.312(c)(1), India MoHFW EMR Standards 2016, DPDP Act 2023.
+- **Audit log on patient writes** (v3.2.1, #179) — POST/PUT on Patient, Visit, Prescription, ConsentForm, recommendations, loyalty all write audit rows. PII recorded as `piiFieldsTouched: [...]` name list only — no raw values.
+- **Wellness retention enforcement** — DPDP-aligned: anonymise inactive 24mo+ patients, hard-delete consent forms >7yr, purge old call logs.
+
+### Telehealth (v3.2)
+
+- Jitsi-based video consult tab on Patient Detail. Room name auto-stored on `Visit.videoRoom`.
+
+### Loyalty + referrals (v3.2 / v3.2.1)
+
+- `LoyaltyTransaction` + `Referral` Prisma models. Manager UI at `/wellness/loyalty`.
+- Auto-link referrals when referred patient signs up via `source = "referral"`.
+- **Auto-credit on visit completion** (v3.2.1) — POST/PUT visits with status='completed' auto-credit 10% of `amountCharged`; idempotent via `LoyaltyTransaction` lookup.
+
+### White-label branding (v3.2)
+
+- `Tenant.logoUrl` + `Tenant.brandColor` — uploadable via Settings → Branding.
+- Logo + accent applied to Sidebar header, Owner Dashboard, email templates, invoice PDFs.
+
+### AdsGPT impersonation (v3.2.1)
+
+- Real SSO launcher wired into wellness dashboard + sidebar. Owner clicks → silently lands in AdsGPT as the right user. "Back to CRM" link from AdsGPT side still pending with their team (see Deferred).
+
 ---
 
 ## What's deferred (waiting on partner teams)
@@ -183,8 +211,8 @@ The handshakes happen tomorrow with the AdsGPT and Callified.ai teams:
 
 | Item | Owner | Status |
 |---|---|---|
+| AdsGPT silent SSO | AdsGPT team / CRM | **Partial** — impersonation launcher live in CRM (v3.2.1); "Back to CRM" link from AdsGPT side still pending |
 | AdsGPT silent user provisioning at CRM signup | AdsGPT team | Pending API contract |
-| AdsGPT "Back to CRM" link in their sidebar | AdsGPT team | Pending |
 | Callified silent provisioning at CRM signup | Callified team | Pending API contract |
 | Callified "Back to CRM" link | Callified team | Pending |
 | Callified → CRM webhook for arriving WhatsApp/call leads | Callified team | Pending contract |

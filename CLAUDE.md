@@ -11,7 +11,7 @@ The persistent backlog of multi-day / architectural work that's been deferred fr
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.2.0 (production-ready wellness: field encryption, telehealth, loyalty, white-label)
+- **Version:** v3.2.1 (overnight QA + RBAC + JWT revoke + clinical no-delete policy)
 - **Branch:** main (single-branch workflow)
 
 ## Verticals
@@ -50,14 +50,14 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 - **middleware/validateInput.js** -- express-validator input sanitization
 - **middleware/fieldFilter.js** -- Field-level permission filtering
 - **middleware/sendLimiter.js** -- Email/SMS send rate limiting
-- **prisma/schema.prisma** -- MySQL via Prisma ORM (DATABASE_URL env var), 99 models
+- **prisma/schema.prisma** -- MySQL via Prisma ORM (DATABASE_URL env var), 114 models
 - **prisma/seed.js** -- Seeds all models with demo data
 - **utils/deduplication.js** -- Phone normalization + contact/lead deduplication
 - All API endpoints prefixed with `/api/`
 - Global auth guard protects all routes except /auth/login, /auth/signup, /auth/register, /health, /marketplace-leads/webhook
 - Rate limiting: 5000 req/15min general, 1000 req/15min on auth/login
 
-### Cron Engines (backend/cron/) -- 15 engines
+### Cron Engines (backend/cron/) -- 18 engines
 
 | Engine | File | Purpose |
 |--------|------|---------|
@@ -107,7 +107,7 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 - **routes/external.js** -- `/health`, `/me`, `/leads` (POST + GET poll), `/calls` (POST + PATCH for late transcripts), `/messages`, `/appointments`, `/contacts/lookup`, `/patients/lookup`, `/services`, `/staff`, `/locations`
 - Docs: docs/wellness-client/EXTERNAL_API.md
 
-### Routes (backend/routes/) -- 88 route files
+### Routes (backend/routes/) -- 90 route files
 
 **Sales & Pipeline:** deals.js, pipelines.js, pipeline_stages.js, deal_insights.js, forecasting.js, quotas.js, win_loss.js, playbooks.js, funnel.js, cpq.js
 
@@ -139,14 +139,14 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 
 ### Frontend (frontend/src/)
 
-- **App.jsx** -- AuthContext provider, React Router, Suspense + React.lazy() for 76 page components (code-split)
+- **App.jsx** -- AuthContext provider, React Router, Suspense + React.lazy() for 80 page components (code-split)
 - **utils/api.js** -- `fetchApi` helper with auto Bearer token and 401 redirect
 
 ### Frontend Components (frontend/src/components/) -- 11 components
 
 CPQBuilder, CommandPalette, DealModal, EmailSignatureEditor, LanguageSwitcher, Layout, NotificationBell, Omnibar, Presence, Sidebar, Softphone
 
-### Frontend Pages (frontend/src/pages/) -- 90+ pages
+### Frontend Pages (frontend/src/pages/) -- 80 pages
 
 **Sales:** Dashboard, Pipeline, Pipelines, Forecasting, Quotas, WinLoss, Playbooks, Funnel, DealInsights, CPQ
 
@@ -180,7 +180,7 @@ CPQBuilder, CommandPalette, DealModal, EmailSignatureEditor, LanguageSwitcher, L
 
 **Wellness theme (v3.1):** theme/wellness.css — scoped under `[data-vertical="wellness"]`. Activated in App.jsx by setting `data-vertical` on body based on tenant.vertical.
 
-### Prisma Models (110 total)
+### Prisma Models (114 total)
 
 Generic (99): AbTest, AccountingSync, Activity, ApiKey, ApprovalRequest, Attachment, AuditLog, AutomationRule, Booking, BookingPage, CalendarEvent, CalendarIntegration, CallLog, Campaign, CannedResponse, Chatbot, ChatbotConversation, ConsentRecord, Contact, ContactAttachment, Contract, Currency, CustomEntity, CustomField, CustomRecord, CustomReport, CustomValue, Dashboard, DataExportRequest, Deal, DealInsight, DocumentTemplate, DocumentView, EmailMessage, EmailTemplate, EmailTracking, Estimate, EstimateLineItem, Expense, FieldPermission, Forecast, IndustryTemplate, Integration, Invoice, KbArticle, KbCategory, LandingPage, LandingPageAnalytics, LeadRoutingRule, LiveChatMessage, LiveChatSession, MarketplaceConfig, MarketplaceLead, Notification, Payment, Pipeline, PipelineStage, Playbook, PlaybookProgress, Product, Project, PushNotification, PushSubscription, PushTemplate, Quota, Quote, QuoteLineItem, ReportSchedule, RetentionPolicy, SandboxSnapshot, ScheduledEmail, ScimToken, Sequence, SequenceEnrollment, SharedInbox, SignatureRequest, SlaPolicy, SmsConfig, SmsMessage, SmsTemplate, SocialMention, SocialPost, SsoConfig, Survey, SurveyResponse, Task, TelephonyConfig, Tenant, Territory, Ticket, Touchpoint, User, VoiceSession, WebVisitor, Webhook, WhatsAppConfig, WhatsAppMessage, WhatsAppTemplate, WinLossReason
 

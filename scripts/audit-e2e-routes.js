@@ -66,11 +66,14 @@ for (const f of fs.readdirSync(SPECS_DIR)) {
   if (!f.endsWith('.spec.js')) continue;
   const src = fs.readFileSync(path.join(SPECS_DIR, f), 'utf8');
   const lines = src.split('\n');
-  // Match /api/... inside string/template literals.
-  const apiRe = /["'`](\/api\/[^"'`\s]+)["'`]|["'`]\$\{API\}(\/[^"'`\s]+)["'`]/g;
+  // Match /api/... inside string/template literals. Three styles in use:
+  //  "/api/foo"            literal
+  //  "${API}/foo"          where API = `${BASE_URL}/api`
+  //  "${BASE_URL}/api/foo" used by some specs (external, voice_transcription)
+  const apiRe = /["'`](\/api\/[^"'`\s]+)["'`]|["'`]\$\{API\}(\/[^"'`\s]+)["'`]|["'`]\$\{BASE_URL\}(\/api\/[^"'`\s]+)["'`]/g;
   for (let i = 0; i < lines.length; i++) {
     for (const m of lines[i].matchAll(apiRe)) {
-      const raw = m[1] || `/api${m[2]}`;
+      const raw = m[1] || (m[2] && `/api${m[2]}`) || m[3];
       specUrls.push({ file: f, line: i + 1, url: raw, normalized: normalize(raw) });
     }
   }
@@ -128,9 +131,32 @@ for (const u of specUrls) {
   }
 }
 
-// 5. Identify route files with zero spec references.
+// 5. Identify route files with zero spec references. Two-pass:
+//    (a) URLs the regex extracted match into the file (precise).
+//    (b) Fallback: a spec named like the route file (or with the route's
+//        URL prefix as a string somewhere in the source) counts as a hit.
+//        This covers specs that use custom URL constants like `${EXT}` or
+//        `${PUB}` instead of `${API}` — the audit regex can't follow those.
 const allRouteFiles = Object.values(prefixToFile).map((b) => `${b}.js`);
-const untested = allRouteFiles.filter((f) => !matchedByFile[f]);
+const fallbackMatched = new Set();
+for (const [prefix, fileBase] of Object.entries(prefixToFile)) {
+  const file = `${fileBase}.js`;
+  if (matchedByFile[file]) continue;
+  const candidates = [
+    fileBase.replace(/_/g, '-'),
+    fileBase.replace(/_/g, ''),
+    fileBase,
+  ];
+  for (const f of fs.readdirSync(SPECS_DIR)) {
+    if (!f.endsWith('.spec.js')) continue;
+    const stem = f.replace('.spec.js', '');
+    if (candidates.includes(stem) || candidates.includes(stem.replace('-api', '')) || candidates.includes(stem.replace('-', '_'))) {
+      const src = fs.readFileSync(path.join(SPECS_DIR, f), 'utf8');
+      if (src.includes(prefix)) fallbackMatched.add(file);
+    }
+  }
+}
+const untested = allRouteFiles.filter((f) => !matchedByFile[f] && !fallbackMatched.has(f));
 
 // 6. Report.
 console.log('=== E2E route audit ===');

@@ -144,9 +144,13 @@ test.describe('zapier.js — Zapier metadata + webhook ingress + subscriptions',
     expect(res.status()).toBe(403);
   });
 
-  test('POST /zapier/actions/:key/execute 404s for unknown action', async ({ request }) => {
+  test('POST /zapier/actions/:key/execute with valid staff token + unknown action returns 404', async ({ request }) => {
+    // The bogus "Bearer glbs_bogus" header would have been rejected by the
+    // global JWT-verification guard with 401 before reaching the route. Use
+    // the real staff token from beforeAll so the request reaches zapier.js
+    // and triggers the unknown-action 404.
     const res = await request.post(`${API}/zapier/actions/nope_e2e/execute`, {
-      headers: { Authorization: 'Bearer glbs_bogus' },
+      headers: auth(),
       data: {},
     });
     expect(res.status()).toBe(404);

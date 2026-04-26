@@ -23,8 +23,11 @@
  *  - approve does NOT mutate the deal — see approvals.js:189-199 ("requester is
  *    responsible for applying the discount"). So the side-effect we assert is a
  *    workflow-rule notification wired to deal.created, not a deal.stage change.
- *  - re-approve / approve-after-reject / reject-after-approve all return 400
- *    (approvals.js:174 + 236), NOT 409/422. Test asserts the actual contract.
+ *  - State-machine contract (post gap #3 fix):
+ *      • re-approve an APPROVED row → 200 + { idempotent: true } (no-op).
+ *      • re-reject a REJECTED row   → 200 + { idempotent: true } (no-op).
+ *      • approve-after-reject       → 422 + code INVALID_APPROVAL_TRANSITION.
+ *      • reject-after-approve       → 422 + code INVALID_APPROVAL_TRANSITION.
  */
 const { test, expect } = require('@playwright/test');
 
@@ -94,7 +97,10 @@ test.describe('Approvals — deep flow (live dev server)', () => {
 
   test.afterAll(async ({ request }) => {
     const auth = { Authorization: `Bearer ${adminToken}` };
-    // Approvals: no DELETE endpoint exists; rely on global-teardown via FLOW_TAG.
+    // Approvals: ADMIN-only DELETE exists post gap #4 fix.
+    for (const id of createdApprovalIds) {
+      await request.delete(`${API}/approvals/${id}`, { headers: auth }).catch(() => {});
+    }
     for (const id of createdRuleIds) {
       await request.delete(`${API}/workflows/${id}`, { headers: auth }).catch(() => {});
     }
@@ -257,7 +263,7 @@ test.describe('Approvals — deep flow (live dev server)', () => {
 
   // ─── Flow 2: state machine on terminal status ───────────────────────
   test.describe('Flow 2 — state-machine guards', () => {
-    test('approve an already-APPROVED request returns 400 (NOT 409 — actual route contract)', async ({ request }) => {
+    test('re-approve an already-APPROVED request returns 200 + idempotent:true (gap #3 fix)', async ({ request }) => {
       const deal = await createDeal(request, { amount: 160000, title: `${FLOW_TAG} Ananya Nair re-approve` });
       const ap = await createApproval(request, deal.id, 'double-approve guard');
 
@@ -269,15 +275,15 @@ test.describe('Approvals — deep flow (live dev server)', () => {
 
       const second = await request.post(`${API}/approvals/${ap.id}/approve`, {
         headers: auth(),
-        data: { comment: 'second should fail' },
+        data: { comment: 'second should be idempotent' },
       });
-      // approvals.js:174 returns 400 for non-PENDING, not 409 / 422.
-      expect(second.status(), `re-approve actual: ${await second.text()}`).toBe(400);
+      expect(second.status(), `re-approve actual: ${await second.text()}`).toBe(200);
       const body = await second.json();
-      expect(body.error).toMatch(/already approved/i);
+      expect(body.idempotent).toBe(true);
+      expect(body.status).toBe('APPROVED');
     });
 
-    test('approve a REJECTED request returns 400 (state-machine block)', async ({ request }) => {
+    test('approve a REJECTED request returns 422 INVALID_APPROVAL_TRANSITION (gap #3 fix)', async ({ request }) => {
       const deal = await createDeal(request, { amount: 165000, title: `${FLOW_TAG} Saurabh Joshi reject-then-approve` });
       const ap = await createApproval(request, deal.id, 'reject-then-approve');
 
@@ -291,14 +297,13 @@ test.describe('Approvals — deep flow (live dev server)', () => {
         headers: auth(),
         data: { comment: 'try after reject' },
       });
-      // Spec asked for 422; route returns 400. We assert the real contract and
-      // log this in the gaps section.
-      expect(approve.status(), `approve-after-reject actual: ${await approve.text()}`).toBe(400);
+      expect(approve.status(), `approve-after-reject actual: ${await approve.text()}`).toBe(422);
       const body = await approve.json();
-      expect(body.error).toMatch(/already rejected/i);
+      expect(body.code).toBe('INVALID_APPROVAL_TRANSITION');
+      expect(body.currentStatus).toBe('REJECTED');
     });
 
-    test('reject an APPROVED request returns 400 (state-machine block)', async ({ request }) => {
+    test('reject an APPROVED request returns 422 INVALID_APPROVAL_TRANSITION (gap #3 fix)', async ({ request }) => {
       const deal = await createDeal(request, { amount: 170000, title: `${FLOW_TAG} Meera Krishnan approve-then-reject` });
       const ap = await createApproval(request, deal.id, 'approve-then-reject');
 
@@ -312,9 +317,30 @@ test.describe('Approvals — deep flow (live dev server)', () => {
         headers: auth(),
         data: { comment: 'changed mind' },
       });
-      expect(reject.status(), `reject-after-approve actual: ${await reject.text()}`).toBe(400);
+      expect(reject.status(), `reject-after-approve actual: ${await reject.text()}`).toBe(422);
       const body = await reject.json();
-      expect(body.error).toMatch(/already approved/i);
+      expect(body.code).toBe('INVALID_APPROVAL_TRANSITION');
+      expect(body.currentStatus).toBe('APPROVED');
+    });
+
+    test('re-reject an already-REJECTED request returns 200 + idempotent:true (gap #3 fix)', async ({ request }) => {
+      const deal = await createDeal(request, { amount: 158000, title: `${FLOW_TAG} Karan Malhotra re-reject` });
+      const ap = await createApproval(request, deal.id, 'double-reject guard');
+
+      const first = await request.post(`${API}/approvals/${ap.id}/reject`, {
+        headers: auth(),
+        data: { comment: 'first decline' },
+      });
+      expect(first.status()).toBe(200);
+
+      const second = await request.post(`${API}/approvals/${ap.id}/reject`, {
+        headers: auth(),
+        data: { comment: 'second decline (no-op)' },
+      });
+      expect(second.status(), `re-reject actual: ${await second.text()}`).toBe(200);
+      const body = await second.json();
+      expect(body.idempotent).toBe(true);
+      expect(body.status).toBe('REJECTED');
     });
   });
 

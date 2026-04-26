@@ -3,6 +3,25 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
+// ─── Helper: audit log ───────────────────────────────────────────────
+// Mirrors the pattern in routes/deals.js — non-critical writes (best-effort).
+async function audit(action, entityId, userId, tenantId, details) {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        action,
+        entity: "ApprovalRequest",
+        entityId,
+        userId,
+        tenantId,
+        details: typeof details === "string" ? details : JSON.stringify(details),
+      },
+    });
+  } catch (_) {
+    /* non-critical */
+  }
+}
+
 // Helper: hydrate requester / approver user objects (Prisma model has no
 // declared relations, so we fetch users explicitly and graft them on).
 async function hydrateUsers(requests, tenantId) {
@@ -170,10 +189,27 @@ router.post(
       if (!existing) {
         return res.status(404).json({ error: "Approval request not found" });
       }
+
+      // State-machine guards (mirrors wellness.js /recommendations/:id/approve):
+      //  - Re-approve an APPROVED row → 200 idempotent (no-op, no double audit).
+      //  - Approve a REJECTED row     → 422 INVALID_APPROVAL_TRANSITION.
+      if (existing.status === "APPROVED") {
+        const [hydrated] = await hydrateUsers([existing], tenantId);
+        return res.json({ ...hydrated, idempotent: true });
+      }
+      if (existing.status === "REJECTED") {
+        return res.status(422).json({
+          error: "Cannot approve a rejected request",
+          code: "INVALID_APPROVAL_TRANSITION",
+          currentStatus: existing.status,
+        });
+      }
       if (existing.status !== "PENDING") {
-        return res
-          .status(400)
-          .json({ error: `Request already ${existing.status.toLowerCase()}` });
+        return res.status(422).json({
+          error: `Cannot approve from status '${existing.status}'`,
+          code: "INVALID_APPROVAL_TRANSITION",
+          currentStatus: existing.status,
+        });
       }
 
       const updated = await prisma.approvalRequest.update({
@@ -197,6 +233,13 @@ router.post(
           `[approvals] Deal #${updated.entityId} discount approved by user ${req.user.userId}; requester must apply.`
         );
       }
+
+      await audit("APPROVE", updated.id, req.user.userId, tenantId, {
+        from: existing.status,
+        to: updated.status,
+        entity: updated.entity,
+        entityId: updated.entityId,
+      });
 
       const [hydrated] = await hydrateUsers([updated], tenantId);
       res.json(hydrated);
@@ -232,10 +275,27 @@ router.post(
       if (!existing) {
         return res.status(404).json({ error: "Approval request not found" });
       }
+
+      // State-machine guards (mirrors wellness.js /recommendations/:id/reject):
+      //  - Re-reject a REJECTED row → 200 idempotent.
+      //  - Reject an APPROVED row   → 422 INVALID_APPROVAL_TRANSITION.
+      if (existing.status === "REJECTED") {
+        const [hydrated] = await hydrateUsers([existing], tenantId);
+        return res.json({ ...hydrated, idempotent: true });
+      }
+      if (existing.status === "APPROVED") {
+        return res.status(422).json({
+          error: "Cannot reject an already-approved request",
+          code: "INVALID_APPROVAL_TRANSITION",
+          currentStatus: existing.status,
+        });
+      }
       if (existing.status !== "PENDING") {
-        return res
-          .status(400)
-          .json({ error: `Request already ${existing.status.toLowerCase()}` });
+        return res.status(422).json({
+          error: `Cannot reject from status '${existing.status}'`,
+          code: "INVALID_APPROVAL_TRANSITION",
+          currentStatus: existing.status,
+        });
       }
 
       const updated = await prisma.approvalRequest.update({
@@ -248,11 +308,63 @@ router.post(
         },
       });
 
+      await audit("REJECT", updated.id, req.user.userId, tenantId, {
+        from: existing.status,
+        to: updated.status,
+        entity: updated.entity,
+        entityId: updated.entityId,
+        comment: updated.comment,
+      });
+
       const [hydrated] = await hydrateUsers([updated], tenantId);
       res.json(hydrated);
     } catch (err) {
       console.error("[approvals][POST /:id/reject]", err);
       res.status(500).json({ error: "Failed to reject request" });
+    }
+  }
+);
+
+// ── DELETE /api/approvals/:id ─ ADMIN-only hard delete ───────────
+// Schema has no soft-delete column (no deletedAt; status is a free String but
+// docstring restricts to PENDING/APPROVED/REJECTED — adding a "DELETED" value
+// would silently bypass tenant filters that key on those three). We hard-delete
+// after writing the audit row so the trail survives.
+router.delete(
+  "/:id",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const tenantId = req.user.tenantId;
+      const id = parseInt(req.params.id, 10);
+      if (Number.isNaN(id)) {
+        return res.status(400).json({ error: "Invalid approval id" });
+      }
+
+      const existing = await prisma.approvalRequest.findFirst({
+        where: { id, tenantId },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Approval request not found" });
+      }
+
+      // Audit BEFORE delete so the trail isn't lost if the delete races.
+      await audit("DELETE", existing.id, req.user.userId, tenantId, {
+        entity: existing.entity,
+        entityId: existing.entityId,
+        status: existing.status,
+        requestedBy: existing.requestedBy,
+        approvedBy: existing.approvedBy,
+        reason: existing.reason,
+      });
+
+      await prisma.approvalRequest.delete({ where: { id } });
+
+      res.json({ success: true, id });
+    } catch (err) {
+      console.error("[approvals][DELETE /:id]", err);
+      res.status(500).json({ error: "Failed to delete approval request" });
     }
   }
 );

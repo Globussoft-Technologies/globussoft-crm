@@ -5,20 +5,25 @@
  */
 const { test, expect } = require('@playwright/test');
 
+// Mirrors the actual labels + paths that renderGenericNav() in
+// frontend/src/components/Sidebar.jsx renders for an ADMIN on the generic
+// tenant (admin@globussoft.com). Headings come from the corresponding page
+// component's <h1>/<h2>. Keep this in sync with Sidebar.jsx whenever labels
+// or paths change — v3.2.1 RBAC + label refactor required this update.
 const SIDEBAR_ROUTES = [
   // The Dashboard sidebar link points to /dashboard. When token is present, "/"
   // redirects to /dashboard, so testing the URL pattern as /dashboard works for both.
   { label: 'Dashboard', path: '/dashboard', heading: /Enterprise Overview/i },
-  { label: 'Inbox', path: '/inbox', heading: /Inbox/i },
+  { label: 'Inbox', path: '/inbox', heading: /Unified Inbox|Inbox/i },
   { label: 'Contacts', path: '/contacts', heading: /Contacts/i },
-  { label: 'Pipeline', path: '/pipeline', heading: /Pipeline|Lead|Deal/i },
-  { label: 'Marketing', path: '/marketing', heading: /Marketing|Campaign/i },
-  { label: 'Sequences', path: '/sequences', heading: /Sequence|Automation|Workflow/i },
-  { label: 'Reports', path: '/reports', heading: /Report|Analytics/i },
-  { label: 'Invoices', path: '/invoices', heading: /Invoices|Invoice/i },
-  { label: 'App Builder', path: '/objects', heading: /App Builder|Object|Entity/i },
-  { label: 'Developers', path: '/developer', heading: /Developer|API|Key/i },
-  { label: 'Settings', path: '/settings', heading: /Settings|Organization/i },
+  { label: 'Pipeline', path: '/pipeline', heading: /Sales Pipeline|Pipeline/i },
+  { label: 'Marketing', path: '/marketing', heading: /Marketing/i },
+  { label: 'Sequences', path: '/sequences', heading: /Sequence|Automation/i },
+  { label: 'Reports', path: '/reports', heading: /Reports? & Analytics|Reports?/i },
+  { label: 'Invoices', path: '/invoices', heading: /Invoices?/i },
+  { label: 'App Builder', path: '/objects', heading: /Custom Objects? Builder|App Builder|Object/i },
+  { label: 'Developers', path: '/developer', heading: /Developer Ecosystem|Developer/i },
+  { label: 'Settings', path: '/settings', heading: /Organization Settings|Settings/i },
 ];
 
 // These modules are now fully built — no longer placeholders
@@ -66,10 +71,19 @@ test.describe('Navigation — Sidebar presence', () => {
   });
 
   test('all expected sidebar links are present', async ({ page }) => {
+    // The sidebar <nav> is overflow:auto and contains 50+ items for ADMINs,
+    // so links low in the list may be scrolled out of view. We assert each
+    // expected label exists in the DOM (count > 0) rather than requiring
+    // them to be in the viewport — `toBeVisible` only checks computed-style
+    // visibility, but the explicit count assertion is clearer about intent.
     for (const linkLabel of ALL_SIDEBAR_LINKS) {
-      await expect(
-        page.locator(`nav a, aside a, nav [href]`).filter({ hasText: new RegExp(linkLabel, 'i') }).first()
-      ).toBeVisible({ timeout: 8000 });
+      // Exact-text regex with word boundaries to avoid "Reports" matching
+      // "Agent Reports" / "Custom Reports" before .first() resolves.
+      const exact = new RegExp(`^\\s*${linkLabel}\\s*$`, 'i');
+      const link = page
+        .locator('nav a, aside a, nav button, aside button')
+        .filter({ hasText: exact });
+      await expect(link.first()).toBeAttached({ timeout: 8000 });
     }
   });
 });
@@ -80,12 +94,16 @@ test.describe('Navigation — Sidebar link routing', () => {
       await page.goto('/');
       await page.waitForLoadState('domcontentloaded');
 
-      // Click the sidebar link
+      // Click the sidebar link. Use exact-text match with word boundaries so
+      // "Reports" doesn't accidentally pick up "Agent Reports"/"Custom Reports"
+      // and "Pipeline" doesn't pick up "Pipelines".
+      const exact = new RegExp(`^\\s*${route.label}\\s*$`, 'i');
       const link = page
-        .locator(`nav a, aside a`)
-        .filter({ hasText: new RegExp(route.label, 'i') })
+        .locator('nav a, aside a')
+        .filter({ hasText: exact })
         .first();
-      await expect(link).toBeVisible({ timeout: 8000 });
+      await expect(link).toBeAttached({ timeout: 8000 });
+      await link.scrollIntoViewIfNeeded();
       await link.click();
 
       await page.waitForLoadState('domcontentloaded');

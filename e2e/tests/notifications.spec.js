@@ -122,7 +122,12 @@ test.describe('Notifications — API endpoints', () => {
     if (response.status() === 200) {
       const body = await safeJson(response);
       expect(body).not.toBeNull();
-      expect(Array.isArray(body)).toBe(true);
+      // backend/routes/notifications.js returns a paginated envelope:
+      //   { notifications: [...], total, page, limit, pages }
+      // Accept either the bare-array legacy shape or the envelope shape so
+      // the test tolerates both during a transition.
+      const list = Array.isArray(body) ? body : (body.notifications ?? body.data);
+      expect(Array.isArray(list)).toBe(true);
     }
   });
 

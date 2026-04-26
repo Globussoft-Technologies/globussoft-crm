@@ -169,7 +169,7 @@ const endOfDay = (d = new Date()) => {
 
 router.get("/patients", async (req, res) => {
   try {
-    const { q, limit = 50, offset = 0 } = req.query;
+    const { q, limit = 50, offset = 0, locationId } = req.query;
     const where = tenantWhere(req);
     if (q) {
       where.OR = [
@@ -178,6 +178,7 @@ router.get("/patients", async (req, res) => {
         { email: { contains: q } },
       ];
     }
+    if (locationId) where.locationId = parseInt(locationId);
     const [patients, total] = await Promise.all([
       prisma.patient.findMany({
         where,
@@ -187,6 +188,17 @@ router.get("/patients", async (req, res) => {
       }),
       prisma.patient.count({ where }),
     ]);
+    // PRD §11: HIPAA / DPDP Act — log every PHI read. Patient list is a
+    // bulk PHI read; emit ONE row per request (not N), with no PHI values.
+    try {
+      await writeAudit('Patient', 'PATIENT_LIST_READ', null, req.user.userId, req.user.tenantId, {
+        count: patients.length,
+        query: q || null,
+        locationId: locationId ? parseInt(locationId) : null,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit PATIENT_LIST_READ failed:", auditErr.message);
+    }
     res.json({ patients, total });
   } catch (e) {
     console.error("[wellness] list patients error:", e.message);
@@ -210,6 +222,21 @@ router.get("/patients/:id", async (req, res) => {
       },
     });
     if (!patient) return res.status(404).json({ error: "Patient not found" });
+    // PRD §11: log every patient detail read. Capture the FIELD NAMES returned
+    // (so reviewers know what columns were exposed) but NEVER the values —
+    // logging allergies/dob/phone here would defeat the audit-log's HIPAA role.
+    try {
+      const accessedFields = Object.keys(patient).filter(
+        (k) => !["visits", "prescriptions", "consents", "treatmentPlans"].includes(k)
+      );
+      await writeAudit('Patient', 'PATIENT_DETAIL_READ', patient.id, req.user.userId, req.user.tenantId, {
+        patientId: patient.id,
+        name: patient.name,
+        accessedFields,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit PATIENT_DETAIL_READ failed:", auditErr.message);
+    }
     res.json(patient);
   } catch (e) {
     console.error("[wellness] get patient error:", e.message);
@@ -410,6 +437,21 @@ router.get("/visits/:id", async (req, res) => {
       },
     });
     if (!visit) return res.status(404).json({ error: "Visit not found" });
+    // PRD §11: log clinical encounter reads. Don't store notes content —
+    // record presence flags only so amendments can still be diffed against
+    // the canonical Visit row, not against the audit blob.
+    try {
+      await writeAudit('Visit', 'VISIT_READ', visit.id, req.user.userId, req.user.tenantId, {
+        visitId: visit.id,
+        patientId: visit.patientId,
+        hasNotes: Boolean(visit.notes && String(visit.notes).trim().length > 0),
+        hasPhotos: Array.isArray(visit.photos)
+          ? visit.photos.length > 0
+          : Boolean(visit.photos && String(visit.photos).length > 2),
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit VISIT_READ failed:", auditErr.message);
+    }
     res.json(visit);
   } catch (e) {
     console.error("[wellness] get visit error:", e.message);
@@ -1530,6 +1572,9 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
     const yesterdayStart = startOfDay(new Date(Date.now() - 86400000));
     const yesterdayEnd = endOfDay(new Date(Date.now() - 86400000));
     const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
+    // PRD §6.8 — no-show risk: window of upcoming booked visits in next 24h.
+    const next24hStart = new Date();
+    const next24hEnd = new Date(Date.now() + 24 * 3600 * 1000);
 
     const visitWhere = (extra = {}) => ({ tenantId, ...(locationId ? { locationId } : {}), ...extra });
 
@@ -1543,6 +1588,7 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
       totalPatients,
       totalServices,
       totalLocations,
+      upcomingVisits,
     ] = await Promise.all([
       prisma.visit.findMany({
         where: visitWhere({ visitDate: { gte: todayStart, lte: todayEnd } }),
@@ -1568,6 +1614,17 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
       prisma.patient.count({ where: { tenantId, ...(locationId ? { locationId } : {}) } }),
       prisma.service.count({ where: { tenantId, isActive: true } }),
       prisma.location.count({ where: { tenantId, isActive: true } }),
+      // PRD §6.8 — upcoming booked visits in the next 24h, with patient
+      // context needed to score no-show risk (past no-shows, first-visit,
+      // engagement signals, reminder confirmation).
+      prisma.visit.findMany({
+        where: visitWhere({ status: "booked", visitDate: { gte: next24hStart, lte: next24hEnd } }),
+        orderBy: { visitDate: "asc" },
+        select: {
+          id: true, visitDate: true, patientId: true,
+          patient: { select: { id: true, name: true, phone: true, createdAt: true } },
+        },
+      }),
     ]);
 
     const sum = (arr, k) => arr.reduce((s, x) => s + (parseFloat(x[k]) || 0), 0);
@@ -1593,6 +1650,71 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
     const capacity = 8 * 17; // 17 staff × 8 slots — generous baseline
     const occupancyPct = Math.min(100, Math.round((completedToday / capacity) * 100));
 
+    // ── PRD §6.8: No-show risk scorer ────────────────────────────────
+    // Rule-based, no ML. Score 0–100 per upcoming booked visit; aggregate
+    // count of visits scoring ≥40 and surface top 5.
+    const patientIds = upcomingVisits.map((v) => v.patientId);
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000);
+    const thirtyDaysAgoLoyalty = new Date(Date.now() - 30 * 86400000);
+    const noShowRisk = { count: 0, totalUpcoming: upcomingVisits.length, topRisks: [] };
+    if (upcomingVisits.length > 0) {
+      const [pastNoShows, anyVisits, smsSent, loyaltyRecent] = await Promise.all([
+        // +30: any past no-show in last 90d
+        prisma.visit.findMany({
+          where: { tenantId, status: "no-show", patientId: { in: patientIds }, visitDate: { gte: ninetyDaysAgo } },
+          select: { patientId: true },
+        }),
+        // +15 if first-visit (no prior visit at all) — pull all visit ids per patient
+        prisma.visit.findMany({
+          where: { tenantId, patientId: { in: patientIds }, id: { notIn: upcomingVisits.map((v) => v.id) } },
+          select: { patientId: true },
+        }),
+        // +20 (negated when present) if SMS reminder confirmed for this visit. Look
+        // for a SENT/DELIVERED outbound SMS to the patient phone in the last 48h
+        // that contains the appointment reminder marker text.
+        prisma.smsMessage.findMany({
+          where: {
+            tenantId,
+            direction: "OUTBOUND",
+            status: { in: ["SENT", "DELIVERED"] },
+            createdAt: { gte: new Date(Date.now() - 48 * 3600 * 1000) },
+            to: { in: upcomingVisits.map((v) => v.patient?.phone).filter(Boolean) },
+            OR: [{ body: { contains: "reminder" } }, { body: { contains: "appointment" } }],
+          },
+          select: { to: true },
+        }),
+        // −10 if patient has a LoyaltyTransaction in last 30d (engaged)
+        prisma.loyaltyTransaction.findMany({
+          where: { tenantId, patientId: { in: patientIds }, createdAt: { gte: thirtyDaysAgoLoyalty } },
+          select: { patientId: true },
+        }),
+      ]);
+      const noShowSet = new Set(pastNoShows.map((v) => v.patientId));
+      const visitedPatientSet = new Set(anyVisits.map((v) => v.patientId));
+      const remindedPhones = new Set(smsSent.map((s) => s.to));
+      const loyalSet = new Set(loyaltyRecent.map((l) => l.patientId));
+
+      const scored = upcomingVisits.map((v) => {
+        const istHour = new Date(v.visitDate.getTime() + 5.5 * 3600 * 1000).getUTCHours();
+        let score = 0;
+        if (noShowSet.has(v.patientId)) score += 30;
+        if (!remindedPhones.has(v.patient?.phone)) score += 20;
+        if (!visitedPatientSet.has(v.patientId)) score += 15;
+        if (istHour < 10 || istHour >= 18) score += 10;
+        if (loyalSet.has(v.patientId)) score -= 10;
+        score = Math.max(0, Math.min(100, score));
+        return {
+          visitId: v.id,
+          patientName: v.patient?.name || "—",
+          score,
+          scheduledAt: v.visitDate,
+        };
+      });
+      scored.sort((a, b) => b.score - a.score);
+      noShowRisk.count = scored.filter((s) => s.score >= 40).length;
+      noShowRisk.topRisks = scored.slice(0, 5);
+    }
+
     res.json({
       today: {
         visits: todayVisits.length,
@@ -1600,6 +1722,7 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
         expectedRevenue: sum(todayVisits, "amountCharged"),
         occupancyPct,
         newLeads: newLeadsToday,
+        noShowRisk,
       },
       yesterday: {
         visits: yesterdayVisits.length,
@@ -1746,6 +1869,18 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
     if (!rx) return res.status(404).json({ error: "Prescription not found" });
     const clinic = await primaryClinic(req.user.tenantId);
     const buf = await renderPrescriptionPdf(rx, rx.patient, clinic);
+    // PRD §11: PDF export of an Rx is a downloadable PHI artefact; the audit
+    // row is what proves "who pulled this drug list and when". IDs only —
+    // never the drug names (those live in the Prescription row itself).
+    try {
+      await writeAudit('Prescription', 'PRESCRIPTION_PDF_DOWNLOAD', rx.id, req.user.userId, req.user.tenantId, {
+        prescriptionId: rx.id,
+        visitId: rx.visitId,
+        patientId: rx.patientId,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit PRESCRIPTION_PDF_DOWNLOAD failed:", auditErr.message);
+    }
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="rx-${id}.pdf"`);
     res.setHeader("Content-Length", buf.length);
@@ -1772,6 +1907,17 @@ router.get("/consents/:id/pdf", async (req, res) => {
       clinic,
       consent.signatureSvg,
     );
+    // PRD §11: consent PDF export carries patient PII + signature image; log it.
+    try {
+      await writeAudit('ConsentForm', 'CONSENT_PDF_DOWNLOAD', consent.id, req.user.userId, req.user.tenantId, {
+        consentId: consent.id,
+        patientId: consent.patientId,
+        serviceId: consent.serviceId,
+        templateName: consent.templateName,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit CONSENT_PDF_DOWNLOAD failed:", auditErr.message);
+    }
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="consent-${id}.pdf"`);
     res.setHeader("Content-Length", buf.length);
@@ -1945,10 +2091,29 @@ router.get("/portal/me", verifyPatientToken, async (req, res) => {
         email: true,
         dob: true,
         gender: true,
+        tenantId: true,
       },
     });
     if (!patient) return res.status(404).json({ error: "Patient not found" });
-    res.json(patient);
+    // PRD §11: patient self-access via portal is still a PHI read. The actor
+    // is the patient (not a staff user) so userId stays null and actorType
+    // = 'patient'. Strip tenantId from the response to keep the public shape.
+    try {
+      const accessedFields = ["id", "name", "phone", "email", "dob", "gender"];
+      await writeAudit(
+        'Patient',
+        'PATIENT_DETAIL_READ',
+        patient.id,
+        null,
+        patient.tenantId,
+        { patientId: patient.id, name: patient.name, accessedFields, source: 'portal' },
+        { actorType: 'patient', patientId: patient.id }
+      );
+    } catch (auditErr) {
+      console.warn("[wellness] audit portal/me failed:", auditErr.message);
+    }
+    const { tenantId: _t, ...publicShape } = patient;
+    res.json(publicShape);
   } catch (e) {
     console.error("[wellness] portal me error:", e.message);
     res.status(500).json({ error: "Failed to load profile" });
@@ -1966,6 +2131,23 @@ router.get("/portal/visits", verifyPatientToken, async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
+    // PRD §11: patient-portal list read of own visits. ONE row per request.
+    try {
+      const tenantId = visits.length ? visits[0].tenantId : null;
+      if (tenantId) {
+        await writeAudit(
+          'Visit',
+          'PATIENT_LIST_READ',
+          null,
+          null,
+          tenantId,
+          { count: visits.length, source: 'portal/visits', patientId: req.patient.id },
+          { actorType: 'patient', patientId: req.patient.id }
+        );
+      }
+    } catch (auditErr) {
+      console.warn("[wellness] audit portal/visits failed:", auditErr.message);
+    }
     res.json(visits);
   } catch (e) {
     console.error("[wellness] portal visits error:", e.message);
@@ -1986,6 +2168,23 @@ router.get("/portal/prescriptions", verifyPatientToken, async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
+    // PRD §11: patient-portal list read of own Rx. ONE row per request.
+    try {
+      const tenantId = prescriptions.length ? prescriptions[0].tenantId : null;
+      if (tenantId) {
+        await writeAudit(
+          'Prescription',
+          'PATIENT_LIST_READ',
+          null,
+          null,
+          tenantId,
+          { count: prescriptions.length, source: 'portal/prescriptions', patientId: req.patient.id },
+          { actorType: 'patient', patientId: req.patient.id }
+        );
+      }
+    } catch (auditErr) {
+      console.warn("[wellness] audit portal/prescriptions failed:", auditErr.message);
+    }
     res.json(prescriptions);
   } catch (e) {
     console.error("[wellness] portal prescriptions error:", e.message);

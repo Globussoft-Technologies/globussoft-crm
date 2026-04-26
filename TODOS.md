@@ -2,7 +2,27 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-26
+Last updated: 2026-04-26 (overnight session through office handoff at 10b7c25)
+
+---
+
+## 📋 Office handoff — what shipped overnight
+
+The 2026-04-26 overnight session closed **22 GitHub issues + 9 backlog items**. Highlights:
+
+- **9 architectural cron-skipped issues** closed: #167 #176 #179 #180 #182 #184 #186 #190 #191
+- **🟡 ship-this-month batch** done: #1+#2 (approvals auto-create), #12 (SLA breach cron), #20 (workflow conditions), #17 (last 3 dead triggers)
+- **🔴 bigger investments** all done: #21 (clinical no-delete policy), #7 (sequence reply detection), #9 (sequence engine + canvas rebuild)
+- **RBAC cluster** closed: #207 #214 #216 — wellnessRole-aware gates, JWT carries the claim, frontend landing/sidebar/dashboard guards. **20/20 RBAC e2e tests pass live.**
+- **Tester reports**: #200/#201/#202/#204/#206/#208/#211 cron-skipped (frontend/UX); #214/#215/#217/#225/#226/#227/#228/#229 cron-skipped (frontend/UX/UI redesign); #213/#218/#219/#220/#221/#224 closed.
+- **Test debt cleared**: 2 deep-flow flakes resolved + mysql2 install + global-teardown extended.
+
+What's left in the backlog (continue from here):
+
+1. **Frontend UI cluster** — 7 cron-skipped issues that all need real frontend work, not single-route patches. See section below.
+2. **41 pre-existing e2e brittleness failures** — non-blocking, pass rate is 93%, mostly UI-flow drift in old specs (theme toggle, navigation sidebar, dashboard percentage badges).
+3. **Backend coverage tool** — wire `c8` to instrument PM2 for line coverage. ~3 hours.
+4. **6 vague tester reports** (#137/#141/#142/#147/#150/#152/#153) — need repro from tester.
 
 ---
 
@@ -65,6 +85,28 @@ These were filed during cron runs and tagged `[cron-skip]` because they need des
 - [x] ~~**#186** No security headers. Missing CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, HSTS, Permissions-Policy. `helmet` is mounted but underconfigured. ~30 min + check no inline scripts break.~~ **Closed in d00ac2f** — Helmet now sets HSTS / SAMEORIGIN / Referrer-Policy / nosniff / CORP same-site / baseUri+formAction 'self'. New `permissionsPolicyMiddleware` for camera/mic/geo/FLoC. imgSrc https-only in prod. unsafe-inline/unsafe-eval retained on scriptSrc — TODO for strict-CSP migration in a follow-up once SSR/nonce pipeline lands.
 - [x] ~~**#190** Deal stage data migration. Existing rows with stage='Lead' (capitalized) cannot be PUT-updated after the validator was tightened.~~ **Closed in d00ac2f** — `backend/scripts/migrate-deal-stage-lowercase.js` is idempotent, coerces capitalized + suffixed + whitespace variants, clips negative amounts to 0. Production run: 32 deals scanned, 1 unmappable ('NotARealStage') logged, no neg amounts.
 - [x] ~~**#191** Login rate limiting. Currently 30 wrong-password attempts in 3.2s all return 403 with no throttling. Add `express-rate-limit` per-IP-per-username on `/auth/login`.~~ **Closed in d00ac2f** — two stacked limiters on `POST /auth/login`: per-IP (5/15min, IPv6-safe via `ipKeyGenerator`) + per-username (10/1h keyed on email lowercase+trim, with noemail:<ip> fallback). `skipSuccessfulRequests` so legitimate fat-finger flows refund the slot. `standardHeaders: 'draft-7'` emits RateLimit-* + Retry-After. `/auth/2fa/verify` intentionally untouched.
+- [x] ~~**#220** POST /api/wellness/patients 500 for names 192-200 chars (utf8mb4 VARCHAR(191) overflow).~~ **Closed in 10b7c25** — validatePatientInput cap dropped from 200 → 191 to match the DB column.
+- [x] ~~**#221** Doctor dropdown empty in Log Visit form.~~ **Closed in 10b7c25** — /api/staff GET / select was missing wellnessRole; the wellness UI's filter `u.wellnessRole === 'doctor'` matched zero rows. Added wellnessRole to the select.
+- [x] ~~**#224** Case history shows raw ENC:v1:… ciphertext for visit notes and prescriptions.~~ **Closed in 10b7c25** — lib/prisma.js `$extends` hooks only ran on the outer query model. Made `decryptRecord` recursive: walks every nested relation and decrypts any field whose name is in the union of encrypted-field names AND whose value passes isEncrypted(). Plaintext sharing a field name is left alone (defense in depth).
+
+---
+
+## 🟦 Frontend UI cluster — cron-skipped, need real frontend work (pick up here)
+
+Each one is a meaningful UX/UI/feature effort, not a single-route patch. Listed by complexity-ish, easy → hard:
+
+- [ ] **#206** — Service Worker push registration spams console with `[push] setupPush error: AbortError: Registration failed - push service error` on every navigation. Suppress the AbortError log path (it's noise — push isn't configured on most tenants). ~30 min, frontend.
+- [ ] **#229** — Patient list table layout breaks when a single name is long: column headers disappear and the long row pushes other columns off-screen. CSS `max-width` / `text-overflow: ellipsis` on the name cell + table-layout: fixed. ~1 hour.
+- [ ] **#225** — Treatment plan "Add" button not debounced — rapid clicks create duplicate plans. Same pattern likely on other forms. Add a `submitting` state on the form's submit handler that disables the button. ~30 min per form; sweep across the wellness-form components. ~2-3 hours.
+- [ ] **#204** — Consent canvas invisible on the wellness theme — border/background uses white-on-cream alpha colors from the dark theme. Scoped CSS override under `[data-vertical="wellness"]`. ~1 hour.
+- [ ] **#226** — Refresh in the middle of New prescription / Log visit / Treatment plan forms silently loses input. Add `beforeunload` prompt + (optional) sessionStorage form-state autosave. Cross-cutting — pick a pattern and apply across the wellness forms. ~half day.
+- [ ] **#215** — Telecaller queue: Booked / Callback / Interested / Not interested fire silently with no confirm dialog and no follow-up form, while Wrong number / Junk show a confirm modal. Make all 6 dispositions consistent (confirm modal + optional follow-up form for the appointment-booking dispositions). ~half day.
+- [ ] **#208** — `/portal` renders Knowledge Base instead of the patient portal. Two routes collide on `/portal`; the wellness patient portal needs its own route (e.g. `/wellness/portal/login`) and the existing `/portal` stays for the generic CRM customer portal. Or pick one — frontend routing decision. ~half day.
+- [ ] **#217** — `/wellness/tasks` 404 + `/wellness/inbox` falls through to generic `/inbox` with the wrong theme. Sidebar prefix logic + missing `/api/wellness/tasks` (or sidebar Link redirect to `/tasks` properly). ~2-3 hours, frontend routing investigation.
+- [ ] **#228** — No mobile responsive design — sidebar fixed-width, no hamburger drawer pattern, content clips at narrow viewports. Multi-day frontend overhaul (breakpoints, drawer component, ARIA, focus trap, all wellness pages tested at 375px width).
+- [ ] **#227** — Reports has no CSV/PDF export across all 4 tabs (P&L / Per-Pro / Per-Location / Attribution). New feature: backend export endpoints + frontend "Export" button per tab. PDFKit already in stack. ~1-2 days.
+- [ ] **#200/#201/#211** — Login page exposes 6 quick-login chips with real production credentials AND login form pre-fills credentials on first load. Per CLAUDE.md these are intentional demo features. Product decision needed: keep, env-gate (`NODE_ENV !== 'production'`), or remove entirely. NOT a bug — UX/security tradeoff.
+- [ ] **#202** Composite billing ticket — multiple parts already covered by earlier validators (negative amount rejected, 1e15 capped, past dueDate validated). Remaining unverified parts of the original report tagged cron-skip pending tester re-verify.
 
 ---
 

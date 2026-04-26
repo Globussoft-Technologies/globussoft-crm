@@ -1,5 +1,5 @@
 const express = require("express");
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -133,10 +133,11 @@ router.post("/:id/enroll", verifyToken, async (req, res) => {
   }
 });
 
-// Debug endpoint to manually trigger a cron tick (useful for E2E testing)
-router.post("/debug/tick", async (req, res) => {
+// Debug endpoint to manually trigger a cron tick. Already implicitly gated
+// by the global /api/* auth guard (any unauthenticated caller gets 403);
+// tightened here to ADMIN-only since this drives the engine for every tenant.
+router.post("/debug/tick", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    // We only expose this in dev/test, but for demo let's just trigger it directly
     const { tickSequenceEngine } = require('../cron/sequenceEngine');
     await tickSequenceEngine();
     res.json({ success: true, message: 'Cron tick fired' });

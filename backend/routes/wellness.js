@@ -1624,8 +1624,11 @@ router.post("/telecaller/dispose", async (req, res) => {
 // ── Patient portal (public login + patient-JWT reads) ─────────────
 
 // POST /portal/login  body: {phone, otp}
-// v1: any 4-digit OTP accepted. Matches Patient by last-10-digits phone
-// globally (tenant-agnostic since the visitor has no tenant context yet).
+// SECURITY: previously accepted any 4-digit OTP without verification — anyone
+// who knew a patient's phone could mint a 30-day portal JWT. Now validates
+// the OTP against the PatientOtp table the same way /verify-otp does.
+// Callers should already be using /portal/login/request-otp + /verify-otp;
+// this endpoint stays for backwards compat with older mobile builds.
 router.post("/portal/login", async (req, res) => {
   try {
     const { phone, otp } = req.body || {};
@@ -1641,6 +1644,20 @@ router.post("/portal/login", async (req, res) => {
     }
     const last10 = digits.slice(-10);
 
+    // Verify OTP against PatientOtp table — must be unused and unexpired.
+    const otpRecord = await prisma.patientOtp.findFirst({
+      where: {
+        phone: last10,
+        otp: String(otp),
+        used: false,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!otpRecord) {
+      return res.status(401).json({ error: "Invalid or expired code" });
+    }
+
     // Patient.phone may be stored with +91 / spaces / dashes — search by "endsWith"
     // via contains on last-10 substring.
     const candidates = await prisma.patient.findMany({
@@ -1653,8 +1670,12 @@ router.post("/portal/login", async (req, res) => {
       return d.slice(-10) === last10;
     });
     if (!patient) {
-      return res.status(404).json({ error: "No patient matches that phone" });
+      return res.status(401).json({ error: "Invalid or expired code" });
     }
+
+    // Single-use OTP — mark consumed before issuing the token.
+    await prisma.patientOtp.update({ where: { id: otpRecord.id }, data: { used: true } });
+
     const token = jwt.sign(
       { patientId: patient.id, phoneLast10: last10 },
       PORTAL_JWT_SECRET,

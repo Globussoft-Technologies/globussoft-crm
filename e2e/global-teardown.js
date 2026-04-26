@@ -26,11 +26,14 @@ const path = require('path');
 
 // Same regex used by the one-off scrub we ran on 2026-04-23. Anchored at
 // start, so a real patient named "Loyalty" (no number) is never matched.
+// Also matches E2E_FLOW_<timestamp> / E2E_AUDIT_<timestamp> tags that the
+// deep-flow + smoke specs added in 2026-04-26 use across patient/contact
+// names AND inside notes/title fields.
 const PAT_REGEX =
-  '^(E2E |Coverage |Loyalty [0-9]{6}|Referrer [0-9]{6}|' +
+  '^(E2E |E2E_FLOW_|E2E_AUDIT_|Coverage |Loyalty [0-9]{6}|Referrer [0-9]{6}|' +
   'Waitlist [0-9]{6}|Lifecycle [0-9]{6}|Friend [0-9]{6}|' +
-  'Junk [0-9]{6}|Telecaller Queue Lead [0-9]{6})';
-const EMAIL_REGEX = '(@example\\.test$|@inbound\\.local$|^e2e[-_])';
+  'Junk [0-9]{6}|Telecaller Queue Lead [0-9]{6}|Race Visit Patient |Aarav Nair |Priya Sharma E2E)';
+const EMAIL_REGEX = '(@example\\.test$|@example\\.in$|@inbound\\.local$|^e2e[-_]|\\.e2e_(flow|audit)_)';
 const SVC_DESC_LIKE = '%wellness-real-user-journeys%';
 
 /**

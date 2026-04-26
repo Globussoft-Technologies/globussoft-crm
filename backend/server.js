@@ -414,6 +414,24 @@ server.listen(PORT, () => {
   console.log(`[Backend] Enterprise Express Server running securely on port ${PORT}`);
 });
 
+// Graceful shutdown — required for c8 / V8 line coverage to flush its temp
+// files (V8 only dumps coverage on clean process exit; SIGTERM-without-handler
+// kills before it can flush). Also benefits production: no half-served
+// requests on `pm2 restart`.
+const _gracefulShutdown = (signal) => {
+  console.log(`[shutdown] ${signal} received — closing server`);
+  server.close(() => {
+    console.log('[shutdown] server closed cleanly');
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.warn('[shutdown] timeout — forcing exit');
+    process.exit(0);
+  }, 10000).unref();
+};
+process.on('SIGTERM', () => _gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => _gracefulShutdown('SIGINT'));
+
 // DISABLE_CRONS=1 lets us boot a side-by-side instance (e.g. for c8 line-
 // coverage runs on a different port) without double-firing reminders, blasts,
 // orchestrator runs, etc. against the shared DB. Set ONLY on the secondary

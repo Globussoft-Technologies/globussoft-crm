@@ -153,9 +153,14 @@ router.get("/patients/:id", async (req, res) => {
 // #108: a phone is optional, but if supplied must contain 10–15 digits after
 // stripping formatting (+, -, spaces, parens). Pre-fix the field accepted any
 // text like "abc123notaphone" which then broke dialer / WhatsApp integration.
+// #205: alphanumeric phones like "90361a46074" used to slip through because
+// we only counted digits. Now we also require the input to contain ONLY
+// phone-shaped characters (digits, +, spaces, dashes, parens). Letters
+// reject outright.
 function isValidPhoneOrEmpty(p) {
   if (p == null || p === "") return true;
   if (typeof p !== "string") return false;
+  if (!/^[0-9+\-\s()]+$/.test(p)) return false;
   const digits = p.replace(/\D/g, "");
   return digits.length >= 10 && digits.length <= 15;
 }
@@ -742,12 +747,22 @@ router.post("/services", async (req, res) => {
     if (!Number.isFinite(price) || price <= 0) {
       return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
     }
+    // #209: cap basePrice at ₹50L (5_000_000). Public booking page exposes
+    // garbage rows like ₹1e15 / 999999 min when there's no upper bound.
+    if (price > 5_000_000) {
+      return res.status(400).json({ error: "basePrice exceeds maximum (₹50,00,000)", code: "PRICE_TOO_HIGH" });
+    }
     // #149: durationMin must be positive; targetRadiusKm must be non-negative
     // when supplied (null = unlimited is fine).
+    // #209: cap durationMin at 8 hours (480 min) — anything beyond that is
+    // not a single appointment.
     if (durationMin !== undefined && durationMin !== null) {
       const d = Number(durationMin);
       if (!Number.isFinite(d) || d <= 0) {
         return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
+      }
+      if (d > 480) {
+        return res.status(400).json({ error: "durationMin exceeds maximum (480)", code: "DURATION_TOO_HIGH" });
       }
     }
     if (targetRadiusKm !== undefined && targetRadiusKm !== null && targetRadiusKm !== "") {
@@ -789,12 +804,20 @@ router.put("/services/:id", async (req, res) => {
       if (!Number.isFinite(price) || price <= 0) {
         return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
       }
+      // #209: same upper-bound cap on edit.
+      if (price > 5_000_000) {
+        return res.status(400).json({ error: "basePrice exceeds maximum (₹50,00,000)", code: "PRICE_TOO_HIGH" });
+      }
     }
     // #149: same duration / radius guards on edit.
     if (data.durationMin !== undefined && data.durationMin !== null) {
       const d = Number(data.durationMin);
       if (!Number.isFinite(d) || d <= 0) {
         return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
+      }
+      // #209: same 8-hour cap on edit.
+      if (d > 480) {
+        return res.status(400).json({ error: "durationMin exceeds maximum (480)", code: "DURATION_TOO_HIGH" });
       }
     }
     if (data.targetRadiusKm !== undefined && data.targetRadiusKm !== null && data.targetRadiusKm !== "") {
@@ -1074,16 +1097,33 @@ router.put("/locations/:id", async (req, res) => {
 //
 // All reports accept ?from=&to=&locationId= filters. Default window: last 30 days.
 
+// #210: date-range guard for /reports endpoints. The picker accepts 5-digit
+// years (e.g. 11900) and inverted ranges (from > to) silently, so reports
+// render ₹0 / "No data" with no warning. Returns { error } on bad input
+// so callers can return 400; otherwise { from, to } as before.
+const MIN_REPORT_YEAR = 2000;
+const MAX_REPORT_YEAR = 2099;
 const reportRange = (req) => {
   const to = req.query.to ? new Date(req.query.to) : new Date();
   const from = req.query.from ? new Date(req.query.from) : new Date(Date.now() - 30 * 86400000);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return { error: { status: 400, error: "from and to must be valid dates", code: "INVALID_DATE_RANGE" } };
+  }
+  const fromY = from.getUTCFullYear();
+  const toY = to.getUTCFullYear();
+  if (fromY < MIN_REPORT_YEAR || fromY > MAX_REPORT_YEAR || toY < MIN_REPORT_YEAR || toY > MAX_REPORT_YEAR) {
+    return { error: { status: 400, error: `year must be between ${MIN_REPORT_YEAR} and ${MAX_REPORT_YEAR}`, code: "DATE_OUT_OF_RANGE" } };
+  }
+  if (from.getTime() > to.getTime()) {
+    return { error: { status: 400, error: "'from' must be on or before 'to'", code: "INVERTED_DATE_RANGE" } };
+  }
   return { from, to };
 };
 
 router.get("/reports/pnl-by-service", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const { from, to } = reportRange(req);
+    const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
     const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
 
     const visitWhere = { tenantId, visitDate: { gte: from, lte: to }, status: "completed" };
@@ -1091,7 +1131,10 @@ router.get("/reports/pnl-by-service", async (req, res) => {
 
     const visits = await prisma.visit.findMany({
       where: visitWhere,
-      select: { serviceId: true, amountCharged: true, doctorId: true },
+      // #212: id was missing here, so visitIdToCost[v.id || -1] always
+      // resolved to -1 → 0 for every row, making PRODUCT COST ₹0
+      // and CONTRIBUTION = REVENUE on every service.
+      select: { id: true, serviceId: true, amountCharged: true, doctorId: true },
     });
     const services = await prisma.service.findMany({
       where: { tenantId },
@@ -1139,7 +1182,7 @@ router.get("/reports/pnl-by-service", async (req, res) => {
 router.get("/reports/per-professional", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const { from, to } = reportRange(req);
+    const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
     const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
 
     const visitWhere = { tenantId, visitDate: { gte: from, lte: to }, status: "completed" };
@@ -1178,7 +1221,7 @@ router.get("/reports/per-professional", async (req, res) => {
 router.get("/reports/attribution", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const { from, to } = reportRange(req);
+    const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
 
     const leads = await prisma.contact.findMany({
       where: { tenantId, createdAt: { gte: from, lte: to } },
@@ -1229,7 +1272,7 @@ router.get("/reports/attribution", async (req, res) => {
 router.get("/reports/per-location", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const { from, to } = reportRange(req);
+    const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
 
     const visits = await prisma.visit.findMany({
       where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },

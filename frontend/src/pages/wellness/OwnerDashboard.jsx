@@ -57,7 +57,14 @@ export default function OwnerDashboard() {
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-family)', fontSize: '1.75rem', fontWeight: 600 }}>Good morning</h1>
+          <h1 style={{ fontFamily: 'var(--font-family)', fontSize: '1.75rem', fontWeight: 600 }}>{(() => {
+            // #203: greeting was hard-coded "Good morning". Compute against
+            // IST since the dashboard is wellness-vertical (India only).
+            const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
+            if (istHour < 12) return 'Good morning';
+            if (istHour < 17) return 'Good afternoon';
+            return 'Good evening';
+          })()}</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
             Here's the snapshot for today — {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>

@@ -131,6 +131,33 @@ const endOfDay = (d = new Date()) => {
   return new Date(ist.getTime() - IST_OFFSET_MS);
 };
 
+// ─────────────────────────────────────────────────────────────────────
+// CLINICAL ARTEFACT RETENTION POLICY (issue #21 — resolved by product/legal):
+//
+// Clinical artefacts — Patient, Visit, Prescription, ConsentForm,
+// AgentRecommendation, ServiceConsumption — are PERMANENT. Once created,
+// they are NEVER deleted, neither hard-deleted nor soft-deleted.
+//
+// Why:
+//   • HIPAA Security Rule 164.312(c)(1) integrity controls
+//   • India MoHFW EMR Standards 2016 require permanent retention with an
+//     amendment trail (not deletion)
+//   • DPDP Act 2023 explicit consent + retention rules accommodate this
+//
+// What this means in code:
+//   • DO NOT add DELETE endpoints for these resources. Period.
+//   • DO NOT add `deletedAt` columns to these models in schema.prisma.
+//   • Corrections happen via PUT/PATCH (amendment) — the audit log captures
+//     the prior + new values so the historical state stays auditable.
+//   • If a row was created in error (typo, test data), use an out-of-band
+//     ops script with a written justification recorded in the audit log.
+//     Never expose a DELETE path through the API.
+//
+// The /visits/:id/photos DELETE below is exempt: it removes photo URL
+// strings from a JSON array on the Visit row, NOT the Visit itself. The
+// Visit row + its prescriptions + consent + visit history all stay.
+// ─────────────────────────────────────────────────────────────────────
+
 // ── Patients ───────────────────────────────────────────────────────
 
 router.get("/patients", async (req, res) => {

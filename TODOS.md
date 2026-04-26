@@ -30,12 +30,8 @@ Last updated: 2026-04-26
 
 ## 🔴 Bigger investments — multi-day, may need legal/compliance signoff
 
-### [ ] #21 — Clinical artefact soft-delete
-**Diagnosis:** No DELETE for Patient/Visit/Prescription/ConsentForm/AgentRecommendation. Bug reports want delete capability; current state forces out-of-band SQL.
-**Compliance constraint:** HIPAA + India MoHFW EMR rules generally REQUIRE permanent retention with amendment trail. Hard delete is forbidden. Need legal/compliance signoff before ANY engineering work.
-**Recommendation if approved:** Add `deletedAt DateTime?` column to all 5 models. Every read query in `wellness.js` filters `deletedAt: null`. New `DELETE` endpoints set `deletedAt = now()`, write an audit row first, restrict to ADMIN. Add `POST /:id/restore` for un-delete (still ADMIN-only). Soft-delete preserves the audit trail; legal should accept this.
-
-**Effort:** ~2 days + schema migration + every wellness.js findMany updated. **Blocker:** legal signoff.
+### [x] ~~#21 — Clinical artefact soft-delete~~
+**RESOLVED BY POLICY (2026-04-26).** Clinical artefacts — Patient, Visit, Prescription, ConsentForm, AgentRecommendation, ServiceConsumption — are PERMANENT. No DELETE endpoints, no `deletedAt` column, no soft-delete. Corrections happen via PUT/PATCH (amendment trail captured in the audit log). Out-of-band ops scripts only for genuine data errors, with written justification in the audit log. Policy block lives at the top of the Clinical section in `backend/routes/wellness.js` (around line 134) so a future engineer doesn't accidentally add a DELETE endpoint. Compliance basis: HIPAA 164.312(c)(1), India MoHFW EMR Standards 2016, DPDP Act 2023.
 
 ---
 

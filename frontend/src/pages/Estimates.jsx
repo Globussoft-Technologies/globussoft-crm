@@ -437,10 +437,11 @@ export default function Estimates() {
                         {est.contact?.name || '-'}
                       </td>
                       <td style={{ padding: '1rem 0.5rem' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                          <DollarSign size={14} color="var(--success-color)" />
-                          {formatCurrency(est.totalAmount)}
-                        </span>
+                        {/* #256: removed the hardcoded $ DollarSign — formatCurrency()
+                            already prefixes the right symbol from tenant.defaultCurrency,
+                            so wellness/India tenants no longer see '$ ₹100.00'. Mirrors
+                            the same fix applied in Invoices.jsx (#242). */}
+                        <span style={{ color: 'var(--success-color)', fontWeight: 600 }}>{formatCurrency(est.totalAmount)}</span>
                       </td>
                       <td style={{ padding: '1rem 0.5rem' }}>
                         <StatusBadge status={est.status} />

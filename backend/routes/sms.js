@@ -85,6 +85,21 @@ router.post("/send", verifyToken, async (req, res) => {
 });
 
 // ─── List SMS Messages ───────────────────────────────────────────────────────
+// #254: redact OTP / verification codes before returning SMS messages to
+// staff. Without this, anyone with /inbox access could read other patients'
+// portal-login codes within their 10-minute validity window — a horizontal
+// account-takeover vector. We scrub the body and leave the rest of the row
+// untouched so audit / "did this send?" use cases still work.
+function redactOtp(body) {
+  if (typeof body !== "string") return body;
+  // Common templates: "Your verification code is 4346. Valid for 10 minutes."
+  // Cover OTP / verification / passcode prefixes + numeric digit groups (4-8).
+  return body.replace(
+    /(verification code|otp|passcode|one[-\s]?time\s+code|login\s+code)\s*(?:is|:)?\s*[:#]?\s*\d{3,8}/gi,
+    "$1 ****"
+  );
+}
+
 router.get("/messages", verifyToken, async (req, res) => {
   try {
     const { direction, contactId, status, page = 1, limit = 25 } = req.query;
@@ -96,7 +111,7 @@ router.get("/messages", verifyToken, async (req, res) => {
     if (contactId) where.contactId = parseInt(contactId);
     if (status) where.status = status;
 
-    const [messages, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       prisma.smsMessage.findMany({
         where,
         orderBy: { createdAt: "desc" },
@@ -106,6 +121,8 @@ router.get("/messages", verifyToken, async (req, res) => {
       }),
       prisma.smsMessage.count({ where }),
     ]);
+    // #254: scrub the digit groups in OTP-template bodies on the way out.
+    const messages = rows.map((m) => ({ ...m, body: redactOtp(m.body) }));
 
     res.json({
       messages,

@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Activity, Calendar, IndianRupee, Sparkles, TrendingUp, Users, Bell, ArrowRight, Stethoscope, Megaphone, ExternalLink } from 'lucide-react';
+import { Activity, AlertTriangle, Calendar, IndianRupee, Sparkles, TrendingUp, Users, Bell, ArrowRight, Stethoscope, Megaphone, ExternalLink } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
@@ -112,6 +112,14 @@ export default function OwnerDashboard() {
         <StatCard icon={Users} label="New leads today" value={data.today.newLeads} sub="across all channels" color="#3b82f6" />
         <StatCard icon={Bell} label="Pending approvals" value={data.pendingApprovals} sub="from the AI agent" color="#a855f7" />
         <StatCard icon={Stethoscope} label="Active treatment plans" value={data.activeTreatmentPlans} sub="multi-session bundles in progress" color="#ec4899" />
+        {/* PRD §6.8 — no-show risk: amber if any flagged, green when clean. */}
+        <StatCard
+          icon={AlertTriangle}
+          label="No-show risk"
+          value={data.today.noShowRisk?.count ?? 0}
+          sub={`of ${data.today.noShowRisk?.totalUpcoming ?? 0} upcoming`}
+          color={(data.today.noShowRisk?.count ?? 0) > 0 ? 'var(--warning-color)' : 'var(--success-color)'}
+        />
       </div>
 
       {/* Yesterday vs Today + Recommendations side by side */}

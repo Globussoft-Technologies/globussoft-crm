@@ -132,12 +132,25 @@ async function executeApproved(rec, { actorUserId } = {}) {
 
     case "lead_followup":
     case "mark_leads_for_callback": {
-      const ageHours = payload.ageHours || 24;
-      const cutoff = new Date(Date.now() - ageHours * 3600000);
-      const leads = await prisma.contact.findMany({
-        where: { tenantId: rec.tenantId, status: "Lead", createdAt: { lte: cutoff } },
-        take: 50, select: { id: true },
-      });
+      // Two modes:
+      //  (a) precise — payload.leadIds is provided (SLA-breach card)
+      //  (b) bulk — fall back to ageHours window (legacy aging card)
+      let leads;
+      if (Array.isArray(payload.leadIds) && payload.leadIds.length > 0) {
+        leads = await prisma.contact.findMany({
+          where: { tenantId: rec.tenantId, id: { in: payload.leadIds.map((n) => parseInt(n, 10)).filter(Number.isFinite) } },
+          select: { id: true },
+        });
+      } else {
+        const ageHours = payload.ageHours || 24;
+        const cutoff = new Date(Date.now() - ageHours * 3600000);
+        leads = await prisma.contact.findMany({
+          where: { tenantId: rec.tenantId, status: "Lead", createdAt: { lte: cutoff } },
+          take: 50, select: { id: true },
+        });
+      }
+      const reassignToUserId = payload.reassignToUserId ? parseInt(payload.reassignToUserId, 10) : null;
+      let reassigned = 0;
       for (const l of leads) {
         await prisma.activity.create({
           data: {
@@ -148,8 +161,12 @@ async function executeApproved(rec, { actorUserId } = {}) {
             userId: actorUserId || null,
           },
         });
+        if (reassignToUserId) {
+          await prisma.contact.update({ where: { id: l.id }, data: { assignedToId: reassignToUserId } });
+          reassigned++;
+        }
       }
-      return { ok: true, action: "leads_flagged", count: leads.length };
+      return { ok: true, action: "leads_flagged", count: leads.length, reassigned };
     }
 
     default:
@@ -159,18 +176,42 @@ async function executeApproved(rec, { actorUserId } = {}) {
 
 // ── Context gatherer ───────────────────────────────────────────────
 
+// PRD §6.4 lead-side SLA default. The Tenant currently has no `slaMinutes`
+// column, so we read an env override and fall back to 30 minutes.
+const DEFAULT_LEAD_SLA_MINUTES = parseInt(process.env.WELLNESS_LEAD_SLA_MINUTES || "30", 10);
+
+// Default working-hour window for the occupancy gap heuristic when a
+// Location row has no `hours` JSON. 09:00–20:00 IST = 11h × 60min = 660m.
+const DEFAULT_WORKING_MINUTES = 11 * 60;
+
+// Parse Location.hours JSON shape `{ mon: ["09:00","20:00"], ... }` into
+// the day's open-minute count. Falls back to DEFAULT_WORKING_MINUTES.
+function workingMinutesForLocation(loc, dayDate = new Date()) {
+  if (!loc || !loc.hours) return DEFAULT_WORKING_MINUTES;
+  let parsed;
+  try { parsed = typeof loc.hours === "string" ? JSON.parse(loc.hours) : loc.hours; } catch { return DEFAULT_WORKING_MINUTES; }
+  const dayKey = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][dayDate.getDay()];
+  const slot = parsed && parsed[dayKey];
+  if (!slot || !Array.isArray(slot) || slot.length < 2) return DEFAULT_WORKING_MINUTES;
+  const [openStr, closeStr] = slot;
+  const toMin = (s) => { const [h, m] = String(s).split(":").map(Number); return (h || 0) * 60 + (m || 0); };
+  const diff = toMin(closeStr) - toMin(openStr);
+  return diff > 0 ? diff : DEFAULT_WORKING_MINUTES;
+}
+
 async function readContext(tenantId) {
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
   const todayEnd   = new Date(); todayEnd.setHours(23, 59, 59, 999);
   const weekAgo    = new Date(Date.now() - 7 * 86400000);
   const dayAgo     = new Date(Date.now() - 86400000);
+  const slaCutoff  = new Date(Date.now() - DEFAULT_LEAD_SLA_MINUTES * 60 * 1000);
 
   const [
-    todayVisits, weekVisits, openLeads, oldLeads, services, locations, lowOccupancyServices,
+    todayVisits, weekVisits, openLeads, oldLeads, services, locationsList, lowOccupancyServices, slaBreachLeads, telecallers,
   ] = await Promise.all([
     prisma.visit.findMany({
       where: { tenantId, visitDate: { gte: todayStart, lte: todayEnd } },
-      select: { status: true, amountCharged: true, serviceId: true },
+      select: { status: true, amountCharged: true, serviceId: true, locationId: true, service: { select: { durationMin: true } } },
     }),
     prisma.visit.findMany({
       where: { tenantId, visitDate: { gte: weekAgo } },
@@ -178,20 +219,64 @@ async function readContext(tenantId) {
     }),
     prisma.contact.count({ where: { tenantId, status: "Lead" } }),
     prisma.contact.count({ where: { tenantId, status: "Lead", createdAt: { lte: dayAgo } } }),
-    prisma.service.findMany({ where: { tenantId, isActive: true }, select: { id: true, name: true, category: true, ticketTier: true, basePrice: true } }),
-    prisma.location.count({ where: { tenantId, isActive: true } }),
+    prisma.service.findMany({ where: { tenantId, isActive: true }, select: { id: true, name: true, category: true, ticketTier: true, basePrice: true, durationMin: true, targetRadiusKm: true } }),
+    prisma.location.findMany({ where: { tenantId, isActive: true }, select: { id: true, name: true, hours: true } }),
     prisma.visit.groupBy({
       by: ["serviceId"],
       where: { tenantId, visitDate: { gte: weekAgo }, status: "completed" },
       _count: { _all: true },
     }),
+    // PRD §6.7 "zero missed leads" — leads created > slaMinutes ago that
+    // have no Activity row recorded yet (no first response). Activity
+    // is the canonical telecaller-touch signal in routes/wellness.js.
+    prisma.contact.findMany({
+      where: {
+        tenantId,
+        status: "Lead",
+        createdAt: { lte: slaCutoff },
+        activities: { none: {} },
+      },
+      select: { id: true, name: true, phone: true, assignedToId: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: 50,
+    }),
+    // Pool of users we can re-assign stale leads to. Prefer telecaller,
+    // then admin/manager. Used to recommend a concrete assignee per card.
+    prisma.user.findMany({
+      where: { tenantId, OR: [{ wellnessRole: "telecaller" }, { role: { in: ["ADMIN", "MANAGER"] } }] },
+      select: { id: true, name: true, email: true, wellnessRole: true, role: true },
+      orderBy: [{ wellnessRole: "asc" }, { id: "asc" }],
+    }),
   ]);
+  const locations = locationsList.length;
 
   const sumAmt = (arr) => arr.reduce((s, x) => s + (parseFloat(x.amountCharged) || 0), 0);
   const todayCompleted = todayVisits.filter((v) => v.status === "completed").length;
   const todayBooked    = todayVisits.filter((v) => v.status === "booked").length;
   const weekRevenue    = sumAmt(weekVisits.filter((v) => v.status === "completed"));
   const occupancyPct   = Math.round((todayCompleted / Math.max(1, locations * 8 * 17)) * 100);
+
+  // ── Real occupancy gap (PRD §6.7) ────────────────────────────────
+  // Capacity = sum(working-minutes per active location for today).
+  // Booked-minute usage = sum(service.durationMin) over today's visits
+  // not in cancelled/no-show. Utilisation = used / capacity.
+  const today = new Date();
+  const capacityMinutes = locationsList.reduce((s, loc) => s + workingMinutesForLocation(loc, today), 0);
+  const usedMinutes = todayVisits
+    .filter((v) => v.status !== "cancelled" && v.status !== "no-show")
+    .reduce((s, v) => s + (v.service?.durationMin || 30), 0);
+  const utilisationPct = capacityMinutes > 0 ? Math.round((usedMinutes / capacityMinutes) * 100) : 0;
+
+  // ── Cold-service ranking by reach × revenue potential ────────────
+  // For the boost recommendation, prefer the service with the highest
+  // (targetRadiusKm × basePrice) score that had ZERO bookings this week.
+  // This biases toward high-ticket, wide-funnel services where ad spend
+  // is most efficient.
+  const bookedSvcIds = new Set(lowOccupancyServices.map((g) => g.serviceId).filter(Boolean));
+  const zeroBookingServices = services
+    .filter((s) => !bookedSvcIds.has(s.id))
+    .map((s) => ({ ...s, reachScore: (s.targetRadiusKm || 0) * (s.basePrice || 0) }))
+    .sort((a, b) => b.reachScore - a.reachScore);
 
   // Find top + bottom-performing services this week
   const serviceMap = Object.fromEntries(services.map((s) => [s.id, s]));
@@ -202,19 +287,29 @@ async function readContext(tenantId) {
   const topServices    = ranked.slice(0, 3);
   const highTickerCold = services.filter((s) => s.ticketTier === "high" && !ranked.some((r) => r.id === s.id)).slice(0, 3);
 
+  // Pick a default telecaller for stale-lead reassignment suggestion.
+  const suggestedAssignee = telecallers.find((u) => u.wellnessRole === "telecaller") || telecallers[0] || null;
+
   return {
     tenantId,
     todayVisits: todayVisits.length,
     todayCompleted, todayBooked,
     weekRevenue,
     occupancyPct,
+    utilisationPct,
+    capacityMinutes,
+    usedMinutes,
     openLeads,
     oldLeads, // leads aging > 24h
     locations,
     topServices,
     highTickerCold, // high-ticket services with NO visits this week
+    zeroBookingServices, // sorted by reachScore = targetRadiusKm × basePrice
     services: services.length,
-    summary: `today: ${todayVisits.length} visits / ${todayCompleted} completed, occupancy ${occupancyPct}%, ${openLeads} open leads (${oldLeads} aging >24h), week revenue ₹${Math.round(weekRevenue).toLocaleString("en-IN")}`,
+    slaBreachLeads, // PRD §6.7: leads older than slaMinutes with no Activity
+    slaMinutes: DEFAULT_LEAD_SLA_MINUTES,
+    suggestedAssignee,
+    summary: `today: ${todayVisits.length} visits / ${todayCompleted} completed, utilisation ${utilisationPct}%, ${openLeads} open leads (${oldLeads} aging >24h, ${slaBreachLeads.length} past SLA), week revenue ₹${Math.round(weekRevenue).toLocaleString("en-IN")}`,
   };
 }
 
@@ -288,6 +383,63 @@ function ruleBasedProposals(ctx) {
       priority: "high",
       expectedImpact: `+1–2 high-ticket bookings, projected revenue +₹${Math.round((svc.basePrice || 0) * 1.5).toLocaleString("en-IN")}/week`,
       payload: { serviceId: svc.id, suggestedDailyBudget: 500 },
+    });
+  }
+
+  // 4. PRD §6.7 — Occupancy gap heuristic.
+  // When today's expected-revenue-utilisation < 50% (booked-minutes vs
+  // working-hour-window across all active locations), recommend boosting
+  // the highest (targetRadiusKm × basePrice) service that had ZERO
+  // bookings in the last 7 days. Suggest a concrete daily budget that
+  // scales with the service's basePrice (1% of base, floor ₹300, cap
+  // ₹2000) so a ₹50k procedure gets ₹500/day, ₹2L procedure ₹2k/day.
+  if (ctx.utilisationPct < 50 && ctx.zeroBookingServices && ctx.zeroBookingServices.length > 0) {
+    const svc = ctx.zeroBookingServices[0];
+    const suggestedDailyBudget = Math.min(2000, Math.max(300, Math.round((svc.basePrice || 0) * 0.01 / 50) * 50));
+    const titleSvc = svc.name;
+    out.push({
+      type: "campaign_boost",
+      title: `Occupancy gap (${ctx.utilisationPct}%) — boost ${titleSvc} ad spend`,
+      body: `Today's booked time fills only ${ctx.utilisationPct}% of working hours (${Math.round(ctx.usedMinutes/60)}h booked / ${Math.round(ctx.capacityMinutes/60)}h capacity). ${titleSvc} (radius ${svc.targetRadiusKm || "∞"}km, ₹${(svc.basePrice || 0).toLocaleString("en-IN")}/case) had zero bookings this week — best ROI candidate to fill the gap.`,
+      priority: "high",
+      expectedImpact: `Lift utilisation by 10–15 pts; projected +₹${Math.round((svc.basePrice || 0) * 1.5).toLocaleString("en-IN")}/week if 1–2 leads convert`,
+      goalContext: "100% occupancy this week",
+      payload: {
+        serviceId: svc.id,
+        serviceName: svc.name,
+        suggestedDailyBudget,
+        utilisationPct: ctx.utilisationPct,
+        capacityMinutes: ctx.capacityMinutes,
+        usedMinutes: ctx.usedMinutes,
+        reason: "occupancy_gap_below_50",
+      },
+    });
+  }
+
+  // 5. PRD §6.7 — Stale-lead escalation (zero missed leads).
+  // Leads older than slaMinutes with no Activity row → recommend
+  // reassignment to the on-duty telecaller. Bundles up to 10 lead
+  // IDs in the payload so the dispatcher can act on them precisely.
+  if (ctx.slaBreachLeads && ctx.slaBreachLeads.length > 0) {
+    const ids = ctx.slaBreachLeads.slice(0, 10).map((l) => l.id);
+    const sample = ctx.slaBreachLeads.slice(0, 3).map((l) => l.name).join(", ");
+    const assignee = ctx.suggestedAssignee;
+    const assigneeLabel = assignee ? (assignee.name || assignee.email) : "the on-duty telecaller";
+    out.push({
+      type: "lead_followup",
+      title: `${ctx.slaBreachLeads.length} leads past ${ctx.slaMinutes}-min SLA — escalate now`,
+      body: `${ctx.slaBreachLeads.length} leads (${sample}${ctx.slaBreachLeads.length > 3 ? ", …" : ""}) have had no first contact recorded. SLA of ${ctx.slaMinutes} minutes (PRD §6.4) has elapsed. Suggest reassigning to ${assigneeLabel} and queuing a holding WhatsApp template.`,
+      priority: "high",
+      expectedImpact: `Recovers ~${Math.max(1, Math.floor(ctx.slaBreachLeads.length * 0.3))} leads that would otherwise drop off`,
+      goalContext: "zero missed leads",
+      payload: {
+        leadIds: ids,
+        reassignToUserId: assignee ? assignee.id : null,
+        reassignToName: assigneeLabel,
+        slaMinutes: ctx.slaMinutes,
+        ageHours: 1,
+        reason: "sla_breach",
+      },
     });
   }
 

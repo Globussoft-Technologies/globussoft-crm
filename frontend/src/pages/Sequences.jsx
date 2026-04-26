@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import ReactFlow, { MiniMap, Controls, Background, addEdge, applyNodeChanges, applyEdgeChanges, Panel } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Network, Play, Plus, Save, Clock, Mail, Trash2, Users, RefreshCw, MessageSquare, MessageCircle, Bell } from 'lucide-react';
+import { Network, Play, Plus, Save, Clock, Mail, Trash2, Users, RefreshCw, MessageSquare, MessageCircle, Bell, ListOrdered } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -195,6 +196,14 @@ export default function Sequences() {
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
                   <h4 style={{ fontWeight: '600', fontSize: '0.9rem', flex: 1, marginRight: '0.5rem' }}>{seq.name}</h4>
+                  <Link
+                    to={`/sequences/${seq.id}/builder`}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ background: 'transparent', border: 'none', color: '#3b82f6', padding: '2px 4px', position: 'relative', zIndex: 10, pointerEvents: 'all', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+                    title="Open step-list builder"
+                  >
+                    <ListOrdered size={14} />
+                  </Link>
                   <button
                     onClick={(e) => deleteSequence(seq.id, e)}
                     style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '2px', position: 'relative', zIndex: 10, pointerEvents: 'all' }}

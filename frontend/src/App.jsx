@@ -24,6 +24,7 @@ const CPQ = lazy(() => import('./pages/CPQ'));
 const CustomObjects = lazy(() => import('./pages/CustomObjects'));
 const CustomObjectView = lazy(() => import('./pages/CustomObjectView'));
 const Sequences = lazy(() => import('./pages/Sequences'));
+const SequenceBuilder = lazy(() => import('./pages/SequenceBuilder'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 const Tickets = lazy(() => import('./pages/Tickets'));
 const Support = lazy(() => import('./pages/Support'));
@@ -200,6 +201,7 @@ export default function App() {
               <Route path="objects" element={<CustomObjects />} />
               <Route path="objects/:entityName" element={<CustomObjectView />} />
               <Route path="sequences" element={<Sequences />} />
+              <Route path="sequences/:id/builder" element={<SequenceBuilder />} />
               <Route path="support" element={<Support />} />
               <Route path="settings" element={<Settings />} />
               <Route path="expenses" element={<Expenses />} />

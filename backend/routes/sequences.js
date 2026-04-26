@@ -196,6 +196,185 @@ router.delete("/enrollments/:id", verifyToken, async (req, res) => {
   }
 });
 
+// ─── SequenceStep CRUD (#9 step-list rebuild) ───────────────────────────
+// New explicit step-list editor. The engine treats Sequence.steps as the
+// canonical drip definition when non-empty; legacy ReactFlow canvas remains
+// the fallback for sequences that haven't been migrated.
+
+const ALLOWED_KINDS = ["email", "sms", "wait", "condition"];
+
+// All step routes are admin-only — drips touch real inboxes and are
+// inherently destructive if mis-edited.
+const stepGuard = [verifyToken, verifyRole(["ADMIN"])];
+
+// Helper: confirm sequence belongs to caller's tenant.
+const findSequenceForTenant = async (id, tenantId) => {
+  if (isNaN(id)) return null;
+  return prisma.sequence.findFirst({ where: { id, tenantId } });
+};
+
+// GET /:id/steps — ordered step list for a sequence
+router.get("/:id/steps", ...stepGuard, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const seq = await findSequenceForTenant(id, req.user.tenantId);
+    if (!seq) return res.status(404).json({ error: "Sequence not found" });
+    const steps = await prisma.sequenceStep.findMany({
+      where: { sequenceId: seq.id },
+      include: { emailTemplate: { select: { id: true, name: true, subject: true } } },
+      orderBy: { position: "asc" },
+    });
+    res.json(steps);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to read steps." });
+  }
+});
+
+// POST /:id/steps — append a new step (or insert at body.position with
+// subsequent rows shifted +1).
+router.post("/:id/steps", ...stepGuard, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const seq = await findSequenceForTenant(id, req.user.tenantId);
+    if (!seq) return res.status(404).json({ error: "Sequence not found" });
+
+    const {
+      kind, emailTemplateId, smsBody, delayMinutes,
+      conditionJson, trueNextPosition, falseNextPosition,
+      pauseOnReply, position,
+    } = req.body || {};
+
+    if (!ALLOWED_KINDS.includes(kind)) {
+      return res.status(400).json({ error: `kind must be one of ${ALLOWED_KINDS.join(", ")}` });
+    }
+
+    // Determine target position.
+    const last = await prisma.sequenceStep.findFirst({
+      where: { sequenceId: seq.id },
+      orderBy: { position: "desc" },
+    });
+    const append = last ? last.position + 1 : 0;
+    const target = (position == null || isNaN(parseInt(position, 10))) ? append : parseInt(position, 10);
+
+    // If inserting BEFORE the end, shift everything at >= target up by 1
+    // BEFORE we create the new row, so the @@unique([sequenceId, position])
+    // constraint isn't violated. We do the shift in descending order to
+    // avoid a transient duplicate.
+    if (target <= append - 1) {
+      const toShift = await prisma.sequenceStep.findMany({
+        where: { sequenceId: seq.id, position: { gte: target } },
+        orderBy: { position: "desc" },
+      });
+      for (const s of toShift) {
+        await prisma.sequenceStep.update({
+          where: { id: s.id },
+          data: { position: s.position + 1 },
+        });
+      }
+    }
+
+    const created = await prisma.sequenceStep.create({
+      data: {
+        sequenceId: seq.id,
+        position: target,
+        kind,
+        emailTemplateId: emailTemplateId != null ? parseInt(emailTemplateId, 10) : null,
+        smsBody: smsBody || null,
+        delayMinutes: delayMinutes != null ? parseInt(delayMinutes, 10) : null,
+        conditionJson: conditionJson || null,
+        trueNextPosition: trueNextPosition != null ? parseInt(trueNextPosition, 10) : null,
+        falseNextPosition: falseNextPosition != null ? parseInt(falseNextPosition, 10) : null,
+        pauseOnReply: pauseOnReply == null ? true : !!pauseOnReply,
+      },
+    });
+    res.status(201).json(created);
+  } catch (err) {
+    console.error("[sequences] create step failed:", err.message);
+    res.status(500).json({ error: "Failed to create step." });
+  }
+});
+
+// PUT /steps/:id — update one step (tenant scoped via parent sequence)
+router.put("/steps/:id", ...stepGuard, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid step ID" });
+    const existing = await prisma.sequenceStep.findFirst({
+      where: { id, sequence: { tenantId: req.user.tenantId } },
+    });
+    if (!existing) return res.status(404).json({ error: "Step not found" });
+
+    const {
+      kind, emailTemplateId, smsBody, delayMinutes,
+      conditionJson, trueNextPosition, falseNextPosition,
+      pauseOnReply,
+    } = req.body || {};
+
+    if (kind != null && !ALLOWED_KINDS.includes(kind)) {
+      return res.status(400).json({ error: `kind must be one of ${ALLOWED_KINDS.join(", ")}` });
+    }
+
+    const updated = await prisma.sequenceStep.update({
+      where: { id: existing.id },
+      data: {
+        ...(kind !== undefined && { kind }),
+        ...(emailTemplateId !== undefined && {
+          emailTemplateId: emailTemplateId == null ? null : parseInt(emailTemplateId, 10),
+        }),
+        ...(smsBody !== undefined && { smsBody }),
+        ...(delayMinutes !== undefined && {
+          delayMinutes: delayMinutes == null ? null : parseInt(delayMinutes, 10),
+        }),
+        ...(conditionJson !== undefined && { conditionJson }),
+        ...(trueNextPosition !== undefined && {
+          trueNextPosition: trueNextPosition == null ? null : parseInt(trueNextPosition, 10),
+        }),
+        ...(falseNextPosition !== undefined && {
+          falseNextPosition: falseNextPosition == null ? null : parseInt(falseNextPosition, 10),
+        }),
+        ...(pauseOnReply !== undefined && { pauseOnReply: !!pauseOnReply }),
+      },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error("[sequences] update step failed:", err.message);
+    res.status(500).json({ error: "Failed to update step." });
+  }
+});
+
+// DELETE /steps/:id — remove + auto-renumber subsequent positions so we
+// never leave a hole that the engine would interpret as "completed".
+router.delete("/steps/:id", ...stepGuard, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid step ID" });
+    const existing = await prisma.sequenceStep.findFirst({
+      where: { id, sequence: { tenantId: req.user.tenantId } },
+    });
+    if (!existing) return res.status(404).json({ error: "Step not found" });
+
+    const { sequenceId, position } = existing;
+    await prisma.sequenceStep.delete({ where: { id: existing.id } });
+
+    // Compact: shift later rows down by 1 (ascending so we don't break the
+    // unique constraint mid-loop).
+    const tail = await prisma.sequenceStep.findMany({
+      where: { sequenceId, position: { gt: position } },
+      orderBy: { position: "asc" },
+    });
+    for (const s of tail) {
+      await prisma.sequenceStep.update({
+        where: { id: s.id },
+        data: { position: s.position - 1 },
+      });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[sequences] delete step failed:", err.message);
+    res.status(500).json({ error: "Failed to delete step." });
+  }
+});
+
 // Debug endpoint to manually trigger a cron tick. Already implicitly gated
 // by the global /api/* auth guard (any unauthenticated caller gets 403);
 // tightened here to ADMIN-only since this drives the engine for every tenant.

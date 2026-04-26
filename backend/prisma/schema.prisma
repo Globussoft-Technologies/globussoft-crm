@@ -331,6 +331,11 @@ model EmailMessage {
   sentiment      String? // positive, neutral, negative
   sentimentScore Float? // -1 to 1
   threadId       String? // for conversation threading
+  // #7 — set by sequenceEngine.processInboundReplies() once an inbound row
+  // matching a `seq-<enrollmentId>` thread has paused its enrollment. Acts
+  // as the dedup gate so a single reply only pauses once, even if the cron
+  // tick fires repeatedly.
+  sequenceReplyHandled DateTime?
   createdAt      DateTime @default(now())
 
   tenantId Int    @default(1)
@@ -503,9 +508,13 @@ model Sequence {
   id          Int                  @id @default(autoincrement())
   name        String
   isActive    Boolean              @default(false)
-  nodes       String?              @db.Text // JSON string
-  edges       String?              @db.Text // JSON string
+  nodes       String?              @db.Text // JSON string (legacy ReactFlow canvas)
+  edges       String?              @db.Text // JSON string (legacy ReactFlow canvas)
   enrollments SequenceEnrollment[]
+  // #9 — explicit step-list rebuild. When this collection is non-empty the
+  // engine uses it instead of parsing nodes/edges, so legacy sequences keep
+  // running unchanged.
+  steps       SequenceStep[]
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
@@ -519,13 +528,53 @@ model SequenceEnrollment {
   sequence    Sequence  @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
   contactId   Int
   contact     Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  // Legacy ReactFlow cursor (string node id). Kept for back-compat.
   currentNode String?
+  // #9 — step-list cursor. Position within Sequence.steps (0-based). Null
+  // before first tick → engine starts at position 0.
+  currentStep Int?      @default(0)
   nextRun     DateTime?
-  status      String    @default("Active") // Active, Completed, Paused
+  status      String    @default("Active") // Active, Completed, Paused, Unenrolled
   createdAt   DateTime  @default(now())
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// #9 — explicit, ordered step list referencing a real EmailTemplate (or SMS
+// body). Replaces the synthesised "system@crm.com / This is an automated drip
+// email…" path. When no SequenceStep rows exist for a Sequence the engine
+// falls back to the legacy JSON canvas for that sequence — both flows
+// coexist during the rollout.
+model SequenceStep {
+  id              Int      @id @default(autoincrement())
+  sequenceId      Int
+  sequence        Sequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+
+  position        Int      // ordering within the sequence (0, 1, 2, …)
+  kind            String   // 'email' | 'sms' | 'wait' | 'condition'
+
+  // For kind='email' / 'sms':
+  emailTemplateId Int?
+  emailTemplate   EmailTemplate? @relation(fields: [emailTemplateId], references: [id], onDelete: SetNull)
+  smsBody         String?  @db.Text
+
+  // For kind='wait':
+  delayMinutes    Int?     // total delay before advancing past this step
+
+  // For kind='condition' — same evaluator as workflowEngine #20.
+  conditionJson     String? @db.Text // e.g. [{"field":"contact.status","op":"eq","value":"Lead"}]
+  trueNextPosition  Int?    // jump target on true (default: position+1)
+  falseNextPosition Int?    // jump target on false (default: position+1)
+
+  // Engine pauses the enrollment if an inbound EmailMessage with
+  // threadId='seq-<enrollmentId>' arrives while parked on this step.
+  pauseOnReply    Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+
+  @@unique([sequenceId, position])
+  @@index([sequenceId])
 }
 
 model Product {
@@ -737,6 +786,8 @@ model EmailTemplate {
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  sequenceSteps SequenceStep[]
 }
 
 model Project {

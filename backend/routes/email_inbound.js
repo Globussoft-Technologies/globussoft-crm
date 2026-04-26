@@ -87,6 +87,24 @@ async function processInboundEmail(payload, io) {
     });
   }
 
+  // 6. #7 — sequence reply detection. If the inbound thread tag is one of
+  //    the synthesised drip threads (`seq-<enrollmentId>`), invoke the
+  //    sequence engine's reply scanner directly so the pause kicks in
+  //    immediately rather than waiting for the next cron tick. Failure
+  //    here must NOT break the webhook response — Mailgun will retry.
+  try {
+    if (emailMessage.threadId && /^seq-\d+$/.test(emailMessage.threadId)) {
+      const { processInboundReplies } = require("../cron/sequenceEngine");
+      // Fire-and-forget; the dedup gate (sequenceReplyHandled) means it's
+      // safe even if the cron tick is also running concurrently.
+      processInboundReplies().catch((e) =>
+        console.error("[email_inbound] reply pause failed:", e.message)
+      );
+    }
+  } catch (e) {
+    console.error("[email_inbound] reply pause require failed:", e.message);
+  }
+
   return { emailId: emailMessage.id, contactId, tenantId };
 }
 

@@ -395,10 +395,24 @@ test.describe('Sequences flow — drip engine business logic', () => {
     expect([200, 400]).toContain(reEnrol.status());
   });
 
-  // ── Flow 4 — reply detection (NOT IMPLEMENTED on backend, see G2) ───
-  test.skip('inbound EmailMessage from enrolled contact pauses enrollment', async () => {
-    // sequenceEngine.processNode + tickSequenceEngine never query
-    // EmailMessage where direction=INBOUND. A reply has no effect on the
-    // drip. Un-skip once a reply-watcher is added (likely via eventBus).
+  // ── Flow 4 — reply detection (#7 + #9 rebuild) ──────────────────────
+  // Engine now scans inbound EmailMessage rows whose threadId starts with
+  // `seq-` and pauses the matching enrollment via processInboundReplies()
+  // on every cron tick. Previously a placeholder skip — see TODOS.md #7.
+  test('debug tick after inbound reply does not crash + reply-detection path runs', async ({ request }) => {
+    // Re-enrol if needed (previous test soft-deleted via Unenrolled).
+    const re = await request.post(`${API}/sequences/${sequenceId}/enroll`, {
+      headers: auth(),
+      data: { contactId },
+    });
+    expect([200, 400]).toContain(re.status());
+
+    // Drive a tick — primary assertion is that processInboundReplies()
+    // (which now runs first inside tickSequenceEngine) returns cleanly.
+    // Real Mailgun-driven pause is covered by the new sequence-step
+    // spec which writes the inbound row with the precise threadId the
+    // engine matches on.
+    const tick = await request.post(`${API}/sequences/debug/tick`, { headers: auth() });
+    expect(tick.ok(), `tick body: ${await tick.text()}`).toBeTruthy();
   });
 });

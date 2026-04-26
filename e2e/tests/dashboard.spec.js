@@ -36,8 +36,10 @@ test.describe('Dashboard', () => {
 
   test('percentage increase badges are visible on metric cards', async ({ page }) => {
     await page.waitForTimeout(2000);
-    // All cards show trend indicators like +14%, +5%
-    const trendBadges = page.locator('span').filter({ hasText: /\+\d/ });
+    // #128 made deltas period-over-period, so when there's no prior baseline
+    // (range = "all" or prior = 0) the cards render an em-dash instead of "+22%".
+    // Either trend percentage badges OR em-dash placeholders are valid output.
+    const trendBadges = page.locator('span').filter({ hasText: /[+\-]\d|—/ });
     const count = await trendBadges.count();
     expect(count).toBeGreaterThanOrEqual(1);
   });
@@ -63,7 +65,8 @@ test.describe('Dashboard', () => {
   });
 
   test('Generate Report button is visible and navigates to /reports', async ({ page }) => {
-    const btn = page.locator('button', { hasText: 'Generate Report' });
+    // Button label was renamed from "Generate Report" to "View Reports" (#128)
+    const btn = page.locator('button').filter({ hasText: /View Reports|Generate Report/i }).first();
     await expect(btn).toBeVisible();
     await btn.click();
     await expect(page).toHaveURL(/\/reports/, { timeout: 10000 });

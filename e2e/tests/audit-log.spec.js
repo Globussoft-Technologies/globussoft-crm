@@ -15,7 +15,7 @@ async function getAuthToken(request) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await request.post(`${BASE_URL}/api/auth/login`, {
-        data: { email: 'admin', password: 'admin' },
+        data: { email: 'admin@globussoft.com', password: 'password123' },
         headers: { 'Content-Type': 'application/json' },
         timeout: REQUEST_TIMEOUT,
       });

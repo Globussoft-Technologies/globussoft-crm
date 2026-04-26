@@ -6,7 +6,9 @@
 const { test, expect } = require('@playwright/test');
 
 const SIDEBAR_ROUTES = [
-  { label: 'Dashboard', path: '/', heading: /Enterprise Overview/i },
+  // The Dashboard sidebar link points to /dashboard. When token is present, "/"
+  // redirects to /dashboard, so testing the URL pattern as /dashboard works for both.
+  { label: 'Dashboard', path: '/dashboard', heading: /Enterprise Overview/i },
   { label: 'Inbox', path: '/inbox', heading: /Inbox/i },
   { label: 'Contacts', path: '/contacts', heading: /Contacts/i },
   { label: 'Pipeline', path: '/pipeline', heading: /Pipeline|Lead|Deal/i },
@@ -89,11 +91,7 @@ test.describe('Navigation — Sidebar link routing', () => {
       await page.waitForLoadState('domcontentloaded');
 
       // URL should match the expected path
-      if (route.path === '/') {
-        await expect(page).toHaveURL('/');
-      } else {
-        await expect(page).toHaveURL(new RegExp(route.path));
-      }
+      await expect(page).toHaveURL(new RegExp(route.path));
 
       // Page should show some expected content
       await expect(page.locator('h1, h2').filter({ hasText: route.heading }).first()).toBeVisible({
@@ -157,7 +155,9 @@ test.describe('Navigation — Browser back/forward', () => {
 
     await page.goBack();
     await page.waitForLoadState('domcontentloaded');
-    await expect(page).toHaveURL('/');
+    // When authenticated, "/" redirects to /dashboard, so going back lands on
+    // /dashboard rather than the bare "/" the test originally asserted.
+    await expect(page).toHaveURL(/\/(dashboard)?$/);
   });
 
   test('browser forward button works after going back', async ({ page }) => {

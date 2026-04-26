@@ -55,8 +55,9 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
 const cookieParser = require('cookie-parser');
-const { helmetMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+const { helmetMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
 app.use(helmetMiddleware);
+app.use(permissionsPolicyMiddleware); // #186 — Permissions-Policy header
 app.use(cookieParser());
 app.use(sanitizeBody);
 app.use(stripTenantOverride);
@@ -70,13 +71,43 @@ const apiLimiter = rateLimit({
   message: { error: "Too many requests, please try again later." },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 1000,
-  message: { error: "Too many login attempts, please try again later." },
+// Login brute-force defense (#191):
+// Two stacked limiters on POST /api/auth/login. Successful logins (2xx) do
+// NOT count toward the limit, so a legitimate user who fat-fingers and then
+// succeeds doesn't burn budget. The per-username limiter keys on the lowercased
+// email so an attacker can't escape it by rotating IPs.
+// IMPORTANT: only applied to /api/auth/login itself — /api/auth/2fa/verify
+// is a separate endpoint with its own threat model.
+const { ipKeyGenerator } = require("express-rate-limit");
+const loginIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 5, // 5 wrong-password attempts per IP per 15 min
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: { error: "Too many login attempts from this IP, please try again later." },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
-app.use("/api/auth/login", authLimiter);
+const loginUsernameLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10, // 10 attempts per email per hour, regardless of IP
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req, res) => {
+    const email = (req.body?.email || "").toLowerCase().trim();
+    // If no email in body (malformed request), fall back to IP so we don't
+    // collapse all anonymous traffic onto a single shared bucket.
+    return email || `noemail:${ipKeyGenerator(req, res)}`;
+  },
+  message: { error: "Too many login attempts for this account, please try again later." },
+  validate: { trustProxy: false, xForwardedForHeader: false },
+});
+// Order matters: per-IP first (cheap, blocks scrapers), per-username second
+// (catches distributed attacks against one account). Both must pass before
+// the route handler runs. Scoped to POST so OPTIONS preflight isn't counted.
+app.post("/api/auth/login", loginIpLimiter, loginUsernameLimiter, (req, res, next) => next());
 app.use("/api", apiLimiter);
 
 const io = new Server(server, { cors: { origin: "*" } });

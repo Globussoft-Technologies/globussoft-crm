@@ -359,16 +359,63 @@ router.get('/:id/attachments', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to fetch attachments' }); }
 });
 
+// #176: JSON-only contract — UI sends {filename, fileUrl}. Multipart isn't wired
+// (no multer in this router) and is not supported here; document the contract
+// rather than crash with a generic 500.
 router.post('/:id/attachments', async (req, res) => {
   try {
-    const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const contactId = parseInt(req.params.id);
+    if (!Number.isFinite(contactId)) {
+      return res.status(400).json({ error: 'Invalid contact id', code: 'INVALID_ID', field: 'id' });
+    }
+    const contact = await prisma.contact.findFirst({ where: { id: contactId, tenantId: req.user.tenantId } });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
-    const { filename, fileUrl, fileSize, mimeType } = req.body;
+
+    // Reject multipart up front — no multer wired here, so req.body would be empty.
+    const ctype = String(req.headers['content-type'] || '').toLowerCase();
+    if (ctype.startsWith('multipart/form-data')) {
+      return res.status(400).json({
+        error: 'Multipart upload not supported on this endpoint. POST application/json with {filename, fileUrl}.',
+        code: 'UNSUPPORTED_CONTENT_TYPE',
+        field: 'Content-Type'
+      });
+    }
+
+    const body = req.body || {};
+    const { filename, fileUrl, fileSize, mimeType } = body;
+
+    if (!filename || typeof filename !== 'string' || !filename.trim()) {
+      return res.status(400).json({ error: 'filename is required', code: 'MISSING_FILENAME', field: 'filename' });
+    }
+    if (!fileUrl || typeof fileUrl !== 'string' || !fileUrl.trim()) {
+      return res.status(400).json({ error: 'fileUrl is required', code: 'MISSING_FILEURL', field: 'fileUrl' });
+    }
+    if (!/^https?:\/\//i.test(fileUrl.trim())) {
+      return res.status(400).json({ error: 'fileUrl must be an http(s) URL', code: 'INVALID_FILEURL', field: 'fileUrl' });
+    }
+
+    const sizeNum = (fileSize === undefined || fileSize === null || fileSize === '')
+      ? null
+      : Number.parseInt(fileSize, 10);
+    if (sizeNum !== null && !Number.isFinite(sizeNum)) {
+      return res.status(400).json({ error: 'fileSize must be an integer', code: 'INVALID_FILESIZE', field: 'fileSize' });
+    }
+
     const attachment = await prisma.contactAttachment.create({
-      data: { filename, fileUrl, fileSize: fileSize ? parseInt(fileSize) : null, mimeType, contactId: contact.id, tenantId: req.user.tenantId }
+      data: {
+        filename: filename.trim().slice(0, 255),
+        fileUrl: fileUrl.trim(),
+        fileSize: sizeNum,
+        mimeType: (mimeType && typeof mimeType === 'string') ? mimeType.trim().slice(0, 120) : null,
+        contactId: contact.id,
+        tenantId: req.user.tenantId,
+      }
     });
     res.status(201).json(attachment);
-  } catch (err) { res.status(500).json({ error: 'Failed to add attachment' }); }
+  } catch (err) {
+    console.error('POST /contacts/:id/attachments failed:', err);
+    res.status(500).json({ error: 'Failed to add attachment' });
+  }
 });
 
 router.delete('/attachments/:attachId', async (req, res) => {

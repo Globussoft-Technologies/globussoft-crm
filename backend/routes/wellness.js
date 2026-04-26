@@ -1586,6 +1586,37 @@ router.post("/public/book", async (req, res) => {
     if (!tenantSlug || !serviceId || !name || !phone) {
       return res.status(400).json({ error: "tenantSlug, serviceId, name, phone required" });
     }
+    // #219: validation gates on the public endpoint. Anyone on the internet
+    // can hit this; the only thing keeping the DB clean is what we check here.
+    // Rate limiting (per-IP) is tracked separately as a cross-cutting middleware
+    // change — see TODOS.md.
+    const trimmedName = String(name).trim();
+    if (trimmedName.length < 2 || trimmedName.length > 100) {
+      return res.status(400).json({ error: "name must be 2–100 characters", code: "INVALID_NAME" });
+    }
+    const phoneStr = String(phone).trim();
+    // Indian mobile: 10 digits starting 6/7/8/9, optionally with +91 / 91 prefix.
+    // Reject letters, short numbers, foreign formats — those are the spam vectors.
+    if (!/^(\+?91)?[6-9]\d{9}$/.test(phoneStr.replace(/[\s-]/g, ""))) {
+      return res.status(400).json({ error: "phone must be a 10-digit Indian mobile (starts 6/7/8/9, optional +91)", code: "INVALID_PHONE" });
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
+      return res.status(400).json({ error: "email is not a valid format", code: "INVALID_EMAIL" });
+    }
+    if (preferredSlot) {
+      const slot = new Date(preferredSlot);
+      if (Number.isNaN(slot.getTime())) {
+        return res.status(400).json({ error: "preferredSlot is not a valid date", code: "INVALID_SLOT" });
+      }
+      const now = new Date();
+      const ninetyDays = new Date(now.getTime() + 90 * 24 * 3600000);
+      if (slot < now) {
+        return res.status(400).json({ error: "preferredSlot must be in the future", code: "SLOT_IN_PAST" });
+      }
+      if (slot > ninetyDays) {
+        return res.status(400).json({ error: "preferredSlot cannot be more than 90 days out", code: "SLOT_TOO_FAR" });
+      }
+    }
     const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
     if (!tenant || tenant.vertical !== "wellness") return res.status(404).json({ error: "Clinic not found" });
     const service = await prisma.service.findFirst({ where: { id: parseInt(serviceId), tenantId: tenant.id } });

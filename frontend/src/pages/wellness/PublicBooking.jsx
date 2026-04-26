@@ -74,12 +74,24 @@ export default function PublicBooking() {
         <>
           <h3 style={sectionH}>1. Pick a service</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.75rem' }}>
-            {profile.services.slice(0, 30).map((s) => (
+            {profile.services
+              // #218: defensive — hide rows whose price/duration would corrupt
+              // the layout (NaN, Infinity, or absurd legacy values from before
+              // the #209 caps shipped). The catalog is now bounded server-side
+              // but old rows can still survive; render only well-formed ones.
+              .filter((s) => {
+                const p = Number(s.basePrice);
+                const d = Number(s.durationMin);
+                return Number.isFinite(p) && p > 0 && p <= 5_000_000
+                  && Number.isFinite(d) && d > 0 && d <= 480;
+              })
+              .slice(0, 30)
+              .map((s) => (
               <button key={s.id} onClick={() => { setPicked({ ...picked, service: s }); setStep('location'); }} style={cardBtn}>
                 <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>{s.category}</div>
                 <div style={{ fontWeight: 600, marginTop: '0.2rem' }}>{s.name}</div>
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.4rem', display: 'flex', gap: '0.7rem' }}>
-                  <span><IndianRupee size={12} style={{ verticalAlign: 'middle' }} /> {s.basePrice.toLocaleString('en-IN')}</span>
+                  <span><IndianRupee size={12} style={{ verticalAlign: 'middle' }} /> {Number(s.basePrice).toLocaleString('en-IN')}</span>
                   <span><Clock size={12} style={{ verticalAlign: 'middle' }} /> {s.durationMin} min</span>
                 </div>
               </button>

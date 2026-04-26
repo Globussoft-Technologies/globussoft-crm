@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { useFormAutosave } from '../../utils/useFormAutosave';
 
 const tabStyle = (active) => ({
   padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
@@ -15,8 +16,25 @@ export default function PatientDetail() {
   const [patient, setPatient] = useState(null);
   const [services, setServices] = useState([]);
   const [doctors, setDoctors] = useState([]);
-  const [tab, setTab] = useState('history');
+  // #226: persist active tab per patient so a browser refresh lands the user
+  // back on the same tab (default 'history' on first visit).
+  const tabStorageKey = `gbs.tab.patient.${id}`;
+  const [tab, setTab] = useState(() => {
+    try {
+      return sessionStorage.getItem(tabStorageKey) || 'history';
+    } catch {
+      return 'history';
+    }
+  });
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(tabStorageKey, tab);
+    } catch {
+      /* ignore */
+    }
+  }, [tab, tabStorageKey]);
 
   const load = () => {
     setLoading(true);
@@ -157,16 +175,34 @@ function RxSummary({ drugs }) {
 
 // ── Prescribe tab ─────────────────────────────────────────────────
 
+const INITIAL_RX = {
+  visitId: '',
+  drugs: [{ name: '', dosage: '', frequency: '', duration: '' }],
+  instructions: '',
+};
+
 function PrescribeTab({ patient, onSaved }) {
   const notify = useNotify();
-  const [visitId, setVisitId] = useState(patient.visits[0]?.id || '');
-  const [drugs, setDrugs] = useState([{ name: '', dosage: '', frequency: '', duration: '' }]);
-  const [instructions, setInstructions] = useState('');
+  // #226: persist Rx draft to sessionStorage so a browser refresh doesn't
+  // wipe drug/dosage/frequency/duration/instructions.
+  const initial = { ...INITIAL_RX, visitId: patient.visits[0]?.id || '' };
+  const [draft, setDraft, isDirty, clearDraft] = useFormAutosave(`rx-${patient.id}`, initial);
+  const { visitId, drugs, instructions } = draft;
   const [saving, setSaving] = useState(false);
 
+  const setVisitId = (v) => setDraft((s) => ({ ...s, visitId: v }));
+  const setInstructions = (v) => setDraft((s) => ({ ...s, instructions: v }));
   const setDrug = (i, k, v) => {
-    const next = [...drugs]; next[i] = { ...next[i], [k]: v }; setDrugs(next);
+    setDraft((s) => {
+      const next = [...s.drugs];
+      next[i] = { ...next[i], [k]: v };
+      return { ...s, drugs: next };
+    });
   };
+  const addDrug = () => setDraft((s) => ({
+    ...s,
+    drugs: [...s.drugs, { name: '', dosage: '', frequency: '', duration: '' }],
+  }));
 
   // #114: at least one drug must have a name. Empty Rx rows previously saved as
   // a phantom prescription (Rx counter incremented but no medication recorded).
@@ -190,8 +226,7 @@ function PrescribeTab({ patient, onSaved }) {
           instructions,
         }),
       });
-      setDrugs([{ name: '', dosage: '', frequency: '', duration: '' }]);
-      setInstructions('');
+      clearDraft();
       onSaved();
       notify.success('Prescription saved.');
     } catch (err) {
@@ -202,6 +237,8 @@ function PrescribeTab({ patient, onSaved }) {
   return (
     <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
       <h3 style={{ marginBottom: '1rem' }}>New prescription</h3>
+
+      {isDirty && <RestoredBanner onDiscard={clearDraft} />}
 
       <div style={{ marginBottom: '1rem' }}>
         <label style={labelStyle}>Tied to visit</label>
@@ -224,7 +261,7 @@ function PrescribeTab({ patient, onSaved }) {
           <input placeholder="Duration" value={d.duration} onChange={(e) => setDrug(i, 'duration', e.target.value)} style={inputStyle} />
         </div>
       ))}
-      <button type="button" onClick={() => setDrugs([...drugs, { name: '', dosage: '', frequency: '', duration: '' }])} style={{ background: 'transparent', border: '1px dashed rgba(255,255,255,0.15)', color: 'var(--text-secondary)', padding: '0.4rem 0.75rem', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', marginBottom: '1rem' }}>
+      <button type="button" onClick={addDrug} style={{ background: 'transparent', border: '1px dashed rgba(255,255,255,0.15)', color: 'var(--text-secondary)', padding: '0.4rem 0.75rem', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', marginBottom: '1rem' }}>
         + Add drug
       </button>
 
@@ -391,12 +428,22 @@ function ConsentTab({ patient, services, onSaved }) {
 
 // ── Treatment plans tab ───────────────────────────────────────────
 
+const INITIAL_PLAN = {
+  name: '',
+  totalSessions: 4,
+  totalPrice: 0,
+  serviceId: '',
+};
+
 function PlansTab({ patient, services, onSaved }) {
   const notify = useNotify();
-  const [name, setName] = useState('');
-  const [totalSessions, setTotalSessions] = useState(4);
-  const [totalPrice, setTotalPrice] = useState(0);
-  const [serviceId, setServiceId] = useState('');
+  // #226: persist treatment-plan draft so refresh doesn't wipe input.
+  const [draft, setDraft, isDirty, clearDraft] = useFormAutosave(`plan-${patient.id}`, INITIAL_PLAN);
+  const { name, totalSessions, totalPrice, serviceId } = draft;
+  const setName = (v) => setDraft((s) => ({ ...s, name: v }));
+  const setTotalSessions = (v) => setDraft((s) => ({ ...s, totalSessions: v }));
+  const setTotalPrice = (v) => setDraft((s) => ({ ...s, totalPrice: v }));
+  const setServiceId = (v) => setDraft((s) => ({ ...s, serviceId: v }));
   // #225: rapid double-clicks on Add were creating duplicate treatment plans.
   // Guard the submit with a `submitting` flag and disable the button while
   // the POST is in flight.
@@ -414,7 +461,7 @@ function PlansTab({ patient, services, onSaved }) {
           name, totalSessions, totalPrice, serviceId: serviceId || null,
         }),
       });
-      setName(''); setTotalPrice(0); setServiceId('');
+      clearDraft();
       onSaved();
     } catch (err) {
       notify.error(`Failed: ${err.message}`);
@@ -448,6 +495,7 @@ function PlansTab({ patient, services, onSaved }) {
 
       <form onSubmit={submit} className="glass" style={{ padding: '1.25rem' }}>
         <h4 style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>New treatment plan</h4>
+        {isDirty && <RestoredBanner onDiscard={clearDraft} />}
         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: '0.5rem' }}>
           <input placeholder="Plan name (e.g. PRP 6-session package)" value={name} onChange={(e) => setName(e.target.value)} required style={inputStyle} />
           <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
@@ -477,12 +525,22 @@ function PlansTab({ patient, services, onSaved }) {
 
 // ── Log visit tab ──────────────────────────────────────────────────
 
+const INITIAL_VISIT = {
+  serviceId: '',
+  doctorId: '',
+  notes: '',
+  amount: 0,
+};
+
 function LogVisitTab({ patient, services, doctors, onSaved }) {
   const notify = useNotify();
-  const [serviceId, setServiceId] = useState('');
-  const [doctorId, setDoctorId] = useState('');
-  const [notes, setNotes] = useState('');
-  const [amount, setAmount] = useState(0);
+  // #226: persist log-visit draft to sessionStorage so refresh doesn't wipe input.
+  const [draft, setDraft, isDirty, clearDraft] = useFormAutosave(`visit-${patient.id}`, INITIAL_VISIT);
+  const { serviceId, doctorId, notes, amount } = draft;
+  const setServiceId = (v) => setDraft((s) => ({ ...s, serviceId: v }));
+  const setDoctorId = (v) => setDraft((s) => ({ ...s, doctorId: v }));
+  const setNotes = (v) => setDraft((s) => ({ ...s, notes: v }));
+  const setAmount = (v) => setDraft((s) => ({ ...s, amount: v }));
   // #225: same debounce guard as PlansTab — rapid clicks were creating duplicate visits.
   const [submitting, setSubmitting] = useState(false);
 
@@ -507,7 +565,7 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
           notes, amountCharged: amount, status: 'completed',
         }),
       });
-      setServiceId(''); setDoctorId(''); setNotes(''); setAmount(0);
+      clearDraft();
       onSaved();
       notify.success('Visit logged.');
     } catch (err) {
@@ -520,6 +578,7 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
   return (
     <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
       <h3 style={{ marginBottom: '1rem' }}>Log a visit</h3>
+      {isDirty && <RestoredBanner onDiscard={clearDraft} />}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
         <div>
           <label style={labelStyle}>Service <span style={{ color: '#ef4444' }}>*</span></label>
@@ -792,6 +851,28 @@ function InventoryTab({ patient, onSaved }) {
 
 const labelStyle = { display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' };
 const inputStyle = { width: '100%', padding: '0.55rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };
+
+// #226: shown above autosaved forms when a draft has been rehydrated from
+// sessionStorage. Lets the user discard the restored input in one click.
+function RestoredBanner({ onDiscard }) {
+  return (
+    <div style={{
+      marginBottom: '0.75rem', padding: '0.5rem 0.75rem',
+      background: 'rgba(205,148,129,0.10)', border: '1px solid rgba(205,148,129,0.25)',
+      borderRadius: 8, fontSize: '0.8rem', color: 'var(--text-primary)',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem',
+    }}>
+      <span>Restored from your previous session.</span>
+      <button type="button" onClick={onDiscard} style={{
+        background: 'transparent', border: '1px solid rgba(205,148,129,0.4)',
+        color: 'var(--text-primary)', padding: '0.25rem 0.6rem', borderRadius: 6,
+        cursor: 'pointer', fontSize: '0.75rem',
+      }}>
+        Discard
+      </button>
+    </div>
+  );
+}
 
 // ── Agent D: Loyalty card + modal ─────────────────────────────────
 

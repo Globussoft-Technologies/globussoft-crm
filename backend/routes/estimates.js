@@ -3,6 +3,7 @@ const router = express.Router();
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { verifyRole } = require("../middleware/auth");
+const { writeAudit, diffFields } = require("../lib/audit");
 
 // GET /api/estimates — list with optional status filter
 // #167: soft-deleted rows hidden by default; opt in with ?includeDeleted=true.
@@ -124,6 +125,13 @@ router.post("/", async (req, res) => {
       },
       include: { contact: true, deal: true, lineItems: true },
     });
+    // #179: audit estimate creation.
+    await writeAudit('Estimate', 'CREATE', estimate.id, req.user.userId, req.user.tenantId, {
+      estimateNum: estimate.estimateNum,
+      title: estimate.title,
+      totalAmount: estimate.totalAmount,
+      lineItemCount: parsedLineItems.length,
+    });
     res.status(201).json(estimate);
   } catch (err) {
     console.error(err);
@@ -154,6 +162,11 @@ router.put("/:id", async (req, res) => {
       data,
       include: { contact: true, deal: true, lineItems: true },
     });
+    // #179: audit only the keys that changed.
+    const changes = diffFields(existing, estimate, Object.keys(data));
+    if (Object.keys(changes).length > 0) {
+      await writeAudit('Estimate', 'UPDATE', estimate.id, req.user.userId, req.user.tenantId, { changedFields: changes });
+    }
     res.json(estimate);
   } catch (err) {
     console.error(err);
@@ -203,6 +216,21 @@ router.put("/:id/convert", async (req, res) => {
       });
 
       return { estimate: updatedEstimate, invoice };
+    });
+
+    // #179: audit conversion. Two-sided trail: estimate side records the resulting
+    // invoice id; invoice side records the source estimate id. This makes it cheap
+    // for auditors to walk either direction.
+    await writeAudit('Estimate', 'CONVERT_TO_INVOICE', estimate.id, req.user.userId, req.user.tenantId, {
+      invoiceId: result.invoice.id,
+      invoiceNum: result.invoice.invoiceNum,
+      amount: result.invoice.amount,
+    });
+    await writeAudit('Invoice', 'CREATE', result.invoice.id, req.user.userId, req.user.tenantId, {
+      invoiceNum: result.invoice.invoiceNum,
+      amount: result.invoice.amount,
+      sourceEstimateId: estimate.id,
+      via: 'estimate-conversion',
     });
 
     res.json(result);

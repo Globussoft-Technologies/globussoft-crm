@@ -3,6 +3,7 @@ const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { ensureEnum, ensureDateInRange } = require("../lib/validators");
+const { writeAudit, diffFields } = require("../lib/audit");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 // #163: enums used elsewhere in the app — surfaced as strict checks instead of
@@ -89,6 +90,13 @@ router.post("/", verifyToken, async (req, res) => {
       include: { contact: true, user: true },
     });
     try { require("../lib/eventBus").emitEvent("task.created", { taskId: task.id, title: task.title, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
+    // #179: audit task creation.
+    await writeAudit('Task', 'CREATE', task.id, req.user.userId, req.user.tenantId, {
+      title: task.title,
+      priority: task.priority,
+      assignedTo: task.userId,
+      contactId: task.contactId,
+    });
     res.status(201).json(task);
   } catch (err) {
     console.error(err);
@@ -117,11 +125,40 @@ router.put("/:id", verifyToken, async (req, res) => {
     if (priority !== undefined) data.priority = priority;
     if (status !== undefined) data.status = status;
 
+    // gap #17: capture prior status BEFORE the update so task.completed can be
+    // gated idempotently — re-saving an already-Completed task must not re-fire.
+    const wasCompleted = existing.status === "Completed";
+
     const task = await prisma.task.update({
       where: { id: existing.id },
       data,
       include: { contact: true, user: true },
     });
+
+    // gap #17: emit task.completed only on the Pending → Completed transition.
+    try {
+      if (!wasCompleted && task.status === "Completed") {
+        require("../lib/eventBus").emitEvent(
+          "task.completed",
+          {
+            taskId: task.id,
+            contactId: task.contactId,
+            dealId: task.dealId || null,
+            assignedToId: task.userId,
+            completedAt: new Date(),
+          },
+          req.user.tenantId,
+          req.io
+        );
+      }
+    } catch (e) {}
+
+    // #179: audit only the keys that actually changed.
+    const changes = diffFields(existing, task, Object.keys(data));
+    if (Object.keys(changes).length > 0) {
+      await writeAudit('Task', 'UPDATE', task.id, req.user.userId, req.user.tenantId, { changedFields: changes });
+    }
+
     res.json(task);
   } catch (err) {
     console.error(err);
@@ -138,10 +175,39 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
     const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Task not found" });
 
+    // gap #17: same idempotency gate as PUT /:id — don't re-fire if already complete.
+    const wasCompleted = existing.status === "Completed";
+
     const task = await prisma.task.update({
       where: { id: existing.id },
       data: { status: "Completed" },
     });
+
+    try {
+      if (!wasCompleted) {
+        require("../lib/eventBus").emitEvent(
+          "task.completed",
+          {
+            taskId: task.id,
+            contactId: task.contactId,
+            dealId: task.dealId || null,
+            assignedToId: task.userId,
+            completedAt: new Date(),
+          },
+          req.user.tenantId,
+          req.io
+        );
+      }
+    } catch (e) {}
+
+    // #179: audit completion (only on the actual transition — re-saving
+    // an already-Completed task is a no-op and should not generate a row).
+    if (!wasCompleted) {
+      await writeAudit('Task', 'COMPLETE', task.id, req.user.userId, req.user.tenantId, {
+        title: existing.title,
+      });
+    }
+
     res.json(task);
   } catch (err) {
     console.error(err);

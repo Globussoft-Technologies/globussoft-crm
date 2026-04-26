@@ -5,6 +5,7 @@ const PDFDocument = require("pdfkit");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { writeAudit, diffFields } = require("../lib/audit");
 
 // Fetch all ledgers for current tenant
 router.get("/", verifyToken, async (req, res) => {
@@ -77,6 +78,14 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
       },
       include: { contact: true, deal: true }
     });
+    // #179: audit invoice creation.
+    await writeAudit('Invoice', 'CREATE', invoice.id, req.user.userId, req.user.tenantId, {
+      invoiceNum: invoice.invoiceNum,
+      amount: invoice.amount,
+      contactId: invoice.contactId,
+      dealId: invoice.dealId,
+      dueDate: invoice.dueDate,
+    });
     res.status(201).json(invoice);
   } catch (err) {
     res.status(500).json({ error: "Invoice compilation and issuance failed" });
@@ -102,6 +111,12 @@ router.post("/:id/pay", verifyToken, async (req, res) => {
           req.io
         );
       } catch(e) {}
+      // #179: audit only on the actual UNPAID -> PAID transition.
+      await writeAudit('Invoice', 'MARK_PAID', invoice.id, req.user.userId, req.user.tenantId, {
+        invoiceNum: invoice.invoiceNum,
+        amount: invoice.amount,
+        paidAt: invoice.paidAt,
+      });
     }
     res.json(invoice);
   } catch (err) {
@@ -133,6 +148,12 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
           req.io
         );
       } catch(e) {}
+      // #179: audit only on the actual UNPAID -> PAID transition.
+      await writeAudit('Invoice', 'MARK_PAID', invoice.id, req.user.userId, req.user.tenantId, {
+        invoiceNum: invoice.invoiceNum,
+        amount: invoice.amount,
+        paidAt: invoice.paidAt,
+      });
     }
     res.json(invoice);
   } catch (err) {
@@ -250,6 +271,14 @@ async function voidInvoiceHandler(req, res) {
       data: { status: "VOIDED" },
       include: { contact: true, deal: true }
     });
+    // #179: audit the void. reason is optional — accepted via body for the
+    // POST/PUT /:id/void endpoints, omitted for the legacy DELETE /:id alias.
+    await writeAudit('Invoice', 'VOID', invoice.id, req.user?.userId || null, req.user.tenantId, {
+      invoiceNum: invoice.invoiceNum,
+      amount: invoice.amount,
+      reason: req.body?.reason || null,
+      via: req.method,
+    });
     res.json(invoice);
   } catch (err) {
     res.status(500).json({ error: "Failed to void invoice" });
@@ -273,6 +302,13 @@ router.post("/:id/refund", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async 
       where: { id: existing.id },
       data: { status: "REFUNDED" },
       include: { contact: true, deal: true }
+    });
+    // #179: audit refund. Original paidAt is preserved on the row, so we don't
+    // duplicate it here — caller can read it from the invoice row directly.
+    await writeAudit('Invoice', 'REFUND', invoice.id, req.user.userId, req.user.tenantId, {
+      invoiceNum: invoice.invoiceNum,
+      amount: invoice.amount,
+      reason: req.body?.reason || null,
     });
     res.json(invoice);
   } catch (err) {
@@ -313,6 +349,22 @@ router.post("/:id/credit-note", verifyToken, verifyRole(["ADMIN", "MANAGER"]), a
         tenantId: req.user.tenantId,
       },
       include: { contact: true, deal: true }
+    });
+    // #179: audit credit note issuance. Two-sided trail — the original gets a
+    // CREDIT_NOTE_ISSUED row pointing forward; the new credit-note row gets a
+    // CREATE row with via=credit-note so it's clearly distinguished from a
+    // standard manual invoice.
+    await writeAudit('Invoice', 'CREDIT_NOTE_ISSUED', original.id, req.user.userId, req.user.tenantId, {
+      creditNoteId: creditNote.id,
+      creditNoteNum: creditNote.invoiceNum,
+      amount: cnAmount,
+      reason: req.body.reason || null,
+    });
+    await writeAudit('Invoice', 'CREATE', creditNote.id, req.user.userId, req.user.tenantId, {
+      invoiceNum: creditNote.invoiceNum,
+      amount: cnAmount,
+      parentInvoiceId: original.id,
+      via: 'credit-note',
     });
     res.status(201).json({ creditNote, originalInvoiceId: original.id, reason: req.body.reason || null });
   } catch (err) {

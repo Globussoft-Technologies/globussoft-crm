@@ -7,6 +7,7 @@ const crypto = require("crypto");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { writeAudit, diffFields } = require("../lib/audit");
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 
 // In-memory store for password reset tokens (token -> { userId, expiresAt })
@@ -202,6 +203,17 @@ router.put("/users/:id/role", verifyToken, verifyRole(["ADMIN"]), async (req, re
     const target = await prisma.user.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!target) return res.status(404).json({ error: "User not found in your organization" });
     const user = await prisma.user.update({ where: { id: target.id }, data: { role } });
+    // #179: audit role changes — these are privilege escalations / demotions
+    // and are the most important security events to record. Skip a no-op
+    // re-assignment of the same role.
+    if (target.role !== user.role) {
+      await writeAudit('User', 'UPDATE_USER_ROLE', user.id, req.user.userId, req.user.tenantId, {
+        targetUserId: user.id,
+        targetEmail: user.email,
+        oldRole: target.role,
+        newRole: user.role,
+      });
+    }
     res.json(user);
   } catch (err) {
     res.status(500).json({ error: "Failed to update role" });
@@ -212,6 +224,16 @@ router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res)
   try {
     const target = await prisma.user.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!target) return res.status(404).json({ error: "User not found in your organization" });
+    // #179: write audit BEFORE the destructive delete so the row exists even
+    // if the cascade fails. User model has no deletedAt column (verified in
+    // schema.prisma) so this is a hard delete — the audit row is the only
+    // post-mortem trail of the deleted account's metadata.
+    await writeAudit('User', 'DELETE_USER', target.id, req.user.userId, req.user.tenantId, {
+      targetUserId: target.id,
+      targetEmail: target.email,
+      targetName: target.name,
+      targetRole: target.role,
+    });
     await prisma.user.delete({ where: { id: target.id } });
     res.json({ success: true });
   } catch (err) {
@@ -256,8 +278,22 @@ router.post("/reset-password", async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await prisma.user.update({ where: { id: entry.userId }, data: { password: hashedPassword } });
+    const targetUser = await prisma.user.update({
+      where: { id: entry.userId },
+      data: { password: hashedPassword },
+      select: { id: true, email: true, tenantId: true },
+    });
     resetTokens.delete(token);
+
+    // #179: audit completed password reset. The reset-password endpoint is
+    // unauthenticated (the token IS the auth), so userId on the audit row is
+    // the target user themselves, not an actor. CRITICAL: never include the
+    // password value (or its hash) in the details blob.
+    await writeAudit('User', 'PASSWORD_RESET_COMPLETED', targetUser.id, targetUser.id, targetUser.tenantId, {
+      targetUserId: targetUser.id,
+      targetEmail: targetUser.email,
+      via: 'reset-token',
+    });
 
     res.json({ message: "Password reset successfully" });
   } catch (error) {
@@ -313,6 +349,25 @@ router.put("/me", verifyToken, async (req, res) => {
       data: updateData,
       select: { id: true, name: true, email: true, role: true, createdAt: true }
     });
+
+    // #179: audit profile changes. CRITICAL: never include the password value
+    // (or its hash) in the details blob — log only that a password change
+    // happened, with a separate PASSWORD_CHANGE action so it shows up cleanly
+    // in the audit-log filter UI.
+    const changedKeys = Object.keys(updateData).filter((k) => k !== 'password');
+    if (changedKeys.length > 0) {
+      const safeChanges = {};
+      for (const k of changedKeys) safeChanges[k] = updateData[k];
+      await writeAudit('User', 'UPDATE_PROFILE', updatedUser.id, req.user.userId, req.user.tenantId, {
+        changedFields: safeChanges,
+      });
+    }
+    if (updateData.password !== undefined) {
+      await writeAudit('User', 'PASSWORD_CHANGE', updatedUser.id, req.user.userId, req.user.tenantId, {
+        // No password / hash anywhere — only the fact and timestamp.
+        via: 'self-service',
+      });
+    }
 
     res.json(updatedUser);
   } catch (error) {

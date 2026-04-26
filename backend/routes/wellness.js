@@ -18,6 +18,7 @@ const {
   renderConsentPdf,
   renderBrandedInvoicePdf,
 } = require("../services/pdfRenderer");
+const { writeAudit, diffFields } = require("../lib/audit");
 
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
@@ -276,6 +277,14 @@ router.post("/patients", async (req, res) => {
       }
     }
 
+    // #179: audit Patient creation. Don't log raw email/phone (PII) — record
+    // entityId + minimal metadata; the row itself can be inspected by admins.
+    await writeAudit('Patient', 'CREATE', patient.id, req.user.userId, req.user.tenantId, {
+      source: patient.source || null,
+      hasEmail: !!patient.email,
+      hasPhone: !!patient.phone,
+    });
+
     res.status(201).json(patient);
   } catch (e) {
     console.error("[wellness] create patient error:", e.message);
@@ -298,6 +307,20 @@ router.put("/patients/:id", async (req, res) => {
     if (req.body.dob !== undefined) data.dob = req.body.dob ? new Date(req.body.dob) : null;
 
     const updated = await prisma.patient.update({ where: { id }, data });
+    // #179: audit only the keys that changed. PII (email/phone) is recorded
+    // by name only — the actual values are not stored in the audit blob to
+    // limit exposure if audit logs leak.
+    const changes = diffFields(existing, updated, Object.keys(data));
+    const safeKeys = Object.keys(changes).filter((k) => !["email", "phone"].includes(k));
+    const piiTouched = Object.keys(changes).filter((k) => ["email", "phone"].includes(k));
+    if (safeKeys.length > 0 || piiTouched.length > 0) {
+      const safeChanges = {};
+      for (const k of safeKeys) safeChanges[k] = changes[k];
+      await writeAudit('Patient', 'UPDATE', updated.id, req.user.userId, req.user.tenantId, {
+        changedFields: safeChanges,
+        piiFieldsTouched: piiTouched,
+      });
+    }
     res.json(updated);
   } catch (e) {
     console.error("[wellness] update patient error:", e.message);
@@ -412,6 +435,16 @@ router.post("/visits", async (req, res) => {
     // by (visitId, type='earned'). Failures must not roll back the visit.
     await maybeAutoCreditLoyalty(visit, req.user.tenantId);
 
+    // #179: audit Visit creation.
+    await writeAudit('Visit', 'CREATE', visit.id, req.user.userId, req.user.tenantId, {
+      patientId: visit.patientId,
+      serviceId: visit.serviceId,
+      doctorId: visit.doctorId,
+      status: visit.status,
+      visitDate: visit.visitDate,
+      amountCharged: visit.amountCharged,
+    });
+
     res.status(201).json(visit);
   } catch (e) {
     console.error("[wellness] create visit error:", e.message);
@@ -465,6 +498,19 @@ router.put("/visits/:id", async (req, res) => {
       } catch (hookErr) {
         console.error("[wellness] waitlist auto-offer hook failed:", hookErr.message);
       }
+    }
+
+    // #179: audit visit update. Status transitions (booked → in-treatment →
+    // completed → cancelled / no-show) are the highest-signal field; always
+    // capture from/to explicitly when status changed.
+    const changes = diffFields(existing, updated, Object.keys(data));
+    if (Object.keys(changes).length > 0) {
+      const action = (changes.status && existing.status !== updated.status) ? 'STATUS_CHANGE' : 'UPDATE';
+      await writeAudit('Visit', action, updated.id, req.user.userId, req.user.tenantId, {
+        priorStatus: existing.status,
+        newStatus: updated.status,
+        changedFields: changes,
+      });
     }
 
     res.json(updated);
@@ -601,6 +647,15 @@ router.post("/prescriptions", async (req, res) => {
         tenantId: req.user.tenantId,
       },
     });
+    // #179: audit Rx creation. Medico-legal: capture drug names so amendments
+    // can be diffed against the original prescription without joining tables.
+    await writeAudit('Prescription', 'CREATE', rx.id, req.user.userId, req.user.tenantId, {
+      patientId: rx.patientId,
+      visitId: rx.visitId,
+      doctorId: rx.doctorId,
+      drugNames: namedDrugs.map((d) => d.name).slice(0, 20),
+      drugCount: namedDrugs.length,
+    });
     res.status(201).json(rx);
   } catch (e) {
     console.error("[wellness] create prescription error:", e.message);
@@ -631,6 +686,23 @@ router.put("/prescriptions/:id", async (req, res) => {
     }
     if (req.body.instructions !== undefined) data.instructions = req.body.instructions;
     const updated = await prisma.prescription.update({ where: { id }, data });
+    // #179: audit Rx amendment. This row is the medico-legal trail —
+    // capture before/after drug arrays so the diff is reconstructible without
+    // having to read prior versions of the row.
+    let priorDrugs = null, newDrugs = null;
+    try { priorDrugs = JSON.parse(existing.drugs || '[]'); } catch (_) {}
+    try { newDrugs = JSON.parse(updated.drugs || '[]'); } catch (_) {}
+    await writeAudit('Prescription', 'UPDATE_PRESCRIPTION', updated.id, req.user.userId, req.user.tenantId, {
+      patientId: updated.patientId,
+      visitId: updated.visitId,
+      doctorId: updated.doctorId,
+      amendedBy: req.user.userId,
+      isOriginalPrescriber: existing.doctorId === req.user.id,
+      priorDrugs,
+      newDrugs,
+      priorInstructions: existing.instructions || null,
+      newInstructions: updated.instructions || null,
+    });
     res.json(updated);
   } catch (e) {
     console.error("[wellness] amend prescription error:", e.message);
@@ -682,6 +754,14 @@ router.post("/consents", async (req, res) => {
         signatureSvg,
         tenantId: req.user.tenantId,
       },
+    });
+    // #179: audit consent creation. Don't store the signatureSvg in the
+    // audit blob — it's a few KB, and the row itself holds the canonical copy.
+    await writeAudit('ConsentForm', 'CREATE', consent.id, req.user.userId, req.user.tenantId, {
+      patientId: consent.patientId,
+      serviceId: consent.serviceId,
+      templateName: consent.templateName,
+      signatureLength: signatureSvg.length,
     });
     res.status(201).json(consent);
   } catch (e) {
@@ -968,6 +1048,13 @@ router.post("/recommendations/:id/approve", async (req, res) => {
     let actionResult = null;
     try { actionResult = await executeApproved(current, { actorUserId: req.user.id }); }
     catch (e) { console.error("[orchestrator] dispatch failed:", e.message); }
+    // #179: audit recommendation approval. We log only AFTER the race-safe
+    // flip so a re-approve attempt (count=0 above) does NOT generate a row.
+    await writeAudit('AgentRecommendation', 'APPROVE', id, req.user.userId, req.user.tenantId, {
+      title: current.title,
+      priority: current.priority,
+      dispatched: actionResult != null,
+    });
     res.json({ ...current, _actionResult: actionResult });
   } catch (e) {
     console.error("[wellness] approve recommendation error:", e.message);
@@ -1067,6 +1154,13 @@ router.post("/recommendations/:id/reject", async (req, res) => {
     if (flip.count === 0) {
       return res.json({ ...current, idempotent: true });
     }
+    // #179: audit recommendation rejection. As with /approve we only log after
+    // the race-safe flip so re-rejection doesn't double-write.
+    await writeAudit('AgentRecommendation', 'REJECT', id, req.user.userId, req.user.tenantId, {
+      title: current.title,
+      priority: current.priority,
+      reason: req.body?.reason || null,
+    });
     res.json(current);
   } catch (e) {
     console.error("[wellness] reject recommendation error:", e.message);
@@ -2004,6 +2098,14 @@ router.post("/loyalty/:patientId/credit", requireManagerPlus, async (req, res) =
         reason,
       },
     });
+    // #179: audit manual loyalty credits — these are a fraud surface
+    // (a manager can hand out points). entityId is the patient, not the tx,
+    // so admins can browse a patient's full credit history at a glance.
+    await writeAudit('Patient', 'CREDIT_LOYALTY', patientId, req.user.userId, req.user.tenantId, {
+      transactionId: tx.id,
+      points,
+      reason,
+    });
     res.status(201).json(tx);
   } catch (e) {
     console.error("[wellness] loyalty credit error:", e.message);
@@ -2049,6 +2151,14 @@ router.post("/loyalty/:patientId/redeem", async (req, res) => {
         points: -points,
         reason,
       },
+    });
+    // #179: audit redemption with balance-after for ledger reconciliation.
+    await writeAudit('Patient', 'REDEEM_LOYALTY', patientId, req.user.userId, req.user.tenantId, {
+      transactionId: tx.id,
+      points,
+      reason,
+      balanceBefore: balance,
+      balanceAfter: balance - points,
     });
     res.status(201).json({ ...tx, balanceAfter: balance - points });
   } catch (e) {

@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const prisma = require("../lib/prisma");
 const { notify, notifyMany, notifyTenant } = require("../lib/notificationService");
+const { writeAudit } = require("../lib/audit");
 
 // GET / — list notifications (paginated)
 router.get("/", async (req, res) => {
@@ -107,6 +108,13 @@ router.delete("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Notification not found" });
 
     await prisma.notification.delete({ where: { id: existing.id } });
+    // #179: audit destructive delete. entityId points at the now-deleted row's
+    // id so admins can correlate with logs from the moments before deletion.
+    await writeAudit('Notification', 'DELETE', existing.id, req.user.userId, req.user.tenantId, {
+      title: existing.title,
+      type: existing.type,
+      targetUserId: existing.userId,
+    });
     res.json({ message: "Notification deleted" });
   } catch (err) {
     console.error("[Notifications] Delete error:", err);
@@ -144,6 +152,14 @@ router.post("/", async (req, res) => {
     if (!userId) {
       if (!isAdmin) return res.status(403).json({ error: "Only admins can broadcast notifications", code: "BROADCAST_FORBIDDEN" });
       const result = await notifyTenant({ tenantId, title, message, type, link, channels, io });
+      // #179: tenant-wide broadcasts are an admin "blast" surface — must be audited.
+      // entityId is null because the broadcast spawned N notifications, not one.
+      await writeAudit('Notification', 'BROADCAST', null, callerId, tenantId, {
+        title,
+        type: type || null,
+        delivered: result.length,
+        channels: channels || null,
+      });
       return res.status(201).json({ delivered: result.length, notifications: result });
     }
     const targetId = parseInt(userId);
@@ -151,6 +167,15 @@ router.post("/", async (req, res) => {
       return res.status(403).json({ error: "Only admins can notify other users", code: "CROSS_USER_FORBIDDEN" });
     }
     const result = await notify({ userId: targetId, tenantId, title, message, type, link, channels, io });
+    // #179: only audit cross-user notifications. Self-notify is too noisy and
+    // not security-relevant; admin → other-user is.
+    if (targetId !== callerId) {
+      await writeAudit('Notification', 'CREATE', result?.id || null, callerId, tenantId, {
+        targetUserId: targetId,
+        title,
+        type: type || null,
+      });
+    }
     res.status(201).json({ delivered: 1, notification: result });
   } catch (err) {
     console.error("[Notifications] Create/deliver error:", err);

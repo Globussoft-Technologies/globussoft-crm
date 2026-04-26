@@ -1,6 +1,7 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { writeAudit } = require("../lib/audit");
 
 const router = express.Router();
 
@@ -18,13 +19,9 @@ router.param("id", (req, res, next, id) => {
   next();
 });
 
-// ─── Helper: audit log ───────────────────────────────────────────────
+// ─── Helper: audit log (delegates to shared lib/audit.js — issue #179) ──
 async function audit(action, entityId, userId, tenantId, details) {
-  try {
-    await prisma.auditLog.create({
-      data: { action, entity: "Deal", entityId, userId, tenantId, details: typeof details === "string" ? details : JSON.stringify(details) },
-    });
-  } catch (_) { /* non-critical */ }
+  return writeAudit("Deal", action, entityId, userId, tenantId, details);
 }
 
 // ─── GET / — list deals with filters ─────────────────────────────────

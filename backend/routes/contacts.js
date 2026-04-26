@@ -4,6 +4,7 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
 const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, conflictFromPrisma } = require("../lib/validators");
+const { writeAudit, diffFields } = require("../lib/audit");
 
 // #167: soft-delete helper. Aggregations / reports / merge / internal joins
 // (e.g. activities, deals, sequenceEnrollments) are NOT yet filtered by
@@ -90,6 +91,8 @@ router.post('/', async (req, res) => {
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     const contact = await prisma.contact.create({ data: { ...req.body, tenantId: req.user.tenantId } });
     try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (e) { /* event bus optional */ }
+    // #179: audit row for new contact.
+    await writeAudit('Contact', 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
     res.status(201).json(contact);
   } catch (err) {
     // #178: duplicate email should be 409 Conflict, not 500.
@@ -135,7 +138,55 @@ router.put('/:id', async (req, res) => {
     // #168: same input checks as create so PUT can't bypass POST validation.
     const inputErr = validateContactInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
-    res.json(await prisma.contact.update({ where: { id: existing.id }, data: req.body }));
+    const contact = await prisma.contact.update({ where: { id: existing.id }, data: req.body });
+
+    // #179: audit only the keys that actually changed (skip unchanged + DB internals).
+    const changes = diffFields(existing, contact, Object.keys(req.body || {}));
+    if (Object.keys(changes).length > 0) {
+      await writeAudit('Contact', 'UPDATE', contact.id, req.user.userId, req.user.tenantId, { changedFields: changes });
+    }
+
+    // gap #17: emit contact.updated for workflow rules. Always-safe fields exposed
+    // for rule conditions. Failure here must NEVER fail the update.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "contact.updated",
+        {
+          contactId: contact.id,
+          changedFields: Object.keys(req.body || {}),
+          status: contact.status,
+          assignedToId: contact.assignedToId,
+          tenantId: req.user.tenantId,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (e) {}
+
+    // gap #17: lead.converted — fires when a Contact's status flips from "Lead"
+    // to "Customer" or "Prospect". Separate trigger from contact.updated so a
+    // rule author can subscribe specifically to conversion events.
+    try {
+      if (
+        existing.status === "Lead" &&
+        (contact.status === "Customer" || contact.status === "Prospect") &&
+        existing.status !== contact.status
+      ) {
+        require("../lib/eventBus").emitEvent(
+          "lead.converted",
+          {
+            contactId: contact.id,
+            fromStatus: existing.status,
+            toStatus: contact.status,
+            assignedToId: contact.assignedToId,
+          },
+          req.user.tenantId,
+          req.io
+        );
+      }
+    } catch (e) {}
+
+    res.json(contact);
   } catch (err) {
     const conflict = conflictFromPrisma(err);
     if (conflict) return res.status(conflict.status).json(conflict);
@@ -218,6 +269,14 @@ router.post('/import-csv', async (req, res) => {
       }
     }
 
+    // #179: audit the bulk import. entityId is null because this affects many rows.
+    await writeAudit('Contact', 'CSV_IMPORT', null, req.user.userId, req.user.tenantId, {
+      rowCount: contacts.length,
+      imported,
+      skipped,
+      errorCount: errors.length,
+      source: 'csv',
+    });
     res.json({ imported, skipped, errors });
   } catch (err) {
     res.status(500).json({ error: 'Failed to import contacts' });
@@ -425,6 +484,14 @@ router.post('/:id/attachments', async (req, res) => {
         tenantId: req.user.tenantId,
       }
     });
+    // #179: audit the attachment add — useful for tracking what files have been
+    // uploaded against a contact (and by whom).
+    await writeAudit('ContactAttachment', 'CREATE', attachment.id, req.user.userId, req.user.tenantId, {
+      contactId: contact.id,
+      filename: attachment.filename,
+      mimeType: attachment.mimeType,
+      fileSize: attachment.fileSize,
+    });
     res.status(201).json(attachment);
   } catch (err) {
     console.error('POST /contacts/:id/attachments failed:', err);
@@ -437,6 +504,11 @@ router.delete('/attachments/:attachId', async (req, res) => {
     const existing = await prisma.contactAttachment.findFirst({ where: { id: parseInt(req.params.attachId), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Attachment not found' });
     await prisma.contactAttachment.delete({ where: { id: existing.id } });
+    // #179: audit the destructive delete (attachments are hard-deleted).
+    await writeAudit('ContactAttachment', 'DELETE', existing.id, req.user.userId, req.user.tenantId, {
+      contactId: existing.contactId,
+      filename: existing.filename,
+    });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete attachment' }); }
 });

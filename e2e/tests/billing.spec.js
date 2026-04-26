@@ -84,26 +84,25 @@ test.describe('Billing — Invoice management', () => {
   test('delete invoice shows confirmation dialog', async ({ page }) => {
     await page.waitForTimeout(2000);
 
-    // Track any dialog that appears
-    let dialogShown = false;
-    page.on('dialog', async (dialog) => {
-      dialogShown = true;
-      await dialog.dismiss(); // Dismiss to avoid actually deleting
-    });
-
+    // Native window.confirm was replaced with an HTML modal (useNotify) in the
+    // batch 6 dialog migration. The browser-side `dialog` event no longer
+    // fires; we now look for the rendered HTML modal instead.
     const deleteBtn = page
       .locator('button')
       .filter({ hasText: /delete|remove|void/i })
       .first();
     const btnCount = await deleteBtn.count();
 
-    if (btnCount > 0) {
-      await deleteBtn.click();
-      await page.waitForTimeout(1000);
-      expect(dialogShown).toBe(true);
-    } else {
+    if (btnCount === 0) {
       test.skip(true, 'No delete buttons found — invoice list may be empty');
+      return;
     }
+    await deleteBtn.click();
+    const modal = page.locator('[role="dialog"][aria-modal="true"], [data-notify-modal]').first();
+    await expect(modal).toBeVisible({ timeout: 5000 });
+    // Cancel so we don't actually void the invoice.
+    const cancelBtn = modal.locator('button').filter({ hasText: /cancel|no|close/i }).first();
+    if ((await cancelBtn.count()) > 0) await cancelBtn.click();
   });
 
   test('billing page shows financial summary or totals', async ({ page }) => {

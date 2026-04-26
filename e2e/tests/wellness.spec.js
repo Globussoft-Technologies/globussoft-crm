@@ -897,9 +897,14 @@ test.describe.serial('Wellness — Telecaller + Patient Portal + Orchestrator', 
   });
 
   test('86. POST /recommendations/:id/reject works', async ({ request }) => {
-    const recs = await (await request.get(`${API}/wellness/recommendations?status=all`, { headers: headers() })).json();
-    if (recs.length === 0) test.skip();
-    const id = recs[recs.length - 1].id;
+    // Pick a *pending* recommendation. After #195 the lifecycle is one-way:
+    // already-rejected → 200 idempotent (no transition), already-approved →
+    // 422. The previous version of this test grabbed `recs[recs.length-1]`
+    // regardless of status, which made it fail any time the latest card had
+    // already been resolved.
+    const recs = await (await request.get(`${API}/wellness/recommendations?status=pending`, { headers: headers() })).json();
+    if (!Array.isArray(recs) || recs.length === 0) test.skip();
+    const id = recs[0].id;
     const r = await request.post(`${API}/wellness/recommendations/${id}/reject`, { headers: headers() });
     expect(r.ok()).toBeTruthy();
     expect((await r.json()).status).toBe('rejected');

@@ -131,7 +131,12 @@ function CaseHistoryTab({ patient }) {
                 {e.kind === 'visit' && e.data.service?.name && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.service.name}</span>}
                 {e.kind === 'consent' && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.templateName}</span>}
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(e.date).toLocaleString('en-IN')}</div>
+              {/* #244: pin Asia/Kolkata so test browsers / users in non-IST
+                  zones still see the visit's IST calendar day + time. Without
+                  an explicit timeZone, toLocaleString uses the browser's local
+                  zone and a UTC-clocked test browser pushed late-evening IST
+                  visits to the next calendar day. */}
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(e.date).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
             </div>
             {e.kind === 'visit' && (
               <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
@@ -246,7 +251,7 @@ function PrescribeTab({ patient, onSaved }) {
           <option value="">— select visit —</option>
           {patient.visits.map((v) => (
             <option key={v.id} value={v.id}>
-              {new Date(v.visitDate).toLocaleDateString('en-IN')} — {v.service?.name || 'Consultation'}
+              {new Date(v.visitDate).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} — {v.service?.name || 'Consultation'}
             </option>
           ))}
         </select>
@@ -678,7 +683,7 @@ function PhotosTab({ patient, onSaved }) {
             <option value="">— select visit —</option>
             {patient.visits.map((v) => (
               <option key={v.id} value={v.id}>
-                {new Date(v.visitDate).toLocaleDateString('en-IN')} — {v.service?.name || 'Consultation'}
+                {new Date(v.visitDate).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} — {v.service?.name || 'Consultation'}
               </option>
             ))}
           </select>
@@ -782,7 +787,7 @@ function InventoryTab({ patient, onSaved }) {
           <option value="">— select visit —</option>
           {patient.visits.map((v) => (
             <option key={v.id} value={v.id}>
-              {new Date(v.visitDate).toLocaleDateString('en-IN')} — {v.service?.name || 'Consultation'}
+              {new Date(v.visitDate).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} — {v.service?.name || 'Consultation'}
             </option>
           ))}
         </select>
@@ -1007,7 +1012,7 @@ function LoyaltyModal({ patientId, data, onClose, onChange }) {
             <tbody>
               {data.transactions.map((tx) => (
                 <tr key={tx.id} style={{ borderTop: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '0.4rem' }}>{new Date(tx.createdAt).toLocaleDateString('en-IN')}</td>
+                  <td style={{ padding: '0.4rem' }}>{new Date(tx.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}</td>
                   <td style={{ padding: '0.4rem' }}>{tx.type}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'right', color: tx.points >= 0 ? 'var(--success-color)' : 'var(--warning-color)', fontWeight: 600 }}>{tx.points >= 0 ? '+' : ''}{tx.points}</td>
                   <td style={{ padding: '0.4rem', color: 'var(--text-secondary)' }}>{tx.reason || '—'}</td>

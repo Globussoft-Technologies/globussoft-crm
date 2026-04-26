@@ -54,6 +54,12 @@ function rowsFromConditions(conds) {
   return rows.length ? rows : [emptyRow()];
 }
 
+// #245: render the operator as a human-readable phrase, not the raw DSL token
+// (e.g. 'is not' not 'neq'). The chip is the only place a non-engineer sees
+// these rules in the demo.
+const OP_LABELS = { eq: 'is', neq: 'is not', contains: 'contains', in: 'in' };
+const opLabel = (op) => OP_LABELS[op] || op;
+
 function formatConditions(conds) {
   if (!conds || Object.keys(conds).length === 0) return <span style={{ opacity: 0.5 }}>(any)</span>;
   return (
@@ -62,7 +68,7 @@ function formatConditions(conds) {
         const v = conds[field];
         let label;
         if (v && typeof v === 'object' && v.op) {
-          label = `${field} ${v.op} ${Array.isArray(v.value) ? v.value.join('|') : v.value}`;
+          label = `${field} ${opLabel(v.op)} ${Array.isArray(v.value) ? v.value.join('|') : v.value}`;
         } else if (Array.isArray(v)) {
           label = `${field} in ${v.join('|')}`;
         } else {

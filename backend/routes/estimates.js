@@ -50,8 +50,14 @@ const MAX_LINE_ITEMS = 200;
 // POST /api/estimates
 router.post("/", async (req, res) => {
   try {
-    const { title, contactId, dealId, validUntil, notes, lineItems } = req.body;
-    if (!title) return res.status(400).json({ error: "title is required" });
+    // #199: accept legacy field names (`name`, `items`) as aliases for the
+    // current contract (`title`, `lineItems`). Older mobile builds and cached
+    // SPA bundles still post the old shape. The new names win when both are
+    // supplied. This is a deprecation-window alias, not a permanent dual-API.
+    const { contactId, dealId, validUntil, notes } = req.body;
+    const title = req.body.title !== undefined ? req.body.title : req.body.name;
+    const lineItems = req.body.lineItems !== undefined ? req.body.lineItems : req.body.items;
+    if (!title) return res.status(400).json({ error: "title is required (legacy field 'name' also accepted)" });
 
     const estimateNum = `EST-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 

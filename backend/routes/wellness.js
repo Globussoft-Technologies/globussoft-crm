@@ -236,7 +236,9 @@ const { ensureEmail, ensureDob, ensureVisitDate, ensureEnum, ensureStringLength 
 
 // #159 #160 #165 #170 #178: shared validation for Patient create + update.
 function validatePatientInput(body, { isUpdate = false } = {}) {
-  const nameErr = ensureStringLength(body.name, { max: 200, field: "name", required: !isUpdate });
+  // #220: cap at 191 to match utf8mb4 VARCHAR(191) DB column limit. The
+  // earlier 200 cap let names through that the DB then rejected with 500.
+  const nameErr = ensureStringLength(body.name, { max: 191, field: "name", required: !isUpdate });
   if (nameErr) return nameErr;
   const emailErr = ensureEmail(body.email);
   if (emailErr) return emailErr;

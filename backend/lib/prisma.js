@@ -56,26 +56,46 @@ function encryptArgs(modelName, args) {
   return args;
 }
 
-function decryptRecord(modelName, record) {
+// All field names that ANY encrypted model uses, flattened. We use this set
+// to decrypt nested-include results where Prisma doesn't run a per-model
+// hook (e.g. patient.findUnique({ include: { visits: { include: { prescriptions: true } } } }) —
+// the inner Visit.notes / Prescription.drugs were returning as raw
+// "ENC:v1:..." ciphertext to the UI before #224.
+const ALL_ENCRYPTED_FIELD_NAMES = new Set(
+  Object.values(ENCRYPTED_FIELDS).flat()
+);
+
+function decryptRecord(record) {
   if (!record || typeof record !== 'object') return record;
-  const fields = ENCRYPTED_FIELDS[modelName];
-  if (!fields) return record;
-  for (const f of fields) {
-    const v = record[f];
-    if (typeof v === 'string' && isEncrypted(v)) {
-      record[f] = decrypt(v);
+  for (const key of Object.keys(record)) {
+    const v = record[key];
+    if (v == null) continue;
+    if (typeof v === 'string') {
+      // Decrypt any field whose NAME matches an encrypted-field name AND
+      // whose value is actually ciphertext. The isEncrypted() gate prevents
+      // decryption attempts on plaintext that happens to share a field name
+      // (e.g. Service.notes if it ever exists) — those leave the value alone.
+      if (ALL_ENCRYPTED_FIELD_NAMES.has(key) && isEncrypted(v)) {
+        record[key] = decrypt(v);
+      }
+    } else if (Array.isArray(v)) {
+      for (const item of v) decryptRecord(item);
+    } else if (typeof v === 'object') {
+      decryptRecord(v);
     }
   }
   return record;
 }
 
 function decryptResult(modelName, result) {
+  // modelName retained for signature compatibility but the walker is now
+  // model-agnostic — it descends into every nested relation.
   if (result == null) return result;
   if (Array.isArray(result)) {
-    for (const r of result) decryptRecord(modelName, r);
+    for (const r of result) decryptRecord(r);
     return result;
   }
-  return decryptRecord(modelName, result);
+  return decryptRecord(result);
 }
 
 function buildClient() {

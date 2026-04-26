@@ -397,9 +397,15 @@ function PlansTab({ patient, services, onSaved }) {
   const [totalSessions, setTotalSessions] = useState(4);
   const [totalPrice, setTotalPrice] = useState(0);
   const [serviceId, setServiceId] = useState('');
+  // #225: rapid double-clicks on Add were creating duplicate treatment plans.
+  // Guard the submit with a `submitting` flag and disable the button while
+  // the POST is in flight.
+  const [submitting, setSubmitting] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await fetchApi('/api/wellness/treatments', {
         method: 'POST',
@@ -410,7 +416,11 @@ function PlansTab({ patient, services, onSaved }) {
       });
       setName(''); setTotalPrice(0); setServiceId('');
       onSaved();
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (err) {
+      notify.error(`Failed: ${err.message}`);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -446,7 +456,19 @@ function PlansTab({ patient, services, onSaved }) {
           </select>
           <input type="number" placeholder="Sessions" min={1} value={totalSessions} onChange={(e) => setTotalSessions(parseInt(e.target.value) || 1)} style={inputStyle} />
           <input type="number" placeholder="Total price ₹" value={totalPrice} onChange={(e) => setTotalPrice(parseFloat(e.target.value) || 0)} style={inputStyle} />
-          <button type="submit" style={{ padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Add</button>
+          <button
+            type="submit"
+            disabled={submitting}
+            style={{
+              padding: '0.5rem 1rem',
+              background: submitting ? 'rgba(107,114,128,0.3)' : 'var(--accent-color)',
+              color: '#fff', border: 'none', borderRadius: 8,
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              opacity: submitting ? 0.6 : 1,
+            }}
+          >
+            {submitting ? 'Adding…' : 'Add'}
+          </button>
         </div>
       </form>
     </div>
@@ -461,6 +483,8 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
   const [doctorId, setDoctorId] = useState('');
   const [notes, setNotes] = useState('');
   const [amount, setAmount] = useState(0);
+  // #225: same debounce guard as PlansTab — rapid clicks were creating duplicate visits.
+  const [submitting, setSubmitting] = useState(false);
 
   // #109: Service + Doctor required; amount must be >= 0. Save disabled until valid.
   const valid = !!serviceId && !!doctorId && Number(amount) >= 0;
@@ -471,6 +495,8 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
       notify.error('Please select a Service and Doctor, and enter an amount of 0 or more.');
       return;
     }
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await fetchApi('/api/wellness/visits', {
         method: 'POST',
@@ -484,7 +510,11 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
       setServiceId(''); setDoctorId(''); setNotes(''); setAmount(0);
       onSaved();
       notify.success('Visit logged.');
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (err) {
+      notify.error(`Failed: ${err.message}`);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -523,17 +553,17 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
       </div>
       <button
         type="submit"
-        disabled={!valid}
+        disabled={!valid || submitting}
         title={!valid ? 'Select Service and Doctor; amount must be 0 or more' : ''}
         style={{
           padding: '0.55rem 1.25rem',
-          background: valid ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
+          background: valid && !submitting ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
           color: '#fff', border: 'none', borderRadius: 8,
-          cursor: valid ? 'pointer' : 'not-allowed',
-          opacity: valid ? 1 : 0.6,
+          cursor: valid && !submitting ? 'pointer' : 'not-allowed',
+          opacity: valid && !submitting ? 1 : 0.6,
         }}
       >
-        Save visit
+        {submitting ? 'Saving…' : 'Save visit'}
       </button>
     </form>
   );
@@ -644,6 +674,8 @@ function InventoryTab({ patient, onSaved }) {
   const [items, setItems] = useState([]);
   const [form, setForm] = useState({ productName: '', qty: 1, unitCost: 0 });
   const [loading, setLoading] = useState(false);
+  // #225: debounce guard so rapid clicks don't create duplicate consumption rows.
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!visitId) { setItems([]); return; }
@@ -664,6 +696,8 @@ function InventoryTab({ patient, onSaved }) {
       notify.error('Unit cost cannot be negative.');
       return;
     }
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await fetchApi(`/api/wellness/visits/${visitId}/consumptions`, {
         method: 'POST', body: JSON.stringify(form),
@@ -671,7 +705,11 @@ function InventoryTab({ patient, onSaved }) {
       setForm({ productName: '', qty: 1, unitCost: 0 });
       const next = await fetchApi(`/api/wellness/visits/${visitId}/consumptions`);
       setItems(next);
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (err) {
+      notify.error(`Failed: ${err.message}`);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const totalCost = items.reduce((s, i) => s + i.qty * i.unitCost, 0);
@@ -732,7 +770,19 @@ function InventoryTab({ patient, onSaved }) {
             <input placeholder="Product name (e.g. Botox vial 100u)" required value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} style={inputStyle} />
             <input type="number" min={1} value={form.qty} onChange={(e) => setForm({ ...form, qty: parseInt(e.target.value) || 1 })} style={inputStyle} placeholder="Qty" />
             <input type="number" min={0} step={0.01} value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: parseFloat(e.target.value) || 0 })} style={inputStyle} placeholder="Unit cost ₹" />
-            <button type="submit" style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Add</button>
+            <button
+              type="submit"
+              disabled={submitting}
+              style={{
+                padding: '0.55rem 1rem',
+                background: submitting ? 'rgba(107,114,128,0.3)' : 'var(--success-color)',
+                color: '#fff', border: 'none', borderRadius: 8,
+                cursor: submitting ? 'not-allowed' : 'pointer',
+                opacity: submitting ? 0.6 : 1,
+              }}
+            >
+              {submitting ? 'Adding…' : 'Add'}
+            </button>
           </form>
         </>
       )}

@@ -118,21 +118,24 @@ export default function Patients() {
 
       {!loading && (
         <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          {/* #229: table-layout: fixed prevents a single very long patient name
+              from blowing the column widths and pushing later columns offscreen.
+              Combined with the ellipsis style on the name cell. */}
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                <th style={thStyle}>Name</th>
-                <th style={thStyle}>Phone</th>
-                <th style={thStyle}>Email</th>
-                <th style={thStyle}>Gender</th>
-                <th style={thStyle}>Source</th>
-                <th style={thStyle}>Added</th>
+                <th style={{ ...thStyle, width: '22%' }}>Name</th>
+                <th style={{ ...thStyle, width: '15%' }}>Phone</th>
+                <th style={{ ...thStyle, width: '23%' }}>Email</th>
+                <th style={{ ...thStyle, width: '10%' }}>Gender</th>
+                <th style={{ ...thStyle, width: '15%' }}>Source</th>
+                <th style={{ ...thStyle, width: '15%' }}>Added</th>
               </tr>
             </thead>
             <tbody>
               {patients.map((p) => (
                 <tr key={p.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                  <td style={tdStyle}>
+                  <td style={nameTdStyle} title={p.name}>
                     <Link to={`/wellness/patients/${p.id}`} style={{ color: 'var(--accent-color)', textDecoration: 'none', fontWeight: 500 }}>
                       {p.name}
                     </Link>
@@ -156,5 +159,7 @@ export default function Patients() {
 }
 
 const thStyle = { textAlign: 'left', padding: '0.75rem 1rem', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' };
-const tdStyle = { padding: '0.75rem 1rem', fontSize: '0.9rem' };
+const tdStyle = { padding: '0.75rem 1rem', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+// #229: name cell ellipses long names so they don't blow out the table layout.
+const nameTdStyle = { ...tdStyle, maxWidth: 220 };
 const inputStyle = { padding: '0.55rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };

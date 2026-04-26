@@ -89,7 +89,17 @@ export async function setupPush(token) {
 
     return true;
   } catch (err) {
-    console.error('[push] setupPush error:', err);
+    // #206: AbortError ("Registration failed - push service error") is expected
+    // on tenants where push isn't configured (no FCM project, browser blocks
+    // push, etc.). Demote to debug to avoid noisy console warnings on every
+    // navigation. Other unexpected errors still surface via console.warn.
+    const name = err && err.name;
+    const msg = (err && err.message) || '';
+    if (name === 'AbortError' || /Registration failed/i.test(msg)) {
+      console.debug('[push] setupPush skipped:', name || msg);
+      return false;
+    }
+    console.warn('[push] setupPush error:', err);
     return false;
   }
 }

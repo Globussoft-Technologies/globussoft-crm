@@ -244,9 +244,14 @@ test.describe('Wellness clinical journey — full encounter flow', () => {
   });
 
   test('6. P&L: productCost > 0 and contribution = revenue - productCost (regression for bb52840)', async ({ request }) => {
-    const today = todayIso();
+    // Use a from = yesterday, to = tomorrow window so the visit's UTC
+    // mid-day timestamp falls inside regardless of server timezone. Passing
+    // from=today as `YYYY-MM-DD` parses to midnight UTC, which is *after*
+    // the visit's actual createdAt and would exclude it.
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
     const res = await request.get(
-      `${API}/wellness/reports/pnl-by-service?from=${today}&to=${today}`,
+      `${API}/wellness/reports/pnl-by-service?from=${yesterday}&to=${tomorrow}`,
       { headers: ownerAuth() },
     );
     expect(res.status(), `pnl-by-service: ${await res.text()}`).toBe(200);

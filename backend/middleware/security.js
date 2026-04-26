@@ -21,9 +21,19 @@ const helmetMiddleware = helmet({
 // `<` and `>` AND HTML-encoded ampersands ("A & B" → "A &amp; B"), corrupting
 // ordinary user input ("Q3 Plan: <budget>" → "Q3 Plan: "). The right XSS
 // defense is output encoding (React already escapes by default), not
-// pre-storage mutation. Replaced with a narrow regex that only strips truly
-// dangerous tags as defense-in-depth.
-const DANGEROUS_TAG_RE = /<\/?(script|iframe|object|embed|style|link|meta|form|svg)\b[^>]*>/gi;
+// pre-storage mutation. We only strip truly dangerous tags as defense-in-depth.
+//
+// #213: extended the dangerous-tag list to cover img/video/audio/source/applet/
+// base/input/textarea — tags that can pull external resources, fire load/error
+// handlers, or stand in for hidden form vectors. Also strip inline event-handler
+// attributes (`onclick=`, `onerror=`, `onload=`, …) so a payload like
+// `<img onerror=alert(1)>` doesn't survive in any sink that ever uses
+// dangerouslySetInnerHTML (PDFs, SMS templates, email HTML, OG cards).
+const DANGEROUS_TAG_RE = /<\/?(script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)\b[^>]*>/gi;
+// `javascript:` URLs in href/src; `data:` URLs that carry HTML/JS too
+const DANGEROUS_URL_RE = /\b(href|src|action|formaction|xlink:href)\s*=\s*(["']?)\s*(javascript|data|vbscript):[^"'>\s]*\2/gi;
+// Inline event handlers: onclick=…, onerror=…, onload=…, onmouseover=…
+const EVENT_HANDLER_RE = /\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
 
 function sanitizeBody(req, res, next) {
   if (req.body && typeof req.body === 'object') {
@@ -35,9 +45,13 @@ function sanitizeBody(req, res, next) {
 function sanitizeObject(obj) {
   for (const key of Object.keys(obj)) {
     if (typeof obj[key] === 'string') {
-      // Strip dangerous tags but preserve raw text (incl. ampersands and
-      // angle-bracket tokens like "<budget>") verbatim.
-      obj[key] = obj[key].replace(DANGEROUS_TAG_RE, '');
+      // Strip dangerous tags + event handlers + javascript: URLs, but preserve
+      // raw text (incl. ampersands and angle-bracket tokens like "<budget>")
+      // verbatim.
+      obj[key] = obj[key]
+        .replace(DANGEROUS_TAG_RE, '')
+        .replace(DANGEROUS_URL_RE, '')
+        .replace(EVENT_HANDLER_RE, '');
     } else if (typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key])) {
       sanitizeObject(obj[key]);
     }

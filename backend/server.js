@@ -414,6 +414,14 @@ server.listen(PORT, () => {
   console.log(`[Backend] Enterprise Express Server running securely on port ${PORT}`);
 });
 
+// DISABLE_CRONS=1 lets us boot a side-by-side instance (e.g. for c8 line-
+// coverage runs on a different port) without double-firing reminders, blasts,
+// orchestrator runs, etc. against the shared DB. Set ONLY on the secondary
+// instance — production PM2 should leave it unset.
+if (process.env.DISABLE_CRONS === '1') {
+  console.log('[crons] DISABLE_CRONS=1 — skipping all cron init (coverage / sandbox mode)');
+} else {
+
 // Scheduled Report Engine (checks hourly for due report schedules)
 const { initReportCron } = require('./cron/reportEngine');
 initReportCron();
@@ -490,5 +498,7 @@ initSlaBreachCron();
 // + emits 'lead.sla_breached' for the PRD §6.4 lead first-response SLA)
 const { initLeadSlaCron } = require('./cron/leadSlaEngine');
 initLeadSlaCron();
+
+} // end DISABLE_CRONS guard
 
 // nodemon restart trigger

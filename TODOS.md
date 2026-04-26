@@ -138,6 +138,20 @@ These are flagged in PRD §12 — track but don't act:
 
 ---
 
+## 🔐 RBAC cluster (#207 / #214 / #216) — closed in 850898a
+
+**Root cause:** wellness users carry the standard `role` field (ADMIN/MANAGER/USER) AND an orthogonal `wellnessRole` field (doctor/professional/telecaller/helper). The wellness routes only checked `role`, so users with `role=USER + wellnessRole=doctor` could hit Owner-Dashboard endpoints, the service catalog, recommendation approve/reject, etc.
+
+**Shipped:**
+- New `backend/middleware/wellnessRole.js` exporting `verifyWellnessRole(allowed)` — orthogonal to `verifyRole`, special tokens `'admin'`/`'manager'` for owner+manager override.
+- JWT now carries the `wellnessRole` claim — minted at register/signup/login/2fa-verify. `/me` selects + returns it. Login responses also expose `user.wellnessRole`. Backwards compat: pre-deploy JWTs without the claim → 403 on gated endpoints (correct — those users shouldn't have been hitting them).
+- **18 backend endpoints gated:** Owner Dashboard, reports (4), recommendation approve/reject/edit, service catalog POST/PUT, location POST/PUT (admin/manager only); prescription POST/PUT (doctor/admin); consent POST (doctor/professional/admin), consent PUT (admin); telecaller queue + dispose (telecaller/manager/admin).
+- **PHI reads (Patient/Visit list/detail) intentionally left open** to all wellness staff in tenant — a stylist legitimately needs their client's notes; audit log #179 records the read.
+- **Frontend:** Login redirects by `wellnessRole` (telecaller→/wellness/telecaller, doctor/professional→/wellness/calendar, helper→/wellness/patients). OwnerDashboard render-time guard bounces non-management. Sidebar hides Owner Dashboard / Recommendations / Service Catalog / Locations / Reports from clinical staff.
+- **20/20 e2e RBAC tests pass live** with rishu (admin) / Pooja (manager) / drharsh (doctor) / stylist1 (professional) / Ankita Verma (telecaller) fixtures.
+
+---
+
 ## 📐 Conventions established this week
 
 These are decisions made during the deep-flow audit that should be applied consistently:

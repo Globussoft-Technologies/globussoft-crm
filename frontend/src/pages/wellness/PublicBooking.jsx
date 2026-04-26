@@ -83,7 +83,7 @@ export default function PublicBooking() {
                 const p = Number(s.basePrice);
                 const d = Number(s.durationMin);
                 return Number.isFinite(p) && p > 0 && p <= 5_000_000
-                  && Number.isFinite(d) && d > 0 && d <= 480;
+                  && Number.isFinite(d) && d > 0 && d <= 720;
               })
               .slice(0, 30)
               .map((s) => (

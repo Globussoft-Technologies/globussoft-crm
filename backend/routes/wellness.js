@@ -882,8 +882,11 @@ router.post("/services", async (req, res) => {
       if (!Number.isFinite(d) || d <= 0) {
         return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
       }
-      if (d > 480) {
-        return res.status(400).json({ error: "durationMin exceeds maximum (480)", code: "DURATION_TOO_HIGH" });
+      // 720 min (12h) supports real long procedures like full hair transplant
+      // sessions, which legitimately take 9-10 hours. The earlier 480 cap
+      // accidentally caught real seed rows on the wellness tenant.
+      if (d > 720) {
+        return res.status(400).json({ error: "durationMin exceeds maximum (720)", code: "DURATION_TOO_HIGH" });
       }
     }
     if (targetRadiusKm !== undefined && targetRadiusKm !== null && targetRadiusKm !== "") {
@@ -937,8 +940,11 @@ router.put("/services/:id", async (req, res) => {
         return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
       }
       // #209: same 8-hour cap on edit.
-      if (d > 480) {
-        return res.status(400).json({ error: "durationMin exceeds maximum (480)", code: "DURATION_TOO_HIGH" });
+      // 720 min (12h) supports real long procedures like full hair transplant
+      // sessions, which legitimately take 9-10 hours. The earlier 480 cap
+      // accidentally caught real seed rows on the wellness tenant.
+      if (d > 720) {
+        return res.status(400).json({ error: "durationMin exceeds maximum (720)", code: "DURATION_TOO_HIGH" });
       }
     }
     if (data.targetRadiusKm !== undefined && data.targetRadiusKm !== null && data.targetRadiusKm !== "") {

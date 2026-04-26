@@ -8,7 +8,10 @@ const prisma = require("../lib/prisma");
     OR: [
       { name: { equals: "Z" } },
       { basePrice: { gt: 5_000_000 } },
-      { durationMin: { gt: 480 } },
+      { durationMin: { gt: 720 } },
+      // Test pollution: rows with the literal "Test Consultation" prefix
+      // accumulated by automated tests at duration 6030 (clearly bogus).
+      { name: { startsWith: "Test Consultation " } },
     ],
   };
   const before = await prisma.service.findMany({ where, select: { id: true, name: true, basePrice: true, durationMin: true, tenantId: true } });

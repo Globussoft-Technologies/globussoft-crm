@@ -85,15 +85,22 @@ router.post("/send", verifyToken, async (req, res) => {
 });
 
 // ─── List SMS Messages ───────────────────────────────────────────────────────
-// #254: redact OTP / verification codes before returning SMS messages to
-// staff. Without this, anyone with /inbox access could read other patients'
-// portal-login codes within their 10-minute validity window — a horizontal
-// account-takeover vector. We scrub the body and leave the rest of the row
-// untouched so audit / "did this send?" use cases still work.
+// #254 / #269: OTP / verification SMSes must NOT be visible to staff. The
+// initial fix redacted the digit group, but #269 confirmed the full exploit
+// chain end-to-end: staff initiated an OTP from a second tab, watched it
+// land in /inbox, and used it to log into the patient's portal as the
+// patient. Stronger fix now: detect OTP messages by template and exclude
+// them entirely from the staff inbox response. Redaction stays as a safety
+// net for any new template phrasing that slips past the filter.
+const OTP_BODY_RE =
+  /(verification code|otp|passcode|one[-\s]?time\s+code|login\s+code)\s*(?:is|:)?\s*[:#]?\s*\d{3,8}/i;
+
+function isOtpMessage(body) {
+  return typeof body === "string" && OTP_BODY_RE.test(body);
+}
+
 function redactOtp(body) {
   if (typeof body !== "string") return body;
-  // Common templates: "Your verification code is 4346. Valid for 10 minutes."
-  // Cover OTP / verification / passcode prefixes + numeric digit groups (4-8).
   return body.replace(
     /(verification code|otp|passcode|one[-\s]?time\s+code|login\s+code)\s*(?:is|:)?\s*[:#]?\s*\d{3,8}/gi,
     "$1 ****"
@@ -111,18 +118,33 @@ router.get("/messages", verifyToken, async (req, res) => {
     if (contactId) where.contactId = parseInt(contactId);
     if (status) where.status = status;
 
-    const [rows, total] = await Promise.all([
+    // #269: pull a wider window than the page asks for so the OTP filter
+    // below doesn't leave gaps in the page after exclusion. 3x the requested
+    // limit (capped at 200) is enough headroom for the OTP density we see
+    // in practice; if a tenant somehow exceeds it the page just gets
+    // shorter, never wrong.
+    const fetchTake = Math.min(take * 3, 200);
+    const [rawRows, totalAll] = await Promise.all([
       prisma.smsMessage.findMany({
         where,
         orderBy: { createdAt: "desc" },
         skip,
-        take,
+        take: fetchTake,
         include: { contact: { select: { id: true, name: true, phone: true } } },
       }),
       prisma.smsMessage.count({ where }),
     ]);
-    // #254: scrub the digit groups in OTP-template bodies on the way out.
+    // #269: exclude OTP messages from the staff-visible inbox entirely.
+    // Belt-and-braces: also redact() the body of anything that survives,
+    // in case a future OTP template phrasing slips past the filter.
+    const filtered = rawRows.filter((m) => !isOtpMessage(m.body));
+    const rows = filtered.slice(0, take);
     const messages = rows.map((m) => ({ ...m, body: redactOtp(m.body) }));
+    // Total reflects only what the staff CAN see (post-filter). The aggregate
+    // count needs its own query since the filter is post-fetch; for an
+    // approximate value we subtract the proportion filtered from totalAll.
+    const filteredFraction = rawRows.length > 0 ? (rawRows.length - filtered.length) / rawRows.length : 0;
+    const total = Math.max(0, Math.round(totalAll * (1 - filteredFraction)));
 
     res.json({
       messages,

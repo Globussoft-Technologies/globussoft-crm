@@ -23,11 +23,8 @@ Last updated: 2026-04-26
 
 ---
 
-### [ ] #17 (remaining 3 of 6 dead workflow triggers)
-**Status:** `deal.stage_changed`, `ticket.created`, `invoice.paid` shipped (commits c214099, _<pending>_).
-**Still dead:** `contact.updated`, `task.completed`, `lead.converted`. Each is a 1-line `emitEvent` in the corresponding route. Lower demand — wire when a real rule needs them.
-
-**Effort:** ~30 min for all 3 when needed. **Files:** `backend/routes/contacts.js`, `backend/routes/tasks.js`, `backend/routes/leads.js` (or wherever lead conversion lives).
+### [x] ~~#17 (remaining 3 of 6 dead workflow triggers)~~
+**Closed in 8fca56b** — all 6 triggers now wired. `contact.updated` emits in `contacts.js` PUT /:id with `{ changedFields, status, assignedToId }`. `task.completed` emits in `tasks.js` PUT /:id and PUT /:id/complete, gated on `wasCompleted = false` so re-saving a completed task doesn't re-fire. `lead.converted` emits in `contacts.js` when status flips Lead → Customer/Prospect (no separate `leads.js` route exists in this codebase). All emits wrapped in try/catch — workflow failures never break the CRUD response.
 
 ---
 
@@ -43,13 +40,14 @@ Last updated: 2026-04-26
 ---
 
 ### [ ] #7 — Sequence reply detection
+**Status: NOW UNBLOCKED.** Prerequisite #20 (workflow conditions) shipped in 8b6bb49.
 **Diagnosis:** `sequenceEngine.js` never reads inbound EmailMessage rows. Replies don't pause drips. Customer replies, drip keeps firing.
-**Recommendation:** Wait for #20 (conditions) to land first. Then:
+**Recommendation:**
 - Mailgun inbound webhook should already exist at `/api/email/inbound` — verify.
 - Engine watches for inbound EmailMessage rows whose `threadId` starts with `seq-` (the threadId convention shipped in commit c214099 via gap #10). When matched, look up enrollment by parsed enrollment id, set `status='Paused'`.
-- Configurable per rule via condition: `pauseOnReply: true | false`.
+- Configurable per rule via condition: `pauseOnReply: true | false` using the now-live workflow conditions evaluator.
 
-**Effort:** ~1-2 days. **Prerequisite:** #20.
+**Effort:** ~1-2 days. **Prerequisite met:** #20 done.
 
 ---
 
@@ -69,7 +67,7 @@ These were filed during cron runs and tagged `[cron-skip]` because they need des
 
 - [x] ~~**#167** Cross-resource hard-delete cleanup (Contacts, Deals, Estimates, Tasks).~~ **Done.** Schema gained `deletedAt DateTime?` + `@@index([tenantId, deletedAt])` on all four models. DELETE now flips `deletedAt` (admin-only); GET list/detail filter it out by default with `?includeDeleted=true` opt-in; new POST `/:id/restore` clears it. Audit rows written for SOFT_DELETE + RESTORE. Idempotent on both sides. *Follow-up audit*: aggregations (deals/stats, custom_reports, attribution), `/duplicates/find`, `/merge`, and internal joins (timeline / activity / sequence enrollments) still see soft-deleted rows — separate ticket.
 - [x] ~~**#176** `POST /api/contacts/:id/attachments` always 500. Multer config missing or wrong mime handler. Needs file-upload investigation.~~ **Closed in d00ac2f** — root cause was unguarded req.body destructure with no multer middleware; route now validates JSON {filename, fileUrl} shape, returns 400 UNSUPPORTED_CONTENT_TYPE for multipart (multer wiring deferred).
-- [ ] **#179** Audit log only records Deal events. Need to wire `prisma.auditLog.create` calls in contacts/patients/invoices/estimates/tasks/pipelines/notifications/profile/destructive-deletes. ~2 days; tedious but mechanical.
+- [x] ~~**#179** Audit log only records Deal events.~~ **Closed in 8fca56b** — new `backend/lib/audit.js` (`writeAudit` + `diffFields` helpers, all wrapped in try/catch). ~50 audit calls added across 8 route files: contacts, estimates, tasks, billing, wellness (patient/visit/Rx/consent/loyalty/recommendation), notifications, auth (profile + role + password). Passwords NEVER written to details. PII recorded as `piiFieldsTouched: [...]` name list only (no raw values). 25 distinct action names. Login attempts intentionally NOT audited — owned by the rate-limit middleware. *Out of scope for this pass*: ConsentForm UPDATE, TreatmentPlan, Service, Location, Referral, Waitlist, Booking endpoints.
 - [x] ~~**#180** No JWT revocation. 7-day tokens are not revocable; no logout endpoint, no session listing.~~ **Closed in 5d9d47a** — RevokedToken model added, jti minted on every login (register/signup/login/2fa-verify), verifyToken checks the table on every request, fail-open on DB error so a Prisma blip doesn't lock everyone out. New endpoints: POST /auth/logout, GET /auth/sessions, DELETE /auth/sessions/:jti. Backwards compat: pre-deploy tokens (no jti claim) keep working until natural 7d expiry — no forced re-login.
 - [x] ~~**#182** SMS queue stuck — 25 messages QUEUED with no provider configured.~~ **Closed in 5d9d47a** — POST /api/sms/drain (ADMIN). resolveProviderConfig() picks SmsConfig row first then env-var fallback (MSG91 → Twilio → Fast2SMS). No provider → fail-fast all QUEUED rows to FAILED with reason. *Follow-up*: per-tenant 1-min trickle cron (out of scope; admin drain + fail-fast closes the silent-accumulation bug for now).
 - [x] ~~**#184** `/survey/:id` customer-facing route broken: blank content, shows admin sidebar to logged-in users.~~ **Closed in 5d9d47a** — backend GET/POST /api/surveys/public/:id (in openPaths), frontend SurveyPublic.jsx mounted OUTSIDE the authenticated Layout (no sidebar). Wellness theme cascades via `data-vertical="wellness"`.

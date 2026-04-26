@@ -57,7 +57,7 @@ test.describe('Sequence step-list rebuild (#9) + reply detection (#7)', () => {
     expect(contactId).toBeTruthy();
 
     // Create an EmailTemplate the step will reference.
-    const tplRes = await request.post(`${API}/email-templates`, {
+    const tplRes = await request.post(`${API}/email_templates`, {
       headers: { Authorization: `Bearer ${adminToken}` },
       data: {
         name: `Onboarding T1 ${RUN_TAG}`,
@@ -87,7 +87,7 @@ test.describe('Sequence step-list rebuild (#9) + reply detection (#7)', () => {
   test.afterAll(async ({ request }) => {
     const headers = { Authorization: `Bearer ${adminToken}` };
     if (sequenceId) await request.delete(`${API}/sequences/${sequenceId}`, { headers });
-    if (templateId) await request.delete(`${API}/email-templates/${templateId}`, { headers }).catch(() => {});
+    if (templateId) await request.delete(`${API}/email_templates/${templateId}`, { headers }).catch(() => {});
     if (contactId) await request.delete(`${API}/contacts/${contactId}`, { headers });
   });
 

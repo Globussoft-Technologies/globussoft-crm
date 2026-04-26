@@ -267,6 +267,13 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   // earlier 200 cap let names through that the DB then rejected with 500.
   const nameErr = ensureStringLength(body.name, { max: 191, field: "name", required: !isUpdate });
   if (nameErr) return nameErr;
+  // #237: reject HTML/JS-shaped chars in patient names so they can't pollute
+  // SMS/WhatsApp templates, CSV exports, or printed receipts where escaping
+  // rules differ from React's. React already escapes at render — this is
+  // defence-in-depth at the ingestion layer.
+  if (body.name != null && /[<>]|onerror\s*=|javascript:/i.test(String(body.name))) {
+    return { status: 400, error: "name contains forbidden characters", code: "INVALID_NAME" };
+  }
   const emailErr = ensureEmail(body.email);
   if (emailErr) return emailErr;
   if (!isValidPhoneOrEmpty(body.phone)) {
@@ -1488,9 +1495,14 @@ router.get("/reports/attribution", verifyWellnessRole(["admin", "manager"]), asy
       if (l.status === "Junk") acc[k].junk += 1;
       if (l.status !== "Junk" && l.status !== "Lead") acc[k].qualified += 1;
     }
+    // #233: only attribute revenue to source buckets that ALSO had a lead in
+    // the same window. Without this, a returning patient whose first contact
+    // was last quarter still books their visit revenue against this month's
+    // attribution, producing rows like "google-ad — 0 leads — ₹3,13,398.27 revenue"
+    // that don't match what marketing actually drove.
     for (const v of visits) {
       const k = bucket(v.patient?.source);
-      if (!acc[k]) acc[k] = { source: k, leads: 0, junk: 0, qualified: 0, revenue: 0 };
+      if (!acc[k]) continue; // source had no lead in this window — skip
       acc[k].revenue += parseFloat(v.amountCharged) || 0;
     }
     const rows = Object.values(acc).map((r) => ({

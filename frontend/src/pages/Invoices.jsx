@@ -356,9 +356,11 @@ export default function Invoices() {
                       <td style={{ padding: '1rem 0.5rem', fontWeight: '600', letterSpacing: '0.03em' }}>
                         {inv.invoiceNum}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                        <DollarSign size={14} color="var(--success-color)" />
-                        {formatCurrency(inv.amount)}
+                      <td style={{ padding: '1rem 0.5rem' }}>
+                        {/* #242: removed the hardcoded $ DollarSign icon — formatCurrency()
+                            already prefixes the right symbol (₹ for INR tenants, $ for USD,
+                            etc.). Stacking the icon caused "$ ₹1,500.00" on Indian tenants. */}
+                        <span style={{ color: 'var(--success-color)', fontWeight: 600 }}>{formatCurrency(inv.amount)}</span>
                       </td>
                       <td style={{ padding: '1rem 0.5rem' }}>
                         <StatusBadge status={inv.status} />

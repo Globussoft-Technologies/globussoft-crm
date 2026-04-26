@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { ensureEnum, ensureDateInRange } = require("../lib/validators");
 
@@ -30,6 +30,7 @@ function validateTaskInput(body) {
 }
 
 // GET /api/tasks — with optional filters
+// #167: soft-deleted tasks hidden by default. ?includeDeleted=true opts in.
 router.get("/", verifyToken, async (req, res) => {
   try {
     const { status, priority, contactId, overdue } = req.query;
@@ -42,6 +43,7 @@ router.get("/", verifyToken, async (req, res) => {
       where.dueDate = { lt: new Date() };
       where.status = "Pending";
     }
+    if (req.query.includeDeleted !== "true") where.deletedAt = null;
 
     // #172: pagination
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
@@ -147,18 +149,56 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
   }
 });
 
-// DELETE /api/tasks/:id
-router.delete("/:id", verifyToken, async (req, res) => {
+// DELETE /api/tasks/:id — soft-delete (#167). ADMIN only. Idempotent.
+router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid task ID" });
     const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Task not found" });
-    await prisma.task.delete({ where: { id: existing.id } });
-    res.json({ message: "Task Deleted" });
+    if (existing.deletedAt) {
+      return res.json({ ...existing, idempotent: true, softDeleted: true });
+    }
+    try {
+      await prisma.auditLog.create({
+        data: { action: "SOFT_DELETE", entity: "Task", entityId: existing.id, userId: req.user?.userId || null, tenantId: req.user.tenantId, details: JSON.stringify({ title: existing.title }) }
+      });
+    } catch (_) { /* audit failures must not block */ }
+    const task = await prisma.task.update({
+      where: { id: existing.id },
+      data: { deletedAt: new Date() },
+    });
+    res.json({ ...task, message: "Task soft-deleted", softDeleted: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to delete Task" });
+  }
+});
+
+// POST /api/tasks/:id/restore — undo soft-delete (#167)
+router.post("/:id/restore", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid task ID" });
+    const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Task not found" });
+    if (!existing.deletedAt) {
+      return res.json({ ...existing, idempotent: true, restored: false });
+    }
+    try {
+      await prisma.auditLog.create({
+        data: { action: "RESTORE", entity: "Task", entityId: existing.id, userId: req.user?.userId || null, tenantId: req.user.tenantId, details: JSON.stringify({ title: existing.title }) }
+      });
+    } catch (_) { /* non-critical */ }
+    const task = await prisma.task.update({
+      where: { id: existing.id },
+      data: { deletedAt: null },
+      include: { contact: true, user: true },
+    });
+    res.json({ ...task, restored: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to restore Task" });
   }
 });
 

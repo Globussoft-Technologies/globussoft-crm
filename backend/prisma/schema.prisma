@@ -171,7 +171,10 @@ model Contact {
   // Customer portal
   portalPasswordHash String?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+  // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
+  // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
+  deletedAt DateTime?
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -200,6 +203,7 @@ model Contact {
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
   @@index([tenantId, assignedToId])
+  @@index([tenantId, deletedAt])
 }
 
 model Activity {
@@ -232,6 +236,8 @@ model Deal {
   lostReason      String?
   winLossReasonId Int?
   createdAt       DateTime  @default(now())
+  // #167: soft-delete column (see Contact).
+  deletedAt       DateTime?
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -251,6 +257,7 @@ model Deal {
   @@index([tenantId, stage])
   @@index([tenantId, ownerId])
   @@index([tenantId, createdAt])
+  @@index([tenantId, deletedAt])
 }
 
 model Ticket {
@@ -263,6 +270,8 @@ model Ticket {
   slaResolveDue   DateTime?
   firstResponseAt DateTime?
   resolvedAt      DateTime?
+  breached        Boolean   @default(false)
+  breachedAt      DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -300,6 +309,11 @@ model AutomationRule {
   triggerType String
   actionType  String
   targetState String?
+  // #20: optional JSON-encoded array of clauses, AND-joined.
+  // Format: [{"field":"deal.amount","op":"gt","value":50000}, ...]
+  // Operators: eq, neq, gt, gte, lt, lte, in, nin, contains, startsWith.
+  // Empty/null = always-fire (backwards compat with pre-#20 rules).
+  condition   String? @db.Text
   isActive    Boolean @default(true)
 
   tenantId Int    @default(1)
@@ -567,6 +581,8 @@ model Task {
   priority  String    @default("Medium") // Low, Medium, High, Critical
   notes     String?
   createdAt DateTime  @default(now())
+  // #167: soft-delete column (see Contact).
+  deletedAt DateTime?
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -582,6 +598,7 @@ model Task {
 
   @@index([tenantId, status])
   @@index([tenantId, userId])
+  @@index([tenantId, deletedAt])
 }
 
 model Expense {
@@ -635,6 +652,8 @@ model Estimate {
   validUntil  DateTime?
   notes       String?   @db.Text
   createdAt   DateTime  @default(now())
+  // #167: soft-delete column (see Contact).
+  deletedAt   DateTime?
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -644,6 +663,8 @@ model Estimate {
   dealId    Int?
   deal      Deal?              @relation(fields: [dealId], references: [id], onDelete: SetNull)
   lineItems EstimateLineItem[]
+
+  @@index([tenantId, deletedAt])
 }
 
 model EstimateLineItem {

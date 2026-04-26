@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { verifyRole } = require("../middleware/auth");
+const { runForTenant: runSlaBreachForTenant } = require("../cron/slaBreachEngine");
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -328,6 +330,20 @@ router.get("/stats", async (req, res) => {
   } catch (err) {
     console.error("[SLA][stats]", err);
     res.status(500).json({ error: "Failed to fetch SLA stats" });
+  }
+});
+
+// POST /api/sla/check-breaches — admin-only manual trigger of the SLA breach
+// engine for the calling tenant. Useful for tests + ops without waiting for
+// the 5-minute cron tick. Idempotent (the engine's breached=false gate keeps
+// already-fired tickets from re-emitting).
+router.post("/check-breaches", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const result = await runSlaBreachForTenant(tenantId(req));
+    res.json(result);
+  } catch (err) {
+    console.error("[SLA][check-breaches]", err);
+    res.status(500).json({ error: "Failed to run SLA breach check" });
   }
 });
 

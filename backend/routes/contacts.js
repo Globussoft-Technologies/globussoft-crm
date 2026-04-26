@@ -1,9 +1,18 @@
 const express = require('express');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyRole } = require('../middleware/auth');
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
 const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, conflictFromPrisma } = require("../lib/validators");
+
+// #167: soft-delete helper. Aggregations / reports / merge / internal joins
+// (e.g. activities, deals, sequenceEnrollments) are NOT yet filtered by
+// deletedAt — that is a follow-up audit (see #167 follow-up note in TODOS).
+function applyDeletedAtFilter(where, includeDeleted) {
+  if (includeDeleted) return where;
+  where.deletedAt = null;
+  return where;
+}
 
 // #160 #166 #168: shared validator for create + update payloads on Contact.
 function validateContactInput(body, { isUpdate = false } = {}) {
@@ -38,6 +47,8 @@ router.get('/', async (req, res) => {
     if (req.query.status) where.status = req.query.status;
     if (req.query.assignedToId) where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === 'true') where.assignedToId = null;
+    // #167: hide soft-deleted rows by default; admin views can opt in.
+    applyDeletedAtFilter(where, req.query.includeDeleted === 'true');
     // #172: honor limit / offset query params with sensible defaults + a hard cap.
     // Pre-fix the API silently returned the entire dataset, breaking pagination
     // and exposing a perf/DoS surface.
@@ -57,11 +68,14 @@ router.get('/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid contact ID' });
+    const includeDeleted = req.query.includeDeleted === 'true';
     const contact = await prisma.contact.findFirst({
       where: { id, tenantId: req.user.tenantId },
       include: { activities: { orderBy: { createdAt: 'desc' } }, tasks: true, deals: true, assignedTo: { select: { id: true, name: true, email: true } } }
     });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    // #167: 404 soft-deleted rows unless caller opts in.
+    if (contact.deletedAt && !includeDeleted) return res.status(404).json({ error: 'Contact not found' });
     res.json(contact);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch contact' });
@@ -427,15 +441,52 @@ router.delete('/attachments/:attachId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to delete attachment' }); }
 });
 
-router.delete('/:id', async (req, res) => {
+// #167: soft-delete — flips deletedAt instead of hard-removing the row.
+// Audit row is written first. Idempotent: a second DELETE returns 200 with
+// {idempotent: true, softDeleted: true}. Cascade behavior on relations is
+// unchanged because we no longer call prisma.contact.delete here.
+router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
-    await prisma.activity.deleteMany({ where: { contactId: existing.id } });
-    await prisma.contact.delete({ where: { id: existing.id } });
-    res.json({ message: 'Deleted' });
+    if (existing.deletedAt) {
+      return res.json({ ...existing, idempotent: true, softDeleted: true });
+    }
+    try {
+      await prisma.auditLog.create({
+        data: { action: 'SOFT_DELETE', entity: 'Contact', entityId: existing.id, userId: req.user?.userId || null, tenantId: req.user.tenantId, details: JSON.stringify({ name: existing.name, email: existing.email }) }
+      });
+    } catch (_) { /* audit failures must not block the soft-delete */ }
+    const contact = await prisma.contact.update({
+      where: { id: existing.id },
+      data: { deletedAt: new Date() }
+    });
+    res.json({ ...contact, softDeleted: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete contact' });
+  }
+});
+
+// #167: restore a soft-deleted contact. ADMIN only. Idempotent on already-live rows.
+router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
+  try {
+    const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    if (!existing.deletedAt) {
+      return res.json({ ...existing, idempotent: true, restored: false });
+    }
+    try {
+      await prisma.auditLog.create({
+        data: { action: 'RESTORE', entity: 'Contact', entityId: existing.id, userId: req.user?.userId || null, tenantId: req.user.tenantId, details: JSON.stringify({ name: existing.name }) }
+      });
+    } catch (_) { /* non-critical */ }
+    const contact = await prisma.contact.update({
+      where: { id: existing.id },
+      data: { deletedAt: null }
+    });
+    res.json({ ...contact, restored: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to restore contact' });
   }
 });
 

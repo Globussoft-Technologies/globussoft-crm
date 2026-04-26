@@ -20,6 +20,16 @@ const TRIGGER_TYPES = [
   { value: "invoice.overdue", label: "Invoice Overdue", description: "Fires when an invoice passes its due date" },
   { value: "task.completed", label: "Task Completed", description: "Fires when a task is marked complete" },
   { value: "lead.converted", label: "Lead Converted", description: "Fires when a lead becomes a customer" },
+  // #1 — approval lifecycle events. Lets a rule auto-create an approval on a
+  // threshold AND lets a separate rule react when that approval is approved
+  // (e.g. advance the deal stage). Decoupled by design.
+  { value: "approval.created", label: "Approval Created", description: "Fires when an approval request is created (manually or via create_approval action)" },
+  { value: "approval.approved", label: "Approval Approved", description: "Fires when an approval request is approved" },
+  { value: "approval.rejected", label: "Approval Rejected", description: "Fires when an approval request is rejected" },
+  // #12 — SLA breach event. Fired by slaBreachEngine cron (every 5 min) when a
+  // ticket has missed its first-response SLA. Lets rules react: notify manager,
+  // escalate, send Slack ping, etc.
+  { value: "sla.breached", label: "SLA Breached", description: "Fires when a ticket misses its first-response SLA (cron: every 5 min)" },
 ];
 
 // Supported action types
@@ -31,6 +41,9 @@ const ACTION_TYPES = [
   { value: "update_field", label: "Update Field", config: ["entity", "entityId", "field", "value"] },
   { value: "assign_agent", label: "Assign Agent", config: ["userId"] },
   { value: "send_webhook", label: "Send Webhook", config: ["url"] },
+  // #1 — auto-create an ApprovalRequest. targetState carries:
+  //   { entity: "Deal", reasonTemplate: "Discount > 10% on {{deal.title}}" }
+  { value: "create_approval", label: "Create Approval Request", config: ["entity", "reasonTemplate"] },
 ];
 
 // GET /triggers — list supported trigger types
@@ -105,10 +118,59 @@ function validateTriggerAction({ triggerType, actionType }) {
   return null;
 }
 
+// #20 — validate the optional `condition` JSON before persisting. Accepts:
+//   - undefined / null / "" → no condition (always-fire, returns {ok:true,value:null})
+//   - JSON-encoded array string of clauses {field,op,value}
+//   - already-an-array (frontend may send the parsed shape)
+// Returns {ok:true,value:<canonical-string-or-null>} or
+//         {ok:false,status,error,code:"INVALID_CONDITION"}.
+const VALID_CONDITION_OPS = new Set([
+  "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith",
+]);
+
+function validateCondition(raw) {
+  if (raw === undefined || raw === null || raw === "") {
+    return { ok: true, value: null };
+  }
+  let parsed;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      return { ok: false, status: 400, error: "condition is not valid JSON", code: "INVALID_CONDITION" };
+    }
+  } else {
+    parsed = raw;
+  }
+  if (!Array.isArray(parsed)) {
+    return { ok: false, status: 400, error: "condition must be an array of clauses", code: "INVALID_CONDITION" };
+  }
+  for (const clause of parsed) {
+    if (!clause || typeof clause !== "object" || Array.isArray(clause)) {
+      return { ok: false, status: 400, error: "each condition clause must be an object", code: "INVALID_CONDITION" };
+    }
+    if (!clause.field || typeof clause.field !== "string") {
+      return { ok: false, status: 400, error: "clause.field is required", code: "INVALID_CONDITION" };
+    }
+    if (!clause.op || !VALID_CONDITION_OPS.has(clause.op)) {
+      return {
+        ok: false,
+        status: 400,
+        error: `clause.op must be one of: ${Array.from(VALID_CONDITION_OPS).join(", ")}`,
+        code: "INVALID_CONDITION",
+      };
+    }
+    if (!("value" in clause)) {
+      return { ok: false, status: 400, error: "clause.value is required", code: "INVALID_CONDITION" };
+    }
+  }
+  return { ok: true, value: JSON.stringify(parsed) };
+}
+
 // POST / — create a new automation rule
 router.post("/", async (req, res) => {
   try {
-    const { name, triggerType, actionType, targetState } = req.body;
+    const { name, triggerType, actionType, targetState, condition } = req.body;
 
     if (!name || !triggerType || !actionType) {
       return res.status(400).json({ error: "name, triggerType, and actionType are required" });
@@ -117,12 +179,18 @@ router.post("/", async (req, res) => {
     const enumErr = validateTriggerAction({ triggerType, actionType });
     if (enumErr) return res.status(enumErr.status).json(enumErr);
 
+    const condCheck = validateCondition(condition);
+    if (!condCheck.ok) {
+      return res.status(condCheck.status).json({ error: condCheck.error, code: condCheck.code });
+    }
+
     const newRule = await prisma.automationRule.create({
       data: {
         name,
         triggerType,
         actionType,
         targetState: typeof targetState === "object" ? JSON.stringify(targetState) : targetState || "{}",
+        condition: condCheck.value,
         tenantId: req.user.tenantId,
       },
     });
@@ -142,7 +210,7 @@ router.put("/:id", async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Workflow not found" });
 
-    const { name, triggerType, actionType, targetState, isActive } = req.body;
+    const { name, triggerType, actionType, targetState, isActive, condition } = req.body;
 
     // #18: enforce trigger/action whitelist on update too.
     const enumErr = validateTriggerAction({ triggerType, actionType });
@@ -154,6 +222,14 @@ router.put("/:id", async (req, res) => {
     if (actionType !== undefined) data.actionType = actionType;
     if (targetState !== undefined) {
       data.targetState = typeof targetState === "object" ? JSON.stringify(targetState) : targetState;
+    }
+    // #20 — validate + persist condition. Allow explicit clear via null/"".
+    if (condition !== undefined) {
+      const condCheck = validateCondition(condition);
+      if (!condCheck.ok) {
+        return res.status(condCheck.status).json({ error: condCheck.error, code: condCheck.code });
+      }
+      data.condition = condCheck.value;
     }
     // #19: allow toggling isActive via PUT so the frontend rule-builder can
     // PATCH {isActive:false} without using the dedicated /toggle endpoint.

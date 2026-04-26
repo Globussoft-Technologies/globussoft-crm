@@ -480,4 +480,8 @@ initWellnessOpsCron();
 const { initLowStockCron } = require('./cron/lowStockEngine');
 initLowStockCron();
 
+// Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
+const { initSlaBreachCron } = require('./cron/slaBreachEngine');
+initSlaBreachCron();
+
 // nodemon restart trigger

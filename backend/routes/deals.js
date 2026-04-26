@@ -1,6 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -28,6 +28,9 @@ async function audit(action, entityId, userId, tenantId, details) {
 }
 
 // ─── GET / — list deals with filters ─────────────────────────────────
+// #167: soft-deleted deals are hidden by default. Pass ?includeDeleted=true
+// for admin/audit views. The /stats endpoint and aggregations are NOT yet
+// filtered (see follow-up note at end of file).
 router.get("/", async (req, res) => {
   try {
     const { stage, ownerId, pipelineId, contactId, from, to } = req.query;
@@ -42,6 +45,7 @@ router.get("/", async (req, res) => {
       if (from) where.createdAt.gte = new Date(from);
       if (to) where.createdAt.lte = new Date(to);
     }
+    if (req.query.includeDeleted !== "true") where.deletedAt = null;
 
     // #172: pagination support (was ignored entirely pre-fix).
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
@@ -98,6 +102,7 @@ router.get("/stats", async (req, res) => {
 // ─── GET /:id — single deal with full relations ─────────────────────
 router.get("/:id", async (req, res) => {
   try {
+    const includeDeleted = req.query.includeDeleted === "true";
     const deal = await prisma.deal.findFirst({
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
       include: {
@@ -112,6 +117,8 @@ router.get("/:id", async (req, res) => {
       },
     });
     if (!deal) return res.status(404).json({ error: "Deal not found" });
+    // #167: 404 soft-deleted deals unless explicitly opted in.
+    if (deal.deletedAt && !includeDeleted) return res.status(404).json({ error: "Deal not found" });
 
     // Fetch activities linked to this deal's contact
     let activities = [];
@@ -418,23 +425,55 @@ router.post("/:id/lost", async (req, res) => {
   }
 });
 
-// ─── DELETE /:id ─────────────────────────────────────────────────────
-router.delete("/:id", async (req, res) => {
+// ─── DELETE /:id — soft-delete (#167) ────────────────────────────────
+// Flips deletedAt instead of removing the row, so pipeline KPIs / forecasting
+// /win-loss history don't silently shrink. Admin only. Idempotent.
+router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const existing = await prisma.deal.findFirst({
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
     });
     if (!existing) return res.status(404).json({ error: "Deal not found" });
+    if (existing.deletedAt) {
+      return res.json({ ...existing, idempotent: true, softDeleted: true });
+    }
 
-    await prisma.deal.delete({ where: { id: existing.id } });
+    await audit("SOFT_DELETE", existing.id, req.user.userId, req.user.tenantId, { title: existing.title, stage: existing.stage });
 
-    await audit("DELETE", existing.id, req.user.userId, req.user.tenantId, { title: existing.title });
+    const deal = await prisma.deal.update({
+      where: { id: existing.id },
+      data: { deletedAt: new Date() },
+    });
 
     if (req.io) req.io.emit("deal_deleted", existing.id);
-    res.json({ success: true });
+    res.json({ ...deal, success: true, softDeleted: true });
   } catch (error) {
     console.error("[deals] delete error:", error.message);
     res.status(500).json({ error: "Failed to delete deal" });
+  }
+});
+
+// ─── POST /:id/restore — undo a soft-delete (#167) ───────────────────
+router.post("/:id/restore", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const existing = await prisma.deal.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Deal not found" });
+    if (!existing.deletedAt) {
+      return res.json({ ...existing, idempotent: true, restored: false });
+    }
+    await audit("RESTORE", existing.id, req.user.userId, req.user.tenantId, { title: existing.title });
+    const deal = await prisma.deal.update({
+      where: { id: existing.id },
+      data: { deletedAt: null },
+      include: { contact: true, owner: true },
+    });
+    if (req.io) req.io.emit("deal_updated", deal);
+    res.json({ ...deal, restored: true });
+  } catch (error) {
+    console.error("[deals] restore error:", error.message);
+    res.status(500).json({ error: "Failed to restore deal" });
   }
 });
 

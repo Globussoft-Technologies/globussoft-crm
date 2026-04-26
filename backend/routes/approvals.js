@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { emitEvent } = require("../lib/eventBus");
 
 // ─── Helper: audit log ───────────────────────────────────────────────
 // Mirrors the pattern in routes/deals.js — non-critical writes (best-effort).
@@ -241,6 +242,30 @@ router.post(
         entityId: updated.entityId,
       });
 
+      // #1 — emit approval.approved so downstream rules (e.g. "advance the
+      // deal stage when its discount approval is granted") can react.
+      // DECOUPLED BY DESIGN: this endpoint is a record-of-decision only — it
+      // does NOT mutate the deal, apply the discount, or fire any side-effect
+      // beyond this event. A SEPARATE workflow rule listening on
+      // approval.approved owns that side-effect, configurable per tenant.
+      try {
+        await emitEvent(
+          "approval.approved",
+          {
+            approvalId: updated.id,
+            entity: updated.entity,
+            entityId: updated.entityId,
+            approverId: req.user.userId,
+            requesterId: updated.requestedBy,
+            reason: updated.reason,
+          },
+          tenantId,
+          req.app.get("io")
+        );
+      } catch (e) {
+        console.error("[approvals] approval.approved emit failed:", e.message);
+      }
+
       const [hydrated] = await hydrateUsers([updated], tenantId);
       res.json(hydrated);
     } catch (err) {
@@ -315,6 +340,27 @@ router.post(
         entityId: updated.entityId,
         comment: updated.comment,
       });
+
+      // #1 — emit approval.rejected so downstream rules can react (notify
+      // requester, log denial, etc.). Decoupled — no deal/entity mutation.
+      try {
+        await emitEvent(
+          "approval.rejected",
+          {
+            approvalId: updated.id,
+            entity: updated.entity,
+            entityId: updated.entityId,
+            approverId: req.user.userId,
+            requesterId: updated.requestedBy,
+            reason: updated.reason,
+            comment: updated.comment,
+          },
+          tenantId,
+          req.app.get("io")
+        );
+      } catch (e) {
+        console.error("[approvals] approval.rejected emit failed:", e.message);
+      }
 
       const [hydrated] = await hydrateUsers([updated], tenantId);
       res.json(hydrated);

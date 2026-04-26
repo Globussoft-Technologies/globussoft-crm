@@ -2,13 +2,16 @@ const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
+const { verifyRole } = require("../middleware/auth");
 
 // GET /api/estimates — list with optional status filter
+// #167: soft-deleted rows hidden by default; opt in with ?includeDeleted=true.
 router.get("/", async (req, res) => {
   try {
     const { status } = req.query;
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
+    if (req.query.includeDeleted !== "true") where.deletedAt = null;
 
     // #172: pagination
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
@@ -30,12 +33,15 @@ router.get("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid estimate ID" });
+    const includeDeleted = req.query.includeDeleted === "true";
 
     const estimate = await prisma.estimate.findFirst({
       where: { id, tenantId: req.user.tenantId },
       include: { contact: true, deal: true, lineItems: true },
     });
     if (!estimate) return res.status(404).json({ error: "Estimate not found" });
+    // #167: 404 soft-deleted rows unless opted in.
+    if (estimate.deletedAt && !includeDeleted) return res.status(404).json({ error: "Estimate not found" });
     res.json(estimate);
   } catch (err) {
     console.error(err);
@@ -206,18 +212,58 @@ router.put("/:id/convert", async (req, res) => {
   }
 });
 
-// DELETE /api/estimates/:id
-router.delete("/:id", async (req, res) => {
+// DELETE /api/estimates/:id — soft-delete (#167). ADMIN only. Idempotent.
+// Cascade onDelete on EstimateLineItem is unchanged (only fires on hard-delete,
+// which we no longer perform here).
+router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid estimate ID" });
     const existing = await prisma.estimate.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Estimate not found" });
-    await prisma.estimate.delete({ where: { id: existing.id } });
-    res.json({ message: "Estimate deleted" });
+    if (existing.deletedAt) {
+      return res.json({ ...existing, idempotent: true, softDeleted: true });
+    }
+    try {
+      await prisma.auditLog.create({
+        data: { action: "SOFT_DELETE", entity: "Estimate", entityId: existing.id, userId: req.user?.userId || null, tenantId: req.user.tenantId, details: JSON.stringify({ estimateNum: existing.estimateNum, title: existing.title }) }
+      });
+    } catch (_) { /* audit failures must not block */ }
+    const estimate = await prisma.estimate.update({
+      where: { id: existing.id },
+      data: { deletedAt: new Date() },
+    });
+    res.json({ ...estimate, message: "Estimate soft-deleted", softDeleted: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to delete estimate" });
+  }
+});
+
+// POST /api/estimates/:id/restore — undo a soft-delete (#167)
+router.post("/:id/restore", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid estimate ID" });
+    const existing = await prisma.estimate.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Estimate not found" });
+    if (!existing.deletedAt) {
+      return res.json({ ...existing, idempotent: true, restored: false });
+    }
+    try {
+      await prisma.auditLog.create({
+        data: { action: "RESTORE", entity: "Estimate", entityId: existing.id, userId: req.user?.userId || null, tenantId: req.user.tenantId, details: JSON.stringify({ estimateNum: existing.estimateNum }) }
+      });
+    } catch (_) { /* non-critical */ }
+    const estimate = await prisma.estimate.update({
+      where: { id: existing.id },
+      data: { deletedAt: null },
+      include: { contact: true, deal: true, lineItems: true },
+    });
+    res.json({ ...estimate, restored: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to restore estimate" });
   }
 });
 

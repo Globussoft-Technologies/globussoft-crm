@@ -8,31 +8,18 @@ Last updated: 2026-04-26
 
 ## 🟡 Ship this month — small/medium effort, real product impact
 
-### [ ] #1 + #2 — Approvals: auto-create on threshold + side effects
-**Diagnosis:** `workflowEngine.js` has no `create_approval` action — high-value deals do NOT auto-trigger approvals. The user must manually POST `/api/approvals`. And `/approve` is a no-op on the deal itself: records the decision but doesn't mutate stage / apply discount / fire any side-effect event.
-**Recommendation:** Don't tangle approve with deal mutation. Decoupled design:
-- Add `create_approval` action type to `workflowEngine.js executeAction()` (1 new switch case). Threshold lives in the rule's `targetState`, e.g. `{ amountGt: 50000, reason: "High-value deal" }`.
-- On `/approve` success, emit `approval.approved` event (1 line). Add to `TRIGGER_TYPES` whitelist.
-- Any rule listening on `approval.approved` can mutate the deal — discount, stage, whatever. Configurable per tenant.
-- No schema migration needed (uses existing `AutomationRule.targetState` JSON + `ApprovalRequest`).
-
-**Effort:** ~3 hours. **Files:** `backend/cron/workflowEngine.js`, `backend/routes/approvals.js`, `backend/routes/workflows.js`.
+### [x] ~~#1 + #2 — Approvals: auto-create on threshold + side effects~~
+**Closed in 8b6bb49** — `create_approval` action wired into `workflowEngine.js executeAction()`. Resolves `entityId` via `payload[entity.toLowerCase()+'Id']`. `reasonTemplate` rendered with mustache-style `{{path.to.field}}` lookups (unresolved placeholders left raw). Approve emits `approval.approved` (does NOT mutate the deal — downstream rules can do that). Reject emits `approval.rejected`. New TRIGGER_TYPES: `approval.created/approved/rejected`. New ACTION_TYPES: `create_approval`.
 
 ---
 
-### [ ] #20 — Workflow rule conditions
-**Diagnosis:** `AutomationRule` has no `condition` column. Every rule fires on every matching event — "fire only if status=Lead" is impossible.
-**Recommendation:** Add `condition String? @db.Text` JSON column to `AutomationRule`. Format: `[{field: "deal.amount", op: "gt", value: 50000}]` — array of clauses, AND-joined. Operators: `eq, neq, gt, gte, lt, lte, in, contains`. Engine evaluator is ~30 lines in `workflowEngine.js`. UI builder later.
-
-**Effort:** ~3 hours + 1 schema migration. **Files:** `backend/prisma/schema.prisma`, `backend/cron/workflowEngine.js`, `backend/routes/workflows.js`. Prerequisite for productionizing #1.
+### [x] ~~#20 — Workflow rule conditions~~
+**Closed in 8b6bb49** — `AutomationRule.condition String? @db.Text` column added. `evaluateCondition()` in `lib/eventBus.js`: JSON-array clauses AND-joined, ops `eq/neq/gt/gte/lt/lte/in/nin/contains/startsWith` with numeric coercion. Empty/null condition = always-fires (back-compat). Bad JSON = fail-closed. Field lookup tries dot-path then flat fallback. Wired BEFORE `executeAction`. POST/PUT validate via `validateCondition()` → 400 INVALID_CONDITION. Unblocks #7 (sequence reply detection — uses `pauseOnReply` rule condition).
 
 ---
 
-### [ ] #12 — SLA breach cron + event
-**Diagnosis:** No cron checks for breach. `breached` flag is computed on-read from `slaResponseDue < now()`. Reports/notifications/automations cannot subscribe to a "ticket just breached" event because none is emitted.
-**Recommendation:** Add a 5-minute cron (mirror `appointmentRemindersEngine` pattern). Query `where: { slaResponseDue: { lt: now }, firstResponseAt: null, breached: false }`. Flip `breached: true` and emit `sla.breached` event. Add `breached Boolean @default(false)` column. Then existing workflow rules can react.
-
-**Effort:** ~3 hours + 1 schema migration. **Files:** `backend/cron/slaBreachEngine.js` (new), `backend/server.js` (mount the cron), `backend/prisma/schema.prisma`, `backend/routes/sla.js`.
+### [x] ~~#12 — SLA breach cron + event~~
+**Closed in 8b6bb49** — `Ticket.breached Boolean @default(false)` + `Ticket.breachedAt DateTime?` columns. `cron/slaBreachEngine.js` runs every 5 min, scans per-tenant for status NOT IN (Resolved/Closed/Cancelled) AND firstResponseAt IS NULL AND slaResponseDue < now AND breached=false. Flips both columns and emits `sla.breached` with `{ ticketId, subject, priority, contactId, assigneeId, dueAt, breachedAt, breachedBy }`. Idempotency via the `breached=false` precondition. New POST `/api/sla/check-breaches` (ADMIN) for manual trigger. New TRIGGER_TYPES entry: `sla.breached`. Existing on-read `GET /api/sla/breaches` kept untouched as fallback.
 
 ---
 

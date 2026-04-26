@@ -324,25 +324,80 @@ test.describe('Workflow engine — deep functional flows', () => {
     expect(body.error).toMatch(/required/i);
   });
 
-  // The engine accepts unknown actionType at CREATE time (no validation
-  // against ACTION_TYPES whitelist in workflows.js POST). Documented as a
-  // gap; we lock current behaviour so a future tightening shows up as a
-  // failed test rather than silent breakage.
-  test.skip('Flow 5c: POST /workflows rejects unknown actionType — currently NOT validated (gap, see findings)', async ({ request }) => {
+  // Gap #18 fixed: workflows POST/PUT now validate triggerType + actionType
+  // against the supported whitelists and reject unknowns with 400.
+  test('Flow 5c: POST /workflows rejects unknown actionType', async ({ request }) => {
     const res = await request.post(`${API}/workflows`, {
       headers: authA(),
       data: { name: `flow5c-${TAG}`, triggerType: 'contact.created', actionType: 'launch_missile', targetState: '{}' },
     });
     expect(res.status()).toBe(400);
-    expect((await res.json()).code).toBe('UNKNOWN_ACTION_TYPE');
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_ACTION_TYPE');
+    expect(Array.isArray(body.allowed)).toBe(true);
+    expect(body.allowed).toContain('create_task');
   });
 
-  test.skip('Flow 5d: POST /workflows rejects unknown triggerType — currently NOT validated (gap)', async ({ request }) => {
+  test('Flow 5d: POST /workflows rejects unknown triggerType', async ({ request }) => {
     const res = await request.post(`${API}/workflows`, {
       headers: authA(),
       data: { name: `flow5d-${TAG}`, triggerType: 'volcano.erupted', actionType: 'create_task', targetState: '{}' },
     });
     expect(res.status()).toBe(400);
-    expect((await res.json()).code).toBe('UNKNOWN_TRIGGER_TYPE');
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_TRIGGER_TYPE');
+    expect(Array.isArray(body.allowed)).toBe(true);
+    expect(body.allowed).toContain('contact.created');
+  });
+
+  // ── Flow 6 — PUT /api/deals/:id stage change emits deal.stage_changed ──
+  // Gap #16 fixed: PUT used to be silent. Now it emits deal.updated and,
+  // when the stage actually moves, deal.stage_changed. We assert downstream
+  // by attaching a send_notification rule and looking for the notification
+  // after a PUT that changes stage.
+  test('Flow 6: PUT /api/deals/:id with a new stage triggers a deal.stage_changed rule (Gap #16)', async ({ request }) => {
+    const contact = await createContact(request, authA(), {
+      name: `Vikram Shah ${TAG}`,
+      email: `vikram.${TAG.toLowerCase()}@example.com`,
+      status: 'Lead',
+    });
+    created.contactsA.push(contact.id);
+
+    const notifTitle = `Deal stage moved [${TAG}]`;
+    const rule = await createRule(request, authA(), {
+      name: `flow6-rule-${TAG}`,
+      triggerType: 'deal.stage_changed',
+      actionType: 'send_notification',
+      targetState: { userId: userIdA, title: notifTitle, message: 'Deal stage changed via PUT.' },
+    });
+    created.rulesA.push(rule.id);
+
+    const dealRes = await request.post(`${API}/deals`, {
+      headers: authA(),
+      data: { title: `Stage move probe ${TAG}`, amount: 12000, stage: 'lead', contactId: contact.id },
+    });
+    expect(dealRes.status()).toBe(201);
+    const deal = await dealRes.json();
+    created.dealsA.push(deal.id);
+
+    const before = await listNotifications(request, authA());
+    const beforeIds = new Set(before.map((n) => n.id));
+
+    // PUT the deal to a new stage. Pre-fix this was a no-op for the engine.
+    const putRes = await request.put(`${API}/deals/${deal.id}`, {
+      headers: authA(),
+      data: { stage: 'proposal' },
+    });
+    expect(putRes.status(), `deal PUT: ${await putRes.text()}`).toBe(200);
+    expect((await putRes.json()).stage).toBe('proposal');
+
+    await new Promise((r) => setTimeout(r, 750));
+
+    const after = await listNotifications(request, authA());
+    const fresh = after.filter((n) => !beforeIds.has(n.id));
+    const match = fresh.find((n) => n.title === notifTitle);
+    expect(match, `expected new Notification "${notifTitle}" after stage PUT; got ${JSON.stringify(fresh.map((n) => n.title))}`).toBeTruthy();
+    expect(match.userId).toBe(userIdA);
+    created.notificationsA.push(match.id);
   });
 });

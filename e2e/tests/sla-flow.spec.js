@@ -32,11 +32,11 @@
  *     `responseOverdueMinutes` / `resolveOverdueMinutes`.
  *
  *   - To force an immediate breach without sleeping: create the SlaPolicy with
- *     responseMinutes=1 (POST coerces 0 -> default 60 because `parseInt(0)||60`
- *     is 60), then PUT responseMinutes=0 (PUT uses bare `parseInt`, so 0
- *     persists), then POST /api/sla/apply/:ticketId. With responseMinutes=0
- *     the computed slaResponseDue equals ticket.createdAt, which is < now()
- *     immediately. createdAt cannot be back-dated via API because
+ *     responseMinutes=0 (now valid on both POST and PUT — the legacy
+ *     `parseInt(0)||60` coercion bug was fixed; 0 means "instant SLA"), then
+ *     POST /api/sla/apply/:ticketId. With responseMinutes=0 the computed
+ *     slaResponseDue equals ticket.createdAt, which is < now() immediately.
+ *     createdAt cannot be back-dated via API because
  *     middleware/validateInput.js stripDangerous() deletes req.body.createdAt.
  */
 const { test, expect } = require('@playwright/test');
@@ -232,9 +232,9 @@ test.describe('SLA + Tickets — deep business-logic flow', () => {
     const breachTicket = await ticketRes.json();
     crossTenantTicketId = breachTicket.id; // reuse afterAll cleanup slot
 
-    // Force the policy to a 0-minute response window. POST coerces 0 -> 60
-    // because `parseInt(0) || 60` is 60, but PUT uses bare parseInt and lets
-    // 0 through. Verified by reading backend/routes/sla.js line 69.
+    // Force the policy to a 0-minute response window. After Gap #13 fix, both
+    // POST and PUT accept 0 as a valid "instant SLA" value (negative is
+    // rejected with 400 / INVALID_RESPONSE_MINUTES).
     const putRes = await request.put(`${API}/sla/policies/${createdPolicyId}`, {
       headers: gauth(),
       data: { responseMinutes: 0 },

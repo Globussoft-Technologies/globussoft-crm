@@ -133,6 +133,69 @@ router.post("/:id/enroll", verifyToken, async (req, res) => {
   }
 });
 
+// ─── Enrollment-level controls ──────────────────────────────────────────
+// Tenant ownership is enforced via the parent sequence's tenantId (the
+// enrollment.tenantId column has a default and is not always trustable on
+// its own — joining through the sequence is the canonical check).
+const findEnrollmentForTenant = async (id, tenantId) => {
+  if (isNaN(id)) return null;
+  return prisma.sequenceEnrollment.findFirst({
+    where: { id, sequence: { tenantId } },
+  });
+};
+
+// Pause an active enrollment — engine skips Paused rows because tickSequenceEngine
+// only loads status='Active'. Clearing nextRun avoids an immediate fire on resume.
+router.patch("/enrollments/:id/pause", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await findEnrollmentForTenant(id, req.user.tenantId);
+    if (!existing) return res.status(404).json({ error: "Enrollment not found" });
+    const updated = await prisma.sequenceEnrollment.update({
+      where: { id: existing.id },
+      data: { status: 'Paused', nextRun: null },
+    });
+    res.json({ success: true, enrollment: updated });
+  } catch(err) {
+    res.status(500).json({ error: "Failed to pause enrollment." });
+  }
+});
+
+// Resume a paused enrollment. nextRun=now() so the next cron tick (≤60s)
+// picks it up and continues from the stored currentNode cursor.
+router.patch("/enrollments/:id/resume", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await findEnrollmentForTenant(id, req.user.tenantId);
+    if (!existing) return res.status(404).json({ error: "Enrollment not found" });
+    const updated = await prisma.sequenceEnrollment.update({
+      where: { id: existing.id },
+      data: { status: 'Active', nextRun: new Date() },
+    });
+    res.json({ success: true, enrollment: updated });
+  } catch(err) {
+    res.status(500).json({ error: "Failed to resume enrollment." });
+  }
+});
+
+// Soft-delete (unenroll). We keep the row so audit / analytics can still see
+// historical drip activity for this contact; the engine ignores any status
+// other than 'Active'.
+router.delete("/enrollments/:id", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await findEnrollmentForTenant(id, req.user.tenantId);
+    if (!existing) return res.status(404).json({ error: "Enrollment not found" });
+    const updated = await prisma.sequenceEnrollment.update({
+      where: { id: existing.id },
+      data: { status: 'Unenrolled', nextRun: null },
+    });
+    res.json({ success: true, enrollment: updated });
+  } catch(err) {
+    res.status(500).json({ error: "Failed to unenroll." });
+  }
+});
+
 // Debug endpoint to manually trigger a cron tick. Already implicitly gated
 // by the global /api/* auth guard (any unauthenticated caller gets 403);
 // tightened here to ADMIN-only since this drives the engine for every tenant.

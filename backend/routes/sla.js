@@ -11,6 +11,19 @@ const minutesBetween = (a, b) => {
   return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 60000);
 };
 
+// Coerce a minutes input. Treats 0 as a valid "instant SLA" value (used by
+// deterministic breach tests). null / undefined / non-numeric → returns the
+// supplied default. Negative → returns the sentinel { negative: true } so the
+// caller can return a 400.
+const coerceMinutes = (raw, fallback) => {
+  if (raw === null || raw === undefined || raw === "") return { value: fallback };
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return { value: fallback };
+  const i = Math.trunc(n);
+  if (i < 0) return { negative: true };
+  return { value: i };
+};
+
 // ─── SLA POLICIES ──────────────────────────────────────────────────────────
 
 // GET /api/sla/policies — list SLA policies for tenant
@@ -34,12 +47,28 @@ router.post("/policies", async (req, res) => {
     if (!name || !priority) {
       return res.status(400).json({ error: "name and priority are required" });
     }
+
+    // 0 is a VALID "instant SLA" value; only null/undefined/non-numeric fall
+    // back to the default of 60 (response) / 1440 (resolve).
+    const respCoerced = coerceMinutes(responseMinutes, 60);
+    if (respCoerced.negative) {
+      return res
+        .status(400)
+        .json({ error: "responseMinutes cannot be negative", code: "INVALID_RESPONSE_MINUTES" });
+    }
+    const resolveCoerced = coerceMinutes(resolveMinutes, 1440);
+    if (resolveCoerced.negative) {
+      return res
+        .status(400)
+        .json({ error: "resolveMinutes cannot be negative", code: "INVALID_RESOLVE_MINUTES" });
+    }
+
     const policy = await prisma.slaPolicy.create({
       data: {
         name: String(name),
         priority: String(priority),
-        responseMinutes: parseInt(responseMinutes) || 60,
-        resolveMinutes: parseInt(resolveMinutes) || 1440,
+        responseMinutes: respCoerced.value,
+        resolveMinutes: resolveCoerced.value,
         isActive: isActive === undefined ? true : !!isActive,
         tenantId: tenantId(req),
       },
@@ -66,8 +95,25 @@ router.put("/policies/:id", async (req, res) => {
     const data = {};
     if (name !== undefined) data.name = String(name);
     if (priority !== undefined) data.priority = String(priority);
-    if (responseMinutes !== undefined) data.responseMinutes = parseInt(responseMinutes);
-    if (resolveMinutes !== undefined) data.resolveMinutes = parseInt(resolveMinutes);
+    if (responseMinutes !== undefined) {
+      // Same rules as POST: 0 is valid (instant SLA); negative → 400.
+      const c = coerceMinutes(responseMinutes, existing.responseMinutes);
+      if (c.negative) {
+        return res
+          .status(400)
+          .json({ error: "responseMinutes cannot be negative", code: "INVALID_RESPONSE_MINUTES" });
+      }
+      data.responseMinutes = c.value;
+    }
+    if (resolveMinutes !== undefined) {
+      const c = coerceMinutes(resolveMinutes, existing.resolveMinutes);
+      if (c.negative) {
+        return res
+          .status(400)
+          .json({ error: "resolveMinutes cannot be negative", code: "INVALID_RESOLVE_MINUTES" });
+      }
+      data.resolveMinutes = c.value;
+    }
     if (isActive !== undefined) data.isActive = !!isActive;
 
     const policy = await prisma.slaPolicy.update({ where: { id }, data });
@@ -133,10 +179,16 @@ router.post("/apply/:ticketId", async (req, res) => {
   }
 });
 
-// POST /api/sla/apply-all — apply policies to all tickets without slaResponseDue
+// POST /api/sla/apply-all — apply policies to all tickets.
+// Default (force=false): only stamp tickets that have no slaResponseDue yet —
+//   safe for cron jobs / repeated calls (backwards-compatible).
+// ?force=true: re-apply policies to in-flight tickets too, OVERWRITING
+//   slaResponseDue / slaResolveDue based on createdAt + current policy minutes.
+//   Use after editing a policy that should propagate to existing tickets.
 router.post("/apply-all", async (req, res) => {
   try {
     const tid = tenantId(req);
+    const force = req.query.force === "true" || req.query.force === "1" || req.body?.force === true;
 
     const policies = await prisma.slaPolicy.findMany({
       where: { tenantId: tid, isActive: true },
@@ -148,7 +200,9 @@ router.post("/apply-all", async (req, res) => {
     }
 
     const tickets = await prisma.ticket.findMany({
-      where: { tenantId: tid, slaResponseDue: null },
+      where: force
+        ? { tenantId: tid }
+        : { tenantId: tid, slaResponseDue: null },
     });
 
     let applied = 0;
@@ -170,7 +224,7 @@ router.post("/apply-all", async (req, res) => {
       applied += 1;
     }
 
-    res.json({ applied, skipped, total: tickets.length });
+    res.json({ applied, skipped, total: tickets.length, force });
   } catch (err) {
     console.error("[SLA][apply-all]", err);
     res.status(500).json({ error: "Failed to apply SLAs" });

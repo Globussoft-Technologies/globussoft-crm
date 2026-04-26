@@ -81,13 +81,33 @@ router.post('/', verifyToken, async (req, res) => {
 });
 
 router.put('/:id', verifyToken, async (req, res) => {
+  // Statuses that constitute an actual agent response. Terminal statuses
+  // (Resolved / Closed / Cancelled) are NOT a first response — the customer
+  // experiences them as closure, not a reply. Match is case-insensitive.
+  const RESPONSIVE_STATUSES = ['in progress', 'pending', 'replied'];
+  const TERMINAL_STATUSES = ['resolved', 'closed', 'cancelled'];
+
   try {
     const existing = await prisma.ticket.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Ticket not found' });
 
     const data = { ...req.body };
-    if (req.body.status === 'Resolved' && !existing.resolvedAt) data.resolvedAt = new Date();
-    if (!existing.firstResponseAt && req.body.status && req.body.status !== 'Open') data.firstResponseAt = new Date();
+    const incomingStatus = typeof req.body.status === 'string' ? req.body.status.trim().toLowerCase() : null;
+    const existingStatus = typeof existing.status === 'string' ? existing.status.trim().toLowerCase() : null;
+
+    if (incomingStatus === 'resolved' && !existing.resolvedAt) data.resolvedAt = new Date();
+
+    // Stamp firstResponseAt only on Open → (In Progress | Pending | Replied).
+    // Skip terminal transitions; they are not a "response".
+    if (
+      !existing.firstResponseAt &&
+      existingStatus === 'open' &&
+      incomingStatus &&
+      RESPONSIVE_STATUSES.includes(incomingStatus) &&
+      !TERMINAL_STATUSES.includes(incomingStatus)
+    ) {
+      data.firstResponseAt = new Date();
+    }
 
     const ticket = await prisma.ticket.update({ where: { id: existing.id }, data });
     if (req.io) req.io.emit('ticket_updated', ticket);

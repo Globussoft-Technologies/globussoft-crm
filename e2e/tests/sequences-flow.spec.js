@@ -20,24 +20,25 @@
  * GAPS DISCOVERED while reading the engine — these are real bugs/missing
  * features, not test issues:
  *
- *   G1. backend/routes/sequences.js exposes NO /enrollments/:id/pause,
- *       /resume, or unenrol endpoint. SequenceEnrollment.status enum allows
- *       'Paused' (schema line 510) but nothing in the API can set it. Flow 2
- *       and Flow 3 from the brief are skipped accordingly.
+ *   G1. (FIXED) backend/routes/sequences.js now exposes
+ *       PATCH /enrollments/:id/pause, PATCH /enrollments/:id/resume, and
+ *       DELETE /enrollments/:id (soft-delete via status='Unenrolled').
+ *       Flow 2 + Flow 3 below are no longer skipped.
  *
  *   G2. No reply detection in sequenceEngine.js — the engine never inspects
  *       inbound EmailMessage rows. A contact who replies stays enrolled and
  *       keeps receiving drips. Flow 4 skipped.
  *
- *   G3. Delay regex (/(\d+)\s*Hour/i and /(\d+)\s*Min/i) does NOT understand
- *       "Day"/"Days". A node labelled "DELAY: Wait 1 Day" silently falls
- *       through to the 60-minute default. We use "Wait 24 Hours" to side-step
- *       this; documented here so it gets fixed.
+ *   G3. (FIXED) Delay regex now understands Days?/Hours?/Min(?:ute)?s? with
+ *       a 60-min fallback (no infinite-tick loop on bad input). "DELAY: Wait
+ *       1 Day" now correctly resolves to 1440 minutes.
  *
  *   G4. processNode() for ACTION: Send Email synthesises a fake from/body
  *       ("system@crm.com" / "This is an automated drip email…") regardless of
  *       any template the user designed in the canvas. There's no link to
- *       EmailTemplate at all.
+ *       EmailTemplate at all. Synthesised rows now carry a deterministic
+ *       threadId (`seq-<enrollmentId>`) so they're queryable via
+ *       /api/email-threading/threads (Gap #10 fix).
  *
  *   G5. /sequences/debug/tick has NO auth middleware. Anyone on the public
  *       internet can fire the engine for every tenant. That's the only reason
@@ -220,31 +221,39 @@ test.describe('Sequences flow — drip engine business logic', () => {
     // we re-enrol-and-fail to confirm row still alive, then verify the
     // observable side-effect (EmailMessage) which IS public.
 
-    // No public API lists EmailMessage rows by contact (email.js exposes
-    // /threads /stats /scheduled only; email-threading.js requires a non-null
-    // threadId which the synthesized engine email doesn't set). We rely on
-    // /email-threading/threads if any thread exists, otherwise verify the
-    // tick succeeded and skip the per-message body check.
+    // /email-threading/threads filters out rows with a null threadId. Since
+    // Gap #10 was fixed (synthesised emails now stamp threadId =
+    // `seq-<enrollmentId>`), the drip should appear here. We still tolerate
+    // a non-200 response shape difference across deploys (the route may
+    // return {threads:[…]} or a bare array), so we normalise.
     const after = await request.get(
       `${API}/email-threading/threads?contactId=${contactId}`,
       { headers: auth() }
     );
-    if (!after.ok()) {
-      // Engine ran successfully (we got 200 from /tick) — accept that as the
-      // observable signal. The lack of a list-by-contact endpoint for raw
-      // EmailMessage rows is documented as a gap.
-      return;
+    let afterArr = [];
+    if (after.ok()) {
+      const afterBody = await after.json();
+      afterArr = Array.isArray(afterBody)
+        ? afterBody
+        : (afterBody.data || afterBody.threads || afterBody.messages || []);
     }
-    const afterBody = await after.json();
-    const afterArr = Array.isArray(afterBody) ? afterBody : (afterBody.data || afterBody.threads || afterBody.messages || []);
-    expect(
-      afterArr.length,
-      'sequenceEngine.processNode should have written something queryable via threads or be a known engine gap'
-    ).toBeGreaterThanOrEqual(beforeCount);
 
-    // The synthesised email subject is `Automated Sequence: ${label}` —
-    // confirm step 1 fired (NOT step 2, which is behind the 24h delay).
-    const subjects = afterArr.map((m) => m.subject || (m.messages && m.messages[0]?.subject) || '');
+    // Pull subjects from whatever shape the threads endpoint returns. If the
+    // route didn't surface anything queryable, fall back to /api/email which
+    // we already snapshotted above — the engine wrote an OUTBOUND row either
+    // way, and we just need ONE channel to confirm step 1 fired.
+    let subjects = afterArr.map((m) => m.subject || (m.messages && m.messages[0]?.subject) || '');
+    if (subjects.length === 0) {
+      const fallback = await request.get(
+        `${API}/email?contactId=${contactId}&direction=OUTBOUND`,
+        { headers: auth() }
+      );
+      if (fallback.ok()) {
+        const fb = await fallback.json();
+        const arr = Array.isArray(fb) ? fb : (fb.data || fb.messages || []);
+        subjects = arr.map((m) => m.subject || '');
+      }
+    }
     const step1Hit = subjects.some((s) => s.includes('ACTION: Send Email Welcome'));
     const step2Hit = subjects.some((s) => s.includes('ACTION: Send Email Follow-up'));
     expect(step1Hit, 'step 1 (Welcome) email must be materialised').toBe(true);
@@ -306,22 +315,61 @@ test.describe('Sequences flow — drip engine business logic', () => {
     expect(step2Subjects.length).toBe(0);
   });
 
-  // ── Flow 2 — pause + resume (NOT IMPLEMENTED on backend, see G1) ────
-  test.skip('PUT /sequences/enrollments/:id/pause → status=Paused', async () => {
-    // backend/routes/sequences.js has no enrollment-level endpoints. The
-    // status enum permits 'Paused' but nothing in the public API can write
-    // it. Will un-skip once the route is added.
+  // ── Flow 2 — pause + resume ─────────────────────────────────────────
+  test('PATCH /sequences/enrollments/:id/pause → status=Paused, nextRun cleared', async ({ request }) => {
+    expect(enrollmentId, 'previous enrolment must exist').toBeTruthy();
+    const res = await request.patch(`${API}/sequences/enrollments/${enrollmentId}/pause`, {
+      headers: auth(),
+    });
+    expect(res.status(), `pause body: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.enrollment.status).toBe('Paused');
+    expect(body.enrollment.nextRun == null).toBe(true);
+
+    // 404 on a bogus id (proves the tenant-scoped lookup works).
+    const miss = await request.patch(`${API}/sequences/enrollments/999999999/pause`, {
+      headers: auth(),
+    });
+    expect(miss.status()).toBe(404);
   });
 
-  test.skip('POST /sequences/enrollments/:id/resume → status=Active + nextRun restored', async () => {
-    // See G1.
+  test('PATCH /sequences/enrollments/:id/resume → status=Active + nextRun set to now', async ({ request }) => {
+    expect(enrollmentId, 'previous enrolment must exist').toBeTruthy();
+    const res = await request.patch(`${API}/sequences/enrollments/${enrollmentId}/resume`, {
+      headers: auth(),
+    });
+    expect(res.status(), `resume body: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.enrollment.status).toBe('Active');
+    // nextRun should be set to ~now so the next cron tick picks it up.
+    expect(body.enrollment.nextRun).toBeTruthy();
+    const drift = Math.abs(new Date(body.enrollment.nextRun).getTime() - Date.now());
+    expect(drift, 'resume should set nextRun ≈ now (within 60s)').toBeLessThan(60_000);
   });
 
-  // ── Flow 3 — unenroll (NOT IMPLEMENTED on backend, see G1) ──────────
-  test.skip('DELETE /sequences/enrollments/:id → row gone or status=Unenrolled', async () => {
-    // No DELETE /enrollments endpoint exists. The only way to remove an
-    // enrollment today is to DELETE the parent sequence (which we do in
-    // afterAll via the cascade in routes/sequences.js delete handler).
+  // ── Flow 3 — unenroll (soft-delete, status=Unenrolled) ──────────────
+  test('DELETE /sequences/enrollments/:id → status=Unenrolled (history preserved)', async ({ request }) => {
+    expect(enrollmentId, 'previous enrolment must exist').toBeTruthy();
+    const res = await request.delete(`${API}/sequences/enrollments/${enrollmentId}`, {
+      headers: auth(),
+    });
+    expect(res.status(), `unenroll body: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.enrollment.status).toBe('Unenrolled');
+
+    // The row still exists — re-enrolling the same contact should now succeed
+    // because the duplicate guard in POST /enroll only checks by sequenceId+contactId
+    // regardless of status. (If that guard tightens later, this assertion can
+    // flip to expect 400 with an "already enrolled" message — both are valid
+    // semantics for soft-deleted history.)
+    const reEnrol = await request.post(`${API}/sequences/${sequenceId}/enroll`, {
+      headers: auth(),
+      data: { contactId },
+    });
+    expect([200, 400]).toContain(reEnrol.status());
   });
 
   // ── Flow 4 — reply detection (NOT IMPLEMENTED on backend, see G2) ───

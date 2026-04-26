@@ -1,5 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const { ensureEnum } = require("../lib/validators");
 
 const router = express.Router();
 
@@ -8,6 +9,7 @@ const TRIGGER_TYPES = [
   { value: "contact.created", label: "Contact Created", description: "Fires when a new contact is added" },
   { value: "contact.updated", label: "Contact Updated", description: "Fires when a contact is modified" },
   { value: "deal.created", label: "Deal Created", description: "Fires when a new deal is created" },
+  { value: "deal.updated", label: "Deal Updated", description: "Fires whenever a deal is updated via PUT /api/deals/:id" },
   { value: "deal.stage_changed", label: "Deal Stage Changed", description: "Fires when a deal moves pipeline stages" },
   { value: "deal.won", label: "Deal Won", description: "Fires when a deal is marked as won" },
   { value: "deal.lost", label: "Deal Lost", description: "Fires when a deal is marked as lost" },
@@ -84,6 +86,24 @@ router.get("/", async (req, res) => {
   }
 });
 
+// Helper: validate that a triggerType / actionType is in the supported whitelist.
+// #18: previously accepted any string; engine would silently log "Unknown actionType"
+// at execute time. Now we reject at create/update time with 400 + machine code.
+const TRIGGER_VALUES = TRIGGER_TYPES.map((t) => t.value);
+const ACTION_VALUES = ACTION_TYPES.map((a) => a.value);
+
+function validateTriggerAction({ triggerType, actionType }) {
+  if (triggerType !== undefined) {
+    const err = ensureEnum(triggerType, TRIGGER_VALUES, { field: "triggerType", code: "INVALID_TRIGGER_TYPE" });
+    if (err) return { ...err, allowed: TRIGGER_VALUES };
+  }
+  if (actionType !== undefined) {
+    const err = ensureEnum(actionType, ACTION_VALUES, { field: "actionType", code: "INVALID_ACTION_TYPE" });
+    if (err) return { ...err, allowed: ACTION_VALUES };
+  }
+  return null;
+}
+
 // POST / — create a new automation rule
 router.post("/", async (req, res) => {
   try {
@@ -92,6 +112,9 @@ router.post("/", async (req, res) => {
     if (!name || !triggerType || !actionType) {
       return res.status(400).json({ error: "name, triggerType, and actionType are required" });
     }
+
+    const enumErr = validateTriggerAction({ triggerType, actionType });
+    if (enumErr) return res.status(enumErr.status).json(enumErr);
 
     const newRule = await prisma.automationRule.create({
       data: {
@@ -118,7 +141,12 @@ router.put("/:id", async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Workflow not found" });
 
-    const { name, triggerType, actionType, targetState } = req.body;
+    const { name, triggerType, actionType, targetState, isActive } = req.body;
+
+    // #18: enforce trigger/action whitelist on update too.
+    const enumErr = validateTriggerAction({ triggerType, actionType });
+    if (enumErr) return res.status(enumErr.status).json(enumErr);
+
     const data = {};
     if (name !== undefined) data.name = name;
     if (triggerType !== undefined) data.triggerType = triggerType;
@@ -126,6 +154,9 @@ router.put("/:id", async (req, res) => {
     if (targetState !== undefined) {
       data.targetState = typeof targetState === "object" ? JSON.stringify(targetState) : targetState;
     }
+    // #19: allow toggling isActive via PUT so the frontend rule-builder can
+    // PATCH {isActive:false} without using the dedicated /toggle endpoint.
+    if (isActive !== undefined) data.isActive = !!isActive;
 
     const updated = await prisma.automationRule.update({
       where: { id: existing.id },

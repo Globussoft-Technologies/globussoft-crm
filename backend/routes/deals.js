@@ -262,6 +262,25 @@ router.put("/:id", async (req, res) => {
 
     await audit("UPDATE", deal.id, req.user.userId, req.user.tenantId, { from: existing.stage, to: deal.stage, fields: Object.keys(data) });
 
+    // #16: PUT was previously silent — emit deal.updated so workflow rules
+    // listening on generic deal updates can fire. Additionally emit
+    // deal.stage_changed when the stage actually moved (separate from /won
+    // and /lost which have their own dedicated emissions).
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      await emitEvent("deal.updated", {
+        dealId: deal.id, title: deal.title, amount: deal.amount, stage: deal.stage,
+        contactId: deal.contactId, userId: req.user.userId,
+      }, req.user.tenantId, req.io);
+      if (stageChanged) {
+        await emitEvent("deal.stage_changed", {
+          dealId: deal.id, title: deal.title, amount: deal.amount,
+          fromStage: existing.stage, toStage: deal.stage,
+          contactId: deal.contactId, userId: req.user.userId,
+        }, req.user.tenantId, req.io);
+      }
+    } catch (_) { /* event bus failures must not break the update */ }
+
     if (req.io) req.io.emit("deal_updated", deal);
     res.json(deal);
   } catch (error) {

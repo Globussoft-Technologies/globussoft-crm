@@ -82,6 +82,38 @@ router.param("id", (req, res, next, id) => {
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
+// Gap #22: Auto-credit loyalty points on completed visits.
+// Earn rule: 10% of amountCharged (floored). Idempotent — only one 'earned'
+// LoyaltyTransaction per visitId. Failures are swallowed so the visit save
+// is never rolled back by a loyalty issue.
+async function maybeAutoCreditLoyalty(visit, tenantId) {
+  try {
+    if (!visit || visit.status !== "completed") return;
+    const amt = parseFloat(visit.amountCharged);
+    if (!amt || amt <= 0) return;
+    const points = Math.floor(amt * 0.1);
+    if (points <= 0) return;
+    // Idempotency: skip if an 'earned' row already exists for this visit
+    const existing = await prisma.loyaltyTransaction.findFirst({
+      where: { tenantId, visitId: visit.id, type: "earned" },
+      select: { id: true },
+    });
+    if (existing) return;
+    await prisma.loyaltyTransaction.create({
+      data: {
+        patientId: visit.patientId,
+        tenantId,
+        type: "earned",
+        points,
+        reason: `Visit #${visit.id} (auto 10% earn)`,
+        visitId: visit.id,
+      },
+    });
+  } catch (err) {
+    console.error("[wellness] auto-credit loyalty failed:", err.message);
+  }
+}
+
 // Day boundaries in IST (UTC+05:30). Wellness clinics are India-based, so
 // "today" must mean the IST calendar day — using server-local hours would
 // shift the window by 5h30 on UTC servers (the production default), making
@@ -375,6 +407,11 @@ router.post("/visits", async (req, res) => {
       });
     }
 
+    // Gap #22: auto-credit loyalty (10% of amountCharged, floored) on
+    // completed visits. Idempotency via unique-per-visit ledger row keyed
+    // by (visitId, type='earned'). Failures must not roll back the visit.
+    await maybeAutoCreditLoyalty(visit, req.user.tenantId);
+
     res.status(201).json(visit);
   } catch (e) {
     console.error("[wellness] create visit error:", e.message);
@@ -414,6 +451,10 @@ router.put("/visits/:id", async (req, res) => {
     }
 
     const updated = await prisma.visit.update({ where: { id }, data });
+
+    // Gap #22: auto-credit loyalty when a visit is updated to 'completed'
+    // with amountCharged > 0. Idempotent via single 'earned' ledger row per visit.
+    await maybeAutoCreditLoyalty(updated, req.user.tenantId);
 
     // Agent B: when a visit transitions to "cancelled", auto-offer the slot
     // to the first matching waitlist entry (same serviceId, status=waiting).
@@ -1140,8 +1181,14 @@ router.get("/reports/pnl-by-service", async (req, res) => {
       where: { tenantId },
       select: { id: true, name: true, category: true, ticketTier: true, basePrice: true },
     });
+    // Gap #23: filter consumptions by their visit's visitDate, not by the
+    // consumption's createdAt. A consumption logged on day N+1 against a
+    // visit on day N would otherwise roll into N+1's productCost, desyncing
+    // revenue (visitDate-based) from cost (createdAt-based).
+    const consumptionWhere = { tenantId, visit: { visitDate: { gte: from, lte: to }, status: "completed" } };
+    if (locationId) consumptionWhere.visit.locationId = locationId;
     const consumptions = await prisma.serviceConsumption.findMany({
-      where: { tenantId, createdAt: { gte: from, lte: to } },
+      where: consumptionWhere,
       select: { visitId: true, qty: true, unitCost: true },
     });
     const visitIdToCost = {};

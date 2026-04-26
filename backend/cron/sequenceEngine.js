@@ -14,7 +14,11 @@ const processNode = async (node, enrollment) => {
   const label = node.data?.label || '';
   
   if (label.startsWith('ACTION: Send Email')) {
-    // Generate an artificial email message
+    // Generate an artificial email message.
+    // Gap #10: stamp a deterministic threadId so the message is queryable
+    // via /api/email-threading/threads (which filters out null threadIds).
+    // All emails from the same enrollment share one thread so the drip
+    // reads as a coherent conversation in the inbox.
     await prisma.emailMessage.create({
       data: {
         subject: `Automated Sequence: ${label}`,
@@ -23,25 +27,32 @@ const processNode = async (node, enrollment) => {
         to: enrollment.contact.email,
         direction: 'OUTBOUND',
         contactId: enrollment.contact.id,
+        threadId: `seq-${enrollment.id}`,
         read: true // Outbound
       }
     });
     // Immediately move to next (no delay)
     return { delayMinutes: 0 };
-  } 
-  
+  }
+
   if (label.startsWith('DELAY:')) {
-    // Extract hours or days from label, e.g. "Wait 72 Hours"
-    const hoursMatch = label.match(/(\d+)\s*Hour/i);
-    const minsMatch = label.match(/(\d+)\s*Min/i);
+    // Extract a duration from the label, e.g. "Wait 72 Hours" / "Wait 1 Day".
+    // Units (in minutes): Days = 1440, Hours = 60, Minutes = 1.
+    // Fallback stays at 60min (NOT 0) so a malformed label can't trigger an
+    // infinite tick loop where the engine re-fires the same node every cron.
+    const daysMatch  = label.match(/(\d+)\s*Days?/i);
+    const hoursMatch = label.match(/(\d+)\s*Hours?/i);
+    const minsMatch  = label.match(/(\d+)\s*Min(?:ute)?s?/i);
     let delayMinutes = 60; // default 1 hour if unparseable
-    
-    if (hoursMatch) {
+
+    if (daysMatch) {
+      delayMinutes = parseInt(daysMatch[1]) * 1440;
+    } else if (hoursMatch) {
       delayMinutes = parseInt(hoursMatch[1]) * 60;
     } else if (minsMatch) {
       delayMinutes = parseInt(minsMatch[1]);
     }
-    
+
     return { delayMinutes };
   }
   

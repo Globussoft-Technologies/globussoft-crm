@@ -259,6 +259,38 @@ router.post("/reply", async (req, res) => {
   }
 });
 
+// ── GET /messages ────────────────────────────────────────────────────────
+// Gap #25: raw EmailMessage rows for a given contact, tenant-scoped.
+// Used by sequence engines / external tooling to verify outbound dispatch
+// without paying the thread-grouping cost of /threads.
+router.get("/messages", async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const contactId = parseInt(req.query.contactId, 10);
+    if (!contactId || Number.isNaN(contactId)) {
+      return res.status(400).json({ error: "contactId is required" });
+    }
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const where = { tenantId, contactId };
+    if (req.query.direction) {
+      const dir = String(req.query.direction).toUpperCase();
+      if (dir !== "INBOUND" && dir !== "OUTBOUND") {
+        return res.status(400).json({ error: "direction must be INBOUND or OUTBOUND" });
+      }
+      where.direction = dir;
+    }
+    const messages = await prisma.emailMessage.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    res.json({ contactId, count: messages.length, messages });
+  } catch (err) {
+    console.error("[email_threading] list messages error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /stats ───────────────────────────────────────────────────────────
 // Thread count, unread thread count, avg response time (OUTBOUND -> next INBOUND).
 router.get("/stats", async (req, res) => {

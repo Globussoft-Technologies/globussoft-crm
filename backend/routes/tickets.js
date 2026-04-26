@@ -6,6 +6,12 @@ const prisma = require("../lib/prisma");
 const VALID_STATUSES = ["Open", "Pending", "Resolved", "Closed"];
 const VALID_PRIORITIES = ["Low", "Medium", "High", "Urgent"];
 
+// Mirror of support.js — statuses that constitute an actual agent response.
+// Terminal statuses (Resolved / Closed / Cancelled) are NOT a first response.
+// Match is case-insensitive.
+const RESPONSIVE_STATUSES = ["in progress", "pending", "replied"];
+const TERMINAL_STATUSES = ["resolved", "closed", "cancelled"];
+
 // GET / — list all tickets in current tenant
 router.get("/", async (req, res) => {
   try {
@@ -70,7 +76,25 @@ router.post("/", async (req, res) => {
         assignee: { select: { id: true, name: true, email: true } },
       },
     });
-    try { require("../lib/eventBus").emitEvent("ticket.created", { ticketId: ticket.id, subject: ticket.subject, priority: ticket.priority, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
+
+    // Auto-apply SLA if policy exists for this priority (mirrors support.js).
+    try {
+      const sla = await prisma.slaPolicy.findFirst({
+        where: { tenantId: req.user.tenantId, priority: ticket.priority, isActive: true },
+      });
+      if (sla) {
+        const now = new Date(ticket.createdAt);
+        await prisma.ticket.update({
+          where: { id: ticket.id },
+          data: {
+            slaResponseDue: new Date(now.getTime() + sla.responseMinutes * 60000),
+            slaResolveDue: new Date(now.getTime() + sla.resolveMinutes * 60000),
+          },
+        });
+      }
+    } catch (e) { /* SLA is non-critical */ }
+
+    try { require("../lib/eventBus").emitEvent("ticket.created", { ticketId: ticket.id, subject: ticket.subject, priority: ticket.priority, contactId: ticket.contactId, status: ticket.status, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
     res.status(201).json(ticket);
   } catch (err) {
     res.status(500).json({ error: "Failed to create ticket." });
@@ -100,6 +124,26 @@ router.put("/:id", async (req, res) => {
     }
     if (assigneeId !== undefined) {
       updateData.assigneeId = assigneeId ? parseInt(assigneeId, 10) : null;
+    }
+
+    // Stamp resolvedAt on first transition to Resolved (mirrors support.js).
+    const incomingStatus = typeof status === "string" ? status.trim().toLowerCase() : null;
+    const existingStatus = typeof existing.status === "string" ? existing.status.trim().toLowerCase() : null;
+
+    if (incomingStatus === "resolved" && !existing.resolvedAt) {
+      updateData.resolvedAt = new Date();
+    }
+
+    // Stamp firstResponseAt only on Open → (In Progress | Pending | Replied).
+    // Skip terminal transitions; they are not a "response". (Mirrors support.js.)
+    if (
+      !existing.firstResponseAt &&
+      existingStatus === "open" &&
+      incomingStatus &&
+      RESPONSIVE_STATUSES.includes(incomingStatus) &&
+      !TERMINAL_STATUSES.includes(incomingStatus)
+    ) {
+      updateData.firstResponseAt = new Date();
     }
 
     const ticket = await prisma.ticket.update({

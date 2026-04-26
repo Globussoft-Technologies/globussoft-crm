@@ -74,6 +74,14 @@ router.post('/', verifyToken, async (req, res) => {
     } catch (e) { /* SLA is non-critical */ }
 
     if (req.io) req.io.emit('ticket_created', ticket);
+    try {
+      require("../lib/eventBus").emitEvent(
+        "ticket.created",
+        { ticketId: ticket.id, subject: ticket.subject, priority: ticket.priority, contactId: ticket.contactId, status: ticket.status },
+        req.user.tenantId,
+        req.io
+      );
+    } catch(e) {}
     res.status(201).json(ticket);
   } catch (err) {
     res.status(500).json({ error: 'Failed to create ticket' });

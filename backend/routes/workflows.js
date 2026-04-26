@@ -16,6 +16,7 @@ const TRIGGER_TYPES = [
   { value: "ticket.created", label: "Ticket Created", description: "Fires when a support ticket is opened" },
   { value: "ticket.updated", label: "Ticket Updated", description: "Fires when a ticket status changes" },
   { value: "invoice.created", label: "Invoice Created", description: "Fires when an invoice is generated" },
+  { value: "invoice.paid", label: "Invoice Paid", description: "Fires when an invoice is marked as paid" },
   { value: "invoice.overdue", label: "Invoice Overdue", description: "Fires when an invoice passes its due date" },
   { value: "task.completed", label: "Task Completed", description: "Fires when a task is marked complete" },
   { value: "lead.converted", label: "Lead Converted", description: "Fires when a lead becomes a customer" },

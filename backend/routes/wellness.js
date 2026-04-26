@@ -2363,8 +2363,10 @@ router.post("/portal/login/request-otp", async (req, res) => {
       return d.slice(-10) === last10;
     });
 
+    let generatedOtp = null;
     if (patient) {
       const otp = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
+      generatedOtp = otp;
       await prisma.patientOtp.create({
         data: {
           phone: last10,
@@ -2386,7 +2388,15 @@ router.post("/portal/login/request-otp", async (req, res) => {
     }
 
     // Always return ok:true — don't leak whether the phone is registered.
-    res.json({ ok: true, expiresAt });
+    // DEV-ONLY: when NODE_ENV !== 'production' AND patient exists, also surface the
+    // freshly-generated OTP so E2E tests can complete the flow without DB access.
+    // Non-enumeration is preserved: response still returns {ok:true} for unknown phones.
+    // Mirrors the pattern used by /api/auth/forgot-password which also returns resetToken in dev.
+    const payload = { ok: true, expiresAt };
+    if (process.env.NODE_ENV !== "production" && generatedOtp) {
+      payload.otp = generatedOtp;
+    }
+    res.json(payload);
   } catch (e) {
     console.error("[wellness] portal request-otp error:", e.message);
     res.status(500).json({ error: "Failed to request OTP" });

@@ -217,6 +217,9 @@ router.post("/tickets", verifyPortalToken, async (req, res) => {
         tenantId: req.portal.tenantId,
       },
     });
+    // TODO(sla): mirror SLA auto-apply from routes/support.js + routes/tickets.js
+    // (look up SlaPolicy by tenantId+priority+isActive, stamp slaResponseDue/slaResolveDue).
+    // Out of scope for the current SLA-port task.
     res.status(201).json(ticket);
   } catch (err) {
     console.error("[Portal][create ticket]", err);

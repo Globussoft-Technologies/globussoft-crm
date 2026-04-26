@@ -1,5 +1,11 @@
 # Globussoft Enterprise CRM -- Project Context
 
+## 🗂️ Engineering backlog — read TODOS.md on session start
+
+The persistent backlog of multi-day / architectural work that's been deferred from cron + overnight runs lives in **[TODOS.md](TODOS.md)** at repo root. It's grouped by priority bucket (🟡 ship-this-month, 🔴 bigger investments, 🚫 don't-patch-rethink) plus the architectural cron-skipped GitHub issues, test debt, and a PRD-gap analysis. Each item has the diagnosis, recommended approach, and effort estimate.
+
+**On session start, read TODOS.md before picking up new work** so you don't duplicate something already triaged or skip an item that's already been planned.
+
 ## Overview
 
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).

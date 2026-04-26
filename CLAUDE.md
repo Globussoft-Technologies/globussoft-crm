@@ -11,7 +11,7 @@ The persistent backlog of multi-day / architectural work that's been deferred fr
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.2.1 (overnight QA + RBAC + JWT revoke + clinical no-delete policy)
+- **Version:** v3.2.2 (form autosave, billing patch, telecaller polish, c8 coverage measured)
 - **Branch:** main (single-branch workflow)
 
 ## Verticals
@@ -51,13 +51,15 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 - **middleware/fieldFilter.js** -- Field-level permission filtering
 - **middleware/sendLimiter.js** -- Email/SMS send rate limiting
 - **prisma/schema.prisma** -- MySQL via Prisma ORM (DATABASE_URL env var), 114 models
+- **DISABLE_CRONS=1** env switch (v3.2.2) — server.js skips cron init when set; for side-by-side coverage instances
+- **Graceful SIGTERM/SIGINT shutdown** (v3.2.2) — required for c8 V8 coverage data to flush before exit
 - **prisma/seed.js** -- Seeds all models with demo data
 - **utils/deduplication.js** -- Phone normalization + contact/lead deduplication
 - All API endpoints prefixed with `/api/`
 - Global auth guard protects all routes except /auth/login, /auth/signup, /auth/register, /health, /marketplace-leads/webhook
 - Rate limiting: 5000 req/15min general, 1000 req/15min on auth/login
 
-### Cron Engines (backend/cron/) -- 18 engines
+### Cron Engines (backend/cron/) -- 19 engines
 
 | Engine | File | Purpose |
 |--------|------|---------|
@@ -107,7 +109,7 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 - **routes/external.js** -- `/health`, `/me`, `/leads` (POST + GET poll), `/calls` (POST + PATCH for late transcripts), `/messages`, `/appointments`, `/contacts/lookup`, `/patients/lookup`, `/services`, `/staff`, `/locations`
 - Docs: docs/wellness-client/EXTERNAL_API.md
 
-### Routes (backend/routes/) -- 90 route files
+### Routes (backend/routes/) -- 91 route files
 
 **Sales & Pipeline:** deals.js, pipelines.js, pipeline_stages.js, deal_insights.js, forecasting.js, quotas.js, win_loss.js, playbooks.js, funnel.js, cpq.js
 

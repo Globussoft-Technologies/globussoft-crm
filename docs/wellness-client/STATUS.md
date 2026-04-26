@@ -4,7 +4,7 @@
 **Last updated:** 2026-04-26
 **Live at:** https://crm.globusdemos.com
 **Tenant:** `enhanced-wellness` (id 2, vertical `wellness`)
-**Production HEAD:** `35d728c5`
+**Production HEAD:** `3e6e8292`
 
 ---
 
@@ -202,6 +202,15 @@ Each service carries `category`, `ticketTier` (low/medium/high), realistic India
 ### AdsGPT impersonation (v3.2.1)
 
 - Real SSO launcher wired into wellness dashboard + sidebar. Owner clicks → silently lands in AdsGPT as the right user. "Back to CRM" link from AdsGPT side still pending with their team (see Deferred).
+
+### Reliability & test infrastructure (v3.2.2)
+
+These don't change anything Rishu sees on screen, but they harden the demo around the edges and let us measure how much of the codebase is actually exercised.
+
+- **Backend line coverage baseline measured for the first time: 33.20%** (10,858 / 32,700 lines) via `c8` against the wellness-only spec set. This is the floor we ratchet up from each release. CI gate set at 50% to start, critical-path floor at 70% (`routes/auth.js`, `routes/external.js`, `routes/billing.js`, `routes/wellness.js`, all `middleware/*`, all `lib/*`). The full 121-spec suite under coverage is queued for the next pass.
+- **DISABLE_CRONS=1 sandbox switch** on `server.js` — lets us spin up a side-by-side coverage-instrumented Express instance on a different port without the cron jobs from the primary process firing twice. Used by the c8 measurement workflow (see PRODUCTION_RUNBOOK §5b).
+- **Graceful SIGTERM/SIGINT shutdown** — `server.js` now flushes V8 coverage data on shutdown so `c8` can write its `.c8tmp/coverage-*.json` artefacts. Without this, killing the process hard meant losing the coverage data.
+- **Form autosave hook** (`useFormAutosave`) — wraps any controlled wellness form (New Prescription, Log Visit, Treatment Plan first; opt-in for the rest). Rehydrates from sessionStorage on mount, debounced persist on every keystroke, `beforeunload` warning if dirty, "Restored from previous session" banner the user can keep or discard. A browser refresh mid-prescription no longer silently nukes 5 minutes of typing.
 
 ---
 

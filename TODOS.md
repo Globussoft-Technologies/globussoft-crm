@@ -2,7 +2,7 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-26 (overnight session through office handoff at 10b7c25)
+Last updated: 2026-04-26 (afternoon doc-sync at HEAD 3e6e829 — v3.2.2 form autosave / billing patch / telecaller polish / c8 coverage measured)
 
 ---
 
@@ -91,22 +91,22 @@ These were filed during cron runs and tagged `[cron-skip]` because they need des
 
 ---
 
-## 🟦 Frontend UI cluster — cron-skipped, need real frontend work (pick up here)
+## 🟦 Frontend UI cluster — 8 of 12 closed in v3.2.2; 4 remain
 
-Each one is a meaningful UX/UI/feature effort, not a single-route patch. Listed by complexity-ish, easy → hard:
+Each one is a meaningful UX/UI/feature effort, not a single-route patch. Most of this section closed in the v3.2.2 afternoon pass. The 4 remaining items are mobile responsive, Reports export, and the login-chip product decision.
 
-- [ ] **#206** — Service Worker push registration spams console with `[push] setupPush error: AbortError: Registration failed - push service error` on every navigation. Suppress the AbortError log path (it's noise — push isn't configured on most tenants). ~30 min, frontend.
-- [ ] **#229** — Patient list table layout breaks when a single name is long: column headers disappear and the long row pushes other columns off-screen. CSS `max-width` / `text-overflow: ellipsis` on the name cell + table-layout: fixed. ~1 hour.
-- [ ] **#225** — Treatment plan "Add" button not debounced — rapid clicks create duplicate plans. Same pattern likely on other forms. Add a `submitting` state on the form's submit handler that disables the button. ~30 min per form; sweep across the wellness-form components. ~2-3 hours.
-- [ ] **#204** — Consent canvas invisible on the wellness theme — border/background uses white-on-cream alpha colors from the dark theme. Scoped CSS override under `[data-vertical="wellness"]`. ~1 hour.
-- [ ] **#226** — Refresh in the middle of New prescription / Log visit / Treatment plan forms silently loses input. Add `beforeunload` prompt + (optional) sessionStorage form-state autosave. Cross-cutting — pick a pattern and apply across the wellness forms. ~half day.
-- [ ] **#215** — Telecaller queue: Booked / Callback / Interested / Not interested fire silently with no confirm dialog and no follow-up form, while Wrong number / Junk show a confirm modal. Make all 6 dispositions consistent (confirm modal + optional follow-up form for the appointment-booking dispositions). ~half day.
-- [ ] **#208** — `/portal` renders Knowledge Base instead of the patient portal. Two routes collide on `/portal`; the wellness patient portal needs its own route (e.g. `/wellness/portal/login`) and the existing `/portal` stays for the generic CRM customer portal. Or pick one — frontend routing decision. ~half day.
-- [ ] **#217** — `/wellness/tasks` 404 + `/wellness/inbox` falls through to generic `/inbox` with the wrong theme. Sidebar prefix logic + missing `/api/wellness/tasks` (or sidebar Link redirect to `/tasks` properly). ~2-3 hours, frontend routing investigation.
+- [x] ~~**#206** — Service Worker push registration spams console with `[push] setupPush error: AbortError`.~~ **Closed in 90ff63f** — AbortError demoted from `console.error` to `console.debug`. Other error classes still log loudly.
+- [x] ~~**#229** — Patient list table layout breaks when a single name is long.~~ **Closed in 90ff63f** — `table-layout: fixed` + `text-overflow: ellipsis` + `title` tooltip on the name cell. Header row no longer collapses on 60-char names.
+- [x] ~~**#225** — Treatment plan "Add" button not debounced.~~ **Closed in 90ff63f** — submitting state on PlansTab + LogVisitTab + InventoryTab disables the button between click and server response.
+- [x] ~~**#204** — Consent canvas invisible on the wellness theme.~~ **Closed in 35d728c** (pre-v3.2.2) — scoped CSS override under `[data-vertical="wellness"]`.
+- [x] ~~**#226** — Refresh in the middle of forms silently loses input.~~ **Closed in 8c6b036** — new `useFormAutosave` hook with sessionStorage rehydrate + beforeunload + active-tab persistence + "Restored from previous session" banner. Wired into New Prescription, Log Visit, Treatment Plan; opt-in pattern for the rest.
+- [x] ~~**#215** — Telecaller queue dispositions inconsistent.~~ **Closed in 3a6d656** — all 6 dispositions now confirm. Booked / Callback / Interested gain a follow-up form (date+time / notes).
+- [x] ~~**#208** — `/portal` route collision.~~ **Closed in 49acd3e** — wellness patient portal moves to `/wellness/portal`; generic CRM customer portal stays at `/portal`.
+- [x] ~~**#217** — `/wellness/tasks` 404 / `/wellness/inbox` wrong theme.~~ **Closed in ec5b6d8** — verified shared `/tasks` and `/inbox` routes work for wellness via the `data-vertical` theme cascade; sidebar prefix corrected.
 - [ ] **#228** — No mobile responsive design — sidebar fixed-width, no hamburger drawer pattern, content clips at narrow viewports. Multi-day frontend overhaul (breakpoints, drawer component, ARIA, focus trap, all wellness pages tested at 375px width).
 - [ ] **#227** — Reports has no CSV/PDF export across all 4 tabs (P&L / Per-Pro / Per-Location / Attribution). New feature: backend export endpoints + frontend "Export" button per tab. PDFKit already in stack. ~1-2 days.
 - [ ] **#200/#201/#211** — Login page exposes 6 quick-login chips with real production credentials AND login form pre-fills credentials on first load. Per CLAUDE.md these are intentional demo features. Product decision needed: keep, env-gate (`NODE_ENV !== 'production'`), or remove entirely. NOT a bug — UX/security tradeoff.
-- [ ] **#202** Composite billing ticket — multiple parts already covered by earlier validators (negative amount rejected, 1e15 capped, past dueDate validated). Remaining unverified parts of the original report tagged cron-skip pending tester re-verify.
+- [x] ~~**#202** Composite billing ticket — multiple parts already covered by earlier validators; update path missing.~~ **Closed in ab90548** — new `PATCH /api/billing/:id` and `POST /api/billing/:id/mark-paid` (idempotent, audited). State-machine codes: terminal transitions return `422 INVALID_INVOICE_TRANSITION`.
 
 ---
 
@@ -122,8 +122,24 @@ Each one is a meaningful UX/UI/feature effort, not a single-route patch. Listed 
 
 ## 📋 Test infrastructure
 
-- [ ] Add a backend coverage tool. Currently we have ~93% e2e pass rate but no real line coverage. Wire `c8` to instrument `pm2` on the dev server to get a coverage % during e2e runs. ~3 hours.
+- [x] ~~Add a backend coverage tool.~~ **Closed in 0c0cf3f + 3e6e829 (v3.2.2)** — `c8` running on a side-by-side `:5098` Express instance with `DISABLE_CRONS=1`. Graceful SIGTERM/SIGINT shutdown added so V8 coverage data flushes on exit. **First measurement: 33.20% (10,858 / 32,700 lines)** against the wellness-only spec set. Full-suite measurement queued. Re-run procedure documented in PRODUCTION_RUNBOOK §5b.
 - [x] ~~`e2e/global-teardown.js` says "mysql2 not installed — skipping scrub." E2E rows tagged `E2E_FLOW_<ts>` are accumulating.~~ **Closed in 4361074** — mysql2 installed as devDependency; PAT_REGEX + EMAIL_REGEX extended to match `E2E_FLOW_<ts>` / `E2E_AUDIT_<ts>` tags. Local runs log "MySQL connect failed" because the dev DB isn't reachable over the public internet — only effective in CI on the same network as the DB.
+
+---
+
+## 📊 Coverage policy (set 2026-04-26)
+
+Set this release as v3.2.2 ships the first real measurement (33.20% wellness-only baseline). Targets, in order from north star to pragmatic floor:
+
+- **Aspirational target: 100%** — everything tested, everything safe. We don't expect to hit it; it's the direction.
+- **CI gate: 50% to start** — current baseline (33.20%) + buffer to give the gate breathing room while specs are written. The gate ratchets up each release; never down.
+- **Critical-path floor: 70%** — every line in `routes/auth.js`, `routes/external.js`, `routes/billing.js`, `routes/wellness.js`, all `middleware/*`, and all `lib/*` must hit 70% before a release ships. **Exemptions:** `lib/eventBus.js` (currently 20%) and `services/landingPageRenderer.js` (currently 2%) are exempted until their dedicated test files land — both are getting one in this release.
+
+### Next 3 coverage gaps (in priority order)
+
+- [ ] **`lib/eventBus.js` — currently 20%.** Core decoupling primitive between routes and the workflow engine; every state-change emits through it. Dedicated spec file in this release: round-trip emit + listener + condition evaluation + idempotency.
+- [ ] **`services/landingPageRenderer.js` — currently 2%.** Server-side renderer for the public `/p/:slug` landing pages; barely exercised by current specs. Dedicated spec file in this release: render variants, form-submission flow, analytics ping, error fallbacks.
+- [ ] **`cron/slaBreachEngine.js` — currently 25%.** Shipped in v3.2.1 (#12); only the happy path is exercised. Add specs for: idempotency on already-breached tickets, multi-tenant isolation, status-precondition correctness, event payload shape.
 
 ---
 

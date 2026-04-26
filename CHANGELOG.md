@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## v3.2.2 — 2026-04-26 (afternoon) — Form autosave, billing patch, telecaller polish, c8 coverage measured
+
+A focused afternoon pass closing the remaining frontend UI cluster from the morning handoff plus the first real backend coverage measurement. **8 GitHub issues closed.** No schema changes; no breaking API changes.
+
+### Added
+
+- **Form autosave hook** (#226) — new `frontend/src/hooks/useFormAutosave.js`. Wraps any controlled form: rehydrates from `sessionStorage` on mount, debounced persist on every keystroke, `beforeunload` warning if dirty, active-tab persistence so a refresh inside Patient Detail's tabbed view doesn't blow away the half-typed prescription. Surfaces a "Restored from previous session" banner that the user can dismiss or accept. Wired into New Prescription, Log Visit, and Treatment Plan forms first; pattern is opt-in, drop-in for the rest.
+- **Billing PATCH + mark-paid endpoints** (#202) — `PATCH /api/billing/:id` for partial updates and `POST /api/billing/:id/mark-paid` (idempotent — second call returns `{ idempotent: true }`). Both write audit rows. State-machine codes: terminal transitions return `422` with `code: "INVALID_INVOICE_TRANSITION"` (matches the v3.2.1 approvals pattern). Closes the long-standing "no update path on /api/billing" gap.
+- **DISABLE_CRONS=1 env switch** — when set, `server.js` skips all cron initialisation. Lets us run a side-by-side coverage instance on `:5098` without cron jobs interfering with the primary `:5099` PM2 process.
+- **Graceful SIGTERM/SIGINT shutdown** — `server.js` now flushes V8 coverage data via `process.on('SIGTERM')` / `process.on('SIGINT')` before exiting. Required for `c8` to write `.c8tmp/coverage-*.json` artefacts on shutdown — without it, killing the process hard means losing the coverage data.
+
+### Bug fixes
+
+- **Form refresh wipes input** (#226) — covered above; was previously losing data silently mid-prescription / mid-visit-log.
+- **Telecaller queue inconsistent dispositions** (#215) — Booked / Callback / Interested fired silently; Wrong number / Junk showed a confirm. All 6 now confirm consistently. Booked / Callback / Interested also gain a follow-up form (date+time for Booked/Callback, notes for Interested) so the disposition captures real intent rather than a one-tap throwaway.
+- **`/portal` route collision** (#208) — wellness patient portal moved to `/wellness/portal`; the generic CRM customer portal stays at `/portal`. Sidebar Link + redirect updated. Both routes now resolve to their intended page.
+- **`/wellness/tasks` blank** (#217) — verified the shared `/tasks` and `/inbox` routes already render correctly under the wellness theme via the `data-vertical="wellness"` cascade. Sidebar Link rewritten to point at the canonical paths; the 404 was a stale prefix in the sidebar config, not a missing page.
+- **Treatment plan Add not debounced** (#225) — submitting state on PlansTab + LogVisitTab + InventoryTab disables the button between click and server response. Sweep across the wellness-form components; pattern documented in the form-handler conventions.
+- **Patient list table breaks on long names** (#229) — `table-layout: fixed` + `text-overflow: ellipsis` on the name cell + `title` tooltip showing the full name. Header row no longer disappears when a single patient has a 60-char display name.
+- **Service Worker push registration spam** (#206) — `[push] setupPush error: AbortError` demoted from `console.error` to `console.debug`. AbortError on registration is normal when push isn't configured for the tenant; was producing noise on every navigation. Other error classes still log loudly.
+
+### Engine improvements
+
+- None this release. v3.2.1 covered the engine layer; this pass is UI + ops.
+
+### UI
+
+- Form autosave banner ("Restored from previous session — keep / discard") on the three highest-frequency wellness forms.
+- Telecaller disposition confirm + follow-up modal (date/time picker for Booked, Callback; notes for Interested).
+- Patient table layout no longer breaks on long names.
+
+### Test coverage
+
+- **Backend line coverage measured for the first time: 33.20%** (10,858 / 32,700 lines) via `c8` against the wellness-only spec set. This is a baseline only — the full 121-spec suite under coverage is queued for the next pass.
+- **Coverage targets set as policy this release:**
+  - **Aspirational target: 100%** — everything tested, everything safe.
+  - **CI gate: 50% to start** — current baseline + buffer; ratchets up each release.
+  - **Critical-path floor: 70%** — `routes/auth.js`, `routes/external.js`, `routes/billing.js`, `routes/wellness.js`, all `middleware/*`, all `lib/*` (exempting `lib/eventBus.js` and `services/landingPageRenderer.js` until their dedicated test files land — both queued for this release).
+- **13 pre-existing e2e flakes resolved** — admin/admin → admin@globussoft.com migration; SIDEBAR_ROUTES rebuild against the v3.2.1 sidebar; theme localStorage seed pattern. Pass rate now 96%+ on the navigation/notifications/theme cluster.
+
+### Deferred (not in v3.2.2)
+
+- **Mobile responsive overhaul** (#228) — multi-day frontend rewrite (breakpoints, hamburger drawer, ARIA, focus trap, all wellness pages tested at 375px). Not in this release.
+- **Reports CSV/PDF export** (#227) — backend export endpoints + per-tab export buttons across the 4 Reports tabs. Estimated 1-2 days; deferred.
+- **Login quick-login chips / pre-fill** (#211 / #201 / #200) — product decision pending: keep, env-gate (`NODE_ENV !== 'production'`), or remove entirely. Not a bug; documented as a UX/security tradeoff.
+- **Full-suite c8 coverage measurement** — the 33.20% number is wellness-only. Running all 121 specs under `c8` is queued (estimated full-suite number is materially higher; will land next release).
+- **Dedicated test files for `lib/eventBus.js` (currently 20%) and `services/landingPageRenderer.js` (currently 2%)** — both targeted for this release; until they ship, the critical-path 70% floor exempts them.
+- **AdsGPT silent SSO "Back to CRM" link** — still pending with AdsGPT team.
+- **Callified silent SSO + back-link + lead webhook** — still pending with Callified team.
+
+---
+
 ## v3.2.1 — 2026-04-26 — Overnight QA + audit pass
 
 A two-day deep-flow audit + fix sprint. Closed **22 GitHub issues + 9 architectural backlog items**. Surfaced and patched a class of latent bugs that smoke tests would never catch — only deep API exercise reveals them. No new features; this is hardening.

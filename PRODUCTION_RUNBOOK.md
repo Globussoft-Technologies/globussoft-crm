@@ -1,6 +1,6 @@
 # Production runbook — Globussoft CRM
 
-For ops + on-call engineers. Last updated: v3.2.1 (2026-04-26).
+For ops + on-call engineers. Last updated: v3.2.2 (2026-04-26).
 
 > **Engineering backlog:** see [TODOS.md](TODOS.md) at repo root for the prioritised list of multi-day / architectural work that's been deferred from cron + overnight runs. Includes the PRD-gap analysis vs `docs/wellness-client/PRD.md`. Read this before scheduling new feature work.
 
@@ -118,6 +118,37 @@ curl -X DELETE https://crm.globusdemos.com/api/developer/apikeys/<id> -H "Author
 curl -X POST https://crm.globusdemos.com/api/developer/apikeys -H "Authorization: Bearer <admin-jwt>" \
   -H "Content-Type: application/json" -d '{"name":"Callified — production"}'
 ```
+
+## 5b. Coverage measurement (v3.2.2)
+
+Backend line coverage is measured via [`c8`](https://github.com/bcoe/c8) running a side-by-side Express instance on a different port. The DISABLE_CRONS=1 switch and graceful SIGTERM/SIGINT handlers were added in v3.2.2 specifically so this can be done safely against the dev server without interfering with the primary `:5099` PM2 process and so V8 coverage data flushes before exit.
+
+```bash
+ssh empcloud-development@163.227.174.141
+cd ~/globussoft-crm/backend
+
+# 1. Start a coverage-instrumented instance on port 5098 (cron-free)
+DISABLE_CRONS=1 PORT=5098 node_modules/.bin/c8 \
+  --reports-dir=./coverage \
+  --temp-directory=./.c8tmp \
+  --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js' \
+  node server.js &
+COV_PID=$!
+
+# 2. Drive it with the e2e suite (or any subset)
+cd ../e2e && BASE_URL=http://localhost:5098 npx playwright test --project=chromium
+
+# 3. Stop the server gracefully so c8 can flush V8 coverage data
+kill -TERM $COV_PID
+wait $COV_PID
+
+# 4. Generate the HTML + lcov reports
+cd ../backend && node_modules/.bin/c8 report --reports-dir=./coverage --temp-directory=./.c8tmp
+```
+
+Reports land at `~/globussoft-crm/backend/coverage/lcov-report/index.html` (HTML drilldown by file) and `~/globussoft-crm/backend/coverage/lcov.info` (machine-readable lcov for CI).
+
+**Current baseline:** 33.20% (10,858 / 32,700 lines), measured 2026-04-26 with the wellness-only spec set. **CI gate is 50%** to start (climbs each release); critical-path floor is 70% on `routes/auth.js`, `routes/external.js`, `routes/billing.js`, `routes/wellness.js`, all `middleware/*`, and all `lib/*` (`lib/eventBus.js` and `services/landingPageRenderer.js` exempted until their dedicated test files land).
 
 ## 6. Activating field encryption (PII protection)
 

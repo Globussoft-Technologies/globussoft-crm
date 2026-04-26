@@ -1,10 +1,26 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **100% route-file e2e coverage** (110 spec files, 700+ tests passing on production).
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **100% route-file e2e coverage** (121 spec files, 700+ tests passing on production). Backend line coverage: 33.20% (measured 2026-04-26 via c8 against wellness-only spec set; full-suite measurement pending).
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.1
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.2
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work.
+
+## What's new in v3.2.2 (April 26 2026 — afternoon — form autosave, billing patch, telecaller polish, c8 coverage measured)
+
+A focused afternoon pass closing the remaining frontend UI cluster from the morning handoff plus the first real backend coverage measurement. **8 GitHub issues closed.**
+
+- **Form autosave** (#226) — new `useFormAutosave` hook rehydrates from sessionStorage on mount, debounced persist on every keystroke, `beforeunload` warning if dirty, "Restored from previous session" banner. Wired into New Prescription, Log Visit, and Treatment Plan forms; pattern is opt-in for the rest.
+- **Billing PATCH + mark-paid endpoints** (#202) — `PATCH /api/billing/:id` and `POST /api/billing/:id/mark-paid` (idempotent, audited). State-machine codes: terminal transitions return `422 INVALID_INVOICE_TRANSITION`. Closes the long-standing "no update path" gap.
+- **Telecaller queue** (#215) — all 6 dispositions now confirm consistently. Booked / Callback / Interested gain a follow-up form (date+time / notes) so the disposition captures real intent.
+- **`/portal` route collision** (#208) — wellness patient portal moves to `/wellness/portal`; generic CRM customer portal stays at `/portal`.
+- **`/wellness/tasks` 404** (#217) — verified the shared `/tasks` and `/inbox` routes already work under the wellness theme via the `data-vertical` cascade; sidebar prefix corrected.
+- **Treatment plan Add debounced** (#225) — submitting state on PlansTab + LogVisitTab + InventoryTab disables the button between click and response.
+- **Patient list table breaks on long names** (#229) — `table-layout: fixed` + ellipsis + `title` tooltip; header row no longer collapses on 60-char display names.
+- **Service Worker push spam** (#206) — `[push] setupPush AbortError` demoted from `console.error` to `console.debug`.
+- **Backend coverage measured for the first time: 33.20%** (10,858 / 32,700 lines) via `c8` against wellness-only spec set. **Coverage targets set as policy:** aspirational 100%, CI gate 50% (climbs each release), critical-path floor 70% (`routes/auth.js`, `routes/external.js`, `routes/billing.js`, `routes/wellness.js`, all `middleware/*`, all `lib/*`).
+- **DISABLE_CRONS=1 env switch + graceful SIGTERM/SIGINT shutdown** — lets us run a side-by-side coverage instance on `:5098` without cron interference, and ensures `c8` can flush V8 coverage data on process exit.
+- **13 e2e flake fixes** — admin/admin → admin@globussoft.com migration; SIDEBAR_ROUTES rebuild against v3.2.1 sidebar; theme localStorage seed pattern. Pass rate now 96%+ on the navigation/notifications/theme cluster.
 
 ## What's new in v3.2.1 (April 26 2026 — overnight QA pass)
 

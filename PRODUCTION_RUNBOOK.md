@@ -1,6 +1,8 @@
 # Production runbook — Globussoft CRM
 
-For ops + on-call engineers. Last updated: v3.2.0 (2026-04-23).
+For ops + on-call engineers. Last updated: v3.2.1 (2026-04-26).
+
+> **Engineering backlog:** see [TODOS.md](TODOS.md) at repo root for the prioritised list of multi-day / architectural work that's been deferred from cron + overnight runs. Includes the PRD-gap analysis vs `docs/wellness-client/PRD.md`. Read this before scheduling new feature work.
 
 ---
 
@@ -202,6 +204,30 @@ curl -s https://crm.globusdemos.com/login | grep -oE "index-[A-Za-z0-9_-]+\.js"
 # Compare to local: ls frontend/dist/assets/index-*.js
 ```
 
+### Webhook from Twilio / Mailgun / Razorpay returns 400 "missing field"
+
+External providers send `application/x-www-form-urlencoded` bodies. The Express app must have `express.urlencoded()` mounted globally (alongside `express.json()`) — without it `req.body` is empty and every webhook 400s on the first required-field check.
+
+```bash
+# Confirm the parser is mounted:
+grep -n "urlencoded" backend/server.js
+# Expected: "app.use(express.urlencoded({ extended: true, limit: '10mb' }));"
+```
+
+### Public webhook returns 403 "Access Denied"
+
+The global `/api/*` auth guard runs before the route's own middleware. If a route is meant to be public (webhook receiver, OAuth callback, public booking, signature-sign page) it must be in the `openPaths` array in `backend/server.js`. Symptoms: `curl -X POST https://crm.globusdemos.com/api/<route>` returns 403 with no body, no provider would ever succeed.
+
+```bash
+# List the current openPaths
+grep -A 1 "Global auth guard" backend/server.js | head -5
+# If a path is missing, add it (in commit, not by SSH-editing on prod)
+```
+
+### Patient portal login returns 500 / 401 on phone numbers known to exist
+
+If the portal route is calling `prisma.contact.findUnique({where:{email}})` or `findUnique({where:{phone}})` on a non-`@unique` field, Prisma throws a validation error caught by the 500 fallback. Use `findFirst` instead. Already audited in v3.2.1 for `portal.js`; if a NEW route shows the symptom, search for `findUnique` against any field that isn't `id` or marked `@unique` in `prisma/schema.prisma`.
+
 ## 9. Production .env keys (must be set on server)
 
 Located at `~/globussoft-crm/.env` (root) and `~/globussoft-crm/backend/.env` (db-specific).
@@ -261,3 +287,6 @@ Live at https://crm.globusdemos.com/login — use the quick-login buttons. All p
 - [ ] Partner API keys are issued + sent securely (NOT email)
 - [ ] Demo data is wiped or moved to a separate `*-demo` tenant
 - [ ] Owner has been walked through their dashboard + recommendation cards
+- [ ] `TODOS.md` has been reviewed — no 🔴 blocker items are open against this customer's vertical
+- [ ] `NODE_ENV=production` is set on the server (otherwise `/wellness/portal/login/request-otp` includes the OTP in the response — fine for dev, fatal for prod)
+- [ ] `scripts/audit-e2e-routes.js` shows 0 broken URLs and >95% of route files referenced by at least one spec

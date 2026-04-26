@@ -1,9 +1,37 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 15 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. 124+ E2E tests passing on production.
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **100% route-file e2e coverage** (110 spec files, 700+ tests passing on production).
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.0
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.1
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md)
+**Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work.
+
+## What's new in v3.2.1 (April 26 2026 — overnight QA pass)
+
+A two-day audit + fix sprint surfaced and closed a class of latent bugs that smoke tests would never catch and only deep API exercise reveals.
+
+**Real backend bugs found and fixed (10+):**
+- **Portal login 500 on unknown email** — `findUnique({where:{email}})` against a non-`@unique` field threw and returned 500 instead of 401. Three sites fixed.
+- **2FA login was unreachable** — `/auth/2fa/verify` was missing from the `openPaths` allowlist; the global guard 403'd before the tempToken could be read.
+- **All form-encoded webhooks were broken** — `express.urlencoded()` was not mounted, so Twilio voice/SMS, WhatsApp, Mailgun, and Razorpay webhooks all 400'd silently on missing-field checks.
+- **Accounting webhook unreachable** — `/accounting/webhook` not in `openPaths` so QuickBooks/Xero/Tally callbacks 403'd.
+- **Setting a quota was impossible** — `POST /quotas` read `userId` from body, but `stripDangerous` middleware deletes `req.body.userId` (anti-injection). Now reads from query.
+- **Portal OTP bypass** — legacy `POST /portal/login` accepted any 4-digit OTP without checking PatientOtp. Anyone with a phone could mint a 30-day portal JWT. Now validates against the OTP table the same way `/verify-otp` does.
+- **`/sequences/debug/tick` open to any user** — implicitly protected by global guard but any USER could fire the cron loop for every tenant. Now ADMIN-only.
+- **P&L productCost stuck at ₹0** — visit `findMany` select omitted `id`, so the consumption-cost lookup always missed. Single line fix; cost rollups now correct.
+- **XSS sanitiser was half-done** — only stripped `<script|iframe|...|svg>`. Now also strips `<img|video|audio|source|applet|base|input|textarea>` plus inline event handlers (`onclick=`, `onerror=`, etc.) and `javascript:`/`data:` URL schemes.
+- **Estimate API breaking change** — POST silently rejected the legacy `{name, items}` shape after a rename. Now accepts both `{name|title, items|lineItems}` for the deprecation window.
+
+**Engine improvements:**
+- **Workflow engine**: `deal.stage_changed`, `ticket.created`, `invoice.paid` events now emit. Trigger/action whitelists are enforced (400 with `INVALID_*_TYPE`). `isActive` is updatable via PUT.
+- **Sequences**: pause / resume / unenroll endpoints added. Delay regex now matches `Days?`/`Hours?`/`Mins?` (was missing days). Synthesised drip emails now carry a deterministic `seq-<enrollmentId>` threadId so they're queryable.
+- **SLA**: `responseMinutes: 0` is valid (instant SLA), `firstResponseAt` only stamps on Open → (In Progress | Pending | Replied), `/apply-all?force=true` re-applies a policy to in-flight tickets. Both `/api/tickets` and `/api/support` now share the SLA auto-apply path.
+- **Approvals**: state-machine codes — terminal-status transitions return 422 `INVALID_APPROVAL_TRANSITION`, idempotent re-approve/reject return `{idempotent: true}`. New DELETE endpoint. Audit log row written on every transition.
+- **Wellness**: auto-credit loyalty (10% of `amountCharged`) on POST/PUT visits when status='completed'; idempotent via `LoyaltyTransaction` lookup. P&L now joins consumptions through `visit.visitDate` (was using `consumption.createdAt`, which desynced revenue and cost windows across day boundaries).
+
+**Test coverage:**
+- 64 new e2e specs across 5 deep-flow modules (approvals, sequences, sla, workflows, wellness clinical journey) + smoke specs covering all 89 mounted route files.
+- New audit script at `scripts/audit-e2e-routes.js` extracts every `/api/*` URL referenced in specs and matches against actual handlers — surfaces broken URLs and untested route files.
 
 ## What's new in v3.1 (April 2026)
 

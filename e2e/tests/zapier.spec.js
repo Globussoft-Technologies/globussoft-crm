@@ -132,11 +132,16 @@ test.describe('zapier.js — Zapier metadata + webhook ingress + subscriptions',
     expect(res.status()).toBe(401);
   });
 
-  test('POST /zapier/actions/:key/execute rejects missing API key with 401', async ({ request }) => {
+  test('POST /zapier/actions/:key/execute without staff token returns 403 (gate)', async ({ request }) => {
+    // /zapier/actions/* is NOT in server.js openPaths, so the global staff
+    // auth guard returns 403 before zapier's own API-key middleware. If we
+    // ever decide to API-key-auth Zapier inbound calls (like /v1/external),
+    // /zapier/actions would need to move into openPaths and this should
+    // become 401.
     const res = await request.post(`${API}/zapier/actions/create_contact/execute`, {
       data: { name: 'Aarav', email: 'aarav@example.in' },
     });
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
   });
 
   test('POST /zapier/actions/:key/execute 404s for unknown action', async ({ request }) => {

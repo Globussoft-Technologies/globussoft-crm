@@ -52,7 +52,7 @@ test.describe('deals_documents routes', () => {
       data: {
         title: `E2E_AUDIT_${Date.now()}_vikram_renewal`,
         amount: 25000,
-        stage: 'qualification',
+        stage: 'lead',
         contactId,
         company: 'Mehta & Sons',
       },

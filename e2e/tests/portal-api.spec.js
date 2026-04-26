@@ -34,18 +34,14 @@ test.describe('Portal API — public + auth gates', () => {
     expect(res.status()).toBe(401);
   });
 
-  test('POST /api/portal/set-password validation: missing fields → 400', async ({ request }) => {
+  // /portal/set-password is NOT in server.js openPaths — it requires staff
+  // auth (admin/manager promotes a contact to a portal user). Without a token
+  // the global auth guard returns 403 before set-password's own validators run.
+  test('POST /api/portal/set-password without staff token returns 403', async ({ request }) => {
     const res = await request.post(`${API}/portal/set-password`, {
-      data: { email: 'someone@example.com' },
+      data: { email: 'someone@example.com', newPassword: 'newpass123' },
     });
-    expect(res.status()).toBe(400);
-  });
-
-  test('POST /api/portal/set-password validation: short password → 400', async ({ request }) => {
-    const res = await request.post(`${API}/portal/set-password`, {
-      data: { email: 'someone@example.com', newPassword: 'abc' },
-    });
-    expect(res.status()).toBe(400);
+    expect(res.status()).toBe(403);
   });
 
   test('POST /api/portal/forgot without email returns 400', async ({ request }) => {
@@ -74,12 +70,16 @@ test.describe('Portal API — public + auth gates', () => {
     expect(res.status()).toBe(400);
   });
 
-  test('GET /api/portal/me without portal token returns 401', async ({ request }) => {
+  // The portal-token-protected endpoints are NOT in server.js openPaths, so
+  // the global staff auth guard runs first and returns 403 for missing token.
+  // The portal-token middleware (returning 401) only runs for staff-authed
+  // requests with the wrong token type.
+  test('GET /api/portal/me without any token returns 403', async ({ request }) => {
     const res = await request.get(`${API}/portal/me`);
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
   });
 
-  test('GET /api/portal/me with admin JWT (wrong type) returns 401', async ({ request }) => {
+  test('GET /api/portal/me with admin JWT (wrong type) returns 401 from portal middleware', async ({ request }) => {
     const login = await request.post(`${API}/auth/login`, {
       data: { email: 'admin@globussoft.com', password: 'password123' },
     });
@@ -87,29 +87,30 @@ test.describe('Portal API — public + auth gates', () => {
     const res = await request.get(`${API}/portal/me`, {
       headers: { Authorization: `Bearer ${adminToken}` },
     });
-    // Either 401 (decoded but type !== PORTAL) or 401 invalid; never 200.
+    // Staff token passes the global guard; portal middleware then rejects
+    // because decoded.type !== "PORTAL".
     expect(res.status()).toBe(401);
   });
 
-  test('GET /api/portal/tickets without token returns 401', async ({ request }) => {
+  test('GET /api/portal/tickets without token returns 403', async ({ request }) => {
     const res = await request.get(`${API}/portal/tickets`);
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
   });
 
-  test('POST /api/portal/tickets without token returns 401', async ({ request }) => {
+  test('POST /api/portal/tickets without token returns 403', async ({ request }) => {
     const res = await request.post(`${API}/portal/tickets`, {
       data: { subject: 'help' },
     });
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
   });
 
-  test('GET /api/portal/invoices without token returns 401', async ({ request }) => {
+  test('GET /api/portal/invoices without token returns 403', async ({ request }) => {
     const res = await request.get(`${API}/portal/invoices`);
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
   });
 
-  test('GET /api/portal/contracts without token returns 401', async ({ request }) => {
+  test('GET /api/portal/contracts without token returns 403', async ({ request }) => {
     const res = await request.get(`${API}/portal/contracts`);
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
   });
 });

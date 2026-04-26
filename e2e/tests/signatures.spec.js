@@ -67,11 +67,14 @@ test.describe('Signatures API — smoke', () => {
     expect(res.status()).toBe(400);
   });
 
-  test('POST /api/signatures/decline/:token with bogus token → 404', async ({ request }) => {
+  test('POST /api/signatures/decline/:token requires staff auth (only /sign is public)', async ({ request }) => {
+    // server.js openPaths exposes /signatures/sign (signer-facing, no auth).
+    // /signatures/decline is NOT in openPaths, so staff JWT is required and
+    // missing-token → 403 from the global guard.
     const res = await request.post(`${API}/signatures/decline/clearly-not-real-${Date.now()}`, {
       data: {},
     });
-    expect(res.status()).toBe(404);
+    expect(res.status()).toBe(403);
   });
 
   // ── Authenticated endpoints ─────────────────────────────────────────

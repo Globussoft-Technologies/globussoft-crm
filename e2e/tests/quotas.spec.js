@@ -88,11 +88,12 @@ test.describe('Quotas API — smoke', () => {
   });
 
   test('POST upsert + PUT update + DELETE happy path', async ({ request }) => {
-    // Use a far-future period so we don't collide with real seeds.
+    // userId is sent via query because stripDangerous middleware strips it
+    // from req.body to block injection on other routes.
     const period = `2099-Q${1 + (Date.now() % 4)}`;
-    const create = await request.post(`${API}/quotas`, {
+    const create = await request.post(`${API}/quotas?userId=${adminUserId}`, {
       headers: auth(),
-      data: { userId: adminUserId, period, target: 50000 },
+      data: { period, target: 50000 },
     });
     expect(create.status()).toBe(201);
     const q = await create.json();
@@ -101,9 +102,9 @@ test.describe('Quotas API — smoke', () => {
     createdQuotaIds.push(q.id);
 
     // Idempotent upsert — same userId+period; different target
-    const upsert = await request.post(`${API}/quotas`, {
+    const upsert = await request.post(`${API}/quotas?userId=${adminUserId}`, {
       headers: auth(),
-      data: { userId: adminUserId, period, target: 75000 },
+      data: { period, target: 75000 },
     });
     expect(upsert.status()).toBe(201);
     const q2 = await upsert.json();

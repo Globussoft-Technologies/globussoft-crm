@@ -109,16 +109,26 @@ test.describe('currencies routes', () => {
   });
 
   test('POST /api/currencies/convert returns converted amount', async ({ request }) => {
+    // Pick two currencies the tenant actually has seeded — the route only
+    // falls back to DEFAULTS when the tenant has zero rows. The generic
+    // tenant's seed leaves USD as base; without other rows present the test
+    // would 404 on INR. Read the list and convert between the first two.
+    const list = await request.get(`${API}/currencies`, { headers: auth() });
+    const items = await list.json();
+    test.skip(!Array.isArray(items) || items.length < 2, 'tenant has fewer than 2 currencies — convert needs at least 2');
+    const from = items[0].code;
+    const to = items[1].code;
+
     const res = await request.post(`${API}/currencies/convert`, {
       headers: auth(),
-      data: { amount: 100, from: 'USD', to: 'INR' },
+      data: { amount: 100, from, to },
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('converted');
     expect(body).toHaveProperty('rate');
-    expect(body.from).toBe('USD');
-    expect(body.to).toBe('INR');
+    expect(body.from).toBe(from);
+    expect(body.to).toBe(to);
   });
 
   test('POST /api/currencies/convert with unknown code returns 404', async ({ request }) => {

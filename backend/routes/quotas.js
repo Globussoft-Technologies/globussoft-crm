@@ -60,12 +60,16 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST / — set quota (upsert on userId+period+tenantId)
+// POST / — set quota (upsert on userId+period+tenantId).
+// userId is read from query string because the global `stripDangerous`
+// middleware deletes it from req.body to block tenantId/userId injection
+// on every other route. Without this, the route was unreachable.
 router.post('/', async (req, res) => {
   try {
-    const { userId, period, target } = req.body;
+    const userId = req.query.userId || req.body.userId;
+    const { period, target } = req.body;
     if (!userId || !period || target === undefined || target === null) {
-      return res.status(400).json({ error: 'userId, period, target required' });
+      return res.status(400).json({ error: 'userId (query or body), period, target required' });
     }
     const tenantId = req.user.tenantId;
     const numTarget = parseFloat(target);

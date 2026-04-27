@@ -2,54 +2,137 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-27 (afternoon — top 3 coverage gaps closed: reports.js + marketing.js + voice_transcription.js; 113 tests added; openPaths audit complete; real backend bug surfaced + fixed)
+Last updated: 2026-04-27 (evening — P1 batch closed: #232 #235 #238 #247 #249 #253 #259 #260 deployed; PRD scope guardrails added below)
+
+---
+
+## 🎯 PRD scope guardrails — read before picking up new work
+
+**The PRD lives at [docs/wellness-client/PRD.md](docs/wellness-client/PRD.md).** Stay inside its bounds. Recent drift was caught on 2026-04-27:
+
+### ❌ Do NOT invest more here (per PRD §6.5 + §6.6)
+- **`routes/voice_transcription.js`** — voice (call recording, transcription, AI summary) belongs to **Callified.ai**, not the CRM. The route exists for legacy/backfill only. Coverage push on 2026-04-27 (`d7ed223`, 20 tests) was a **mistake in priority** — already shipped, leave as-is, don't extend.
+- **`routes/whatsapp.js`** — WhatsApp Business API + chatbot flows = **Callified.ai**. Do NOT add WhatsApp coverage to the next-session list. If a WhatsApp bug is filed, fix the bug; don't expand the surface.
+- **`routes/voice.js`** + Twilio click-to-call inside CRM — **Callified.ai** territory.
+- **Ad creation / creative generation / Meta+Google campaign management** — **AdsGPT** (adsgpt.io). Do NOT build this in CRM.
+- **Patient self-service portal extensions** (`/wellness/portal`) — not in PRD §5 personas. Bug fixes OK (we did #238); new features = drift. Patient comms per PRD = Callified WhatsApp + CRM SMS reminders.
+
+### ✅ DO invest here (PRD-aligned + demo-critical)
+- **`routes/sms.js`** — PRD §6.5 explicitly keeps SMS in CRM for reminders + OTP. Coverage push next session is correct.
+- **Owner Dashboard** (PRD §6.8) — closing #246 (₹0 expected revenue), #247 (count disagreement, just fixed), #277 (twenty-trillion overflow) all keep this honest.
+- **Lead management** (PRD §6.4) — #260 just shipped; SLA timer (lead-side, not ticket-side — see PRD gap below) is real PRD work.
+- **Calendar + appointments** (PRD §6.3) — #247 fixed; #270 (empty-slot click is no-op), #262 (only 3 doctor columns) still open.
+- **Reports** (PRD §6.9) — #232 just fixed; #227 (CSV/PDF export across 4 tabs) is real PRD work for franchise-readiness.
+- **Multi-clinic / locations** (PRD §6.9 franchise-ready) — #235 just shipped.
+- **Orchestrator depth** (PRD §6.7) — verify the engine actually computes occupancy gap → recommends ad budget → drafts campaign. May be a stub.
+
+### 🎬 Apr-end demo criteria (PRD §14) — must work end-to-end before sign-off
+PRD says "if those six work end-to-end, Rishu signs":
+1. ✅ Login to Enhanced Wellness tenant — works
+2. ✅ Owner dashboard with realistic numbers — works (modulo #277 overflow)
+3. ⚠️ AdsGPT creative push to Meta — "mocked OK if API not live"; verify the demo flow actually surfaces a creative or stub
+4. ⚠️ WhatsApp chatbot booking → real appointment — needs Callified webhook live end-to-end
+5. ✅ Doctor enters Rx + captures consent on tablet — works (Rx PDF, consent canvas, treatment plan all live)
+6. ✅ Orchestrator surfaces one recommendation card — works (`AgentRecommendation` cards visible on Owner Dashboard)
+
+The two ⚠️ items are external-blocked (Callified + AdsGPT teams owe their side). Track in `external-blocked` section; don't try to build around them inside CRM.
 
 ---
 
 ## 📌 NEXT SESSION — pick up here
 
-State at end of 2026-04-27 session (HEAD `4846adb`):
+State at end of 2026-04-27 session (HEAD `6624955`):
 
 ### Backend coverage — gate at 60% (already live in `.c8rc.json`)
 - **Pre-spec full-suite measurement (2026-04-26): 64.76 % lines** (21,484 / 33,170)
 - **Gate as of HEAD**: lines/functions/statements 60%, branches 45%
 - **Aspirational target: 100%**
 
-### Coverage shipped 2026-04-27
-- **`routes/reports.js`** (`4846adb`) — 52 tests, all pass live in 23.5s. Covers all 7 endpoints + every metric/type branch + `validateDateRange` errors. Was 14.17%; forecast ~85% on the file.
-- **`routes/marketing.js`** (`612617f`) — 41 tests, all pass live in 18.1s. Covers campaign CRUD + audience targeting (status/source/aiScore/tags filters, EMAIL+SMS) + send/schedule/pause + public form ingest (4 AI-score heuristic branches). Was 28.20%; forecast ~80% on the file.
-- **`routes/voice_transcription.js`** (this commit) — 20 tests, all pass live in 22.1s. Covers all 5 endpoints + every validation/404/no-recording branch (Gemini & Whisper success paths exercised cheaply via fake URLs that fail download — covers route-handler catch path without burning real API quota). Was 29.55%; forecast ~75-80% on the file.
-- **Real backend bug surfaced + fixed** (same commit `612617f`): `POST /api/marketing/submit` was designed as a public form ingest but was NOT in `server.js openPaths` so the global guard 403'd every embedded-form POST. Same class as #auth/2fa/verify and #accounting/webhook from the overnight audit. Added to openPaths.
-- **OpenPaths audit complete**: cross-referenced every route file with `// no auth / public / unauthenticated` markers against `server.js openPaths` array. All gaps closed (`/marketing/submit` was the only one). landing_pages public is mounted at `/p` (not `/api`) so bypasses the guard correctly. `/communications/tracking/:emailId` and `/attribution/track` reference `req.user` so are correctly auth-required.
-- Combined forecast: global coverage **64.76% → ~71-72%**.
-- **Next move (5 min on the server)**: pull, run `npm run coverage:start` + the e2e suite + `npm run coverage:report`, read the new global lines %. If ≥ 70%, bump `.c8rc.json` lines/functions/statements to **70** (branches to 55). Don't over-bump — ratchet up, never down.
+### Shipped 2026-04-27
 
-### Top remaining coverage gaps (in priority order)
-1. **`routes/sms.js`** — 31.05 % (141 / 454) — DLT compliance branches; Fast2SMS now routed through here. Recent OTP-redaction + filter (#254 / #269) needs a dedicated spec branch too.
-2. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151) — ticket SLA breach cron, recent feature
-3. **`routes/whatsapp.js`** — investigate next; template approval + media branches are likely thin
+**P1 batch (deployed `6624955` + env var set on server):**
+- `#232` — Reports tabs (P&L / Per-Pro / Per-Location) all surface canonical visit count + revenue from the same completed-visit query. Verified live: all three now show 109 visits / ₹12,74,414.93 (was 87 / 80 / 111). New `totals.unbucketed` field exposes the data-quality delta (visits without serviceId / doctorId / locationId).
+- `#235` — Clinic locations editable: pencil icon → prefilled form → PUT `/api/wellness/locations/:id`.
+- `#238` — Patient portal OTP: `WELLNESS_DEMO_OTP=1234` env-var bypass shipped + set on server; demo patient `+919876500001` seeded; verified end-to-end (returns token + patient).
+- `#247` — Calendar grid no longer drops visits without `doctorId` (silent `if (!v.doctorId) continue`); they render in an "Unassigned" column. Out-of-range visits (before 09:00 / after 19:00) clamp to boundary instead of vanishing.
+- `#249` — Stale-chunk recovery for **all** lazy routes (`32771b8`): `lazyWithRetry` helper auto-reloads on `Failed to fetch dynamically imported module` once per session; `RouteErrorBoundary` catches the residual case with a "Reload page" CTA.
+- `#253` — Inbox Play Recording wired: native `<audio controls autoplay>`; falls back to "Recording not available" on load error.
+- `#259` — Closed not-reproducing (verified Owner Rishu now gets HTTP 200 from `/api/wellness/dashboard`).
+- `#260` — `/leads` row click navigates to `/contacts/:id`; pointer cursor; `e.stopPropagation` on checkbox / select / Convert button.
+
+**Coverage shipped earlier in the day:**
+- `routes/reports.js` (`4846adb`) — 52 tests. Was 14.17%; forecast ~85%.
+- `routes/marketing.js` (`612617f`) — 41 tests. Was 28.20%; forecast ~80%. Surfaced + fixed `/marketing/submit` openPaths bug.
+- `routes/voice_transcription.js` (`d7ed223`) — 20 tests. **⚠️ PRD drift in retrospect** — voice belongs to Callified per PRD §6.5. Tests already shipped; don't extend further. See guardrails section above.
+- **OpenPaths audit complete** — no further gaps (landing_pages mounted at `/p`, `/communications/tracking` and `/attribution/track` correctly require auth).
+
+Combined forecast: global coverage **64.76% → ~71-72%**.
+
+**Next move (5 min on the server)**: pull, run `npm run coverage:start` + the e2e suite + `npm run coverage:report`, read the new global lines %. If ≥ 70%, bump `.c8rc.json` lines/functions/statements to **70** (branches to 55). Don't over-bump — ratchet up, never down.
+
+### Top remaining coverage gaps (in priority order, PRD-aligned only)
+1. **`routes/sms.js`** — 31.05 % (141 / 454). PRD §6.5 keeps SMS in CRM (reminders + OTP). Cover DLT compliance branches; Fast2SMS routing; OTP-redaction + filter (#254 / #269) need dedicated spec branches.
+2. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151). Ticket SLA breach cron; recent feature. Per PRD §6.4 we ALSO need lead-side SLA — see PRD gap analysis below.
+3. **`routes/wellness.js`** + clinical sub-flows — biggest in the codebase, lots of branches; a focused pass on patient/visit/Rx/consent CRUD would lift global coverage AND directly back PRD §6.1.
+
+⛔ **Skipped per PRD scope (do NOT push coverage on these)**:
+- `routes/whatsapp.js` — Callified.ai handles WhatsApp (PRD §6.5)
+- `routes/voice.js` + Twilio click-to-call — Callified.ai (PRD §6.5)
+- `routes/voice_transcription.js` — already covered, but don't extend (Callified territory)
 
 Each one needs ~1 spec file (~200-400 lines) using the patterns from `e2e/tests/marketing-api.spec.js` (latest), `e2e/tests/reports-api.spec.js`, or `e2e/tests/billing-update.spec.js`.
 
-### What's open on GitHub (8 issues at session end)
-- **Multi-day**: #228 (mobile responsive overhaul), #227 (CSV/PDF export across 4 reports tabs), #137 (external-integrations test sandbox infra)
-- **Product decision**: #200 / #201 / #211 (login quick-login chips + cred prefill — keep / env-gate / remove?)
-- **Vague — need fresh repro**: #141 / #142 / #147 / #150 / #152 / #153 — paste the repro-request template from session log into each
+### What's open on GitHub (45 at session end, after closing 8 P1s today)
+
+**By priority bucket** (`gh issue list --state open` 2026-04-27 evening):
+- **P1** — 0 open (all 8 closed today: #232 #235 #238 #247 #249 #253 #259 #260)
+- **P2** — 11 open
+- **P3** — 16 open
+- **[wellness]** — 11 open (overlaps with P-tags; some wellness P2/P3 are double-tagged)
+- **untagged** — 6 open
+- **[Tracking]** — 1
+
+**P2 cluster (next priority after P1):**
+- #270 `/wellness/calendar` empty time-slot click is a no-op (no "Create visit" affordance)
+- #264 `/settings` Dark Mode toggle sets data-theme but CSS doesn't respond
+- #262 `/wellness/calendar` only 3 doctor columns (others have no schedule visible)
+- #258 `/lead-routing` "Apply All" button no UI feedback (200 OK but silent)
+- #257 `/estimates` Drafts/Sent status pills don't filter
+- #252 Unified Inbox shows empty-state on Emails tab while other tabs have data
+- ...
+
+**Wellness vertical bucket (PRD-priority):**
+- #275 [meta] No global toast/notification system mounted — root cause for many silent-failure bugs (#273, #274, #276) — **closes a class of issues if shipped**
+- #277 Owner Dashboard "Today's expected revenue" overflow (twenty trillion rupees)
+- #278 Prescription has no detail view, no PDF, instructions dropped from timeline
+- #276 `/wellness/recommendations` Reject button unwired
+- #274 `/wellness/services` Save returns 403 silently
+- #273 `/estimates` Convert button silent no-op
+- #272 / #271 / #268 / #267 / #266 / #265 / #263 / #261 — mostly seed pollution (P3) + minor UX gaps
+
+**Multi-day**: #228 (mobile responsive overhaul), #227 (CSV/PDF reports export — PRD §6.9 franchise-readiness), #137 (external-integrations sandbox)
+
+**Product decision**: #200 / #201 / #211 (login quick-login chips — keep / env-gate / remove)
+
+**Vague — need fresh repro**: #141 / #142 / #147 / #150 / #152 / #153
 
 ### External-blocked (can't fix from inside CRM)
 - **Callified webhook + silent SSO** — biggest demo-narrative gap. Our `/api/v1/external/leads` already accepts X-API-Key POSTs. Their team owes the contract.
 - **AdsGPT "Back to CRM" link** — our SSO impersonation works one-way; their side pending
 - **Rishu inputs** — Superphone + Zylu CSVs (data migration), Aadhaar/PAN scans (Android Play Store resubmit)
 
-### Recommended order next session
-1. **15 min** — pull, verify clean tree, glance at overnight commits
-2. **5 min** — re-run coverage on the server to capture combined lift from `4846adb` + `612617f` + this voice_transcription commit
-3. **5 min** — bump `.c8rc.json` lines/functions/statements `60 → 70`, branches `45 → 55` (only if the new measurement supports it)
-4. **1.5-2 hours** — `routes/sms.js` spec (31 % → 75 %+, lifts global another ~2-3 pts; pay attention to the OTP-redaction branches added in #254 / #269 which need dedicated coverage)
-5. **Rest** — pick from #228 / #227 / Callified chase / vague-issue triage based on priority
+### Recommended order next session (PRD-aligned)
+1. **15 min** — pull, verify clean tree (HEAD `6624955`), glance at overnight commits
+2. **5 min** — re-run coverage on the server, capture combined lift; bump `.c8rc.json` lines/functions/statements `60 → 70` if data supports it
+3. **30 min — close the demo-blocker class:** `#275` global toast system. PRD §6.8 owner needs to know when something fails; right now Save errors are silent (root cause for #273 #274 #276). One commit, unblocks 3+ open issues.
+4. **30 min — `#277`** Owner Dashboard expected-revenue overflow (₹20T). PRD §6.8 demo criterion. Likely a unit-conversion bug or sum on an already-summed column.
+5. **1.5-2 hours — `routes/sms.js` coverage spec** (31% → 75%+, PRD §6.5 aligned, lifts global another ~2-3 pts)
+6. **Rest** — pick from open P2 (#270 calendar empty-slot, #262 doctor columns, #258 lead-routing feedback) or PRD §6.9 (#227 reports export). NOT whatsapp/voice — those are Callified.
 
 ### Recent commits worth knowing about
-- `<this commit> test(e2e): cover routes/voice_transcription.js — 20 tests across 5 endpoints` — 29 % → ~75-80 % on the file; openPaths audit also done (no new gaps found beyond the marketing/submit fix in `612617f`)
+- `6624955 fix: P1 batch — #232 #235 #238 #247 #253 #260` — 7 P1s closed (the 8th, #259, was already not-reproducing). Reports tabs reconciled, locations editable, OTP demo bypass, calendar Unassigned column, Play Recording wired, leads row click. Deployed + WELLNESS_DEMO_OTP env var set on server.
+- `32771b8 fix: #249 stale-chunk recovery for all lazy routes` — class-wide frontend fix; lazyWithRetry helper + RouteErrorBoundary
+- `d7ed223 test(e2e): cover routes/voice_transcription.js — 20 tests across 5 endpoints` — **⚠️ retroactively flagged as PRD drift** (voice = Callified per PRD §6.5). Tests already shipped; don't extend.
 - `612617f fix(server)+test(e2e): cover routes/marketing.js + add /marketing/submit to openPaths` — 41 tests; surfaced + fixed real auth-gate bug on the public form-ingest endpoint
 - `4846adb test(e2e): cover routes/reports.js — 52 tests across 7 endpoints` — biggest single gap closed; verified live
 - `9afee65 fix: #269 stronger OTP filter — exclude OTP SMSes from staff inbox entirely (was just redacting)` — closes the confirmed account-takeover chain; #254 redaction kept as belt-and-braces
@@ -257,7 +340,7 @@ Status of each PRD section relative to what's actually shipped. Cross-checked ag
 
 - [ ] **PRD 6.4 — Lead-side SLA timer**: PRD says "first response in <5 min for high-ticket services". The SLA engine I worked on today is ticket-side (Ticket model). Lead-side SLA — does it exist? Verify; if not, build a `LeadSla` policy or extend the existing one to cover Lead model (`firstResponseDueAt` on Lead).
 - [ ] **PRD 6.7 — Orchestrator depth**: "100% occupancy this week" / "maximize ROAS" / "zero missed leads" goals from PRD §6.7. Verify the engine actually computes occupancy gap → recommends ad budget → drafts campaign, vs being a single-recommendation stub. May need expansion.
-- [ ] **PRD 6.8 — No-shows risk widget**: Listed in "today's snapshot" alongside appointments/revenue/occupancy. Check if Owner Dashboard renders a no-show prediction; likely stub.
+- [x] ~~**PRD 6.8 — No-shows risk widget**~~ — Verified shipped 2026-04-27. `/api/wellness/dashboard` returns `noShowRisk: { count, totalUpcoming, topRisks: [{visitId, patientName, score, scheduledAt}, ...] }` with rule-based scoring (past no-shows / first-visit / SMS reminder confirmation / engagement signals). See [routes/wellness.js:1671](backend/routes/wellness.js#L1671).
 - [ ] **PRD 11 — Audit log on patient record reads**: PRD requires "Audit log on every read of a patient record". Currently audit only covers Deal events (deferred gap #179). Wire `prisma.auditLog.create` calls in the Patient/Visit/Prescription/ConsentForm GET handlers.
 - [ ] **PRD 14.3 — Demo: AdsGPT push to Meta**: PRD says "mocked OK if API not live". Verify the demo flow actually surfaces a creative or stub.
 - [ ] **PRD 14.4 — Demo: WhatsApp chatbot booking → real appointment**: Requires Callified.ai webhook to be live end-to-end. Verify the integration ties an inbound WhatsApp lead to a CRM Appointment row.

@@ -121,6 +121,31 @@ E2E_SKIP_SCRUB=1 BASE_URL=http://localhost:5098 \
 # server.js graceful-shutdown handler flushes V8 coverage before exit
 ```
 
+### Login quick-login chips — closed by product decision (2026-04-27 evening)
+
+The following 4 issues all describe the same surface: the login page renders
+quick-login chips for demo accounts and pre-fills the email field. Per the
+product decision on 2026-04-27, this is **intentional for the demo server**
+(crm.globusdemos.com is a publicly-accessible dev/sales-demo box, not a real
+production deployment of the CRM). The chips and prefill make the live demo
+fast for stakeholders and prospects — typing real credentials kills the
+narrative pace.
+
+If/when this codebase is deployed to a real production tenant (an actual
+clinic running their live operations), the chips + prefill should be
+env-gated behind `NODE_ENV === 'production'` (= hide them) — but that's a
+deployment-time concern for that tenant, not a CRM-codebase fix. The credit
+demo creds (`admin@globussoft.com / password123`) are intentionally public
+per CLAUDE.md.
+
+- **#200** Login form pre-fills real user creds (dup of #201)
+- **#201** Login form pre-fills real user creds
+- **#211** Login chips expose 6 real prod creds
+- **#241** Login missing wellness Doctor / Manager chips
+
+Closed as "won't fix — by design for demo server". Re-open with a clear
+production-deployment context if/when this codebase ships to a non-demo env.
+
 ### Stale-issue cleanup (2026-04-27 evening)
 
 The following 6 issues were migrated from `Globussoft-Technologies/callified` on

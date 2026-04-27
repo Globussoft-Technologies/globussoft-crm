@@ -19,10 +19,38 @@
  * so Rishu always sees something useful in the morning.
  */
 const cron = require("node-cron");
+const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 
 let GoogleGenerativeAI;
 try { ({ GoogleGenerativeAI } = require("@google/generative-ai")); } catch (_) { /* optional */ }
+
+// ── Dedup helpers (issues #261, #285) ──────────────────────────────
+// Cron used to spam the same "Today's occupancy only 1%" card on every
+// run because the in-memory `seen` set only checked status="pending"
+// rows for today. If the user approved the card, the next run skipped
+// the dedup and inserted another. Same root cause for #285's 6× tasks.
+//
+// We now key dedup on (type + payload-hash) for AgentRecommendation,
+// and (title + dueDate-day + tenantId) for Task. Both are scoped to
+// today (createdAt >= start-of-day) so legitimate next-day cards pass.
+function startOfDayUTC(d = new Date()) {
+  const x = new Date(d); x.setHours(0, 0, 0, 0); return x;
+}
+function endOfDayUTC(d = new Date()) {
+  const x = new Date(d); x.setHours(23, 59, 59, 999); return x;
+}
+function payloadHash(p) {
+  // Stable hash over type + title + payload JSON. Title is included so a
+  // dynamic value (e.g. occupancyPct=1 vs 5) yields a different hash and
+  // we don't suppress a legitimately different recommendation.
+  const norm = JSON.stringify({
+    type: p.type || "",
+    title: (p.title || "").trim().toLowerCase(),
+    payload: p.payload || null,
+  });
+  return crypto.createHash("sha1").update(norm).digest("hex").slice(0, 16);
+}
 
 // ── Run-for-tenant entry point ─────────────────────────────────────
 
@@ -37,18 +65,31 @@ async function runForTenant(tenantId) {
   let proposals = await generateProposals(ctx);
   if (!proposals || proposals.length === 0) proposals = ruleBasedProposals(ctx);
 
-  // Dedupe vs today's existing pending recommendations (avoid spam)
-  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  // Dedupe vs ALL of today's recommendations regardless of status
+  // (issues #261 / #285). The previous filter `status: "pending"` let an
+  // approved card from earlier today re-appear on the next cron run.
+  const todayStart = startOfDayUTC();
   const existing = await prisma.agentRecommendation.findMany({
-    where: { tenantId, status: "pending", createdAt: { gte: todayStart } },
-    select: { type: true, title: true },
+    where: { tenantId, createdAt: { gte: todayStart } },
+    select: { type: true, title: true, payload: true },
   });
-  const seen = new Set(existing.map((r) => `${r.type}:${r.title.slice(0, 32)}`));
+  const seen = new Set();
+  for (const r of existing) {
+    let parsed = null;
+    try { parsed = r.payload ? JSON.parse(r.payload) : null; } catch (_) {}
+    seen.add(payloadHash({ type: r.type, title: r.title, payload: parsed }));
+    // Legacy key for back-compat with rows that had different payload-shape
+    seen.add(`${r.type}:${(r.title || "").slice(0, 32)}`);
+  }
 
   const created = [];
   for (const p of proposals) {
-    const key = `${p.type}:${(p.title || "").slice(0, 32)}`;
-    if (seen.has(key)) continue;
+    const hash = payloadHash(p);
+    const legacyKey = `${p.type}:${(p.title || "").slice(0, 32)}`;
+    if (seen.has(hash) || seen.has(legacyKey)) {
+      console.log(`[Orchestrator] skip dupe rec tenant=${tenantId} type=${p.type} hash=${hash}`);
+      continue;
+    }
     const rec = await prisma.agentRecommendation.create({
       data: {
         type: p.type,
@@ -62,7 +103,8 @@ async function runForTenant(tenantId) {
       },
     });
     created.push(rec);
-    seen.add(key);
+    seen.add(hash);
+    seen.add(legacyKey);
   }
   console.log(`[Orchestrator] tenant ${tenantId}: ${created.length} new recommendations`);
   return { created: created.length, contextSummary: ctx.summary };
@@ -70,26 +112,52 @@ async function runForTenant(tenantId) {
 
 // ── Action dispatcher (called when Rishu approves a card) ──────────
 
+// Dedup helper for tasks created from approved recommendations.
+// Issue #285: approving the same recurring card repeatedly was spawning a
+// fresh Task each time. We now skip if a task with the same title and
+// dueDate (date-only, tenant-scoped) already exists. dueDate may be null
+// in which case we match against tasks created today.
+async function findOrCreateTask({ title, notes, status, priority, tenantId, userId, dueDate }) {
+  const dayStart = startOfDayUTC(dueDate || new Date());
+  const dayEnd = endOfDayUTC(dueDate || new Date());
+  const where = {
+    title,
+    tenantId,
+    deletedAt: null,
+    ...(dueDate
+      ? { dueDate: { gte: dayStart, lte: dayEnd } }
+      : { createdAt: { gte: dayStart, lte: dayEnd } }),
+  };
+  const existing = await prisma.task.findFirst({ where, select: { id: true } });
+  if (existing) {
+    console.log(`[Orchestrator] skip dupe task tenant=${tenantId} title="${title.slice(0, 40)}" existingId=${existing.id}`);
+    return { task: existing, deduped: true };
+  }
+  const task = await prisma.task.create({
+    data: { title, notes, status, priority, tenantId, userId, dueDate: dueDate || null },
+  });
+  return { task, deduped: false };
+}
+
 async function executeApproved(rec, { actorUserId } = {}) {
   if (!rec) return { ok: false, reason: "no-rec" };
   let payload = {};
   try { payload = rec.payload ? JSON.parse(rec.payload) : {}; } catch (_) {}
 
   switch (rec.type) {
-    case "campaign_boost":
+    case "campaign_boost": {
       // Real budget bump requires AdsGPT/Callified handshake (tomorrow's work).
       // For now, log a Task for the marketer to execute manually.
-      await prisma.task.create({
-        data: {
-          title: `Marketer: ${rec.title}`,
-          notes: `${rec.body}\n\nApproved by user #${actorUserId} on ${new Date().toISOString()}`,
-          status: "OPEN",
-          priority: "HIGH",
-          tenantId: rec.tenantId,
-          userId: actorUserId || null,
-        },
+      const { deduped } = await findOrCreateTask({
+        title: `Marketer: ${rec.title}`,
+        notes: `${rec.body}\n\nApproved by user #${actorUserId} on ${new Date().toISOString()}`,
+        status: "OPEN",
+        priority: "HIGH",
+        tenantId: rec.tenantId,
+        userId: actorUserId || null,
       });
-      return { ok: true, action: "task_created", note: "Awaiting AdsGPT/Callified handshake for direct budget API" };
+      return { ok: true, action: deduped ? "task_deduped" : "task_created", note: "Awaiting AdsGPT/Callified handshake for direct budget API" };
+    }
 
     case "send_sms_blast": {
       const audience = payload.audienceFilter || {};
@@ -116,19 +184,18 @@ async function executeApproved(rec, { actorUserId } = {}) {
     }
 
     case "occupancy_alert":
-    case "schedule_gap":
-      // Translate to a manager task
-      await prisma.task.create({
-        data: {
-          title: rec.title,
-          notes: rec.body,
-          status: "OPEN",
-          priority: "HIGH",
-          tenantId: rec.tenantId,
-          userId: actorUserId || null,
-        },
+    case "schedule_gap": {
+      // Translate to a manager task (deduped — see findOrCreateTask).
+      const { deduped } = await findOrCreateTask({
+        title: rec.title,
+        notes: rec.body,
+        status: "OPEN",
+        priority: "HIGH",
+        tenantId: rec.tenantId,
+        userId: actorUserId || null,
       });
-      return { ok: true, action: "task_created" };
+      return { ok: true, action: deduped ? "task_deduped" : "task_created" };
+    }
 
     case "lead_followup":
     case "mark_leads_for_callback": {
@@ -448,10 +515,85 @@ function ruleBasedProposals(ctx) {
 
 // ── Cron init + manual trigger ─────────────────────────────────────
 
+// Inline cleanup of pre-existing duplicates created before #261/#285 fix
+// shipped. Idempotent — keeps the OLDEST row of each (type+title) group
+// for today, soft-deletes the rest. Same logic for Tasks (by title +
+// dueDate-day). Best-effort; errors are logged but do not abort the
+// cron run.
+async function cleanupExistingDupes(tenantId) {
+  const todayStart = startOfDayUTC();
+  const result = { recsRemoved: 0, tasksRemoved: 0 };
+  try {
+    const recs = await prisma.agentRecommendation.findMany({
+      where: { tenantId, createdAt: { gte: todayStart } },
+      select: { id: true, type: true, title: true, payload: true, createdAt: true, status: true },
+      orderBy: { createdAt: "asc" },
+    });
+    const groups = new Map();
+    for (const r of recs) {
+      let parsed = null;
+      try { parsed = r.payload ? JSON.parse(r.payload) : null; } catch (_) {}
+      const key = payloadHash({ type: r.type, title: r.title, payload: parsed });
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    for (const rows of groups.values()) {
+      if (rows.length < 2) continue;
+      // Keep the oldest non-pending row if any (preserves user actions),
+      // else the oldest. Delete the rest.
+      const keeper = rows.find((r) => r.status !== "pending") || rows[0];
+      const toDelete = rows.filter((r) => r.id !== keeper.id).map((r) => r.id);
+      if (toDelete.length === 0) continue;
+      const del = await prisma.agentRecommendation.deleteMany({ where: { id: { in: toDelete } } });
+      result.recsRemoved += del.count;
+    }
+  } catch (e) {
+    console.warn(`[Orchestrator] cleanup recs failed tenant=${tenantId}: ${e.message}`);
+  }
+  try {
+    // Tasks: dedup by (title + dueDate-day) within today's createdAt window.
+    const tasks = await prisma.task.findMany({
+      where: { tenantId, deletedAt: null, createdAt: { gte: todayStart } },
+      select: { id: true, title: true, dueDate: true, createdAt: true, status: true },
+      orderBy: { createdAt: "asc" },
+    });
+    const tgroups = new Map();
+    for (const t of tasks) {
+      const dayKey = t.dueDate ? startOfDayUTC(t.dueDate).toISOString() : "none";
+      const key = `${t.title}|${dayKey}`;
+      if (!tgroups.has(key)) tgroups.set(key, []);
+      tgroups.get(key).push(t);
+    }
+    for (const rows of tgroups.values()) {
+      if (rows.length < 2) continue;
+      const keeper = rows.find((r) => r.status !== "OPEN" && r.status !== "Pending") || rows[0];
+      const toDelete = rows.filter((r) => r.id !== keeper.id).map((r) => r.id);
+      if (toDelete.length === 0) continue;
+      // Soft-delete to preserve audit trail (Task has deletedAt column).
+      const del = await prisma.task.updateMany({
+        where: { id: { in: toDelete } },
+        data: { deletedAt: new Date() },
+      });
+      result.tasksRemoved += del.count;
+    }
+  } catch (e) {
+    console.warn(`[Orchestrator] cleanup tasks failed tenant=${tenantId}: ${e.message}`);
+  }
+  if (result.recsRemoved || result.tasksRemoved) {
+    console.log(`[Orchestrator] inline cleanup tenant=${tenantId} recs=${result.recsRemoved} tasks=${result.tasksRemoved}`);
+  }
+  return result;
+}
+
 async function runForAllWellnessTenants() {
   const tenants = await prisma.tenant.findMany({ where: { vertical: "wellness", isActive: true }, select: { id: true } });
   for (const t of tenants) {
-    try { await runForTenant(t.id); } catch (e) { console.error("[Orchestrator] tenant fail:", t.id, e.message); }
+    try {
+      // Issues #261 / #285: clear any pre-existing dupes from previous
+      // buggy cron runs before generating new cards.
+      await cleanupExistingDupes(t.id);
+      await runForTenant(t.id);
+    } catch (e) { console.error("[Orchestrator] tenant fail:", t.id, e.message); }
   }
 }
 
@@ -463,4 +605,4 @@ function initOrchestratorCron() {
   console.log("[Orchestrator] cron initialized (daily 07:00 IST)");
 }
 
-module.exports = { initOrchestratorCron, runForTenant, runForAllWellnessTenants, executeApproved };
+module.exports = { initOrchestratorCron, runForTenant, runForAllWellnessTenants, executeApproved, cleanupExistingDupes };

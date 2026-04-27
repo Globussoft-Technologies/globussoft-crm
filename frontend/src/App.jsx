@@ -96,6 +96,10 @@ const WellnessPatientPortal = lazy(() => import('./pages/wellness/PatientPortal'
 const WellnessPerLocation = lazy(() => import('./pages/wellness/PerLocationDashboard'));
 const WellnessLoyalty = lazy(() => import('./pages/wellness/Loyalty'));
 const WellnessWaitlist = lazy(() => import('./pages/wellness/Waitlist'));
+// #305: /wellness/inventory used to render a blank page (no route element).
+// Inventory is implemented as a tab inside PatientDetail; this stub explains
+// that and links to the patient list.
+const WellnessInventory = lazy(() => import('./pages/wellness/Inventory'));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import('./pages/SurveyPublic'));
 
@@ -295,6 +299,7 @@ export default function App() {
               <Route path="wellness/per-location" element={<WellnessPerLocation />} />
               <Route path="wellness/loyalty" element={<WellnessLoyalty />} />
               <Route path="wellness/waitlist" element={<WellnessWaitlist />} />
+              <Route path="wellness/inventory" element={<WellnessInventory />} />
             </Route>
           </Routes>
         </Suspense>

@@ -28,7 +28,13 @@ const STATUS_BORDER = {
 // availability from the grid.
 const PRACTITIONER_ROLES = new Set(['doctor', 'professional']);
 
-const isoDay = (d) => d.toISOString().slice(0, 10);
+// #263: render the IST calendar day, not the UTC day. toISOString() returns
+// UTC, so any IST clock time before 05:30 (e.g. 1 AM IST = 19:30 prev-day UTC)
+// previously yielded the wrong date string and the calendar fetched a
+// different day than the Owner Dashboard's IST-aware startOfDay()/endOfDay()
+// helpers in backend/routes/wellness.js — producing different "today" counts.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const isoDay = (d) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
 const fmtHour = (h) => `${String(h).padStart(2, '0')}:00`;
 const UNASSIGNED_KEY = '__unassigned__';
 

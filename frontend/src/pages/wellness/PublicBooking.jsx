@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Sparkles, Clock, MapPin, IndianRupee, CheckCircle2 } from 'lucide-react';
+import { useFormAutosave } from '../../utils/useFormAutosave';
+
+const INITIAL_FORM = { name: '', phone: '', email: '', notes: '', preferredSlot: '' };
 
 export default function PublicBooking() {
   const { slug } = useParams();
@@ -9,7 +12,9 @@ export default function PublicBooking() {
   const [error, setError] = useState('');
   const [step, setStep] = useState('service');
   const [picked, setPicked] = useState({ service: null, location: null });
-  const [form, setForm] = useState({ name: '', phone: '', email: '', notes: '', preferredSlot: '' });
+  // #239 — partial form state must survive a mid-form refresh. Keying the
+  // autosave by tenant slug keeps drafts from leaking between clinics.
+  const [form, setForm, , clearDraft] = useFormAutosave(`public-booking.${slug || 'default'}`, INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(null);
 
@@ -37,7 +42,12 @@ export default function PublicBooking() {
         }),
       });
       const data = await res.json();
-      if (res.ok) setDone(data);
+      if (res.ok) {
+        setDone(data);
+        // #239 — booking succeeded, drop the autosaved draft so a future
+        // visit to the same clinic on this device starts clean.
+        clearDraft();
+      }
       else setError(data.error || 'Booking failed');
     } catch (err) { setError('Network error.'); }
     setSubmitting(false);

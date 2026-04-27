@@ -32,11 +32,16 @@ jobs:
 
     steps:
       - name: Show trigger info
+        env:
+          # Pass the commit message via env to avoid bash-template-injection
+          # when the message has quotes / backticks / multiple lines
+          # (lesson from 2026-04-27 deploy failure on 2897b85).
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           echo "Trigger: ${{ github.event_name }}"
           echo "Commit:  ${{ github.sha }}"
           echo "Pusher:  ${{ github.actor }}"
-          echo "Message: ${{ github.event.head_commit.message }}"
+          printf 'Message: %s\n' "$COMMIT_MSG" | head -3
 
       # ── Backend deploy ──────────────────────────────────────────────
       # git pull -> npm install -> prisma generate -> pm2 restart -> health.

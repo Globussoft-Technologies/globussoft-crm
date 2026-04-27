@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, User as UserIcon, Stethoscope } from 'lucide-react';
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, User as UserIcon, Stethoscope, Plus, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 
 const HOURS = Array.from({ length: 11 }, (_, i) => 9 + i); // 9 AM → 7 PM
 const STATUS_COLOR = {
@@ -19,14 +20,32 @@ const STATUS_BORDER = {
   'no-show': '#ef4444', cancelled: '#64748b',
 };
 
+// #262: practitioners who can be assigned to visits include both doctors
+// and professionals (salon stylists, aestheticians, slimming therapists,
+// Ayurveda practitioners — see PRD §1). Pre-fix the calendar filter only
+// kept wellnessRole === 'doctor', so 12 professionals had no column even
+// though they had visits booked, and the receptionist couldn't see their
+// availability from the grid.
+const PRACTITIONER_ROLES = new Set(['doctor', 'professional']);
+
 const isoDay = (d) => d.toISOString().slice(0, 10);
 const fmtHour = (h) => `${String(h).padStart(2, '0')}:00`;
+const UNASSIGNED_KEY = '__unassigned__';
 
 export default function CalendarGrid() {
+  const notify = useNotify();
   const [date, setDate] = useState(() => new Date());
   const [visits, setVisits] = useState([]);
-  const [doctors, setDoctors] = useState([]);
+  const [allStaff, setAllStaff] = useState([]);
+  const [services, setServices] = useState([]);
+  const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showAll, setShowAll] = useState(false);
+  // #270: empty-slot click opens a "New visit" modal seeded with the chosen
+  // (doctorId, hour). Booked visits are status='booked' which doesn't require
+  // serviceId or doctorId per visitPOST validators (#109), but we collect
+  // both up-front because that's how a receptionist actually books.
+  const [newVisit, setNewVisit] = useState(null); // { columnId, hour } | null
 
   const load = async () => {
     setLoading(true);
@@ -39,31 +58,50 @@ export default function CalendarGrid() {
       // calendar appeared empty even though the dashboard showed the correct counts.
       const fromQ = `${dStr}T00:00:00+05:30`;
       const toQ = `${dStr}T23:59:59+05:30`;
-      const [staff, vs] = await Promise.all([
+      const [staff, vs, svc, pts] = await Promise.all([
         fetchApi('/api/staff').catch(() => []),
         fetchApi(`/api/wellness/visits?from=${encodeURIComponent(fromQ)}&to=${encodeURIComponent(toQ)}&limit=500`),
+        fetchApi('/api/wellness/services').catch(() => []),
+        fetchApi('/api/wellness/patients').catch(() => []),
       ]);
-      const docs = (Array.isArray(staff) ? staff : []).filter((u) => u.wellnessRole === 'doctor');
-      setDoctors(docs.length ? docs : (Array.isArray(staff) ? staff.slice(0, 4) : []));
+      setAllStaff(Array.isArray(staff) ? staff : []);
       setVisits(Array.isArray(vs) ? vs : []);
-    } catch (e) { setVisits([]); setDoctors([]); }
+      setServices(Array.isArray(svc) ? svc.filter((s) => s.isActive !== false) : []);
+      setPatients(Array.isArray(pts) ? pts : []);
+    } catch (_e) { setVisits([]); setAllStaff([]); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [date]);
 
+  // #262: build the practitioner list. Default view = practitioners with at
+  // least one visit on this day (so the grid stays readable on small clinics).
+  // Toggle "Show all" to surface every practitioner for booking empty slots.
+  const practitioners = useMemo(() => {
+    const all = allStaff.filter((u) => PRACTITIONER_ROLES.has(u.wellnessRole));
+    const doctorIdsToday = new Set(visits.map((v) => v.doctorId).filter(Boolean));
+    if (showAll) return all;
+    const withVisits = all.filter((u) => doctorIdsToday.has(u.id));
+    // Fallback: if no practitioner has visits today, surface everyone so the
+    // grid isn't empty and the receptionist can still book.
+    return withVisits.length ? withVisits : all;
+  }, [allStaff, visits, showAll]);
+
   // #247: include visits without a doctor assignment in an "Unassigned"
   // column instead of silently dropping them. The dashboard counts ALL
-  // visits today; the calendar must too, otherwise the counts disagree
-  // and unassigned bookings stay invisible. Also clamp visits scheduled
+  // visits today; the calendar must too. Also clamp visits scheduled
   // before 09:00 / after 19:00 to the boundary hour so they're surfaced.
-  const UNASSIGNED_KEY = '__unassigned__';
   const columns = useMemo(() => {
-    const cols = doctors.map((d) => ({ id: d.id, name: d.name, isUnassigned: false }));
+    const cols = practitioners.map((d) => ({
+      id: d.id,
+      name: d.name,
+      role: d.wellnessRole,
+      isUnassigned: false,
+    }));
     if (visits.some((v) => !v.doctorId)) {
-      cols.push({ id: UNASSIGNED_KEY, name: 'Unassigned', isUnassigned: true });
+      cols.push({ id: UNASSIGNED_KEY, name: 'Unassigned', role: null, isUnassigned: true });
     }
     return cols;
-  }, [visits, doctors]);
+  }, [visits, practitioners]);
 
   const grid = useMemo(() => {
     const out = {};
@@ -83,6 +121,10 @@ export default function CalendarGrid() {
     const next = new Date(date); next.setDate(next.getDate() + days); setDate(next);
   };
 
+  // #262 sub-counts for the header chip
+  const totalPractitionerCount = useMemo(() => allStaff.filter((u) => PRACTITIONER_ROLES.has(u.wellnessRole)).length, [allStaff]);
+  const visiblePractitionerCount = practitioners.length;
+
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -91,10 +133,27 @@ export default function CalendarGrid() {
             <CalendarIcon size={24} /> Calendar
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Day view by doctor — {date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            Day view by practitioner — {date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {totalPractitionerCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAll((v) => !v)}
+              className="glass"
+              style={{
+                padding: '0.4rem 0.8rem', fontSize: '0.8rem',
+                borderRadius: 8, cursor: 'pointer',
+                border: `1px solid ${showAll ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                background: showAll ? 'rgba(99,102,241,0.15)' : 'transparent',
+                color: 'var(--text-primary)',
+              }}
+              title={showAll ? `Showing all ${totalPractitionerCount} practitioners` : `Showing ${visiblePractitionerCount} with visits today`}
+            >
+              {showAll ? `All ${totalPractitionerCount}` : `${visiblePractitionerCount} of ${totalPractitionerCount}`}
+            </button>
+          )}
           <button onClick={() => shift(-1)} className="glass" style={navBtn}><ChevronLeft size={16} /></button>
           <button onClick={() => setDate(new Date())} className="glass" style={{ ...navBtn, padding: '0.4rem 0.9rem', fontSize: '0.85rem', width: 'auto' }}>Today</button>
           <button onClick={() => shift(1)} className="glass" style={navBtn}><ChevronRight size={16} /></button>
@@ -105,7 +164,7 @@ export default function CalendarGrid() {
 
       {!loading && columns.length === 0 && (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          No doctors configured and no visits scheduled. Add a doctor under Staff or book a visit.
+          No practitioners configured and no visits scheduled. Add staff under Staff or book a visit.
         </div>
       )}
 
@@ -121,6 +180,11 @@ export default function CalendarGrid() {
                   <Stethoscope size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7 }} />
                 )}
                 {c.name}
+                {c.role && (
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginLeft: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {c.role}
+                  </span>
+                )}
               </div>
             ))}
 
@@ -129,8 +193,23 @@ export default function CalendarGrid() {
                 <div style={hourLabel}>{fmtHour(h)}</div>
                 {columns.map((c) => {
                   const cell = grid[c.id]?.[h] || [];
+                  // #270: empty slots are clickable when the column belongs to a
+                  // real practitioner (not the synthetic Unassigned column —
+                  // a fresh booking should always be assigned to someone).
+                  const isCreatable = !c.isUnassigned && cell.length === 0;
                   return (
-                    <div key={`${c.id}-${h}`} style={hourCell}>
+                    <div
+                      key={`${c.id}-${h}`}
+                      style={{
+                        ...hourCell,
+                        cursor: isCreatable ? 'pointer' : 'default',
+                        position: 'relative',
+                      }}
+                      onClick={isCreatable ? () => setNewVisit({ columnId: c.id, hour: h }) : undefined}
+                      title={isCreatable ? `Book ${fmtHour(h)} with ${c.name}` : undefined}
+                      onMouseEnter={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0.8'); } : undefined}
+                      onMouseLeave={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0'); } : undefined}
+                    >
                       {cell.map((v) => (
                         <Link
                           to={`/wellness/patients/${v.patient?.id || v.patientId}`}
@@ -142,6 +221,7 @@ export default function CalendarGrid() {
                             padding: '0.4rem 0.5rem', borderRadius: '6px',
                             fontSize: '0.75rem', display: 'block',
                           }}
+                          onClick={(e) => e.stopPropagation()}
                         >
                           <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {new Date(v.visitDate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} · {v.patient?.name || `#${v.patientId}`}
@@ -151,6 +231,21 @@ export default function CalendarGrid() {
                           </div>
                         </Link>
                       ))}
+                      {isCreatable && (
+                        <span
+                          data-empty-affordance
+                          style={{
+                            position: 'absolute', inset: 0,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: 'var(--accent-color)', opacity: 0,
+                            transition: 'opacity 0.12s',
+                            pointerEvents: 'none',
+                            fontSize: '0.7rem', fontWeight: 500, gap: '0.25rem',
+                          }}
+                        >
+                          <Plus size={12} /> Book
+                        </span>
+                      )}
                     </div>
                   );
                 })}
@@ -167,6 +262,145 @@ export default function CalendarGrid() {
           </span>
         ))}
       </div>
+
+      {newVisit && (
+        <NewVisitModal
+          column={columns.find((c) => c.id === newVisit.columnId)}
+          hour={newVisit.hour}
+          date={date}
+          patients={patients}
+          services={services}
+          notify={notify}
+          onClose={() => setNewVisit(null)}
+          onCreated={() => { setNewVisit(null); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// #270: lightweight modal for booking a visit from the calendar grid.
+// Only required field is patientId (per the visit POST validator at
+// routes/wellness.js:472). status defaults to 'booked' so the receptionist
+// doesn't trip the "completed visits need serviceId + doctorId" gate.
+function NewVisitModal({ column, hour, date, patients, services, notify, onClose, onCreated }) {
+  const [patientId, setPatientId] = useState('');
+  const [serviceId, setServiceId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const localDate = new Date(date);
+  localDate.setHours(hour, 0, 0, 0);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!patientId) return;
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      // visitDate built as IST wall time; backend stores as UTC, dashboard
+      // applies the same +05:30 offset on read so the slot lands at the
+      // intended hour for the receptionist's column.
+      const istIso = `${date.toISOString().slice(0, 10)}T${String(hour).padStart(2, '0')}:00:00+05:30`;
+      await fetchApi('/api/wellness/visits', {
+        method: 'POST',
+        body: JSON.stringify({
+          patientId: parseInt(patientId, 10),
+          serviceId: serviceId ? parseInt(serviceId, 10) : null,
+          doctorId: column.id,
+          visitDate: istIso,
+          status: 'booked',
+          notes: notes || null,
+        }),
+      });
+      const patientName = patients.find((p) => p.id === parseInt(patientId, 10))?.name;
+      notify.success(`Booked ${patientName || 'visit'} at ${String(hour).padStart(2, '0')}:00 with ${column.name}`);
+      onCreated();
+    } catch (_err) { /* fetchApi already toasted */ }
+    setSubmitting(false);
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="new-visit-title"
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9000,
+        background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '1rem',
+      }}
+    >
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={submit}
+        className="glass"
+        style={{
+          background: 'var(--surface-bg, #ffffff)', color: 'var(--text-primary)',
+          padding: '1.5rem', borderRadius: 12, width: '100%', maxWidth: 480,
+          border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+          display: 'flex', flexDirection: 'column', gap: '0.75rem',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 id="new-visit-title" style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>
+            New visit
+          </h3>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+            <X size={18} />
+          </button>
+        </div>
+        <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          {column.name} • {localDate.toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })}
+        </p>
+
+        <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Patient *</label>
+        <select required value={patientId} onChange={(e) => setPatientId(e.target.value)} style={modalInput}>
+          <option value="">— select patient —</option>
+          {patients.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}{p.phone ? ` · ${p.phone}` : ''}</option>
+          ))}
+        </select>
+
+        <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Service (optional)</label>
+        <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={modalInput}>
+          <option value="">— pick later —</option>
+          {services.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+
+        <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Notes (optional)</label>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={2}
+          style={{ ...modalInput, resize: 'vertical', fontFamily: 'inherit' }}
+          placeholder="Walk-in confirmed, follow-up consult, etc."
+        />
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+          <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', background: 'transparent', border: '1px solid var(--border-color, rgba(0,0,0,0.15))', borderRadius: 8, cursor: 'pointer', color: 'var(--text-primary)' }}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!patientId || submitting}
+            style={{
+              padding: '0.5rem 1.25rem',
+              background: !patientId || submitting ? 'rgba(99,102,241,0.4)' : 'var(--accent-color, #6366f1)',
+              border: 'none', color: '#fff', borderRadius: 8,
+              cursor: !patientId || submitting ? 'not-allowed' : 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            {submitting ? 'Booking…' : 'Book visit'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -175,3 +409,4 @@ const navBtn = { width: '36px', height: '36px', display: 'flex', alignItems: 'ce
 const colHead = { padding: '0.5rem 0.75rem', fontWeight: 600, fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)', color: 'var(--text-primary)' };
 const hourLabel = { padding: '0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)', textAlign: 'right', borderRight: '1px solid rgba(255,255,255,0.05)' };
 const hourCell = { padding: '0.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', minHeight: '60px', borderBottom: '1px solid rgba(255,255,255,0.04)' };
+const modalInput = { padding: '0.5rem 0.7rem', borderRadius: 8, border: '1px solid var(--border-color, rgba(0,0,0,0.15))', background: 'var(--input-bg, rgba(0,0,0,0.03))', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };

@@ -1,10 +1,12 @@
 import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-react';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
 
 const Leads = () => {
+  const navigate = useNavigate();
   const [leads, setLeads] = useState([]);
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -215,8 +217,14 @@ const Leads = () => {
               ) : filteredLeads.length === 0 ? (
                 <tr><td colSpan="9" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
               ) : filteredLeads.map(lead => (
-                <tr key={lead.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
-                  <td style={{ padding: '1rem' }}>
+                <tr
+                  key={lead.id}
+                  style={{ borderBottom: '1px solid var(--border-color)', cursor: 'pointer' }}
+                  className="table-row-hover"
+                  onClick={() => navigate(`/contacts/${lead.id}`)}
+                  title="Open lead detail"
+                >
+                  <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
                     <input type="checkbox" checked={selectedLeads.includes(lead.id)} onChange={() => toggleSelect(lead.id)} style={{ cursor: 'pointer' }} />
                   </td>
                   <td style={{ padding: '1rem', fontWeight: '500' }}>{lead.name}</td>
@@ -245,7 +253,7 @@ const Leads = () => {
                       {lead.source || 'Organic'}
                     </span>
                   </td>
-                  <td style={{ padding: '1rem' }}>
+                  <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
                     <select
                       className="input-field"
                       value={lead.assignedToId || ''}
@@ -261,7 +269,7 @@ const Leads = () => {
                   <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
                     {formatDate(lead.createdAt)}
                   </td>
-                  <td style={{ padding: '1rem', textAlign: 'right' }}>
+                  <td style={{ padding: '1rem', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                     <button
                       onClick={() => handleConvert(lead.id)}
                       title="Convert to Customer"

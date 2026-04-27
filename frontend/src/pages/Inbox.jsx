@@ -21,6 +21,12 @@ export default function Inbox() {
   const [showMeet, setShowMeet] = useState(false);
   const [meetData, setMeetData] = useState({ contactId: '', date: '', time: '', description: '' });
 
+  // #253: track which call recording is currently expanded into a player.
+  // playerErrors keyed by call.id so a single broken URL doesn't poison
+  // all the other rows.
+  const [playingCallId, setPlayingCallId] = useState(null);
+  const [playerErrors, setPlayerErrors] = useState({});
+
   useEffect(() => {
     Promise.all([
       fetchApi('/api/communications/inbox'),
@@ -217,11 +223,11 @@ export default function Inbox() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {calls.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>No recent calls.</p>}
             {calls.map(call => (
-              <div key={call.id} className="table-row-hover" style={{ padding: '1.5rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: 'var(--table-header-bg)', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+              <div key={call.id} className="table-row-hover" style={{ padding: '1.5rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: 'var(--table-header-bg)', display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                 <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'rgba(245, 158, 11, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--warning-color)', flexShrink: 0 }}>
                   <Phone size={20} />
                 </div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: '200px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.5rem' }}>
                     <p style={{ fontWeight: 'bold' }}>{call.direction} CALL</p>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Clock size={12}/> {call.duration} seconds</span>
@@ -229,10 +235,35 @@ export default function Inbox() {
                   </div>
                   <p style={{ color: 'var(--text-secondary)' }}>{call.notes || "No notes logged for this call."}</p>
                 </div>
-                {call.recordingUrl && (
-                  <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem' }}>
-                    <Play size={16} /> Play Recording
-                  </button>
+                {call.recordingUrl ? (
+                  playingCallId === call.id ? (
+                    playerErrors[call.id] ? (
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                        Recording not available (URL stored but file unreachable)
+                      </span>
+                    ) : (
+                      <audio
+                        controls
+                        autoPlay
+                        src={call.recordingUrl}
+                        onError={() => setPlayerErrors(prev => ({ ...prev, [call.id]: true }))}
+                        style={{ height: 36 }}
+                      />
+                    )
+                  ) : (
+                    <button
+                      onClick={() => setPlayingCallId(call.id)}
+                      className="btn-secondary"
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', cursor: 'pointer' }}
+                      title={call.recordingUrl}
+                    >
+                      <Play size={16} /> Play Recording
+                    </button>
+                  )
+                ) : (
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                    No recording
+                  </span>
                 )}
               </div>
             ))}

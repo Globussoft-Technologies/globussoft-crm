@@ -1368,6 +1368,21 @@ const reportRange = (req) => {
 // #207/#216: org-wide financial reports must not leak to clinical staff.
 // Doctors / professionals see their own slice via /per-professional? but
 // the unfiltered P&L view stays admin/manager.
+// #232: every reports tab reads from the same completed-visit window. To
+// stop the four tabs from disagreeing on the headline "visits" count,
+// each endpoint surfaces the canonical total separately from its per-row
+// breakdown — and surfaces `unbucketed` when rows don't sum to the total
+// (e.g. visits without a serviceId, doctorId, locationId, or whose join
+// target was deleted). The unbucketed count is what was previously
+// silently dropped from every tab independently, which is what produced
+// the 87 / 80 / 111 disagreement.
+function canonicalVisitTotals(visits) {
+  return {
+    visits: visits.length,
+    revenue: visits.reduce((s, v) => s + (parseFloat(v.amountCharged) || 0), 0),
+  };
+}
+
 router.get("/reports/pnl-by-service", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -1417,13 +1432,16 @@ router.get("/reports/pnl-by-service", verifyWellnessRole(["admin", "manager"]), 
       .map((r) => ({ ...r, contribution: r.revenue - r.productCost }))
       .sort((a, b) => b.revenue - a.revenue);
 
+    const canonical = canonicalVisitTotals(visits);
+    const bucketedVisits = rows.reduce((s, r) => s + r.count, 0);
     res.json({
       window: { from, to, locationId: locationId || null },
       totals: {
-        visits: rows.reduce((s, r) => s + r.count, 0),
-        revenue: rows.reduce((s, r) => s + r.revenue, 0),
+        visits: canonical.visits,
+        revenue: canonical.revenue,
         productCost: rows.reduce((s, r) => s + r.productCost, 0),
         contribution: rows.reduce((s, r) => s + r.contribution, 0),
+        unbucketed: canonical.visits - bucketedVisits, // visits with no serviceId or unmatched service
       },
       rows,
     });
@@ -1461,9 +1479,15 @@ router.get("/reports/per-professional", verifyWellnessRole(["admin", "manager"])
       acc[d.id].revenue += parseFloat(v.amountCharged) || 0;
     }
     const rows = Object.values(acc).sort((a, b) => b.revenue - a.revenue);
+    const canonical = canonicalVisitTotals(visits);
+    const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
     res.json({
       window: { from, to, locationId: locationId || null },
-      totals: { visits: rows.reduce((s, r) => s + r.visits, 0), revenue: rows.reduce((s, r) => s + r.revenue, 0) },
+      totals: {
+        visits: canonical.visits,
+        revenue: canonical.revenue,
+        unbucketed: canonical.visits - bucketedVisits, // visits with no doctorId or unmatched doctor
+      },
       rows,
     });
   } catch (e) {
@@ -1558,9 +1582,15 @@ router.get("/reports/per-location", verifyWellnessRole(["admin", "manager"]), as
       patients: patients.find((p) => p.locationId === l.id)?._count?._all || 0,
     })).sort((a, b) => b.revenue - a.revenue);
 
+    const canonical = canonicalVisitTotals(visits);
+    const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
     res.json({
       window: { from, to },
-      totals: { visits: rows.reduce((s, r) => s + r.visits, 0), revenue: rows.reduce((s, r) => s + r.revenue, 0) },
+      totals: {
+        visits: canonical.visits,
+        revenue: canonical.revenue,
+        unbucketed: canonical.visits - bucketedVisits, // visits with null/unknown locationId
+      },
       rows,
     });
   } catch (e) {
@@ -2837,17 +2867,27 @@ router.post("/portal/login/verify-otp", async (req, res) => {
     if (digits.length < 10) return res.status(400).json({ error: "Invalid phone" });
     const last10 = digits.slice(-10);
 
-    const record = await prisma.patientOtp.findFirst({
-      where: {
-        phone: last10,
-        otp: String(otp),
-        used: false,
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: "desc" },
-    });
-    if (!record) {
-      return res.status(401).json({ error: "Invalid or expired code" });
+    // #238 demo bypass: when WELLNESS_DEMO_OTP is set in env (e.g. "1234"),
+    // accept it as a valid OTP without checking the PatientOtp table. Still
+    // requires a real seeded patient to exist for the phone — this is for
+    // the demo / QA flow, not an auth weakening for unknown phones.
+    const demoOtp = process.env.WELLNESS_DEMO_OTP;
+    const isDemoBypass = demoOtp && String(otp) === String(demoOtp);
+
+    let record = null;
+    if (!isDemoBypass) {
+      record = await prisma.patientOtp.findFirst({
+        where: {
+          phone: last10,
+          otp: String(otp),
+          used: false,
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      if (!record) {
+        return res.status(401).json({ error: "Invalid or expired code" });
+      }
     }
 
     // Resolve the patient by last-10-digit phone (tenant-agnostic).
@@ -2864,8 +2904,10 @@ router.post("/portal/login/verify-otp", async (req, res) => {
       return res.status(401).json({ error: "Invalid or expired code" });
     }
 
-    // Mark OTP used (single-use).
-    await prisma.patientOtp.update({ where: { id: record.id }, data: { used: true } });
+    // Mark OTP used (single-use). Skip for demo bypass — no record exists.
+    if (record) {
+      await prisma.patientOtp.update({ where: { id: record.id }, data: { used: true } });
+    }
 
     const token = jwt.sign(
       { patientId: patient.id, phoneLast10: last10 },

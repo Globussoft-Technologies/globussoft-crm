@@ -330,6 +330,31 @@ async function main() {
   }
   console.log(`[seed-wellness] services seeded: ${Object.keys(serviceMap).length}`);
 
+  // 4a. Demo portal patient (#238) — well-known phone +919876500001 used in QA
+  // docs and the patient-portal smoke flow. Idempotent: upsert on phone.
+  // Requires WELLNESS_DEMO_OTP env var to actually unlock; this just ensures
+  // the patient row exists so verify-otp can resolve a tenant.
+  const demoPortalPhone = "+919876500001";
+  const existingDemo = await prisma.patient.findFirst({
+    where: { tenantId: tenant.id, phone: demoPortalPhone },
+  });
+  if (!existingDemo) {
+    await prisma.patient.create({
+      data: {
+        name: "Demo Portal Patient",
+        email: "demo.portal@enhancedwellness.in",
+        phone: demoPortalPhone,
+        dob: new Date(1990, 5, 15),
+        gender: "F",
+        bloodGroup: "O+",
+        source: "demo",
+        tenantId: tenant.id,
+        locationId: ranchi.id,
+      },
+    });
+    console.log(`[seed-wellness] demo portal patient seeded at ${demoPortalPhone}`);
+  }
+
   // 4. Patients (50) — only seed if we have fewer than 10 already (idempotency)
   const existingPatientCount = await prisma.patient.count({ where: { tenantId: tenant.id } });
   if (existingPatientCount < 10) {

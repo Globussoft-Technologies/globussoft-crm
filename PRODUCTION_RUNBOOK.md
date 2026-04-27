@@ -277,6 +277,7 @@ Optional but recommended:
 - `MSG91_AUTH_KEY`, `MSG91_SENDER_ID` — SMS send
 - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` — payment links
 - `STRIPE_SECRET_KEY` — payments
+- `WELLNESS_DEMO_OTP` — patient-portal demo bypass (e.g. `1234`). When set, this exact OTP unlocks the portal for any seeded demo patient (e.g. `+919876500001`). Real OTP flow still required for unknown phones; this is for the demo / QA flow only. Leave unset in real-customer production.
 
 Audit: `grep -E "^(JWT_SECRET|DATABASE_URL|GEMINI|SENTRY|WELLNESS_FIELD)" ~/globussoft-crm/{,backend/}.env | sed 's/=.*/=<set>/'`
 

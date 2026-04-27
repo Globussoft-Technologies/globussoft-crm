@@ -51,18 +51,33 @@ export default function CalendarGrid() {
   };
   useEffect(() => { load(); }, [date]);
 
+  // #247: include visits without a doctor assignment in an "Unassigned"
+  // column instead of silently dropping them. The dashboard counts ALL
+  // visits today; the calendar must too, otherwise the counts disagree
+  // and unassigned bookings stay invisible. Also clamp visits scheduled
+  // before 09:00 / after 19:00 to the boundary hour so they're surfaced.
+  const UNASSIGNED_KEY = '__unassigned__';
+  const columns = useMemo(() => {
+    const cols = doctors.map((d) => ({ id: d.id, name: d.name, isUnassigned: false }));
+    if (visits.some((v) => !v.doctorId)) {
+      cols.push({ id: UNASSIGNED_KEY, name: 'Unassigned', isUnassigned: true });
+    }
+    return cols;
+  }, [visits, doctors]);
+
   const grid = useMemo(() => {
     const out = {};
-    for (const d of doctors) out[d.id] = {};
+    for (const c of columns) out[c.id] = {};
     for (const v of visits) {
-      if (!v.doctorId) continue;
-      const h = new Date(v.visitDate).getHours();
-      if (!out[v.doctorId]) out[v.doctorId] = {};
-      if (!out[v.doctorId][h]) out[v.doctorId][h] = [];
-      out[v.doctorId][h].push(v);
+      const colId = v.doctorId || UNASSIGNED_KEY;
+      if (!out[colId]) out[colId] = {};
+      const rawHour = new Date(v.visitDate).getHours();
+      const h = Math.max(HOURS[0], Math.min(HOURS[HOURS.length - 1], rawHour));
+      if (!out[colId][h]) out[colId][h] = [];
+      out[colId][h].push(v);
     }
     return out;
-  }, [visits, doctors]);
+  }, [visits, columns]);
 
   const shift = (days) => {
     const next = new Date(date); next.setDate(next.getDate() + days); setDate(next);
@@ -88,30 +103,34 @@ export default function CalendarGrid() {
 
       {loading && <div>Loading…</div>}
 
-      {!loading && doctors.length === 0 && (
+      {!loading && columns.length === 0 && (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          No doctors configured. Add one under Staff.
+          No doctors configured and no visits scheduled. Add a doctor under Staff or book a visit.
         </div>
       )}
 
-      {!loading && doctors.length > 0 && (
+      {!loading && columns.length > 0 && (
         <div className="glass" style={{ padding: '1rem', overflow: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: `80px repeat(${doctors.length}, minmax(180px, 1fr))`, gap: '4px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(180px, 1fr))`, gap: '4px' }}>
             <div style={{ ...colHead, background: 'transparent' }}></div>
-            {doctors.map((d) => (
-              <div key={d.id} style={colHead}>
-                <Stethoscope size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7 }} />
-                {d.name}
+            {columns.map((c) => (
+              <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1 }}>
+                {c.isUnassigned ? (
+                  <UserIcon size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7 }} />
+                ) : (
+                  <Stethoscope size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7 }} />
+                )}
+                {c.name}
               </div>
             ))}
 
             {HOURS.map((h) => (
               <React.Fragment key={h}>
                 <div style={hourLabel}>{fmtHour(h)}</div>
-                {doctors.map((d) => {
-                  const cell = grid[d.id]?.[h] || [];
+                {columns.map((c) => {
+                  const cell = grid[c.id]?.[h] || [];
                   return (
-                    <div key={`${d.id}-${h}`} style={hourCell}>
+                    <div key={`${c.id}-${h}`} style={hourCell}>
                       {cell.map((v) => (
                         <Link
                           to={`/wellness/patients/${v.patient?.id || v.patientId}`}

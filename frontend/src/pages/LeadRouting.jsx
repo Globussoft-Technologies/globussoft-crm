@@ -21,6 +21,10 @@ const OP_OPTIONS = [
   { value: 'in', label: 'in (csv)' },
 ];
 
+// #299: canonical lead pipeline statuses. Must stay in sync with backend
+// ALLOWED_STATUSES in backend/routes/lead_routing.js.
+const STATUS_OPTIONS = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
+
 const emptyRow = () => ({ field: 'source', op: 'eq', value: '' });
 
 function buildConditionsObject(rows) {
@@ -163,12 +167,24 @@ export default function LeadRouting() {
 
   const saveRule = async () => {
     if (!form.name.trim()) { showToast('Name is required', 'error'); return; }
+    // #301: keep the UI in sync with the server-side min=1 priority guard.
+    const priorityNum = Number(form.priority);
+    if (!Number.isFinite(priorityNum) || !Number.isInteger(priorityNum) || priorityNum < 1) {
+      showToast('Priority must be a positive integer (minimum 1)', 'error');
+      return;
+    }
+    // #302: at least one usable condition must be set before save.
+    const conditionsObj = buildConditionsObject(form.rows);
+    if (!conditionsObj || Object.keys(conditionsObj).length === 0) {
+      showToast('At least one condition is required', 'error');
+      return;
+    }
     const payload = {
       name: form.name.trim(),
-      conditions: buildConditionsObject(form.rows),
+      conditions: conditionsObj,
       assignType: form.assignType,
       assignTo: form.assignType === 'specific_user' && form.assignTo ? Number(form.assignTo) : null,
-      priority: Number(form.priority) || 100,
+      priority: priorityNum,
       isActive: form.isActive,
     };
     try {
@@ -340,7 +356,7 @@ export default function LeadRouting() {
               </div>
               <div>
                 <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Priority</label>
-                <input type="number" className="input-field" value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })} style={{ width: '100%', marginTop: 4 }} />
+                <input type="number" min="1" step="1" className="input-field" value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })} style={{ width: '100%', marginTop: 4 }} />
               </div>
             </div>
 
@@ -355,7 +371,18 @@ export default function LeadRouting() {
                     <select className="input-field" value={row.op} onChange={e => updateRow(idx, 'op', e.target.value)}>
                       {OP_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
-                    <input className="input-field" value={row.value} onChange={e => updateRow(idx, 'value', e.target.value)} placeholder={row.op === 'in' ? 'Website,Referral,Ad' : 'value'} />
+                    {/* #299: when the condition field is "status", constrain the
+                        value to the canonical pipeline enum instead of a free
+                        text input. "in" still falls back to text since it
+                        accepts a comma-separated list. */}
+                    {row.field === 'status' && row.op !== 'in' ? (
+                      <select className="input-field" value={row.value} onChange={e => updateRow(idx, 'value', e.target.value)}>
+                        <option value="">— select —</option>
+                        {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    ) : (
+                      <input className="input-field" value={row.value} onChange={e => updateRow(idx, 'value', e.target.value)} placeholder={row.op === 'in' ? (row.field === 'status' ? 'Lead,Prospect,Customer' : 'Website,Referral,Ad') : 'value'} />
+                    )}
                     <button onClick={() => removeRow(idx)} className="btn-secondary" style={{ padding: '0.4rem' }} title="Remove"><Trash2 size={14} /></button>
                   </div>
                 ))}

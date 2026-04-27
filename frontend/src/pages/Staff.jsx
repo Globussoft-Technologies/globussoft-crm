@@ -9,6 +9,16 @@ const ROLE_CONFIG = {
   USER:    { color: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
 };
 
+// #236: wellness verticals don't want to see "USER" for every doctor — show
+// their wellnessRole (doctor / professional / stylist / helper / telecaller)
+// as the primary label. Falls through to RBAC role for generic tenants.
+function displayRole(member) {
+  if (member.wellnessRole) {
+    return member.wellnessRole.charAt(0).toUpperCase() + member.wellnessRole.slice(1);
+  }
+  return member.role;
+}
+
 function RoleBadge({ role }) {
   const cfg = ROLE_CONFIG[role] || ROLE_CONFIG.USER;
   return (
@@ -144,21 +154,43 @@ export default function Staff() {
                       {member.email}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem' }}>
-                      <select
-                        value={member.role}
-                        onChange={e => updateRole(member.id, e.target.value)}
-                        style={{
-                          background: ROLE_CONFIG[member.role]?.bg || 'transparent',
-                          color: ROLE_CONFIG[member.role]?.color || 'inherit',
-                          border: `1px solid ${ROLE_CONFIG[member.role]?.color || 'var(--border-color)'}33`,
-                          borderRadius: '999px', padding: '0.2rem 0.5rem', fontSize: '0.75rem',
-                          fontWeight: 'bold', cursor: 'pointer', outline: 'none',
-                        }}
-                      >
-                        <option value="ADMIN">ADMIN</option>
-                        <option value="MANAGER">MANAGER</option>
-                        <option value="USER">USER</option>
-                      </select>
+                      {member.wellnessRole ? (
+                        // For wellness staff, display the wellnessRole as a
+                        // read-only badge (it's edited elsewhere). The RBAC
+                        // role dropdown still works for non-wellness members.
+                        <span
+                          title={`RBAC role: ${member.role}`}
+                          style={{
+                            background: 'rgba(38,88,85,0.1)',
+                            color: 'var(--accent-color, #265855)',
+                            border: '1px solid rgba(38,88,85,0.3)',
+                            borderRadius: '999px',
+                            padding: '0.2rem 0.6rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            textTransform: 'capitalize',
+                            display: 'inline-block',
+                          }}
+                        >
+                          {displayRole(member)}
+                        </span>
+                      ) : (
+                        <select
+                          value={member.role}
+                          onChange={e => updateRole(member.id, e.target.value)}
+                          style={{
+                            background: ROLE_CONFIG[member.role]?.bg || 'transparent',
+                            color: ROLE_CONFIG[member.role]?.color || 'inherit',
+                            border: `1px solid ${ROLE_CONFIG[member.role]?.color || 'var(--border-color)'}33`,
+                            borderRadius: '999px', padding: '0.2rem 0.5rem', fontSize: '0.75rem',
+                            fontWeight: 'bold', cursor: 'pointer', outline: 'none',
+                          }}
+                        >
+                          <option value="ADMIN">ADMIN</option>
+                          <option value="MANAGER">MANAGER</option>
+                          <option value="USER">USER</option>
+                        </select>
+                      )}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                       {new Date(member.createdAt).toLocaleDateString()}

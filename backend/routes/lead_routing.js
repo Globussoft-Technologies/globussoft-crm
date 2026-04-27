@@ -6,12 +6,55 @@ const router = express.Router();
 // In-memory round-robin counter, keyed by `${tenantId}:${ruleId}`
 const rrCounters = {};
 
+// Canonical lead pipeline statuses (Issue #299).
+// Validated case-insensitively so "lead", "Lead", "LEAD" all pass.
+const ALLOWED_STATUSES = ["Lead", "Prospect", "Customer", "Churned", "Junk"];
+const ALLOWED_STATUSES_LOWER = ALLOWED_STATUSES.map(s => s.toLowerCase());
+
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function safeJson(str, fallback) {
   if (!str) return fallback;
   if (typeof str === "object") return str;
   try { return JSON.parse(str); } catch { return fallback; }
+}
+
+// Returns null if conditions object is valid, or an error message string if not.
+// Enforces:
+//   #299 — when `status` is a condition, value must be in ALLOWED_STATUSES
+//   #302 — at least one condition is required (no "any" rules allowed)
+function validateConditions(conditions) {
+  if (!conditions || typeof conditions !== "object" || Array.isArray(conditions)) {
+    return "At least one condition is required";
+  }
+  const keys = Object.keys(conditions);
+  if (keys.length === 0) {
+    return "At least one condition is required";
+  }
+
+  // status enum validation
+  if (Object.prototype.hasOwnProperty.call(conditions, "status")) {
+    const raw = conditions.status;
+    let values = [];
+    if (raw && typeof raw === "object" && !Array.isArray(raw) && raw.op) {
+      // { op: "...", value: ... }
+      if (Array.isArray(raw.value)) values = raw.value;
+      else values = [raw.value];
+    } else if (Array.isArray(raw)) {
+      values = raw;
+    } else {
+      values = [raw];
+    }
+
+    for (const v of values) {
+      if (v == null || v === "") continue;
+      if (!ALLOWED_STATUSES_LOWER.includes(String(v).toLowerCase())) {
+        return `Invalid status "${v}". Allowed: ${ALLOWED_STATUSES.join(", ")}`;
+      }
+    }
+  }
+
+  return null;
 }
 
 function checkConditionsMatch(conditions, contact) {
@@ -114,13 +157,24 @@ router.post("/", async (req, res) => {
     const tenantId = req.user.tenantId;
     const { name, conditions, assignType, assignTo, priority, isActive } = req.body || {};
     if (!name) return res.status(400).json({ error: "Name is required" });
+
+    // #302: reject rules with zero conditions; #299: reject unknown statuses.
+    const condErr = validateConditions(conditions);
+    if (condErr) return res.status(400).json({ error: condErr });
+
+    // #301: priority must be a positive integer (>= 1).
+    const priorityNum = priority != null ? Number(priority) : 100;
+    if (!Number.isFinite(priorityNum) || priorityNum < 1 || !Number.isInteger(priorityNum)) {
+      return res.status(400).json({ error: "Priority must be a positive integer (minimum 1)" });
+    }
+
     const rule = await prisma.leadRoutingRule.create({
       data: {
         name,
         conditions: JSON.stringify(conditions || {}),
         assignType: assignType || "round_robin",
         assignTo: assignTo ? Number(assignTo) : null,
-        priority: priority != null ? Number(priority) : 100,
+        priority: priorityNum,
         isActive: isActive !== false,
         tenantId,
       },
@@ -143,6 +197,23 @@ router.put("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Rule not found" });
 
     const { name, conditions, assignType, assignTo, priority, isActive } = req.body || {};
+
+    // #302 / #299: only validate conditions when they're being changed; partial
+    // updates such as the active toggle (sends only { isActive }) must still pass.
+    if (conditions !== undefined) {
+      const condErr = validateConditions(conditions);
+      if (condErr) return res.status(400).json({ error: condErr });
+    }
+
+    // #301: same min=1 rule on update.
+    let priorityNum;
+    if (priority !== undefined) {
+      priorityNum = Number(priority);
+      if (!Number.isFinite(priorityNum) || priorityNum < 1 || !Number.isInteger(priorityNum)) {
+        return res.status(400).json({ error: "Priority must be a positive integer (minimum 1)" });
+      }
+    }
+
     const updated = await prisma.leadRoutingRule.update({
       where: { id },
       data: {
@@ -150,7 +221,7 @@ router.put("/:id", async (req, res) => {
         ...(conditions !== undefined && { conditions: JSON.stringify(conditions || {}) }),
         ...(assignType !== undefined && { assignType }),
         ...(assignTo !== undefined && { assignTo: assignTo === null ? null : Number(assignTo) }),
-        ...(priority !== undefined && { priority: Number(priority) }),
+        ...(priority !== undefined && { priority: priorityNum }),
         ...(isActive !== undefined && { isActive: !!isActive }),
       },
     });

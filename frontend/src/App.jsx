@@ -115,6 +115,18 @@ function GenericOnly({ children }) {
   return children;
 }
 
+// #303: bare /calendar used to render a blank <main> because the route table
+// had no entry for it. Wellness tenants are bounced to their themed calendar
+// (/wellness/calendar); generic tenants land on /calendar-sync which is the
+// closest analog (Google/Outlook calendar binding management).
+function CalendarRedirect() {
+  const { tenant } = useContext(AuthContext);
+  if (tenant?.vertical === 'wellness') {
+    return <Navigate to="/wellness/calendar" replace />;
+  }
+  return <Navigate to="/calendar-sync" replace />;
+}
+
 export default function App() {
   // #116: persist user across reloads. Pre-fix, user started as null on every
   // page load (token + tenant were restored, but not user), so the header showed
@@ -188,7 +200,10 @@ export default function App() {
             <Route path="/patient-portal" element={<WellnessPatientPortal />} />
             {/* #184: customer-facing survey landing page from SMS — no auth, no admin chrome */}
             <Route path="/survey/:id" element={<SurveyPublic />} />
-            <Route path="/" element={!token ? <Landing /> : <Navigate to="/dashboard" />} />
+            {/* #240: unauthenticated visitors to `/` should land on /login, not the
+                marketing Landing page. The Landing component is still importable
+                for any explicit /landing CTA but is no longer the implicit root. */}
+            <Route path="/" element={!token ? <Navigate to="/login" replace /> : <Navigate to="/dashboard" replace />} />
             <Route path="/*" element={token ? <Layout /> : <Navigate to="/login" />}>
               <Route path="dashboard" element={<GenericOnly><Dashboard /></GenericOnly>} />
               <Route path="contacts" element={<Contacts />} />
@@ -261,6 +276,10 @@ export default function App() {
               <Route path="sandbox" element={<Sandbox />} />
               <Route path="funnel" element={<GenericOnly><Funnel /></GenericOnly>} />
               <Route path="zapier" element={<Zapier />} />
+              {/* #303: bare /calendar previously rendered a blank <main>. Wellness
+                  tenants get bounced to their themed calendar; everyone else sees
+                  the calendar-sync page (which is the closest generic equivalent). */}
+              <Route path="calendar" element={<CalendarRedirect />} />
               {/* Wellness vertical */}
               <Route path="wellness" element={<WellnessOwnerDashboard />} />
               <Route path="wellness/recommendations" element={<WellnessRecommendations />} />

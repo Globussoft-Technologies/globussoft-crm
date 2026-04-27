@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
+import { formatMoney } from '../utils/money';
 
 // ── Style constants ───────────────────────────────────────────────
 const GLASS = {
@@ -74,13 +75,11 @@ function GatewayBadge({ gateway }) {
   );
 }
 
+// #286: use the canonical formatMoney() helper so wellness (INR) tenants no
+// longer see "$" on the dashboard. If the row carries its own currency
+// (multi-currency tenants), respect it; otherwise fall back to tenant default.
 function formatCurrency(amount, currency) {
-  const num = Number(amount || 0);
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD' }).format(num);
-  } catch {
-    return `${currency || ''} ${num.toFixed(2)}`;
-  }
+  return formatMoney(amount || 0, currency ? { currency } : undefined);
 }
 
 function formatDate(value) {
@@ -198,7 +197,7 @@ export default function Payments() {
         <StatCard
           icon={<DollarSign size={20} />}
           label="Total Collected (30d)"
-          value={formatCurrency(stats.collected, 'USD')}
+          value={formatMoney(stats.collected)}
           color="#10b981"
         />
         <StatCard

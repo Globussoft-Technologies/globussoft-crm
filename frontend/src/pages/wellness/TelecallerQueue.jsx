@@ -97,10 +97,23 @@ const ageLabel = (iso) => {
   return `${days}d ago`;
 };
 
-const slaFor = (iso) => {
+// #290: previous thresholds (5 min OK, 30 min warn, anything older = breach)
+// were wildly too aggressive — any lead older than half an hour lit up red,
+// which meant the entire queue read "SLA breach" by the time a telecaller
+// logged in for the day. Real first-response SLAs for inbound wellness leads
+// are measured in hours, not minutes.
+//
+// Also: if firstResponseAt is set, the SLA is satisfied — never breach a lead
+// the team has already responded to. The backend telecaller queue endpoint
+// will start including firstResponseAt in a future pass; until then we just
+// treat its absence as "no response yet".
+const slaFor = (lead) => {
+  if (lead?.firstResponseAt) return { color: '#10b981', label: 'SLA OK' };
+  const iso = lead?.createdAt || lead;
   const mins = (Date.now() - new Date(iso).getTime()) / 60000;
-  if (mins < 5) return { color: '#10b981', label: 'SLA OK' };
-  if (mins < 30) return { color: '#f59e0b', label: 'SLA warn' };
+  if (mins < 30) return { color: '#10b981', label: 'SLA OK' };       // <30m
+  if (mins < 4 * 60) return { color: '#f59e0b', label: 'SLA warn' };  // <4h
+  if (mins < 24 * 60) return { color: '#f97316', label: 'SLA late' }; // <24h
   return { color: '#ef4444', label: 'SLA breach' };
 };
 
@@ -470,7 +483,7 @@ export default function TelecallerQueue() {
         }}
       >
         {leads.map((l) => {
-          const sla = slaFor(l.createdAt);
+          const sla = slaFor(l);
           const busy = !!disposing[l.id];
           return (
             <div

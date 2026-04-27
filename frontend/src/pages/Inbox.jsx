@@ -128,7 +128,12 @@ export default function Inbox() {
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Manage all client emails, calls, and SMS from one hub.</p>
         </div>
         <div style={{ display: 'flex', gap: '1rem' }}>
-          <button onClick={() => setShowMeet(true)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(168, 85, 247, 0.1)', color: 'var(--accent-color)', borderColor: 'var(--accent-color)' }}>
+          {/* #294: the previous styling was 10%-tinted purple + accent-color text,
+              which on the wellness cream background (#FAF7F2) rendered as nearly
+              invisible blush-on-cream. Switched to the canonical --accent-bg /
+              --accent-text pair (deep teal solid + white foreground on wellness;
+              same vars are safe defaults for generic tenants too). */}
+          <button onClick={() => setShowMeet(true)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--accent-bg, var(--accent-color))', color: 'var(--accent-text, #ffffff)', borderColor: 'var(--accent-bg, var(--accent-color))' }}>
             <Calendar size={18} /> Schedule Meeting
           </button>
           <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

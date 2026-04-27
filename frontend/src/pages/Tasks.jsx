@@ -10,19 +10,36 @@ const PRIORITY_CONFIG = {
   Low:      { color: '#64748b', bg: 'rgba(100,116,139,0.08)', border: '#475569', pulse: false },
 };
 
+// #296: backend (or a stale workflow) can hand us values like CRITICAL_OMG
+// that aren't in the canonical enum. Map known cases case-insensitively, then
+// fall back to "Other" so the UI never shows a screaming all-caps badge.
+const PRIORITY_LABELS = { LOW: 'Low', MEDIUM: 'Medium', HIGH: 'High', CRITICAL: 'Critical' };
+
+function normalizePriority(raw) {
+  if (!raw) return 'Medium';
+  const upper = String(raw).toUpperCase();
+  if (PRIORITY_LABELS[upper]) return PRIORITY_LABELS[upper];
+  // Common backend variant, e.g. 'CRITICAL_OMG' → "Critical"
+  for (const key of Object.keys(PRIORITY_LABELS)) {
+    if (upper.startsWith(key)) return PRIORITY_LABELS[key];
+  }
+  return 'Other';
+}
+
 function PriorityBadge({ priority }) {
-  const cfg = PRIORITY_CONFIG[priority] || PRIORITY_CONFIG.Medium;
+  const normalized = normalizePriority(priority);
+  const cfg = PRIORITY_CONFIG[normalized] || PRIORITY_CONFIG.Medium;
   return (
     <span style={{
       padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem',
       fontWeight: 'bold', backgroundColor: cfg.bg, color: cfg.color,
       border: `1px solid ${cfg.color}33`,
     }}>
-      {priority === 'Critical' && '🔴 '}
-      {priority === 'High' && '🟠 '}
-      {priority === 'Medium' && '🔵 '}
-      {priority === 'Low' && '⚪ '}
-      {priority}
+      {normalized === 'Critical' && '🔴 '}
+      {normalized === 'High' && '🟠 '}
+      {normalized === 'Medium' && '🔵 '}
+      {normalized === 'Low' && '⚪ '}
+      {normalized}
     </span>
   );
 }

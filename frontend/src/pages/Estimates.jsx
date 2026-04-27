@@ -69,14 +69,24 @@ export default function Estimates() {
   const stats = useMemo(() => {
     const draftCount = estimates.filter(e => e.status === 'Draft').length;
     const sentCount = estimates.filter(e => e.status === 'Sent').length;
-    const totalValue = estimates.reduce((sum, e) => sum + Number(e.totalAmount), 0);
-    return { draftCount, sentCount, totalValue };
+    return { draftCount, sentCount };
   }, [estimates]);
 
   const visibleEstimates = useMemo(() => {
     if (statusFilter === 'all') return estimates;
     return estimates.filter((e) => e.status === statusFilter);
   }, [estimates, statusFilter]);
+
+  // #255 / #288 (dupes): Total Value pill must reflect what the user is
+  // actually looking at. Previously this summed the full `estimates` array, so
+  // when a status filter (e.g. 'Sent') was applied the pill still totaled
+  // every Draft/Rejected/Converted estimate in the DB — e.g. ₹56,010 shown
+  // while the 13 visible rows only added up to ~₹1,300. Sum visibleEstimates
+  // so the header pill always matches the rendered ledger rows.
+  const visibleTotalValue = useMemo(
+    () => visibleEstimates.reduce((sum, e) => sum + (Number(e.totalAmount) || 0), 0),
+    [visibleEstimates]
+  );
 
   const grandTotal = useMemo(() =>
     lineItems.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0),
@@ -233,7 +243,7 @@ export default function Estimates() {
           background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={14} /> Total Value: {formatCurrency(stats.totalValue)}
+          <DollarSign size={14} /> Total Value: {formatCurrency(visibleTotalValue)}
         </span>
       </div>
 

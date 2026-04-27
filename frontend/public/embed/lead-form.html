@@ -139,20 +139,49 @@
           });
       }
 
-      // Initial render — if a slug is given but no key, we still show the form (lead arrives via tenant tag)
-      if (services.length) {
-        render(buildForm(services));
-      } else if (slug) {
-        // Try to fetch the clinic profile to populate the service dropdown
-        fetch(apiBase + '/api/wellness/public/tenant/' + encodeURIComponent(slug))
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (profile) {
-            var names = (profile && profile.services) ? profile.services.map(function (s) { return s.name; }).slice(0, 30) : [];
-            render(buildForm(names));
+      // #297: previously we rendered the form for any apiKey value (or none)
+      // and only failed at submit time. Malformed/expired keys still showed
+      // a fully-functional form, which leaks UI affordance and lets bots probe.
+      // Now: if an apiKey is supplied, validate it against the partner-API
+      // health endpoint BEFORE rendering. Slug-based public booking still
+      // works without a key (tenant slug is its own validator below).
+      function showRefusal(msg) {
+        render('<div class="err" style="padding:1.5rem;text-align:center"><strong>Form unavailable</strong><br/><span style="font-size:0.85rem">' + escape(msg) + '</span></div>');
+      }
+
+      function renderInitial() {
+        if (services.length) {
+          render(buildForm(services));
+        } else if (slug) {
+          // Try to fetch the clinic profile to populate the service dropdown
+          fetch(apiBase + '/api/wellness/public/tenant/' + encodeURIComponent(slug))
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (profile) {
+              var names = (profile && profile.services) ? profile.services.map(function (s) { return s.name; }).slice(0, 30) : [];
+              render(buildForm(names));
+            })
+            .catch(function () { render(buildForm([])); });
+        } else {
+          render(buildForm([]));
+        }
+      }
+
+      if (apiKey) {
+        // Defence-in-depth: shape check first, then live validation.
+        // Real keys are issued as `glbs_<base64ish>` per backend/lib (see ApiKey model).
+        if (!/^glbs_[A-Za-z0-9_-]{8,}$/.test(apiKey)) {
+          showRefusal('Invalid API key format.');
+          return;
+        }
+        fetch(apiBase + '/api/v1/external/health', { headers: { 'X-API-Key': apiKey } })
+          .then(function (r) {
+            if (!r.ok) throw new Error('rejected');
+            return r.json().catch(function () { return {}; });
           })
-          .catch(function () { render(buildForm([])); });
+          .then(renderInitial)
+          .catch(function () { showRefusal('API key is invalid or has been revoked. Contact the site owner.'); });
       } else {
-        render(buildForm([]));
+        renderInitial();
       }
 
       document.addEventListener('submit', function (e) { if (e.target && e.target.id === 'f') submit(e); });

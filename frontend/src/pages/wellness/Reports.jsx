@@ -133,13 +133,15 @@ function ProTable({ data }) {
       ]} />
       <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
         <table style={tableStyle}>
-          <thead><tr>{['Staff', 'Role', 'Specialty', 'Visits', 'Revenue'].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+          {/* #236: drop the orthogonal RBAC role column (it always says USER for
+              doctors/professionals/etc) and surface wellnessRole as the primary
+              "Role" instead — that's the meaningful one for clinics. */}
+          <thead><tr>{['Staff', 'Role', 'Visits', 'Revenue'].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
           <tbody>
             {data.rows.map((r) => (
               <tr key={r.id}>
                 <td style={td}>{r.name}</td>
-                <td style={td}>{r.role}</td>
-                <td style={td}>{r.wellnessRole || '—'}</td>
+                <td style={{ ...td, textTransform: 'capitalize' }}>{r.wellnessRole || r.role || '—'}</td>
                 <td style={tdR}>{r.visits}</td>
                 <td style={tdR}>{formatMoney(r.revenue)}</td>
               </tr>

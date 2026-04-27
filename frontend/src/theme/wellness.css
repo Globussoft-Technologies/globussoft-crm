@@ -20,6 +20,11 @@
   --accent-color:    #CD9481;        /* warm blush */
   --accent-hover:    #B87E6A;
   --accent-glow:     rgba(205, 148, 129, 0.45);
+  /* #294: canonical accent-on-accent pair. The blush text on a 10%-blush
+   * cream tint failed AA contrast on cream backgrounds. Pair the deep teal
+   * surface with cream text for an always-legible CTA on wellness. */
+  --accent-bg:       var(--primary-color);   /* deep teal surface */
+  --accent-text:     #FFFFFF;                /* cream/white foreground */
 
   --success-color:   #4A7C59;        /* sage green */
   --warning-color:   #D4923B;        /* warm amber */

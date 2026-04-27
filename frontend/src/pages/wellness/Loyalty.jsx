@@ -3,6 +3,27 @@ import { Award, Trophy, Search, Plus, Minus, Users, Gift, CheckCircle2, X } from
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 
+// #298: Indian phone numbers were rendering as the raw "+919826720222" 12-digit
+// stream. Group as +91 XXXXX XXXXX. Falls back to the original string for
+// non-IN numbers (10-digit US, etc) so we don't mangle them.
+function formatPhone(raw) {
+  if (!raw) return '—';
+  const digits = String(raw).replace(/\D/g, '');
+  // 91-prefixed Indian (12 digits total)
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return `+91 ${digits.slice(2, 7)} ${digits.slice(7)}`;
+  }
+  // 10-digit Indian (no country code) — group 5+5
+  if (digits.length === 10) {
+    return `${digits.slice(0, 5)} ${digits.slice(5)}`;
+  }
+  // 11-digit (with leading 0) — strip and format
+  if (digits.length === 11 && digits.startsWith('0')) {
+    return `${digits.slice(1, 6)} ${digits.slice(6)}`;
+  }
+  return String(raw);
+}
+
 /**
  * Loyalty + Referrals — manager view.
  * Top: current month leaderboard, referral pipeline.
@@ -223,7 +244,7 @@ function SearchTab({ onCreditChange }) {
               }}
             >
               <div style={{ fontWeight: 500 }}>{p.name}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{p.phone || '—'}</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{formatPhone(p.phone)}</div>
             </button>
           ))}
         </div>
@@ -399,7 +420,7 @@ function ReferralsTab({ referrals, onChanged }) {
               <tr key={r.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                 <td style={td}>{r.referrer?.name || `#${r.referrerPatientId}`}</td>
                 <td style={td}>{r.referredName}</td>
-                <td style={{ ...td, color: 'var(--text-secondary)' }}>{r.referredPhone}</td>
+                <td style={{ ...td, color: 'var(--text-secondary)' }}>{formatPhone(r.referredPhone)}</td>
                 <td style={td}>
                   <span style={{
                     padding: '0.15rem 0.5rem',

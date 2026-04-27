@@ -16,9 +16,19 @@ const ConvertedLeads = () => {
 
   const fetchLeads = (status) => {
     setLoading(true);
-    fetchApi(`/api/contacts/by-status?status=${status}`)
+    fetchApi(`/api/contacts/by-status?status=${encodeURIComponent(status)}`)
       .then(response => {
-        setLeads(response.data || []);
+        // #251: backend response shape is { success, count, data: [...] }, but
+        // some sister endpoints return the raw array. Be defensive and handle
+        // both — the previous code only read `response.data` and silently
+        // showed 0 leads when the API returned an array directly (or when
+        // .data was nested one level deeper inside an axios-style envelope).
+        const rows = Array.isArray(response)
+          ? response
+          : (Array.isArray(response?.data) ? response.data
+            : (Array.isArray(response?.data?.data) ? response.data.data
+              : (Array.isArray(response?.contacts) ? response.contacts : [])));
+        setLeads(rows);
         setLoading(false);
       })
       .catch(() => setLoading(false));

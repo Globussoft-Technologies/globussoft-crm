@@ -491,6 +491,12 @@ router.post("/visits", async (req, res) => {
     if (amountCharged != null && amountCharged !== "" && Number(amountCharged) < 0) {
       return res.status(400).json({ error: "amountCharged must be 0 or greater", code: "AMOUNT_NEGATIVE" });
     }
+    // #277: cap amountCharged at ₹50,00,000 (₹50L) to match the Service.basePrice
+    // ceiling from #209. Without this, a visit can store ₹1e15 (one quadrillion)
+    // and blow up Owner Dashboard's expectedRevenue tile to twenty trillion.
+    if (amountCharged != null && amountCharged !== "" && Number(amountCharged) > 5_000_000) {
+      return res.status(400).json({ error: "amountCharged exceeds the ₹50,00,000 per-visit cap", code: "AMOUNT_TOO_LARGE" });
+    }
 
     const visit = await prisma.visit.create({
       data: {
@@ -548,6 +554,13 @@ router.put("/visits/:id", async (req, res) => {
     const allowed = ["status", "vitals", "notes", "photosBefore", "photosAfter", "amountCharged", "videoRoom"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.visitDate !== undefined) data.visitDate = new Date(req.body.visitDate);
+
+    // #277: same per-visit cap as POST — reject overflow updates.
+    if (data.amountCharged != null && data.amountCharged !== "") {
+      const amt = Number(data.amountCharged);
+      if (amt < 0) return res.status(400).json({ error: "amountCharged must be 0 or greater", code: "AMOUNT_NEGATIVE" });
+      if (amt > 5_000_000) return res.status(400).json({ error: "amountCharged exceeds the ₹50,00,000 per-visit cap", code: "AMOUNT_TOO_LARGE" });
+    }
 
     // #197: enforce status enum + transition matrix. A junk status like 'frog'
     // can no longer slip through, and terminal statuses (completed/cancelled)

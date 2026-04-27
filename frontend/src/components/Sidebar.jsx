@@ -1,5 +1,5 @@
-import { useContext, useState, useRef, useLayoutEffect } from 'react';
-import { NavLink } from 'react-router-dom';
+import { useContext, useState, useRef, useLayoutEffect, useEffect } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
   Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3,
   Code, FileDigit, Database, Network, Target, CheckSquare, UserPlus, Building2, Receipt, Ticket,
@@ -11,12 +11,28 @@ import {
 import { AuthContext } from '../App';
 import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
 
-const Sidebar = () => {
+const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
   const { user, tenant } = useContext(AuthContext);
   const role = user?.role || 'USER';
   const isAdmin = role === 'ADMIN';
   const isManager = role === 'ADMIN' || role === 'MANAGER';
   const isWellness = tenant?.vertical === 'wellness';
+  const location = useLocation();
+
+  // #228: ESC closes the mobile drawer (a11y). Also auto-close on route change
+  // so navigating from the drawer doesn't leave it stuck open over the
+  // destination page.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e) => { if (e.key === 'Escape') onMobileClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [mobileOpen, onMobileClose]);
+
+  useEffect(() => {
+    if (mobileOpen) onMobileClose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
 
   // #151: persist sidebar scroll across re-renders. The browser usually does this
   // for free, but route-driven re-renders sometimes cause the nav to reset to top
@@ -94,7 +110,21 @@ const Sidebar = () => {
   const callifiedUrl = import.meta.env.VITE_CALLIFIED_URL || 'https://callified.ai';
 
   return (
-    <aside className="glass" style={{ width: '250px', height: '100vh', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', borderRadius: '0', borderLeft: 'none', borderTop: 'none', borderBottom: 'none' }}>
+    <>
+      {/* #228: backdrop is only visible at <=768px (responsive.css) and only
+          when the drawer is open. Tap dismisses. */}
+      <div
+        className={`sidebar-backdrop ${mobileOpen ? 'is-open' : ''}`}
+        onClick={onMobileClose}
+        aria-hidden="true"
+      />
+      <aside
+        id="app-sidebar"
+        role="navigation"
+        aria-label="Main navigation"
+        className={`glass app-sidebar ${mobileOpen ? 'is-open' : ''}`}
+        style={{ width: '250px', height: '100vh', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', borderRadius: '0', borderLeft: 'none', borderTop: 'none', borderBottom: 'none' }}
+      >
       <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
         {logoUrl ? (
           <img
@@ -117,7 +147,8 @@ const Sidebar = () => {
       >
         {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) : renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager })}
       </nav>
-    </aside>
+      </aside>
+    </>
   );
 };
 

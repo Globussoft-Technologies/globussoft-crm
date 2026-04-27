@@ -1455,87 +1455,238 @@ function canonicalVisitTotals(visits) {
   };
 }
 
+// #227: each report's calc body is extracted into a pure helper so the JSON
+// endpoint AND the new CSV/PDF export endpoints can share a single source of
+// truth. Helpers return the same shape the JSON endpoint sent, plus a
+// `range` block ({ from, to, locationId }) the export wrappers use to
+// build human-readable filenames + PDF subtitles.
+
+async function computePnlByService(req) {
+  const tenantId = req.user.tenantId;
+  const _rr = reportRange(req);
+  if (_rr.error) return { error: _rr.error };
+  const { from, to } = _rr;
+  const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
+
+  const visitWhere = { tenantId, visitDate: { gte: from, lte: to }, status: "completed" };
+  if (locationId) visitWhere.locationId = locationId;
+
+  const visits = await prisma.visit.findMany({
+    where: visitWhere,
+    // #212: id was missing here, so visitIdToCost[v.id || -1] always
+    // resolved to -1 → 0 for every row, making PRODUCT COST ₹0
+    // and CONTRIBUTION = REVENUE on every service.
+    select: { id: true, serviceId: true, amountCharged: true, doctorId: true },
+  });
+  const services = await prisma.service.findMany({
+    where: { tenantId },
+    select: { id: true, name: true, category: true, ticketTier: true, basePrice: true },
+  });
+  // Gap #23: filter consumptions by their visit's visitDate, not by the
+  // consumption's createdAt. A consumption logged on day N+1 against a
+  // visit on day N would otherwise roll into N+1's productCost, desyncing
+  // revenue (visitDate-based) from cost (createdAt-based).
+  const consumptionWhere = { tenantId, visit: { visitDate: { gte: from, lte: to }, status: "completed" } };
+  if (locationId) consumptionWhere.visit.locationId = locationId;
+  const consumptions = await prisma.serviceConsumption.findMany({
+    where: consumptionWhere,
+    select: { visitId: true, qty: true, unitCost: true },
+  });
+  const visitIdToCost = {};
+  for (const c of consumptions) {
+    visitIdToCost[c.visitId] = (visitIdToCost[c.visitId] || 0) + (c.qty * c.unitCost);
+  }
+
+  const acc = {};
+  for (const v of visits) {
+    if (!v.serviceId) continue;
+    const s = services.find((x) => x.id === v.serviceId);
+    if (!s) continue;
+    if (!acc[s.id]) acc[s.id] = { id: s.id, name: s.name, category: s.category, ticketTier: s.ticketTier, count: 0, revenue: 0, productCost: 0 };
+    acc[s.id].count += 1;
+    acc[s.id].revenue += parseFloat(v.amountCharged) || 0;
+    acc[s.id].productCost += visitIdToCost[v.id || -1] || 0;
+  }
+  const rows = Object.values(acc)
+    .map((r) => ({ ...r, contribution: r.revenue - r.productCost }))
+    .sort((a, b) => b.revenue - a.revenue);
+
+  // #281 fix: header KPI cards must equal the sum of the displayed
+  // rows. Previously we surfaced `canonical.visits` / `canonical.revenue`
+  // (all completed visits including those with no serviceId) in the
+  // header but only summed the bucketed rows in productCost /
+  // contribution. The result: a 116-vs-90 visit mismatch and a ₹27k
+  // revenue discrepancy that destroyed the Owner's trust in the report.
+  // We now sum the rows for all four header cards and surface the
+  // canonical / unbucketed counts separately as `canonical` so the
+  // frontend can render a "+N visits without service" footnote without
+  // contaminating the headline KPIs.
+  const canonical = canonicalVisitTotals(visits);
+  const bucketedVisits = rows.reduce((s, r) => s + r.count, 0);
+  const bucketedRevenue = rows.reduce((s, r) => s + r.revenue, 0);
+  const bucketedProductCost = rows.reduce((s, r) => s + r.productCost, 0);
+  const bucketedContribution = rows.reduce((s, r) => s + r.contribution, 0);
+  return {
+    window: { from, to, locationId: locationId || null },
+    totals: {
+      visits: bucketedVisits,
+      revenue: bucketedRevenue,
+      productCost: bucketedProductCost,
+      contribution: bucketedContribution,
+      unbucketed: canonical.visits - bucketedVisits,
+    },
+    canonical: {
+      visits: canonical.visits,
+      revenue: canonical.revenue,
+    },
+    rows,
+  };
+}
+
+async function computePerProfessional(req) {
+  const tenantId = req.user.tenantId;
+  const _rr = reportRange(req);
+  if (_rr.error) return { error: _rr.error };
+  const { from, to } = _rr;
+  const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
+
+  const visitWhere = { tenantId, visitDate: { gte: from, lte: to }, status: "completed" };
+  if (locationId) visitWhere.locationId = locationId;
+
+  const visits = await prisma.visit.findMany({
+    where: visitWhere,
+    select: { doctorId: true, amountCharged: true, serviceId: true },
+  });
+  const doctors = await prisma.user.findMany({
+    where: { tenantId },
+    select: { id: true, name: true, email: true, role: true, wellnessRole: true },
+  });
+
+  const acc = {};
+  for (const v of visits) {
+    if (!v.doctorId) continue;
+    const d = doctors.find((x) => x.id === v.doctorId);
+    if (!d) continue;
+    if (!acc[d.id]) acc[d.id] = { id: d.id, name: d.name, role: d.role, wellnessRole: d.wellnessRole, visits: 0, revenue: 0 };
+    acc[d.id].visits += 1;
+    acc[d.id].revenue += parseFloat(v.amountCharged) || 0;
+  }
+  const rows = Object.values(acc).sort((a, b) => b.revenue - a.revenue);
+  const canonical = canonicalVisitTotals(visits);
+  const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
+  return {
+    window: { from, to, locationId: locationId || null },
+    totals: {
+      visits: canonical.visits,
+      revenue: canonical.revenue,
+      unbucketed: canonical.visits - bucketedVisits,
+    },
+    rows,
+  };
+}
+
+async function computeAttribution(req) {
+  const tenantId = req.user.tenantId;
+  const _rr = reportRange(req);
+  if (_rr.error) return { error: _rr.error };
+  const { from, to } = _rr;
+
+  const leads = await prisma.contact.findMany({
+    where: { tenantId, createdAt: { gte: from, lte: to } },
+    select: { firstTouchSource: true, source: true, status: true },
+  });
+  const visits = await prisma.visit.findMany({
+    where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
+    select: { amountCharged: true, patient: { select: { source: true } } },
+  });
+
+  const acc = {};
+  const bucket = (src) => (src || "unknown").toLowerCase();
+  for (const l of leads) {
+    const k = bucket(l.firstTouchSource || l.source);
+    if (!acc[k]) acc[k] = { source: k, leads: 0, junk: 0, qualified: 0, revenue: 0 };
+    acc[k].leads += 1;
+    if (l.status === "Junk") acc[k].junk += 1;
+    if (l.status !== "Junk" && l.status !== "Lead") acc[k].qualified += 1;
+  }
+  // #233: only attribute revenue to source buckets that ALSO had a lead in
+  // the same window. Without this, a returning patient whose first contact
+  // was last quarter still books their visit revenue against this month's
+  // attribution, producing rows like "google-ad — 0 leads — ₹3,13,398.27 revenue"
+  // that don't match what marketing actually drove.
+  for (const v of visits) {
+    const k = bucket(v.patient?.source);
+    if (!acc[k]) continue;
+    acc[k].revenue += parseFloat(v.amountCharged) || 0;
+  }
+  const rows = Object.values(acc).map((r) => ({
+    ...r,
+    junkRate: r.leads ? Math.round((r.junk / r.leads) * 100) : 0,
+    conversionRate: r.leads ? Math.round((r.qualified / r.leads) * 100) : 0,
+    revenuePerLead: r.leads ? Math.round(r.revenue / r.leads) : 0,
+  })).sort((a, b) => b.revenue - a.revenue);
+
+  return {
+    window: { from, to },
+    totals: {
+      leads: rows.reduce((s, r) => s + r.leads, 0),
+      junk: rows.reduce((s, r) => s + r.junk, 0),
+      qualified: rows.reduce((s, r) => s + r.qualified, 0),
+      revenue: rows.reduce((s, r) => s + r.revenue, 0),
+    },
+    rows,
+  };
+}
+
+async function computePerLocation(req) {
+  const tenantId = req.user.tenantId;
+  const _rr = reportRange(req);
+  if (_rr.error) return { error: _rr.error };
+  const { from, to } = _rr;
+
+  const visits = await prisma.visit.findMany({
+    where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
+    select: { locationId: true, amountCharged: true },
+  });
+  const patients = await prisma.patient.groupBy({
+    by: ["locationId"], where: { tenantId }, _count: { _all: true },
+  });
+  const locations = await prisma.location.findMany({
+    where: { tenantId }, select: { id: true, name: true, city: true, state: true, isActive: true },
+  });
+
+  const visitAcc = {};
+  for (const v of visits) {
+    const k = v.locationId ?? 0;
+    if (!visitAcc[k]) visitAcc[k] = { visits: 0, revenue: 0 };
+    visitAcc[k].visits += 1;
+    visitAcc[k].revenue += parseFloat(v.amountCharged) || 0;
+  }
+  const rows = locations.map((l) => ({
+    id: l.id, name: l.name, city: l.city, state: l.state, isActive: l.isActive,
+    visits: visitAcc[l.id]?.visits || 0,
+    revenue: visitAcc[l.id]?.revenue || 0,
+    patients: patients.find((p) => p.locationId === l.id)?._count?._all || 0,
+  })).sort((a, b) => b.revenue - a.revenue);
+
+  const canonical = canonicalVisitTotals(visits);
+  const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
+  return {
+    window: { from, to },
+    totals: {
+      visits: canonical.visits,
+      revenue: canonical.revenue,
+      unbucketed: canonical.visits - bucketedVisits,
+    },
+    rows,
+  };
+}
+
 router.get("/reports/pnl-by-service", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
-    const tenantId = req.user.tenantId;
-    const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
-    const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
-
-    const visitWhere = { tenantId, visitDate: { gte: from, lte: to }, status: "completed" };
-    if (locationId) visitWhere.locationId = locationId;
-
-    const visits = await prisma.visit.findMany({
-      where: visitWhere,
-      // #212: id was missing here, so visitIdToCost[v.id || -1] always
-      // resolved to -1 → 0 for every row, making PRODUCT COST ₹0
-      // and CONTRIBUTION = REVENUE on every service.
-      select: { id: true, serviceId: true, amountCharged: true, doctorId: true },
-    });
-    const services = await prisma.service.findMany({
-      where: { tenantId },
-      select: { id: true, name: true, category: true, ticketTier: true, basePrice: true },
-    });
-    // Gap #23: filter consumptions by their visit's visitDate, not by the
-    // consumption's createdAt. A consumption logged on day N+1 against a
-    // visit on day N would otherwise roll into N+1's productCost, desyncing
-    // revenue (visitDate-based) from cost (createdAt-based).
-    const consumptionWhere = { tenantId, visit: { visitDate: { gte: from, lte: to }, status: "completed" } };
-    if (locationId) consumptionWhere.visit.locationId = locationId;
-    const consumptions = await prisma.serviceConsumption.findMany({
-      where: consumptionWhere,
-      select: { visitId: true, qty: true, unitCost: true },
-    });
-    const visitIdToCost = {};
-    for (const c of consumptions) {
-      visitIdToCost[c.visitId] = (visitIdToCost[c.visitId] || 0) + (c.qty * c.unitCost);
-    }
-
-    const acc = {};
-    for (const v of visits) {
-      if (!v.serviceId) continue;
-      const s = services.find((x) => x.id === v.serviceId);
-      if (!s) continue;
-      if (!acc[s.id]) acc[s.id] = { id: s.id, name: s.name, category: s.category, ticketTier: s.ticketTier, count: 0, revenue: 0, productCost: 0 };
-      acc[s.id].count += 1;
-      acc[s.id].revenue += parseFloat(v.amountCharged) || 0;
-      acc[s.id].productCost += visitIdToCost[v.id || -1] || 0;
-    }
-    const rows = Object.values(acc)
-      .map((r) => ({ ...r, contribution: r.revenue - r.productCost }))
-      .sort((a, b) => b.revenue - a.revenue);
-
-    // #281 fix: header KPI cards must equal the sum of the displayed
-    // rows. Previously we surfaced `canonical.visits` / `canonical.revenue`
-    // (all completed visits including those with no serviceId) in the
-    // header but only summed the bucketed rows in productCost /
-    // contribution. The result: a 116-vs-90 visit mismatch and a ₹27k
-    // revenue discrepancy that destroyed the Owner's trust in the report.
-    // We now sum the rows for all four header cards and surface the
-    // canonical / unbucketed counts separately as `canonical` so the
-    // frontend can render a "+N visits without service" footnote without
-    // contaminating the headline KPIs.
-    const canonical = canonicalVisitTotals(visits);
-    const bucketedVisits = rows.reduce((s, r) => s + r.count, 0);
-    const bucketedRevenue = rows.reduce((s, r) => s + r.revenue, 0);
-    const bucketedProductCost = rows.reduce((s, r) => s + r.productCost, 0);
-    const bucketedContribution = rows.reduce((s, r) => s + r.contribution, 0);
-    res.json({
-      window: { from, to, locationId: locationId || null },
-      totals: {
-        visits: bucketedVisits,
-        revenue: bucketedRevenue,
-        productCost: bucketedProductCost,
-        contribution: bucketedContribution,
-        unbucketed: canonical.visits - bucketedVisits, // visits with no serviceId or unmatched service
-      },
-      // Canonical (all completed visits in window) for reconciliation /
-      // footnote rendering — NOT the headline KPIs.
-      canonical: {
-        visits: canonical.visits,
-        revenue: canonical.revenue,
-      },
-      rows,
-    });
+    const result = await computePnlByService(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    res.json(result);
   } catch (e) {
     console.error("[reports] pnl-by-service:", e.message);
     res.status(500).json({ error: "Failed to compute P&L" });
@@ -1544,43 +1695,9 @@ router.get("/reports/pnl-by-service", verifyWellnessRole(["admin", "manager"]), 
 
 router.get("/reports/per-professional", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
-    const tenantId = req.user.tenantId;
-    const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
-    const locationId = req.query.locationId ? parseInt(req.query.locationId) : undefined;
-
-    const visitWhere = { tenantId, visitDate: { gte: from, lte: to }, status: "completed" };
-    if (locationId) visitWhere.locationId = locationId;
-
-    const visits = await prisma.visit.findMany({
-      where: visitWhere,
-      select: { doctorId: true, amountCharged: true, serviceId: true },
-    });
-    const doctors = await prisma.user.findMany({
-      where: { tenantId },
-      select: { id: true, name: true, email: true, role: true, wellnessRole: true },
-    });
-
-    const acc = {};
-    for (const v of visits) {
-      if (!v.doctorId) continue;
-      const d = doctors.find((x) => x.id === v.doctorId);
-      if (!d) continue;
-      if (!acc[d.id]) acc[d.id] = { id: d.id, name: d.name, role: d.role, wellnessRole: d.wellnessRole, visits: 0, revenue: 0 };
-      acc[d.id].visits += 1;
-      acc[d.id].revenue += parseFloat(v.amountCharged) || 0;
-    }
-    const rows = Object.values(acc).sort((a, b) => b.revenue - a.revenue);
-    const canonical = canonicalVisitTotals(visits);
-    const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
-    res.json({
-      window: { from, to, locationId: locationId || null },
-      totals: {
-        visits: canonical.visits,
-        revenue: canonical.revenue,
-        unbucketed: canonical.visits - bucketedVisits, // visits with no doctorId or unmatched doctor
-      },
-      rows,
-    });
+    const result = await computePerProfessional(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    res.json(result);
   } catch (e) {
     console.error("[reports] per-professional:", e.message);
     res.status(500).json({ error: "Failed to compute per-professional report" });
@@ -1589,54 +1706,9 @@ router.get("/reports/per-professional", verifyWellnessRole(["admin", "manager"])
 
 router.get("/reports/attribution", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
-    const tenantId = req.user.tenantId;
-    const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
-
-    const leads = await prisma.contact.findMany({
-      where: { tenantId, createdAt: { gte: from, lte: to } },
-      select: { firstTouchSource: true, source: true, status: true },
-    });
-    const visits = await prisma.visit.findMany({
-      where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
-      select: { amountCharged: true, patient: { select: { source: true } } },
-    });
-
-    const acc = {};
-    const bucket = (src) => (src || "unknown").toLowerCase();
-    for (const l of leads) {
-      const k = bucket(l.firstTouchSource || l.source);
-      if (!acc[k]) acc[k] = { source: k, leads: 0, junk: 0, qualified: 0, revenue: 0 };
-      acc[k].leads += 1;
-      if (l.status === "Junk") acc[k].junk += 1;
-      if (l.status !== "Junk" && l.status !== "Lead") acc[k].qualified += 1;
-    }
-    // #233: only attribute revenue to source buckets that ALSO had a lead in
-    // the same window. Without this, a returning patient whose first contact
-    // was last quarter still books their visit revenue against this month's
-    // attribution, producing rows like "google-ad — 0 leads — ₹3,13,398.27 revenue"
-    // that don't match what marketing actually drove.
-    for (const v of visits) {
-      const k = bucket(v.patient?.source);
-      if (!acc[k]) continue; // source had no lead in this window — skip
-      acc[k].revenue += parseFloat(v.amountCharged) || 0;
-    }
-    const rows = Object.values(acc).map((r) => ({
-      ...r,
-      junkRate: r.leads ? Math.round((r.junk / r.leads) * 100) : 0,
-      conversionRate: r.leads ? Math.round((r.qualified / r.leads) * 100) : 0,
-      revenuePerLead: r.leads ? Math.round(r.revenue / r.leads) : 0,
-    })).sort((a, b) => b.revenue - a.revenue);
-
-    res.json({
-      window: { from, to },
-      totals: {
-        leads: rows.reduce((s, r) => s + r.leads, 0),
-        junk: rows.reduce((s, r) => s + r.junk, 0),
-        qualified: rows.reduce((s, r) => s + r.qualified, 0),
-        revenue: rows.reduce((s, r) => s + r.revenue, 0),
-      },
-      rows,
-    });
+    const result = await computeAttribution(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    res.json(result);
   } catch (e) {
     console.error("[reports] attribution:", e.message);
     res.status(500).json({ error: "Failed to compute attribution" });
@@ -1645,48 +1717,284 @@ router.get("/reports/attribution", verifyWellnessRole(["admin", "manager"]), asy
 
 router.get("/reports/per-location", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
-    const tenantId = req.user.tenantId;
-    const _rr = reportRange(req); if (_rr.error) return res.status(_rr.error.status).json(_rr.error); const { from, to } = _rr;
-
-    const visits = await prisma.visit.findMany({
-      where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
-      select: { locationId: true, amountCharged: true },
-    });
-    const patients = await prisma.patient.groupBy({
-      by: ["locationId"], where: { tenantId }, _count: { _all: true },
-    });
-    const locations = await prisma.location.findMany({
-      where: { tenantId }, select: { id: true, name: true, city: true, state: true, isActive: true },
-    });
-
-    const visitAcc = {};
-    for (const v of visits) {
-      const k = v.locationId ?? 0;
-      if (!visitAcc[k]) visitAcc[k] = { visits: 0, revenue: 0 };
-      visitAcc[k].visits += 1;
-      visitAcc[k].revenue += parseFloat(v.amountCharged) || 0;
-    }
-    const rows = locations.map((l) => ({
-      id: l.id, name: l.name, city: l.city, state: l.state, isActive: l.isActive,
-      visits: visitAcc[l.id]?.visits || 0,
-      revenue: visitAcc[l.id]?.revenue || 0,
-      patients: patients.find((p) => p.locationId === l.id)?._count?._all || 0,
-    })).sort((a, b) => b.revenue - a.revenue);
-
-    const canonical = canonicalVisitTotals(visits);
-    const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
-    res.json({
-      window: { from, to },
-      totals: {
-        visits: canonical.visits,
-        revenue: canonical.revenue,
-        unbucketed: canonical.visits - bucketedVisits, // visits with null/unknown locationId
-      },
-      rows,
-    });
+    const result = await computePerLocation(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    res.json(result);
   } catch (e) {
     console.error("[reports] per-location:", e.message);
     res.status(500).json({ error: "Failed to compute per-location report" });
+  }
+});
+
+// ── Reports: CSV / PDF export endpoints (#227) ─────────────────────
+//
+// Each existing JSON report has paired .csv and .pdf siblings that re-use the
+// same compute helper above and serialise to text/csv or application/pdf with
+// a Content-Disposition: attachment header so the browser triggers a download.
+//
+// Memory note: full report buffered in memory before send. The 4 reports cap
+// at <2k rows in practice (services, doctors, locations, sources are bounded
+// per tenant). If any tenant ever pushes well past that we'd switch to row
+// streaming for CSV; for now buffered keeps the code simple.
+
+function csvEscape(val) {
+  if (val === null || val === undefined) return "";
+  const s = String(val);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+function rowsToCsv(headers, rows) {
+  const lines = [headers.map(csvEscape).join(",")];
+  for (const r of rows) lines.push(r.map(csvEscape).join(","));
+  return lines.join("\r\n") + "\r\n";
+}
+function isoDay(d) {
+  if (!d) return "";
+  try { return new Date(d).toISOString().slice(0, 10); } catch { return ""; }
+}
+function rangeLabel(window) {
+  return `${isoDay(window?.from) || "?"}-to-${isoDay(window?.to) || "?"}`;
+}
+function sendCsv(res, baseName, window, csvText) {
+  const filename = `${baseName}-${rangeLabel(window)}.csv`;
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  // BOM so Excel auto-detects UTF-8 (₹ glyph, accented patient names, etc).
+  res.write("﻿");
+  res.end(csvText);
+}
+
+// Generic tabular PDF — a renderer matching the prescription/consent style:
+// clinic letterhead, centered title, range subtitle, and a paginated table.
+async function renderReportPdf(title, columns, rows, range, clinic) {
+  const PDFDocument = require("pdfkit");
+  const doc = new PDFDocument({ size: "A4", margin: 40, layout: "landscape" });
+  const chunks = [];
+  const bufPromise = new Promise((resolve, reject) => {
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+
+  // Letterhead — same look as renderPrescriptionPdf's drawClinicHeader.
+  const c = {
+    name: clinic?.name || "Clinic",
+    addressLine: clinic?.addressLine || "",
+    city: clinic?.city || "",
+    state: clinic?.state || "",
+    pincode: clinic?.pincode || "",
+    phone: clinic?.phone || "",
+    email: clinic?.email || "",
+  };
+  doc.font("Helvetica-Bold").fontSize(16).fillColor("#111").text(c.name);
+  doc.font("Helvetica").fontSize(9).fillColor("#555");
+  const addr = [c.addressLine, [c.city, c.state, c.pincode].filter(Boolean).join(", ")]
+    .filter(Boolean).join("  ·  ");
+  if (addr) doc.text(addr);
+  const contact = [c.phone, c.email].filter(Boolean).join("  |  ");
+  if (contact) doc.text(contact);
+  doc.moveDown(0.3);
+  const divY = doc.y;
+  doc.moveTo(doc.page.margins.left, divY)
+    .lineTo(doc.page.width - doc.page.margins.right, divY)
+    .lineWidth(0.7).strokeColor("#999").stroke();
+  doc.moveDown(0.6);
+
+  // Title + range
+  doc.font("Helvetica-Bold").fontSize(14).fillColor("#111").text(title, { align: "center" });
+  if (range?.from && range?.to) {
+    doc.font("Helvetica").fontSize(9).fillColor("#666")
+      .text(`${isoDay(range.from)} → ${isoDay(range.to)}`, { align: "center" });
+  }
+  doc.moveDown(0.6);
+
+  // Table — equal-width columns scaled to printable width.
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const printW = right - left;
+  const colW = printW / columns.length;
+  const headerY = doc.y;
+  doc.font("Helvetica-Bold").fontSize(9).fillColor("#333");
+  columns.forEach((h, i) => {
+    doc.text(String(h), left + i * colW + 2, headerY, { width: colW - 4, ellipsis: true });
+  });
+  doc.moveTo(left, headerY + 14).lineTo(right, headerY + 14)
+    .lineWidth(0.5).strokeColor("#bbb").stroke();
+
+  let y = headerY + 18;
+  doc.font("Helvetica").fontSize(9).fillColor("#222");
+  const lineH = 14;
+  const bottom = doc.page.height - doc.page.margins.bottom - 20;
+  for (const row of rows) {
+    if (y + lineH > bottom) {
+      doc.addPage({ size: "A4", margin: 40, layout: "landscape" });
+      y = doc.page.margins.top;
+      // re-emit table header on new page for readability
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#333");
+      columns.forEach((h, i) => {
+        doc.text(String(h), left + i * colW + 2, y, { width: colW - 4, ellipsis: true });
+      });
+      doc.moveTo(left, y + 14).lineTo(right, y + 14)
+        .lineWidth(0.5).strokeColor("#bbb").stroke();
+      y += 18;
+      doc.font("Helvetica").fontSize(9).fillColor("#222");
+    }
+    row.forEach((cell, i) => {
+      doc.text(cell === null || cell === undefined ? "" : String(cell),
+        left + i * colW + 2, y, { width: colW - 4, ellipsis: true });
+    });
+    y += lineH;
+  }
+  if (rows.length === 0) {
+    doc.fillColor("#888").text("No data in this window.", left, y + 6, { width: printW, align: "center" });
+  }
+
+  doc.end();
+  return bufPromise;
+}
+
+function sendPdf(res, baseName, window, buf) {
+  const filename = `${baseName}-${rangeLabel(window)}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Content-Length", buf.length);
+  res.send(buf);
+}
+
+const fmtMoney = (n) => {
+  const v = Number(n) || 0;
+  return v.toFixed(2);
+};
+
+// ── P&L by service exports ─────────────────────────────────────────
+
+router.get("/reports/pnl-by-service.csv", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const result = await computePnlByService(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    const headers = ["Service", "Category", "Tier", "Visits", "Revenue", "Product cost", "Contribution"];
+    const rows = result.rows.map((r) => [r.name, r.category, r.ticketTier, r.count, fmtMoney(r.revenue), fmtMoney(r.productCost), fmtMoney(r.contribution)]);
+    rows.push([]);
+    rows.push(["TOTAL", "", "", result.totals.visits, fmtMoney(result.totals.revenue), fmtMoney(result.totals.productCost), fmtMoney(result.totals.contribution)]);
+    sendCsv(res, "pnl-by-service", result.window, rowsToCsv(headers, rows));
+  } catch (e) {
+    console.error("[reports] pnl-by-service.csv:", e.message);
+    res.status(500).json({ error: "Failed to export P&L CSV" });
+  }
+});
+
+router.get("/reports/pnl-by-service.pdf", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const result = await computePnlByService(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    const clinic = await primaryClinic(req.user.tenantId);
+    const columns = ["Service", "Category", "Tier", "Visits", "Revenue", "Product cost", "Contribution"];
+    const rows = result.rows.map((r) => [r.name, r.category, r.ticketTier, r.count, fmtMoney(r.revenue), fmtMoney(r.productCost), fmtMoney(r.contribution)]);
+    rows.push(["TOTAL", "", "", result.totals.visits, fmtMoney(result.totals.revenue), fmtMoney(result.totals.productCost), fmtMoney(result.totals.contribution)]);
+    const buf = await renderReportPdf("P&L by Service", columns, rows, result.window, clinic);
+    sendPdf(res, "pnl-by-service", result.window, buf);
+  } catch (e) {
+    console.error("[reports] pnl-by-service.pdf:", e.message);
+    res.status(500).json({ error: "Failed to export P&L PDF" });
+  }
+});
+
+// ── Per-professional exports ───────────────────────────────────────
+
+router.get("/reports/per-professional.csv", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const result = await computePerProfessional(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    const headers = ["Staff", "Role", "Visits", "Revenue"];
+    const rows = result.rows.map((r) => [r.name, r.wellnessRole || r.role || "", r.visits, fmtMoney(r.revenue)]);
+    rows.push([]);
+    rows.push(["TOTAL", "", result.totals.visits, fmtMoney(result.totals.revenue)]);
+    sendCsv(res, "per-professional", result.window, rowsToCsv(headers, rows));
+  } catch (e) {
+    console.error("[reports] per-professional.csv:", e.message);
+    res.status(500).json({ error: "Failed to export per-professional CSV" });
+  }
+});
+
+router.get("/reports/per-professional.pdf", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const result = await computePerProfessional(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    const clinic = await primaryClinic(req.user.tenantId);
+    const columns = ["Staff", "Role", "Visits", "Revenue"];
+    const rows = result.rows.map((r) => [r.name, r.wellnessRole || r.role || "", r.visits, fmtMoney(r.revenue)]);
+    rows.push(["TOTAL", "", result.totals.visits, fmtMoney(result.totals.revenue)]);
+    const buf = await renderReportPdf("Per-Professional Report", columns, rows, result.window, clinic);
+    sendPdf(res, "per-professional", result.window, buf);
+  } catch (e) {
+    console.error("[reports] per-professional.pdf:", e.message);
+    res.status(500).json({ error: "Failed to export per-professional PDF" });
+  }
+});
+
+// ── Per-location exports ───────────────────────────────────────────
+
+router.get("/reports/per-location.csv", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const result = await computePerLocation(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    const headers = ["Location", "City", "State", "Patients", "Visits", "Revenue", "Status"];
+    const rows = result.rows.map((r) => [r.name, r.city || "", r.state || "", r.patients, r.visits, fmtMoney(r.revenue), r.isActive ? "Active" : "Inactive"]);
+    rows.push([]);
+    rows.push(["TOTAL", "", "", "", result.totals.visits, fmtMoney(result.totals.revenue), ""]);
+    sendCsv(res, "per-location", result.window, rowsToCsv(headers, rows));
+  } catch (e) {
+    console.error("[reports] per-location.csv:", e.message);
+    res.status(500).json({ error: "Failed to export per-location CSV" });
+  }
+});
+
+router.get("/reports/per-location.pdf", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const result = await computePerLocation(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    const clinic = await primaryClinic(req.user.tenantId);
+    const columns = ["Location", "City", "State", "Patients", "Visits", "Revenue", "Status"];
+    const rows = result.rows.map((r) => [r.name, r.city || "", r.state || "", r.patients, r.visits, fmtMoney(r.revenue), r.isActive ? "Active" : "Inactive"]);
+    rows.push(["TOTAL", "", "", "", result.totals.visits, fmtMoney(result.totals.revenue), ""]);
+    const buf = await renderReportPdf("Per-Location Report", columns, rows, result.window, clinic);
+    sendPdf(res, "per-location", result.window, buf);
+  } catch (e) {
+    console.error("[reports] per-location.pdf:", e.message);
+    res.status(500).json({ error: "Failed to export per-location PDF" });
+  }
+});
+
+// ── Attribution exports ────────────────────────────────────────────
+
+router.get("/reports/attribution.csv", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const result = await computeAttribution(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    const headers = ["Source", "Leads", "Junk", "Junk %", "Qualified", "Conv %", "Revenue", "Rev / Lead"];
+    const rows = result.rows.map((r) => [r.source, r.leads, r.junk, `${r.junkRate}%`, r.qualified, `${r.conversionRate}%`, fmtMoney(r.revenue), fmtMoney(r.revenuePerLead)]);
+    rows.push([]);
+    rows.push(["TOTAL", result.totals.leads, result.totals.junk, "", result.totals.qualified, "", fmtMoney(result.totals.revenue), ""]);
+    sendCsv(res, "attribution", result.window, rowsToCsv(headers, rows));
+  } catch (e) {
+    console.error("[reports] attribution.csv:", e.message);
+    res.status(500).json({ error: "Failed to export attribution CSV" });
+  }
+});
+
+router.get("/reports/attribution.pdf", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const result = await computeAttribution(req);
+    if (result.error) return res.status(result.error.status).json(result.error);
+    const clinic = await primaryClinic(req.user.tenantId);
+    const columns = ["Source", "Leads", "Junk", "Junk %", "Qualified", "Conv %", "Revenue", "Rev / Lead"];
+    const rows = result.rows.map((r) => [r.source, r.leads, r.junk, `${r.junkRate}%`, r.qualified, `${r.conversionRate}%`, fmtMoney(r.revenue), fmtMoney(r.revenuePerLead)]);
+    rows.push(["TOTAL", result.totals.leads, result.totals.junk, "", result.totals.qualified, "", fmtMoney(result.totals.revenue), ""]);
+    const buf = await renderReportPdf("Marketing Attribution", columns, rows, result.window, clinic);
+    sendPdf(res, "attribution", result.window, buf);
+  } catch (e) {
+    console.error("[reports] attribution.pdf:", e.message);
+    res.status(500).json({ error: "Failed to export attribution PDF" });
   }
 });
 

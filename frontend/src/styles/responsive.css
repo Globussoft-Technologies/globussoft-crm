@@ -1,0 +1,198 @@
+/*
+ * Mobile responsive layer — Issue #228 (80/20 pass).
+ *
+ * Scope: sidebar drawer + 6 critical wellness pages
+ * (OwnerDashboard, Patients, PatientDetail, Calendar, Reports, TelecallerQueue).
+ * Modals globally constrain to viewport. Forms / charts / marketing are
+ * intentionally untouched — most already work via existing auto-fit grids.
+ *
+ * Full mobile parity (every page audited at 320/375/414/768) remains a
+ * follow-up multi-day task.
+ */
+
+/* ── Sidebar drawer transitions: always present so the slide animation
+   works the moment the viewport drops into mobile range. ─────────── */
+.app-sidebar {
+  transition: transform 240ms cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  z-index: 998;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+/* ── Mobile (<=768px): sidebar becomes off-canvas drawer ─────────── */
+@media (max-width: 768px) {
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px !important;
+    max-width: 85vw;
+    height: 100vh;
+    z-index: 999;
+    transform: translateX(-100%);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .app-sidebar.is-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    pointer-events: none;
+  }
+
+  .sidebar-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Main content area takes full width — no static sidebar reservation. */
+  .app-main {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* Hamburger becomes visible. Push it to the left of the header. */
+  .sidebar-toggle {
+    display: inline-flex !important;
+  }
+
+  /* Slimmer chrome on mobile — header padding, main padding. */
+  .app-shell header {
+    padding: 6px 12px !important;
+  }
+
+  /* ── Modals globally: constrain to viewport, scrollable inner. ─── */
+  /* Catches DealModal (.card.modal) plus any inline modal-overlay /
+     modal-content / glass modal patterns we sprinkled across pages. */
+  .modal,
+  .card.modal,
+  [class*="modal-content"] {
+    max-width: min(600px, calc(100vw - 1rem)) !important;
+    width: calc(100vw - 1rem) !important;
+    max-height: 90vh !important;
+    overflow-y: auto !important;
+    margin: 0.5rem !important;
+  }
+
+  [class*="modal-overlay"] {
+    padding: 0.5rem !important;
+  }
+
+  /* ── Page-level mobile fixes (the demo-path 6) ─────────────────── */
+
+  /* OwnerDashboard: 2-up and 3-up KPI strips stack on mobile. The
+     auto-fit grids already reflow; only the hard-coded 1fr 1fr / 1fr 1fr 1fr
+     rows need an override. We target the wellness landing root. */
+  [data-vertical="wellness"] main > div > div[style*="1fr 1fr 1fr"],
+  [data-vertical="wellness"] main > div > div[style*="1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Patients / Reports tables: wrap in a horizontally-scrolling region.
+     Most pages put tables inside .glass — make that .glass (when not the
+     sidebar) the scroll container. Tables themselves are left intact so
+     cell layout stays sane. */
+  main .glass {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  table {
+    min-width: 100%;
+  }
+
+  /* PatientDetail tabs already use flex+wrap so they naturally stack.
+     Ensure the strip can also scroll horizontally if a tenant adds enough
+     tabs to overflow even after wrapping. */
+  main > div > div[style*="flex-wrap"] {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Calendar day-view: doctor columns are inline-styled. Allow the grid
+     to overflow horizontally; reduce min column width to 120px so the
+     timetable fits 2-3 columns at 375px without breaking layout. */
+  main > div > div[style*="repeat("][style*="minmax(180px"] {
+    grid-template-columns: 80px repeat(var(--cal-cols, 6), minmax(120px, 1fr)) !important;
+    min-width: max-content;
+  }
+
+  /* The Calendar grid sits inside an overflow:auto wrapper already (line 178
+     of Calendar.jsx wraps the grid in a div). Help it by forcing horizontal
+     scroll on the immediate parent of any wide grid. */
+  .calendar-scroll, .calendar-scroll > div {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Reports: Totals strip uses fixed N-col grid — wrap it. */
+  main > div > div[style*="repeat("][style*=", 1fr)"] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  /* TelecallerQueue lead cards: minmax(340px, 1fr) overflows at 375px
+     because 340 + padding > 375. Force 1-per-row. */
+  main > div > div[style*="minmax(340px"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Generic safety: any horizontally-overflowing card-list grid with
+     a min track wider than 320px should collapse to 1 column. */
+  div[style*="minmax(320px"],
+  div[style*="minmax(340px"],
+  div[style*="minmax(360px"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Reports / Patients export+filter button rows — wrap. Scope to main
+     content so the app-shell header (which has its own balance) is not
+     affected. */
+  main div[style*="display: flex"][style*="gap"] {
+    flex-wrap: wrap;
+  }
+
+  /* Page-level main padding sanity. */
+  main {
+    padding: 0 !important;
+  }
+}
+
+/* ── Very narrow (<=380px iPhone SE / Galaxy S8) extra clamps ────── */
+@media (max-width: 380px) {
+  .app-sidebar {
+    width: 260px !important;
+  }
+
+  /* KPI cards inside auto-fit grids force to 1 column at this width
+     to avoid awkward 140px-each pairs. */
+  div[style*="minmax(200px"],
+  div[style*="minmax(220px"],
+  div[style*="minmax(240px"],
+  div[style*="minmax(260px"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Reports totals: collapse to 1 column at very narrow widths. */
+  main > div > div[style*="repeat("][style*=", 1fr)"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ── Tablet (769-1024px): sidebar still static; just tighten paddings. */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .app-sidebar {
+    width: 220px !important;
+  }
+}

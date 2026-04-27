@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BarChart3, TrendingUp, Stethoscope, MapPin, IndianRupee } from 'lucide-react';
+import { BarChart3, TrendingUp, Stethoscope, MapPin, IndianRupee, Download, Loader2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 
@@ -17,6 +17,16 @@ const ENDPOINTS = {
   att: '/api/wellness/reports/attribution',
 };
 
+// #227: each tab maps to a base export filename and the same backend endpoint
+// stem; we just append .csv / .pdf to the JSON endpoint to hit the export
+// siblings.
+const EXPORT_BASENAMES = {
+  pnl: 'pnl-by-service',
+  pro: 'per-professional',
+  loc: 'per-location',
+  att: 'attribution',
+};
+
 const isoDay = (d) => d.toISOString().slice(0, 10);
 
 export default function Reports() {
@@ -25,6 +35,11 @@ export default function Reports() {
   const [to, setTo] = useState(isoDay(new Date()));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  // #227: a single in-flight flag covers both buttons — clicking Export CSV
+  // disables Export PDF for the same tab while we wait, mirroring the UX of
+  // the prescription-PDF button in PatientDetail.jsx.
+  const [exporting, setExporting] = useState(null); // 'csv' | 'pdf' | null
+  const [exportError, setExportError] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -32,6 +47,44 @@ export default function Reports() {
     fetchApi(url).then(setData).catch(() => setData(null)).finally(() => setLoading(false));
   };
   useEffect(load, [tab, from, to]);
+
+  // #227: export downloader. We use raw fetch so we can stream the binary
+  // body into a blob URL — fetchApi assumes JSON. Same pattern used by the
+  // RxDetailModal "Download PDF" button in PatientDetail.jsx.
+  const downloadExport = async (format) => {
+    setExporting(format);
+    setExportError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const url = `${ENDPOINTS[tab]}.${format}?from=${from}T00:00:00&to=${to}T23:59:59`;
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        let msg = `Export failed (${res.status})`;
+        try {
+          const err = await res.json();
+          if (err?.error) msg = err.error;
+        } catch { /* binary body, leave default */ }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `${EXPORT_BASENAMES[tab]}-${from}-to-${to}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Same 60s revoke as the Rx download — gives the browser time to
+      // actually persist the file before we drop the reference.
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err) {
+      setExportError(err.message || 'Export failed');
+    } finally {
+      setExporting(null);
+    }
+  };
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
@@ -63,12 +116,48 @@ export default function Reports() {
         <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={dateInput} />
       </div>
 
+      {/* #227: export bar — both buttons disabled while either is in flight, and
+          while the JSON load is still in flight (no point exporting an empty
+          tab the user hasn't seen yet). */}
+      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        {exportError && (
+          <div role="alert" style={{ color: 'var(--danger-color)', fontSize: '0.8rem', marginRight: 'auto' }}>
+            {exportError}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => downloadExport('csv')}
+          disabled={loading || !!exporting}
+          aria-label="Export this report as CSV"
+          style={exportBtn(exporting === 'csv')}
+        >
+          {exporting === 'csv'
+            ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+            : <Download size={14} />}
+          Export CSV
+        </button>
+        <button
+          type="button"
+          onClick={() => downloadExport('pdf')}
+          disabled={loading || !!exporting}
+          aria-label="Export this report as PDF"
+          style={exportBtn(exporting === 'pdf')}
+        >
+          {exporting === 'pdf'
+            ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+            : <Download size={14} />}
+          Export PDF
+        </button>
+      </div>
+
       {loading && <div>Loading…</div>}
       {!loading && data && tab === 'pnl' && <PnlTable data={data} />}
       {!loading && data && tab === 'pro' && <ProTable data={data} />}
       {!loading && data && tab === 'loc' && <LocTable data={data} />}
       {!loading && data && tab === 'att' && <AttTable data={data} />}
       {!loading && !data && <div className="glass" style={{ padding: '2rem', textAlign: 'center' }}>No data.</div>}
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
@@ -224,3 +313,13 @@ const th = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fon
 const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)' };
 const tdR = { ...td, textAlign: 'right' };
 const dateInput = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem' };
+// #227: export buttons sit next to the date picker — wait state shows a
+// spinner and dims the button without removing it from the layout.
+const exportBtn = (busy) => ({
+  display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+  padding: '0.45rem 0.85rem',
+  background: busy ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.06)',
+  border: '1px solid rgba(255,255,255,0.1)',
+  borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.8rem',
+  cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1,
+});

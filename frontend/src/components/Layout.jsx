@@ -1,6 +1,6 @@
-import React, { useContext, useEffect } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
-import { LogOut, ChevronDown } from 'lucide-react';
+import { LogOut, ChevronDown, Menu } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Omnibar from './Omnibar';
 import Presence from './Presence';
@@ -14,6 +14,8 @@ const Layout = () => {
   const navigate = useNavigate();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === 'wellness';
+  // #228: drawer state for mobile sidebar (<=768px). Desktop ignores this.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Auto-register push notifications after login (silent failures OK)
   useEffect(() => {
@@ -28,9 +30,9 @@ const Layout = () => {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--bg-color)' }}>
-      <Sidebar />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div className="app-shell" style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--bg-color)' }}>
+      <Sidebar mobileOpen={sidebarOpen} onMobileClose={() => setSidebarOpen(false)} />
+      <div className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <header style={{
           display: 'flex',
           justifyContent: 'flex-end',
@@ -42,6 +44,25 @@ const Layout = () => {
           minHeight: 48,
           flexShrink: 0,
         }}>
+          {/* #228: hamburger toggle — hidden on desktop via responsive.css. */}
+          <button
+            type="button"
+            className="sidebar-toggle"
+            onClick={() => setSidebarOpen((v) => !v)}
+            aria-label={sidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-expanded={sidebarOpen}
+            aria-controls="app-sidebar"
+            style={{
+              display: 'none',
+              alignItems: 'center', justifyContent: 'center',
+              background: 'none', border: '1px solid var(--border-color)',
+              color: 'var(--text-primary)', borderRadius: 8,
+              width: 36, height: 36, cursor: 'pointer',
+              marginRight: 'auto',
+            }}
+          >
+            <Menu size={18} />
+          </button>
           <NotificationBell />
           <button
             onClick={() => navigate('/profile')}

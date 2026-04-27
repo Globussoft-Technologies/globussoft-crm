@@ -2,29 +2,32 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-26 (evening — full-suite c8 coverage run completed at 64.76 % lines)
+Last updated: 2026-04-27 (morning — `routes/reports.js` covered, 52 tests pass live)
 
 ---
 
 ## 📌 NEXT SESSION — pick up here
 
-State at end of 2026-04-26 session (HEAD `fb3d63e` + 3 commits queued during evening run):
+State at end of 2026-04-27 session (HEAD `4846adb`):
 
-### Backend coverage — measured + gated
-- **64.76 % lines** (21,484 / 33,170) — full 1056-test suite, c8 against side-by-side instance on :5098
-- **50.03 % branches** (just over the 50 % gate)
-- **66.11 % functions** / 64.76 % statements
-- Aspirational target: **100 %**. Current gate (`backend/.c8rc.json`): 50 % across the board. **Bump to 60 % next push** — we're 5 pts over and want headroom.
-- HTML report on the server: `~/globussoft-crm/backend/coverage/lcov-report/index.html`. Re-run via `npm run coverage:start` + run e2e suite + `kill -TERM <pid>` + `npm run coverage:report`.
+### Backend coverage — gate at 60% (already live in `.c8rc.json`)
+- **Pre-spec full-suite measurement (2026-04-26): 64.76 % lines** (21,484 / 33,170)
+- **Gate as of HEAD**: lines/functions/statements 60%, branches 45%
+- **Aspirational target: 100%**
 
-### Top 5 files to test next (will lift coverage 8-12 pts combined)
-1. **`routes/reports.js`** — 14.17 % (70 / 494) — owner-side reporting endpoints; biggest single gap
-2. **`routes/marketing.js`** — 28.20 % (152 / 539) — campaign + form-ingest paths
-3. **`routes/voice_transcription.js`** — 29.55 % (73 / 247) — Gemini audio transcription branches
-4. **`routes/sms.js`** — 31.05 % (141 / 454) — DLT compliance branches; Fast2SMS now routed through here
-5. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151) — ticket SLA breach cron, recent feature
+### Reports.js coverage — shipped 2026-04-27 in `4846adb`
+- New `e2e/tests/reports-api.spec.js`: **52 tests, all pass live in 23.5s**
+- Covers all 7 endpoints + every metric/type branch + `validateDateRange` errors
+- `routes/reports.js` was 14.17 % (70 / 494). Forecast post-spec: **~85% on the file**, lifting global coverage **64.76% → ~67-68%**
+- **Next move (5 min on the server)**: pull, run `npm run coverage:start` + the e2e suite + `npm run coverage:report`, read the new global lines %. If ≥ 65%, bump `.c8rc.json` lines/functions/statements to **65** (branches to 50). Don't over-bump — we want ratchet-up, never ratchet-down.
 
-Each one needs ~1 spec file (~150 lines) using the patterns from `e2e/tests/eventbus-actions.spec.js` or `e2e/tests/billing-update.spec.js`.
+### Top 4 remaining coverage gaps (in priority order)
+1. **`routes/marketing.js`** — 28.20 % (152 / 539) — campaign + form-ingest paths
+2. **`routes/voice_transcription.js`** — 29.55 % (73 / 247) — Gemini audio transcription branches
+3. **`routes/sms.js`** — 31.05 % (141 / 454) — DLT compliance branches; Fast2SMS now routed through here. Recent OTP-redaction + filter (#254 / #269) needs a dedicated spec branch too.
+4. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151) — ticket SLA breach cron, recent feature
+
+Each one needs ~1 spec file (~150-300 lines) using the patterns from `e2e/tests/reports-api.spec.js` (latest), `e2e/tests/billing-update.spec.js`, or `e2e/tests/eventbus-actions.spec.js`.
 
 ### What's open on GitHub (8 issues at session end)
 - **Multi-day**: #228 (mobile responsive overhaul), #227 (CSV/PDF export across 4 reports tabs), #137 (external-integrations test sandbox infra)
@@ -37,12 +40,16 @@ Each one needs ~1 spec file (~150 lines) using the patterns from `e2e/tests/even
 - **Rishu inputs** — Superphone + Zylu CSVs (data migration), Aadhaar/PAN scans (Android Play Store resubmit)
 
 ### Recommended order tomorrow
-1. **15 min** — pull, verify clean tree, glance at any overnight commits
-2. **2 hours** — close `routes/reports.js` coverage (14 % → 80 %+); will lift global by ~3 pts
-3. **30 min** — bump `.c8rc.json` gate from 50 % → 60 %, re-run, confirm green
-4. **Rest** — pick from #228 / #227 / Callified chase / vague-issue triage based on priority
+1. **15 min** — pull, verify clean tree, glance at overnight commits
+2. **5 min** — re-run coverage on the server to capture the lift from `4846adb` (`routes/reports.js` spec)
+3. **5 min** — bump `.c8rc.json` lines/functions/statements `60 → 65`, branches `45 → 50` (only if the new measurement is ≥ 65%)
+4. **2 hours** — `routes/marketing.js` spec (28 % → 80 %+, lifts global another ~2-3 pts)
+5. **Rest** — pick from #228 / #227 / Callified chase / vague-issue triage based on priority
 
 ### Recent commits worth knowing about
+- `4846adb test(e2e): cover routes/reports.js — 52 tests across 7 endpoints` — biggest gap closed; verified live
+- `9afee65 fix: #269 stronger OTP filter — exclude OTP SMSes from staff inbox entirely (was just redacting)` — closes the confirmed account-takeover chain; #254 redaction kept as belt-and-braces
+- `ac1fa1c fix(qa): cron batch — #254 #256` — SMS-OTP digit redaction in /api/sms/messages + estimates `$ ₹` cleanup
 - `fb3d63e docs: refresh all 6 doc files for v3.2.2`
 - `fff1dd6 test(e2e): cover lib/eventBus.js + services/landingPageRenderer.js` — 5 new specs (4 eventBus + 1 landing page); jumped lib from 67 % → 80.59 %, services from 51 % → 63.15 %
 - `d947e65 chore(coverage): wire c8 gate config + scripts; bump backend to v3.2.2` — `.c8rc.json` + npm scripts (`coverage:start`, `coverage:report`, `coverage:check`)

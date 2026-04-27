@@ -41,10 +41,15 @@ export default function Recommendations() {
       if (!ok) return;
     }
     try {
-      await fetchApi(`/api/wellness/recommendations/${id}/${action}`, { method: 'POST' });
+      // #275 + #276: success path was silent — added explicit confirmation
+      // toast. fetchApi auto-toasts errors with the server message; this catch
+      // exists only to keep the page from logging an unhandled rejection.
+      await fetchApi(`/api/wellness/recommendations/${id}/${action}`, { method: 'POST', silent: true });
+      notify.success(action === 'approve' ? 'Recommendation approved' : 'Recommendation rejected');
       load();
-    } catch (e) {
-      notify.error(`Failed to ${action}: ${e.message}`);
+    } catch (err) {
+      // fetchApi already toasted the underlying message. Page-specific hint:
+      if (err.status === 403) notify.info('Approving recommendations requires admin or manager.');
     }
   };
 

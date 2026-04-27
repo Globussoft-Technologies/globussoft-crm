@@ -223,6 +223,8 @@ function ServiceCard({ service, onChanged }) {
     }
     setSaving(true);
     try {
+      // #274 #275: fetchApi auto-toasts the server error message (e.g.
+      // "Insufficient wellness role" on 403). Page emits the success toast.
       await fetchApi(`/api/wellness/services/${service.id}`, {
         method: 'PUT',
         body: JSON.stringify({
@@ -234,9 +236,10 @@ function ServiceCard({ service, onChanged }) {
           isActive: draft.isActive !== false,
         }),
       });
+      notify.success(`Saved "${draft.name}"`);
       setEditing(false);
       onChanged && onChanged();
-    } catch (err) { notify.error(`Save failed: ${err.message}`); }
+    } catch (_err) { /* fetchApi already surfaced the message */ }
     setSaving(false);
   };
 
@@ -246,8 +249,9 @@ function ServiceCard({ service, onChanged }) {
       await fetchApi(`/api/wellness/services/${service.id}`, {
         method: 'PUT', body: JSON.stringify({ isActive: false }),
       });
+      notify.success(`Deactivated "${service.name}"`);
       onChanged && onChanged();
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (_err) { /* fetchApi already surfaced the message */ }
   };
 
   if (editing) {

@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { registerGlobalNotify } from './api';
 
 /**
  * useNotify — drop-in replacement for window.alert / confirm / prompt.
@@ -32,7 +33,16 @@ export function NotifyProvider({ children }) {
   const pushToast = useCallback((kind, message, opts = {}) => {
     const id = ++_idSeq;
     const ttl = opts.ttl ?? (kind === 'error' ? 6000 : 3500);
-    setToasts((prev) => [...prev, { id, kind, message }]);
+    setToasts((prev) => {
+      // #275: dedupe identical (kind, message) toasts within a 1.5s window.
+      // Now that fetchApi auto-toasts errors, page-level .catch() handlers that
+      // re-toast the same string would otherwise stack a second toast.
+      const recent = prev.find(
+        (t) => t.kind === kind && t.message === message && Date.now() - t.createdAt < 1500,
+      );
+      if (recent) return prev;
+      return [...prev, { id, kind, message, createdAt: Date.now() }];
+    });
     if (ttl > 0) {
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -109,6 +119,13 @@ export function NotifyProvider({ children }) {
 
     return { success, error, info, confirm, prompt };
   }, [pushToast, openModal]);
+
+  // #275: register the toast API with utils/api.js so fetchApi can surface
+  // errors as toasts globally — even on pages that forget to .catch().
+  useEffect(() => {
+    registerGlobalNotify(api);
+    return () => registerGlobalNotify(null);
+  }, [api]);
 
   return (
     <NotifyContext.Provider value={api}>

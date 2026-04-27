@@ -135,10 +135,19 @@ export default function Estimates() {
   const convertToInvoice = async (id) => {
     if (!await notify.confirm('Convert this estimate to an invoice?')) return;
     try {
-      await fetchApi(`/api/estimates/${id}/convert`, { method: 'PUT' });
+      // #273: surface backend errors (since fetchApi already auto-toasts the
+      // server message; a page-level catch would duplicate). On success show a
+      // confirmation so the click is never silent.
+      const result = await fetchApi(`/api/estimates/${id}/convert`, { method: 'PUT', silent: true });
+      const invNum = result?.invoiceNum || result?.invoice?.invoiceNum;
+      notify.success(invNum ? `Converted to invoice ${invNum}` : 'Converted to invoice');
       loadData();
-    } catch {
-      notify.error('Failed to convert estimate. Make sure the estimate has a contact assigned.');
+    } catch (err) {
+      // fetchApi auto-toasted the server error; add hint when 400 (likely
+      // missing contact/line items) without duplicating the underlying msg.
+      if (err.status === 400) {
+        notify.info('Tip: make sure the estimate has a contact and at least one line item.');
+      }
     }
   };
 

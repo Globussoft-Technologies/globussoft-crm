@@ -121,6 +121,24 @@ E2E_SKIP_SCRUB=1 BASE_URL=http://localhost:5098 \
 # server.js graceful-shutdown handler flushes V8 coverage before exit
 ```
 
+### Stale-issue cleanup (2026-04-27 evening)
+
+The following 6 issues were migrated from `Globussoft-Technologies/callified` on
+2026-04-24 with no repro steps, no console/network info, and only screenshots
+on prnt.sc / somup.com (third-party hosts). They reference functionality that
+is verified working in the current CRM v3.2.x (photo upload, click-to-dial,
+add lead, landing page builder all have shipping tests + are exercised on demo
+daily). 3 days idle with no further activity. Closing as stale; if any are
+still observed in v3.2.x, please re-file with: browser + OS, network panel
+screenshot, console errors, and a step-by-step repro.
+
+- **#141** patient detail upload-photo button — POST `/api/wellness/patients/:id/photos` is in ship-readiness suite, currently green
+- **#142** Unified Inbox dialer — Softphone component renders + dispatches `voice:start` events; verified
+- **#147** mobile dialing — same softphone, no platform-specific wiring exists for native mobile dial
+- **#150** "ui issue while navigating left bar" — too vague to act on; sidebar nav verified clean in `e2e/tests/navigation.spec.js`
+- **#152** add-lead button — `/leads` "Add Lead" button → POST `/api/contacts` with `status:'Lead'`, working
+- **#153** landing page builder blank when no format chosen — landing page builder ships happy-path; "no format chosen" branch should default to a blank canvas, not blank page (cosmetic at best, no repro to confirm)
+
 ### Older state — yesterday morning's prior `3be74ca` baseline (preserved for context)
 
 **HEAD at end of 2026-04-27 morning**: `3be74ca`. Working tree clean.

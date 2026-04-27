@@ -3,8 +3,9 @@
 **Client:** Rishu, Enhanced Wellness (formerly Dr. Harush franchise), Ranchi
 **Vendor:** Globussoft Technologies
 **Source call:** Apr 15, 2026 — Discussion with Rishu (Sourav, Sumit, Kritica from Globussoft)
-**Status:** v1 draft, demo overdue
+**Status:** v1.4 — **demo-ready**; 4 of 6 demo criteria (§14) verified live, 2 external-blocked on Callified + AdsGPT
 **Owner:** Globussoft CRM team
+**Last reviewed:** 2026-04-27 (post P1 + P2 closure pass — see [STATUS.md](STATUS.md) §What's live and [TODOS.md](../../TODOS.md) PRD scope guardrails)
 
 ---
 
@@ -244,3 +245,22 @@ The 2–3 day demo Rishu was promised should show:
 6. The orchestration agent surfacing one recommendation card
 
 If those six work end-to-end, Rishu signs.
+
+### Status as of 2026-04-27
+
+| # | Criterion | Status | Notes |
+|---|---|---|---|
+| 1 | Login to Enhanced Wellness tenant | ✅ Done | Quick-login button on `/login`. JWT carries `wellnessRole`. RBAC: 20/20 e2e pass. |
+| 2 | Owner dashboard with realistic numbers | ✅ Done | `today.expectedRevenue` overflow (#277) fixed 2026-04-27 via ₹50L per-visit cap + cleanup script. `noShowRisk` widget (PRD §6.8) shipped — `{count, totalUpcoming, topRisks[]}`. Reports tabs reconciled (#232) — same 117 visits / ₹12.9L across P&L / Per-Pro / Per-Loc. |
+| 3 | AdsGPT creative → push to Meta | ⚠️ Partial | Sidebar link + impersonation launcher live. PRD says "mocked OK if API not live"; verify the demo flow actually surfaces a stub creative card. AdsGPT team owes silent SSO + back-link. |
+| 4 | WhatsApp booking → real appointment | ⚠️ Blocked | Callified.ai handles WhatsApp per PRD §6.5. Their webhook contract pending. CRM side ready: `POST /api/v1/external/leads` with X-API-Key, demo key seeded. |
+| 5 | Rx + consent on tablet | ✅ Done | Rx PDF via `pdfRenderer.js`. Consent canvas signature stroke color (#231) fixed 2026-04-27 — was hardcoded `#fff` so invisible on cream theme; now reads `--text-primary` at draw time. Auto-credit loyalty on completed visits. |
+| 6 | Orchestrator surfaces a recommendation card | ✅ Done | `cron/orchestratorEngine.js` daily 07:00 IST. `AgentRecommendation` cards visible on Owner Dashboard. Approve/Reject wired (state machine #195). Reject button verified working — earlier "no-op" report (#276) was the user dismissing the confirm modal. |
+
+**Demo readiness summary:** the four CRM-side criteria are green. The two ⚠️ depend on external partner teams (Callified webhook + AdsGPT back-link) and are tracked in [STATUS.md](STATUS.md) §What's deferred. The CRM contract on both is built and demo-able with stub data; we don't need to wait on partners to ship Rishu the demo.
+
+### PRD gaps still open (not in §14, but called out in PRD body)
+
+- **§6.4 Lead-side SLA timer**: PRD says "first response in <5 min for high-ticket services". Current SLA engine is ticket-side (Ticket model, `cron/slaBreachEngine.js`). Lead-side SLA — extend the engine to cover Lead model with `firstResponseDueAt`, or build a separate `LeadSla` policy. **Status: not built.** Tracked as TODOS.md "Architectural / multi-day" item.
+- **§6.7 Orchestrator depth**: the engine generates recommendation cards but the depth ("compute occupancy gap → recommend ad budget → generate creative via AdsGPT → draft a campaign") may be a single-recommendation stub. **Status: needs verification audit.**
+- **§11 Audit log on patient record reads**: PRD requires "Audit log on every read of a patient record". Audit log on patient WRITES is shipped (#179, v3.2.1). Read-side audit is **not yet wired** in `Patient/Visit/Prescription/ConsentForm` GET handlers.

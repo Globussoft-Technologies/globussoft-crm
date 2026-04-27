@@ -2,7 +2,7 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-27 (evening — P1 batch closed: #232 #235 #238 #247 #249 #253 #259 #260 deployed; PRD scope guardrails added below)
+Last updated: 2026-04-27 (end of day — **24 user-facing bugs closed**, P1 + P2 boards both at 0 open. Class fixes: fetchApi rewrite + redundant-catch sweep, Visit.amountCharged ₹50L cap, off-by-one date range in reports. All deployed + verified live.)
 
 ---
 
@@ -41,24 +41,94 @@ The two ⚠️ items are external-blocked (Callified + AdsGPT teams owe their si
 
 ## 📌 NEXT SESSION — pick up here
 
-State at end of 2026-04-27 session (HEAD `6624955`):
+**HEAD at end of 2026-04-27**: `3be74ca`. Working tree clean.
+
+**Open backlog at end of 2026-04-27 evening:**
+- P1: **0** (all 8 closed today)
+- P2: **0** (all 11 closed today)
+- P3: **16** (mostly seed pollution + minor UX)
+- wellness-tagged: **19** (overlaps with P-tags + the P3 cluster + a few untagged)
+- untagged: **6** | Tracking: 1
+- **Total open: 42** (was 53 at start of day)
+
+### Next-session priority order (PRD-aligned)
+
+The Apr-end demo criteria from PRD §14 are 4-of-6 working (5 ⚠️ are external-blocked on Callified + AdsGPT teams). Remaining open issues are mostly polish + one architectural piece. Priority order:
+
+1. **Coverage gate bump** (5 min on the server) — pull, run `npm run coverage:start` + e2e suite + `npm run coverage:report`. If global lines % ≥ 70, bump `.c8rc.json` lines/functions/statements `60 → 70` (branches `45 → 55`). Combined forecast was ~71-72% from today's reports.js + marketing.js + voice_transcription.js coverage pushes.
+
+2. **`routes/sms.js` coverage spec** (1.5-2 hours, PRD §6.5 aligned) — currently 31.05% (141 / 454). Cover DLT compliance branches; Fast2SMS routing; the OTP-redaction + filter additions from #254 / #269. Patterns from `e2e/tests/marketing-api.spec.js` or `reports-api.spec.js`.
+
+3. **#227 Reports CSV/PDF export** (1-2 days, PRD §6.9 franchise-readiness) — backend export endpoints + frontend "Export" button per tab across P&L / Per-Pro / Per-Location / Attribution. PDFKit already in stack.
+
+4. **Wellness P3 cluster — quick wins (1 hour total)**:
+   - `#272`: 6 identical "E2E Branch [id]" location rows — one-shot cleanup script (mirror `cleanup-overflow-visit-amounts.js`)
+   - `#271`: telecaller queue UK phone "+447700900000" — same scrub script can pick this up (delete leads with non-Indian phones in wellness tenant)
+   - `#268`: "test-skip" / "test-junk" lead sources in marketing attribution — scrub script
+   - `#267`: patient Source column mixes kebab-case + snake_case — normalise on read OR migrate on write
+   - `#266`: patient Gender mixes "M"/"F"/"female"/"—" — same migration pattern
+   - `#265`: duplicate "Kavita Reddy" patients — merge
+   - `#250`: 1/1/1999 task with permanent OVERDUE — delete
+   - `#240`: root `/` should redirect to /login for unauthenticated — single line in App.jsx
+
+5. **Architectural / multi-day** (only when polish backlog is empty):
+   - **#228** mobile responsive overhaul — multi-day (breakpoints, hamburger drawer, ARIA, focus trap)
+   - **#137** external-integrations test sandbox infra
+   - **PRD §6.7 orchestrator depth** — verify the engine actually computes occupancy gap → recommends ad budget → drafts campaign vs being a single-recommendation stub
+   - **PRD §6.4 lead-side SLA** — current SLA engine is ticket-side; PRD says "first response in <5 min for high-ticket services" applies to LEADS
+
+6. **Vague — need fresh repro from tester**: #141 #142 #147 #150 #152 #153
+
+7. **Product decisions**: #200 / #201 / #211 (login quick-login chips + cred prefill — keep / env-gate / remove?)
+
+### State of demo criteria (PRD §14)
+1. ✅ Login to Enhanced Wellness tenant
+2. ✅ Owner dashboard with realistic numbers (overflow #277 fixed today)
+3. ⚠️ AdsGPT creative push to Meta — verify the demo flow surfaces a stub if API not live
+4. ⚠️ WhatsApp chatbot booking → real appointment — needs Callified webhook live
+5. ✅ Doctor enters Rx + captures consent on tablet (white strokes #231 fixed today)
+6. ✅ Orchestrator surfaces one recommendation card
+
+### State at end of 2026-04-27 session (HEAD `3be74ca`):
 
 ### Backend coverage — gate at 60% (already live in `.c8rc.json`)
 - **Pre-spec full-suite measurement (2026-04-26): 64.76 % lines** (21,484 / 33,170)
 - **Gate as of HEAD**: lines/functions/statements 60%, branches 45%
 - **Aspirational target: 100%**
 
-### Shipped 2026-04-27
+### Shipped 2026-04-27 (full closure list — 24 user-facing bugs + class fixes + coverage)
 
-**P1 batch (deployed `6624955` + env var set on server):**
-- `#232` — Reports tabs (P&L / Per-Pro / Per-Location) all surface canonical visit count + revenue from the same completed-visit query. Verified live: all three now show 109 visits / ₹12,74,414.93 (was 87 / 80 / 111). New `totals.unbucketed` field exposes the data-quality delta (visits without serviceId / doctorId / locationId).
+**P1 batch (8 closed, deployed `6624955` + `WELLNESS_DEMO_OTP` env var set on server):**
+- `#232` — Reports tabs (P&L / Per-Pro / Per-Location) all surface canonical visit count + revenue. Verified live: all three now show 117 visits / ₹12,90,414.93 / productCost ₹32,000 (was 87 / 80 / 111 / ₹0). New `totals.unbucketed` field exposes the data-quality delta.
 - `#235` — Clinic locations editable: pencil icon → prefilled form → PUT `/api/wellness/locations/:id`.
-- `#238` — Patient portal OTP: `WELLNESS_DEMO_OTP=1234` env-var bypass shipped + set on server; demo patient `+919876500001` seeded; verified end-to-end (returns token + patient).
-- `#247` — Calendar grid no longer drops visits without `doctorId` (silent `if (!v.doctorId) continue`); they render in an "Unassigned" column. Out-of-range visits (before 09:00 / after 19:00) clamp to boundary instead of vanishing.
-- `#249` — Stale-chunk recovery for **all** lazy routes (`32771b8`): `lazyWithRetry` helper auto-reloads on `Failed to fetch dynamically imported module` once per session; `RouteErrorBoundary` catches the residual case with a "Reload page" CTA.
+- `#238` — Patient portal OTP: `WELLNESS_DEMO_OTP=1234` env-var bypass shipped + set on server; demo patient `+919876500001` seeded; verified end-to-end.
+- `#247` — Calendar grid no longer drops visits without `doctorId`; they render in an "Unassigned" column. Out-of-range visits clamp to boundary.
+- `#249` — Stale-chunk recovery for **all** lazy routes (`32771b8`): `lazyWithRetry` helper + `RouteErrorBoundary`. Class-wide frontend fix.
 - `#253` — Inbox Play Recording wired: native `<audio controls autoplay>`; falls back to "Recording not available" on load error.
-- `#259` — Closed not-reproducing (verified Owner Rishu now gets HTTP 200 from `/api/wellness/dashboard`).
-- `#260` — `/leads` row click navigates to `/contacts/:id`; pointer cursor; `e.stopPropagation` on checkbox / select / Convert button.
+- `#259` — Closed not-reproducing (Owner now gets HTTP 200 from `/api/wellness/dashboard`).
+- `#260` — `/leads` row click navigates to `/contacts/:id`; pointer cursor; `e.stopPropagation` on interactive cells.
+
+**P2 batch (11 closed across `59277ac`, `3be74ca`):**
+- `#230` — closed as already fixed by #225 (90ff63f, debounced Add).
+- `#231` — Consent canvas strokes were hardcoded `#fff`; now reads `--text-primary` via `getComputedStyle` so they contrast on cream + dark.
+- `#234` — Off-by-one in `reportRange()`: `to=YYYY-MM-DD` was parsed as midnight UTC, dropping every visit/consumption later that day. Fix: when raw param is date-only, clamp `from` to start-of-day, `to` to end-of-day. Productive for all 4 reports tabs. Verified live: productCost went ₹0 → ₹32,000.
+- `#243` — Invoices ledger overflow: `table-layout: fixed` + `<colgroup>` widths + Contact cell ellipsis + opaque sticky Actions bg + zIndex.
+- `#246` — Closed as already fixed by #277 (Visit overflow cleanup).
+- `#252` — Inbox empty-state scoped to active tab: 'No emails yet' + sub-line listing other-tab counts when present.
+- `#257` — Estimates Drafts/Sent pills now real filter buttons (statusFilter state + aria-pressed).
+- `#258` — Lead Routing Apply All migrated from local toast to global notify; consistent UX.
+- `#262` — Calendar now shows ALL practitioners (doctors + professionals = 16 staff, was 3). Default view is "with visits today"; chip toggles to "All N".
+- `#264` — Dark mode toggle disabled with "coming soon" copy until a real dark theme stylesheet ships (multi-day work, not in PRD §8).
+- `#270` — Calendar empty-slot click opens "New visit" modal seeded with (practitioner, date, hour). Patient required, status='booked'.
+
+**Toast / silent-failure cluster (4 closed across `9c03cf4`, `dfe94b7`):**
+- `#273 #274 #276` — root cause was upstream `fetchApi` reading `errData.message` instead of `errData.error` (backend returns `{error, code}`). Every error toast surfaced the generic fallback "API Request Failed" — looked silent.
+- `#275` — closed as misdiagnosis: NotifyProvider HAS been mounted at App root with a working `useNotify()` API since launch. The toast container only mounts when toasts are active, which is why the bug reporter's DOM-scan found nothing. The real fix was the `fetchApi` rewrite.
+- **fetchApi rewrite class fix**: reads `errData.error || errData.message`; 403 / 404 / 5xx / network fallbacks; auto-toasts every error via `_globalNotify` registered by NotifyProvider on mount; throws Error with `.status` / `.code` / `.data` attached. Pages opt out with `{silent: true}`.
+- **Sweep across 9 wellness pages** (`dfe94b7`) — replaced 17 redundant `catch (err) { notify.error('Failed: ${err.message}') }` with `catch (_err) { /* fetchApi already toasted */ }` AND added missing success toasts on Locations create/update/toggle, Loyalty referral + reward, Patients create, Treatment plan create, Inventory consumption log, Services create, Waitlist add/status/remove, TelecallerQueue.
+
+**Visit overflow (1 closed, `233db7a` + cleanup script run on prod):**
+- `#277` — Owner Dashboard "Today's expected revenue" showed ₹20,000,000,030,000 (twenty trillion). Two Visit rows had `amountCharged=1e15` (residue from #218 era — "Z" service had basePrice=1e15). Fix: ₹50L per-visit cap on POST + PUT (matches Service.basePrice ceiling from #209). Cleanup script `backend/scripts/cleanup-overflow-visit-amounts.js` NULLed the 2 polluted rows. Verified live: now ₹30,000.
 
 **Coverage shipped earlier in the day:**
 - `routes/reports.js` (`4846adb`) — 52 tests. Was 14.17%; forecast ~85%.
@@ -129,11 +199,18 @@ Each one needs ~1 spec file (~200-400 lines) using the patterns from `e2e/tests/
 5. **1.5-2 hours — `routes/sms.js` coverage spec** (31% → 75%+, PRD §6.5 aligned, lifts global another ~2-3 pts)
 6. **Rest** — pick from open P2 (#270 calendar empty-slot, #262 doctor columns, #258 lead-routing feedback) or PRD §6.9 (#227 reports export). NOT whatsapp/voice — those are Callified.
 
-### Recent commits worth knowing about
-- `6624955 fix: P1 batch — #232 #235 #238 #247 #253 #260` — 7 P1s closed (the 8th, #259, was already not-reproducing). Reports tabs reconciled, locations editable, OTP demo bypass, calendar Unassigned column, Play Recording wired, leads row click. Deployed + WELLNESS_DEMO_OTP env var set on server.
-- `32771b8 fix: #249 stale-chunk recovery for all lazy routes` — class-wide frontend fix; lazyWithRetry helper + RouteErrorBoundary
+### Recent commits worth knowing about (2026-04-27, newest → oldest)
+- `3be74ca fix: P2 calendar — #262 #270` — practitioner columns expanded from 3 to 16; empty-slot click opens "New visit" modal seeded with (practitioner, date, hour).
+- `59277ac fix: P2 batch — #231 #234 #243 #252 #257 #258 #264` — consent stroke color, off-by-one date range in reports, invoice column overflow, inbox empty-state scoping, estimates filter pills wired, lead-routing toast migration, dark-mode toggle disabled until real theme ships.
+- `dfe94b7 fix(ui): #275 follow-up — sweep redundant notify.error catches across wellness pages` — 9 files, 17 call sites cleaned; success toasts added where missing.
+- `9c03cf4 fix: #275 #273 #274 #276 — global error toasts + success feedback` — fetchApi rewrite (reads errData.error not .message; 5xx + network fallbacks; auto-toasts via registered NotifyProvider). Closes the silent-failure class.
+- `233db7a fix: #277 cap Visit.amountCharged at ₹50L + cleanup script` — backend validator + one-shot cleanup of 2 polluted ₹1e15 visit rows.
+- `ed64825 docs: TODOS — P1 batch closed, PRD scope guardrails added`
+- `6624955 fix: P1 batch — #232 #235 #238 #247 #253 #260` — 6 P1s; reports canonical totals, location editing, OTP demo bypass, calendar Unassigned column, Play Recording, leads row click.
+- `32771b8 fix: #249 stale-chunk recovery for all lazy routes` — class-wide; lazyWithRetry + RouteErrorBoundary
 - `d7ed223 test(e2e): cover routes/voice_transcription.js — 20 tests across 5 endpoints` — **⚠️ retroactively flagged as PRD drift** (voice = Callified per PRD §6.5). Tests already shipped; don't extend.
-- `612617f fix(server)+test(e2e): cover routes/marketing.js + add /marketing/submit to openPaths` — 41 tests; surfaced + fixed real auth-gate bug on the public form-ingest endpoint
+- `612617f fix(server)+test(e2e): cover routes/marketing.js + add /marketing/submit to openPaths` — 41 tests; real auth-gate bug fixed on the public form-ingest endpoint
+- `4846adb test(e2e): cover routes/reports.js — 52 tests across 7 endpoints` — biggest single coverage gap closed
 - `4846adb test(e2e): cover routes/reports.js — 52 tests across 7 endpoints` — biggest single gap closed; verified live
 - `9afee65 fix: #269 stronger OTP filter — exclude OTP SMSes from staff inbox entirely (was just redacting)` — closes the confirmed account-takeover chain; #254 redaction kept as belt-and-braces
 - `ac1fa1c fix(qa): cron batch — #254 #256` — SMS-OTP digit redaction in /api/sms/messages + estimates `$ ₹` cleanup

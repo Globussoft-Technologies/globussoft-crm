@@ -1,10 +1,34 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **100% route-file e2e coverage** (121 spec files, 700+ tests passing on production). Backend line coverage: **64.76%** (full 1056-test suite under c8, measured 2026-04-26; gate at 60% lines / 45% branches; aspirational target 100%).
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **100% route-file e2e coverage** (124 spec files, 800+ tests passing on production). Backend line coverage: **~71-72%** (forecast after 2026-04-27 reports.js + marketing.js coverage push; gate at 60% lines / 45% branches; aspirational target 100%).
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.2
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.3
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work.
+
+## What's new in v3.2.3 (April 27 2026 — P1 + P2 closure pass + fetchApi rewrite + demo polish)
+
+A focused day-long pass on user-reported QA bugs. **24 GitHub issues closed**: 8 P1 (demo-breaking), 11 P2 (functional gaps), 4 silent-failure cluster, and 1 visit overflow. P1 + P2 boards both at 0 open. No schema changes; backwards-compatible API changes only.
+
+**Class fixes (most leverage):**
+- **`fetchApi` rewrite** ([frontend/src/utils/api.js](frontend/src/utils/api.js)) — every error toast now surfaces the real server message. Root cause: `fetchApi` read `errData.message` but every backend route returns `{error, code}`, so every toast fell back to the generic literal "API Request Failed". Fix: read `errData.error || errData.message`; 403 / 404 / 5xx / network fallbacks; auto-toasts via `_globalNotify` registered by `NotifyProvider` on mount; throws Error with `.status` / `.code` / `.data`. Closes the silent-failure class behind #273-#276.
+- **Stale-chunk recovery** (#249) — new `lazyWithRetry` helper wraps every `lazy()` import; on `Failed to fetch dynamically imported module` it auto-reloads once per session. New `RouteErrorBoundary` catches the residual case. Affects all 80 lazy routes.
+- **Visit.amountCharged ₹50L cap** (#277) — POST + PUT `/api/wellness/visits` reject `amountCharged > 5_000_000` with `code: AMOUNT_TOO_LARGE`. Cleanup script NULLed 2 polluted ₹1e15 rows on prod.
+- **Reports off-by-one date range** (#234) — `to=YYYY-MM-DD` was being parsed as midnight UTC, dropping every visit later that day. Now clamped to end-of-day. Net effect: P&L productCost went ₹0 → ₹32,000.
+- **Reports tabs canonical totals** (#232) — P&L / Per-Pro / Per-Location were each silently filtering visits with different rules. New `canonicalVisitTotals()` makes totals identical across tabs; new `totals.unbucketed` exposes the join-key-missing delta.
+
+**Demo-criteria status (PRD §14):** 4 of 6 verified live. The 2 ⚠️ are external-blocked (Callified webhook + AdsGPT back-link). See [docs/wellness-client/PRD.md §14 status table](docs/wellness-client/PRD.md#status-as-of-2026-04-27).
+
+**Highlights of bug fixes:**
+- Calendar grid now shows ALL 16 practitioners (was 3); empty-slot click opens "New visit" modal (#262, #270).
+- Reports tabs reconciled (#232) — same 117 visits / ₹12.9L across P&L / Per-Pro / Per-Location.
+- Patient portal OTP demo bypass via `WELLNESS_DEMO_OTP=1234` env var (#238).
+- Owner Dashboard ₹20T overflow fixed (#277) — was ₹30,000.
+- Consent canvas signatures visible on cream theme (#231) — `--text-primary` instead of hardcoded `#fff`.
+- Inbox Play Recording wired (#253); Leads row click navigates (#260); Locations editable (#235); Calendar Unassigned column (#247).
+- 17 redundant `notify.error` catches swept across 9 wellness pages; success toasts added where missing.
+
+**Coverage:** combined forecast 64.76% → ~71-72% from 3 new e2e specs (`reports.js` 52 tests, `marketing.js` 41 tests, `voice_transcription.js` 20 tests). Re-run on server next session and bump `.c8rc.json` `60 → 70` if measurement supports.
 
 ## What's new in v3.2.2 (April 26 2026 — afternoon — form autosave, billing patch, telecaller polish, c8 coverage measured)
 

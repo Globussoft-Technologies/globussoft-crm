@@ -1,6 +1,6 @@
 {
   "name": "globussoft-crm-backend",
-  "version": "3.2.2",
+  "version": "3.2.3",
   "description": "Backend API for Globussoft CRM",
   "main": "server.js",
   "scripts": {

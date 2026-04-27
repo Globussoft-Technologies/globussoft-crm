@@ -11,7 +11,7 @@ The persistent backlog of multi-day / architectural work that's been deferred fr
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.2.2 (form autosave, billing patch, telecaller polish, c8 coverage measured)
+- **Version:** v3.2.3 (P1 + P2 closure pass, fetchApi rewrite, demo polish — see [CHANGELOG.md](CHANGELOG.md))
 - **Branch:** main (single-branch workflow)
 
 ## Verticals

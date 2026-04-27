@@ -1,16 +1,29 @@
 # Enhanced Wellness — Build Status
 
 **Companion to:** [PRD.md](PRD.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EXTERNAL_API.md](EXTERNAL_API.md)
-**Last updated:** 2026-04-26
+**Last updated:** 2026-04-27 (end of day — v3.2.3 deployed; P1 + P2 boards both at 0 open after a 24-issue closure pass)
 **Live at:** https://crm.globusdemos.com
 **Tenant:** `enhanced-wellness` (id 2, vertical `wellness`)
-**Production HEAD:** `3e6e8292`
+**Production HEAD:** `3be74ca` (v3.2.3)
 
 ---
 
 ## TL;DR
 
-The Enhanced Wellness tenant is **live and demo-ready**. Built as a configuration on the existing multi-tenant CRM (no fork). Rishu can log in, see his clinic's morning dashboard, click into any of 50 patients, write a prescription, capture a consent on a tablet, scan 106 services across every Dr. Haror's category, review 3 AI agent recommendations, and bounce out to AdsGPT or Callified.ai via single-click sidebar links.
+The Enhanced Wellness tenant is **live and demo-ready**. 4 of 6 PRD §14 demo criteria are verified green; the 2 ⚠️ depend on Callified + AdsGPT teams shipping their side. Built as a configuration on the existing multi-tenant CRM (no fork). Rishu can log in, see his clinic's morning dashboard with sane numbers (₹20T overflow fixed today), click into any of 300+ patients, write a prescription, capture a consent on a tablet (signatures now visible on cream theme), scan 106 services across every Dr. Haror's category, review the AI agent's recommendations, book a visit by clicking any empty cell on the practitioner calendar, and bounce out to AdsGPT or Callified.ai via single-click sidebar links.
+
+### Today's closure pass (2026-04-27, v3.2.3)
+
+24 user-facing bugs closed in a focused day. P1 + P2 boards both at 0 open (was 8 + 11). See [CHANGELOG.md v3.2.3](../../CHANGELOG.md) for the full list. Highlights for the wellness vertical:
+
+- Reports tabs reconciled (#232) — P&L / Per-Pro / Per-Location now show the same 117 visits / ₹12.9L
+- Owner Dashboard expected revenue overflow fixed (#277) — ₹20T → ₹30,000
+- Calendar shows all 16 practitioners (was 3) and supports click-to-book on empty slots (#262, #270)
+- Patient portal OTP demo flow unlocked via `WELLNESS_DEMO_OTP=1234` (#238)
+- Consent signatures visible on cream theme (#231)
+- Locations editable in-place (#235); calendar surfaces unassigned visits (#247)
+- Class fix: `fetchApi` rewrite means every error toast surfaces the real server message (was generic "API Request Failed")
+- Class fix: stale-chunk auto-recovery for all 80 lazy routes (#249) — no more blank screens after deploy
 
 ---
 

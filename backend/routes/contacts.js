@@ -6,6 +6,7 @@ const audienceController = require("../controllers/audienceController");
 const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, conflictFromPrisma } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
+const { normalizePhone } = require("../utils/deduplication");
 
 // #167: soft-delete helper. Aggregations / reports / merge / internal joins
 // (e.g. activities, deals, sequenceEnrollments) are NOT yet filtered by
@@ -191,6 +192,71 @@ router.put('/:id', async (req, res) => {
         );
       }
     } catch (e) {}
+
+    // Bug #283 [wellness]: when a contact transitions into Customer on a
+    // wellness tenant, the downstream wellness app needs a Patient row to
+    // hang visits / Rx / consents off. Without this row the customer is a
+    // dead-end in the wellness UI. Idempotent: dedupe on contactId, then on
+    // phone (normalized last-10-digit match) so we never double-create.
+    // Best-effort: any failure here MUST NOT fail the contact update itself.
+    try {
+      if (
+        existing.status !== "Customer" &&
+        contact.status === "Customer"
+      ) {
+        const tenant = await prisma.tenant.findUnique({
+          where: { id: req.user.tenantId },
+          select: { vertical: true },
+        });
+        if (tenant && tenant.vertical === "wellness") {
+          let patient = await prisma.patient.findFirst({
+            where: { tenantId: req.user.tenantId, contactId: contact.id },
+          });
+          if (!patient && contact.phone) {
+            const last10 = String(contact.phone).replace(/\D/g, "").slice(-10);
+            if (last10.length === 10) {
+              patient = await prisma.patient.findFirst({
+                where: { tenantId: req.user.tenantId, phone: { contains: last10 } },
+              });
+              // Backfill the contactId link if we matched by phone but the
+              // Patient was never linked to this CRM Contact.
+              if (patient && !patient.contactId) {
+                await prisma.patient.update({
+                  where: { id: patient.id },
+                  data: { contactId: contact.id },
+                });
+              }
+            }
+          }
+          if (!patient) {
+            const normalizedPhone = contact.phone
+              ? (normalizePhone(contact.phone) || contact.phone)
+              : null;
+            const created = await prisma.patient.create({
+              data: {
+                name: contact.name || contact.email || "Unnamed patient",
+                email: contact.email || null,
+                phone: normalizedPhone,
+                source: contact.source || "lead-conversion",
+                contactId: contact.id,
+                tenantId: req.user.tenantId,
+              },
+            });
+            await writeAudit(
+              "Patient",
+              "CREATE",
+              created.id,
+              req.user.userId,
+              req.user.tenantId,
+              { from: "lead-conversion", contactId: contact.id }
+            );
+          }
+        }
+      }
+    } catch (e) {
+      // Patient backfill is non-blocking; log and continue.
+      console.error("[contacts PUT] wellness Patient backfill failed:", e && e.message);
+    }
 
     res.json(contact);
   } catch (err) {

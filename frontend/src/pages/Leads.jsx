@@ -55,10 +55,14 @@ const Leads = () => {
   };
 
   const handleConvert = async (id) => {
+    // Bug #283: pipeline is Lead -> Prospect -> Customer -> Churned. The
+    // Convert button must move the lead one step (to Prospect), not jump
+    // straight to Customer. ConvertedLeads.jsx defaults to the "Prospect"
+    // tab, so this is also where the user expects to find the row next.
     await fetchApi(`/api/contacts/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'Customer' }),
+      body: JSON.stringify({ status: 'Prospect' }),
     });
     fetchLeads();
   };

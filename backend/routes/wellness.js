@@ -11,6 +11,8 @@ const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
 const jwt = require("jsonwebtoken");
+const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = require("express-rate-limit");
 const prisma = require("../lib/prisma");
 const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
 const {
@@ -400,6 +402,26 @@ router.put("/patients/:id", async (req, res) => {
 
 // ── Visits ─────────────────────────────────────────────────────────
 
+// #280: Visits are the source for the doctor calendar at /wellness/calendar.
+// Stylists / helpers are non-clinical staff and must NOT see clinical PHI:
+// patient names + service names like "Acne Vulgaris Treatment" or "Hair
+// Restoration". Scope their list to:
+//   1. visits whose service category is non-clinical (salon-style work), AND
+//   2. visits assigned to themselves (their own column).
+// Doctors / professionals / admins / managers / telecallers keep full view.
+const CLINICAL_SERVICE_CATEGORIES = [
+  "hair-transplant",
+  "hair-restoration",
+  "hair-concern",
+  "skin",
+  "skin-surgery",
+  "dermatology",
+  "aesthetics",
+  "body-contouring",
+  "ayurveda",
+  "slimming",
+];
+
 router.get("/visits", async (req, res) => {
   try {
     const { patientId, doctorId, status, from, to, limit = 100, offset = 0 } = req.query;
@@ -412,6 +434,26 @@ router.get("/visits", async (req, res) => {
       if (from) where.visitDate.gte = new Date(from);
       if (to) where.visitDate.lte = new Date(to);
     }
+
+    // #280: stylist/helper PHI scope. Bypass for ADMIN/MANAGER (org oversight).
+    const wRole = req.user?.wellnessRole;
+    const isOrgRole = req.user?.role === "ADMIN" || req.user?.role === "MANAGER";
+    if (!isOrgRole && (wRole === "stylist" || wRole === "helper")) {
+      where.OR = [
+        { doctorId: req.user.userId }, // own column
+        {
+          service: {
+            is: {
+              OR: [
+                { category: null },
+                { category: { notIn: CLINICAL_SERVICE_CATEGORIES } },
+              ],
+            },
+          },
+        },
+      ];
+    }
+
     const visits = await prisma.visit.findMany({
       where,
       take: Math.min(parseInt(limit), 500),
@@ -2819,7 +2861,41 @@ router.delete("/waitlist/:id", async (req, res) => {
 // already on server.js openPaths allowlist).
 // ─────────────────────────────────────────────────────────────────────
 
-router.post("/portal/login/request-otp", async (req, res) => {
+// #295: hard rate limits on /portal/login/request-otp. Without these any
+// caller could fan out 20+ OTP requests in parallel, costing SMS credits
+// and (worse) flooding a real patient's phone if used for harassment.
+// Two stacked limiters: phone-level (3 / 10 min per last-10-digit phone)
+// and IP-level (10 / 10 min per source IP). Both must pass.
+const portalRequestOtpPhoneLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req, res) => {
+    const raw = String(req.body?.phone || "").replace(/\D/g, "");
+    const last10 = raw.slice(-10);
+    // Fall back to IP when phone missing/invalid so we don't share a single
+    // empty bucket across callers (which would let one bad actor lock the
+    // route for everyone). Use ipKeyGenerator for IPv6 safety.
+    return last10.length === 10 ? `phone:${last10}` : ipKeyGenerator(req, res);
+  },
+  message: { error: "Too many OTP requests for this number. Try again in 10 minutes." },
+});
+
+const portalRequestOtpIpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: { error: "Too many OTP requests from this network. Try again later." },
+});
+
+router.post(
+  "/portal/login/request-otp",
+  portalRequestOtpIpLimiter,
+  portalRequestOtpPhoneLimiter,
+  async (req, res) => {
   try {
     const { phone } = req.body || {};
     if (!phone) return res.status(400).json({ error: "phone is required" });
@@ -2897,8 +2973,29 @@ router.post("/portal/login/verify-otp", async (req, res) => {
     // accept it as a valid OTP without checking the PatientOtp table. Still
     // requires a real seeded patient to exist for the phone — this is for
     // the demo / QA flow, not an auth weakening for unknown phones.
+    //
+    // #292 hardening: the bypass was previously accepted for ANY existing
+    // patient phone, which meant attackers could log in as any real patient
+    // (e.g. Kavita Reddy 9811891334) using `1234`. Tighten the gate:
+    //   1. Only honor the bypass outside production (NODE_ENV !== 'production').
+    //      Production opt-in still possible via WELLNESS_DEMO_OTP_ALLOW_PROD=1.
+    //   2. Restrict to an explicit phone whitelist (last-10-digit match).
+    //      Default whitelist is the seeded demo patient (+919876500001 →
+    //      "9876500001"). Override via WELLNESS_DEMO_OTP_PHONES (comma-sep,
+    //      digits only — last 10 used).
     const demoOtp = process.env.WELLNESS_DEMO_OTP;
-    const isDemoBypass = demoOtp && String(otp) === String(demoOtp);
+    const demoOtpAllowedInProd = process.env.WELLNESS_DEMO_OTP_ALLOW_PROD === "1";
+    const demoOtpEnvOk =
+      process.env.NODE_ENV !== "production" || demoOtpAllowedInProd;
+    const demoOtpPhones = (process.env.WELLNESS_DEMO_OTP_PHONES || "9876500001")
+      .split(",")
+      .map((p) => String(p).replace(/\D/g, "").slice(-10))
+      .filter((p) => p.length === 10);
+    const isDemoBypass =
+      Boolean(demoOtp) &&
+      demoOtpEnvOk &&
+      String(otp) === String(demoOtp) &&
+      demoOtpPhones.includes(last10);
 
     let record = null;
     if (!isDemoBypass) {

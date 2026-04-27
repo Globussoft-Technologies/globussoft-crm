@@ -1,0 +1,185 @@
+name: Deploy to demo server (crm.globusdemos.com)
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      # Skip deploy when only docs / tests / operator scripts change.
+      # (paths-ignore does NOT support !negation — keep this as a flat list.)
+      - "**/*.md"
+      - "docs/**"
+      - "e2e/**"
+      - "backend/scripts/**"
+      - ".gitignore"
+      - ".github/workflows/post_comments.yml"
+  workflow_dispatch:
+    inputs:
+      skip_frontend:
+        description: "Skip frontend build (backend-only deploy)"
+        type: boolean
+        default: false
+
+# One deploy at a time — never cancel an in-flight deploy. A half-finished
+# deploy on prod is worse than the next push waiting in the queue.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Show trigger info
+        run: |
+          echo "Trigger: ${{ github.event_name }}"
+          echo "Commit:  ${{ github.sha }}"
+          echo "Pusher:  ${{ github.actor }}"
+          echo "Message: ${{ github.event.head_commit.message }}"
+
+      # ── Backend deploy ──────────────────────────────────────────────
+      # git pull -> npm install -> prisma generate -> pm2 restart -> health.
+      # On health failure, the next step rolls back to HEAD~1.
+      - name: Deploy backend
+        id: backend
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 10m
+          script: |
+            set -euo pipefail
+            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+            cd ~/globussoft-crm
+
+            echo "=== git state before ==="
+            echo "before SHA: $(git rev-parse --short HEAD)"
+
+            git fetch origin main
+            git reset --hard origin/main
+            echo "after  SHA: $(git rev-parse --short HEAD)"
+            git log --oneline -3
+
+            cd backend
+            echo "=== npm install ==="
+            npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
+
+            echo "=== prisma generate ==="
+            npx prisma generate 2>&1 | tail -3
+
+            echo "=== pm2 restart ==="
+            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
+
+            echo "=== health poll ==="
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              body=$(curl -s --max-time 5 http://127.0.0.1:5099/api/health 2>&1 || true)
+              if echo "$body" | grep -q '"healthy"'; then
+                echo "  [try $i] healthy"
+                exit 0
+              fi
+              echo "  [try $i] $body"
+              sleep 2
+            done
+            echo "[fail] backend did not reach healthy within 20s"
+            exit 1
+
+      # If the backend deploy failed (most likely the health check), roll back
+      # to HEAD~1 and restart. Don't try anything fancier — keep the rollback
+      # path identical to a manual `git reset --hard HEAD~1 && pm2 restart`.
+      - name: Rollback backend on failure
+        if: failure() && steps.backend.conclusion == 'failure'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            set -eo pipefail
+            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+            cd ~/globussoft-crm
+            echo "=== ROLLBACK to HEAD~1 ==="
+            echo "current: $(git rev-parse --short HEAD)"
+            git reset --hard HEAD~1
+            echo "rolled back to: $(git rev-parse --short HEAD)"
+            cd backend
+            npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -3
+            npx prisma generate 2>&1 | tail -2
+            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
+            echo "[rollback] complete — health verification skipped (manual check needed)"
+
+      # ── Frontend deploy ─────────────────────────────────────────────
+      # vite build on the server, rsync dist -> /var/www, then sudo chown to
+      # www-data so nginx can read it. The chown is the lesson from today's
+      # 2026-04-27 incident: sudo rsync alone strips ownership and the site
+      # 403s.
+      - name: Deploy frontend
+        if: ${{ inputs.skip_frontend != true }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 10m
+          script: |
+            set -euo pipefail
+            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+            cd ~/globussoft-crm/frontend
+
+            echo "=== vite build ==="
+            npx vite build --logLevel=error 2>&1 | tail -8
+            du -sh dist
+
+            echo "=== rsync dist -> /var/www/crm.globusdemos.com ==="
+            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S rsync -a --delete dist/ /var/www/crm.globusdemos.com/ 2>&1 | tail -3
+
+            echo "=== fix ownership + perms (lesson from 2026-04-27 sudo-rsync 403) ==="
+            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S chown -R www-data:www-data /var/www/crm.globusdemos.com/
+            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S find /var/www/crm.globusdemos.com/ -type d -exec chmod 755 {} +
+            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S find /var/www/crm.globusdemos.com/ -type f -exec chmod 644 {} +
+            echo "ok"
+
+      # ── Smoke check ─────────────────────────────────────────────────
+      # If we get here without a rollback, the backend was healthy. Now
+      # confirm the public surface is also alive.
+      - name: Smoke check public surface
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 2m
+          script: |
+            set -eo pipefail
+            echo "=== https://crm.globusdemos.com/ ==="
+            code=$(curl -sk -o /dev/null -w '%{http_code}' 'https://crm.globusdemos.com/')
+            echo "GET /                   -> $code"
+            [ "$code" = "200" ] || { echo "[fail] expected 200"; exit 1; }
+
+            echo "=== https://crm.globusdemos.com/api/health ==="
+            code=$(curl -sk -o /dev/null -w '%{http_code}' 'https://crm.globusdemos.com/api/health')
+            echo "GET /api/health         -> $code"
+            [ "$code" = "200" ] || { echo "[fail] expected 200"; exit 1; }
+
+            echo "=== served chunk + watchdog (#284 sentinel) ==="
+            html=$(curl -sk 'https://crm.globusdemos.com/?_cb='$(date +%s))
+            chunk=$(echo "$html" | grep -oE 'index-[A-Za-z0-9_-]+\.js' | head -1 || true)
+            echo "served chunk: $chunk"
+            if [ -n "$chunk" ]; then
+              hits=$(curl -sk "https://crm.globusdemos.com/assets/$chunk" | grep -c 'mountWatchdogReloaded' || true)
+              echo "mountWatchdogReloaded refs in chunk: $hits"
+            fi
+
+            echo "=== pm2 status ==="
+            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+            pm2 list | grep globussoft-crm-backend || true
+
+      - name: Deploy summary
+        run: |
+          echo "::notice title=Deploy complete::commit ${{ github.sha }} live on https://crm.globusdemos.com"

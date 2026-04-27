@@ -2942,16 +2942,14 @@ router.post(
       });
     }
 
-    // Always return ok:true — don't leak whether the phone is registered.
-    // DEV-ONLY: when NODE_ENV !== 'production' AND patient exists, also surface the
-    // freshly-generated OTP so E2E tests can complete the flow without DB access.
-    // Non-enumeration is preserved: response still returns {ok:true} for unknown phones.
-    // Mirrors the pattern used by /api/auth/forgot-password which also returns resetToken in dev.
-    const payload = { ok: true, expiresAt };
-    if (process.env.NODE_ENV !== "production" && generatedOtp) {
-      payload.otp = generatedOtp;
-    }
-    res.json(payload);
+    // #300 [P0]: NEVER return the OTP in the response body. The previous gate
+    // (NODE_ENV !== 'production') leaked the OTP on the public demo server,
+    // enabling unauthenticated account takeover for any patient phone. The
+    // OTP is delivered out-of-band via SMS only. E2E tests that need to read
+    // the OTP must read it from the PatientOtp DB table directly (no env-var
+    // bypass — easier to forget than to disable). Always return ok:true so
+    // we don't leak whether the phone is registered.
+    res.json({ ok: true, expiresAt });
   } catch (e) {
     console.error("[wellness] portal request-otp error:", e.message);
     res.status(500).json({ error: "Failed to request OTP" });

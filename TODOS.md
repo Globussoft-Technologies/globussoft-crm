@@ -2,7 +2,7 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-27 (morning — `routes/reports.js` covered, 52 tests pass live)
+Last updated: 2026-04-27 (morning — `routes/reports.js` + `routes/marketing.js` covered; 93 tests added; real backend bug surfaced + fixed)
 
 ---
 
@@ -15,19 +15,19 @@ State at end of 2026-04-27 session (HEAD `4846adb`):
 - **Gate as of HEAD**: lines/functions/statements 60%, branches 45%
 - **Aspirational target: 100%**
 
-### Reports.js coverage — shipped 2026-04-27 in `4846adb`
-- New `e2e/tests/reports-api.spec.js`: **52 tests, all pass live in 23.5s**
-- Covers all 7 endpoints + every metric/type branch + `validateDateRange` errors
-- `routes/reports.js` was 14.17 % (70 / 494). Forecast post-spec: **~85% on the file**, lifting global coverage **64.76% → ~67-68%**
-- **Next move (5 min on the server)**: pull, run `npm run coverage:start` + the e2e suite + `npm run coverage:report`, read the new global lines %. If ≥ 65%, bump `.c8rc.json` lines/functions/statements to **65** (branches to 50). Don't over-bump — we want ratchet-up, never ratchet-down.
+### Coverage shipped 2026-04-27
+- **`routes/reports.js`** (`4846adb`) — 52 tests, all pass live in 23.5s. Covers all 7 endpoints + every metric/type branch + `validateDateRange` errors. Was 14.17%; forecast ~85% on the file.
+- **`routes/marketing.js`** (`612617f`) — 41 tests, all pass live in 18.1s. Covers campaign CRUD + audience targeting (status/source/aiScore/tags filters, EMAIL+SMS) + send/schedule/pause + public form ingest (4 AI-score heuristic branches). Was 28.20%; forecast ~80% on the file.
+- **Real backend bug surfaced + fixed** (same commit `612617f`): `POST /api/marketing/submit` was designed as a public form ingest but was NOT in `server.js openPaths` so the global guard 403'd every embedded-form POST. Same class as #auth/2fa/verify and #accounting/webhook from the overnight audit. Added to openPaths.
+- Combined forecast: global coverage **64.76% → ~70-71%**.
+- **Next move (5 min on the server)**: pull, run `npm run coverage:start` + the e2e suite + `npm run coverage:report`, read the new global lines %. If ≥ 70%, bump `.c8rc.json` lines/functions/statements to **70** (branches to 55). Don't over-bump — ratchet up, never down.
 
-### Top 4 remaining coverage gaps (in priority order)
-1. **`routes/marketing.js`** — 28.20 % (152 / 539) — campaign + form-ingest paths
-2. **`routes/voice_transcription.js`** — 29.55 % (73 / 247) — Gemini audio transcription branches
-3. **`routes/sms.js`** — 31.05 % (141 / 454) — DLT compliance branches; Fast2SMS now routed through here. Recent OTP-redaction + filter (#254 / #269) needs a dedicated spec branch too.
-4. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151) — ticket SLA breach cron, recent feature
+### Top 3 remaining coverage gaps (in priority order)
+1. **`routes/voice_transcription.js`** — 29.55 % (73 / 247) — Gemini audio transcription branches
+2. **`routes/sms.js`** — 31.05 % (141 / 454) — DLT compliance branches; Fast2SMS now routed through here. Recent OTP-redaction + filter (#254 / #269) needs a dedicated spec branch too.
+3. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151) — ticket SLA breach cron, recent feature
 
-Each one needs ~1 spec file (~150-300 lines) using the patterns from `e2e/tests/reports-api.spec.js` (latest), `e2e/tests/billing-update.spec.js`, or `e2e/tests/eventbus-actions.spec.js`.
+Each one needs ~1 spec file (~200-400 lines) using the patterns from `e2e/tests/marketing-api.spec.js` (latest), `e2e/tests/reports-api.spec.js`, or `e2e/tests/billing-update.spec.js`.
 
 ### What's open on GitHub (8 issues at session end)
 - **Multi-day**: #228 (mobile responsive overhaul), #227 (CSV/PDF export across 4 reports tabs), #137 (external-integrations test sandbox infra)
@@ -39,15 +39,16 @@ Each one needs ~1 spec file (~150-300 lines) using the patterns from `e2e/tests/
 - **AdsGPT "Back to CRM" link** — our SSO impersonation works one-way; their side pending
 - **Rishu inputs** — Superphone + Zylu CSVs (data migration), Aadhaar/PAN scans (Android Play Store resubmit)
 
-### Recommended order tomorrow
+### Recommended order next session
 1. **15 min** — pull, verify clean tree, glance at overnight commits
-2. **5 min** — re-run coverage on the server to capture the lift from `4846adb` (`routes/reports.js` spec)
-3. **5 min** — bump `.c8rc.json` lines/functions/statements `60 → 65`, branches `45 → 50` (only if the new measurement is ≥ 65%)
-4. **2 hours** — `routes/marketing.js` spec (28 % → 80 %+, lifts global another ~2-3 pts)
+2. **5 min** — re-run coverage on the server to capture the combined lift from `4846adb` + `612617f` (`routes/reports.js` + `routes/marketing.js`)
+3. **5 min** — bump `.c8rc.json` lines/functions/statements `60 → 70`, branches `45 → 55` (only if the new measurement supports it)
+4. **2 hours** — `routes/voice_transcription.js` spec (29 % → 80 %+, lifts global another ~1-2 pts)
 5. **Rest** — pick from #228 / #227 / Callified chase / vague-issue triage based on priority
 
 ### Recent commits worth knowing about
-- `4846adb test(e2e): cover routes/reports.js — 52 tests across 7 endpoints` — biggest gap closed; verified live
+- `612617f fix(server)+test(e2e): cover routes/marketing.js + add /marketing/submit to openPaths` — 41 tests; surfaced + fixed real auth-gate bug on the public form-ingest endpoint
+- `4846adb test(e2e): cover routes/reports.js — 52 tests across 7 endpoints` — biggest single gap closed; verified live
 - `9afee65 fix: #269 stronger OTP filter — exclude OTP SMSes from staff inbox entirely (was just redacting)` — closes the confirmed account-takeover chain; #254 redaction kept as belt-and-braces
 - `ac1fa1c fix(qa): cron batch — #254 #256` — SMS-OTP digit redaction in /api/sms/messages + estimates `$ ₹` cleanup
 - `fb3d63e docs: refresh all 6 doc files for v3.2.2`

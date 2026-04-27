@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus } from 'lucide-react';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
@@ -110,6 +110,9 @@ export default function PatientDetail() {
 // ── Case history tab ──────────────────────────────────────────────
 
 function CaseHistoryTab({ patient }) {
+  // #278: clicking an Rx card pops a detail modal with all fields + PDF download.
+  const [openRx, setOpenRx] = useState(null);
+
   const events = [
     ...patient.visits.map((v) => ({ kind: 'visit', date: v.visitDate, data: v })),
     ...patient.prescriptions.map((p) => ({ kind: 'rx', date: p.createdAt, data: p })),
@@ -120,36 +123,58 @@ function CaseHistoryTab({ patient }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      {events.map((e, i) => (
-        <div key={i} className="glass" style={{ padding: '1rem', display: 'flex', gap: '0.75rem' }}>
-          <div style={{ width: 8, background: kindColor(e.kind), borderRadius: 4, flexShrink: 0 }} />
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                {kindIcon(e.kind)}
-                <strong style={{ textTransform: 'capitalize' }}>{kindLabel(e.kind)}</strong>
-                {e.kind === 'visit' && e.data.service?.name && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.service.name}</span>}
-                {e.kind === 'consent' && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.templateName}</span>}
+      {events.map((e, i) => {
+        const clickable = e.kind === 'rx';
+        return (
+          <div
+            key={i}
+            className="glass"
+            onClick={clickable ? () => setOpenRx(e.data) : undefined}
+            role={clickable ? 'button' : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            onKeyDown={clickable ? (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setOpenRx(e.data); } } : undefined}
+            title={clickable ? 'Click to view full prescription details' : undefined}
+            style={{ padding: '1rem', display: 'flex', gap: '0.75rem', cursor: clickable ? 'pointer' : 'default' }}
+          >
+            <div style={{ width: 8, background: kindColor(e.kind), borderRadius: 4, flexShrink: 0 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  {kindIcon(e.kind)}
+                  <strong style={{ textTransform: 'capitalize' }}>{kindLabel(e.kind)}</strong>
+                  {e.kind === 'visit' && e.data.service?.name && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.service.name}</span>}
+                  {e.kind === 'consent' && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.templateName}</span>}
+                </div>
+                {/* #244: pin Asia/Kolkata so test browsers / users in non-IST
+                    zones still see the visit's IST calendar day + time. Without
+                    an explicit timeZone, toLocaleString uses the browser's local
+                    zone and a UTC-clocked test browser pushed late-evening IST
+                    visits to the next calendar day. */}
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(e.date).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
               </div>
-              {/* #244: pin Asia/Kolkata so test browsers / users in non-IST
-                  zones still see the visit's IST calendar day + time. Without
-                  an explicit timeZone, toLocaleString uses the browser's local
-                  zone and a UTC-clocked test browser pushed late-evening IST
-                  visits to the next calendar day. */}
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(e.date).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
+              {e.kind === 'visit' && (
+                <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                  {e.data.notes || 'No notes'}
+                  {e.data.amountCharged && <> • <strong style={{ color: 'var(--success-color)' }}>₹{Math.round(e.data.amountCharged).toLocaleString('en-IN')}</strong></>}
+                </div>
+              )}
+              {e.kind === 'rx' && (
+                // #278 (sub-issue 1): the timeline summary now also surfaces
+                // Instructions inline (collapsible if long). Sub-issue 2's
+                // modal still shows the full record on click.
+                <RxSummary drugs={e.data.drugs} instructions={e.data.instructions} />
+              )}
             </div>
-            {e.kind === 'visit' && (
-              <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                {e.data.notes || 'No notes'}
-                {e.data.amountCharged && <> • <strong style={{ color: 'var(--success-color)' }}>₹{Math.round(e.data.amountCharged).toLocaleString('en-IN')}</strong></>}
-              </div>
-            )}
-            {e.kind === 'rx' && (
-              <RxSummary drugs={e.data.drugs} />
-            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
+      {openRx && (
+        <RxDetailModal
+          rx={openRx}
+          patient={patient}
+          onClose={() => setOpenRx(null)}
+        />
+      )}
     </div>
   );
 }
@@ -164,17 +189,191 @@ const kindIcon = (k) => {
   return null;
 };
 
-function RxSummary({ drugs }) {
+// #278 sub-issue 1: previously this only rendered the drug rows and silently
+// dropped Instructions, which is clinically unsafe (e.g. "take after food",
+// "stop if rash appears"). We now surface instructions below the drugs and
+// truncate long bodies behind an expand/collapse toggle.
+function RxSummary({ drugs, instructions }) {
+  const [expanded, setExpanded] = useState(false);
   let parsed = [];
   try { parsed = typeof drugs === 'string' ? JSON.parse(drugs) : drugs; } catch { return <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{String(drugs).slice(0, 120)}</div>; }
   if (!Array.isArray(parsed)) return null;
+
+  const instr = (instructions || '').trim();
+  const longInstr = instr.length > 140;
+  const shownInstr = !longInstr || expanded ? instr : `${instr.slice(0, 140)}…`;
+
   return (
-    <ul style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, paddingLeft: '1rem' }}>
-      {parsed.slice(0, 3).map((d, i) => (
-        <li key={i}>{d.name} — {d.dosage}, {d.frequency}{d.duration ? `, ${d.duration}` : ''}</li>
-      ))}
-      {parsed.length > 3 && <li>+ {parsed.length - 3} more</li>}
-    </ul>
+    <>
+      <ul style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, paddingLeft: '1rem' }}>
+        {parsed.slice(0, 3).map((d, i) => (
+          <li key={i}>{d.name} — {d.dosage}, {d.frequency}{d.duration ? `, ${d.duration}` : ''}</li>
+        ))}
+        {parsed.length > 3 && <li>+ {parsed.length - 3} more</li>}
+      </ul>
+      {instr && (
+        <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+          <strong style={{ color: 'var(--text-primary)' }}>Instructions:</strong> {shownInstr}
+          {longInstr && (
+            <button
+              type="button"
+              onClick={(ev) => { ev.stopPropagation(); setExpanded((v) => !v); }}
+              style={{
+                marginLeft: '0.4rem', background: 'transparent', border: 'none',
+                color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.78rem',
+                display: 'inline-flex', alignItems: 'center', gap: '0.15rem', padding: 0,
+              }}
+            >
+              {expanded ? <>Show less <ChevronUp size={11} /></> : <>Show more <ChevronDown size={11} /></>}
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+// #278 sub-issue 2 + 3: full Rx detail modal. Lists every field (drug, dosage,
+// frequency, duration, instructions, prescribed-by, date, patient) and offers
+// a "Download PDF" button wired to the existing /api/wellness/prescriptions/:id/pdf
+// endpoint (route already exists in backend/routes/wellness.js, which calls
+// renderPrescriptionPdf in services/pdfRenderer.js).
+function RxDetailModal({ rx, patient, onClose }) {
+  const notify = useNotify();
+  const [downloading, setDownloading] = useState(false);
+  let drugs = [];
+  try { drugs = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs; } catch { drugs = []; }
+  if (!Array.isArray(drugs)) drugs = [];
+
+  const downloadPdf = async () => {
+    setDownloading(true);
+    try {
+      // Use fetch directly so we can stream the binary into a blob URL.
+      // fetchApi assumes JSON responses; PDFs are binary.
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/wellness/prescriptions/${rx.id}/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `PDF download failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      // Open in a new tab; user can save from there. We also revoke the URL
+      // shortly after so we don't leak the blob in memory forever.
+      window.open(url, '_blank', 'noopener');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      notify.error(err.message || 'Failed to download prescription PDF.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="glass"
+        style={{
+          width: '90%', maxWidth: 640, maxHeight: '85vh', overflow: 'auto',
+          padding: '1.5rem', background: 'var(--surface-color, #fff)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <FileText size={18} /> Prescription details
+          </h2>
+          <button onClick={onClose} aria-label="Close" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem', fontSize: '0.85rem' }}>
+          <div>
+            <div style={{ color: 'var(--text-secondary)' }}>Patient</div>
+            <div style={{ fontWeight: 600 }}>{patient?.name || '—'}</div>
+          </div>
+          <div>
+            <div style={{ color: 'var(--text-secondary)' }}>Date</div>
+            <div style={{ fontWeight: 600 }}>{new Date(rx.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
+          </div>
+          <div>
+            <div style={{ color: 'var(--text-secondary)' }}>Prescribed by</div>
+            <div style={{ fontWeight: 600 }}>{rx.doctor?.name || '—'}</div>
+          </div>
+          <div>
+            <div style={{ color: 'var(--text-secondary)' }}>Visit ID</div>
+            <div style={{ fontWeight: 600 }}>#{rx.visitId}</div>
+          </div>
+        </div>
+
+        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Medications</h3>
+        {drugs.length === 0 ? (
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '0.5rem 0' }}>(no medications listed)</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', marginBottom: '1rem' }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Drug</th>
+                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Dosage</th>
+                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Frequency</th>
+                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Duration</th>
+              </tr>
+            </thead>
+            <tbody>
+              {drugs.map((d, i) => (
+                <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
+                  <td style={{ padding: '0.4rem', fontWeight: 600 }}>{d.name || d.drug || '—'}</td>
+                  <td style={{ padding: '0.4rem' }}>{d.dosage || '—'}</td>
+                  <td style={{ padding: '0.4rem' }}>{d.frequency || '—'}</td>
+                  <td style={{ padding: '0.4rem' }}>{d.duration || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Instructions</h3>
+        <div style={{
+          fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5,
+          whiteSpace: 'pre-wrap', padding: '0.6rem', borderRadius: 8,
+          border: '1px solid var(--border-color)', marginBottom: '1rem',
+        }}>
+          {rx.instructions || '—'}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ padding: '0.55rem 1rem', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem' }}
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={downloadPdf}
+            disabled={downloading}
+            style={{
+              padding: '0.55rem 1rem', background: 'var(--accent-color)', color: '#fff',
+              border: 'none', borderRadius: 8, cursor: downloading ? 'wait' : 'pointer',
+              fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+              opacity: downloading ? 0.7 : 1,
+            }}
+          >
+            <Download size={14} /> {downloading ? 'Preparing…' : 'Download PDF'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

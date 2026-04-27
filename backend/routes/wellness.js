@@ -218,7 +218,11 @@ router.get("/patients/:id", async (req, res) => {
           orderBy: { visitDate: "desc" },
           include: { service: true, doctor: { select: { id: true, name: true, email: true } } },
         },
-        prescriptions: { orderBy: { createdAt: "desc" } },
+        prescriptions: {
+          orderBy: { createdAt: "desc" },
+          // #278: include doctor so the Rx detail modal can show "prescribed by".
+          include: { doctor: { select: { id: true, name: true, email: true } } },
+        },
         consents: { orderBy: { signedAt: "desc" }, include: { service: true } },
         treatmentPlans: { include: { service: true } },
       },
@@ -2090,11 +2094,18 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
     const id = parseInt(req.params.id);
     const rx = await prisma.prescription.findFirst({
       where: tenantWhere(req, { id }),
-      include: { patient: true },
+      // #278: include doctor so the PDF letterhead shows the prescriber's name
+      // under the signature line. Falls back to the requesting user if the
+      // Rx pre-dates the doctorId column being populated.
+      include: {
+        patient: true,
+        doctor: { select: { id: true, name: true, email: true } },
+      },
     });
     if (!rx) return res.status(404).json({ error: "Prescription not found" });
     const clinic = await primaryClinic(req.user.tenantId);
-    const buf = await renderPrescriptionPdf(rx, rx.patient, clinic);
+    const doctor = rx.doctor || (req.user?.name ? { name: req.user.name } : null);
+    const buf = await renderPrescriptionPdf(rx, rx.patient, clinic, doctor);
     // PRD §11: PDF export of an Rx is a downloadable PHI artefact; the audit
     // row is what proves "who pulled this drug list and when". IDs only —
     // never the drug names (those live in the Prescription row itself).

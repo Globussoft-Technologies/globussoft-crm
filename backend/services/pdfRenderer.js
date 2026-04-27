@@ -126,7 +126,7 @@ function getConsentBody(templateName) {
 
 // ── 1. Prescription PDF ────────────────────────────────────────────
 
-async function renderPrescriptionPdf(prescription, patient, clinic) {
+async function renderPrescriptionPdf(prescription, patient, clinic, doctor) {
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
@@ -146,8 +146,10 @@ async function renderPrescriptionPdf(prescription, patient, clinic) {
   doc.text(`Date: ${formatDate(prescription?.createdAt || new Date())}`);
   doc.moveDown(0.8);
 
-  // Drug table
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Rx");
+  // Drug table — #278: Rx label uses the unicode ℞ glyph (U+211E). pdfkit's
+  // built-in Helvetica covers the BMP enough for this symbol on every
+  // platform we target; if a future custom font drops it, fall back to "Rx".
+  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text("℞");
   doc.moveDown(0.3);
 
   const drugs = parseDrugs(prescription?.drugs);
@@ -201,10 +203,14 @@ async function renderPrescriptionPdf(prescription, patient, clinic) {
     doc.moveDown(0.8);
   }
 
-  // Signature line
+  // Signature line — #278: when the Rx has a tracked prescriber, name them
+  // under the line so the document reads as a proper doctor-attributed Rx.
   const sigY = Math.max(doc.y + 40, 700);
   doc.moveTo(360, sigY).lineTo(545, sigY).lineWidth(0.5).strokeColor("#444").stroke();
   doc.font("Helvetica").fontSize(10).fillColor("#333").text("Doctor's signature", 360, sigY + 4);
+  if (doctor?.name) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#222").text(doctor.name, 360, sigY + 18);
+  }
 
   doc.end();
   return bufPromise;

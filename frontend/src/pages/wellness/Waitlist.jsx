@@ -64,12 +64,11 @@ export default function Waitlist() {
           notes: form.notes || undefined,
         }),
       });
+      notify.success('Added to waitlist');
       setShowAdd(false);
       setForm({ patientId: '', serviceId: '', preferredDateRange: '', notes: '' });
       load();
-    } catch (err) {
-      notify.error(`Failed: ${err.message}`);
-    } finally {
+    } catch (_err) { /* fetchApi already toasted */ } finally {
       setSaving(false);
     }
   };
@@ -80,16 +79,18 @@ export default function Waitlist() {
         method: 'PUT',
         body: JSON.stringify({ status }),
       });
+      notify.success(`Marked ${status}`);
       load();
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (_err) { /* fetchApi already toasted */ }
   };
 
   const remove = async (id) => {
     if (!await notify.confirm({ message: 'Remove this waitlist entry?', destructive: true, confirmText: 'Remove' })) return;
     try {
       await fetchApi(`/api/wellness/waitlist/${id}`, { method: 'DELETE' });
+      notify.success('Removed from waitlist');
       load();
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (_err) { /* fetchApi already toasted */ }
   };
 
   const serviceName = (id) => services.find((s) => s.id === id)?.name || '—';

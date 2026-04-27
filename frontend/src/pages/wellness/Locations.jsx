@@ -46,20 +46,23 @@ export default function Locations() {
     try {
       if (editingId) {
         await fetchApi(`/api/wellness/locations/${editingId}`, { method: 'PUT', body: JSON.stringify(form) });
+        notify.success(`Updated "${form.name}"`);
       } else {
         await fetchApi('/api/wellness/locations', { method: 'POST', body: JSON.stringify(form) });
+        notify.success(`Created "${form.name}"`);
       }
       resetForm();
       load();
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (_err) { /* fetchApi already toasted the server message */ }
     setSaving(false);
   };
 
   const toggleActive = async (loc) => {
     try {
       await fetchApi(`/api/wellness/locations/${loc.id}`, { method: 'PUT', body: JSON.stringify({ isActive: !loc.isActive }) });
+      notify.success(loc.isActive ? `Deactivated "${loc.name}"` : `Activated "${loc.name}"`);
       load();
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (_err) { /* fetchApi already toasted */ }
   };
 
   return (

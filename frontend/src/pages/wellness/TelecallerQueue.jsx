@@ -365,9 +365,7 @@ export default function TelecallerQueue() {
 
       setLeads((prev) => prev.filter((l) => l.id !== contactId));
       notify.success(`${disp.label}: ${lead.name || `lead #${contactId}`}`);
-    } catch (err) {
-      notify.error(`Failed: ${err.message}`);
-    } finally {
+    } catch (_err) { /* fetchApi already toasted */ } finally {
       setDisposing((s) => {
         const copy = { ...s };
         delete copy[contactId];

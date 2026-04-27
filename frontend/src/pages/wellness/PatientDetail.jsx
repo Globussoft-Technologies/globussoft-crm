@@ -234,9 +234,7 @@ function PrescribeTab({ patient, onSaved }) {
       clearDraft();
       onSaved();
       notify.success('Prescription saved.');
-    } catch (err) {
-      notify.error(`Failed: ${err.message}`);
-    } finally { setSaving(false); }
+    } catch (_err) { /* fetchApi already toasted */ } finally { setSaving(false); }
   };
 
   return (
@@ -359,9 +357,7 @@ function ConsentTab({ patient, services, onSaved }) {
       clearSig();
       onSaved();
       notify.success('Consent captured.');
-    } catch (err) {
-      notify.error(`Failed: ${err.message}`);
-    } finally { setSaving(false); }
+    } catch (_err) { /* fetchApi already toasted */ } finally { setSaving(false); }
   };
 
   return (
@@ -466,11 +462,10 @@ function PlansTab({ patient, services, onSaved }) {
           name, totalSessions, totalPrice, serviceId: serviceId || null,
         }),
       });
+      notify.success(`Treatment plan "${name}" created`);
       clearDraft();
       onSaved();
-    } catch (err) {
-      notify.error(`Failed: ${err.message}`);
-    } finally {
+    } catch (_err) { /* fetchApi already toasted */ } finally {
       setSubmitting(false);
     }
   };
@@ -573,9 +568,7 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
       clearDraft();
       onSaved();
       notify.success('Visit logged.');
-    } catch (err) {
-      notify.error(`Failed: ${err.message}`);
-    } finally {
+    } catch (_err) { /* fetchApi already toasted */ } finally {
       setSubmitting(false);
     }
   };
@@ -766,12 +759,11 @@ function InventoryTab({ patient, onSaved }) {
       await fetchApi(`/api/wellness/visits/${visitId}/consumptions`, {
         method: 'POST', body: JSON.stringify(form),
       });
+      notify.success(`Logged ${form.qty}× ${form.productName}`);
       setForm({ productName: '', qty: 1, unitCost: 0 });
       const next = await fetchApi(`/api/wellness/visits/${visitId}/consumptions`);
       setItems(next);
-    } catch (err) {
-      notify.error(`Failed: ${err.message}`);
-    } finally {
+    } catch (_err) { /* fetchApi already toasted */ } finally {
       setSubmitting(false);
     }
   };

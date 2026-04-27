@@ -50,12 +50,11 @@ export default function Patients() {
     try {
       const payload = { ...form, locationId: form.locationId ? parseInt(form.locationId) : null };
       await fetchApi('/api/wellness/patients', { method: 'POST', body: JSON.stringify(payload) });
+      notify.success(`Patient "${form.name}" added`);
       setForm({ name: '', phone: '', email: '', gender: '', source: 'walk-in', locationId: locations[0]?.id || '' });
       setShowAdd(false);
       load();
-    } catch (err) {
-      notify.error(`Failed: ${err.message}`);
-    }
+    } catch (_err) { /* fetchApi already toasted */ }
   };
 
   return (

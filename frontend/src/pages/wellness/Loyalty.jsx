@@ -162,9 +162,7 @@ function SearchTab({ onCreditChange }) {
     try {
       const r = await fetchApi(`/api/wellness/loyalty/${p.id}`);
       setLoyalty(r);
-    } catch (err) {
-      notify.error(`Failed to load loyalty: ${err.message}`);
-    }
+    } catch (_err) { /* fetchApi already toasted */ }
   };
 
   const credit = async (e) => {
@@ -321,8 +319,9 @@ function ReferralsTab({ referrals, onChanged }) {
         method: 'PUT',
         body: JSON.stringify({ rewardPoints: pts }),
       });
+      notify.success(`Rewarded ${pts} points`);
       onChanged();
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (_err) { /* fetchApi already toasted */ }
   };
 
   const submit = async (e) => {
@@ -338,10 +337,11 @@ function ReferralsTab({ referrals, onChanged }) {
           referredEmail: form.referredEmail || undefined,
         }),
       });
+      notify.success(`Referral logged for ${form.referredName}`);
       setForm({ referrerPatientId: '', referredName: '', referredPhone: '', referredEmail: '' });
       setShowAdd(false);
       onChanged();
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (_err) { /* fetchApi already toasted */ }
   };
 
   return (

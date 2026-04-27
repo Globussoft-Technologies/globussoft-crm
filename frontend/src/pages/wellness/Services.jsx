@@ -36,10 +36,11 @@ export default function Services() {
     e.preventDefault();
     try {
       await fetchApi('/api/wellness/services', { method: 'POST', body: JSON.stringify(form) });
+      notify.success(`Service "${form.name}" created`);
       setShowAdd(false);
       setForm({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: 0, durationMin: 60, targetRadiusKm: 30, description: '' });
       load();
-    } catch (err) { notify.error(`Failed: ${err.message}`); }
+    } catch (_err) { /* fetchApi already toasted */ }
   };
 
   return (

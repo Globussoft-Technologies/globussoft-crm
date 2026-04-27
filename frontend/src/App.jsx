@@ -1,10 +1,12 @@
-import React, { useState, useContext, createContext, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useContext, createContext, useEffect, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Landing from './pages/Landing';
 import Layout from './components/Layout';
+import RouteErrorBoundary from './components/RouteErrorBoundary';
 import { NotifyProvider } from './utils/notify';
+import { lazyWithRetry as lazy } from './utils/lazyWithRetry';
 import './theme/wellness.css'; // wellness vertical theme overrides (scoped)
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -169,6 +171,7 @@ export default function App() {
     <AuthContext.Provider value={{ user, setUser, token, setToken, tenant, setTenant }}>
     <NotifyProvider>
       <BrowserRouter>
+        <RouteErrorBoundary>
         <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: 'var(--text-primary)' }}>Loading...</div>}>
           <Routes>
             <Route path="/login" element={!token ? <Login /> : <Navigate to="/dashboard" />} />
@@ -276,6 +279,7 @@ export default function App() {
             </Route>
           </Routes>
         </Suspense>
+        </RouteErrorBoundary>
       </BrowserRouter>
     </NotifyProvider>
     </AuthContext.Provider>

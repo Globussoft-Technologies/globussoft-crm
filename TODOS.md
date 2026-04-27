@@ -83,6 +83,34 @@ remaining technical scope rather than firefighting. In priority order:
    - Rishu inputs — Superphone + Zylu CSVs (data migration), Aadhaar/PAN
      scans (Android Play Store resubmit)
 
+### 🌱 Long-term wishlist — good-to-have, not urgent
+
+Park items here that aren't bugs, aren't on the next-30-day plan, and aren't
+external-blocked, but that we'd want to revisit when there's space. Don't
+work these unless the urgent + priority backlog is empty.
+
+- **Patient self-service portal as a first-class persona** (multi-week
+  dedicated push). PRD §5 currently lists 6 personas, all clinic-staff or
+  Globussoft-managed; the patient is the *subject* of the system, not a
+  *user*. Today `/wellness/portal` is a thin compliance + Rx-download
+  fallback. Promoting it to a real product would mean:
+  - Update PRD §5 to add a "Patient" persona with documented needs
+    (book directly, view loyalty points, pay invoices online, upload
+    before/after photos, manage reschedule, opt in/out of reminders)
+  - Dedicated security review for every new public endpoint (every portal
+    endpoint is internet-facing — see today's #292/#295/#300 for the kind
+    of P0 these surfaces produce)
+  - Mobile-first UI design (the only realistic patient device)
+  - Payment integration on the patient side (Stripe/Razorpay tokenized,
+    not the staff invoicing flow)
+  - Decide product positioning: does it compete with WhatsApp (which
+    Callified owns per PRD §6.5) or complement it?
+  - Estimate: 2-4 weeks dedicated work + ongoing security review cadence.
+  - Pickup trigger: when Rishu (or a future tenant) explicitly asks for
+    patient self-service AND staff-side CRM is in a steady state.
+
+- _(Add more good-to-haves here as they surface during normal work.)_
+
 ### Apr-end demo criteria (PRD §14) — final state
 
 PRD says "if those six work end-to-end, Rishu signs":

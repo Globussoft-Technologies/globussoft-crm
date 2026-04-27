@@ -309,7 +309,12 @@ function ConsentTab({ patient, services, onSaved }) {
     setIsDrawing(true);
     setHasStrokes(true);
     const ctx = canvasRef.current.getContext('2d');
-    ctx.strokeStyle = '#fff';
+    // #231: previous code hardcoded strokeStyle = '#fff' which made signatures
+    // invisible on the wellness cream background (#204 fixed the canvas bg
+    // but missed the stroke color). Resolve the theme's text color from
+    // CSS variables at draw time so strokes contrast on both dark and cream.
+    const cssColor = getComputedStyle(canvasRef.current).getPropertyValue('--text-primary').trim();
+    ctx.strokeStyle = cssColor || '#1f2937';
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
     const { x, y } = getCoords(e);

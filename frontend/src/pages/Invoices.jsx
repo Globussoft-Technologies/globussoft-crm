@@ -328,7 +328,20 @@ export default function Invoices() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }} role="table" aria-label="Invoices table">
+              {/* #243: table-layout fixed + per-column widths so the Contact
+                  cell can no longer expand past its allotted space and bleed
+                  on top of the sticky Actions column. The Contact cell itself
+                  also truncates with ellipsis (see <td> below). */}
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem', tableLayout: 'fixed' }} role="table" aria-label="Invoices table">
+                <colgroup>
+                  <col style={{ width: '120px' }} />
+                  <col style={{ width: '110px' }} />
+                  <col style={{ width: '100px' }} />
+                  <col style={{ width: '120px' }} />
+                  <col style={{ width: '110px' }} />
+                  <col />
+                  <col style={{ width: '260px' }} />
+                </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
                     <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Invoice #</th>
@@ -339,7 +352,7 @@ export default function Invoices() {
                     <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Contact</th>
                     {/* #119 polish: sticky right-edge so action buttons are always
                         visible regardless of horizontal scroll position. */}
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right', position: 'sticky', right: 0, background: 'var(--card-bg, var(--surface-bg))', boxShadow: '-4px 0 8px -4px rgba(0,0,0,0.15)' }}>Actions</th>
+                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right', position: 'sticky', right: 0, background: 'var(--surface-bg, #ffffff)', boxShadow: '-4px 0 8px -4px rgba(0,0,0,0.15)', zIndex: 2 }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -375,10 +388,22 @@ export default function Invoices() {
                         {/* #111: Invoice schema uses issuedDate, not createdAt. */}
                         {inv.issuedDate ? new Date(inv.issuedDate).toLocaleDateString() : '—'}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
+                      <td
+                        style={{
+                          padding: '1rem 0.5rem', color: 'var(--text-secondary)',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}
+                        title={inv.contact?.name || 'Unknown'}
+                      >
                         {inv.contact?.name || 'Unknown'}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', textAlign: 'right', position: 'sticky', right: 0, background: 'var(--card-bg, var(--surface-bg))', boxShadow: '-4px 0 8px -4px rgba(0,0,0,0.15)' }}>
+                      <td style={{
+                        padding: '1rem 0.5rem', textAlign: 'right',
+                        position: 'sticky', right: 0,
+                        background: 'var(--surface-bg, #ffffff)',
+                        boxShadow: '-4px 0 8px -4px rgba(0,0,0,0.15)',
+                        zIndex: 1,
+                      }}>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                           <button
                             onClick={() => downloadPdf(inv.id, inv.invoiceNum)}

@@ -201,7 +201,19 @@ export default function Inbox() {
           </div>
         ) : activeTab === 'emails' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {emails.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>Inbox is empty. Start communicating!</p>}
+            {/* #252: scope empty state to the active tab. Calls/SMS/WhatsApp
+                may still have data; the previous global "Inbox is empty"
+                message read like the whole CRM had no activity. */}
+            {emails.length === 0 && (
+              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
+                No emails yet.
+                {(calls.length + smsMessages.length + waMessages.length) > 0 && (
+                  <span style={{ display: 'block', marginTop: '0.5rem', fontSize: '0.85rem', opacity: 0.8 }}>
+                    {calls.length} call{calls.length !== 1 ? 's' : ''}, {smsMessages.length} SMS, {waMessages.length} WhatsApp message{waMessages.length !== 1 ? 's' : ''} in other tabs.
+                  </span>
+                )}
+              </p>
+            )}
             {emails.map(email => (
               <div key={email.id} className="table-row-hover" style={{ padding: '1.5rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: email.read ? 'rgba(0,0,0,0.2)' : 'rgba(59, 130, 246, 0.05)', display: 'flex', gap: '1.5rem', cursor: 'pointer' }}>
                 <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>

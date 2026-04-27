@@ -1361,9 +1361,22 @@ router.put("/locations/:id", verifyWellnessRole(["admin", "manager"]), async (re
 // so callers can return 400; otherwise { from, to } as before.
 const MIN_REPORT_YEAR = 2000;
 const MAX_REPORT_YEAR = 2099;
+// #234 fix: when the client sends to=YYYY-MM-DD (no time part), treat it as
+// end-of-day in UTC instead of midnight start-of-day. Without this, every
+// visit / consumption row created LATER on the to-date is silently excluded —
+// which made P&L productCost = ₹0 because the only consumption-bearing visits
+// (388/389/397/398) were on 2026-04-26 13:40-13:56 and got dropped when the
+// client sent to=2026-04-26 ⇒ parsed as 2026-04-26T00:00:00Z. Same off-by-
+// one was deflating visit counts + revenue across all 4 reports tabs.
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
 const reportRange = (req) => {
-  const to = req.query.to ? new Date(req.query.to) : new Date();
-  const from = req.query.from ? new Date(req.query.from) : new Date(Date.now() - 30 * 86400000);
+  const rawTo = req.query.to;
+  const to = rawTo ? new Date(rawTo) : new Date();
+  if (rawTo && DATE_ONLY.test(rawTo)) to.setUTCHours(23, 59, 59, 999);
+  const rawFrom = req.query.from;
+  const from = rawFrom ? new Date(rawFrom) : new Date(Date.now() - 30 * 86400000);
+  if (rawFrom && DATE_ONLY.test(rawFrom)) from.setUTCHours(0, 0, 0, 0);
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     return { error: { status: 400, error: "from and to must be valid dates", code: "INVALID_DATE_RANGE" } };
   }

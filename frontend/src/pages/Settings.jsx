@@ -222,17 +222,23 @@ export default function Settings() {
         {/* Appearance Card */}
         <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            {theme === 'dark' ? <Moon size={20} color="var(--accent-color)" /> : <Sun size={20} color="var(--warning-color)" />} Appearance
+            <Sun size={20} color="var(--warning-color)" /> Appearance
           </h3>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <p style={{ fontWeight: '500', fontSize: '1rem' }}>Theme</p>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-                Switch between dark and light mode
+                {/* #264: dark theme stylesheet not yet shipped — toggling
+                    data-theme=dark had no CSS to respond. Disable the toggle
+                    until the dark variable overrides land, rather than leave
+                    a 'visual lie' button. */}
+                Light mode (dark mode coming soon).
               </p>
             </div>
             <button
-              onClick={toggleTheme}
+              type="button"
+              disabled
+              title="Dark mode is not yet available — see issue #264"
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -240,17 +246,17 @@ export default function Settings() {
                 padding: '0.6rem 1.25rem',
                 borderRadius: '10px',
                 border: '1px solid var(--border-color)',
-                background: theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
-                color: 'var(--text-primary)',
-                cursor: 'pointer',
-                transition: 'var(--transition)',
+                background: 'rgba(0,0,0,0.03)',
+                color: 'var(--text-secondary)',
+                cursor: 'not-allowed',
+                opacity: 0.6,
                 fontFamily: 'var(--font-family)',
                 fontWeight: '500',
                 fontSize: '0.9rem',
               }}
             >
-              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-              Switch to {theme === 'dark' ? 'Light' : 'Dark'} Mode
+              <Sun size={18} />
+              Light mode
             </button>
           </div>
         </div>

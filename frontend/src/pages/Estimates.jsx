@@ -44,6 +44,8 @@ export default function Estimates() {
   const [deals, setDeals] = useState([]);
   const [form, setForm] = useState(INITIAL_FORM);
   const [lineItems, setLineItems] = useState([{ ...EMPTY_LINE_ITEM }]);
+  // #257: status pills now actually filter the ledger ('all' | 'Draft' | 'Sent').
+  const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
     loadData();
@@ -70,6 +72,11 @@ export default function Estimates() {
     const totalValue = estimates.reduce((sum, e) => sum + Number(e.totalAmount), 0);
     return { draftCount, sentCount, totalValue };
   }, [estimates]);
+
+  const visibleEstimates = useMemo(() => {
+    if (statusFilter === 'all') return estimates;
+    return estimates.filter((e) => e.status === statusFilter);
+  }, [estimates, statusFilter]);
 
   const grandTotal = useMemo(() =>
     lineItems.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0),
@@ -177,34 +184,56 @@ export default function Estimates() {
         </p>
       </header>
 
-      {/* Summary Stats */}
+      {/* Summary Stats — pills filter the ledger (#257) */}
       <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
-        <span style={{
-          padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-          background: 'rgba(148,163,184,0.1)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.3)',
-          display: 'flex', alignItems: 'center', gap: '0.4rem',
-        }}>
+        <button
+          type="button"
+          onClick={() => setStatusFilter('all')}
+          aria-pressed={statusFilter === 'all'}
+          style={{
+            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+            background: statusFilter === 'all' ? 'rgba(99,102,241,0.18)' : 'rgba(255,255,255,0.04)',
+            color: statusFilter === 'all' ? 'var(--accent-color)' : 'var(--text-secondary)',
+            border: `1px solid ${statusFilter === 'all' ? 'rgba(99,102,241,0.35)' : 'var(--border-color)'}`,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem',
+          }}
+        >
+          {estimates.length} All
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusFilter(statusFilter === 'Draft' ? 'all' : 'Draft')}
+          aria-pressed={statusFilter === 'Draft'}
+          style={{
+            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+            background: statusFilter === 'Draft' ? 'rgba(148,163,184,0.25)' : 'rgba(148,163,184,0.1)',
+            color: '#94a3b8',
+            border: `1px solid ${statusFilter === 'Draft' ? 'rgba(148,163,184,0.6)' : 'rgba(148,163,184,0.3)'}`,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem',
+          }}
+        >
           {stats.draftCount} Drafts
-        </span>
-        <span style={{
-          padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-          background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
-          display: 'flex', alignItems: 'center', gap: '0.4rem',
-        }}>
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusFilter(statusFilter === 'Sent' ? 'all' : 'Sent')}
+          aria-pressed={statusFilter === 'Sent'}
+          style={{
+            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+            background: statusFilter === 'Sent' ? 'rgba(59,130,246,0.25)' : 'rgba(59,130,246,0.1)',
+            color: '#3b82f6',
+            border: `1px solid ${statusFilter === 'Sent' ? 'rgba(59,130,246,0.6)' : 'rgba(59,130,246,0.3)'}`,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem',
+          }}
+        >
           {stats.sentCount} Sent
-        </span>
+        </button>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
           background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
           <DollarSign size={14} /> Total Value: {formatCurrency(stats.totalValue)}
-        </span>
-        <span style={{
-          padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem',
-          background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
-        }}>
-          {estimates.length} total estimates
         </span>
       </div>
 
@@ -431,7 +460,7 @@ export default function Estimates() {
                   </tr>
                 </thead>
                 <tbody>
-                  {estimates.map(est => (
+                  {visibleEstimates.map(est => (
                     <tr
                       key={est.id}
                       style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.15s' }}

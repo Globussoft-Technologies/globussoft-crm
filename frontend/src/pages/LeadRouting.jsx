@@ -96,7 +96,6 @@ export default function LeadRouting() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [toast, setToast] = useState(null);
   const [applying, setApplying] = useState(false);
 
   const [form, setForm] = useState({
@@ -127,9 +126,13 @@ export default function LeadRouting() {
     setLoading(false);
   };
 
+  // #258: migrated from a page-local toast renderer to the global notify
+  // surface so every page shares the same toast UI (top-right, 24px from
+  // edge, z-index 10000) and so fetchApi's auto-toast lines up with this
+  // page's manual ones (dedupe within 1.5s).
   const showToast = (msg, type = 'success') => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3500);
+    if (type === 'error') notify.error(msg);
+    else notify.success(msg);
   };
 
   const openNew = () => {
@@ -268,16 +271,6 @@ export default function LeadRouting() {
           </button>
         </div>
       </header>
-
-      {toast && (
-        <div style={{
-          position: 'fixed', top: 90, right: 24, zIndex: 300,
-          padding: '0.85rem 1.2rem', borderRadius: 10,
-          background: toast.type === 'error' ? 'rgba(239,68,68,0.9)' : 'rgba(16,185,129,0.9)',
-          color: 'white', fontWeight: 600, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-          backdropFilter: 'blur(8px)',
-        }}>{toast.msg}</div>
-      )}
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? (

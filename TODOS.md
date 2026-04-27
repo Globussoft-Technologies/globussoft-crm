@@ -2,7 +2,7 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-27 (morning — `routes/reports.js` + `routes/marketing.js` covered; 93 tests added; real backend bug surfaced + fixed)
+Last updated: 2026-04-27 (afternoon — top 3 coverage gaps closed: reports.js + marketing.js + voice_transcription.js; 113 tests added; openPaths audit complete; real backend bug surfaced + fixed)
 
 ---
 
@@ -18,14 +18,16 @@ State at end of 2026-04-27 session (HEAD `4846adb`):
 ### Coverage shipped 2026-04-27
 - **`routes/reports.js`** (`4846adb`) — 52 tests, all pass live in 23.5s. Covers all 7 endpoints + every metric/type branch + `validateDateRange` errors. Was 14.17%; forecast ~85% on the file.
 - **`routes/marketing.js`** (`612617f`) — 41 tests, all pass live in 18.1s. Covers campaign CRUD + audience targeting (status/source/aiScore/tags filters, EMAIL+SMS) + send/schedule/pause + public form ingest (4 AI-score heuristic branches). Was 28.20%; forecast ~80% on the file.
+- **`routes/voice_transcription.js`** (this commit) — 20 tests, all pass live in 22.1s. Covers all 5 endpoints + every validation/404/no-recording branch (Gemini & Whisper success paths exercised cheaply via fake URLs that fail download — covers route-handler catch path without burning real API quota). Was 29.55%; forecast ~75-80% on the file.
 - **Real backend bug surfaced + fixed** (same commit `612617f`): `POST /api/marketing/submit` was designed as a public form ingest but was NOT in `server.js openPaths` so the global guard 403'd every embedded-form POST. Same class as #auth/2fa/verify and #accounting/webhook from the overnight audit. Added to openPaths.
-- Combined forecast: global coverage **64.76% → ~70-71%**.
+- **OpenPaths audit complete**: cross-referenced every route file with `// no auth / public / unauthenticated` markers against `server.js openPaths` array. All gaps closed (`/marketing/submit` was the only one). landing_pages public is mounted at `/p` (not `/api`) so bypasses the guard correctly. `/communications/tracking/:emailId` and `/attribution/track` reference `req.user` so are correctly auth-required.
+- Combined forecast: global coverage **64.76% → ~71-72%**.
 - **Next move (5 min on the server)**: pull, run `npm run coverage:start` + the e2e suite + `npm run coverage:report`, read the new global lines %. If ≥ 70%, bump `.c8rc.json` lines/functions/statements to **70** (branches to 55). Don't over-bump — ratchet up, never down.
 
-### Top 3 remaining coverage gaps (in priority order)
-1. **`routes/voice_transcription.js`** — 29.55 % (73 / 247) — Gemini audio transcription branches
-2. **`routes/sms.js`** — 31.05 % (141 / 454) — DLT compliance branches; Fast2SMS now routed through here. Recent OTP-redaction + filter (#254 / #269) needs a dedicated spec branch too.
-3. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151) — ticket SLA breach cron, recent feature
+### Top remaining coverage gaps (in priority order)
+1. **`routes/sms.js`** — 31.05 % (141 / 454) — DLT compliance branches; Fast2SMS now routed through here. Recent OTP-redaction + filter (#254 / #269) needs a dedicated spec branch too.
+2. **`cron/slaBreachEngine.js`** — 24.50 % (37 / 151) — ticket SLA breach cron, recent feature
+3. **`routes/whatsapp.js`** — investigate next; template approval + media branches are likely thin
 
 Each one needs ~1 spec file (~200-400 lines) using the patterns from `e2e/tests/marketing-api.spec.js` (latest), `e2e/tests/reports-api.spec.js`, or `e2e/tests/billing-update.spec.js`.
 
@@ -41,12 +43,13 @@ Each one needs ~1 spec file (~200-400 lines) using the patterns from `e2e/tests/
 
 ### Recommended order next session
 1. **15 min** — pull, verify clean tree, glance at overnight commits
-2. **5 min** — re-run coverage on the server to capture the combined lift from `4846adb` + `612617f` (`routes/reports.js` + `routes/marketing.js`)
+2. **5 min** — re-run coverage on the server to capture combined lift from `4846adb` + `612617f` + this voice_transcription commit
 3. **5 min** — bump `.c8rc.json` lines/functions/statements `60 → 70`, branches `45 → 55` (only if the new measurement supports it)
-4. **2 hours** — `routes/voice_transcription.js` spec (29 % → 80 %+, lifts global another ~1-2 pts)
+4. **1.5-2 hours** — `routes/sms.js` spec (31 % → 75 %+, lifts global another ~2-3 pts; pay attention to the OTP-redaction branches added in #254 / #269 which need dedicated coverage)
 5. **Rest** — pick from #228 / #227 / Callified chase / vague-issue triage based on priority
 
 ### Recent commits worth knowing about
+- `<this commit> test(e2e): cover routes/voice_transcription.js — 20 tests across 5 endpoints` — 29 % → ~75-80 % on the file; openPaths audit also done (no new gaps found beyond the marketing/submit fix in `612617f`)
 - `612617f fix(server)+test(e2e): cover routes/marketing.js + add /marketing/submit to openPaths` — 41 tests; surfaced + fixed real auth-gate bug on the public form-ingest endpoint
 - `4846adb test(e2e): cover routes/reports.js — 52 tests across 7 endpoints` — biggest single gap closed; verified live
 - `9afee65 fix: #269 stronger OTP filter — exclude OTP SMSes from staff inbox entirely (was just redacting)` — closes the confirmed account-takeover chain; #254 redaction kept as belt-and-braces

@@ -19,9 +19,9 @@
   "temp-directory": "./.c8tmp",
   "reports-dir": "./coverage",
   "check-coverage": false,
-  "//gate": "Current full-suite measurement: 64.76% lines / 50.03% branches / 66.11% functions. Gate set with ~5pt headroom; raise as suite grows.",
-  "lines": 60,
-  "functions": 60,
-  "branches": 45,
-  "statements": 60
+  "//gate": "Current full-suite measurement (2026-04-27): 66.65% lines / 51.97% branches / 68.13% functions. Gate set with ~1.5pt headroom over baseline; raise as suite grows. Aspirational target: 100%.",
+  "lines": 65,
+  "functions": 65,
+  "branches": 50,
+  "statements": 65
 }

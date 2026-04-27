@@ -172,11 +172,16 @@ async function cleanupTestSources() {
 async function cleanupSourceCasing() {
   header(267, "Normalize Patient.source / Contact.source underscores -> hyphens");
   try {
+    // Note: Prisma's `contains: "_"` lowers to SQL `LIKE '%_%'`, where `_`
+    // is a single-char wildcard — that matches every non-empty string, not
+    // just rows with a literal underscore. Fetch source-bearing rows and
+    // filter in JS to get the real underscore set.
     // Patient
-    const patientHits = await prisma.patient.findMany({
-      where: { tenantId: TENANT_ID, source: { contains: "_" } },
+    const patientAll = await prisma.patient.findMany({
+      where: { tenantId: TENANT_ID, source: { not: null } },
       select: { id: true, name: true, source: true },
     });
+    const patientHits = patientAll.filter((p) => p.source && p.source.includes("_"));
     console.log(`Patient: found ${patientHits.length} rows with underscores in source`);
     for (const p of patientHits) {
       console.log(`  patient id=${p.id} name="${p.name}" source="${p.source}" -> "${p.source.replace(/_/g, "-")}"`);
@@ -195,11 +200,12 @@ async function cleanupSourceCasing() {
       console.log(`Patient: would update ${patientHits.length} rows.`);
     }
 
-    // Contact
-    const contactHits = await prisma.contact.findMany({
-      where: { tenantId: TENANT_ID, source: { contains: "_" } },
+    // Contact (same SQL-wildcard caveat — see Patient comment above)
+    const contactAll = await prisma.contact.findMany({
+      where: { tenantId: TENANT_ID, source: { not: null } },
       select: { id: true, name: true, source: true },
     });
+    const contactHits = contactAll.filter((c) => c.source && c.source.includes("_"));
     console.log(`Contact: found ${contactHits.length} rows with underscores in source`);
     for (const c of contactHits) {
       console.log(`  contact id=${c.id} name="${c.name}" source="${c.source}" -> "${c.source.replace(/_/g, "-")}"`);

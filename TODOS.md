@@ -2,7 +2,7 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-27 (end of day — **24 user-facing bugs closed**, P1 + P2 boards both at 0 open. Class fixes: fetchApi rewrite + redundant-catch sweep, Visit.amountCharged ₹50L cap, off-by-one date range in reports. All deployed + verified live.)
+Last updated: 2026-04-27 (afternoon session — **6 more issues closed** on top of yesterday's 24: P0/P1/PHI batch (#292 #295 #280) + #283 lead conversion + #284 React mount race + 6 P3 cleanups (#272 #271 #268 #266 #250) via the new `cleanup-p3-data-quality.js` script. Coverage: 64.76% → 66.65% lines (+1.89 pt). c8 gate raised to 65/50/65/65. New `e2e/tests/sms-api.spec.js` with 44 tests adds coverage for routes/sms.js (was 31%). All deployed + verified live on demo.)
 
 ---
 
@@ -41,7 +41,89 @@ The two ⚠️ items are external-blocked (Callified + AdsGPT teams owe their si
 
 ## 📌 NEXT SESSION — pick up here
 
-**HEAD at end of 2026-04-27**: `3be74ca`. Working tree clean.
+**HEAD at end of 2026-04-27 afternoon**: see latest `git log` (will be the gate-bump + TODOS commit on top of the cleanup-#267 fix). Working tree clean.
+
+### Afternoon session (2026-04-27) — what shipped today
+
+- **Coverage rerun on server**: 64.76% → **66.65% lines** (21,484 → 22,181 / 33,170 → 33,277). Branches 50.03% → 51.97%. Functions 66.11% → 68.13%. 1,191 tests passed in 14.4 min (3 pre-existing flakies). Combined lift came from yesterday's 3 specs (reports / marketing / voice_transcription) maturing into the run.
+
+- **`e2e/tests/sms-api.spec.js`** (44 tests, ~530 lines) — full coverage of `routes/sms.js`: POST /send (validation + no-provider branch), GET /messages (pagination + direction/status/contactId filters + OTP-redaction filter from #254/#269), templates CRUD, /config ADMIN-only mask + isActive deactivates-others, /drain admin queue flush + no-provider FAIL, /webhook/twilio (inbound + status maps), /webhook/msg91 (status code 1/2/9/unknown maps), /webhook/<unknown> → 400, auth gates. Smoke run on demo: 44/44 passed in 2.4s. PRD §6.5 aligned.
+
+- **#292 [P0/PHI]**: Patient Portal hardcoded OTP `1234` worked for ANY existing patient. Fix in `backend/routes/wellness.js`: env-gate the `WELLNESS_DEMO_OTP` bypass to `NODE_ENV !== 'production'` (override `WELLNESS_DEMO_OTP_ALLOW_PROD=1`) AND restrict to phones in `WELLNESS_DEMO_OTP_PHONES` (default `9876500001`). **Verified live**: Kavita Reddy `+919811891334` rejected with `{"error":"Invalid or expired code"}`; demo `+919876500001` still works.
+
+- **#295 [P1]**: `/api/wellness/portal/login/request-otp` had zero rate limiting. Fix: two stacked `express-rate-limit` instances — 3/10min per phone (last-10 keyed) + 10/10min per IP (`ipKeyGenerator` for IPv6). **Verified live**: 5 sequential requests → 200, 200, 200, 429, 429.
+
+- **#280 [PHI]**: Stylists could read full doctor calendar (patient names + clinical service names). Fix: GET /wellness/visits scopes by `wellnessRole` — stylists/helpers see only their own column OR non-clinical-category visits. Clinical block-list: hair-transplant, skin, dermatology, body-contouring, etc. ADMIN/MANAGER keep full org oversight.
+
+- **#283 [wellness]**: Convert lead → Customer skipped Prospect AND didn't create a Patient. Two fixes: (a) `frontend/src/pages/Leads.jsx` Convert button now sends `Prospect` (one stage at a time, matches `ConvertedLeads.jsx` default tab); (b) `backend/routes/contacts.js` PUT detects `* → Customer` transitions on wellness tenants and idempotently creates a `Patient` row keyed by `contactId`, with phone-last-10 dedupe + audit log. Best-effort wrapper — never breaks the contact update.
+
+- **#284 [wellness]**: React app fails to mount on first navigation — blank screen until hard reload. Two fixes: (a) `lazyWithRetry.js` now retries 3× with 300ms/900ms exponential backoff before falling through to stale-chunk reload (handles transient chunk-fetch failures from cancelled in-flight requests); (b) `main.jsx` 4-second mount watchdog force-reloads once if `#root` empty, sessionStorage-guarded against reload loops. **Verified live**: `mountWatchdogReloaded` ships in `index-CrdQQG-V.js`.
+
+- **P3 cleanup script `backend/scripts/cleanup-p3-data-quality.js`** — single dry-run-default script that closed 6 P3 issues in one pass:
+  - **#272**: 7 `E2E Branch [id]` location dupes deleted (gated on zero visits/patients FK)
+  - **#271**: 34 non-Indian-phone Contacts soft-deleted
+  - **#268**: 11 Contact rows with `test-skip` / `test-junk` / `e2e-test` / `qa-test` sources updated to `other`
+  - **#267**: confirmed clean (script's initial `contains:'_'` filter was a SQL LIKE wildcard match-all bug — fixed in second pass with proper string-includes filter; verified 0 literal underscores in 267 patient + 206 contact source values)
+  - **#266**: 19 gender values normalized to canonical M/F/Other
+  - **#265**: detection-only — surfaced 150 dupe-name groups (sneha iyer ×21, reyansh kumar ×15, phi audit test patient ×8, etc.) for human-merge review. **Issue stays open.**
+  - **#250**: 1 ancient `1/1/1999` task soft-deleted
+
+- **c8 gate raised**: `60/60/45/60` → **`65/65/50/65`** (lines/functions/branches/statements). ~1.5pt headroom over baseline. Aspirational target stays 100%.
+
+### Lessons learned today (for the deploy script)
+
+1. **Prisma `contains: '_'` is not a literal-underscore filter.** Lowers to SQL `LIKE '%_%'` where `_` is a single-char wildcard, matching every non-empty string. Use `findMany` + JS `.filter(r => r.field.includes('_'))` instead — or `$queryRaw` with `LIKE '%\_%'` ESCAPE `'\\'`.
+
+2. **Don't `sudo rsync --delete dist/ /var/www/...` from a non-root user.** It strips ownership: the new directory ends up `empcloud-development:empcloud-development 700`, nginx (`www-data`) gets `Permission denied`, site 403s. Fix: `sudo chown -R www-data:www-data` + `chmod 755`/`644` after every rsync. The original `ssh_deploy.py` is missing this step — needs a permanent fix.
+
+### Open backlog at end of 2026-04-27 afternoon
+
+- **P1**: 0 open
+- **P2**: ~10 open (the wellness UI bugs filed overnight by QA: #285 #287 #288 #289 #290 #291 #293 #294 #296 #298 #299 + a few legacy)
+- **P3**: ~10 open (post-cleanup, the data-quality items removed but UI polish remain)
+- **wellness-tagged**: ~9 open
+- **Open total**: ~50 (was 50 at session start; closed 6 today, but ~6 new ones came in from overnight QA — net flat)
+
+### Next-session priority order (PRD-aligned)
+
+1. **15 min** — pull, glance at overnight commits, re-baseline
+2. **30 min — overnight QA P0**: `#295` rate-limit shipped today, but check if the in-memory rate-limiter survives PM2 restart (it doesn't — first request after a restart resets the bucket). If real prod risk, swap to a Redis store. Won't matter for demo.
+3. **1-2 hours — P2 wellness UI cluster**: #285 (6× duplicate auto-task), #287 (treatment plan label/service mismatch), #288 (estimates total mismatch), #289 (no-show 11 of 11 + occupancy 0% impossible), #290 (every telecaller lead shows SLA BREACH), #291 (smoke-test location name leaks to public booking), #293 (location filter not applying), #296 (CRITICAL_OMG raw enum)
+4. **30 min — fix `ssh_deploy.py`**: bake the `sudo chown www-data:www-data` + `chmod` into the rsync step; add a post-deploy `curl /api/health` AND `curl /` HTTP-200 sanity check.
+5. **1.5-2 hours — coverage push** on `cron/slaBreachEngine.js` (24%) and `routes/wellness.js` clinical sub-flows. Target: 66.65 → 70%+, then bump gate.
+6. **#137 + #228 + #227** — multi-day items still queued.
+7. **#265 dupe-patient merge** — needs human review of the 150 detected groups (sneha iyer, reyansh kumar, phi audit test patient are clearly e2e pollution; safe to bulk-soft-delete those at minimum).
+
+### Coverage state (HEAD post-bump)
+- **66.65% lines / 51.97% branches / 68.13% functions** (1,191 tests, 14.4 min)
+- Gate at HEAD: 65 lines / 65 functions / 50 branches / 65 statements
+- Top under-covered (PRD-aligned): `cron/slaBreachEngine.js` 24.50%, `routes/sms.js` will lift dramatically when the new spec is in the run, `lib/notificationService.js` 29.37%
+- ⛔ Skipped per PRD §6.5: `routes/whatsapp.js`, `routes/voice.js`, `routes/voice_transcription.js` (Callified.ai territory)
+
+### Coverage run cheat-sheet (still works)
+
+```bash
+ssh empcloud-development@163.227.174.141
+cd ~/globussoft-crm
+git pull
+cd backend
+DISABLE_CRONS=1 PORT=5098 ./node_modules/.bin/c8 \
+  --reporter=text-summary --reporter=json-summary \
+  --temp-directory=./.c8tmp --reports-dir=./coverage \
+  --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js,prisma/migrations/**' \
+  node server.js &
+
+cd ../e2e
+E2E_SKIP_SCRUB=1 BASE_URL=http://localhost:5098 \
+  npx playwright test --project=chromium --no-deps --reporter=list
+
+# back to backend dir, send SIGTERM to c8 process (pid in nohup output)
+# server.js graceful-shutdown handler flushes V8 coverage before exit
+```
+
+### Older state — yesterday morning's prior `3be74ca` baseline (preserved for context)
+
+**HEAD at end of 2026-04-27 morning**: `3be74ca`. Working tree clean.
 
 **Open backlog at end of 2026-04-27 evening:**
 - P1: **0** (all 8 closed today)

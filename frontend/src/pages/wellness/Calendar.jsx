@@ -68,29 +68,22 @@ export default function CalendarGrid() {
         fetchApi('/api/staff').catch(() => []),
         fetchApi(`/api/wellness/visits?from=${encodeURIComponent(fromQ)}&to=${encodeURIComponent(toQ)}&limit=500`),
         fetchApi('/api/wellness/services').catch(() => []),
-        fetchApi('/api/wellness/patients').catch(() => []),
+        fetchApi('/api/wellness/patients').catch(() => ({})),
       ]);
       setAllStaff(Array.isArray(staff) ? staff : []);
       setVisits(Array.isArray(vs) ? vs : []);
       setServices(Array.isArray(svc) ? svc.filter((s) => s.isActive !== false) : []);
-      setPatients(Array.isArray(pts) ? pts : []);
+      setPatients(Array.isArray(pts) ? pts : (pts?.patients || []));
     } catch (_e) { setVisits([]); setAllStaff([]); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [date]);
 
-  // #262: build the practitioner list. Default view = practitioners with at
-  // least one visit on this day (so the grid stays readable on small clinics).
-  // Toggle "Show all" to surface every practitioner for booking empty slots.
+  // Always show all practitioners so receptionists can book any
+  // practitioner at any time, regardless of today's schedule.
   const practitioners = useMemo(() => {
-    const all = allStaff.filter((u) => PRACTITIONER_ROLES.has(u.wellnessRole));
-    const doctorIdsToday = new Set(visits.map((v) => v.doctorId).filter(Boolean));
-    if (showAll) return all;
-    const withVisits = all.filter((u) => doctorIdsToday.has(u.id));
-    // Fallback: if no practitioner has visits today, surface everyone so the
-    // grid isn't empty and the receptionist can still book.
-    return withVisits.length ? withVisits : all;
-  }, [allStaff, visits, showAll]);
+    return allStaff.filter((u) => PRACTITIONER_ROLES.has(u.wellnessRole));
+  }, [allStaff]);
 
   // #247: include visits without a doctor assignment in an "Unassigned"
   // column instead of silently dropping them. The dashboard counts ALL
@@ -144,21 +137,19 @@ export default function CalendarGrid() {
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           {totalPractitionerCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowAll((v) => !v)}
+            <div
               className="glass"
               style={{
                 padding: '0.4rem 0.8rem', fontSize: '0.8rem',
-                borderRadius: 8, cursor: 'pointer',
-                border: `1px solid ${showAll ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.1)'}`,
-                background: showAll ? 'rgba(99,102,241,0.15)' : 'transparent',
+                borderRadius: 8,
+                border: '1px solid rgba(99,102,241,0.3)',
+                background: 'rgba(99,102,241,0.1)',
                 color: 'var(--text-primary)',
               }}
-              title={showAll ? `Showing all ${totalPractitionerCount} practitioners` : `Showing ${visiblePractitionerCount} with visits today`}
+              title={`All ${totalPractitionerCount} practitioners visible (scroll horizontally to see more)`}
             >
-              {showAll ? `All ${totalPractitionerCount}` : `${visiblePractitionerCount} of ${totalPractitionerCount}`}
-            </button>
+              {totalPractitionerCount} Practitioners
+            </div>
           )}
           <button onClick={() => shift(-1)} className="glass" style={navBtn}><ChevronLeft size={16} /></button>
           <button onClick={() => setDate(new Date())} className="glass" style={{ ...navBtn, padding: '0.4rem 0.9rem', fontSize: '0.85rem', width: 'auto' }}>Today</button>
@@ -175,19 +166,29 @@ export default function CalendarGrid() {
       )}
 
       {!loading && columns.length > 0 && (
-        <div className="glass" style={{ padding: '1rem', overflow: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(180px, 1fr))`, gap: '4px' }}>
+        <div
+          className="glass"
+          style={{
+            padding: '1rem',
+            overflow: 'auto',
+            maxHeight: 'calc(100vh - 300px)',
+            scrollBehavior: 'smooth',
+            scrollbarWidth: 'thin',
+            scrollbarColor: 'rgba(99,102,241,0.6) rgba(255,255,255,0.08)',
+          }}
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(100px, 1fr))`, gap: '2px', minWidth: 'min-content' }}>
             <div style={{ ...colHead, background: 'transparent' }}></div>
             {columns.map((c) => (
-              <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1 }}>
+              <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1, overflow: 'hidden', whiteSpace: 'normal', wordBreak: 'break-word', fontSize: '0.7rem', padding: '0.3rem 0.4rem', minHeight: '55px' }}>
                 {c.isUnassigned ? (
-                  <UserIcon size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7 }} />
+                  <UserIcon size={11} style={{ verticalAlign: 'middle', marginRight: '0.15rem', opacity: 0.7, flexShrink: 0 }} />
                 ) : (
-                  <Stethoscope size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7 }} />
+                  <Stethoscope size={11} style={{ verticalAlign: 'middle', marginRight: '0.15rem', opacity: 0.7, flexShrink: 0 }} />
                 )}
-                {c.name}
+                <span style={{ display: 'block', lineHeight: '1.1', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 500 }}>{c.name}</span>
                 {c.role && (
-                  <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginLeft: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  <span style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', marginTop: '0.05rem', textTransform: 'uppercase', letterSpacing: '0.01em', display: 'block' }}>
                     {c.role}
                   </span>
                 )}
@@ -223,16 +224,16 @@ export default function CalendarGrid() {
                           style={{
                             textDecoration: 'none', color: 'var(--text-primary)',
                             background: STATUS_COLOR[v.status] || 'rgba(255,255,255,0.05)',
-                            borderLeft: `3px solid ${STATUS_BORDER[v.status] || '#64748b'}`,
-                            padding: '0.4rem 0.5rem', borderRadius: '6px',
-                            fontSize: '0.75rem', display: 'block',
+                            borderLeft: `2px solid ${STATUS_BORDER[v.status] || '#64748b'}`,
+                            padding: '0.25rem 0.35rem', borderRadius: '4px',
+                            fontSize: '0.7rem', display: 'block', lineHeight: '1.2',
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.65rem' }}>
                             {new Date(v.visitDate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} · {v.patient?.name || `#${v.patientId}`}
                           </div>
-                          <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <div style={{ color: 'var(--text-secondary)', fontSize: '0.6rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {v.service?.name || '—'}
                           </div>
                         </Link>
@@ -412,7 +413,7 @@ function NewVisitModal({ column, hour, date, patients, services, notify, onClose
 }
 
 const navBtn = { width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', background: 'transparent', color: 'var(--text-primary)' };
-const colHead = { padding: '0.5rem 0.75rem', fontWeight: 600, fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)', color: 'var(--text-primary)' };
-const hourLabel = { padding: '0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)', textAlign: 'right', borderRight: '1px solid rgba(255,255,255,0.05)' };
-const hourCell = { padding: '0.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', minHeight: '60px', borderBottom: '1px solid rgba(255,255,255,0.04)' };
+const colHead = { padding: '0.3rem 0.4rem', fontWeight: 600, fontSize: '0.7rem', borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)', color: 'var(--text-primary)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', minHeight: '55px' };
+const hourLabel = { padding: '0.3rem 0.25rem', fontSize: '0.65rem', color: 'var(--text-secondary)', textAlign: 'right', borderRight: '1px solid rgba(255,255,255,0.05)', fontWeight: 500 };
+const hourCell = { padding: '0.15rem', display: 'flex', flexDirection: 'column', gap: '0.1rem', minHeight: '60px', borderBottom: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden' };
 const modalInput = { padding: '0.5rem 0.7rem', borderRadius: 8, border: '1px solid var(--border-color, rgba(0,0,0,0.15))', background: 'var(--input-bg, rgba(0,0,0,0.03))', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };

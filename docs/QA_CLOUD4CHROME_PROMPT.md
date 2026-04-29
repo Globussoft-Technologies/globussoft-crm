@@ -101,7 +101,19 @@ For each bug:
    POST https://api.github.com/repos/Globussoft-Technologies/globussoft-crm/issues/<N>/comments
    Body: "Still reproducing on 2026-04-XX. Repro: 1. <step> 2. <step>. Browser: Chrome XX. Network/console: <attach>. Same as previously reported."
 
-3. If a matching closed issue exists → still post a comment ("REGRESSION on 2026-04-XX, please re-open") AND create a new issue tagged `[regression]` referencing the closed one.
+3. **Before flagging anything as REGRESSION, run THIS verification protocol** (the 2026-04-29 #349–#358 round was 10 false-regressions caused by skipping these steps):
+
+   **a. Hard-reload first.** Press `Ctrl+Shift+R` (or `Cmd+Shift+R`) to bust the browser cache + service worker. Many "regressions" are stale assets — the fix is deployed but your tab is rendering an old bundle. If the symptom disappears after hard-reload, the issue is a stale-cache illusion; do not file.
+
+   **b. Don't conflate "field accepts typed value" with "form actually saves it".** Many fixes work by rejecting on Save (server returns 400 or shows inline error on submit), NOT by blocking the keystroke at input time. So if your test only types into a field and observes the field's value, you'll think the input was "accepted" even when the actual fix is intact. The protocol:
+      - Type the bad value into the field.
+      - **Click Save / Submit.**
+      - Open the DevTools Network panel.
+      - Verify either: (i) the request was never sent (frontend short-circuited with an inline error → fix is working), OR (ii) the request was sent and got `400` back (server rejected → fix is working). Only if the request returned `200/201` AND the bad value is now persisted in the database is it a real regression.
+
+   **c. Field-accepting-keystrokes is NOT a P0/P1/P2 by itself.** If `<input type="number">` accepts `-5` typed in but Save returns 400 with an inline error, that's a UX-polish opportunity (input-time validation), not a P-bug. File it as P3 with a note "input doesn't paint inline-invalid until Save". Do not file it as a regression of the original P-bug.
+
+   **d. If a matching closed issue exists AND a + b + c all confirm the symptom is real:** post a comment on the closed issue ("REGRESSION on YYYY-MM-DD, please re-open. Hard-reloaded; clicked Save; got 200 with bad value persisted. Network panel attached.") AND create a new issue tagged `[regression]` referencing the closed one. Otherwise close the loop in your own log: write `[QA] FALSE-REGRESSION #<original> — symptom not reproducible after hard-reload + Save click` and move on.
 
 4. If no match → create a new issue with this template:
 

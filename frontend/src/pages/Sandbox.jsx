@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import {
   Database, Camera, Download, Trash2, AlertTriangle, RotateCcw, X, Plus, ShieldAlert,
@@ -28,7 +28,7 @@ function formatDate(d) {
 
 function getRole() {
   try {
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     if (!token) return 'USER';
     const payload = JSON.parse(atob(token.split('.')[1]));
     return payload.role || 'USER';
@@ -92,7 +92,7 @@ export default function Sandbox() {
 
   const handleDownload = async (snap) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getAuthToken();
       const resp = await fetch(`/api/sandbox/${snap.id}/download`, {
         headers: { Authorization: `Bearer ${token}` },
       });

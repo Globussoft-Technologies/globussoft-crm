@@ -23,9 +23,13 @@ const Layout = () => {
   }, [token]);
 
   const handleLogout = () => {
+    // #343: setToken(null) flows through setAuthToken → clears the in-memory
+    // holder + sessionStorage. The legacy localStorage.removeItem('token')
+    // call is now a defensive no-op against any stale pre-#343 token, kept
+    // so users mid-migration don't end up with a ghost bearer hanging around.
     setUser(null);
     setToken(null);
-    localStorage.removeItem('token');
+    try { localStorage.removeItem('token'); } catch { /* ignore */ }
     navigate('/login');
   };
 

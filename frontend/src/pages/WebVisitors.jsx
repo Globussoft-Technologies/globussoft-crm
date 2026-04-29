@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Eye, Globe, Users, UserCheck, Calendar, Copy, ChevronDown, ChevronRight } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 
 function timeAgo(d) {
   if (!d) return '';
@@ -49,7 +49,7 @@ export default function WebVisitors() {
 
   const tenantId = useMemo(() => {
     try {
-      const tok = localStorage.getItem('token');
+      const tok = getAuthToken();
       if (!tok) return 1;
       const payload = JSON.parse(atob(tok.split('.')[1] || ''));
       return payload.tenantId || 1;

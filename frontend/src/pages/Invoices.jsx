@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download, RefreshCw } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
 const STATUS_CONFIG = {
@@ -129,7 +129,7 @@ export default function Invoices() {
   };
 
   const downloadPdf = (id, invoiceNum) => {
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     const baseUrl = import.meta.env.VITE_API_URL || '';
     const url = `${baseUrl}/api/billing/${id}/pdf`;
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { ScrollText, Filter, Download, ChevronDown, User } from 'lucide-react';
 
@@ -133,7 +133,7 @@ export default function AuditLog() {
     if (action) params.set('action', action);
     if (from) params.set('from', from);
     if (to) params.set('to', to);
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     fetch(`/api/audit-viewer/export.csv?${params.toString()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })

@@ -37,8 +37,9 @@ const Login = () => {
     }
 
     if (ssoToken) {
+      // #343: setToken (in App.jsx) now writes through to the in-memory
+      // holder + sessionStorage via setAuthToken — no localStorage write.
       setToken(ssoToken);
-      localStorage.setItem('token', ssoToken);
 
       let parsedTenant = null;
       if (tenantParam) {

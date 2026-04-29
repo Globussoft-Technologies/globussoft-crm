@@ -92,6 +92,30 @@ router.param("id", (req, res, next, id) => {
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
+// #348 — namespacing rule. The /api/wellness/* namespace is reserved for
+// CLINICAL resources (patients, visits, prescriptions, consents, treatments,
+// services, locations, etc.). Org-level resources — staff, audit logs,
+// tenants, billing — live at /api/<resource> and have NO wellness alias.
+//
+// Pre-fix, the inconsistency was: /api/staff -> 200, /api/wellness/staff -> 403
+// (caught by the wellness role gate, no clear error); /api/audit -> 200,
+// /api/wellness/audit -> 404 (no handler). Both failure modes left integration
+// builders guessing.
+//
+// We respond with 410 Gone (not 404) and a clear redirect message so the
+// caller learns the rule explicitly. See docs/API_NAMESPACING.md.
+const wellnessNamespacedRedirect = (canonical) => (req, res) => {
+  res.status(410).json({
+    error: `Use ${canonical}. Wellness namespace is for clinical resources only.`,
+    code: "WELLNESS_NAMESPACE_INVALID",
+    canonical,
+  });
+};
+router.all("/staff", wellnessNamespacedRedirect("/api/staff"));
+router.all("/staff/*", wellnessNamespacedRedirect("/api/staff"));
+router.all("/audit", wellnessNamespacedRedirect("/api/audit"));
+router.all("/audit/*", wellnessNamespacedRedirect("/api/audit"));
+
 // Gap #22: Auto-credit loyalty points on completed visits.
 // Earn rule: 10% of amountCharged (floored). Idempotent — only one 'earned'
 // LoyaltyTransaction per visitId. Failures are swallowed so the visit save
@@ -247,6 +271,144 @@ router.get("/patients/:id", async (req, res) => {
   } catch (e) {
     console.error("[wellness] get patient error:", e.message);
     res.status(500).json({ error: "Failed to load patient" });
+  }
+});
+
+// #346 — nested patient sub-resources. The Patient detail SPA tabs (visits,
+// Rx, consents, treatment plans) call these REST-shaped paths directly
+// instead of /visits?patientId= etc. Without them every tab returned 404.
+// Each handler mirrors the select shape of the corresponding flat list endpoint
+// (router.get("/visits"), /prescriptions, /consents, /treatments) and adds a
+// patient-existence check so we return 404 for an unknown patient (rather
+// than an empty array, which would mask data-integrity bugs in the UI).
+
+// GET /patients/:id/visits — visits for a specific patient
+router.get("/patients/:id/visits", async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const visits = await prisma.visit.findMany({
+      where: tenantWhere(req, { patientId }),
+      orderBy: { visitDate: "desc" },
+      include: {
+        patient: { select: { id: true, name: true, phone: true } },
+        service: { select: { id: true, name: true, category: true } },
+        doctor: { select: { id: true, name: true } },
+      },
+    });
+    // Audit-log the read same as the flat /visits list (PRD §11 clinical reads).
+    try {
+      await writeAudit('Patient', 'PATIENT_VISITS_READ', patientId, req.user.userId, req.user.tenantId, {
+        patientId, visitCount: visits.length,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit PATIENT_VISITS_READ failed:", auditErr.message);
+    }
+    res.json(visits);
+  } catch (e) {
+    console.error("[wellness] list patient visits error:", e.message);
+    res.status(500).json({ error: "Failed to list patient visits" });
+  }
+});
+
+// GET /patients/:id/prescriptions — Rx for a specific patient
+router.get("/patients/:id/prescriptions", async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const items = await prisma.prescription.findMany({
+      where: tenantWhere(req, { patientId }),
+      orderBy: { createdAt: "desc" },
+      include: {
+        patient: { select: { id: true, name: true } },
+        doctor: { select: { id: true, name: true } },
+      },
+    });
+    try {
+      await writeAudit('Patient', 'PATIENT_RX_READ', patientId, req.user.userId, req.user.tenantId, {
+        patientId, rxCount: items.length,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit PATIENT_RX_READ failed:", auditErr.message);
+    }
+    res.json(items);
+  } catch (e) {
+    console.error("[wellness] list patient prescriptions error:", e.message);
+    res.status(500).json({ error: "Failed to list patient prescriptions" });
+  }
+});
+
+// GET /patients/:id/consents — signed consent forms for a specific patient
+router.get("/patients/:id/consents", async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const items = await prisma.consentForm.findMany({
+      where: tenantWhere(req, { patientId }),
+      orderBy: { signedAt: "desc" },
+      include: {
+        patient: { select: { id: true, name: true } },
+        service: { select: { id: true, name: true } },
+      },
+    });
+    try {
+      await writeAudit('Patient', 'PATIENT_CONSENTS_READ', patientId, req.user.userId, req.user.tenantId, {
+        patientId, consentCount: items.length,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit PATIENT_CONSENTS_READ failed:", auditErr.message);
+    }
+    res.json(items);
+  } catch (e) {
+    console.error("[wellness] list patient consents error:", e.message);
+    res.status(500).json({ error: "Failed to list patient consents" });
+  }
+});
+
+// GET /patients/:id/treatment-plans — treatment plans for a specific patient
+router.get("/patients/:id/treatment-plans", async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const plans = await prisma.treatmentPlan.findMany({
+      where: tenantWhere(req, { patientId }),
+      include: {
+        patient: { select: { id: true, name: true, phone: true } },
+        service: { select: { id: true, name: true, category: true } },
+      },
+      orderBy: { startedAt: "desc" },
+    });
+    try {
+      await writeAudit('Patient', 'PATIENT_TREATMENTS_READ', patientId, req.user.userId, req.user.tenantId, {
+        patientId, planCount: plans.length,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit PATIENT_TREATMENTS_READ failed:", auditErr.message);
+    }
+    res.json(plans);
+  } catch (e) {
+    console.error("[wellness] list patient treatment plans error:", e.message);
+    res.status(500).json({ error: "Failed to list patient treatment plans" });
   }
 });
 

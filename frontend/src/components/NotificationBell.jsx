@@ -1,8 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useContext } from 'react';
 import { Bell, Check, X } from 'lucide-react';
+import { io } from 'socket.io-client';
 import { fetchApi } from '../utils/api';
+import { AuthContext } from '../App';
 
 const NotificationBell = () => {
+  const { user } = useContext(AuthContext);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
@@ -30,11 +33,51 @@ const NotificationBell = () => {
     }
   }, []);
 
+  // #345: previously polled /api/notifications/unread-count on a setInterval
+  // (originally ~800ms, later 30s) which produced a steady stream of HTTP
+  // requests visible in the network tab even when nothing changed. Socket.IO
+  // is already mounted via Presence; the backend emits `notification_new`
+  // (notificationService.js) and `notifications_cleared` (routes/notifications.js)
+  // so we can update the count locally on push.
+  //
+  // We keep ONE initial HTTP fetch on mount to populate the count without
+  // waiting for the next push, then rely on socket events for updates. If
+  // the socket fails to connect (nginx not proxying /socket.io, etc.), the
+  // count stays accurate on the next page load — acceptable degradation
+  // and still vastly better than 1.5x/sec polling.
   useEffect(() => {
     fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 30000);
-    return () => clearInterval(interval);
-  }, [fetchUnreadCount]);
+
+    if (!user) return;
+
+    const socket = io('/', { reconnection: false, timeout: 5000 });
+    socket.on('connect_error', () => { /* nginx may not proxy socket.io — silent */ });
+    socket.on('error', () => { /* silent */ });
+
+    // New notification → bump the local count if it's for this user.
+    // The server broadcasts globally with { userId, notification }; we filter
+    // client-side so other users' notifications don't inflate our badge.
+    socket.on('notification_new', (payload) => {
+      if (!payload) return;
+      if (payload.userId && user.id && payload.userId !== user.id) return;
+      setUnreadCount((c) => c + 1);
+      // If the dropdown happens to be open, prepend the new notification so
+      // it shows up without a re-fetch.
+      if (payload.notification) {
+        setNotifications((prev) => [payload.notification, ...prev]);
+      }
+    });
+
+    // Server signals all-cleared (mark-all-read, bulk delete) for a user.
+    socket.on('notifications_cleared', (payload) => {
+      if (payload?.userId && user.id && payload.userId !== user.id) return;
+      setUnreadCount(0);
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [fetchUnreadCount, user]);
 
   useEffect(() => {
     if (open) fetchNotifications();

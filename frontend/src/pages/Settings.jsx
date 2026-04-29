@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { ThemeContext, AuthContext } from '../App';
 
@@ -41,7 +41,7 @@ export default function Settings() {
     try {
       const fd = new FormData();
       fd.append('logo', file);
-      const token = localStorage.getItem('token');
+      const token = getAuthToken();
       const resp = await fetch('/api/wellness/branding/logo', {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},

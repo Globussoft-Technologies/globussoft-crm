@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { useNotify } from '../utils/notify';
 import { PieChart as PieChartIcon, Download, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
@@ -146,7 +146,7 @@ export default function Reports() {
   const totalValue = data.reduce((sum, item) => sum + (item.value || 0), 0);
 
   const exportFile = (format) => {
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     const baseUrl = import.meta.env.VITE_API_URL || '';
     const endpoint = format === 'pdf' ? 'export-pdf' : 'export-csv';
     const params = viewMode === 'table'

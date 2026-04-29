@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import { Trophy, Users, TrendingUp, Phone, Mail, CheckSquare, Download, Calendar } from 'lucide-react';
 
@@ -51,7 +51,7 @@ export default function AgentReports() {
   }, [selectedAgent, startDate, endDate]);
 
   const handleExportCSV = () => {
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     const baseUrl = import.meta.env.VITE_API_URL || '';
     fetch(`${baseUrl}/api/reports/export-csv?type=agent-performance${dateParams()}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => res.blob())
@@ -65,7 +65,7 @@ export default function AgentReports() {
   };
 
   const handleExportPDF = () => {
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     const baseUrl = import.meta.env.VITE_API_URL || '';
     fetch(`${baseUrl}/api/reports/export-pdf?type=agent-performance${dateParams()}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => res.blob())

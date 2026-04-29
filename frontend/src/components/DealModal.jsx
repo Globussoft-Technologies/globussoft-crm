@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, FileText, UploadCloud, Download, FileSignature } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import CPQBuilder from './CPQBuilder';
 
@@ -48,7 +48,7 @@ export default function DealModal({ deal, onClose }) {
     formData.append('file', file);
     
     try {
-      const token = localStorage.getItem('token');
+      const token = getAuthToken();
       await fetch(`${API_BASE}/api/deals_documents/${deal.id}/upload`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
+import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
 
@@ -16,10 +16,24 @@ export default function PatientDetail() {
   const [patient, setPatient] = useState(null);
   const [services, setServices] = useState([]);
   const [doctors, setDoctors] = useState([]);
-  // #226: persist active tab per patient so a browser refresh lands the user
-  // back on the same tab (default 'history' on first visit).
-  const tabStorageKey = `gbs.tab.patient.${id}`;
+  // #344 [SECURITY]: sessionStorage was being polluted with attacker-controlled
+  // URL segments (e.g. `gbs.tab.patient.1' OR '1'='1`) because we interpolated
+  // useParams().id directly into the storage key. Patient ids in this app are
+  // always numeric (Prisma BIGINT primary key), so we validate against that
+  // shape and refuse to read/write the key for anything else. We also URL-
+  // encode as defense-in-depth so a slipped-through value can't break out of
+  // the key namespace via control characters. A non-numeric id likely means
+  // the patient route was hit with garbage — log a warning and fall back to
+  // the in-memory default so the tab still works for this session without
+  // persisting a malformed key.
+  const isSafeId = typeof id === 'string' && /^\d+$/.test(id);
+  const tabStorageKey = isSafeId ? `gbs.tab.patient.${encodeURIComponent(id)}` : null;
+  if (!isSafeId && id != null) {
+    // eslint-disable-next-line no-console
+    console.warn('[PatientDetail] refusing to persist tab state for non-numeric id:', id);
+  }
   const [tab, setTab] = useState(() => {
+    if (!tabStorageKey) return 'history';
     try {
       return sessionStorage.getItem(tabStorageKey) || 'history';
     } catch {
@@ -29,6 +43,7 @@ export default function PatientDetail() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!tabStorageKey) return;
     try {
       sessionStorage.setItem(tabStorageKey, tab);
     } catch {
@@ -250,7 +265,7 @@ function RxDetailModal({ rx, patient, onClose }) {
     try {
       // Use fetch directly so we can stream the binary into a blob URL.
       // fetchApi assumes JSON responses; PDFs are binary.
-      const token = localStorage.getItem('token');
+      const token = getAuthToken();
       const res = await fetch(`/api/wellness/prescriptions/${rx.id}/pdf`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -850,7 +865,7 @@ function PhotosTab({ patient, onSaved }) {
       const fd = new FormData();
       for (const f of files) fd.append('photos', f);
       fd.append('kind', kind);
-      const token = localStorage.getItem('token');
+      const token = getAuthToken();
       const r = await fetch(`/api/wellness/visits/${visitId}/photos`, {
         method: 'POST', body: fd,
         headers: { Authorization: `Bearer ${token}` },

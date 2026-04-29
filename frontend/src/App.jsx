@@ -7,6 +7,7 @@ import Layout from './components/Layout';
 import RouteErrorBoundary from './components/RouteErrorBoundary';
 import { NotifyProvider } from './utils/notify';
 import { lazyWithRetry as lazy } from './utils/lazyWithRetry';
+import { setAuthToken, getAuthToken, clearAuthToken, markAuthReady } from './utils/api';
 import './theme/wellness.css'; // wellness vertical theme overrides (scoped)
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -102,6 +103,10 @@ const WellnessWaitlist = lazy(() => import('./pages/wellness/Waitlist'));
 const WellnessInventory = lazy(() => import('./pages/wellness/Inventory'));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import('./pages/SurveyPublic'));
+// #341: global catch-all 404. Previously unmapped or wrong-prefix URLs
+// (e.g. /loyalty without /wellness/) rendered a blank <main> with HTTP 200
+// because the SPA layout served but nothing inside it matched.
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
@@ -156,16 +161,56 @@ export default function App() {
   const [tenant, setTenant] = useState(() => {
     try { return JSON.parse(localStorage.getItem('tenant') || 'null'); } catch { return null; }
   });
-  const [token, setToken] = useState(localStorage.getItem('token') || null);
+  // #343 [SECURITY]: token no longer lives in localStorage. It's held in
+  // memory inside utils/api.js with sessionStorage as the rehydrate source on
+  // hard refresh, so it doesn't survive a browser restart and isn't readable
+  // from a stolen disk image. We do a one-time migration of any legacy
+  // localStorage token from a pre-fix build so users don't get punted to
+  // /login on first deploy. The XSS-can-still-read-it caveat is documented
+  // in utils/api.js — the real fix is httpOnly cookies (TODOS.md wishlist).
+  const [token, setTokenState] = useState(() => {
+    let initial = getAuthToken();
+    if (!initial) {
+      try {
+        const legacy = localStorage.getItem('token');
+        if (legacy) {
+          initial = legacy;
+          setAuthToken(legacy);
+          localStorage.removeItem('token');
+        }
+      } catch { /* ignore */ }
+    }
+    return initial || null;
+  });
+  const setToken = (next) => {
+    setAuthToken(next);
+    setTokenState(next || null);
+  };
+  // #347: gate initial mount until we've finished rehydrating the token
+  // from sessionStorage. Without this, child pages fire fetches in their
+  // own useEffect before AuthContext finishes mounting, racing the token
+  // and getting 403s. We render a splash until `loading` flips false on
+  // first effect tick (synchronous-after-mount).
+  const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
 
   useEffect(() => {
-    if (token) {
-      localStorage.setItem('token', token);
-    } else {
-      localStorage.removeItem('token');
+    // Token storage is owned by setAuthToken/clearAuthToken in utils/api.js
+    // (in-memory + sessionStorage). Nothing to mirror to localStorage anymore.
+    if (!token) {
+      // Defensive: if some legacy code path nulled `token` directly via
+      // setTokenState, make sure the api-side state is in sync.
+      clearAuthToken();
     }
   }, [token]);
+
+  // Mark auth as ready after the very first render so any fetch helpers
+  // that wait on whenAuthReady() unblock once we've had a chance to read
+  // sessionStorage. This runs synchronously after mount.
+  useEffect(() => {
+    setLoading(false);
+    markAuthReady();
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -197,9 +242,22 @@ export default function App() {
 
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
 
+  // #347: while AuthContext is still rehydrating the token from sessionStorage
+  // we render a single splash. Pages mount their own fetches in useEffect, and
+  // before this gate they raced the token and 403'd. Since `loading` flips
+  // false on the first effect tick (synchronous after mount), this is a one-
+  // frame splash on cold-start, invisible in normal nav.
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: 'var(--text-primary, #888)' }}>
+        Loading...
+      </div>
+    );
+  }
+
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
-    <AuthContext.Provider value={{ user, setUser, token, setToken, tenant, setTenant }}>
+    <AuthContext.Provider value={{ user, setUser, token, setToken, tenant, setTenant, loading }}>
     <NotifyProvider>
       <BrowserRouter>
         <RouteErrorBoundary>
@@ -323,6 +381,11 @@ export default function App() {
                   bookmarks all resolve. Mirrors the /wellness/inventory
                   fix from #305. */}
               <Route path="wellness/invoices" element={<Navigate to="/invoices" replace />} />
+              {/* #341: catch-all for unmapped or wrong-prefix URLs. Renders
+                  inside the layout chrome so the user keeps the sidebar +
+                  header. Pre-fix the SPA returned a blank <main>; now we
+                  show a real 404 with a path suggestion when applicable. */}
+              <Route path="*" element={<NotFound />} />
             </Route>
           </Routes>
         </Suspense>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Shield, Download, Trash2, Clock, AlertTriangle, CheckCircle2, Save } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 
@@ -56,7 +56,7 @@ export default function Privacy() {
     setExporting(true);
     setExportSuccess(false);
     try {
-      const token = localStorage.getItem('token');
+      const token = getAuthToken();
       const res = await fetch('/api/gdpr/export/me', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },

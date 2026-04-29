@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { BarChart3, TrendingUp, Stethoscope, MapPin, IndianRupee, Download, Loader2 } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
+import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 
 const TABS = [
@@ -55,7 +55,7 @@ export default function Reports() {
     setExporting(format);
     setExportError(null);
     try {
-      const token = localStorage.getItem('token');
+      const token = getAuthToken();
       const url = `${ENDPOINTS[tab]}.${format}?from=${from}T00:00:00&to=${to}T23:59:59`;
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bot, Plus, Edit, Play, Power, Trash2, Copy, X, ChevronUp, ChevronDown, Send, MessageCircle } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
 const NODE_TYPES = [
@@ -39,7 +39,7 @@ export default function Chatbots() {
 
   const tenantId = useMemo(() => {
     try {
-      const tok = localStorage.getItem('token');
+      const tok = getAuthToken();
       if (!tok) return 1;
       const p = JSON.parse(atob(tok.split('.')[1] || ''));
       return p.tenantId || 1;

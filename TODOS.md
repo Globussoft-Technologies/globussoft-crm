@@ -109,6 +109,18 @@ work these unless the urgent + priority backlog is empty.
   - Pickup trigger: when Rishu (or a future tenant) explicitly asks for
     patient self-service AND staff-side CRM is in a steady state.
 
+- **Tighter input-time validation** (so the field rejects bad values BEFORE
+  Save, not just on submit). Came up 2026-04-29 when an automated QA agent
+  filed #349–#355 as duplicates of #331–#337: the QA tool observes "field
+  accepts value typed" without verifying "Save returns 400". The shipped
+  fixes are correct (server rejects, form re-validates on submit) but the
+  field itself doesn't paint inline-invalid until the user clicks Save.
+  Polish work, not a bug. Adoption pattern: extend `numberInput.jsx`'s
+  `<NumberInput>` to take `min`/`max`/`required` and paint a red ring +
+  inline error in real-time. Apply across LeadRouting Priority, Estimates
+  qty/unitPrice/discount, Patient/Lead name (whitespace check). Single
+  agent, half-day.
+
 - _(Add more good-to-haves here as they surface during normal work.)_
 
 ### Apr-end demo criteria (PRD §14) — final state

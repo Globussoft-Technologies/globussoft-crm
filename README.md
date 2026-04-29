@@ -1,10 +1,45 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **100% route-file e2e coverage** (124 spec files, 800+ tests passing on production). Backend line coverage: **~71-72%** (forecast after 2026-04-27 reports.js + marketing.js coverage push; gate at 60% lines / 45% branches; aspirational target 100%).
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail. **Mobile-responsive** sidebar drawer + 6 demo-path pages. Backend line coverage: **66.65%** (1,191 tests, gate 65% lines / 50% branches; aspirational target 100%).
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.3
-**Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md)
-**Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work.
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.5
+**Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md)
+**Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompt:** [QA_CLOUD4CHROME_PROMPT.md](docs/QA_CLOUD4CHROME_PROMPT.md).
+
+## What's new in v3.2.5 (April 29 2026 — security hardening + fresh QA round + nested patient endpoints)
+
+A focused round on a fresh 8-issue QA pass plus the lingering #339. All deployed via GitHub Actions in a single commit (`d778d6a`).
+
+- **#342 [P1][SECURITY]** — Helmet response headers regression caught and fixed. Six security headers (HSTS 1y, X-Frame SAMEORIGIN, Referrer-Policy strict-origin-when-cross-origin, X-Content-Type-Options nosniff, COOP same-origin, CORP cross-origin) now present on every API response. Earlier custom CSP was interacting badly with the SPA's inline styles + the cross-origin embed widget; replaced with explicit lean config.
+- **#343 [P1][SECURITY]** — JWT bearer token migrated off `localStorage` to in-memory + sessionStorage. AuthContext on cold start migrates legacy tokens once and deletes the old key. New `getAuthToken()` / `whenAuthReady()` exports. Sweep across 12 pages that called `localStorage.getItem('token')` directly. Real reduction in attack surface (no more 30-day persistent token in disk-backed origin store); full httpOnly-cookie migration is a multi-day follow-up.
+- **#344, #347** — sessionStorage URL-segment sanitization + auth-race fix on fresh navigation (AuthProvider blocks render behind `loading` flag).
+- **#346** — Nested patient endpoints (`GET /patients/:id/visits | /prescriptions | /consents | /treatment-plans`) added. Each verifies parent exists, reuses select shape, audit-logs the read.
+- **#345** — `/api/notifications/unread-count` polling killed (was 1.5x/sec). NotificationBell now does ONE initial HTTP fetch + Socket.IO subscription to `notification_new` / `notifications_cleared`.
+- **#341** — Global `*` 404 fallback route. New [NotFound.jsx](frontend/src/pages/NotFound.jsx) (~125 lines, wellness-themed) with dynamic suggestions for 8 known wrong-prefix URLs (`/loyalty` → `/wellness/loyalty`, etc.) and tenant-aware quick links.
+- **#348** — API namespace inconsistency. `/wellness/staff` and `/wellness/audit` now return 410 Gone with `code: WELLNESS_NAMESPACE_INVALID` and a `canonical` field. New [API_NAMESPACING.md](docs/API_NAMESPACING.md) documents the org-vs-wellness split.
+
+See [CHANGELOG.md](CHANGELOG.md#v325--2026-04-29--security-hardening--8-bug-new-round--nested-patient-endpoints) for the full v3.2.5 entry.
+
+## What's new in v3.2.4 (April 29 2026 — inbox-zero + GitHub Actions + mobile responsive + reports export)
+
+**The day the issue board went 50 → 0 → refilled by overnight QA → cleared again. ~50 issues across 3 agent rounds. New CI/CD: GitHub Actions deploy. New scope: prescription PDF, Reports CSV/PDF export, mobile-responsive 80/20, external-integrations sandbox foundation.**
+
+- **GitHub Actions deploy pipeline** ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) replaces local `ssh_deploy_*.py` scripts. Triggers on push to main + manual dispatch. Steps: backend pull → install → prisma generate → pm2 restart → health poll, with auto-rollback to `HEAD~1` on health-check fail. Frontend: vite build → sudo rsync → chown www-data + chmod (the lesson from a sudo-rsync 403 incident is baked in). Concurrency `deploy-prod` queue. Required secrets: `SSH_HOST`, `SSH_USER`, `SSH_PASSWORD`.
+- **#300 [P0/SECURITY]** — `/portal/login/request-otp` was leaking the OTP in the JSON body (gated on `NODE_ENV !== 'production'`, but demo runs without that env var). Removed the bypass entirely; OTP is SMS-only.
+- **#312 [P0]** — Calendar New Visit modal had an empty Patient dropdown (184 patients existed). Defensive shape read for `{patients, total}` response.
+- **#313 [P0]** — Tasks deadline shifted +5:30h. Frontend now sends `new Date(value).toISOString()` so server gets a real UTC timestamp.
+- **#292 / #295 / #280 / #324 / #326 / #323** — RBAC + PHI cluster: hardcoded OTP `1234` no longer works for arbitrary phones; OTP request rate-limited (3/10min/phone + 10/10min/IP); stylists only see their own column + non-clinical visits; doctors only see their own column; telecallers can no longer write prescriptions; managers no longer see Delete on /staff.
+- **#227 — Reports CSV/PDF export** across all 4 tabs (P&L, Per-Pro, Per-Location, Attribution). Backend extracted shared calc helpers; CSV uses UTF-8 BOM (Excel-friendly INR + Hindi names) + appended TOTAL row; PDF uses pdfkit A4-landscape with the same letterhead style as prescriptions.
+- **#228 — Mobile responsive 80/20**. Sidebar collapses behind a hamburger drawer at ≤768px. New [responsive.css](frontend/src/styles/responsive.css) covers 6 demo-path pages: OwnerDashboard, Patients, PatientDetail, Calendar, Reports, TelecallerQueue. Full mobile parity remains a multi-day follow-up.
+- **#137 — External integrations sandbox foundation**. New [SANDBOX.md](docs/wellness-client/SANDBOX.md) inventories 7 inbound webhooks + 7 outbound integrations + 19 cron engines (8 with NO E2E coverage). Three runnable Express mocks at ports 5101/5102/5103.
+- **#278** — Prescription detail modal + PDF download. Case History timeline now shows Instructions; Rx cards clickable; Download PDF button uses pdfkit letterhead.
+- **40+ smaller P2/P3 fixes**, plus 3 cleanup scripts that ran on prod: `cleanup-p3-data-quality.js`, `merge-duplicate-patients.js` (331 → 181 patients with all 327 visits + 33 Rx + 14 consents + 42 treatment plans preserved via reattach), `cleanup-seed-pollution-2026-04-27.js`.
+- **#316 [P1]** — number-input concatenation. Three agents investigated; no clear root cause in code. Shipped defensive `<NumberInput>` helper as a fallback while the real cause (likely browser/IME or Playwright `.fill()` artifact) is investigated.
+- **Backend coverage 64.76% → 66.65% lines**, gate raised `60/45/60/60` → `65/50/65/65`. New [sms-api.spec.js](e2e/tests/sms-api.spec.js) (44 tests) covering `routes/sms.js`.
+- **Closed by product decision** (#200 #201 #211 #241): login quick-login chips + prefilled creds intentional for demo server.
+- **Stale-issue cleanup** (#141 #142 #147 #150 #152 #153): migrated from a different product 3 days idle, no repro.
+
+See [CHANGELOG.md](CHANGELOG.md#v324--2026-04-29--inbox-zero-day-1--day-2-50-issues-across-3-agent-rounds-github-actions-deploy-mobile-responsive) for the full v3.2.4 entry.
 
 ## What's new in v3.2.3 (April 27 2026 — P1 + P2 closure pass + fetchApi rewrite + demo polish)
 

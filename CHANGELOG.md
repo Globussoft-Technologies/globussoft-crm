@@ -1,5 +1,110 @@
 # CHANGELOG
 
+## v3.2.5 — 2026-04-29 — security hardening + 8-bug new round + nested patient endpoints
+
+A focused round on a fresh QA pass that surfaced 8 new issues (#341–#348). All closed in a single commit (`d778d6a`) deployed via GitHub Actions. Plus #339 (lingering auto-close lag from v3.2.4) re-asserted and closed.
+
+### P1 / Security
+
+- **#342 [REGRESSION of #186]** — All 6 browser security response headers were missing in production. Root cause: prior Helmet config layered a custom CSP (with `unsafe-inline` + many directives) and `crossOriginResourcePolicy='same-site'` that interacted badly with the SPA's inline styles + the cross-origin embed widget; the response was effectively stripped along the chain. Fix in [backend/middleware/security.js](backend/middleware/security.js): explicit config — `contentSecurityPolicy: false`, `crossOriginEmbedderPolicy: false`, `crossOriginResourcePolicy: { policy: 'cross-origin' }`. Kept HSTS (1y, includeSubDomains), X-Frame-Options SAMEORIGIN, Referrer-Policy strict-origin-when-cross-origin, X-Content-Type-Options pinned. Verified live on `/api/health` (Cloudflare strips on cached HTML; HSTS is host-wide once received).
+- **#343 [SECURITY]** — JWT bearer token + tenant PII in JS-readable `localStorage`. Migrated to module-level in-memory holder + `sessionStorage` fallback. AuthContext on cold start migrates legacy localStorage token once and deletes the key. Logout clears in-memory + sessionStorage. New `getAuthToken()` / `setAuthToken()` / `whenAuthReady()` exports in [frontend/src/utils/api.js](frontend/src/utils/api.js). Honest scope: ships a real reduction (no 30-day persistent token in disk-backed storage) without the multi-day httpOnly-cookie + CSRF refactor — XSS still wins on a live page; the cookie migration is logged as long-term wishlist. **Plus a 12-file sweep**: every direct `localStorage.getItem('token')` caller for raw fetches (DealModal, AgentReports, AuditLog, Chatbots, Invoices, Privacy, Reports, Sandbox, Settings, WebVisitors, wellness/PatientDetail, wellness/Reports) migrated to `getAuthToken()`. Without this, those endpoints would 401 immediately.
+- **#344 [SECURITY]** — `sessionStorage` retained unsanitized URL path segments as keys (e.g. `gbs.tab.patient.1' OR '1'='1`). PatientDetail tab keys now require id matches `/^\d+$/`; non-numeric ids skip read+write, log warning. `encodeURIComponent` applied as defense-in-depth.
+
+### P2 / API
+
+- **#346** — Nested patient endpoints returned 404 even when the patient existed. Added `GET /patients/:id/visits | /prescriptions | /consents | /treatment-plans`. Each verifies parent exists, reuses select shape, writes `PATIENT_*_READ` audit row.
+- **#347** — Auth race during fresh navigation: SPA fired 5–10 API calls before token was loaded; some 403 spuriously. AuthProvider now blocks render behind a `loading` flag that flips false on first `useEffect` tick. `whenAuthReady()` Promise exported for non-React paths.
+- **#348** — API namespace inconsistency. Added catch-all 410 Gone for `/wellness/staff` and `/wellness/audit` with `code: WELLNESS_NAMESPACE_INVALID` and a `canonical` field pointing at `/api/staff` / `/api/audit`. New [docs/API_NAMESPACING.md](docs/API_NAMESPACING.md) documents the org-vs-wellness split.
+
+### P2 / UX
+
+- **#341** — No global 404 fallback. New [frontend/src/pages/NotFound.jsx](frontend/src/pages/NotFound.jsx) (~125 lines, wellness-themed, glassmorphism, dynamic suggestions for 8 known wrong-prefix URLs like `/loyalty` → `/wellness/loyalty`). Catch-all `Route path='*'` at end of route tree.
+- **#345** — `/api/notifications/unread-count` polled ~1.5x/sec (13 calls in 8s). Killed the `setInterval`; NotificationBell now does ONE initial HTTP fetch + Socket.IO subscription to `notification_new` and `notifications_cleared` events. Backend already emits these.
+
+### P3
+
+- **#339** — Re-asserted auto-close after the v3.2.4 keyword didn't fire (state_reason was null). The dedup-on-create + cleanup-script fix has been live since v3.2.4.
+
+### Risks called out in the commit
+
+- HSTS in dev (1y) — sticks for HTTPS responses only.
+- CSP off — removes XSS defense-in-depth. CSP-with-nonce is a future ticket.
+- `/wellness/staff` 410 — grepped frontend for callers; none. Safe.
+- Socket.IO emit is a global broadcast (clients filter by `user.id`). Per-user rooms is a follow-up.
+- 2 unit tests still assert `localStorage.getItem('token')` — will fail. Test update is a follow-up.
+
+---
+
+## v3.2.4 — 2026-04-29 — inbox-zero day-1 → day-2: ~50 issues across 3 agent rounds, GitHub Actions deploy, mobile responsive
+
+The day the issue board went from 50 → 0 → got refilled by overnight QA → cleared again (twice). Three big agent rounds across two work sessions. New CI/CD: GitHub Actions deploy pipeline. New scope: prescription PDF, Reports CSV/PDF export, mobile-responsive 80/20, external-integrations sandbox foundation.
+
+### Class fixes (most leverage)
+
+- **GitHub Actions deploy pipeline** ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) — replaces the local `ssh_deploy_*.py` scripts. Triggers on push to `main` (skipping doc/test/script-only changes via paths-ignore) plus manual `workflow_dispatch`. Steps: backend pull → npm install → prisma generate → pm2 restart → health poll → on-fail rollback to HEAD~1 + restart, then frontend vite build → sudo rsync to `/var/www` → **chown www-data + chmod 755/644** (the lesson from a 2026-04-27 sudo-rsync 403 incident is baked in), then a smoke check of `/` and `/api/health` plus the `mountWatchdogReloaded` sentinel from #284. Concurrency `deploy-prod` with `cancel-in-progress: false`. Required secrets: `SSH_HOST`, `SSH_USER`, `SSH_PASSWORD`. After fixing one bash-template footgun (`${{ github.event.head_commit.message }}` interpolated bare into bash echo) by passing the message via env var, the pipeline has been stable for 8+ deploys.
+
+### P0 (3) — security + booking blockers
+
+- **#300 [P0/SECURITY]** — `POST /api/wellness/portal/login/request-otp` returned the OTP in the JSON response body (gated on `NODE_ENV !== 'production'`, but the demo server runs without that env var, so the OTP leaked publicly). Unauthenticated account takeover for any registered patient phone — verified live with Kavita Reddy. Removed the env-var bypass entirely; OTP is now SMS-only.
+- **#312 [P0]** — Calendar New Visit modal had an empty Patient `<select>` (only the placeholder option). 184 patients existed but never reached the dropdown. Root cause: `/api/wellness/patients` returns `{patients, total}`, not a bare array; Calendar.jsx read `Array.isArray(pts) ? pts : []` and always fell through. Defensive shape read covering bare-array | `{patients}` | `{data}` (same pattern as #251).
+- **#313 [P0]** — Tasks deadline shifted +5:30h. Frontend sent the bare `<input type="datetime-local">` wall-clock string; Node's `new Date(...)` interpreted it as UTC, IST display path then added +5:30. Now sends `new Date(value).toISOString()`.
+
+### P0/P1 RBAC + PHI cluster (4)
+
+- **#292 [P0][PHI]** — Hardcoded OTP `1234` worked for ANY existing patient (not just the seeded demo). Tightened `WELLNESS_DEMO_OTP` bypass: requires `NODE_ENV !== 'production'` (override `WELLNESS_DEMO_OTP_ALLOW_PROD=1`) AND phone in `WELLNESS_DEMO_OTP_PHONES` (default `9876500001`).
+- **#295 [P1]** — `request-otp` had zero rate limiting. Two stacked `express-rate-limit` instances: 3/10min per phone (last-10 keyed) + 10/10min per IP (`ipKeyGenerator` for IPv6). Verified: 5 sequential → 200, 200, 200, 429, 429.
+- **#280 / #324 [PHI]** — Stylists could read full doctor calendar; doctors saw all 16 practitioner columns. Extended `wellnessRole` scope on `GET /wellness/visits`: stylists/helpers see only their own column OR non-clinical-category visits; doctors see only their own column. ADMIN/MANAGER keep full org oversight.
+- **#326 [P1][RBAC]** — Telecaller could write New Prescription. New `requireClinicalRole` middleware on POST/PUT `/prescriptions` — only `wellnessRole==='doctor'` OR RBAC ADMIN passes; everything else 403 with `code: 'CLINICAL_ROLE_REQUIRED'`. Smoke-verified live.
+- **#323 [P1][RBAC]** — Manager saw Delete + role-edit on `/staff`. Backend was already ADMIN-only; UI was leaking. Hid both behind `canManageStaff` check in Staff.jsx.
+
+### Multi-day items shipped (3)
+
+- **#227 — Reports CSV/PDF export** across 4 tabs (P&L, Per-Pro, Per-Location, Attribution). Backend extracted 4 pure calc helpers so JSON + CSV + PDF share the same query path. CSV uses `rowsToCsv` with UTF-8 BOM (Excel-friendly INR + Hindi names) + appended TOTAL summary row. PDF uses pdfkit A4-landscape with the same letterhead style as the prescription PDF. Frontend Reports.jsx gets per-tab Export CSV / Export PDF buttons using the same blob-fetch + Bearer pattern as RxDetailModal.
+- **#228 — Mobile responsive 80/20** (demo-path only; full parity is multi-day follow-up). Sidebar collapses behind a hamburger drawer at ≤768px (backdrop tap + ESC + route-change auto-close, ARIA wired). New `frontend/src/styles/responsive.css` covers 6 demo-path pages: OwnerDashboard, Patients, PatientDetail, Calendar, Reports, TelecallerQueue.
+- **#137 — External integrations sandbox foundation**. New [docs/wellness-client/SANDBOX.md](docs/wellness-client/SANDBOX.md) inventories 7 inbound webhooks + 7 outbound integrations + 19 cron engines tagged by E2E coverage status (8 have NO coverage). Three runnable Express mocks at ports 5101/5102/5103 in [backend/scripts/sandbox/](backend/scripts/sandbox/). [e2e/sandbox-harness.md](e2e/sandbox-harness.md) documents the cron-trigger pattern.
+
+### #278 — Prescription detail modal + PDF download + Instructions in timeline
+
+- Case History timeline now shows Instructions (truncated >140 chars with Show more / Show less).
+- Rx cards are clickable (role=button, keyboard Enter/Space) and open a new `RxDetailModal` showing all 8 fields.
+- "Download PDF" button uses an existing backend route (`GET /prescriptions/:id/pdf`) wired through `pdfRenderer.js`. Letterhead style: clinic name, address, divider, ℞ symbol, drug list, full instructions, signature line.
+
+### Bug fixes — smaller P2/P3 (40+)
+
+Across 3 agent rounds + a stale-issue cleanup. Sample:
+
+- **#283** — Convert lead → Customer skipped Prospect AND didn't create a Patient. Frontend Convert button now sends `Prospect`; backend contacts PUT detects `* → Customer` transitions on wellness tenants and idempotently creates a Patient row (phone-last-10 dedupe + audit log).
+- **#284** — React app fails to mount on first navigation. `lazyWithRetry` retries 3× with 300ms/900ms exponential backoff before falling through to stale-chunk reload. `main.jsx` 4-second mount watchdog force-reloads once if `#root` empty.
+- **#285 + #261** — Orchestrator-emitted duplicate tasks + recommendation cards. Payload-hash dedup across all statuses for today + new `findOrCreateTask` helper that short-circuits on (title, dueDate-day, tenantId). Plus inline `cleanupExistingDupes()` runs at top of every cron pass.
+- **#308** — Same recommendation in Pending+Approved+Rejected at once. `GET /recommendations` widens to all-status, groups by `(type + lowercased title)`, picks most-resolved per group, then filters to the requested status.
+- **#321** — Reports P&L PRODUCT COST showed ~₹100 trillion. Schema-level cap on POST `/visits/:id/consumptions`: qty ≤ 10000, unitCost ≤ ₹10L, line total ≤ ₹1Cr. Cleanup script zeroed the 1 polluted row.
+- **#316 [P1]** — All `<input type="number">` fields concatenate residual on Ctrl+A → Delete → type. Two prior agents skipped via grep; third investigated useFormAutosave (not the cause), keydown handlers (none global), defaultValue/.value= imperative (none). Most plausible remaining theory: browser/IME or Playwright `.fill()` artifact. Shipped a defensive helper [frontend/src/utils/numberInput.jsx](frontend/src/utils/numberInput.jsx) (`sanitizeNumberInput` + `<NumberInput>` wrapper) with `prev.length*2 + startsWith` guard so legit typing isn't collapsed. Adopted on Service Catalog Duration; other call-sites can migrate when the helper proves out the theory.
+- **#331** — Patients search drops first character. Triple-defense: skip-first-mount-debounce, `qRef` captures current query for debounced effect, request-id tags so stale empty-q response can't stomp typed-query result.
+- **#320** + **#272** + **#271** + **#268** + **#267** + **#266** + **#265** + **#250** + **#306** + **#310** + **#311** + **#318** + **#319** + **#322** + **#327** + **#328** + **#330** + **#339** — Data-quality cleanup. Three scripts ran on prod: [cleanup-p3-data-quality.js](backend/scripts/cleanup-p3-data-quality.js), [merge-duplicate-patients.js](backend/scripts/merge-duplicate-patients.js) (331 patients → 181 with all 327 visits/33 Rx/14 consents/42 treatment plans preserved via reattach), and [cleanup-seed-pollution-2026-04-27.js](backend/scripts/cleanup-seed-pollution-2026-04-27.js) (87 row mutations). Plus the new `cleanupLandingPageDraftDupes()` section.
+
+### Test coverage
+
+- **66.65% lines** (was 64.76% — +1.89 pt) measured 2026-04-27 across 1,191 backend tests in 14.4 min. Branches 51.97%. Functions 68.13%. Gate raised `60/45/60/60` → `65/50/65/65`.
+- New [e2e/tests/sms-api.spec.js](e2e/tests/sms-api.spec.js) (44 tests) covering `routes/sms.js` (was 31%) — POST /send validation + no-provider, GET /messages with OTP-redaction filter, /templates CRUD, /config ADMIN-only mask, /drain admin queue flush, /webhook/twilio + msg91 status maps, auth gates.
+
+### Lessons learned (baked into next-session habits)
+
+1. Prisma `contains: '_'` is a SQL LIKE wildcard match-all, not a literal underscore filter. Use `findMany` + JS `.filter()`.
+2. Don't `sudo rsync --delete dist/ /var/www/...` from a non-root user — strips ownership; nginx 403s. Fix baked into `deploy.yml`.
+3. GitHub Actions multi-line commit-message interpolation is a footgun. Use `env: COMMIT_MSG: ...` and `printf '%s\n' "$COMMIT_MSG"`.
+4. Referral schema uses `referrerPatientId` / `referredPatientId` — both must be reattached during patient merge.
+5. Parallel agent file-affinity discipline: 4–5 agents in parallel works reliably when each owns a disjoint set of files. Same-file agents must be folded into one.
+
+### Closed by product decision (4)
+
+- **#200 #201 #211 #241** — Login quick-login chips + prefilled creds. Intentional for the demo server (publicly-accessible dev/sales-demo, not real production). Closing as won't-fix; for a real production deployment, env-gate behind `NODE_ENV === 'production'` at deploy time.
+
+### Stale-issue cleanup (6)
+
+- **#141 #142 #147 #150 #152 #153** — Migrated from `Globussoft-Technologies/callified` on 2026-04-24 with no repro steps, only screenshots on prnt.sc/somup.com. 3 days idle. Closed as stale; re-file with browser+OS, network panel, console, step-by-step repro if observed in v3.2.x.
+
+---
+
 ## v3.2.3 — 2026-04-27 — P1 + P2 closure pass, fetchApi rewrite, demo polish
 
 A focused day-long pass on user-reported QA bugs. **24 GitHub issues closed**: 8 P1 (demo-breaking), 11 P2 (functional gaps), 4 silent-failure cluster (#273-#276 + the systemic fetchApi fix), and 1 visit overflow (#277). P1 + P2 boards both at 0 open. No schema changes; backwards-compatible API changes only.

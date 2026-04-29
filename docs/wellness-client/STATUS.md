@@ -1,10 +1,10 @@
 # Enhanced Wellness — Build Status
 
-**Companion to:** [PRD.md](PRD.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EXTERNAL_API.md](EXTERNAL_API.md)
-**Last updated:** 2026-04-27 (end of day — v3.2.3 deployed; P1 + P2 boards both at 0 open after a 24-issue closure pass)
+**Companion to:** [PRD.md](PRD.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EXTERNAL_API.md](EXTERNAL_API.md), [SANDBOX.md](SANDBOX.md)
+**Last updated:** 2026-04-29 (end of day — v3.2.5 deployed; **GitHub issue inbox: 0 open**. ~70 issues closed across two sessions. New CI/CD via GitHub Actions; mobile-responsive 80/20; reports CSV/PDF export; security hardening pass.)
 **Live at:** https://crm.globusdemos.com
 **Tenant:** `enhanced-wellness` (id 2, vertical `wellness`)
-**Production HEAD:** `3be74ca` (v3.2.3)
+**Production HEAD:** `d778d6a` (v3.2.5) — auto-deployed via [.github/workflows/deploy.yml](../../.github/workflows/deploy.yml)
 
 ---
 
@@ -12,9 +12,29 @@
 
 The Enhanced Wellness tenant is **live and demo-ready**. 4 of 6 PRD §14 demo criteria are verified green; the 2 ⚠️ depend on Callified + AdsGPT teams shipping their side. Built as a configuration on the existing multi-tenant CRM (no fork). Rishu can log in, see his clinic's morning dashboard with sane numbers (₹20T overflow fixed today), click into any of 300+ patients, write a prescription, capture a consent on a tablet (signatures now visible on cream theme), scan 106 services across every Dr. Haror's category, review the AI agent's recommendations, book a visit by clicking any empty cell on the practitioner calendar, and bounce out to AdsGPT or Callified.ai via single-click sidebar links.
 
-### Today's closure pass (2026-04-27, v3.2.3)
+### Recent closure passes (2026-04-29, v3.2.4 + v3.2.5)
 
-24 user-facing bugs closed in a focused day. P1 + P2 boards both at 0 open (was 8 + 11). See [CHANGELOG.md v3.2.3](../../CHANGELOG.md) for the full list. Highlights for the wellness vertical:
+**~70 user-facing bugs closed across two work sessions on 2026-04-29.** Inbox went 50 → 0 → refilled by overnight QA → 0 again. See [CHANGELOG.md v3.2.5](../../CHANGELOG.md) and [v3.2.4](../../CHANGELOG.md#v324--2026-04-29--inbox-zero-day-1--day-2-50-issues-across-3-agent-rounds-github-actions-deploy-mobile-responsive) for the full lists. Headline items for the wellness vertical:
+
+- **GitHub Actions deploy pipeline** — push to main auto-deploys with health-check + rollback on fail. No more local `ssh_deploy_*.py` scripts.
+- **Reports CSV/PDF export** (#227) shipped across all 4 tabs (P&L, Per-Pro, Per-Location, Attribution). Backend extracts shared calc helpers; CSV uses UTF-8 BOM for Excel/INR; PDF uses pdfkit letterhead.
+- **Mobile responsive 80/20** (#228) — sidebar hamburger drawer at ≤768px + responsive CSS for the 6 demo-path pages. Full mobile parity remains a multi-day follow-up.
+- **External integrations sandbox foundation** (#137) — [SANDBOX.md](SANDBOX.md) inventories 7 inbound webhooks + 7 outbound integrations + 19 cron engines (8 with no E2E coverage). Three runnable Express mocks at ports 5101–5103.
+- **Prescription detail modal + PDF download** (#278) — Case History timeline shows Instructions; Rx cards clickable; Download PDF wires to existing pdfkit letterhead route.
+- **OTP-leak P0** (#300) — `request-otp` no longer returns the OTP in the response body. SMS-only.
+- **Calendar Patient dropdown P0** (#312) — defensive shape read for `{patients, total}` API response.
+- **Tasks deadline +5:30h P0** (#313) — frontend now sends ISO timestamp.
+- **RBAC + PHI cluster** (#280 #292 #295 #324 #326 #323) — stylists/doctors only see their own column; telecallers can't write Rx; manager UI no longer shows Delete on /staff; OTP rate-limited (3/10min/phone + 10/10min/IP); hardcoded OTP `1234` restricted to one demo phone.
+- **Security headers regression fixed** (#342) — six Helmet headers (HSTS, X-Frame, Referrer-Policy, X-Content-Type-Options, COOP, CORP) now present on every API response.
+- **JWT off localStorage** (#343) — token now in-memory + sessionStorage; 12-file sweep migrated all callers to `getAuthToken()`. Honest scope: full httpOnly-cookie migration is multi-day follow-up.
+- **Nested patient endpoints** (#346) — `GET /patients/:id/visits | /prescriptions | /consents | /treatment-plans` all 200, parent-existence verified, audit-logged.
+- **Global 404 fallback** (#341) — new NotFound.jsx with dynamic suggestions for known wrong-prefix URLs.
+- **Notification polling killed** (#345) — replaced 1.5x/sec HTTP poll with Socket.IO subscription.
+- **3 cleanup scripts ran on prod**: `cleanup-p3-data-quality.js`, `merge-duplicate-patients.js` (331 → 181 patients with all clinical refs preserved via reattach), `cleanup-seed-pollution-2026-04-27.js` (87 row mutations across 11 issue clusters).
+
+### Earlier closure pass (2026-04-27, v3.2.3)
+
+24 user-facing bugs closed in a focused day. See [CHANGELOG.md v3.2.3](../../CHANGELOG.md#v323--2026-04-27--p1--p2-closure-pass-fetchapi-rewrite-demo-polish). Highlights:
 
 - Reports tabs reconciled (#232) — P&L / Per-Pro / Per-Location now show the same 117 visits / ₹12.9L
 - Owner Dashboard expected revenue overflow fixed (#277) — ₹20T → ₹30,000

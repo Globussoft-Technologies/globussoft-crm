@@ -1,8 +1,39 @@
 # Production runbook — Globussoft CRM
 
-For ops + on-call engineers. Last updated: v3.2.2 (2026-04-26).
+For ops + on-call engineers. Last updated: v3.2.5 (2026-04-29).
 
 > **Engineering backlog:** see [TODOS.md](TODOS.md) at repo root for the prioritised list of multi-day / architectural work that's been deferred from cron + overnight runs. Includes the PRD-gap analysis vs `docs/wellness-client/PRD.md`. Read this before scheduling new feature work.
+
+---
+
+## 0. Deploy (since v3.2.4)
+
+**Standard deploy = `git push origin main`.** GitHub Actions handles the rest:
+
+1. Backend: pull → `npm install` → `prisma generate` → `pm2 restart globussoft-crm-backend` → poll `/api/health` until `{"status":"healthy"}` (10× 2s).
+2. **On health-check fail**: workflow auto-rolls back to `HEAD~1` + restarts. No human needed.
+3. Frontend: `npx vite build` → sudo rsync to `/var/www/crm.globusdemos.com/` → `chown -R www-data:www-data` + `chmod 755`/`644` (the lesson from a 2026-04-27 sudo-rsync 403 incident is baked in).
+4. Smoke check: `curl /` → 200, `curl /api/health` → 200, verify `mountWatchdogReloaded` in served `index-*.js` (the #284 sentinel).
+
+**Workflow file:** [.github/workflows/deploy.yml](.github/workflows/deploy.yml). **Required secrets** (set via GitHub UI Settings → Secrets and variables → Actions): `SSH_HOST`, `SSH_USER`, `SSH_PASSWORD`, `SSH_PORT` (optional, default 22).
+
+**Concurrency:** `deploy-prod` group with `cancel-in-progress: false` — one deploy at a time, never cancel an in-flight deploy.
+
+**Skip auto-deploy** when only docs / tests / operator scripts change. The `paths-ignore` excludes `**/*.md`, `docs/**`, `e2e/**`, `backend/scripts/**`, `.gitignore`, and the post-comments workflow.
+
+**Manual re-deploy** or backend-only: GitHub UI → Actions → "Deploy to demo server (crm.globusdemos.com)" → Run workflow. Optional `skip_frontend` input bypasses the vite build for backend-only fixes.
+
+**Rollback by hand** (if you need to revert further than HEAD~1):
+```bash
+ssh empcloud-development@163.227.174.141
+cd ~/globussoft-crm
+git reset --hard <SHA>
+cd backend && npm install && npx prisma generate
+pm2 restart globussoft-crm-backend --update-env
+```
+Then on local: revert the offending commit or push a fixup so origin/main matches the deployed state.
+
+The local `ssh_deploy_*.py` scripts are legacy (archived under `_archive/ssh_scripts/`). Keep them around only for ad-hoc data ops (e.g. running cleanup scripts on prod via `node scripts/cleanup-*.js --commit`).
 
 ---
 

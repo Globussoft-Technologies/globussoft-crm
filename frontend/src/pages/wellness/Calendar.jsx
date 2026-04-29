@@ -73,7 +73,15 @@ export default function CalendarGrid() {
       setAllStaff(Array.isArray(staff) ? staff : []);
       setVisits(Array.isArray(vs) ? vs : []);
       setServices(Array.isArray(svc) ? svc.filter((s) => s.isActive !== false) : []);
-      setPatients(Array.isArray(pts) ? pts : []);
+      // #312: /api/wellness/patients returns { patients, total } not a bare
+      // array. Defensive read so a future shape change doesn't silently
+      // empty the dropdown again. Same fix as #251 for /converted-leads.
+      const patientsArr = Array.isArray(pts)
+        ? pts
+        : Array.isArray(pts?.patients) ? pts.patients
+        : Array.isArray(pts?.data) ? pts.data
+        : [];
+      setPatients(patientsArr);
     } catch (_e) { setVisits([]); setAllStaff([]); }
     setLoading(false);
   };

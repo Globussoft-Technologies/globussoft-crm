@@ -72,7 +72,16 @@ export default function Tasks() {
   const createTask = async (e) => {
     e.preventDefault();
     try {
-      await fetchApi('/api/tasks', { method: 'POST', body: JSON.stringify(newTask) });
+      // #313: <input type="datetime-local"> returns a wall-clock string
+      // ("2026-05-20T15:30") with no timezone. Sending it bare to the server
+      // makes Node `new Date(...)` interpret it as UTC, and the IST display
+      // path then adds +5:30, breaking the round-trip. Convert via the
+      // browser's local Date so the saved value is a real ISO timestamp.
+      const payload = {
+        ...newTask,
+        dueDate: newTask.dueDate ? new Date(newTask.dueDate).toISOString() : null,
+      };
+      await fetchApi('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
       setNewTask({ title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium' });
       loadData();
     } catch (err) {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, Plus, Users, Phone, Mail } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
@@ -9,24 +9,78 @@ export default function Patients() {
   const [patients, setPatients] = useState([]);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState('');
+  // #331-bug fix: form-create flag added so handleCreate can request a refresh
+  // without re-introducing a stale-state read. The previous direct `load()`
+  // call inside handleCreate re-fetched with whatever `q` the closure had
+  // captured when the form was rendered, which raced against the debounced
+  // search effect.
+  const [reloadTick, setReloadTick] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [locations, setLocations] = useState([]);
   const [form, setForm] = useState({ name: '', phone: '', email: '', gender: '', source: 'walk-in', locationId: '' });
 
-  const load = () => {
+  // #331: search box dropped the first character of a fresh query.
+  //
+  // Root cause: two interacting issues.
+  //  1. On mount, the debounced fetch effect ran with q=''. Under React 18
+  //     StrictMode (and dev double-invoke) this scheduled a no-op
+  //     "fetch all patients" request that completed AFTER the user's first
+  //     keystroke fetch. The second response overwrote the filtered list,
+  //     re-rendered the table as "No patients found" because the
+  //     subsequent typed-query fetch had already updated `loading=false`
+  //     and `patients=[]` was the most recent server reply for an
+  //     in-flight cancelled request whose stale resolution still landed.
+  //  2. The `load` closure captured `q` at definition time. By the time
+  //     the timer fired, `q` could be one keystroke behind the input
+  //     value because re-renders re-create `load`, but the timer ID being
+  //     cleaned up was the one captured by the OUTER useEffect — fine
+  //     for cancellation, but the bound `load` that did get called still
+  //     used the latest q. The actual cause was (1) — the racing empty
+  //     fetch — but to be safe we also (a) read `q` via a ref so the
+  //     timer body always sees the current value, (b) tag each fetch
+  //     with a request id and ignore stale responses, and (c) skip the
+  //     no-op empty-string fetch on initial mount.
+  const qRef = useRef(q);
+  useEffect(() => { qRef.current = q; }, [q]);
+  const reqIdRef = useRef(0);
+  const didMountRef = useRef(false);
+
+  const load = (currentQ) => {
+    const myReqId = ++reqIdRef.current;
     setLoading(true);
-    const url = q ? `/api/wellness/patients?q=${encodeURIComponent(q)}` : '/api/wellness/patients';
+    const url = currentQ ? `/api/wellness/patients?q=${encodeURIComponent(currentQ)}` : '/api/wellness/patients';
     fetchApi(url)
-      .then((d) => { setPatients(d.patients); setTotal(d.total); })
-      .catch(() => { setPatients([]); setTotal(0); })
-      .finally(() => setLoading(false));
+      .then((d) => {
+        // Drop stale responses — a slow empty-query fetch must not stomp
+        // on a fresher typed-query fetch.
+        if (myReqId !== reqIdRef.current) return;
+        setPatients(d.patients);
+        setTotal(d.total);
+      })
+      .catch(() => {
+        if (myReqId !== reqIdRef.current) return;
+        setPatients([]);
+        setTotal(0);
+      })
+      .finally(() => {
+        if (myReqId !== reqIdRef.current) return;
+        setLoading(false);
+      });
   };
 
   useEffect(() => {
-    const t = setTimeout(load, 250);
+    // First mount: do exactly one immediate load with empty q so the table
+    // populates, but don't go through the debounced path that races with
+    // the user's first keystroke.
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      load('');
+      return;
+    }
+    const t = setTimeout(() => load(qRef.current), 250);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, reloadTick]);
 
   useEffect(() => {
     fetchApi('/api/wellness/locations').then(setLocations).catch(() => setLocations([]));
@@ -43,17 +97,28 @@ export default function Patients() {
 
   const handleCreate = async (e) => {
     e.preventDefault();
+    // #337: reject whitespace-only names. The HTML `required` attribute on
+    // the input only checks `value.length >= 1`, so "   " sails through.
+    // Trim before any other validation so we also normalise the saved name.
+    const trimmedName = (form.name || '').trim();
+    if (trimmedName.length < 1) {
+      notify.error('Name is required');
+      return;
+    }
     if (!isValidPhone(form.phone)) {
       notify.error('Phone number is invalid. Enter 10–15 digits (formatting characters like +, -, spaces, and parentheses are allowed).');
       return;
     }
     try {
-      const payload = { ...form, locationId: form.locationId ? parseInt(form.locationId) : null };
+      const payload = { ...form, name: trimmedName, locationId: form.locationId ? parseInt(form.locationId) : null };
       await fetchApi('/api/wellness/patients', { method: 'POST', body: JSON.stringify(payload) });
-      notify.success(`Patient "${form.name}" added`);
+      notify.success(`Patient "${trimmedName}" added`);
       setForm({ name: '', phone: '', email: '', gender: '', source: 'walk-in', locationId: locations[0]?.id || '' });
       setShowAdd(false);
-      load();
+      // #331: bump reloadTick instead of calling load() directly so the
+      // debounced effect handles the refresh consistently and reads the
+      // latest q via the ref.
+      setReloadTick((t) => t + 1);
     } catch (_err) { /* fetchApi already toasted */ }
   };
 

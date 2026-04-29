@@ -143,7 +143,13 @@ function ensureVisitDate(value, { required = false } = {}) {
   return null;
 }
 
-function ensureStringLength(value, { max, min = 0, field, code, required = false } = {}) {
+function ensureStringLength(value, { max, min = 0, field, code, required = false, trim = true } = {}) {
+  // #337: when `trim` is true (the default for required string fields),
+  // a value of all-whitespace ("   ") is treated as empty for both the
+  // required check and the min-length check. The value is NOT mutated —
+  // routes are expected to also call .trim() before persisting if they
+  // want the saved value normalised; this validator only enforces "is
+  // there meaningful content".
   if (value == null || value === "") {
     return required
       ? { status: 400, error: `${field} is required`, code: code || `${field.toUpperCase()}_REQUIRED` }
@@ -152,7 +158,11 @@ function ensureStringLength(value, { max, min = 0, field, code, required = false
   if (typeof value !== "string") {
     return { status: 400, error: `${field} must be a string`, code: code || `${field.toUpperCase()}_INVALID` };
   }
-  if (value.length < min) {
+  const effective = trim ? value.trim() : value;
+  if (required && effective.length === 0) {
+    return { status: 400, error: `${field} is required`, code: code || `${field.toUpperCase()}_REQUIRED` };
+  }
+  if (effective.length < min) {
     return { status: 400, error: `${field} must be at least ${min} characters`, code: code || `${field.toUpperCase()}_TOO_SHORT` };
   }
   if (typeof max === "number" && value.length > max) {

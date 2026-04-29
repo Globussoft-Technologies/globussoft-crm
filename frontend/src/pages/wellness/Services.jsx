@@ -15,6 +15,9 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+// #316: NumberInput strips the `<oldValue><newTyped>` concatenation artifact
+// users hit when doing Ctrl+A → Delete → retype on number fields.
+import { NumberInput } from '../../utils/numberInput';
 
 const tierColor = { high: '#ef4444', medium: '#f59e0b', low: '#64748b' };
 
@@ -157,7 +160,10 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
             </div>
             <div>
               <label style={fieldLabel}>Duration (min)</label>
-              <input type="number" min="1" placeholder="e.g. 60" value={form.durationMin} onChange={(e) => setForm({ ...form, durationMin: parseInt(e.target.value) || 30 })} style={inputStyle} />
+              {/* #316: NumberInput intercepts the Ctrl+A→Delete→retype concat bug.
+                  We pass the raw string through to setForm so the input remains
+                  fully controlled even mid-edit (no flicker back to the old value). */}
+              <NumberInput min="1" placeholder="e.g. 60" value={form.durationMin} onChange={(e) => setForm({ ...form, durationMin: e.target.value === '' ? '' : (parseInt(e.target.value) || 30) })} style={inputStyle} />
             </div>
             <div>
               <label style={fieldLabel}>Marketing radius (km)</label>

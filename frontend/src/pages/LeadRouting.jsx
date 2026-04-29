@@ -168,9 +168,12 @@ export default function LeadRouting() {
   const saveRule = async () => {
     if (!form.name.trim()) { showToast('Name is required', 'error'); return; }
     // #301: keep the UI in sync with the server-side min=1 priority guard.
+    // #332: also enforce upper bound of 999 — beyond that it's not a real
+    // priority, just data-entry noise that breaks sort order and overflows
+    // the priority chip column.
     const priorityNum = Number(form.priority);
-    if (!Number.isFinite(priorityNum) || !Number.isInteger(priorityNum) || priorityNum < 1) {
-      showToast('Priority must be a positive integer (minimum 1)', 'error');
+    if (!Number.isFinite(priorityNum) || !Number.isInteger(priorityNum) || priorityNum < 1 || priorityNum > 999) {
+      showToast('Priority must be an integer between 1 and 999', 'error');
       return;
     }
     // #302: at least one usable condition must be set before save.
@@ -356,7 +359,8 @@ export default function LeadRouting() {
               </div>
               <div>
                 <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Priority</label>
-                <input type="number" min="1" step="1" className="input-field" value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })} style={{ width: '100%', marginTop: 4 }} />
+                {/* #301 min=1, #332 max=999 — both bounds enforced server-side too. */}
+                <input type="number" min="1" max="999" step="1" className="input-field" value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })} style={{ width: '100%', marginTop: 4 }} />
               </div>
             </div>
 

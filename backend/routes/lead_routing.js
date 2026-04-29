@@ -162,10 +162,12 @@ router.post("/", async (req, res) => {
     const condErr = validateConditions(conditions);
     if (condErr) return res.status(400).json({ error: condErr });
 
-    // #301: priority must be a positive integer (>= 1).
+    // #301 (min=1) + #332 (max=999): priority must be a positive integer in
+    // [1, 999]. Above 999 isn't a "rare" priority, it's a data-entry typo
+    // that breaks the sort column and overflows the UI chip.
     const priorityNum = priority != null ? Number(priority) : 100;
-    if (!Number.isFinite(priorityNum) || priorityNum < 1 || !Number.isInteger(priorityNum)) {
-      return res.status(400).json({ error: "Priority must be a positive integer (minimum 1)" });
+    if (!Number.isFinite(priorityNum) || priorityNum < 1 || priorityNum > 999 || !Number.isInteger(priorityNum)) {
+      return res.status(400).json({ error: "Priority must be an integer between 1 and 999" });
     }
 
     const rule = await prisma.leadRoutingRule.create({
@@ -205,12 +207,12 @@ router.put("/:id", async (req, res) => {
       if (condErr) return res.status(400).json({ error: condErr });
     }
 
-    // #301: same min=1 rule on update.
+    // #301 + #332: same [1, 999] rule on update.
     let priorityNum;
     if (priority !== undefined) {
       priorityNum = Number(priority);
-      if (!Number.isFinite(priorityNum) || priorityNum < 1 || !Number.isInteger(priorityNum)) {
-        return res.status(400).json({ error: "Priority must be a positive integer (minimum 1)" });
+      if (!Number.isFinite(priorityNum) || priorityNum < 1 || priorityNum > 999 || !Number.isInteger(priorityNum)) {
+        return res.status(400).json({ error: "Priority must be an integer between 1 and 999" });
       }
     }
 

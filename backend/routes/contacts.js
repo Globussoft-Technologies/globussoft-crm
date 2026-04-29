@@ -23,7 +23,11 @@ function validateContactInput(body, { isUpdate = false } = {}) {
   const emailErr = ensureEmail(body.email, { required: !isUpdate });
   if (emailErr) return emailErr;
   // Name — string length cap, prevents Prisma column-overflow 500s (#165).
-  const nameErr = ensureStringLength(body.name, { max: 200, field: "name" });
+  // #337: name is a required field on create AND must contain non-whitespace
+  // content. The `ensureStringLength` helper trims before the empty-check by
+  // default, so "   " is rejected with NAME_REQUIRED. Stays optional on
+  // update so a PATCH that doesn't touch name still validates.
+  const nameErr = ensureStringLength(body.name, { max: 200, field: "name", required: !isUpdate });
   if (nameErr) return nameErr;
   // aiScore — bounded 0–100; UI renders "X/100" so anything else is broken (#166).
   if (body.aiScore !== undefined && body.aiScore !== null) {
@@ -91,7 +95,11 @@ router.post('/', async (req, res) => {
     // clear code instead of a 500 from the DB layer.
     const inputErr = validateContactInput(req.body, { isUpdate: false });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
-    const contact = await prisma.contact.create({ data: { ...req.body, tenantId: req.user.tenantId } });
+    // #337: persist the trimmed name so we don't leak the user's accidental
+    // leading/trailing whitespace into search indexes, exports, etc. The
+    // validator already verified there's at least one non-whitespace char.
+    const normalised = { ...req.body, name: typeof req.body.name === "string" ? req.body.name.trim() : req.body.name };
+    const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
     try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (e) { /* event bus optional */ }
     // #179: audit row for new contact.
     await writeAudit('Contact', 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });

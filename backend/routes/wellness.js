@@ -311,9 +311,14 @@ router.post("/patients", async (req, res) => {
     const { name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId } = req.body;
     const inputErr = validatePatientInput(req.body, { isUpdate: false });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
+    // #337: persist the trimmed name. validatePatientInput's ensureStringLength
+    // now rejects whitespace-only names; this normalises the saved value so
+    // the Patients list, search index, prescriptions, and SMS templates all
+    // see the clean form.
+    const normalisedName = typeof name === "string" ? name.trim() : name;
     const patient = await prisma.patient.create({
       data: {
-        name,
+        name: normalisedName,
         email,
         phone,
         dob: dob ? new Date(dob) : null,
@@ -2158,9 +2163,28 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
           ? { tenantId, status: "active", patient: { locationId } }
           : { tenantId, status: "active" },
       }),
-      prisma.contact.count({
-        where: { tenantId, status: "Lead", createdAt: { gte: todayStart, lte: todayEnd } },
-      }),
+      // #335: when the global Locations filter is set, scope new-leads-today
+      // to leads tied to a Patient at that location. Contact has no
+      // locationId column (leads are tenant-scoped, not location-scoped, in
+      // the generic CRM model), so we approximate by matching on phone or
+      // email against Patient.locationId. This makes the Leads KPI tile
+      // respond to the dropdown the same way Appointments + Revenue do.
+      // When locationId is unset we keep the existing tenant-wide count.
+      (async () => {
+        const baseWhere = { tenantId, status: "Lead", createdAt: { gte: todayStart, lte: todayEnd } };
+        if (!locationId) return prisma.contact.count({ where: baseWhere });
+        const patients = await prisma.patient.findMany({
+          where: { tenantId, locationId },
+          select: { phone: true, email: true },
+        });
+        const phones = patients.map((p) => p.phone).filter(Boolean);
+        const emails = patients.map((p) => p.email).filter(Boolean);
+        if (phones.length === 0 && emails.length === 0) return 0;
+        const orClauses = [];
+        if (phones.length) orClauses.push({ phone: { in: phones } });
+        if (emails.length) orClauses.push({ email: { in: emails } });
+        return prisma.contact.count({ where: { ...baseWhere, OR: orClauses } });
+      })(),
       prisma.visit.findMany({
         where: visitWhere({ visitDate: { gte: thirtyDaysAgo } }),
         select: { visitDate: true, amountCharged: true },

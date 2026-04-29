@@ -27,7 +27,19 @@ function StatusBadge({ status }) {
 import { formatMoney, currencySymbol } from '../utils/money';
 const formatCurrency = (v) => formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
-const EMPTY_LINE_ITEM = { description: '', quantity: 1, unitPrice: 0 };
+// #333: every numeric field on a line item now has a sane range. The
+// caps were chosen to fit a clinic / SMB CRM (₹9,999,999.99 unit price is
+// already 1 crore — anyone needing more than this should be using Deals
+// with multi-currency line items, not the lightweight Estimates form),
+// and to fit comfortably in the ledger column without overflow.
+const QTY_MIN = 1;
+const QTY_MAX = 9999;
+const UNIT_PRICE_MIN = 0;
+const UNIT_PRICE_MAX = 9_999_999.99;
+const DISCOUNT_MIN = 0;
+const DISCOUNT_MAX = 100;
+
+const EMPTY_LINE_ITEM = { description: '', quantity: 1, unitPrice: 0, discount: 0 };
 
 const INITIAL_FORM = {
   title: '',
@@ -88,19 +100,32 @@ export default function Estimates() {
     [visibleEstimates]
   );
 
+  // #333: include a percent discount in the per-line total so the grand
+  // total reflects what the customer actually pays.
   const grandTotal = useMemo(() =>
-    lineItems.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0), 0),
+    lineItems.reduce((sum, item) => {
+      const q = Number(item.quantity) || 0;
+      const p = Number(item.unitPrice) || 0;
+      const d = Math.min(Math.max(Number(item.discount) || 0, 0), 100);
+      return sum + q * p * (1 - d / 100);
+    }, 0),
     [lineItems]
   );
 
-  // #123: any negative qty or unit price taints the estimate. Two negatives can
-  // multiply to a fake-positive total, so we check each side independently and
-  // block submit + flag totals red whenever any line is bad.
+  // #123 / #333: any out-of-range qty / unit price / discount taints the
+  // estimate. Block submit + flag totals red whenever any line is bad.
+  // Two negatives can multiply to a fake-positive total, so each side is
+  // checked independently. NaN / Infinity (e.g. someone pasting a 24-digit
+  // price) also fails Number.isFinite and is rejected.
   const hasInvalidLine = useMemo(() =>
     lineItems.some(item => {
       const q = Number(item.quantity);
       const p = Number(item.unitPrice);
-      return (Number.isFinite(q) && q < 0) || (Number.isFinite(p) && p < 0);
+      const d = Number(item.discount ?? 0);
+      if (!Number.isFinite(q) || q < QTY_MIN || q > QTY_MAX) return true;
+      if (!Number.isFinite(p) || p < UNIT_PRICE_MIN || p > UNIT_PRICE_MAX) return true;
+      if (!Number.isFinite(d) || d < DISCOUNT_MIN || d > DISCOUNT_MAX) return true;
+      return false;
     }),
     [lineItems]
   );
@@ -125,11 +150,33 @@ export default function Estimates() {
 
   const createEstimate = async (e) => {
     e.preventDefault();
+    // #333: re-validate at submit since browser min/max can be bypassed by
+    // paste. Reject the create with an inline-style error message that
+    // points at exactly which bound was tripped.
     if (hasInvalidLine) {
-      notify.error('Fix the negative quantity or unit price in the line items before saving.');
+      notify.error(
+        `Each line item needs a quantity in [${QTY_MIN}, ${QTY_MAX}], a unit price in [${UNIT_PRICE_MIN}, ${UNIT_PRICE_MAX.toLocaleString()}], and a discount in [${DISCOUNT_MIN}%, ${DISCOUNT_MAX}%]. Fix them before saving.`
+      );
       return;
     }
     try {
+      // #333: backend doesn't yet persist a per-line discount column, so
+      // fold any Disc% into the unit price before submitting. This keeps
+      // the saved totalAmount in sync with the grand total the user sees
+      // on screen (otherwise a 10% discount would look applied on the
+      // form but disappear when reloaded from the ledger).
+      const submittableLineItems = lineItems
+        .filter(item => item.description.trim())
+        .map(item => {
+          const q = Number(item.quantity) || 1;
+          const p = Number(item.unitPrice) || 0;
+          const d = Math.min(Math.max(Number(item.discount) || 0, 0), 100);
+          return {
+            description: item.description,
+            quantity: q,
+            unitPrice: Number((p * (1 - d / 100)).toFixed(2)),
+          };
+        });
       await fetchApi('/api/estimates', {
         method: 'POST',
         body: JSON.stringify({
@@ -138,7 +185,7 @@ export default function Estimates() {
           dealId: form.dealId || undefined,
           validUntil: form.validUntil || undefined,
           notes: form.notes || undefined,
-          lineItems: lineItems.filter(item => item.description.trim()),
+          lineItems: submittableLineItems,
         }),
       });
       setForm(INITIAL_FORM);
@@ -348,9 +395,14 @@ export default function Estimates() {
                     </div>
                     <div style={{ flex: 0.5 }}>
                       <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Qty</label>
+                      {/* #333: integer 1..9999. step=1 + min/max tells the
+                          browser to validate, and the submit handler also
+                          re-checks since min/max are bypassable via paste. */}
                       <input
                         type="number"
-                        min="1"
+                        min={QTY_MIN}
+                        max={QTY_MAX}
+                        step="1"
                         className="input-field"
                         value={item.quantity}
                         onChange={e => handleLineItemChange(index, 'quantity', e.target.value)}
@@ -359,25 +411,50 @@ export default function Estimates() {
                     </div>
                     <div style={{ flex: 0.75 }}>
                       <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Unit Price</label>
+                      {/* #333: 0..9,999,999.99 (1 crore cap). Anything bigger
+                          is a paste-typo, not a real estimate line item. */}
                       <input
                         type="number"
                         step="0.01"
-                        min="0"
+                        min={UNIT_PRICE_MIN}
+                        max={UNIT_PRICE_MAX}
                         className="input-field"
                         value={item.unitPrice}
                         onChange={e => handleLineItemChange(index, 'unitPrice', e.target.value)}
                         aria-label={`Line item ${index + 1} unit price`}
                       />
                     </div>
+                    <div style={{ flex: 0.5 }}>
+                      <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Disc %</label>
+                      {/* #333: percent discount 0..100. Anything else flips
+                          the line total negative and breaks the ledger. */}
+                      <input
+                        type="number"
+                        min={DISCOUNT_MIN}
+                        max={DISCOUNT_MAX}
+                        step="0.5"
+                        className="input-field"
+                        value={item.discount ?? 0}
+                        onChange={e => handleLineItemChange(index, 'discount', e.target.value)}
+                        aria-label={`Line item ${index + 1} discount percent`}
+                      />
+                    </div>
                     <div style={{ flex: 0.5, textAlign: 'right' }}>
                       <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Total</label>
                       {(() => {
-                        const q = Number(item.quantity) || 0;
-                        const p = Number(item.unitPrice) || 0;
-                        const lineInvalid = q < 0 || p < 0;
+                        const q = Number(item.quantity);
+                        const p = Number(item.unitPrice);
+                        const d = Number(item.discount ?? 0);
+                        const lineInvalid =
+                          !Number.isFinite(q) || q < QTY_MIN || q > QTY_MAX ||
+                          !Number.isFinite(p) || p < UNIT_PRICE_MIN || p > UNIT_PRICE_MAX ||
+                          !Number.isFinite(d) || d < DISCOUNT_MIN || d > DISCOUNT_MAX;
+                        const lineTotal = lineInvalid
+                          ? 0
+                          : q * p * (1 - d / 100);
                         return (
                           <span style={{ fontSize: '0.85rem', fontWeight: '600', color: lineInvalid ? '#ef4444' : '#10b981' }}>
-                            {formatCurrency(q * p)}
+                            {formatCurrency(lineTotal)}
                           </span>
                         );
                       })()}
@@ -423,7 +500,7 @@ export default function Estimates() {
               </div>
               {hasInvalidLine && (
                 <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px', color: '#ef4444', fontSize: '0.75rem' }}>
-                  One or more line items has a negative quantity or unit price. Fix them before creating the estimate.
+                  One or more line items is out of range. Quantity must be {QTY_MIN}–{QTY_MAX}, unit price {UNIT_PRICE_MIN}–{UNIT_PRICE_MAX.toLocaleString()}, discount {DISCOUNT_MIN}–{DISCOUNT_MAX}%.
                 </div>
               )}
             </div>
@@ -432,7 +509,7 @@ export default function Estimates() {
               type="submit"
               className="btn-primary"
               disabled={hasInvalidLine}
-              title={hasInvalidLine ? 'Fix negative quantity / unit price first' : ''}
+              title={hasInvalidLine ? `Each line needs qty ${QTY_MIN}–${QTY_MAX}, unit price ≤ ${UNIT_PRICE_MAX.toLocaleString()}, discount ${DISCOUNT_MIN}–${DISCOUNT_MAX}%` : ''}
               style={{
                 padding: '1rem', marginTop: '0.5rem',
                 opacity: hasInvalidLine ? 0.5 : 1,

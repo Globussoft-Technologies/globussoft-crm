@@ -243,8 +243,39 @@ function ProTable({ data }) {
 }
 
 function LocTable({ data }) {
+  // #336: header used to silently disagree with the admin /wellness/locations
+  // page (admin lists active+inactive; report rendered the same rows but never
+  // labeled the split, so "1 location" in the report vs "2 locations" in admin
+  // looked like a data bug). Surface the breakdown explicitly: "N active
+  // locations" with a small "inactive: M" badge when M>0. Data already carries
+  // isActive per-row from computePerLocation().
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const activeCount = rows.filter((r) => r.isActive).length;
+  const inactiveCount = rows.length - activeCount;
   return (
     <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+        <h2 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>
+          {activeCount} active location{activeCount === 1 ? '' : 's'}
+        </h2>
+        {inactiveCount > 0 && (
+          <span
+            title="Inactive locations are listed below for completeness but are excluded from operational counts."
+            style={{
+              background: 'rgba(100,116,139,0.18)',
+              color: 'var(--text-secondary)',
+              padding: '0.15rem 0.5rem',
+              borderRadius: 999,
+              fontSize: '0.7rem',
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+            }}
+          >
+            inactive: {inactiveCount}
+          </span>
+        )}
+      </div>
       <Totals items={[
         { label: 'Visits', value: data.totals.visits.toLocaleString('en-IN') },
         { label: 'Revenue', value: formatMoney(data.totals.revenue) },
@@ -253,8 +284,8 @@ function LocTable({ data }) {
         <table style={tableStyle}>
           <thead><tr>{['Location', 'City', 'Patients', 'Visits', 'Revenue', 'Status'].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
           <tbody>
-            {data.rows.map((r) => (
-              <tr key={r.id}>
+            {rows.map((r) => (
+              <tr key={r.id} style={r.isActive ? undefined : { opacity: 0.65 }}>
                 <td style={td}>{r.name}</td>
                 <td style={td}>{r.city}{r.state ? `, ${r.state}` : ''}</td>
                 <td style={tdR}>{r.patients}</td>

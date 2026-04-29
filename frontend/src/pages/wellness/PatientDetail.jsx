@@ -1026,24 +1026,42 @@ function InventoryTab({ patient, onSaved }) {
             </div>
           )}
 
-          <form onSubmit={submit} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '0.5rem', alignItems: 'end' }}>
-            <input placeholder="Product name (e.g. Botox vial 100u)" required value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} style={inputStyle} />
-            <input type="number" min={1} value={form.qty} onChange={(e) => setForm({ ...form, qty: parseInt(e.target.value) || 1 })} style={inputStyle} placeholder="Qty" />
-            <input type="number" min={0} step={0.01} value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: parseFloat(e.target.value) || 0 })} style={inputStyle} placeholder="Unit cost ₹" />
-            <button
-              type="submit"
-              disabled={submitting}
-              style={{
-                padding: '0.55rem 1rem',
-                background: submitting ? 'rgba(107,114,128,0.3)' : 'var(--success-color)',
-                color: '#fff', border: 'none', borderRadius: 8,
-                cursor: submitting ? 'not-allowed' : 'pointer',
-                opacity: submitting ? 0.6 : 1,
-              }}
-            >
-              {submitting ? 'Adding…' : 'Add'}
-            </button>
-          </form>
+          {/* #338: Add button must be disabled until both product name and a
+              positive quantity are filled in. Empty rows had been making it
+              into the consumption ledger as `qty=0, productName=""`, which
+              corrupted stock-deduction reports. */}
+          {(() => {
+            const productNameOk = !!form.productName && form.productName.trim().length > 0;
+            const qtyNum = Number(form.qty);
+            const qtyOk = Number.isFinite(qtyNum) && qtyNum >= 1;
+            const canAdd = productNameOk && qtyOk && !submitting;
+            const disabledReason = !productNameOk
+              ? 'Enter a product name first'
+              : !qtyOk
+                ? 'Quantity must be at least 1'
+                : '';
+            return (
+              <form onSubmit={submit} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '0.5rem', alignItems: 'end' }}>
+                <input placeholder="Product name (e.g. Botox vial 100u)" required value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} style={inputStyle} />
+                <input type="number" min={1} value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value === '' ? '' : (parseInt(e.target.value) || 1) })} style={inputStyle} placeholder="Qty" />
+                <input type="number" min={0} step={0.01} value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: e.target.value === '' ? '' : (parseFloat(e.target.value) || 0) })} style={inputStyle} placeholder="Unit cost ₹" />
+                <button
+                  type="submit"
+                  disabled={!canAdd}
+                  title={disabledReason}
+                  style={{
+                    padding: '0.55rem 1rem',
+                    background: canAdd ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
+                    color: '#fff', border: 'none', borderRadius: 8,
+                    cursor: canAdd ? 'pointer' : 'not-allowed',
+                    opacity: canAdd ? 1 : 0.6,
+                  }}
+                >
+                  {submitting ? 'Adding…' : 'Add'}
+                </button>
+              </form>
+            );
+          })()}
         </>
       )}
     </div>

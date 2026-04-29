@@ -70,7 +70,22 @@ export default function Staff() {
   };
 
   const deleteUser = async (id, name) => {
-    if (!await notify.confirm(`Are you sure you want to delete ${name || 'this user'}? This action cannot be undone.`)) return;
+    // #340: this used to be a string-form notify.confirm, which renders as a
+    // generic modal with a neutral "Confirm" button. The Staff Delete control
+    // is genuinely destructive (hard delete on the User row + cascading
+    // ownership reassignments), so we use the structured form so the modal:
+    //   1. has a clear destructive title
+    //   2. shows a red "Delete" button (notify.confirm honours `destructive`)
+    //   3. echoes the staff member's name back to the operator so they can
+    //      sanity-check who they're about to remove before clicking
+    const target = name || 'this user';
+    if (!await notify.confirm({
+      title: 'Delete staff member',
+      message: `Permanently delete ${target}? This cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Keep',
+      destructive: true,
+    })) return;
     try {
       await fetchApi(`/api/staff/${id}`, { method: 'DELETE' });
       loadStaff();

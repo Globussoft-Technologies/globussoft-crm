@@ -45,6 +45,20 @@ const Leads = () => {
 
   const handleCreateLead = async (e) => {
     e.preventDefault();
+    // #337: reject whitespace-only names. The HTML `required` attribute on
+    // the input only checks length, not whether the value is meaningful,
+    // so "   " was being persisted as a Contact with a blank-looking name.
+    // Trim and validate before the network call.
+    const trimmedName = (newLead.name || '').trim();
+    if (trimmedName.length < 1) {
+      // Keep this consistent with the field-level UX elsewhere — no toast,
+      // just a native alert is jarring on a form, but Leads.jsx doesn't
+      // import the global notify helper. Use window.alert as the cheapest
+      // immediate-block-and-tell. The companion backend validator will be
+      // the second line of defence (see backend follow-up note in PR).
+      window.alert('Name is required');
+      return;
+    }
     // #315: refetch leads after a successful create so the "All Leads" pipeline
     // counter chip in the header (which reads `leads.length`) refreshes
     // immediately. Pre-fix the await on the create call could throw and skip
@@ -55,7 +69,7 @@ const Leads = () => {
       await fetchApi('/api/contacts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newLead),
+        body: JSON.stringify({ ...newLead, name: trimmedName }),
       });
       setNewLead({ name: '', email: '', company: '', title: '', source: 'Organic', status: 'Lead' });
     } finally {
@@ -166,7 +180,12 @@ const Leads = () => {
             <UserCheck size={15} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} />
             Assign
           </button>
-          <button onClick={() => setSelectedLeads([])} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.875rem' }}>
+          {/* #334: Clear must (a) drop the underlying selection so checkbox
+              rows un-tick, AND (b) reset the bulk-agent dropdown so a
+              re-selection doesn't pick up the previously-chosen agent.
+              One handler, both effects, so the action bar's hidden state
+              and the row state stay in lock-step. */}
+          <button onClick={() => { setSelectedLeads([]); setBulkAgent(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.875rem' }}>
             Clear
           </button>
         </div>

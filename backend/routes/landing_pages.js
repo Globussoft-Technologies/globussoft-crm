@@ -33,7 +33,35 @@ router.get("/:id", verifyToken, async (req, res) => {
 router.post("/", verifyToken, async (req, res) => {
   try {
     const { title, slug, templateType, content } = req.body;
-    const finalSlug = slug || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now().toString(36);
+    if (!title || typeof title !== "string" || !title.trim()) {
+      return res.status(400).json({ error: "title is required" });
+    }
+    const trimmedTitle = title.trim();
+
+    // #339: dedup-on-create — if a Draft landing page with the same title
+    // (case-insensitive trim) already exists for this tenant, reject with 409
+    // so the user opens the existing draft instead of accumulating dupes.
+    // Published / archived pages don't block (a stale "Lead Capture" PUBLISHED
+    // doesn't prevent starting a fresh draft to replace it). Fetch the tenant's
+    // drafts and JS-compare with toLowerCase().trim() — Prisma `equals` with
+    // `mode: 'insensitive'` isn't portable across all MySQL collations, so the
+    // JS path is the safer match for the spec.
+    const existingDrafts = await prisma.landingPage.findMany({
+      where: { tenantId: req.user.tenantId, status: "DRAFT" },
+      select: { id: true, title: true },
+    });
+    const needle = trimmedTitle.toLowerCase();
+    const dupe = existingDrafts.find(
+      (p) => (p.title || "").trim().toLowerCase() === needle
+    );
+    if (dupe) {
+      return res.status(409).json({
+        error: `A landing page named '${trimmedTitle}' already exists in Draft. Open it or rename.`,
+        existingId: dupe.id,
+      });
+    }
+
+    const finalSlug = slug || trimmedTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now().toString(36);
 
     let finalContent = content;
     if (templateType && !content) {
@@ -42,7 +70,7 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     const page = await prisma.landingPage.create({
-      data: { title, slug: finalSlug, templateType, content: finalContent || "[]", userId: req.user.userId, tenantId: req.user.tenantId },
+      data: { title: trimmedTitle, slug: finalSlug, templateType, content: finalContent || "[]", userId: req.user.userId, tenantId: req.user.tenantId },
     });
     res.status(201).json(page);
   } catch (err) {

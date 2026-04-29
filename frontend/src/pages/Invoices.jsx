@@ -218,18 +218,25 @@ export default function Invoices() {
           </h3>
           <form onSubmit={createInvoice} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
+            {/* #314: Invoice # is server-generated and was being silently
+                overwritten on save, leaving the user confused about why their
+                custom number didn't stick. Make the field read-only and surface
+                the next number that will be assigned, so what the user sees
+                up-front matches what the backend writes. Custom numbering is an
+                admin-only feature and isn't part of this form. */}
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Invoice #</label>
               <input
                 type="text"
                 className="input-field"
-                placeholder={nextInvoiceNum}
-                value={newInvoice.invoiceNum}
-                onChange={e => handleFieldChange('invoiceNum', e.target.value)}
-                aria-label="Invoice number"
+                placeholder="Auto-generated on save"
+                value={nextInvoiceNum}
+                readOnly
+                aria-label="Invoice number (auto-generated on save)"
+                style={{ opacity: 0.75, cursor: 'not-allowed' }}
               />
               <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.25rem', display: 'block' }}>
-                Auto-generated if left blank
+                Auto-generated on save
               </span>
             </div>
 

@@ -85,12 +85,21 @@ export default function Patients() {
             <option value="F">Female</option>
             <option value="Other">Other</option>
           </select>
+          {/* #317: option `value` is the canonical lowercase / kebab-case
+              enum that matches the DB. Display labels stay human-readable.
+              Pre-fix, mixed casing between this form ("Referral") and what
+              the backend stored ("referral") meant the source filter dropdown
+              showed two distinct entries for the same logical source and
+              filtered patients incorrectly. Keeping a single source of truth
+              here prevents the divergence from re-emerging. */}
           <select value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })} style={inputStyle}>
             <option value="walk-in">Walk-in</option>
+            <option value="referral">Referral</option>
+            <option value="website-form">Website form</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="instagram">Instagram</option>
             <option value="meta-ad">Meta ad</option>
             <option value="google-ad">Google ad</option>
-            <option value="whatsapp">WhatsApp</option>
-            <option value="referral">Referral</option>
             <option value="indiamart">IndiaMART</option>
           </select>
           {locations.length > 1 && (

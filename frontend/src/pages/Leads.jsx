@@ -45,13 +45,22 @@ const Leads = () => {
 
   const handleCreateLead = async (e) => {
     e.preventDefault();
-    await fetchApi('/api/contacts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newLead),
-    });
-    setNewLead({ name: '', email: '', company: '', title: '', source: 'Organic', status: 'Lead' });
-    fetchLeads();
+    // #315: refetch leads after a successful create so the "All Leads" pipeline
+    // counter chip in the header (which reads `leads.length`) refreshes
+    // immediately. Pre-fix the await on the create call could throw and skip
+    // the refetch, leaving the header counter stuck on the stale count even
+    // when the row was inserted server-side. Wrap in try/finally so the
+    // refresh always runs and the form is reset on success.
+    try {
+      await fetchApi('/api/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newLead),
+      });
+      setNewLead({ name: '', email: '', company: '', title: '', source: 'Organic', status: 'Lead' });
+    } finally {
+      fetchLeads();
+    }
   };
 
   const handleConvert = async (id) => {

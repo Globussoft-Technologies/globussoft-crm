@@ -163,9 +163,17 @@ export default function CalendarGrid() {
                 background: showAll ? 'rgba(99,102,241,0.15)' : 'transparent',
                 color: 'var(--text-primary)',
               }}
-              title={showAll ? `Showing all ${totalPractitionerCount} practitioners` : `Showing ${visiblePractitionerCount} with visits today`}
+              title={showAll ? `Showing all ${totalPractitionerCount} practitioners` : `Showing ${visiblePractitionerCount} with visits today (click to show all)`}
             >
-              {showAll ? `All ${totalPractitionerCount}` : `${visiblePractitionerCount} of ${totalPractitionerCount}`}
+              {/* #307: pre-fix copy was "1 of 16" with no unit, which sat right
+                  next to the date chevrons and was widely misread as
+                  "day 1 of 16" — i.e. the chevrons advanced practitioners.
+                  Add the explicit "practitioners" noun + a stable label
+                  ("All practitioners (16)") for the showAll mode so the chip
+                  is unambiguously about the column filter, not navigation. */}
+              {showAll
+                ? `All practitioners (${totalPractitionerCount})`
+                : `${visiblePractitionerCount} of ${totalPractitionerCount} practitioners`}
             </button>
           )}
           <button onClick={() => shift(-1)} className="glass" style={navBtn}><ChevronLeft size={16} /></button>

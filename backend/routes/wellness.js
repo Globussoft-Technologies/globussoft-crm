@@ -457,6 +457,17 @@ router.get("/visits", async (req, res) => {
         },
       ];
     }
+    // #324: doctor calendar PHI scope. A doctor opening /wellness/calendar
+    // was seeing every other practitioner's column (16 doctors + professionals)
+    // — that's other clinicians' patient lists, prescriptions, and consents
+    // surfaced via the visit row. Issue body explicitly asks for "Doctor
+    // should see Own calendar column, own patients' Rx + consent". Scope
+    // their visit feed to visits they're the assigned doctor on. ADMIN /
+    // MANAGER keep org-wide oversight, and the explicit ?doctorId= query
+    // path (used by the per-doctor profile view) is preserved.
+    if (!isOrgRole && wRole === "doctor") {
+      where.doctorId = req.user.userId;
+    }
 
     const visits = await prisma.visit.findMany({
       where,
@@ -729,9 +740,31 @@ router.post("/visits/:id/consumptions", async (req, res) => {
     const { productName, qty = 1, unitCost = 0, productId } = req.body;
     if (!productName) return res.status(400).json({ error: "productName required" });
 
+    // #321: cap unitCost + qty + line total. P&L by Service was rendering
+    // PRODUCT COST = ₹99,99,98,99,90,48,826 (~100 trillion) because a single
+    // ServiceConsumption row carried an unbounded unitCost (likely a paise/
+    // rupee unit-mismatch or a fat-fingered entry). Mirrors the ₹50L Visit
+    // amountCharged cap from #277. ₹10L per unit is already absurd for any
+    // clinic consumable; the line total is capped at ₹1Cr to match the
+    // cleanup-script threshold in the output note.
+    const qNum = parseInt(qty) || 1;
+    const cNum = parseFloat(unitCost) || 0;
+    if (qNum < 0 || cNum < 0) {
+      return res.status(400).json({ error: "qty and unitCost must be non-negative", code: "AMOUNT_NEGATIVE" });
+    }
+    if (qNum > 10_000) {
+      return res.status(400).json({ error: "qty exceeds the 10,000-unit per-line cap", code: "QTY_TOO_LARGE" });
+    }
+    if (cNum > 1_000_000) {
+      return res.status(400).json({ error: "unitCost exceeds the ₹10,00,000 per-unit cap", code: "UNIT_COST_TOO_LARGE" });
+    }
+    if (qNum * cNum > 10_000_000) {
+      return res.status(400).json({ error: "consumption line total exceeds the ₹1,00,00,000 per-line cap", code: "LINE_TOTAL_TOO_LARGE" });
+    }
+
     const c = await prisma.serviceConsumption.create({
       data: {
-        productName, qty: parseInt(qty) || 1, unitCost: parseFloat(unitCost) || 0,
+        productName, qty: qNum, unitCost: cNum,
         visitId: id,
         productId: productId ? parseInt(productId) : null,
         tenantId: req.user.tenantId,
@@ -745,6 +778,24 @@ router.post("/visits/:id/consumptions", async (req, res) => {
 });
 
 // ── Prescriptions ──────────────────────────────────────────────────
+
+// #326: clinical-write gate. The reusable verifyWellnessRole emits
+// `WELLNESS_ROLE_FORBIDDEN` which collides with non-clinical 403s
+// (catalog edits, owner reports). Prescriptions are a medico-legal
+// write — frontend + audit need a stable, distinct code so a telecaller
+// (or any non-doctor wellnessRole) hitting this route is unmistakably
+// blocked for a clinical reason. Allow only doctor wellnessRole or RBAC
+// ADMIN. MANAGER is explicitly NOT allowed: managers operate the clinic
+// but don't carry a clinical mandate.
+function requireClinicalRole(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: "Authentication required" });
+  if (req.user.role === "ADMIN") return next();
+  if (req.user.wellnessRole === "doctor") return next();
+  return res.status(403).json({
+    error: "Only clinical staff (doctor) may write prescriptions",
+    code: "CLINICAL_ROLE_REQUIRED",
+  });
+}
 
 router.get("/prescriptions", async (req, res) => {
   try {
@@ -770,7 +821,7 @@ router.get("/prescriptions", async (req, res) => {
 // #207/#216: only doctors (or admin owner override) may write prescriptions.
 // Managers operate the clinic but don't prescribe; telecallers/helpers/professionals
 // have no clinical mandate.
-router.post("/prescriptions", verifyWellnessRole(["doctor", "admin"]), async (req, res) => {
+router.post("/prescriptions", requireClinicalRole, async (req, res) => {
   try {
     const { visitId, patientId, doctorId, drugs, instructions } = req.body;
     if (!visitId || !patientId) {
@@ -817,7 +868,7 @@ router.post("/prescriptions", verifyWellnessRole(["doctor", "admin"]), async (re
 // #207/#216: same clinical gate on amend. The body still enforces "only the
 // original prescriber or an ADMIN" — this gate just keeps non-clinicals out
 // before the row lookup.
-router.put("/prescriptions/:id", verifyWellnessRole(["doctor", "admin"]), async (req, res) => {
+router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.prescription.findFirst({ where: tenantWhere(req, { id }) });
@@ -1125,15 +1176,56 @@ router.put("/services/:id", verifyWellnessRole(["admin", "manager"]), async (req
 router.get("/recommendations", async (req, res) => {
   try {
     const { status = "pending" } = req.query;
-    const items = await prisma.agentRecommendation.findMany({
-      where: tenantWhere(req, status === "all" ? {} : { status }),
+    // #308: a single logical recommendation (e.g. "Boost campaign for
+    // Unshaven FUE Hair Transplant") was appearing in Pending, Approved,
+    // AND Rejected tabs simultaneously because the orchestrator cron
+    // emitted multiple AgentRecommendation rows with the same dedup key
+    // (type + title) and the GET endpoint returned every row that
+    // matched the requested status filter. Cron-side dedup from #261/
+    // #285 only suppresses re-emits within the same UTC day — older
+    // pollution + cross-day collisions still leak through.
+    //
+    // Response-level dedup: collapse rows by (type + lowercased title)
+    // and keep the most-recently-resolved instance per group. When the
+    // caller asks for status='pending', skip groups whose representative
+    // is already approved/rejected; for terminal status filters, return
+    // only the chosen representative so the same card never shows up
+    // under two tabs at once.
+    // Pull a wider window — we need sibling rows of any status to
+    // decide whether a pending row is actually superseded.
+    const all = await prisma.agentRecommendation.findMany({
+      where: tenantWhere(req),
       orderBy: [
-        { priority: "desc" }, // high > medium > low alphabetically — close enough
+        { priority: "desc" },
         { createdAt: "desc" },
       ],
-      take: 50,
+      take: 500,
     });
-    res.json(items);
+    const STATUS_RANK = { rejected: 3, approved: 2, snoozed: 1, pending: 0 };
+    const groups = new Map();
+    for (const r of all) {
+      const key = `${r.type || ""}::${(r.title || "").trim().toLowerCase()}`;
+      const cur = groups.get(key);
+      if (!cur) { groups.set(key, r); continue; }
+      const curRank = STATUS_RANK[cur.status] ?? 0;
+      const newRank = STATUS_RANK[r.status] ?? 0;
+      // Prefer a terminal (approved/rejected) representative over pending.
+      // Within the same status tier, the orderBy above means `cur` already
+      // wins (higher priority + newer createdAt comes first).
+      if (newRank > curRank) groups.set(key, r);
+    }
+    const reps = Array.from(groups.values());
+    const filtered = status === "all"
+      ? reps
+      : reps.filter((r) => r.status === status);
+    // Keep the original ordering contract.
+    filtered.sort((a, b) => {
+      const pa = ["high", "medium", "low"].indexOf(a.priority);
+      const pb = ["high", "medium", "low"].indexOf(b.priority);
+      if (pa !== pb) return pa - pb;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+    res.json(filtered.slice(0, 50));
   } catch (e) {
     console.error("[wellness] list recommendations error:", e.message);
     res.status(500).json({ error: "Failed to list recommendations" });

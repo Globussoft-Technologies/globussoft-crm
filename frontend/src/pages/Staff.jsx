@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { UsersRound, Trash2, Shield } from 'lucide-react';
+import { AuthContext } from '../App';
 
 const ROLE_CONFIG = {
   ADMIN:   { color: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
@@ -34,6 +35,14 @@ function RoleBadge({ role }) {
 
 export default function Staff() {
   const notify = useNotify();
+  // #323: a clinic Manager (role=MANAGER) was seeing Delete buttons on
+  // every staff row — including the Owner and other Admins. The DELETE
+  // /api/staff/:id endpoint is already gated by verifyRole(["ADMIN"]),
+  // so the click would 403, but the UI shouldn't dangle the button at
+  // all. Hide both the Delete control and the inline RBAC role select
+  // unless the viewer is an actual ADMIN.
+  const { user } = useContext(AuthContext) || {};
+  const canManageStaff = user?.role === 'ADMIN';
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -174,7 +183,7 @@ export default function Staff() {
                         >
                           {displayRole(member)}
                         </span>
-                      ) : (
+                      ) : canManageStaff ? (
                         <select
                           value={member.role}
                           onChange={e => updateRole(member.id, e.target.value)}
@@ -190,23 +199,30 @@ export default function Staff() {
                           <option value="MANAGER">MANAGER</option>
                           <option value="USER">USER</option>
                         </select>
+                      ) : (
+                        // #323: non-admins see role as a read-only badge.
+                        <RoleBadge role={member.role} />
                       )}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                       {new Date(member.createdAt).toLocaleDateString()}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem' }}>
-                      <button
-                        onClick={() => deleteUser(member.id, member.name || member.email)}
-                        title="Delete user"
-                        style={{
-                          background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)',
-                          borderRadius: '6px', padding: '0.35rem 0.5rem', cursor: 'pointer', display: 'flex',
-                          alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem',
-                        }}
-                      >
-                        <Trash2 size={13} /> Delete
-                      </button>
+                      {canManageStaff ? (
+                        <button
+                          onClick={() => deleteUser(member.id, member.name || member.email)}
+                          title="Delete user"
+                          style={{
+                            background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)',
+                            borderRadius: '6px', padding: '0.35rem 0.5rem', cursor: 'pointer', display: 'flex',
+                            alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem',
+                          }}
+                        >
+                          <Trash2 size={13} /> Delete
+                        </button>
+                      ) : (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>—</span>
+                      )}
                     </td>
                   </tr>
                 ))}

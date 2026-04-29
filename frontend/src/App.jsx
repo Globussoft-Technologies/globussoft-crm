@@ -119,6 +119,21 @@ function GenericOnly({ children }) {
   return children;
 }
 
+// #325: mirror of GenericOnly for the wellness vertical. Generic CRM tenants
+// (e.g. admin@globussoft.com on the Default Org) were able to navigate to
+// /wellness URLs even though wellness is a separate tenant — the pages would
+// load but show empty/cross-tenant data. Bounce them to the generic dashboard.
+// A stricter RBAC check at the API level still applies; this guard is just to
+// stop the URL bar from rendering a misleading wellness UI on non-wellness
+// tenants.
+function WellnessOnly({ children }) {
+  const { tenant } = useContext(AuthContext);
+  if (tenant && tenant.vertical !== 'wellness') {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return children;
+}
+
 // #303: bare /calendar used to render a blank <main> because the route table
 // had no entry for it. Wellness tenants are bounced to their themed calendar
 // (/wellness/calendar); generic tenants land on /calendar-sync which is the
@@ -284,22 +299,30 @@ export default function App() {
                   tenants get bounced to their themed calendar; everyone else sees
                   the calendar-sync page (which is the closest generic equivalent). */}
               <Route path="calendar" element={<CalendarRedirect />} />
-              {/* Wellness vertical */}
-              <Route path="wellness" element={<WellnessOwnerDashboard />} />
-              <Route path="wellness/recommendations" element={<WellnessRecommendations />} />
-              <Route path="wellness/patients" element={<WellnessPatients />} />
-              <Route path="wellness/patients/:id" element={<WellnessPatientDetail />} />
-              <Route path="wellness/services" element={<WellnessServices />} />
-              <Route path="wellness/locations" element={<WellnessLocations />} />
-              <Route path="wellness/calendar" element={<WellnessCalendar />} />
-              <Route path="wellness/reports" element={<WellnessReports />} />
-              <Route path="wellness/telecaller" element={<WellnessTelecallerQueue />} />
+              {/* Wellness vertical — gated by WellnessOnly so generic-CRM
+                  tenants can't surface wellness pages by URL (#325). */}
+              <Route path="wellness" element={<WellnessOnly><WellnessOwnerDashboard /></WellnessOnly>} />
+              <Route path="wellness/recommendations" element={<WellnessOnly><WellnessRecommendations /></WellnessOnly>} />
+              <Route path="wellness/patients" element={<WellnessOnly><WellnessPatients /></WellnessOnly>} />
+              <Route path="wellness/patients/:id" element={<WellnessOnly><WellnessPatientDetail /></WellnessOnly>} />
+              <Route path="wellness/services" element={<WellnessOnly><WellnessServices /></WellnessOnly>} />
+              <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
+              <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
+              <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
+              <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
               {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
               <Route path="telecaller" element={<Navigate to="/wellness/telecaller" replace />} />
-              <Route path="wellness/per-location" element={<WellnessPerLocation />} />
-              <Route path="wellness/loyalty" element={<WellnessLoyalty />} />
-              <Route path="wellness/waitlist" element={<WellnessWaitlist />} />
-              <Route path="wellness/inventory" element={<WellnessInventory />} />
+              <Route path="wellness/per-location" element={<WellnessOnly><WellnessPerLocation /></WellnessOnly>} />
+              <Route path="wellness/loyalty" element={<WellnessOnly><WellnessLoyalty /></WellnessOnly>} />
+              <Route path="wellness/waitlist" element={<WellnessOnly><WellnessWaitlist /></WellnessOnly>} />
+              <Route path="wellness/inventory" element={<WellnessOnly><WellnessInventory /></WellnessOnly>} />
+              {/* #309: /wellness/invoices used to render a blank page (no
+                  route binding). Wellness shares the generic CRM Invoices
+                  UI — alias the prefixed URL to the canonical /invoices
+                  route so the sidebar link, deep links from emails, and
+                  bookmarks all resolve. Mirrors the /wellness/inventory
+                  fix from #305. */}
+              <Route path="wellness/invoices" element={<Navigate to="/invoices" replace />} />
             </Route>
           </Routes>
         </Suspense>

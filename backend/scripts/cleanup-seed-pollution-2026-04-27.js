@@ -13,6 +13,9 @@
 // wildcard). See cleanup-p3-data-quality.js #267 for the lesson.
 //
 // Issues addressed (all tenantId=2 = Enhanced Wellness):
+//   #339 [P3]  LandingPage drafts with duplicate (lowercased trimmed) title
+//              for tenant 2 -> keep oldest id, hard-delete the rest. Pairs
+//              with the dedup-on-create 409 added in routes/landing_pages.js.
 //   #330 [P2]  Tenant 2 base currency was USD/$ -> set to INR / IN / en-IN
 //   #328 [P2]  KB has 9 published "Test Article 001 1777..." rows -> hard delete
 //   #327 [P2]  Notifications dropdown has "Targeted / just user 8", "Test ..."
@@ -555,6 +558,59 @@ async function cleanupServiceConsumptionBlowups() {
   }
 }
 
+// ─── #339: LandingPage 'Lead Capture' draft dedupe ────────────────────────
+async function cleanupLandingPageDraftDupes() {
+  header(339, "Hard-delete duplicate Draft LandingPage rows (keep oldest id)");
+  try {
+    // LandingPage has no deletedAt column -> hard delete is the only option.
+    // Strategy: group all DRAFT rows for tenant 2 by lowercased+trimmed title,
+    // pick the lowest id as the keeper, hard-delete the rest. PUBLISHED /
+    // ARCHIVED rows are out of scope (they may legitimately share a title
+    // with an older draft mid-rewrite).
+    const drafts = await prisma.landingPage.findMany({
+      where: { tenantId: TENANT_ID, status: "DRAFT" },
+      select: { id: true, title: true, slug: true, createdAt: true },
+      orderBy: { id: "asc" },
+    });
+    const groups = new Map(); // normalized title -> [rows]
+    for (const p of drafts) {
+      const key = (p.title || "").trim().toLowerCase();
+      if (!key) continue; // skip blank-titled rows; not a dedupe candidate
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    }
+    const dupGroups = [...groups.entries()].filter(([, rows]) => rows.length > 1);
+    let toDelete = [];
+    for (const [key, rows] of dupGroups) {
+      // rows already sorted ascending by id (orderBy above)
+      const [keeper, ...losers] = rows;
+      console.log(`  group "${key}": ${rows.length} drafts`);
+      console.log(`    KEEP   id=${keeper.id} slug="${keeper.slug}" createdAt=${keeper.createdAt.toISOString()}`);
+      for (const l of losers) {
+        console.log(`    DELETE id=${l.id} slug="${l.slug}" createdAt=${l.createdAt.toISOString()}`);
+        toDelete.push(l.id);
+      }
+    }
+    console.log(
+      `Scanned ${drafts.length} tenant-${TENANT_ID} drafts; ${dupGroups.length} duplicate group(s); ${toDelete.length} row(s) to delete`
+    );
+    let applied = 0;
+    if (COMMIT && toDelete.length > 0) {
+      const result = await prisma.landingPage.deleteMany({
+        where: { id: { in: toDelete } },
+      });
+      applied = result.count;
+      console.log(`Hard-deleted ${applied} LandingPage rows.`);
+    } else {
+      console.log(`Would hard-delete ${toDelete.length} LandingPage rows.`);
+    }
+    record(339, "LandingPage draft dedupe", toDelete.length, COMMIT ? applied : toDelete.length);
+  } catch (e) {
+    console.error(`#339 failed:`, e.message);
+    record(339, "LandingPage draft dedupe", 0, 0, true, e.message);
+  }
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────
 (async () => {
   console.log(`cleanup-seed-pollution-2026-04-27.js  mode=${MODE}  tenantId=${TENANT_ID}`);
@@ -571,6 +627,7 @@ async function cleanupServiceConsumptionBlowups() {
   await cleanupSpamPatients();           // #306
   await cleanupLeadRoutingRuleNames();   // #320
   await cleanupServiceConsumptionBlowups(); // #321
+  await cleanupLandingPageDraftDupes();  // #339
 
   console.log("");
   console.log("=== Summary ===");

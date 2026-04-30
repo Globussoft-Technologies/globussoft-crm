@@ -88,20 +88,17 @@ jobs:
 
   # ── 2. API_TESTS: run our pure-API specs against a CI-local backend ──
   # Spins up MySQL 8 service container, seeds, boots backend on :5000,
-  # runs ci-smoke.spec.js. Currently INFORMATIONAL (continue-on-error:true)
-  # while we iterate on CI-environment failures we can't debug without an
-  # admin PAT for log access. Promotion to mandatory is gated on:
-  #   - 3 consecutive green runs
-  #   - admin PAT secret added so log retrieval works
-  # Tracking: see the post-d992764 CI iteration in the engineering
-  # backlog (TODOS.md). The deploy job DOES still depend on this job's
-  # presence (needs:), but a failure here doesn't block deploy until
-  # we promote it.
+  # runs ci-smoke.spec.js (4 tests). Promoted from informational to
+  # MANDATORY on a7962b3 after a green run confirmed the fixture-init
+  # issue (missing playwright/.auth/user.json) is resolved. Future
+  # spec additions (sms-api, marketing-api, reports-api, voice-
+  # transcription-api, knowledge-base-api, portal-api) get added to
+  # the test list one-by-one in the Run step as each is verified
+  # against a freshly-seeded CI database.
   api_tests:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
     services:
       mysql:
         image: mysql:8.0
@@ -237,12 +234,14 @@ jobs:
   # ── 3. DEPLOY: only runs if build + api_tests pass ───────────────────
   deploy:
     needs: [build, api_tests]
-    # Build is mandatory: any failure blocks deploy.
-    # api_tests is INFORMATIONAL (job has continue-on-error: true). Its
-    # result is intentionally ignored here while we iterate. Promote
-    # to a mandatory gate by adding `&& needs.api_tests.result == 'success'`
-    # once it's reliably green.
-    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    # BOTH gates mandatory:
+    #   - build (vite + node syntax)
+    #   - api_tests (ci-smoke.spec.js against ephemeral MySQL + seeded backend)
+    # Either failure blocks deploy.
+    # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
+    # bypass for emergency hotfixes (still requires manual workflow_dispatch
+    # — a regular push can never bypass).
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

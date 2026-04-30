@@ -211,23 +211,30 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          # Print top-10 lowest-line-pct files with at least 30 lines of
-          # statements (filters out tiny files / config stubs that aren't
-          # worth a coverage push). Output goes into the step summary so
-          # the /schedule routine can grep it from the run logs.
+          # Render the same per-file table to BOTH stdout (so `gh run view
+          # --log` picks it up — the /schedule routine can grep here) AND
+          # the step summary (UI). Also drop a plain CSV next to the
+          # report so the artifact has a machine-friendly form.
           node -e "
+            const fs = require('fs');
             const sum = require('./coverage/coverage-summary.json');
             const rows = Object.entries(sum)
               .filter(([k]) => k !== 'total')
               .filter(([_, v]) => v.statements && v.statements.total >= 30)
-              .map(([file, v]) => ({ file, lines: v.lines.pct, stmts: v.statements.total }))
+              .map(([file, v]) => ({ file: file.replace(process.cwd() + '/', ''), lines: v.lines.pct, stmts: v.statements.total }))
               .sort((a, b) => a.lines - b.lines)
               .slice(0, 10);
-            console.log('## Top under-covered files (≥ 30 stmts)');
-            console.log('| File | Lines % | Stmts |');
-            console.log('|------|---------|-------|');
-            for (const r of rows) console.log('| ' + r.file.replace(process.cwd() + '/', '') + ' | ' + r.lines + ' | ' + r.stmts + ' |');
-          " >> $GITHUB_STEP_SUMMARY
+            // Markdown for step summary + stdout
+            const md = ['## Top under-covered files (≥ 30 stmts)', '', '| File | Lines % | Stmts |', '|------|---------|-------|',
+              ...rows.map(r => '| ' + r.file + ' | ' + r.lines + ' | ' + r.stmts + ' |')].join('\n');
+            console.log('::group::Top under-covered files');
+            console.log(md);
+            console.log('::endgroup::');
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + '\n');
+            // CSV for the artifact
+            const csv = ['file,lines_pct,stmts', ...rows.map(r => r.file + ',' + r.lines + ',' + r.stmts)].join('\n');
+            fs.writeFileSync('coverage/top-under-covered.csv', csv);
+          "
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4

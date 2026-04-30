@@ -1,0 +1,250 @@
+name: Backend coverage measurement
+
+# Runs the gated API specs against an ephemeral CI backend with c8
+# instrumentation enabled, then reports per-file coverage. Replaces the
+# manual `ssh empcloud-development@163.227.174.141` cheat-sheet at the
+# bottom of TODOS.md so coverage can be measured without SSH access.
+#
+# Methodology note: this workflow runs the same 18 API specs as the
+# api_tests gate in deploy.yml (NOT the full chromium project). The demo
+# SSH measurement runs every spec against a backend that has its frontend
+# served by nginx, so the absolute % from the two methodologies will not
+# match. What's stable across runs HERE is the gate-spec lift — adding a
+# new spec to the gate list (in BOTH this workflow and deploy.yml) raises
+# this number directly.
+#
+# Trigger: workflow_dispatch only. The /schedule routine fires it every
+# 2 weeks via `gh workflow run coverage.yml`. To run manually, push the
+# button under Actions → Backend coverage measurement → Run workflow.
+on:
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          MYSQL_DATABASE: gbscrm_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -pci_root_pw"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+    env:
+      DATABASE_URL: "mysql://root:ci_root_pw@127.0.0.1:3306/gbscrm_ci"
+      JWT_SECRET: "ci_jwt_secret_for_test_runs_only"
+      DISABLE_CRONS: "1"
+      NODE_ENV: "test"
+      PORT: "5000"
+    outputs:
+      lines_pct: ${{ steps.report.outputs.LINES_PCT }}
+      branches_pct: ${{ steps.report.outputs.BRANCHES_PCT }}
+      functions_pct: ${{ steps.report.outputs.FUNCTIONS_PCT }}
+      statements_pct: ${{ steps.report.outputs.STATEMENTS_PCT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: |
+            backend/package-lock.json
+            e2e/package-lock.json
+
+      - name: Wait for MySQL ready
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -uroot -pci_root_pw --silent; then
+              echo "MySQL ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Backend — install + prisma db push + seed
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx prisma generate
+          npx prisma db push --skip-generate --accept-data-loss
+          node prisma/seed.js
+          if [ -f prisma/seed-wellness.js ]; then
+            node prisma/seed-wellness.js
+          fi
+          echo "::notice::Database seeded"
+
+      - name: Boot backend with c8 instrumentation on :5000
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          rm -rf coverage .c8tmp
+          mkdir -p coverage .c8tmp
+          # c8 wraps `node server.js`; SIGTERM propagates to the child, and
+          # server.js has the graceful-shutdown handler (v3.2.2) that flushes
+          # V8 coverage data on SIGTERM/SIGINT before exit.
+          nohup ./node_modules/.bin/c8 \
+            --reporter=json-summary --reporter=text-summary --reporter=lcov \
+            --temp-directory=./.c8tmp --reports-dir=./coverage \
+            --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js,prisma/migrations/**,**/*.spec.js,**/*.test.js' \
+            node server.js > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+          # The pid above is c8's. The actual server runs in c8's child and
+          # gets the SIGTERM forwarded when we kill c8 later.
+          for i in $(seq 1 30); do
+            if curl -fs http://127.0.0.1:5000/api/health 2>/dev/null | grep -q "healthy"; then
+              echo "Backend ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Backend failed to reach healthy in 30s"
+          tail -100 /tmp/backend.log
+          exit 1
+
+      - name: E2E install + playwright browsers
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx playwright install chromium --with-deps
+          mkdir -p playwright/.auth
+          echo '{"cookies":[],"origins":[]}' > playwright/.auth/user.json
+
+      - name: Run gated API specs against c8-instrumented backend
+        working-directory: e2e
+        env:
+          BASE_URL: "http://127.0.0.1:5000"
+          E2E_SKIP_SCRUB: "1"
+        # continue-on-error so a flaky spec doesn't lose the c8 data we
+        # already collected. The summary step still runs and reports
+        # whatever coverage the suite generated up to the failure point.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # Same list as deploy.yml api_tests gate. Keep these in sync —
+          # see the TODOS pickup notes for the next-spec promotion ladder.
+          npx playwright test \
+            --project=chromium \
+            --reporter=list \
+            --no-deps \
+            tests/ci-smoke.spec.js \
+            tests/sms-api.spec.js \
+            tests/marketing-api.spec.js \
+            tests/reports-api.spec.js \
+            tests/sla-breach-api.spec.js \
+            tests/treatment-plans-api.spec.js \
+            tests/sequence-engine-api.spec.js \
+            tests/expenses-api.spec.js \
+            tests/projects-api.spec.js \
+            tests/ai-scoring-api.spec.js \
+            tests/contracts-api.spec.js \
+            tests/custom-objects-api.spec.js \
+            tests/cpq-api.spec.js \
+            tests/tasks-api.spec.js \
+            tests/estimates-api.spec.js \
+            tests/push-api.spec.js \
+            tests/communications-api.spec.js \
+            tests/notifications-api.spec.js
+
+      - name: Stop backend (SIGTERM → c8 flushes coverage data)
+        run: |
+          # SIGTERM the c8 process; c8 forwards to server.js; server.js
+          # graceful-shutdown handler flushes V8 coverage. Wait up to 15s
+          # for the process to exit and the .c8tmp/ files to be written.
+          kill -TERM $(cat /tmp/backend.pid) 2>/dev/null || true
+          for i in $(seq 1 15); do
+            if ! kill -0 $(cat /tmp/backend.pid) 2>/dev/null; then
+              echo "Backend stopped after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          # Belt-and-braces: if it's still running, kill -9.
+          kill -9 $(cat /tmp/backend.pid) 2>/dev/null || true
+
+      - name: Generate coverage report + extract summary
+        id: report
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          # Render lcov + text + json-summary off the .c8tmp/ data.
+          ./node_modules/.bin/c8 report \
+            --temp-directory=./.c8tmp --reports-dir=./coverage \
+            --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js,prisma/migrations/**,**/*.spec.js,**/*.test.js' \
+            --reporter=text-summary --reporter=json-summary --reporter=lcov
+
+          # Pull the totals out of coverage-summary.json so downstream
+          # workflows / the /schedule routine can read them via the job
+          # outputs. node -e for inline JSON parsing without a python dep.
+          node -e "
+            const sum = require('./coverage/coverage-summary.json').total;
+            console.log('LINES_PCT='     + sum.lines.pct);
+            console.log('STATEMENTS_PCT='+ sum.statements.pct);
+            console.log('FUNCTIONS_PCT=' + sum.functions.pct);
+            console.log('BRANCHES_PCT='  + sum.branches.pct);
+          " | tee -a $GITHUB_OUTPUT
+
+          # Step summary for humans browsing Actions UI.
+          {
+            echo "## Backend coverage"
+            echo ""
+            echo '```'
+            ./node_modules/.bin/c8 report \
+              --temp-directory=./.c8tmp --reports-dir=./coverage \
+              --exclude='node_modules/**,coverage/**,scripts/**,prisma/seed*.js,prisma/migrations/**,**/*.spec.js,**/*.test.js' \
+              --reporter=text-summary
+            echo '```'
+            echo ""
+            echo "Methodology: 18 gated API specs. Numbers are NOT comparable to the demo SSH measurement (which runs every spec against a frontend-served backend). To raise this number, add a spec to the gate list in BOTH .github/workflows/deploy.yml AND .github/workflows/coverage.yml."
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Identify top under-covered files (for follow-up coverage push)
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          # Print top-10 lowest-line-pct files with at least 30 lines of
+          # statements (filters out tiny files / config stubs that aren't
+          # worth a coverage push). Output goes into the step summary so
+          # the /schedule routine can grep it from the run logs.
+          node -e "
+            const sum = require('./coverage/coverage-summary.json');
+            const rows = Object.entries(sum)
+              .filter(([k]) => k !== 'total')
+              .filter(([_, v]) => v.statements && v.statements.total >= 30)
+              .map(([file, v]) => ({ file, lines: v.lines.pct, stmts: v.statements.total }))
+              .sort((a, b) => a.lines - b.lines)
+              .slice(0, 10);
+            console.log('## Top under-covered files (≥ 30 stmts)');
+            console.log('| File | Lines % | Stmts |');
+            console.log('|------|---------|-------|');
+            for (const r of rows) console.log('| ' + r.file.replace(process.cwd() + '/', '') + ' | ' + r.lines + ' | ' + r.stmts + ' |');
+          " >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ github.sha }}
+          path: |
+            backend/coverage/
+            backend/.c8tmp/
+          retention-days: 30
+
+      - name: Final exit gate
+        run: |
+          # Don't fail the workflow on a flaky spec — coverage was the goal.
+          # But DO fail if the report step couldn't extract a percentage.
+          if [ -z "${{ steps.report.outputs.LINES_PCT }}" ]; then
+            echo "::error::Coverage report failed to extract LINES_PCT — see earlier logs"
+            exit 1
+          fi
+          echo "::notice title=Coverage::lines=${{ steps.report.outputs.LINES_PCT }}% / branches=${{ steps.report.outputs.BRANCHES_PCT }}% / functions=${{ steps.report.outputs.FUNCTIONS_PCT }}% / statements=${{ steps.report.outputs.STATEMENTS_PCT }}%"

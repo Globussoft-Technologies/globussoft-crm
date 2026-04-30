@@ -187,6 +187,14 @@ jobs:
           # because playwright.config.js declares the chromium project.
           # Don't swallow install failures here — fail loud so we know.
           npx playwright install chromium --with-deps
+          # The chromium project sets storageState: 'playwright/.auth/
+          # user.json'. That file is created by the auth.setup project
+          # (which we skip via --no-deps). Pre-create an empty state so
+          # the chromium project loads cleanly. Same trick the coverage
+          # SSH script used. Without this every spec fails at fixture
+          # init with ENOENT.
+          mkdir -p playwright/.auth
+          echo '{"cookies":[],"origins":[]}' > playwright/.auth/user.json
 
       - name: Run API-only specs
         working-directory: e2e

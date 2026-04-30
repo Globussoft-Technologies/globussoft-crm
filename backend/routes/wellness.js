@@ -1128,7 +1128,7 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
     const id = parseInt(req.params.id);
     const existing = await prisma.prescription.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Prescription not found" });
-    if (existing.doctorId !== req.user.id && req.user.role !== "ADMIN") {
+    if (existing.doctorId !== req.user.userId && req.user.role !== "ADMIN") {
       return res.status(403).json({ error: "Only the prescriber or an admin can amend this prescription", code: "AMEND_FORBIDDEN" });
     }
     const data = {};
@@ -1153,7 +1153,7 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
       visitId: updated.visitId,
       doctorId: updated.doctorId,
       amendedBy: req.user.userId,
-      isOriginalPrescriber: existing.doctorId === req.user.id,
+      isOriginalPrescriber: existing.doctorId === req.user.userId,
       priorDrugs,
       newDrugs,
       priorInstructions: existing.instructions || null,

@@ -6,6 +6,7 @@ try {
   // dotenv missing or root .env not present — process.env is still honored.
 }
 
+const crypto = require("crypto");
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const { google } = require("googleapis");
@@ -110,8 +111,15 @@ async function findOrCreateSsoUser({ provider, providerId, email, name }) {
 }
 
 function issueJwt(user) {
+  const jti = crypto.randomBytes(16).toString("hex");
   return jwt.sign(
-    { userId: user.id, role: user.role, tenantId: user.tenantId },
+    {
+      userId: user.id,
+      role: user.role,
+      wellnessRole: user.wellnessRole ?? null,
+      tenantId: user.tenantId,
+      jti,
+    },
     JWT_SECRET,
     { expiresIn: "7d" }
   );
@@ -123,12 +131,12 @@ function redirectWithToken(res, frontendBase, token, tenant) {
         JSON.stringify({ id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan })
       )
     : "";
-  const url = `${frontendBase}/login?sso_token=${encodeURIComponent(token)}&tenant=${tenantPayload}`;
+  const url = `${frontendBase}/sso/return?token=${encodeURIComponent(token)}&tenant=${tenantPayload}`;
   return res.redirect(url);
 }
 
 function redirectWithError(res, frontendBase, message) {
-  const url = `${frontendBase}/login?sso_error=${encodeURIComponent(message)}`;
+  const url = `${frontendBase}/sso/return?error=${encodeURIComponent(message)}`;
   return res.redirect(url);
 }
 

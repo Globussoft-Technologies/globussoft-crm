@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { AuthContext } from '../App';
 import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
+import { launchCallifiedSSO } from '../utils/callified';
 
 const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
   const { user, tenant } = useContext(AuthContext);
@@ -85,8 +86,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
       try {
         await launchAdsGptAs(ADSGPT_DEMO_LOGIN);
       } catch (err) {
-        console.warn('[Sidebar] AdsGPT SSO failed, opening plain dashboard:', err.message);
-        window.open(ADSGPT_DASHBOARD, '_blank', 'noopener,noreferrer');
+        console.error('[Sidebar] AdsGPT SSO error:', err.message);
       } finally {
         setAdsLoading(false);
       }
@@ -107,7 +107,38 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
     );
   };
 
-  const callifiedUrl = import.meta.env.VITE_CALLIFIED_URL || 'https://callified.ai';
+  // SSO-authenticated Callified launcher — generates a signed JWT and opens
+  // the Callified dashboard. If SSO fails, shows an error notification.
+  const [callifiedLoading, setCallifiedLoading] = useState(false);
+  const CallifiedLink = ({ icon: Icon = PhoneCall, label = 'Callified' }) => {
+    const handleClick = async (e) => {
+      e.preventDefault();
+      if (callifiedLoading) return;
+      setCallifiedLoading(true);
+      try {
+        await launchCallifiedSSO();
+      } catch (err) {
+        console.error('[Sidebar] Callified SSO error:', err.message);
+        alert(`Failed to open Callified: ${err.message}`);
+      } finally {
+        setCallifiedLoading(false);
+      }
+    };
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={callifiedLoading}
+        className="nav-link"
+        aria-label="Open Callified dashboard"
+        style={{ ...navStyle, background: 'transparent', border: 'none', width: '100%', textAlign: 'left', cursor: callifiedLoading ? 'wait' : 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}
+      >
+        {callifiedLoading ? <Loader2 size={20} className="spin" /> : <Icon size={20} />}
+        <span style={{ flex: 1 }}>{label}</span>
+        <ExternalLink size={14} style={{ opacity: 0.6 }} />
+      </button>
+    );
+  };
 
   return (
     <>
@@ -145,7 +176,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
         onScroll={(e) => { scrollRef.current = e.currentTarget.scrollTop; }}
         style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}
       >
-        {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) : renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager })}
+        {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, sectionLabelStyle }) : renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager })}
       </nav>
       </aside>
     </>
@@ -154,7 +185,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
 
 // ── Wellness sidebar — slim, clinic-focused ───────────────────────
 
-function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) {
+function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, sectionLabelStyle }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   return (
     <>
@@ -166,7 +197,7 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, i
       <Link to="/wellness" icon={LayoutDashboard} label="Owner Dashboard" managerOnly />
       <Link to="/wellness/recommendations" icon={Sparkles} label="Recommendations" managerOnly />
       <AdsGptLink icon={Sparkles} label="AdsGPT" />
-      <ExtLink href={callifiedUrl} icon={PhoneCall} label="Callified" />
+      <CallifiedLink icon={PhoneCall} label="Callified" />
 
       {/* Clinical — Patients, Calendar, Waitlist visible to all wellness staff
           (clinical staff need their patients + day grid). Service Catalog is a
@@ -243,13 +274,13 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, i
 
 // ── Generic sidebar (preserved unchanged) ─────────────────────────
 
-function renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager }) {
+function renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager }) {
   return (
     <>
       {/* Core — visible to ALL roles */}
       <Link to="/dashboard" icon={LayoutDashboard} label="Dashboard" />
       <AdsGptLink icon={Sparkles} label="AdsGPT" />
-      <ExtLink href={callifiedUrl} icon={PhoneCall} label="Callified" />
+      <CallifiedLink icon={PhoneCall} label="Callified" />
       <Link to="/inbox" icon={InboxIcon} label="Inbox" />
       <Link to="/contacts" icon={Users} label="Contacts" />
       <Link to="/pipeline" icon={Briefcase} label="Pipeline" />

@@ -2,7 +2,7 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-30 (evening — **🎯 GitHub issue inbox: 0 open + 0 PRs**. Today's haul: ~108 issues closed across 7 commits + PR #400 (Callified SSO) merged + closed PRD §14 demo criterion #4. **CI gate hardened from 4 → 467 mandatory API tests across 13 specs**. Coverage **64.76% → 67.27% lines** (+2.51pt today; gate bumped 65 → 66 lines/funcs/stmts and 50 → 52 branches with 1.3-3pt headroom). **Two real production bugs caught by the gate**: SLA engine silently failing every cron tick from a Ticket.contactId schema mismatch; PR #400 lockfile drift would have broken the deploy pipeline. Pickup from any laptop: `git clone …` → read this file → continue.)
+Last updated: 2026-04-30 (late evening — **🎯 GitHub issue inbox still 0 open + 0 PRs**. Picked up from afternoon handoff and pushed coverage further. **Added 3 new API specs (tasks + estimates + push) — 144 new tests; CI gate now 16 specs / 611 tests**. **Caught + fixed 3 pre-existing CI flakes** that had been red on every deploy since their specs landed: cpq quantity NaN bug (REAL prod fix), expenses expenseDate not-nullable schema bug (REAL prod fix), expenses status-filter case-sensitivity (TEST fix). Pickup from home: `git pull origin main` → read "NEXT SESSION" below → continue.)
 
 ---
 
@@ -41,43 +41,42 @@ The two ⚠️ items are external-blocked (Callified + AdsGPT teams owe their si
 
 ## 📌 NEXT SESSION — pick up here
 
-**HEAD at end of 2026-04-30**: `19a23a9` (cpq + custom-objects specs + CI gate at 13 specs / 467 tests). Working tree clean. Open issues: **0**. Open PRs: **0**.
+**HEAD at end of 2026-04-30 late evening**: `da5ba56` (push-api spec wired into gate + 3 pre-existing flakes fixed: cpq quantity NaN, expenses nullable expenseDate, expenses status case-insensitivity). Working tree clean. Open issues: **0**. Open PRs: **0**.
 
 ### Quick state check before starting
 
 ```bash
 git pull origin main
-# expected HEAD: 19a23a9 or later
-# CI gate: 13 specs, 467 mandatory API tests + build + deploy
-# coverage: 67.27% lines, gate 66/52/66/66
-# site: https://crm.globusdemos.com (healthy, last deploy from f7a240f or later)
+# expected HEAD: da5ba56 or later
+# CI gate: 16 specs, 611 mandatory API tests + build + deploy
+# coverage: ~67-68% lines (estimated; needs rerun), gate 66/52/66/66
+# site: https://crm.globusdemos.com — verify last deploy succeeded after
+#   da5ba56 landed; the 3 flake fixes should have flipped api_tests green
+#   for the first time since 9a5dffc.
 ```
 
-If `local.env` doesn't have `GH_TOKEN`, you'll need to either re-create
-the PAT (https://github.com/settings/personal-access-tokens) or work
-without one (60 req/hr unauth ceiling — fine for casual checks, painful
-for log fetches). The PAT we used today is in chat history; rotate it.
+Important pickup tasks before starting new work:
+
+1. **Verify CI is green at HEAD** — `gh run list --repo Globussoft-Technologies/globussoft-crm --branch main --limit 1`. If api_tests is still red, check whether `prisma db push` ran on demo (the expenseDate nullable migration only auto-applies in CI's ephemeral container).
+
+2. **Sync demo schema** — if api_tests is green on CI but demo's expenses page is broken or expenses-api spec fails against demo: SSH to demo, `cd ~/globussoft-crm/backend && npx prisma db push --skip-generate --accept-data-loss` to apply the nullable expenseDate column. Backwards-compatible change, no data loss.
+
+3. **Re-measure coverage** — once CI is green, re-run `ssh_full_coverage.py` (or the cheat-sheet at the bottom of this file) to capture the lift from tasks-api (53), estimates-api (58), and push-api (33) — 144 new tests total. Expected lift ~1.5-2pt on global lines (roughly 67.27 → 68.5-69%). If ≥70 measured, bump c8 gate from 66 → 70.
+
+If `local.env` doesn't have `GH_TOKEN`, the gh CLI's keychain creds work for git push via `git push https://x-access-token:$(gh auth token)@github.com/...`. The embedded ghp_ token in `git remote -v origin` URL is stale and asks for a password.
 
 ### What to work on next (no urgent bug pressure)
 
 With issue board + PR queue both at zero, options in priority order:
 
-1. **Coverage push toward 70% gate** — current 67.27% lines, gate 66.
-   Need ~73% measured to safely bump to 70. Top remaining drags from
-   the latest measurement (each ~+0.3-0.5 pt):
+1. **Coverage push toward 70% gate** — tasks (53) + estimates (58) + push (33) shipped today; remaining top drags (each ~+0.3-0.5 pt):
      - `lib/notificationService.js` (29.37%, 143 lines)
-     - `routes/tasks.js` (30.99%, 271 lines)
      - `cron/lowStockEngine.js` (31.15%)
-     - `routes/push.js` (31.95%)
-     - `routes/communications.js` (32.05%)
-     - `services/whatsappProvider.js` (34.58%)
-     - `services/pushService.js` (35.41%)
-     - `routes/estimates.js` (35.95%) — large file, big lift potential
+     - `routes/communications.js` (32.05%) — inbox, send-email (with Mailgun no-API-key branch), tracking pixels (public, no auth), call logs. Clean target.
+     - `services/pushService.js` (35.41%) — partly covered now via push-api spec; check the actual delta after coverage rerun before writing a dedicated spec.
      - `cron/sentimentEngine.js` (36.61%)
-   Each spec should follow the proven pattern in
-   `e2e/tests/sla-breach-api.spec.js` (best CI-friendly template) or
-   `e2e/tests/treatment-plans-api.spec.js`. Always add to the CI gate
-   list in `.github/workflows/deploy.yml` after each new spec.
+     - ⛔ NOT `services/whatsappProvider.js` (Callified per PRD §6.5) — stays skipped.
+   Each spec should follow the proven pattern in `e2e/tests/sla-breach-api.spec.js`, `e2e/tests/tasks-api.spec.js`, or `e2e/tests/push-api.spec.js`. Always add to the CI gate list in `.github/workflows/deploy.yml` after each new spec.
 
 2. **Mobile parity follow-up** — #228 shipped 80/20; complete pass
    needs per-page audit at 320/375/414/768 across all ~80 pages,
@@ -122,7 +121,26 @@ With issue board + PR queue both at zero, options in priority order:
    applies to LEADS too. New cron OR enhancement to slaBreachEngine
    (the engine just got 48 tests + a real bug fix; clean target).
 
-### Today's run (2026-04-30) — what shipped
+### Late-evening run (2026-04-30 evening → night) — what shipped
+
+**3 new specs (144 tests) + 3 pre-existing CI flakes fixed.** CI gate
+went from 13 specs / 467 tests to 16 specs / 611 tests. Two real
+production bugs (cpq + expenses) and one test-assertion bug surfaced
++ fixed by the gate hardening — exactly the value we hoped for.
+
+| Commit  | What |
+|---------|------|
+| `5841202` | tasks-api + estimates-api specs (111 tests) wired into gate |
+| `108db42` | tasks-api offset test fix — drop non-deterministic id compare |
+| `a650c7e` | push-api spec (33 tests) wired into gate — 16 specs / 611 |
+| `ae92cda` | fix(cpq): normalize qty/unitPrice BEFORE computing line total. Pre-existing CI flake — POST /quotes returned 500 on missing quantity from undefined×price=NaN→Prisma reject. |
+| `da5ba56` | fix(expenses): nullable expenseDate (schema) + case-insensitive status assertions (test). Pre-existing CI flakes — null on non-nullable column → 500; row.status==='APPROVED' was case-sensitive vs MySQL's case-insensitive WHERE. |
+
+Demo schema follow-up needed: `prisma db push` on demo to apply the
+nullable expenseDate column (backwards-compatible). CI applies it
+automatically via the ephemeral container's `prisma db push` step.
+
+### Earlier run (2026-04-30 day) — preserved for context
 
 **~108 GitHub issues closed**, ~25 commits pushed, PR #400 (Callified
 SSO) merged, CI gate hardened to 13-spec / 467-test mandatory pipeline,
@@ -193,11 +211,11 @@ coverage lifted +2.51 pt lines, two real production bugs caught.
    in parallel works reliably when each owns a disjoint set of files.
    Same-file work is one agent.
 
-### CI gate snapshot (HEAD 19a23a9)
+### CI gate snapshot (HEAD da5ba56)
 
 ```
 build      mandatory  npm ci + prisma generate + node-check + vite build
-api_tests  mandatory  MySQL container + seed + 13 specs / 467 tests:
+api_tests  mandatory  MySQL container + seed + 16 specs / 611 tests:
                         ci-smoke.spec.js              ( 4 tests)
                         sms-api.spec.js              (44 tests)
                         marketing-api.spec.js        (41 tests)
@@ -211,6 +229,9 @@ api_tests  mandatory  MySQL container + seed + 13 specs / 467 tests:
                         contracts-api.spec.js        (37 tests)
                         custom-objects-api.spec.js   (29 tests)
                         cpq-api.spec.js              (26 tests)
+                        tasks-api.spec.js            (53 tests)  NEW
+                        estimates-api.spec.js        (58 tests)  NEW
+                        push-api.spec.js             (33 tests)  NEW
 deploy     gated by both  pull → install → prisma → pm2 → health → vite →
                           rsync → chown → smoke
 ```

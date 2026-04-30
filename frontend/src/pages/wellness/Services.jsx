@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
   Plus,
@@ -12,6 +13,7 @@ import {
   Trash2,
   X,
   Save,
+  Activity,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -20,20 +22,37 @@ import { useNotify } from '../../utils/notify';
 import { NumberInput } from '../../utils/numberInput';
 
 const tierColor = { high: '#ef4444', medium: '#f59e0b', low: '#64748b' };
+const statusColor = { active: '#10b981', completed: '#6366f1', paused: '#f59e0b', cancelled: '#ef4444' };
 
 export default function Services() {
   const notify = useNotify();
-  const [tab, setTab] = useState('catalog'); // catalog | packages
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') || 'catalog';
+  const [tab, setTab] = useState(initialTab); // catalog | packages | activetreatments
   const [services, setServices] = useState([]);
+  const [treatments, setTreatments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [treatmentsLoading, setTreatmentsLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [selectedTreatment, setSelectedTreatment] = useState(null);
   const [form, setForm] = useState({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: 0, durationMin: 60, targetRadiusKm: 30, description: '' });
 
   const load = () => {
     setLoading(true);
     fetchApi('/api/wellness/services').then(setServices).catch(() => setServices([])).finally(() => setLoading(false));
   };
+
+  const loadTreatments = () => {
+    setTreatmentsLoading(true);
+    fetchApi('/api/wellness/activetreatment').then(res => setTreatments(res.data || [])).catch(() => setTreatments([])).finally(() => setTreatmentsLoading(false));
+  };
+
   useEffect(load, []);
+  useEffect(() => {
+    if (tab === 'activetreatments') {
+      loadTreatments();
+    }
+  }, [tab]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -73,6 +92,7 @@ export default function Services() {
       >
         <TabBtn active={tab === 'catalog'} onClick={() => setTab('catalog')} icon={Sparkles} label="Catalog" />
         <TabBtn active={tab === 'packages'} onClick={() => setTab('packages')} icon={Package} label="Packages" />
+        <TabBtn active={tab === 'activetreatments'} onClick={() => setTab('activetreatments')} icon={Activity} label="Active Treatments" />
       </div>
 
       {tab === 'catalog' && (
@@ -88,6 +108,23 @@ export default function Services() {
       )}
 
       {tab === 'packages' && <PackageBuilder services={services} />}
+
+      {tab === 'activetreatments' && (
+        <ActiveTreatmentsTab
+          treatments={treatments}
+          loading={treatmentsLoading}
+          onChanged={loadTreatments}
+          onSelectTreatment={setSelectedTreatment}
+        />
+      )}
+
+      {selectedTreatment && (
+        <TreatmentDetailModal
+          treatment={selectedTreatment}
+          onClose={() => setSelectedTreatment(null)}
+          onChanged={() => { loadTreatments(); setSelectedTreatment(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -317,6 +354,125 @@ function ServiceCard({ service, onChanged }) {
   );
 }
 
+function TreatmentDetailModal({ treatment, onClose, onChanged }) {
+  const notify = useNotify();
+  const statusLabel = treatment.status ? treatment.status.charAt(0).toUpperCase() + treatment.status.slice(1) : 'Active';
+  const progressPercent = treatment.totalSessions > 0 ? Math.round((treatment.completedSessions / treatment.totalSessions) * 100) : 0;
+  const nextDueDate = treatment.nextDueAt ? new Date(treatment.nextDueAt).toLocaleDateString('en-IN') : 'Not scheduled';
+  const startDate = new Date(treatment.startedAt).toLocaleDateString('en-IN');
+
+  const updateStatus = async (newStatus) => {
+    try {
+      await fetchApi(`/api/wellness/treatment-plans/${treatment.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: newStatus }),
+      });
+      notify.success(`Treatment plan marked as ${newStatus}`);
+      onChanged && onChanged();
+    } catch (_err) { /* fetchApi already surfaced the message */ }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+    }} onClick={onClose}>
+      <div className="glass" style={{ maxWidth: '600px', width: '90%', maxHeight: '80vh', overflow: 'auto', padding: '2rem', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'transparent', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>×</button>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '1.5rem', gap: '1rem' }}>
+          <div>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.25rem' }}>{treatment.name}</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Treatment Plan Details</p>
+          </div>
+          <span style={{ background: statusColor[treatment.status] || statusColor.active, color: '#fff', padding: '0.4rem 0.8rem', borderRadius: 6, fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            {statusLabel}
+          </span>
+        </div>
+
+        {/* Patient Information */}
+        <Section title="Patient Information">
+          <DetailRow label="Name" value={treatment.patient?.name || 'N/A'} />
+          <DetailRow label="Email" value={treatment.patient?.email || 'N/A'} />
+          <DetailRow label="Phone" value={treatment.patient?.phone || 'N/A'} />
+          <DetailRow label="Gender" value={treatment.patient?.gender || 'N/A'} />
+          <DetailRow label="Blood Group" value={treatment.patient?.bloodGroup || 'N/A'} />
+          <DetailRow label="Date of Birth" value={treatment.patient?.dob ? new Date(treatment.patient.dob).toLocaleDateString('en-IN') : 'N/A'} />
+          {treatment.patient?.allergies && <DetailRow label="Allergies" value={treatment.patient.allergies} />}
+          {treatment.patient?.notes && <DetailRow label="Notes" value={treatment.patient.notes} />}
+        </Section>
+
+        {/* Service Information */}
+        {treatment.service && (
+          <Section title="Service Information">
+            <DetailRow label="Service Name" value={treatment.service.name} />
+            <DetailRow label="Category" value={treatment.service.category} />
+            <DetailRow label="Base Price" value={`₹${treatment.service.basePrice.toLocaleString('en-IN')}`} />
+            <DetailRow label="Duration" value={`${treatment.service.durationMin} minutes`} />
+            <DetailRow label="Target Radius" value={treatment.service.targetRadiusKm ? `${treatment.service.targetRadiusKm} km` : 'Unlimited'} />
+            {treatment.service.description && <DetailRow label="Description" value={treatment.service.description} />}
+          </Section>
+        )}
+
+        {/* Treatment Plan Details */}
+        <Section title="Treatment Plan Details">
+          <DetailRow label="Total Sessions" value={treatment.totalSessions} />
+          <DetailRow label="Completed Sessions" value={treatment.completedSessions} />
+          <DetailRow label="Progress" value={`${progressPercent}%`} />
+          <DetailRow label="Total Price" value={`₹${treatment.totalPrice?.toLocaleString('en-IN') || '0'}`} />
+          <DetailRow label="Start Date" value={startDate} />
+          <DetailRow label="Next Due Date" value={nextDueDate} />
+        </Section>
+
+        {/* Progress Bar */}
+        <div style={{ marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Session Progress</span>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{treatment.completedSessions}/{treatment.totalSessions}</span>
+          </div>
+          <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, height: '12px', overflow: 'hidden' }}>
+            <div style={{ background: statusColor[treatment.status] || statusColor.active, height: '100%', width: `${progressPercent}%`, transition: 'width 0.3s ease' }} />
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button onClick={() => updateStatus(treatment.status === 'active' ? 'paused' : 'active')} style={{ flex: 1, padding: '0.75rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}>
+            {treatment.status === 'active' ? '⏸ Pause' : '▶ Resume'}
+          </button>
+          <button onClick={() => updateStatus('completed')} style={{ flex: 1, padding: '0.75rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}>
+            ✓ Mark Complete
+          </button>
+          <button onClick={() => updateStatus('cancelled')} style={{ flex: 1, padding: '0.75rem', background: 'var(--danger-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}>
+            ✕ Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, children }) {
+  return (
+    <div style={{ marginBottom: '1.5rem' }}>
+      <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.75rem', paddingBottom: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+        {title}
+      </h3>
+      <div style={{ display: 'grid', gap: '0.5rem' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function DetailRow({ label, value }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '1rem', fontSize: '0.9rem', paddingBottom: '0.5rem' }}>
+      <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{label}</span>
+      <span style={{ color: 'var(--text-primary)', wordBreak: 'break-word' }}>{value}</span>
+    </div>
+  );
+}
+
 const iconBtn = { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text-secondary)', padding: '0.25rem', borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };
 
 function PackageBuilder({ services }) {
@@ -499,6 +655,99 @@ function Row({ label, children, negative }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
       <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
       <span style={{ color: negative ? '#f59e0b' : 'var(--text-primary)' }}>{children}</span>
+    </div>
+  );
+}
+
+function ActiveTreatmentsTab({ treatments, loading, onChanged, onSelectTreatment }) {
+  return (
+    <>
+      <h2 style={srOnly}>Active treatment plans</h2>
+      {loading && <div>Loading treatment plans…</div>}
+      {!loading && treatments.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+          No active treatment plans yet.
+        </div>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+        {treatments.map((t) => (
+          <TreatmentCard key={t.id} treatment={t} onChanged={onChanged} onSelect={onSelectTreatment} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function TreatmentCard({ treatment, onChanged, onSelect }) {
+  const notify = useNotify();
+  const statusLabel = treatment.status ? treatment.status.charAt(0).toUpperCase() + treatment.status.slice(1) : 'Active';
+  const progressPercent = treatment.totalSessions > 0 ? Math.round((treatment.completedSessions / treatment.totalSessions) * 100) : 0;
+  const nextDueDate = treatment.nextDueAt ? new Date(treatment.nextDueAt).toLocaleDateString('en-IN') : 'Not scheduled';
+  const startDate = new Date(treatment.startedAt).toLocaleDateString('en-IN');
+
+  const updateStatus = async (newStatus) => {
+    try {
+      await fetchApi(`/api/wellness/treatment-plans/${treatment.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: newStatus }),
+      });
+      notify.success(`Treatment plan marked as ${newStatus}`);
+      onChanged && onChanged();
+    } catch (_err) { /* fetchApi already surfaced the message */ }
+  };
+
+  const handleCancel = async () => {
+    if (!await notify.confirm({
+      message: `Cancel this treatment plan for ${treatment.patient?.name}?`,
+      destructive: true,
+      confirmText: 'Cancel Plan'
+    })) return;
+    await updateStatus('cancelled');
+  };
+
+  return (
+    <div className="glass" style={{ padding: '1.25rem', position: 'relative', cursor: 'pointer', transition: 'all 0.3s ease' }} onClick={() => onSelect(treatment)}>
+      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem' }}>
+        <button onClick={() => updateStatus(treatment.status === 'active' ? 'paused' : 'active')} title={treatment.status === 'active' ? 'Pause' : 'Resume'} style={iconBtn}>
+          <Clock size={12} />
+        </button>
+        <button onClick={handleCancel} title="Cancel" style={{ ...iconBtn, color: 'var(--danger-color)' }}>
+          <Trash2 size={12} />
+        </button>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', paddingRight: '3rem' }}>
+        <div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            {treatment.patient?.name}
+          </div>
+          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '0.15rem' }}>{treatment.name}</h3>
+        </div>
+        <span style={{ background: statusColor[treatment.status] || statusColor.active, color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', textTransform: 'uppercase', fontWeight: 600 }}>
+          {statusLabel}
+        </span>
+      </div>
+      <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+        <span><IndianRupee size={12} style={{ verticalAlign: 'middle' }} /> {treatment.totalPrice?.toLocaleString('en-IN') || '0'}</span>
+        <span><Clock size={12} style={{ verticalAlign: 'middle' }} /> {treatment.completedSessions}/{treatment.totalSessions} sessions</span>
+        <span><MapPin size={12} style={{ verticalAlign: 'middle' }} /> Due: {nextDueDate}</span>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ marginTop: '0.75rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Progress</span>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{progressPercent}%</span>
+        </div>
+        <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 4, height: '6px', overflow: 'hidden' }}>
+          <div style={{ background: statusColor[treatment.status] || statusColor.active, height: '100%', width: `${progressPercent}%`, transition: 'width 0.3s ease' }} />
+        </div>
+      </div>
+
+      {treatment.service && (
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+          <strong>Service:</strong> {treatment.service.name}
+        </p>
+      )}
     </div>
   );
 }

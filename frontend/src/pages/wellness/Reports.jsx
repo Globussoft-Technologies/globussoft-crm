@@ -176,36 +176,44 @@ function Totals({ items }) {
 }
 
 function PnlTable({ data }) {
+  const colWidths = ['25%', '18%', '10%', '10%', '12%', '12%', '13%'];
+  const headers = ['Service', 'Category', 'Tier', 'Visits', 'Revenue', 'Product cost', 'Contribution'];
+  const totals = data?.totals || { visits: 0, revenue: 0, productCost: 0, contribution: 0 };
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+
   return (
     <>
       <Totals items={[
-        { label: 'Visits', value: data.totals.visits.toLocaleString('en-IN') },
-        { label: 'Revenue', value: formatMoney(data.totals.revenue) },
-        { label: 'Product cost', value: formatMoney(data.totals.productCost) },
-        { label: 'Contribution', value: formatMoney(data.totals.contribution) },
+        { label: 'Visits', value: (totals.visits || 0).toLocaleString('en-IN') },
+        { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
+        { label: 'Product cost', value: formatMoney(totals.productCost || 0) },
+        { label: 'Contribution', value: formatMoney(totals.contribution || 0) },
       ]} />
       <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
         <table style={tableStyle}>
-          <thead><tr>{['Service', 'Category', 'Tier', 'Visits', 'Revenue', 'Product cost', 'Contribution'].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+          <colgroup>
+            {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
+          </colgroup>
+          <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: i > 2 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
           <tbody>
-            {data.rows.map((r) => (
+            {rows.map((r) => (
               <tr key={r.id}>
-                <td style={td}>{r.name}</td>
-                <td style={td}>{r.category}</td>
-                <td style={td}>
+                <td style={{ ...td, width: colWidths[0] }}>{r.name}</td>
+                <td style={{ ...td, width: colWidths[1] }}>{r.category}</td>
+                <td style={{ ...td, width: colWidths[2] }}>
                   <span style={{ background: tierBg(r.ticketTier), padding: '0.15rem 0.45rem', borderRadius: 4, fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 600 }}>
                     {r.ticketTier}
                   </span>
                 </td>
-                <td style={tdR}>{r.count}</td>
-                <td style={tdR}>{formatMoney(r.revenue)}</td>
-                <td style={tdR}>{formatMoney(r.productCost)}</td>
-                <td style={{ ...tdR, color: r.contribution > 0 ? 'var(--success-color)' : 'var(--danger-color)', fontWeight: 600 }}>
+                <td style={{ ...tdR, width: colWidths[3] }}>{r.count}</td>
+                <td style={{ ...tdR, width: colWidths[4] }}>{formatMoney(r.revenue)}</td>
+                <td style={{ ...tdR, width: colWidths[5] }}>{formatMoney(r.productCost)}</td>
+                <td style={{ ...tdR, width: colWidths[6], color: r.contribution > 0 ? 'var(--success-color)' : 'var(--danger-color)', fontWeight: 600 }}>
                   {formatMoney(r.contribution)}
                 </td>
               </tr>
             ))}
-            {data.rows.length === 0 && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No services with revenue in this window.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No services with revenue in this window.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -214,25 +222,33 @@ function PnlTable({ data }) {
 }
 
 function ProTable({ data }) {
+  const colWidths = ['40%', '20%', '20%', '20%'];
+  const headers = ['Staff', 'Role', 'Visits', 'Revenue'];
+  const totals = data?.totals || { visits: 0, revenue: 0 };
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+
   return (
     <>
       <Totals items={[
-        { label: 'Visits', value: data.totals.visits.toLocaleString('en-IN') },
-        { label: 'Revenue', value: formatMoney(data.totals.revenue) },
+        { label: 'Visits', value: (totals.visits || 0).toLocaleString('en-IN') },
+        { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
       ]} />
       <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
         <table style={tableStyle}>
+          <colgroup>
+            {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
+          </colgroup>
           {/* #236: drop the orthogonal RBAC role column (it always says USER for
               doctors/professionals/etc) and surface wellnessRole as the primary
               "Role" instead — that's the meaningful one for clinics. */}
-          <thead><tr>{['Staff', 'Role', 'Visits', 'Revenue'].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+          <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: i > 1 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
           <tbody>
-            {data.rows.map((r) => (
+            {rows.map((r) => (
               <tr key={r.id}>
-                <td style={td}>{r.name}</td>
-                <td style={{ ...td, textTransform: 'capitalize' }}>{r.wellnessRole || r.role || '—'}</td>
-                <td style={tdR}>{r.visits}</td>
-                <td style={tdR}>{formatMoney(r.revenue)}</td>
+                <td style={{ ...td, width: colWidths[0] }}>{r.name}</td>
+                <td style={{ ...td, width: colWidths[1], textTransform: 'capitalize' }}>{r.wellnessRole || r.role || '—'}</td>
+                <td style={{ ...tdR, width: colWidths[2] }}>{r.visits}</td>
+                <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(r.revenue)}</td>
               </tr>
             ))}
           </tbody>
@@ -243,15 +259,13 @@ function ProTable({ data }) {
 }
 
 function LocTable({ data }) {
-  // #336: header used to silently disagree with the admin /wellness/locations
-  // page (admin lists active+inactive; report rendered the same rows but never
-  // labeled the split, so "1 location" in the report vs "2 locations" in admin
-  // looked like a data bug). Surface the breakdown explicitly: "N active
-  // locations" with a small "inactive: M" badge when M>0. Data already carries
-  // isActive per-row from computePerLocation().
+  const colWidths = ['20%', '18%', '13%', '13%', '18%', '18%'];
+  const headers = ['Location', 'City', 'Patients', 'Visits', 'Revenue', 'Status'];
+  const totals = data?.totals || { visits: 0, revenue: 0 };
   const rows = Array.isArray(data?.rows) ? data.rows : [];
   const activeCount = rows.filter((r) => r.isActive).length;
-  const inactiveCount = rows.length - activeCount;
+  const inactiveCount = rows.filter((r) => !r.isActive).length;
+
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
@@ -277,21 +291,24 @@ function LocTable({ data }) {
         )}
       </div>
       <Totals items={[
-        { label: 'Visits', value: data.totals.visits.toLocaleString('en-IN') },
-        { label: 'Revenue', value: formatMoney(data.totals.revenue) },
+        { label: 'Visits', value: (totals.visits || 0).toLocaleString('en-IN') },
+        { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
       ]} />
       <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
         <table style={tableStyle}>
-          <thead><tr>{['Location', 'City', 'Patients', 'Visits', 'Revenue', 'Status'].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+          <colgroup>
+            {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
+          </colgroup>
+          <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: (i > 1 && i < 5) ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} style={r.isActive ? undefined : { opacity: 0.65 }}>
-                <td style={td}>{r.name}</td>
-                <td style={td}>{r.city}{r.state ? `, ${r.state}` : ''}</td>
-                <td style={tdR}>{r.patients}</td>
-                <td style={tdR}>{r.visits}</td>
-                <td style={tdR}>{formatMoney(r.revenue)}</td>
-                <td style={td}>{r.isActive ? '🟢 Active' : '⚪ Inactive'}</td>
+              <tr key={r.id}>
+                <td style={{ ...td, width: colWidths[0] }}>{r.name}</td>
+                <td style={{ ...td, width: colWidths[1] }}>{r.city}{r.state ? `, ${r.state}` : ''}</td>
+                <td style={{ ...tdR, width: colWidths[2] }}>{r.patients}</td>
+                <td style={{ ...tdR, width: colWidths[3] }}>{r.visits}</td>
+                <td style={{ ...tdR, width: colWidths[4] }}>{formatMoney(r.revenue)}</td>
+                <td style={{ ...td, width: colWidths[5] }}>{r.isActive ? '🟢 Active' : '⚪ Inactive'}</td>
               </tr>
             ))}
           </tbody>
@@ -308,6 +325,9 @@ function AttTable({ data }) {
   // the cost of guarding is zero.
   const totals = data?.totals || { leads: 0, junk: 0, qualified: 0, revenue: 0 };
   const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const colWidths = ['20%', '15%', '15%', '15%', '18%', '17%'];
+  const headers = ['Source', 'Leads', 'Junk %', 'Conv %', 'Revenue', 'Rev / Lead'];
+
   return (
     <>
       <Totals items={[
@@ -318,16 +338,19 @@ function AttTable({ data }) {
       ]} />
       <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
         <table style={tableStyle}>
-          <thead><tr>{['Source', 'Leads', 'Junk %', 'Conv %', 'Revenue', 'Rev / Lead'].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+          <colgroup>
+            {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
+          </colgroup>
+          <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: i > 0 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.source}>
-                <td style={td}><strong>{r.source}</strong></td>
-                <td style={tdR}>{r.leads}</td>
-                <td style={{ ...tdR, color: r.junkRate > 70 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>{r.junkRate}%</td>
-                <td style={{ ...tdR, color: r.conversionRate > 10 ? 'var(--success-color)' : 'var(--text-secondary)', fontWeight: r.conversionRate > 10 ? 600 : 400 }}>{r.conversionRate}%</td>
-                <td style={tdR}>{formatMoney(r.revenue)}</td>
-                <td style={tdR}>{formatMoney(r.revenuePerLead)}</td>
+                <td style={{ ...td, width: colWidths[0] }}><strong>{r.source}</strong></td>
+                <td style={{ ...tdR, width: colWidths[1] }}>{r.leads}</td>
+                <td style={{ ...tdR, width: colWidths[2], color: r.junkRate > 70 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>{r.junkRate}%</td>
+                <td style={{ ...tdR, width: colWidths[3], color: r.conversionRate > 10 ? 'var(--success-color)' : 'var(--text-secondary)', fontWeight: r.conversionRate > 10 ? 600 : 400 }}>{r.conversionRate}%</td>
+                <td style={{ ...tdR, width: colWidths[4] }}>{formatMoney(r.revenue)}</td>
+                <td style={{ ...tdR, width: colWidths[5] }}>{formatMoney(r.revenuePerLead)}</td>
               </tr>
             ))}
             {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No leads in this window.</td></tr>}
@@ -339,9 +362,9 @@ function AttTable({ data }) {
 }
 
 const tierBg = (t) => ({ high: 'rgba(239,68,68,0.2)', medium: 'rgba(245,158,11,0.2)', low: 'rgba(100,116,139,0.2)' }[t] || 'rgba(100,116,139,0.2)');
-const tableStyle = { width: '100%', borderCollapse: 'collapse' };
-const th = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)' };
-const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)' };
+const tableStyle = { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' };
+const th = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', textOverflow: 'ellipsis' };
+const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden', textOverflow: 'ellipsis', wordBreak: 'break-word' };
 const tdR = { ...td, textAlign: 'right' };
 const dateInput = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem' };
 // #227: export buttons sit next to the date picker — wait state shows a

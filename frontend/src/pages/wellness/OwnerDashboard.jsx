@@ -21,8 +21,8 @@ function landingForClinicalStaff(user) {
 
 const formatRupees = (n) => `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
 
-const StatCard = ({ icon: Icon, label, value, sub, color }) => (
-  <div className="glass" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+const StatCard = ({ icon: Icon, label, value, sub, color, onClick }) => (
+  <div className="glass" onClick={onClick} style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', cursor: onClick ? 'pointer' : 'default', transition: onClick ? 'all 0.2s ease' : 'none' }} onMouseEnter={(e) => onClick && (e.currentTarget.style.transform = 'translateY(-4px)')} onMouseLeave={(e) => onClick && (e.currentTarget.style.transform = 'translateY(0)')}>
     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
       <Icon size={16} color={color} /> {label}
     </div>
@@ -106,12 +106,12 @@ export default function OwnerDashboard() {
 
       {/* KPI grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-        <StatCard icon={Calendar} label="Today's appointments" value={data.today.visits} sub={`${data.today.completed} completed so far`} color="var(--accent-color)" />
+        <StatCard icon={Calendar} label="Today's appointments" value={data.today.visits} sub={`${data.today.completed} completed so far`} color="var(--accent-color)" onClick={() => navigate('/wellness/calendar')} />
         <StatCard icon={IndianRupee} label="Today's expected revenue" value={formatRupees(data.today.expectedRevenue)} sub="based on scheduled services" color="var(--success-color)" />
         <StatCard icon={Activity} label="Occupancy" value={`${data.today.occupancyPct}%`} sub="vs target 100%" color={data.today.occupancyPct >= 60 ? 'var(--success-color)' : 'var(--warning-color)'} />
         <StatCard icon={Users} label="New leads today" value={data.today.newLeads} sub="across all channels" color="#3b82f6" />
         <StatCard icon={Bell} label="Pending approvals" value={data.pendingApprovals} sub="from the AI agent" color="#a855f7" />
-        <StatCard icon={Stethoscope} label="Active treatment plans" value={data.activeTreatmentPlans} sub="multi-session bundles in progress" color="#ec4899" />
+        <StatCard icon={Stethoscope} label="Active treatment plans" value={data.activeTreatmentPlans} sub="multi-session bundles in progress" color="#ec4899" onClick={() => navigate('/wellness/services?tab=activetreatments')} />
         {/* PRD §6.8 — no-show risk: amber if any flagged, green when clean. */}
         <StatCard
           icon={AlertTriangle}

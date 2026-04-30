@@ -187,16 +187,20 @@ jobs:
           E2E_SKIP_SCRUB: "1"
         run: |
           set -euo pipefail
-          # Start with just api-health.spec.js — minimal, self-contained,
-          # exercises auth + 50 endpoints without assuming specific seed
-          # rows. Once this is stable we can expand the list to the
-          # other 6 API specs (sms, marketing, reports, voice, kb, portal).
+          # Use ci-smoke.spec.js (purpose-built for CI). The older
+          # api-health.spec.js has prod-environment assumptions
+          # (legacy admin/admin bypass that was removed for security)
+          # that make it unsuitable as a CI gate.
+          # Promotion plan: add sms-api / marketing-api / reports-api
+          # / voice-transcription-api / knowledge-base-api / portal-api
+          # one-by-one as each is verified to work against a freshly-
+          # seeded CI database.
           npx playwright test \
             --project=chromium \
             --reporter=list \
             --no-deps \
-            tests/api-health.spec.js
-          echo "::notice::API specs passed"
+            tests/ci-smoke.spec.js
+          echo "::notice::CI smoke specs passed"
 
       - name: Upload artifacts on failure
         if: failure()

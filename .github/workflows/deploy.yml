@@ -203,12 +203,13 @@ jobs:
           # Promotion ladder. Each spec gets added once it's been
           # verified to pass against a freshly-seeded CI database.
           # Currently in the gate:
-          #   - ci-smoke.spec.js          (4 tests: health/login/auth-gate)
-          #   - sms-api.spec.js           (44 tests: routes/sms.js)
-          #   - marketing-api.spec.js     (41 tests: routes/marketing.js)
-          #   - reports-api.spec.js       (52 tests: routes/reports.js)
-          #   - sla-breach-api.spec.js    (48 tests: cron/slaBreachEngine.js)
-          # Total: 189 API tests run on every push.
+          #   - ci-smoke.spec.js              (4 tests: health/login/auth-gate)
+          #   - sms-api.spec.js              (44 tests: routes/sms.js)
+          #   - marketing-api.spec.js        (41 tests: routes/marketing.js)
+          #   - reports-api.spec.js          (52 tests: routes/reports.js)
+          #   - sla-breach-api.spec.js       (48 tests: cron/slaBreachEngine.js)
+          #   - treatment-plans-api.spec.js  (40 tests: controllers/treatmentPlanController.js + routes/wellness treatment-plan endpoints)
+          # Total: 229 API tests run on every push.
           # Next: voice-transcription-api, knowledge-base-api, portal-api.
           npx playwright test \
             --project=chromium \
@@ -218,7 +219,8 @@ jobs:
             tests/sms-api.spec.js \
             tests/marketing-api.spec.js \
             tests/reports-api.spec.js \
-            tests/sla-breach-api.spec.js
+            tests/sla-breach-api.spec.js \
+            tests/treatment-plans-api.spec.js
           echo "::notice::API specs passed"
 
       - name: Upload artifacts on failure

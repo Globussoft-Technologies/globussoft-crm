@@ -203,15 +203,21 @@ jobs:
           # Promotion ladder. Each spec gets added once it's been
           # verified to pass against a freshly-seeded CI database.
           # Currently in the gate:
-          #   - ci-smoke.spec.js              (4 tests: health/login/auth-gate)
+          #   - ci-smoke.spec.js              ( 4 tests: health/login/auth-gate)
           #   - sms-api.spec.js              (44 tests: routes/sms.js)
           #   - marketing-api.spec.js        (41 tests: routes/marketing.js)
           #   - reports-api.spec.js          (52 tests: routes/reports.js)
           #   - sla-breach-api.spec.js       (48 tests: cron/slaBreachEngine.js)
           #   - treatment-plans-api.spec.js  (40 tests: controllers/treatmentPlanController.js)
           #   - sequence-engine-api.spec.js  (49 tests: cron/sequenceEngine.js)
-          # Total: 278 API tests run on every push.
-          # Next: voice-transcription-api, knowledge-base-api, portal-api.
+          #   - expenses-api.spec.js         (37 tests: routes/expenses.js)
+          #   - projects-api.spec.js         (37 tests: routes/projects.js)
+          #   - ai-scoring-api.spec.js       (23 tests: routes/ai_scoring.js)
+          #   - contracts-api.spec.js        (37 tests: routes/contracts.js)
+          # Total: 412 API tests run on every push.
+          # Next: voice-transcription-api, knowledge-base-api, portal-api,
+          # custom-objects-api, cpq-api (2 in-flight from background agents
+          # — pick up after wrap-up).
           npx playwright test \
             --project=chromium \
             --reporter=list \
@@ -222,7 +228,11 @@ jobs:
             tests/reports-api.spec.js \
             tests/sla-breach-api.spec.js \
             tests/treatment-plans-api.spec.js \
-            tests/sequence-engine-api.spec.js
+            tests/sequence-engine-api.spec.js \
+            tests/expenses-api.spec.js \
+            tests/projects-api.spec.js \
+            tests/ai-scoring-api.spec.js \
+            tests/contracts-api.spec.js
           echo "::notice::API specs passed"
 
       - name: Upload artifacts on failure

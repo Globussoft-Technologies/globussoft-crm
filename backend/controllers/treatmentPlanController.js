@@ -17,8 +17,11 @@ exports.getAllTreatmentPlans = async (req, res) => {
                 patient: true,
                 service: true,
             },
+            // TreatmentPlan schema has no `createdAt` field; sort by id desc
+            // (newest-first equivalent for autoincrement PKs). Real fix would
+            // be to add createdAt to the schema in a future migration.
             orderBy: {
-                createdAt: "desc",
+                id: "desc",
             },
         });
 

@@ -1250,6 +1250,16 @@ router.put("/consents/:id", verifyWellnessRole(["admin"]), async (req, res) => {
       return res.status(400).json({ error: "signatureSvg cannot be edited after signing", code: "SIGNATURE_IMMUTABLE" });
     }
     const updated = await prisma.consentForm.update({ where: { id }, data });
+    // #179: HIPAA / DPDP — consent metadata amendments are PHI-adjacent and
+    // must be auditable. signatureSvg is rejected above so it can't appear
+    // in the diff. Audit failure must NOT break the user-facing response.
+    try {
+      const changes = diffFields(existing, updated, Object.keys(data));
+      await writeAudit('ConsentForm', 'UPDATE', updated.id, req.user.userId, req.user.tenantId, {
+        patientId: existing.patientId,
+        changedFields: changes,
+      });
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
     res.json(updated);
   } catch (e) {
     console.error("[wellness] amend consent error:", e.message);
@@ -1297,6 +1307,16 @@ router.post("/treatments", async (req, res) => {
         tenantId: req.user.tenantId,
       },
     });
+    // #179: PHI-adjacent treatment plan create is auditable per PRD §11.
+    try {
+      await writeAudit('TreatmentPlan', 'CREATE', plan.id, req.user.userId, req.user.tenantId, {
+        patientId: plan.patientId,
+        serviceId: plan.serviceId,
+        name: plan.name,
+        totalSessions: plan.totalSessions,
+        totalPrice: plan.totalPrice,
+      });
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
     res.status(201).json(plan);
   } catch (e) {
     console.error("[wellness] create treatment error:", e.message);
@@ -1372,6 +1392,16 @@ router.post("/services", verifyWellnessRole(["admin", "manager"]), async (req, r
         tenantId: req.user.tenantId,
       },
     });
+    // #179: catalog mutations are operational config — audit so price/duration
+    // changes are traceable for billing-dispute investigations.
+    try {
+      await writeAudit('Service', 'CREATE', svc.id, req.user.userId, req.user.tenantId, {
+        name: svc.name,
+        category: svc.category,
+        basePrice: svc.basePrice,
+        durationMin: svc.durationMin,
+      });
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
     res.status(201).json(svc);
   } catch (e) {
     console.error("[wellness] create service error:", e.message);
@@ -1422,6 +1452,15 @@ router.put("/services/:id", verifyWellnessRole(["admin", "manager"]), async (req
       }
     }
     const updated = await prisma.service.update({ where: { id }, data });
+    // #179: audit only the keys that actually changed.
+    try {
+      const changes = diffFields(existing, updated, Object.keys(data));
+      if (Object.keys(changes).length > 0) {
+        await writeAudit('Service', 'UPDATE', updated.id, req.user.userId, req.user.tenantId, {
+          changedFields: changes,
+        });
+      }
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
     res.json(updated);
   } catch (e) {
     console.error("[wellness] update service error:", e.message);
@@ -1522,6 +1561,15 @@ router.put("/recommendations/:id", verifyWellnessRole(["admin", "manager"]), asy
       return res.status(400).json({ error: "priority must be one of: low, medium, high", code: "INVALID_PRIORITY" });
     }
     const updated = await prisma.agentRecommendation.update({ where: { id }, data });
+    // #179: audit recommendation amendment so the trail mirrors approve/reject.
+    try {
+      const changes = diffFields(existing, updated, Object.keys(data));
+      if (Object.keys(changes).length > 0) {
+        await writeAudit('AgentRecommendation', 'UPDATE', updated.id, req.user.userId, req.user.tenantId, {
+          changedFields: changes,
+        });
+      }
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
     res.json(updated);
   } catch (e) {
     console.error("[wellness] amend recommendation error:", e.message);
@@ -1738,6 +1786,14 @@ router.post("/locations", verifyWellnessRole(["admin", "manager"]), async (req, 
         tenantId: req.user.tenantId,
       },
     });
+    // #179: clinic location config — audit so changes to addresses / hours are traceable.
+    try {
+      await writeAudit('Location', 'CREATE', loc.id, req.user.userId, req.user.tenantId, {
+        name: loc.name,
+        city: loc.city,
+        state: loc.state,
+      });
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
     res.status(201).json(loc);
   } catch (e) {
     console.error("[wellness] create location error:", e.message);
@@ -1761,6 +1817,15 @@ router.put("/locations/:id", verifyWellnessRole(["admin", "manager"]), async (re
     }
 
     const updated = await prisma.location.update({ where: { id }, data });
+    // #179: audit the changed fields only.
+    try {
+      const changes = diffFields(existing, updated, Object.keys(data));
+      if (Object.keys(changes).length > 0) {
+        await writeAudit('Location', 'UPDATE', updated.id, req.user.userId, req.user.tenantId, {
+          changedFields: changes,
+        });
+      }
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
     res.json(updated);
   } catch (e) {
     console.error("[wellness] update location error:", e.message);

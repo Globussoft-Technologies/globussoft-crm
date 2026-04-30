@@ -1,4 +1,5 @@
 const prisma = require("../lib/prisma");
+const { writeAudit } = require("../lib/audit");
 
 exports.getAllTreatmentPlans = async (req, res) => {
     try {
@@ -64,6 +65,15 @@ exports.updateTreatmentPlan = async (req, res) => {
             data: { status },
             include: { patient: true, service: true },
         });
+
+        // #179: PHI-adjacent treatment plan status change — audit per PRD §11.
+        try {
+            await writeAudit('TreatmentPlan', 'UPDATE', updated.id, req.user.userId, tenantId, {
+                patientId: updated.patientId,
+                fromStatus: plan.status,
+                toStatus: updated.status,
+            });
+        } catch (auditErr) { console.warn('[audit]', auditErr.message); }
 
         return res.status(200).json({
             success: true,

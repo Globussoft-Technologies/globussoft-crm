@@ -38,10 +38,15 @@ export default function SequenceBuilder() {
   const reload = async () => {
     setLoading(true);
     try {
+      // #397: pass { silent: true } so a 404 (e.g. fresh sequence with no
+      // steps yet, or non-admin viewer) doesn't surface a "Not found." toast
+      // every time someone opens the builder. The .catch swallowing that
+      // existed before only suppressed the throw — the global toast still
+      // fired from inside fetchApi. silent stops the toast at the source.
       const [allSeq, stepsRes, tplRes] = await Promise.all([
-        fetchApi('/api/sequences').catch(() => []),
-        fetchApi(`/api/sequences/${sequenceId}/steps`).catch(() => []),
-        fetchApi('/api/email-templates').catch(() => []),
+        fetchApi('/api/sequences', { silent: true }).catch(() => []),
+        fetchApi(`/api/sequences/${sequenceId}/steps`, { silent: true }).catch(() => []),
+        fetchApi('/api/email-templates', { silent: true }).catch(() => []),
       ]);
       const seq = (Array.isArray(allSeq) ? allSeq : []).find(s => s.id === sequenceId);
       setSequence(seq || null);

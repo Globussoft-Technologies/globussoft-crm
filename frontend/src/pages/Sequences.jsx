@@ -10,21 +10,76 @@ const initialNodes = [
   { id: '1', type: 'input', data: { label: 'TRIGGER: Contact Subscribed' }, position: { x: 250, y: 50 }, style: { background: '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 'bold', width: 220, textAlign: 'center' } },
 ];
 
+// #394: sessionStorage keys for draft persistence. We persist the canvas
+// (nodes + edges) and the activeSeqId across hard refreshes so a user who
+// refreshes mid-build doesn't lose the work, and a user who refreshes after
+// loading a saved sequence comes back to the same one.
+const DRAFT_KEY = 'sequences:draft';
+const ACTIVE_SEQ_KEY = 'sequences:activeSeqId';
+
+const loadDraft = () => {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
+      return parsed;
+    }
+  } catch { /* ignore */ }
+  return null;
+};
+
+const saveDraft = (nodes, edges, activeSeqId) => {
+  try {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ nodes, edges }));
+    if (activeSeqId != null) {
+      sessionStorage.setItem(ACTIVE_SEQ_KEY, String(activeSeqId));
+    } else {
+      sessionStorage.removeItem(ACTIVE_SEQ_KEY);
+    }
+  } catch { /* ignore quota */ }
+};
+
+const clearDraft = () => {
+  try {
+    sessionStorage.removeItem(DRAFT_KEY);
+    sessionStorage.removeItem(ACTIVE_SEQ_KEY);
+  } catch { /* ignore */ }
+};
+
 export default function Sequences() {
   const notify = useNotify();
-  const [nodes, setNodes] = useState(initialNodes);
-  const [edges, setEdges] = useState([]);
+  // #394: hydrate from sessionStorage on first paint so a refresh during a
+  // build keeps the user's added nodes on the canvas. If no draft exists,
+  // fall back to the trigger-only initialNodes.
+  const initial = loadDraft();
+  const [nodes, setNodes] = useState(initial?.nodes ?? initialNodes);
+  const [edges, setEdges] = useState(initial?.edges ?? []);
   const [saving, setSaving] = useState(false);
   const [sequences, setSequences] = useState([]);
-  const [activeSeqId, setActiveSeqId] = useState(null);
+  const [activeSeqId, setActiveSeqId] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem(ACTIVE_SEQ_KEY);
+      return raw ? parseInt(raw, 10) : null;
+    } catch { return null; }
+  });
   const [seqName, setSeqName] = useState('');
   const [showNameModal, setShowNameModal] = useState(false);
 
   useEffect(() => { loadSequences(); }, []);
 
+  // #394: autosave the canvas to sessionStorage on every change so a hard
+  // refresh / accidental tab close doesn't drop work the user hasn't yet
+  // hit "Create Sequence" on. Throttle is unnecessary at this size.
+  useEffect(() => {
+    saveDraft(nodes, edges, activeSeqId);
+  }, [nodes, edges, activeSeqId]);
+
   const loadSequences = async () => {
     try {
-      const data = await fetchApi('/api/sequences');
+      // #397: silent so a transient 404/403 on this background list fetch
+      // doesn't pop a "Not found." toast over the canvas.
+      const data = await fetchApi('/api/sequences', { silent: true });
       setSequences(Array.isArray(data) ? data : []);
     } catch(err) {}
   };
@@ -58,9 +113,24 @@ export default function Sequences() {
   };
 
   const saveSequence = async (nameOverride) => {
+    // #396: validate name (trim, length>=1) BEFORE we hit the network so an
+    // empty / whitespace-only name never round-trips and the user gets an
+    // immediate, clear error rather than a server-side rejection.
+    const rawName = (nameOverride || seqName || '').trim();
+    const fallback = `Drip Matrix ${Math.floor(Math.random()*9000)}`;
+    const name = rawName.length >= 1 ? rawName : fallback;
+
+    // #395: validate canvas shape before submit. We require at least one
+    // node beyond the starter trigger, and `nodes` must be an array. The
+    // backend re-validates, but this catches the common case (empty canvas)
+    // before it ever turns into a 500.
+    if (!Array.isArray(nodes) || nodes.length < 1) {
+      notify.error('Add at least one step to the canvas before saving.');
+      return;
+    }
+
     setSaving(true);
     try {
-      const name = nameOverride || seqName || `Drip Matrix ${Math.floor(Math.random()*9000)}`;
       if (activeSeqId) {
         // Update existing
         await fetchApi(`/api/sequences/${activeSeqId}`, {
@@ -68,13 +138,17 @@ export default function Sequences() {
           body: JSON.stringify({ name, nodes, edges, isActive: true })
         });
       } else {
-        await fetchApi('/api/sequences', {
+        const created = await fetchApi('/api/sequences', {
           method: 'POST',
           body: JSON.stringify({ name, nodes, edges })
         });
+        if (created?.id) setActiveSeqId(created.id);
       }
       setShowNameModal(false);
       setSeqName('');
+      // #394: keep the draft tied to the now-persisted sequence so the next
+      // refresh continues to show the same canvas. We only blow it away on
+      // explicit "New" / delete.
       loadSequences();
     } catch(err) {
       console.error('Failed to save sequence:', err);
@@ -91,6 +165,9 @@ export default function Sequences() {
         setNodes(initialNodes);
         setEdges([]);
         setActiveSeqId(null);
+        // #394: drop the persisted draft for the deleted sequence so a
+        // refresh doesn't resurrect a stale canvas pointing at a dead row.
+        clearDraft();
       }
       loadSequences();
     } catch(err) {
@@ -102,6 +179,8 @@ export default function Sequences() {
     setNodes(initialNodes);
     setEdges([]);
     setActiveSeqId(null);
+    // #394: explicit user-initiated reset wipes the draft too.
+    clearDraft();
   };
 
   return (

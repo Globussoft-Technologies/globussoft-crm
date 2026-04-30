@@ -1,8 +1,34 @@
 const express = require("express");
+const sanitizeHtml = require("sanitize-html");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+
+// #398: strip ALL HTML/JS markup from free-text fields stored on a Sequence.
+// Global middleware/security.js only strips dangerous tags (script/iframe/img),
+// but sequence names + step content are pure text fields — no formatting is
+// expected, so we strip everything to avoid stored-XSS sinks (PDF previews,
+// email subject lines, dashboard cards).
+const sanitizeText = (input) => {
+  if (typeof input !== "string") return input;
+  return sanitizeHtml(input, { allowedTags: [], allowedAttributes: {} }).trim();
+};
+
+// Walk an array of ReactFlow nodes and strip any text inside data.label so a
+// payload like `{ data: { label: "<img onerror=…>" } }` cannot persist.
+const sanitizeNodes = (nodes) => {
+  if (!Array.isArray(nodes)) return nodes;
+  return nodes.map((n) => {
+    if (n && typeof n === "object" && n.data && typeof n.data === "object") {
+      const data = { ...n.data };
+      if (typeof data.label === "string") data.label = sanitizeText(data.label);
+      if (typeof data.content === "string") data.content = sanitizeText(data.content);
+      return { ...n, data };
+    }
+    return n;
+  });
+};
 
 // Fetch all drip sequences
 router.get("/", verifyToken, async (req, res) => {
@@ -25,11 +51,31 @@ router.post("/", verifyToken, async (req, res) => {
   try {
     const { name, nodes, edges } = req.body;
 
+    // #396: reject empty/whitespace-only names (same pattern as #337 /pipelines).
+    const cleanName = sanitizeText(name);
+    if (!cleanName || cleanName.length < 1) {
+      return res.status(400).json({
+        error: "Sequence name is required.",
+        code: "INVALID_SEQUENCE",
+      });
+    }
+
+    // #395: validate the canvas shape before we hand it to JSON.stringify +
+    // Prisma. nodes must be an array (edges may be empty); anything else
+    // would surface as an opaque internal error downstream.
+    if (!Array.isArray(nodes)) {
+      return res.status(400).json({
+        error: "Sequence validation failed",
+        code: "INVALID_SEQUENCE",
+      });
+    }
+
     const seq = await prisma.sequence.create({
       data: {
-        name,
-        nodes: JSON.stringify(nodes),
-        edges: JSON.stringify(edges),
+        name: cleanName,
+        // #398: scrub HTML out of any node labels before persisting.
+        nodes: JSON.stringify(sanitizeNodes(nodes)),
+        edges: JSON.stringify(Array.isArray(edges) ? edges : []),
         isActive: true,
         tenantId: req.user.tenantId,
       }
@@ -37,7 +83,13 @@ router.post("/", verifyToken, async (req, res) => {
 
     res.status(201).json(seq);
   } catch(err) {
-    res.status(500).json({ error: "Compilation of Drip Array failed." });
+    // #395: do not leak raw err.message ("Compilation of Drip Array failed.")
+    // to the client. Log internally; return a sanitized code-tagged response.
+    console.error("[sequences] create failed:", err.message);
+    res.status(500).json({
+      error: "Sequence validation failed",
+      code: "INVALID_SEQUENCE",
+    });
   }
 });
 
@@ -65,17 +117,37 @@ router.patch("/:id", verifyToken, async (req, res) => {
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid sequence ID' });
     const existing = await prisma.sequence.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Sequence not found" });
+    // #396 + #398: same trim/sanitize rules apply on update so a rename to "  "
+    // or "<script>…" doesn't get through the back door.
+    let cleanName;
+    if (name !== undefined) {
+      cleanName = sanitizeText(name);
+      if (!cleanName || cleanName.length < 1) {
+        return res.status(400).json({
+          error: "Sequence name is required.",
+          code: "INVALID_SEQUENCE",
+        });
+      }
+    }
+    if (nodes !== undefined && !Array.isArray(nodes)) {
+      return res.status(400).json({
+        error: "Sequence validation failed",
+        code: "INVALID_SEQUENCE",
+      });
+    }
+
     const updated = await prisma.sequence.update({
       where: { id: existing.id },
       data: {
-        ...(name !== undefined && { name }),
-        ...(nodes !== undefined && { nodes: JSON.stringify(nodes) }),
-        ...(edges !== undefined && { edges: JSON.stringify(edges) }),
+        ...(name !== undefined && { name: cleanName }),
+        ...(nodes !== undefined && { nodes: JSON.stringify(sanitizeNodes(nodes)) }),
+        ...(edges !== undefined && { edges: JSON.stringify(Array.isArray(edges) ? edges : []) }),
         ...(isActive !== undefined && { isActive }),
       }
     });
     res.json(updated);
   } catch(err) {
+    console.error("[sequences] update failed:", err.message);
     res.status(500).json({ error: "Failed to update sequence." });
   }
 });

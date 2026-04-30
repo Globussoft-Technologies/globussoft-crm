@@ -446,19 +446,57 @@ function isValidPhoneOrEmpty(p) {
 }
 
 const { ensureEmail, ensureDob, ensureVisitDate, ensureEnum, ensureStringLength } = require("../lib/validators");
+const sanitizeHtml = require("sanitize-html");
+
+// #213: defence-in-depth XSS scrub for free-text patient fields. The legacy
+// regex below ("/[<>]|onerror=|javascript:/i") rejected `<script>` and any
+// angle-bracket payload in `name` but it was a name-only check — `notes` was
+// stored verbatim, so `<img src=x onerror=alert(1)>` was happily persisted
+// and could surface anywhere we render notes outside React's auto-escape
+// (PDF receipts, CSV exports, SMS, the patient portal). sanitize-html with
+// no allowed tags/attributes strips ALL HTML markup while preserving the
+// inner text so a typo like "5 < 6 mg" still saves cleanly as "5  6 mg".
+function scrubPlainText(value) {
+  if (value == null) return value;
+  if (typeof value !== "string") return value;
+  // allowedTags=[] + allowedAttributes={} + disallowedTagsMode='discard' →
+  // entire tag is dropped (text content kept). This catches every HTML
+  // payload class (<script>, <img onerror>, <svg onload>, <iframe>, …)
+  // not just the angle-bracket-shaped ones the old regex covered.
+  return sanitizeHtml(value, {
+    allowedTags: [],
+    allowedAttributes: {},
+    disallowedTagsMode: "discard",
+  });
+}
 
 // #159 #160 #165 #170 #178: shared validation for Patient create + update.
+// #213: also mutates body.name / body.notes / body.allergies in place to
+// strip HTML so the route persists the sanitised value (see callers below).
 function validatePatientInput(body, { isUpdate = false } = {}) {
   // #220: cap at 191 to match utf8mb4 VARCHAR(191) DB column limit. The
   // earlier 200 cap let names through that the DB then rejected with 500.
   const nameErr = ensureStringLength(body.name, { max: 191, field: "name", required: !isUpdate });
   if (nameErr) return nameErr;
-  // #237: reject HTML/JS-shaped chars in patient names so they can't pollute
-  // SMS/WhatsApp templates, CSV exports, or printed receipts where escaping
-  // rules differ from React's. React already escapes at render — this is
-  // defence-in-depth at the ingestion layer.
-  if (body.name != null && /[<>]|onerror\s*=|javascript:/i.test(String(body.name))) {
-    return { status: 400, error: "name contains forbidden characters", code: "INVALID_NAME" };
+  // #213: scrub HTML from free-text PHI fields. Strips ALL tags (no whitelist)
+  // — patient names + notes never legitimately contain markup. Mutate the
+  // body so the route's prisma.create/update sees the sanitised string.
+  if (body.name != null) body.name = scrubPlainText(body.name);
+  if (body.notes != null) body.notes = scrubPlainText(body.notes);
+  if (body.allergies != null) body.allergies = scrubPlainText(body.allergies);
+  // After scrub, re-check the name still has length (a payload that was
+  // 100% HTML — e.g. `<img onerror=…>` — collapses to "" and would silently
+  // save as a blank name otherwise). Keep this AFTER sanitisation so the
+  // 400 reflects the post-scrub state the DB will see.
+  if (!isUpdate && (body.name == null || String(body.name).trim() === "")) {
+    return { status: 400, error: "name is required", code: "NAME_REQUIRED" };
+  }
+  // #237 (kept as belt-and-braces): reject any residual JS-shaped payload.
+  // sanitize-html already strips tags but it does NOT block raw strings like
+  // "javascript:foo" or "onerror=…" sitting in plain text — those are still
+  // a phishing/social-engineering vector in printed receipts.
+  if (body.name != null && /onerror\s*=|javascript:/i.test(String(body.name))) {
+    return { status: 400, error: "name contains forbidden content", code: "INVALID_NAME" };
   }
   const emailErr = ensureEmail(body.email);
   if (emailErr) return emailErr;
@@ -488,9 +526,13 @@ const VISIT_TRANSITIONS = {
 
 router.post("/patients", async (req, res) => {
   try {
-    const { name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId } = req.body;
+    // #213: validate FIRST so validatePatientInput can scrub HTML on body.name
+    // / body.notes / body.allergies in place, then destructure the sanitised
+    // values for persistence. Pre-fix the destructure happened before the
+    // validator and the route saved the raw `<img onerror=…>` payload.
     const inputErr = validatePatientInput(req.body, { isUpdate: false });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
+    const { name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId } = req.body;
     // #337: persist the trimmed name. validatePatientInput's ensureStringLength
     // now rejects whitespace-only names; this normalises the saved value so
     // the Patients list, search index, prescriptions, and SMS templates all
@@ -1508,7 +1550,12 @@ router.post("/recommendations/:id/approve", verifyWellnessRole(["admin", "manage
 });
 
 // Manual orchestrator trigger — useful for demos and testing
-router.post("/orchestrator/run", async (req, res) => {
+// #216: manual cron triggers were comment-claimed "Restricted to ADMIN/MANAGER"
+// but had no actual gate, so a USER/doctor/telecaller could fire them. These
+// dispatch SMS blasts, generate AI recommendations, and rotate orchestrator
+// state — operational mutations that must require admin/manager. Add the
+// missing verifyWellnessRole gate to all four manual run endpoints.
+router.post("/orchestrator/run", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const result = await runForTenant(req.user.tenantId);
     res.json(result);
@@ -1519,8 +1566,9 @@ router.post("/orchestrator/run", async (req, res) => {
 });
 
 // Manual triggers for the other 2 crons — for testing + demo replay.
-// Restricted to ADMIN/MANAGER (verify role via req.user.role check).
-router.post("/reminders/run", async (req, res) => {
+// #216: now actually restricted to ADMIN/MANAGER (was previously only commented
+// as such; no enforcement). verifyWellnessRole emits WELLNESS_ROLE_FORBIDDEN.
+router.post("/reminders/run", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const { processTenant } = require("../cron/appointmentRemindersEngine");
     const tenant = await prisma.tenant.findUnique({
@@ -1535,7 +1583,7 @@ router.post("/reminders/run", async (req, res) => {
   }
 });
 
-router.post("/ops/run", async (req, res) => {
+router.post("/ops/run", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const { runNpsForTenant, runRetentionForTenant } = require("../cron/wellnessOpsEngine");
     const npsSent = await runNpsForTenant(req.user.tenantId);
@@ -1549,7 +1597,8 @@ router.post("/ops/run", async (req, res) => {
 
 // Manual trigger for the low-stock inventory alert engine.
 // Returns the per-tenant breakdown { products, notifications, emails }.
-router.post("/inventory/low-stock/run", async (req, res) => {
+// #216: gate to admin/manager — emails staff and creates notifications.
+router.post("/inventory/low-stock/run", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const { runLowStockForTenant } = require("../cron/lowStockEngine");
     const tenant = await prisma.tenant.findUnique({

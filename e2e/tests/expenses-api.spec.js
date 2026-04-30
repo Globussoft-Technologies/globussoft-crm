@@ -206,6 +206,10 @@ test.describe('Expenses API — GET / (list)', () => {
 
   test('?status filter passes through Prisma where', async ({ request }) => {
     // Create + stamp status via PUT, then filter.
+    // MySQL utf8mb4 collation is case-insensitive on equality, so a
+    // WHERE status='APPROVED' matches rows seeded as 'Approved' too.
+    // The route's filter is correct; the test assertion just needs to
+    // tolerate either case for legacy / seed-data rows in the result set.
     const e = await createExpense(request, { title: 'status-filter' });
     const upd = await authPut(request, `/api/expenses/${e.id}`, { status: 'APPROVED' });
     expect(upd.status()).toBe(200);
@@ -214,7 +218,7 @@ test.describe('Expenses API — GET / (list)', () => {
     expect(res.status()).toBe(200);
     const list = await res.json();
     expect(list.find((x) => x.id === e.id)).toBeTruthy();
-    for (const row of list) expect(row.status).toBe('APPROVED');
+    for (const row of list) expect(row.status.toUpperCase()).toBe('APPROVED');
   });
 
   test('combined ?status + ?category filters AND together', async ({ request }) => {
@@ -224,7 +228,7 @@ test.describe('Expenses API — GET / (list)', () => {
     expect(res.status()).toBe(200);
     const list = await res.json();
     for (const row of list) {
-      expect(row.status).toBe('PENDING');
+      expect(row.status.toUpperCase()).toBe('PENDING');
       expect(row.category).toBe('Office');
     }
   });

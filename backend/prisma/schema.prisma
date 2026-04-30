@@ -670,7 +670,7 @@ model Expense {
   status      String   @default("Pending") // Pending, Approved, Rejected, Reimbursed
   receiptUrl  String?
   notes       String?  @db.Text
-  expenseDate DateTime @default(now())
+  expenseDate DateTime? @default(now())
   createdAt   DateTime @default(now())
 
   tenantId Int    @default(1)

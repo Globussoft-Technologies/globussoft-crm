@@ -200,20 +200,20 @@ jobs:
           E2E_SKIP_SCRUB: "1"
         run: |
           set -euo pipefail
-          # Use ci-smoke.spec.js (purpose-built for CI). The older
-          # api-health.spec.js has prod-environment assumptions
-          # (legacy admin/admin bypass that was removed for security)
-          # that make it unsuitable as a CI gate.
-          # Promotion plan: add sms-api / marketing-api / reports-api
-          # / voice-transcription-api / knowledge-base-api / portal-api
-          # one-by-one as each is verified to work against a freshly-
-          # seeded CI database.
+          # Promotion ladder. Each spec gets added once it's been
+          # verified to pass against a freshly-seeded CI database.
+          # Currently in the gate:
+          #   - ci-smoke.spec.js (4 tests: health/login/auth-gate)
+          #   - sms-api.spec.js (44 tests: routes/sms.js full surface)
+          # Next: marketing-api, reports-api, voice-transcription-api,
+          # knowledge-base-api, portal-api (one-by-one).
           npx playwright test \
             --project=chromium \
             --reporter=list \
             --no-deps \
-            tests/ci-smoke.spec.js
-          echo "::notice::CI smoke specs passed"
+            tests/ci-smoke.spec.js \
+            tests/sms-api.spec.js
+          echo "::notice::API specs passed"
 
       - name: Upload artifacts on failure
         if: failure()

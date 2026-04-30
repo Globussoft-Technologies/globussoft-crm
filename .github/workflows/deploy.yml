@@ -4,18 +4,25 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      # Skip deploy when only docs / tests / operator scripts change.
+      # Skip the entire workflow when only docs / operator scripts change.
       # (paths-ignore does NOT support !negation — keep this as a flat list.)
       - "**/*.md"
       - "docs/**"
-      - "e2e/**"
       - "backend/scripts/**"
       - ".gitignore"
       - ".github/workflows/post_comments.yml"
+      # NOTE: e2e/** is intentionally NOT ignored anymore — changes to specs
+      # should trigger the api_tests job so we know the new spec passes
+      # before deploying. The deploy job itself doesn't depend on any e2e
+      # file at runtime; the api_tests job runs them.
   workflow_dispatch:
     inputs:
       skip_frontend:
         description: "Skip frontend build (backend-only deploy)"
+        type: boolean
+        default: false
+      skip_tests:
+        description: "Skip build + api_tests gates (emergency hotfix only)"
         type: boolean
         default: false
 
@@ -26,7 +33,186 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── 1. BUILD: backend syntax-check + frontend vite build ────────────
+  # Catches JSX errors, import typos, missing modules, npm install failures.
+  # No DB, no server boot — pure static validation. ~3 min.
+  build:
+    if: ${{ inputs.skip_tests != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Backend — npm ci + prisma generate + syntax check
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx prisma generate
+          # Parse-check every backend .js — catches the kind of class of
+          # bugs the cleanup-script Python-docstring header had on first
+          # write (lesson from a 2026-04-27 dev cycle).
+          fails=0
+          while IFS= read -r f; do
+            if ! node --check "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::node --check failed"
+              fails=$((fails + 1))
+            fi
+          done < <(find . -path ./node_modules -prune -o -name "*.js" -print)
+          if [ $fails -gt 0 ]; then
+            echo "::error::$fails backend file(s) failed parse-check"
+            exit 1
+          fi
+          echo "::notice::All backend .js files parse cleanly"
+
+      - name: Frontend — npm ci + vite build
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          # Vite build catches JSX / import errors AND ensures the bundle
+          # actually compiles. Output goes to dist/ which we just
+          # discard — the deploy job rebuilds on the server.
+          npx vite build --logLevel=error
+          du -sh dist
+          echo "::notice::Frontend bundle builds cleanly"
+
+  # ── 2. API_TESTS: run our pure-API specs against a CI-local backend ──
+  # Spins up MySQL 8 service container, seeds, boots backend on :5000,
+  # runs the 4 API-only specs (sms / marketing / reports / voice).
+  # Skips UI specs — those need a browser + add 14 min runtime.
+  api_tests:
+    if: ${{ inputs.skip_tests != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          MYSQL_DATABASE: gbscrm_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -pci_root_pw"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+    env:
+      DATABASE_URL: "mysql://root:ci_root_pw@127.0.0.1:3306/gbscrm_ci"
+      JWT_SECRET: "ci_jwt_secret_for_test_runs_only"
+      DISABLE_CRONS: "1"
+      NODE_ENV: "test"
+      PORT: "5000"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: |
+            backend/package-lock.json
+            e2e/package-lock.json
+
+      - name: Wait for MySQL ready
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -uroot -pci_root_pw --silent; then
+              echo "MySQL ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Backend — install + prisma db push + seed
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx prisma generate
+          # Apply schema to the empty CI database. Prisma `db push` is the
+          # right call here (no migrations needed for a fresh CI DB).
+          npx prisma db push --skip-generate --accept-data-loss
+          # Seed the generic + wellness tenants so the API specs have
+          # the demo creds + tenantId=2 they expect.
+          node prisma/seed.js
+          if [ -f prisma/seed-wellness.js ]; then
+            node prisma/seed-wellness.js
+          fi
+          echo "::notice::Database seeded for CI"
+
+      - name: Boot backend on :5000 (DISABLE_CRONS=1)
+        working-directory: backend
+        run: |
+          # Background nohup so the next step can run the e2e suite against it.
+          nohup node server.js > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+          # Poll /api/health until ready (10s budget).
+          for i in $(seq 1 20); do
+            if curl -fs http://127.0.0.1:5000/api/health 2>/dev/null | grep -q "healthy"; then
+              echo "Backend ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Backend failed to reach healthy in 20s"
+          tail -50 /tmp/backend.log
+          exit 1
+
+      - name: E2E install + run API-only specs
+        working-directory: e2e
+        env:
+          BASE_URL: "http://127.0.0.1:5000"
+          E2E_SKIP_SCRUB: "1"
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          # Run the 4 API-only specs (no browser fixtures used).
+          # All 4 use the `request` fixture which doesn't launch a browser,
+          # so we don't need playwright install --with-deps.
+          npx playwright install chromium --with-deps >/dev/null 2>&1 || true
+          npx playwright test \
+            --project=chromium \
+            --reporter=list \
+            --no-deps \
+            tests/api-health.spec.js \
+            tests/sms-api.spec.js \
+            tests/marketing-api.spec.js \
+            tests/reports-api.spec.js \
+            tests/voice-transcription-api.spec.js \
+            tests/knowledge-base-api.spec.js \
+            tests/portal-api.spec.js 2>&1 | tail -40 || {
+              echo "::error::API tests failed"
+              echo "--- backend log tail ---"
+              tail -80 /tmp/backend.log
+              exit 1
+            }
+          echo "::notice::All API specs passed"
+
+      - name: Stop backend
+        if: always()
+        run: |
+          kill $(cat /tmp/backend.pid) 2>/dev/null || true
+
+  # ── 3. DEPLOY: only runs if build + api_tests pass ───────────────────
   deploy:
+    needs: [build, api_tests]
+    # `if: always()` would deploy even on failed gates; `success()` is the
+    # default and what we want. The `inputs.skip_tests == true` branch lets
+    # operators bypass the gates via workflow_dispatch for emergency hotfixes
+    # — needs() is still satisfied because skipped jobs count as success.
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -42,6 +228,7 @@ jobs:
           echo "Commit:  ${{ github.sha }}"
           echo "Pusher:  ${{ github.actor }}"
           printf 'Message: %s\n' "$COMMIT_MSG" | head -3
+          echo "Tests:   build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }}"
 
       # ── Backend deploy ──────────────────────────────────────────────
       # git pull -> npm install -> prisma generate -> pm2 restart -> health.
@@ -187,4 +374,4 @@ jobs:
 
       - name: Deploy summary
         run: |
-          echo "::notice title=Deploy complete::commit ${{ github.sha }} live on https://crm.globusdemos.com"
+          echo "::notice title=Deploy complete::commit ${{ github.sha }} live on https://crm.globusdemos.com (build + api_tests passed)"

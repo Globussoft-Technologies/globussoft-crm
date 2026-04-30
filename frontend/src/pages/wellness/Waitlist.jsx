@@ -20,7 +20,10 @@ export default function Waitlist() {
   const [filter, setFilter] = useState('waiting');
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ patientId: '', serviceId: '', preferredDateRange: '', notes: '' });
+  // #363: estimatedWaitMin is a strict numeric (minutes). Pre-fix the rough
+  // "preferredDateRange" textbox doubled as a wait-time field and accepted
+  // free text like "soon" / "tomorrow", which the cron couldn't bucket.
+  const [form, setForm] = useState({ patientId: '', serviceId: '', preferredDateRange: '', estimatedWaitMin: '', notes: '' });
   const [saving, setSaving] = useState(false);
 
   const load = () => {
@@ -61,13 +64,21 @@ export default function Waitlist() {
           patientId: parseInt(form.patientId),
           serviceId: form.serviceId ? parseInt(form.serviceId) : undefined,
           preferredDateRange: form.preferredDateRange || undefined,
+          // #363: number-only minutes; backend that doesn't know the field
+          // will ignore it harmlessly.
+          estimatedWaitMin: form.estimatedWaitMin === '' ? undefined : parseInt(form.estimatedWaitMin, 10),
           notes: form.notes || undefined,
         }),
       });
       notify.success('Added to waitlist');
       setShowAdd(false);
-      setForm({ patientId: '', serviceId: '', preferredDateRange: '', notes: '' });
+      setForm({ patientId: '', serviceId: '', preferredDateRange: '', estimatedWaitMin: '', notes: '' });
       load();
+      // #362: same root cause as #392 — sidebar / external counters don't
+      // refresh after a fresh POST. Refetching the local list above already
+      // updates this page; this CustomEvent gives any listening shell
+      // (sidebar badge, dashboard tile) a free hook to re-pull its count.
+      window.dispatchEvent(new CustomEvent('waitlist:created'));
     } catch (_err) { /* fetchApi already toasted */ } finally {
       setSaving(false);
     }
@@ -158,6 +169,23 @@ export default function Waitlist() {
           <div>
             <label style={labelStyle}>Preferred dates</label>
             <input type="text" value={form.preferredDateRange} onChange={(e) => setForm({ ...form, preferredDateRange: e.target.value })} placeholder="e.g. asap or 2026-04-25..2026-05-05" style={inputStyle} />
+          </div>
+          {/* #363: wait time was free text — switch to bounded number with explicit unit. */}
+          <div>
+            <label style={labelStyle}>Estimated wait time (minutes)</label>
+            <div style={{ display: 'flex', alignItems: 'stretch', gap: '0.4rem' }}>
+              <input
+                type="number"
+                min="0"
+                max="999"
+                step="1"
+                value={form.estimatedWaitMin}
+                onChange={(e) => setForm({ ...form, estimatedWaitMin: e.target.value })}
+                placeholder="e.g. 45"
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              <span style={{ display: 'flex', alignItems: 'center', padding: '0 0.6rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-secondary)', fontSize: '0.8rem' }}>minutes</span>
+            </div>
           </div>
           <div style={{ gridColumn: '1 / -1' }}>
             <label style={labelStyle}>Notes</label>

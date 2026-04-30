@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { BookOpen, Plus, Edit, Trash2, Eye, FolderTree, Save, X, Globe } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../App';
 
 const EMPTY_ARTICLE = {
   title: '',
@@ -13,6 +14,7 @@ const EMPTY_ARTICLE = {
 
 export default function KnowledgeBase() {
   const notify = useNotify();
+  const { tenant } = useContext(AuthContext);
   const [categories, setCategories] = useState([]);
   const [articles, setArticles] = useState([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState(null);
@@ -153,10 +155,10 @@ export default function KnowledgeBase() {
       <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <BookOpen size={26} color="var(--accent-color)" /> Knowledge Base
+            <BookOpen size={26} color="var(--accent-color)" /> {tenant?.name ? `${tenant.name} Knowledge Base` : 'Knowledge Base'}
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Manage help articles and categories. Published articles are exposed to your customer portal.
+            {totalArticles} {totalArticles === 1 ? 'article' : 'articles'} · Manage help articles and categories. Published articles are exposed to your customer portal.
           </p>
         </div>
         <button onClick={beginNew} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.7rem 1.2rem' }}>
@@ -261,7 +263,7 @@ export default function KnowledgeBase() {
         {/* Right pane: editor or article list */}
         <div className="card" style={{ padding: '1.5rem' }}>
           {editing ? (
-            <form onSubmit={saveArticle} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <form key={editing === 'new' ? 'new' : `edit-${editing.id}`} onSubmit={saveArticle} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   {editing === 'new' ? <><Plus size={18} color="var(--accent-color)" /> New Article</> : <><Edit size={18} color="var(--accent-color)" /> Edit Article</>}
@@ -312,8 +314,8 @@ export default function KnowledgeBase() {
                 <input
                   type="checkbox"
                   id="isPublished"
-                  checked={form.isPublished}
-                  onChange={(e) => setForm({ ...form, isPublished: e.target.checked })}
+                  checked={!!form.isPublished}
+                  onChange={(e) => setForm(prev => ({ ...prev, isPublished: e.target.checked }))}
                 />
                 <label htmlFor="isPublished" style={{ fontSize: '0.875rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
                   Published (visible on customer portal)

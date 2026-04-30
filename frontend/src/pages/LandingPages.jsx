@@ -27,9 +27,18 @@ export default function LandingPages() {
   const handleCreate = async (templateType) => {
     try {
       const tmpl = templates.find(t => t.id === templateType);
+      // #377: Blank template was rendering an empty canvas with no editable
+      // region, leaving users with no way to add sections. Seed a single
+      // empty heading + text placeholder so the editor surfaces a section
+      // the user can immediately edit or replace.
+      const blankSeed = [
+        { id: `seed-${Date.now()}`, type: 'heading', props: { text: 'Your Headline Here', level: 'h1', align: 'center', color: '#1e293b' } },
+        { id: `seed-${Date.now() + 1}`, type: 'text', props: { text: 'Click any block to edit, or pick a component from the left panel to add more.', align: 'center', color: '#64748b', fontSize: '1rem' } },
+      ];
+      const seedContent = tmpl ? JSON.stringify(tmpl.content) : JSON.stringify(blankSeed);
       const page = await fetchApi('/api/landing-pages', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: tmpl?.name || 'Untitled Page', templateType, content: tmpl ? JSON.stringify(tmpl.content) : '[]' })
+        body: JSON.stringify({ title: tmpl?.name || 'Untitled Page', templateType, content: seedContent })
       });
       setShowTemplatePicker(false);
       navigate(`/landing-pages/builder/${page.id}`);

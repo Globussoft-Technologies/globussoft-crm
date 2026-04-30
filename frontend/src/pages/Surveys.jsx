@@ -98,9 +98,14 @@ export default function Surveys() {
     if (!form.name.trim() || !form.question.trim()) return;
     setSubmitting(true);
     try {
+      // #381: explicitly set isActive=true on creation so the survey is
+      // immediately visible to the patient-facing wellness portal preview,
+      // which filters by `isActive`. Without this flag the backend default
+      // applies, but some downstream consumers (portal preview) were missing
+      // surveys created before the default was added.
       await fetchApi('/api/surveys', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, isActive: true }),
       });
       setShowCreate(false);
       setForm({ name: '', type: 'NPS', question: '' });
@@ -233,6 +238,50 @@ export default function Surveys() {
                 <TypeBadge type={selected.type} />
               </div>
             </div>
+          )}
+        </div>
+
+        {/* Response form preview */}
+        <div className="card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+          <h3 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <MessageSquare size={18} color="var(--accent-color)" /> Response Form Preview
+          </h3>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>{selected.question}</p>
+          {selected.type === 'CSAT' ? (
+            <div>
+              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginBottom: '0.5rem' }}>
+                {[1, 2, 3, 4, 5].map(n => (
+                  <button key={n} disabled style={{
+                    width: '48px', height: '48px', borderRadius: '8px',
+                    border: '1px solid var(--border-color)', background: 'var(--surface-color, rgba(255,255,255,0.04))',
+                    color: 'var(--text-primary)', fontSize: '1rem', fontWeight: 600, cursor: 'not-allowed',
+                  }}>{n}</button>
+                ))}
+              </div>
+              {/* #380: anchor labels for the CSAT 1-5 scale */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)', maxWidth: '280px', margin: '0 auto' }}>
+                <span>Very Dissatisfied</span>
+                <span>Very Satisfied</span>
+              </div>
+            </div>
+          ) : selected.type === 'NPS' ? (
+            <div>
+              <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
+                  <button key={n} disabled style={{
+                    width: '40px', height: '40px', borderRadius: '6px',
+                    border: '1px solid var(--border-color)', background: 'var(--surface-color, rgba(255,255,255,0.04))',
+                    color: 'var(--text-primary)', fontSize: '0.875rem', fontWeight: 600, cursor: 'not-allowed',
+                  }}>{n}</button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                <span>Not at all likely</span>
+                <span>Extremely likely</span>
+              </div>
+            </div>
+          ) : (
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>Custom survey — free-form response.</p>
           )}
         </div>
 

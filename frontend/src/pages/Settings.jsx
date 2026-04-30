@@ -4,6 +4,12 @@ import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { ThemeContext, AuthContext } from '../App';
 
+// #391: single source of truth for the default brand color so the color
+// picker swatch, the placeholder hint, and the color actually applied
+// when no brand color is set all match. Mirrors --accent-color in
+// index.css.
+const DEFAULT_BRAND_COLOR = '#3b82f6';
+
 export default function Settings() {
   const notify = useNotify();
   const { theme, toggleTheme } = useContext(ThemeContext);
@@ -133,20 +139,35 @@ export default function Settings() {
     }
   };
 
+  // #390: persist reorder to the backend. Optimistic UI update first, then
+  // PUT /api/pipeline_stages/reorder with the new {id, position} pairs. The
+  // server returns the canonical sorted list which we adopt as ground truth
+  // (so any server-side dedup / clamp wins). On failure we reload to undo
+  // the optimistic swap and notify the user — silent failures previously
+  // looked like "snap back on refresh" because the PUT errored without
+  // surfacing.
   const handleMoveStage = async (index, direction) => {
     const newStages = [...pipelineStages];
     const swapIndex = index + direction;
     if (swapIndex < 0 || swapIndex >= newStages.length) return;
     [newStages[index], newStages[swapIndex]] = [newStages[swapIndex], newStages[index]];
     const reordered = newStages.map((s, i) => ({ id: s.id, position: i }));
-    setPipelineStages(newStages);
+    // Reflect new positions locally so the optimistic UI matches what we
+    // POST (previously items kept their old position values).
+    const optimistic = newStages.map((s, i) => ({ ...s, position: i }));
+    setPipelineStages(optimistic);
     try {
-      await fetchApi('/api/pipeline_stages/reorder', {
+      const updated = await fetchApi('/api/pipeline_stages/reorder', {
         method: 'PUT',
         body: JSON.stringify({ stages: reordered })
       });
-      fetchStages();
+      if (Array.isArray(updated)) {
+        setPipelineStages(updated);
+      } else {
+        fetchStages();
+      }
     } catch (err) {
+      notify.error('Failed to save stage order');
       fetchStages();
     }
   };
@@ -309,14 +330,14 @@ export default function Settings() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
                 <input
                   type="color"
-                  value={/^#[0-9a-fA-F]{6}$/.test(branding.brandColor || '') ? branding.brandColor : '#265855'}
+                  value={/^#[0-9a-fA-F]{6}$/.test(branding.brandColor || '') ? branding.brandColor : DEFAULT_BRAND_COLOR}
                   onChange={(e) => setBranding({ ...branding, brandColor: e.target.value })}
                   style={{ width: 48, height: 40, border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer', padding: 2, background: 'var(--input-bg)' }}
                 />
                 <input
                   type="text"
                   className="input-field"
-                  placeholder="#265855"
+                  placeholder={DEFAULT_BRAND_COLOR}
                   value={branding.brandColor || ''}
                   onChange={(e) => setBranding({ ...branding, brandColor: e.target.value })}
                   style={{ flex: 1 }}

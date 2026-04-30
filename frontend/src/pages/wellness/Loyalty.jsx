@@ -96,9 +96,20 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
 // ── Overview tab ──────────────────────────────────────────────────
 
 function OverviewTab({ leaderboard, referrals, loading }) {
-  const pendingReferrals = referrals.filter((r) => r.status === 'pending').length;
-  const signedUp = referrals.filter((r) => r.status === 'signed_up').length;
-  const rewarded = referrals.filter((r) => r.status === 'rewarded').length;
+  // #379: pipeline cards now expose per-stage count + total reward value so
+  // the manager can see "10 pending · ₹0 reward locked" vs "5 rewarded ·
+  // ₹2,500 paid out" at a glance instead of just bare counts.
+  const stageStats = (status) => {
+    const rows = referrals.filter((r) => r.status === status);
+    const totalValue = rows.reduce((sum, r) => sum + (Number(r.rewardPoints) || 0), 0);
+    return { count: rows.length, totalValue };
+  };
+  const pending = stageStats('pending');
+  const signed = stageStats('signed_up');
+  const rewardedStats = stageStats('rewarded');
+  const pendingReferrals = pending.count;
+  const signedUp = signed.count;
+  const rewarded = rewardedStats.count;
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}>
@@ -128,9 +139,9 @@ function OverviewTab({ leaderboard, referrals, loading }) {
           <Users size={16} /> Referral pipeline
         </h2>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
-          <Stat label="Pending" value={pendingReferrals} color="var(--warning-color)" />
-          <Stat label="Signed up" value={signedUp} color="var(--accent-color)" />
-          <Stat label="Rewarded" value={rewarded} color="var(--success-color)" />
+          <Stat label="Pending" value={pendingReferrals} color="var(--warning-color)" sub={`${pending.count} referrals · ₹${pending.totalValue.toLocaleString('en-IN')} total`} />
+          <Stat label="Signed up" value={signedUp} color="var(--accent-color)" sub={`${signed.count} referrals · ₹${signed.totalValue.toLocaleString('en-IN')} total`} />
+          <Stat label="Rewarded" value={rewarded} color="var(--success-color)" sub={`${rewardedStats.count} referrals · ₹${rewardedStats.totalValue.toLocaleString('en-IN')} total`} />
         </div>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '1rem' }}>
           Switch to <strong>Referrals</strong> tab to manage individual rows.
@@ -140,11 +151,14 @@ function OverviewTab({ leaderboard, referrals, loading }) {
   );
 }
 
-function Stat({ label, value, color }) {
+function Stat({ label, value, color, sub }) {
   return (
     <div style={{ padding: '0.75rem', background: 'rgba(38,88,85,0.04)', borderRadius: 8, textAlign: 'center' }}>
       <div style={{ fontSize: '1.5rem', fontWeight: 700, color }}>{value}</div>
       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: '0.2rem' }}>{label}</div>
+      {sub && (
+        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>{sub}</div>
+      )}
     </div>
   );
 }

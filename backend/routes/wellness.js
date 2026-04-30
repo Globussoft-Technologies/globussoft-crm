@@ -1684,6 +1684,12 @@ router.post("/locations", verifyWellnessRole(["admin", "manager"]), async (req, 
     if (!name || !addressLine || !city) {
       return res.status(400).json({ error: "name, addressLine, city are required" });
     }
+    // #385: enforce Indian PIN code shape — exactly 6 digits when supplied.
+    // Frontend caps at 6 numeric chars; this gate catches API/scripted callers
+    // and any pre-existing bad input that bypassed the new pattern attribute.
+    if (pincode !== undefined && pincode !== null && pincode !== "" && !/^\d{6}$/.test(String(pincode))) {
+      return res.status(400).json({ error: "Pincode must be exactly 6 digits", code: "INVALID_PINCODE" });
+    }
     const loc = await prisma.location.create({
       data: {
         name, addressLine, city,
@@ -1714,6 +1720,11 @@ router.put("/locations/:id", verifyWellnessRole(["admin", "manager"]), async (re
     const data = {};
     const allowed = ["name", "addressLine", "city", "state", "pincode", "country", "phone", "email", "latitude", "longitude", "hours", "isActive"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+
+    // #385: same 6-digit guard on PUT so partial updates can't bypass the rule.
+    if (data.pincode !== undefined && data.pincode !== null && data.pincode !== "" && !/^\d{6}$/.test(String(data.pincode))) {
+      return res.status(400).json({ error: "Pincode must be exactly 6 digits", code: "INVALID_PINCODE" });
+    }
 
     const updated = await prisma.location.update({ where: { id }, data });
     res.json(updated);

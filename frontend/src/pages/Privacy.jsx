@@ -37,12 +37,23 @@ export default function Privacy() {
       const existing = await fetchApi('/api/gdpr/retention-policies');
       const map = {};
       (Array.isArray(existing) ? existing : []).forEach(p => { map[p.entity] = p; });
-      const merged = RETENTION_ENTITIES.map(meta => ({
-        entity: meta.entity,
-        label: meta.label,
-        retainDays: map[meta.entity]?.retainDays ?? meta.defaultDays,
-        isActive: map[meta.entity]?.isActive ?? false,
-      }));
+      // #389: defaults previously rendered blank when the server returned
+      // a row with retainDays === 0 / "" / null. ?? only catches null+undef,
+      // so a zero or empty string leaked through as a blank input. Coerce
+      // to a positive integer and fall back to the canonical default
+      // otherwise.
+      const merged = RETENTION_ENTITIES.map(meta => {
+        const row = map[meta.entity];
+        const raw = row?.retainDays;
+        const days = Number(raw);
+        const retainDays = Number.isFinite(days) && days > 0 ? days : meta.defaultDays;
+        return {
+          entity: meta.entity,
+          label: meta.label,
+          retainDays,
+          isActive: row?.isActive ?? false,
+        };
+      });
       setPolicies(merged);
     } catch (err) {
       console.error(err);
@@ -97,6 +108,10 @@ export default function Privacy() {
       });
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 3000);
+      // #388: explicit toast in addition to the inline "Saved" flash. The
+      // flash is easy to miss on a long page; the toast is the consistent
+      // CRUD-feedback surface used by every other save handler in the app.
+      notify.success('Retention policy saved');
       loadPolicies();
     } catch (err) {
       notify.error('Failed to save policies: ' + err.message);

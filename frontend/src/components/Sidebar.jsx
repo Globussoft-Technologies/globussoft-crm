@@ -1,5 +1,6 @@
-import { useContext, useState, useRef, useLayoutEffect, useEffect } from 'react';
+import { useContext, useState, useRef, useLayoutEffect, useEffect, useCallback } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import {
   Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3,
   Code, FileDigit, Database, Network, Target, CheckSquare, UserPlus, Building2, Receipt, Ticket,
@@ -9,6 +10,7 @@ import {
   PhoneCall, Stethoscope, HeartPulse, Bell, Clock, Loader2,
 } from 'lucide-react';
 import { AuthContext } from '../App';
+import { fetchApi } from '../utils/api';
 import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
 
 const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
@@ -34,6 +36,60 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
+  // #392: Live sidebar counters. Previously counters were stale until
+  // a manual page reload (initial-fetch-on-mount only). Strategy:
+  //   1. One initial fetch on mount populates the badges.
+  //   2. Subscribe to the same socket events the rest of the app uses
+  //      (deal_updated, marketplace_lead_imported, marketplace_lead_new,
+  //      booking_created) and bump the relevant counters locally.
+  //   3. Re-fetch every 60s as a fallback in case a socket event is
+  //      missed (nginx not proxying socket.io, brief disconnects).
+  const [counts, setCounts] = useState({ leads: 0, tasks: 0, tickets: 0, inbox: 0 });
+  const refreshCounts = useCallback(async () => {
+    if (!user) return;
+    const safeLen = (p) => p.then((r) => Array.isArray(r) ? r.length : (r?.total ?? 0)).catch(() => null);
+    const [leads, tasks, tickets, inbox] = await Promise.all([
+      safeLen(fetchApi('/api/contacts?status=Lead')),
+      safeLen(fetchApi('/api/tasks?status=PENDING')),
+      safeLen(fetchApi('/api/tickets?status=OPEN')),
+      safeLen(fetchApi('/api/email?unread=1')),
+    ]);
+    setCounts((prev) => ({
+      leads: leads ?? prev.leads,
+      tasks: tasks ?? prev.tasks,
+      tickets: tickets ?? prev.tickets,
+      inbox: inbox ?? prev.inbox,
+    }));
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    refreshCounts();
+    // 60s safety-net polling — covers cases where the socket can't connect
+    // (nginx without /socket.io proxy) or events are missed during reconnects.
+    const intervalId = setInterval(refreshCounts, 60000);
+
+    // Live socket bumps — using the same single-namespace io('/') pattern as
+    // NotificationBell. Failures are silent so the polling fallback owns
+    // correctness.
+    const socket = io('/', { reconnection: false, timeout: 5000 });
+    socket.on('connect_error', () => {});
+    socket.on('error', () => {});
+    socket.on('marketplace_lead_imported', () => setCounts((c) => ({ ...c, leads: c.leads + 1 })));
+    socket.on('marketplace_lead_new', (p) => setCounts((c) => ({ ...c, leads: c.leads + (p?.count || 1) })));
+    socket.on('email_received', () => setCounts((c) => ({ ...c, inbox: c.inbox + 1 })));
+    socket.on('lead_created', () => setCounts((c) => ({ ...c, leads: c.leads + 1 })));
+    socket.on('task_created', () => setCounts((c) => ({ ...c, tasks: c.tasks + 1 })));
+    socket.on('ticket_created', () => setCounts((c) => ({ ...c, tickets: c.tickets + 1 })));
+    // Generic invalidation event — any module can emit and we re-fetch.
+    socket.on('sidebar_counts_changed', () => refreshCounts());
+
+    return () => {
+      clearInterval(intervalId);
+      socket.disconnect();
+    };
+  }, [user, refreshCounts]);
+
   // #151: persist sidebar scroll across re-renders. The browser usually does this
   // for free, but route-driven re-renders sometimes cause the nav to reset to top
   // (reproducible via items in the lower part of the sidebar). useLayoutEffect
@@ -55,12 +111,15 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
     ? { ...sectionLabel, color: brandColor }
     : sectionLabel;
 
-  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly }) => {
+  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, count }) => {
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
     return (
       <NavLink to={to} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
-        <Icon size={20} /> {label}
+        <Icon size={20} /> <span style={{ flex: 1 }}>{label}</span>
+        {Number.isFinite(count) && count > 0 && (
+          <span style={badgeStyle} aria-label={`${count} items`}>{count > 99 ? '99+' : count}</span>
+        )}
       </NavLink>
     );
   };
@@ -145,7 +204,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
         onScroll={(e) => { scrollRef.current = e.currentTarget.scrollTop; }}
         style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}
       >
-        {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) : renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager })}
+        {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle, counts }) : renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, counts })}
       </nav>
       </aside>
     </>
@@ -154,7 +213,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
 
 // ── Wellness sidebar — slim, clinic-focused ───────────────────────
 
-function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle }) {
+function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle, counts = {} }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   return (
     <>
@@ -180,11 +239,11 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, i
 
       {/* Lead-to-revenue */}
       <div style={labelStyle}>Leads & Revenue</div>
-      <Link to="/inbox" icon={InboxIcon} label="Unified Inbox" />
+      <Link to="/inbox" icon={InboxIcon} label="Unified Inbox" count={counts.inbox} />
       <Link to="/wellness/telecaller" icon={PhoneCall} label="Telecaller Queue" />
-      <Link to="/leads" icon={UserPlus} label="All Leads" managerOnly />
+      <Link to="/leads" icon={UserPlus} label="All Leads" managerOnly count={counts.leads} />
       <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" managerOnly />
-      <Link to="/tasks" icon={CheckSquare} label="Tasks" />
+      <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} />
       <Link to="/marketplace-leads" icon={ShoppingBag} label="Marketplace Leads" managerOnly />
       <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
 
@@ -243,21 +302,21 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, i
 
 // ── Generic sidebar (preserved unchanged) ─────────────────────────
 
-function renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager }) {
+function renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, counts = {} }) {
   return (
     <>
       {/* Core — visible to ALL roles */}
       <Link to="/dashboard" icon={LayoutDashboard} label="Dashboard" />
       <AdsGptLink icon={Sparkles} label="AdsGPT" />
       <ExtLink href={callifiedUrl} icon={PhoneCall} label="Callified" />
-      <Link to="/inbox" icon={InboxIcon} label="Inbox" />
+      <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} />
       <Link to="/contacts" icon={Users} label="Contacts" />
       <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
-      <Link to="/leads" icon={UserPlus} label="Leads" />
+      <Link to="/leads" icon={UserPlus} label="Leads" count={counts.leads} />
       <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" />
       <Link to="/clients" icon={Building2} label="Clients" />
-      <Link to="/tasks" icon={CheckSquare} label="Task Queue" />
-      <Link to="/tickets" icon={Ticket} label="Tickets" />
+      <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} />
+      <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} />
       <Link to="/calendar-sync" icon={Calendar} label="Calendar" />
       <Link to="/live-chat" icon={MessageSquare} label="Live Chat" />
 
@@ -347,6 +406,19 @@ const navStyle = {
   textDecoration: 'none',
   fontSize: '0.9rem',
   flexShrink: 0,
+};
+
+// #392: live counter badge — shown on /leads, /tasks, /tickets, /inbox.
+const badgeStyle = {
+  fontSize: '0.7rem',
+  fontWeight: 700,
+  padding: '0.05rem 0.45rem',
+  borderRadius: '999px',
+  background: 'var(--accent-color, #6366f1)',
+  color: '#fff',
+  minWidth: '20px',
+  textAlign: 'center',
+  lineHeight: 1.4,
 };
 
 export default Sidebar;

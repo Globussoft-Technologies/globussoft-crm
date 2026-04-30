@@ -18,7 +18,10 @@ export default function Patients() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [locations, setLocations] = useState([]);
-  const [form, setForm] = useState({ name: '', phone: '', email: '', gender: '', source: 'walk-in', locationId: '' });
+  // #205: dob added so the form can capture it; gender already exists. Phone
+  // is now required (Indian mobile shape); email is optional but validated
+  // shape-wise when present.
+  const [form, setForm] = useState({ name: '', phone: '', email: '', dob: '', gender: '', source: 'walk-in', locationId: '' });
 
   // #331: search box dropped the first character of a fresh query.
   //
@@ -89,11 +92,16 @@ export default function Patients() {
   // #108: phone may be optional, but if present must look like a real phone number
   // (10–15 digits after stripping +, -, spaces, parens). Pre-fix the form accepted
   // arbitrary text like "abc123notaphone".
+  // #205: phone is now required and must look like an Indian mobile (10-digit
+  // starting 6-9, optional +91 prefix). Existing isValidPhone kept for
+  // legacy callers; #205 uses the stricter check below at submit time.
   const isValidPhone = (p) => {
     if (!p || !p.trim()) return true; // optional
     const digits = p.replace(/\D/g, '');
     return digits.length >= 10 && digits.length <= 15;
   };
+  const INDIAN_MOBILE_RE = /^(\+91)?[6-9]\d{9}$/;
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -105,15 +113,40 @@ export default function Patients() {
       notify.error('Name is required');
       return;
     }
-    if (!isValidPhone(form.phone)) {
-      notify.error('Phone number is invalid. Enter 10–15 digits (formatting characters like +, -, spaces, and parentheses are allowed).');
+    // #205: phone required + Indian mobile shape. Strip spaces / dashes /
+    // parens before testing so common formatting (+91 98765-43210) passes.
+    const phoneRaw = (form.phone || '').trim();
+    const phoneClean = phoneRaw.replace(/[\s\-()]/g, '');
+    if (!phoneClean) {
+      notify.error('Phone is required');
       return;
     }
+    if (!INDIAN_MOBILE_RE.test(phoneClean)) {
+      notify.error('Enter a valid Indian mobile number (10 digits, starting 6-9; +91 prefix optional).');
+      return;
+    }
+    // #205: email optional, but if filled must look like an email.
+    const emailRaw = (form.email || '').trim();
+    if (emailRaw && !EMAIL_RE.test(emailRaw)) {
+      notify.error('Enter a valid email address (e.g. patient@example.com).');
+      return;
+    }
+    // #205: DOB is optional. Don't reject — just nudge once before save.
+    if (!form.dob) {
+      notify.info('Tip: adding a date of birth helps with age-based recommendations.');
+    }
     try {
-      const payload = { ...form, name: trimmedName, locationId: form.locationId ? parseInt(form.locationId) : null };
+      const payload = {
+        ...form,
+        name: trimmedName,
+        phone: phoneClean,
+        email: emailRaw || null,
+        dob: form.dob || null,
+        locationId: form.locationId ? parseInt(form.locationId) : null,
+      };
       await fetchApi('/api/wellness/patients', { method: 'POST', body: JSON.stringify(payload) });
       notify.success(`Patient "${trimmedName}" added`);
-      setForm({ name: '', phone: '', email: '', gender: '', source: 'walk-in', locationId: locations[0]?.id || '' });
+      setForm({ name: '', phone: '', email: '', dob: '', gender: '', source: 'walk-in', locationId: locations[0]?.id || '' });
       setShowAdd(false);
       // #331: bump reloadTick instead of calling load() directly so the
       // debounced effect handles the refresh consistently and reads the
@@ -142,10 +175,15 @@ export default function Patients() {
       {showAdd && (
         <form onSubmit={handleCreate} className="glass" style={{ padding: '1rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', alignItems: 'end' }}>
           <input placeholder="Name *" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
-          <input placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
+          {/* #205: phone required (Indian mobile). Add inputMode + pattern so
+              mobile keyboards default numeric and HTML5 native validation
+              catches the obvious cases. JS-side check still runs on submit. */}
+          <input placeholder="Phone *" required type="tel" inputMode="tel" pattern="(\+91)?[6-9]\d{9}" title="Indian mobile: 10 digits, starting 6-9, optional +91 prefix" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
           <input placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={inputStyle} />
+          {/* #205: DOB optional. Type=date so the browser shows a real picker. */}
+          <input placeholder="Date of birth" type="date" value={form.dob} onChange={(e) => setForm({ ...form, dob: e.target.value })} style={inputStyle} />
           <select value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })} style={inputStyle}>
-            <option value="">Gender</option>
+            <option value="">Gender (optional)</option>
             <option value="M">Male</option>
             <option value="F">Female</option>
             <option value="Other">Other</option>

@@ -133,9 +133,12 @@ export default function Sequences() {
     try {
       if (activeSeqId) {
         // Update existing
+        // #374: don't ship isActive:true on plain saves — that would silently
+        // activate a paused/draft sequence on every "Save". Activation is
+        // owned by the explicit Active toggle in the step-list builder.
         await fetchApi(`/api/sequences/${activeSeqId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ name, nodes, edges, isActive: true })
+          body: JSON.stringify({ name, nodes, edges })
         });
       } else {
         const created = await fetchApi('/api/sequences', {

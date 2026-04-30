@@ -31,12 +31,29 @@ export default function LandingPageBuilder() {
     }).catch(() => {});
   }, [id]);
 
+  // #378: normalize slug input — lowercase, replace any non [a-z0-9-] with '-',
+  // collapse repeats, and truncate to 50 chars. Applied on every keystroke so
+  // users can't enter spaces, uppercase, or special characters.
+  const normalizeSlug = (s) =>
+    String(s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 50);
+
   const handleSave = async () => {
+    // #378: defensive client-side validation before PUT.
+    if (page.slug !== undefined && page.slug !== '' && !/^[a-z0-9-]+$/.test(page.slug)) {
+      notify.error('Slug must contain only lowercase letters, numbers, and hyphens.');
+      return;
+    }
     setSaving(true);
     try {
+      const payload = { title: page.title, content: JSON.stringify(components) };
+      if (page.slug) payload.slug = page.slug;
       await fetchApi(`/api/landing-pages/${id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: page.title, content: JSON.stringify(components) })
+        body: JSON.stringify(payload)
       });
     } catch { notify.error('Save failed'); }
     setSaving(false);
@@ -73,6 +90,17 @@ export default function LandingPageBuilder() {
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.75rem 1.5rem', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
         <Link to="/landing-pages" style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>
         <input className="input-field" value={page.title} onChange={e => setPage({ ...page, title: e.target.value })} style={{ fontWeight: '600', fontSize: '1rem', padding: '0.375rem 0.75rem', width: '250px' }} />
+        {/* #378: slug input with HTML pattern + onChange normalization */}
+        <input
+          className="input-field"
+          value={page.slug || ''}
+          onChange={e => setPage({ ...page, slug: normalizeSlug(e.target.value) })}
+          placeholder="slug"
+          title="Lowercase letters, numbers, and hyphens only (max 50 chars)"
+          pattern="[a-z0-9-]+"
+          maxLength={50}
+          style={{ fontSize: '0.85rem', padding: '0.375rem 0.75rem', width: '180px', color: 'var(--text-secondary)' }}
+        />
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--subtle-bg)', borderRadius: '6px', padding: '0.2rem' }}>
           <button onClick={() => setPreviewMode('desktop')} style={{ padding: '0.3rem 0.6rem', borderRadius: '4px', border: 'none', cursor: 'pointer', background: previewMode === 'desktop' ? 'var(--accent-color)' : 'transparent', color: previewMode === 'desktop' ? '#fff' : 'var(--text-secondary)' }}><Monitor size={14} /></button>

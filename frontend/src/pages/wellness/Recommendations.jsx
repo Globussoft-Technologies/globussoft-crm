@@ -16,6 +16,10 @@ export default function Recommendations() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('pending');
+  // #359: keep an "all" copy so per-sub-tab counters add up to the total.
+  // The list endpoint applies its own filter when status≠'all', so a separate
+  // status='all' fetch is the source of truth for the counters at the top.
+  const [allItems, setAllItems] = useState([]);
 
   const load = () => {
     setLoading(true);
@@ -23,9 +27,26 @@ export default function Recommendations() {
       .then(setItems)
       .catch(() => setItems([]))
       .finally(() => setLoading(false));
+    // Always re-pull the unfiltered set so the chip counts reflect the
+    // post-action state after approve/reject.
+    fetchApi(`/api/wellness/recommendations?status=all`)
+      .then((rows) => setAllItems(Array.isArray(rows) ? rows : []))
+      .catch(() => { /* non-fatal — counters degrade to current page only */ });
   };
 
   useEffect(() => { load(); }, [filter]);
+
+  // #359: align the count math with the backend's status string. Backend
+  // emits lowercase ('pending' / 'approved' / 'rejected') but defensive
+  // toLowerCase() guards against any mixed-case rows leaking in. With this,
+  // pending+approved+rejected always sums to allItems.length.
+  const statusCount = (s) => allItems.filter((r) => (r.status || '').toLowerCase() === s).length;
+  const COUNTS = {
+    pending: statusCount('pending'),
+    approved: statusCount('approved'),
+    rejected: statusCount('rejected'),
+    all: allItems.length,
+  };
 
   const handleAction = async (id, action) => {
     // #129: confirm before reject — recommendations feed campaign-spend decisions,
@@ -77,7 +98,9 @@ export default function Recommendations() {
               border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', borderRadius: 8, textTransform: 'capitalize',
             }}
           >
-            {f}
+            {/* #359: surface the per-stage count next to each chip so the
+                operator can verify pending + approved + rejected = all. */}
+            {f} <span style={{ opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>({COUNTS[f] ?? 0})</span>
           </button>
         ))}
       </div>
@@ -87,7 +110,13 @@ export default function Recommendations() {
       {!loading && items.length === 0 && (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <AlertCircle size={24} style={{ marginBottom: '0.5rem' }} />
-          <div>No {filter === 'all' ? '' : filter} recommendations.</div>
+          {/* #360: empty stages used to render a blank panel — now they
+              tell the operator why the queue is empty (orchestrator runs
+              once a day at 7 AM IST, so a fresh-rejected list will stay
+              empty until the next batch). */}
+          <div>
+            No recommendations in this stage yet — the orchestrator runs at 7 AM IST daily.
+          </div>
         </div>
       )}
 

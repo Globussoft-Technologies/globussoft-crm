@@ -70,13 +70,19 @@ router.post("/", verifyToken, async (req, res) => {
       });
     }
 
+    // #374: newly-created drips must land as DRAFT (isActive=false) so the
+    // engine doesn't begin firing emails the second the owner clicks Save.
+    // The owner explicitly toggles Active from the builder once the flow is
+    // verified. Honour an explicit { isActive: true } only when the caller
+    // sends it (e.g. a future "save & activate" button).
+    const { isActive } = req.body;
     const seq = await prisma.sequence.create({
       data: {
         name: cleanName,
         // #398: scrub HTML out of any node labels before persisting.
         nodes: JSON.stringify(sanitizeNodes(nodes)),
         edges: JSON.stringify(Array.isArray(edges) ? edges : []),
-        isActive: true,
+        isActive: isActive === true ? true : false,
         tenantId: req.user.tenantId,
       }
     });
@@ -320,6 +326,19 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
       return res.status(400).json({ error: `kind must be one of ${ALLOWED_KINDS.join(", ")}` });
     }
 
+    // #375: reject non-numeric delayMinutes server-side. The frontend already
+    // forces type="number", but anyone POSTing directly (curl / partner API)
+    // could ship "tomorrow" / "a bit later" and stall the engine on NaN.
+    if (delayMinutes !== undefined && delayMinutes !== null && delayMinutes !== "") {
+      const dmRaw = String(delayMinutes).trim();
+      if (!/^\d+$/.test(dmRaw)) {
+        return res.status(400).json({
+          error: "delayMinutes must be a non-negative integer",
+          code: "INVALID_DELAY",
+        });
+      }
+    }
+
     // Determine target position.
     const last = await prisma.sequenceStep.findFirst({
       where: { sequenceId: seq.id },
@@ -384,6 +403,17 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
 
     if (kind != null && !ALLOWED_KINDS.includes(kind)) {
       return res.status(400).json({ error: `kind must be one of ${ALLOWED_KINDS.join(", ")}` });
+    }
+
+    // #375: same numeric guard on update — must reject "tomorrow" etc.
+    if (delayMinutes !== undefined && delayMinutes !== null && delayMinutes !== "") {
+      const dmRaw = String(delayMinutes).trim();
+      if (!/^\d+$/.test(dmRaw)) {
+        return res.status(400).json({
+          error: "delayMinutes must be a non-negative integer",
+          code: "INVALID_DELAY",
+        });
+      }
     }
 
     const updated = await prisma.sequenceStep.update({

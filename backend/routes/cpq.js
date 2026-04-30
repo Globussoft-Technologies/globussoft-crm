@@ -50,13 +50,18 @@ router.post("/quotes", verifyToken, async (req, res) => {
     let computedMrr = 0;
 
     const linesToInject = lineItems.map(item => {
-      const lineCost = item.quantity * item.unitPrice;
+      // Normalize numeric inputs BEFORE computing line totals — otherwise
+      // missing quantity → undefined * unitPrice → NaN, which Prisma rejects
+      // on the Float column and surfaces as a generic 500.
+      const qty = parseInt(item.quantity) || 1;
+      const price = parseFloat(item.unitPrice) || 0;
+      const lineCost = qty * price;
       if (item.isRecurring) computedMrr += lineCost;
       else computedTotal += lineCost;
 
       return {
-        quantity: parseInt(item.quantity) || 1,
-        unitPrice: parseFloat(item.unitPrice),
+        quantity: qty,
+        unitPrice: price,
         productName: item.productName,
         isRecurring: Boolean(item.isRecurring),
         productId: item.productId ? parseInt(item.productId) : null

@@ -218,9 +218,10 @@ jobs:
           #   - cpq-api.spec.js              (26 tests: routes/cpq.js)
           #   - tasks-api.spec.js            (53 tests: routes/tasks.js)
           #   - estimates-api.spec.js        (58 tests: routes/estimates.js)
-          # Total: 578 API tests run on every push.
+          #   - push-api.spec.js             (33 tests: routes/push.js)
+          # Total: 611 API tests run on every push.
           # Next candidate specs (under-covered list): voice-transcription-api,
-          # knowledge-base-api, portal-api, push-api, communications-api,
+          # knowledge-base-api, portal-api, communications-api,
           # lib/notificationService.js.
           npx playwright test \
             --project=chromium \
@@ -240,7 +241,8 @@ jobs:
             tests/custom-objects-api.spec.js \
             tests/cpq-api.spec.js \
             tests/tasks-api.spec.js \
-            tests/estimates-api.spec.js
+            tests/estimates-api.spec.js \
+            tests/push-api.spec.js
           echo "::notice::API specs passed"
 
       - name: Upload artifacts on failure

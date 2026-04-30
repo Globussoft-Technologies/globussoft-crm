@@ -71,5 +71,9 @@ e2e/fetch_fathom.js
 # Local coverage snapshot dump (downloaded artifact for backend/scripts/coverage-analysis.js)
 backend/coverage-snapshot/
 
+# Local vitest / c8 coverage output
+backend/coverage/
+backend/.c8tmp/
+
 .env
 .env.docker

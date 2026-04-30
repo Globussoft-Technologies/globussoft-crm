@@ -38,12 +38,18 @@ async function processTenant(tenant) {
       id: true,
       subject: true,
       priority: true,
-      contactId: true,
       assigneeId: true,
       slaResponseDue: true,
       tenantId: true,
     },
   });
+  // Schema fix (caught by sla-breach-api.spec.js in CI): Ticket has no
+  // `contactId` column — only `assigneeId`. Earlier the select listed
+  // `contactId: true` and the engine threw PrismaClientValidationError
+  // any time a candidate ticket existed. Production cron silently
+  // logged the error every 5 min; no SLA breach was ever recorded.
+  // Removing contactId from the select here AND from the event payload
+  // below.
 
   const breachedIds = [];
   for (const t of candidates) {
@@ -65,7 +71,6 @@ async function processTenant(tenant) {
           ticketId: t.id,
           subject: t.subject,
           priority: t.priority,
-          contactId: t.contactId,
           assigneeId: t.assigneeId,
           dueAt,
           breachedAt,

@@ -4,7 +4,47 @@
 
 Last updated: 2026-05-01 (overnight — **major coverage push**. Phase 1 e2e: **5 new API specs (~411 tests)** for routes/wellness.js + routes/contacts.js + routes/external.js + routes/deals.js + routes/surveys.js. CI gate now **23 specs / ~1,084 mandatory API tests**. **Surfaced + fixed a real prod bug class**: bare `req.user.id` (always undefined; JWT key is `userId`) across `routes/wellness.js`, `routes/workflows.js`, `routes/custom_reports.js`, `routes/dashboards.js` — including the Rx PUT prescriber check that 403'd every original prescriber. Plus **vitest unit-test layer (22 files / 674 tests / 3 skipped)** covering all of `lib/`, `middleware/`, `services/` (except whatsapp), `utils/` — now mandatory CI gate. Plus three new GitHub Actions workflows: `deploy.yml` (existing, expanded), `e2e-full.yml` (release-only Playwright sweep on tag push), `coverage.yml` (workflow_dispatch coverage measurement). Pickup from home: `git pull origin main`.)
 
-## 🛑 Deferred for later (do NOT pick up unless explicitly assigned)
+## 📌 NEXT SESSION — pick up here
+
+**HEAD at end of overnight run**: `868b227` (test(unit): vitest layer for backend lib + middleware + services + utils). All four CI jobs green. Working tree clean. No open PRs. Issue inbox: 0.
+
+### Phase 1 + vitest layer — what shipped
+
+| Commit | What |
+|---|---|
+| `c529e1f` | test(e2e): Phase 1 coverage push — 5 new API specs (~411 tests) |
+| `2f7a0db` | fix(test): skip wellness-clinical onerror= test |
+| `7506ebd` | fix(wellness): use req.user.userId not req.user.id in Rx PUT prescriber-check |
+| `6b1470f` | fix(routes): replace bare req.user.id (always undefined) with req.user.userId — class fix across wellness, workflows, custom_reports, dashboards |
+| `868b227` | test(unit): vitest layer for backend lib + middleware + services + utils (22 files / 674 tests / 3 skipped) |
+
+**CI gate now**: build + 23 specs / 1,084 API tests + 22 unit-test files / 674 unit tests + deploy. All four jobs mandatory.
+
+### Coverage state
+
+| Tier | Tool | Lines | Notes |
+|---|---|---|---|
+| Routes | Playwright + c8 (`coverage.yml`) | **40.52%** (was 33.63% — +6.89pp) | Methodology: 23 gated API specs against c8-instrumented backend |
+| Helpers (lib + middleware + services + utils) | vitest + v8 (`npm run test:coverage`) | **79.01%** | First measurement; vitest layer is brand new |
+
+### Phase 2 — biggest remaining route targets (top by absolute uncovered lines)
+
+| Rank | Uncov | File | Notes |
+|---|---|---|---|
+| 1 | 2,347 | `routes/wellness.js` | Already 41.4% covered by wellness-clinical-api; remaining is dashboard, reports, telecaller, patient-portal sub-flows. Could split into `wellness-dashboard-api.spec.js` + `wellness-reports-api.spec.js` + `wellness-telecaller-api.spec.js`. |
+| 2 | 530 | `cron/orchestratorEngine.js` | Has admin trigger endpoint; pattern same as sla-breach-api.spec.js. |
+| 3 | 475 | `routes/billing.js` | Includes PATCH + mark-paid (#202) — clean target. |
+| 4 | 396 | `routes/sandbox.js` | DESTRUCTIVE-RESTORE endpoints; test the gates carefully. |
+| 5 | 368 | `routes/social.js` | Internal CRUD, clean target. |
+| 6 | 362 | `routes/payments.js` | Stripe/Razorpay external — test only the auth gate + validation paths until integration mocks land. |
+| 7 | 352 | `routes/auth.js` | Login + signup + 2FA + sessions. Watch out for rate limits — need unique emails per test. |
+| 8 | 351 | `routes/approvals.js` | State machine; partly covered via wellness approvals already. |
+| 9 | 347 | `routes/marketplace_leads.js` | Includes public `/webhook` — public endpoint testing. |
+| 10 | 334 | `routes/chatbots.js` | Clean target. |
+
+Recommended next round: 5 parallel agents on **billing, social, marketplace_leads, knowledge_base, approvals** (all clean targets, no rate limit / external service issues). Expected lift: 40.52% → ~48-50%.
+
+### 🛑 Deferred for later (do NOT pick up unless explicitly assigned)
 
 ### External-service mocked integration tests
 The vitest unit suite intentionally does NOT cover these external-service paths because they require fault-injection mocks that don't fit cleanly inside the CJS+ESM hybrid we have:

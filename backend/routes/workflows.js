@@ -294,7 +294,7 @@ router.post("/:id/test", async (req, res) => {
 
     // Build mock payload from request body or generate defaults
     const mockPayload = req.body.payload || {
-      userId: req.user.id,
+      userId: req.user.userId,
       tenantId: req.user.tenantId,
       contactId: req.body.contactId || null,
       dealId: req.body.dealId || null,

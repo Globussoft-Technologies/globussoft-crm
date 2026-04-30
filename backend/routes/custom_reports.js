@@ -164,7 +164,7 @@ router.post("/", async (req, res) => {
         name,
         description: description || null,
         config: JSON.stringify(config),
-        userId: req.user.id || null,
+        userId: req.user.userId || null,
         tenantId: req.user.tenantId,
       },
     });

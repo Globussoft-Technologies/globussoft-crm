@@ -72,7 +72,7 @@ router.post('/', async (req, res) => {
       data: {
         name,
         layout: JSON.stringify(Array.isArray(layout) ? layout : []),
-        userId: req.user.id || null,
+        userId: req.user.userId || null,
         tenantId: req.user.tenantId,
       },
     });

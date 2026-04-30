@@ -1094,7 +1094,7 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
       data: {
         visitId: parseInt(visitId),
         patientId: parseInt(patientId),
-        doctorId: doctorId ? parseInt(doctorId) : req.user.id,
+        doctorId: doctorId ? parseInt(doctorId) : req.user.userId,
         drugs: JSON.stringify(namedDrugs),
         instructions,
         tenantId: req.user.tenantId,
@@ -1601,7 +1601,7 @@ router.post("/recommendations/:id/approve", verifyWellnessRole(["admin", "manage
     // the SMS blast twice or create duplicate Tasks).
     const flip = await prisma.agentRecommendation.updateMany({
       where: { id, tenantId: req.user.tenantId, status: "pending" },
-      data: { status: "approved", resolvedById: req.user.id, resolvedAt: new Date() },
+      data: { status: "approved", resolvedById: req.user.userId, resolvedAt: new Date() },
     });
     const current = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
 
@@ -1615,7 +1615,7 @@ router.post("/recommendations/:id/approve", verifyWellnessRole(["admin", "manage
 
     // We won the race — safe to dispatch the approved action
     let actionResult = null;
-    try { actionResult = await executeApproved(current, { actorUserId: req.user.id }); }
+    try { actionResult = await executeApproved(current, { actorUserId: req.user.userId }); }
     catch (e) { console.error("[orchestrator] dispatch failed:", e.message); }
     // #179: audit recommendation approval. We log only AFTER the race-safe
     // flip so a re-approve attempt (count=0 above) does NOT generate a row.
@@ -1724,7 +1724,7 @@ router.post("/recommendations/:id/reject", verifyWellnessRole(["admin", "manager
     // Race-safe transition mirroring the /approve handler.
     const flip = await prisma.agentRecommendation.updateMany({
       where: { id, tenantId: req.user.tenantId, status: { in: ["pending", "snoozed"] } },
-      data: { status: "rejected", resolvedById: req.user.id, resolvedAt: new Date() },
+      data: { status: "rejected", resolvedById: req.user.userId, resolvedAt: new Date() },
     });
     const current = await prisma.agentRecommendation.findFirst({ where: tenantWhere(req, { id }) });
     if (flip.count === 0) {
@@ -2952,7 +2952,7 @@ router.get("/telecaller/queue", verifyWellnessRole(["telecaller", "admin", "mana
   try {
     const leads = await prisma.contact.findMany({
       where: tenantWhere(req, {
-        assignedToId: req.user.id,
+        assignedToId: req.user.userId,
         status: "Lead",
       }),
       orderBy: { createdAt: "asc" },
@@ -2998,7 +2998,7 @@ router.post("/telecaller/dispose", verifyWellnessRole(["telecaller", "admin", "m
         description,
         contactId: contact.id,
         tenantId: req.user.tenantId,
-        userId: req.user.id,
+        userId: req.user.userId,
       },
     });
 

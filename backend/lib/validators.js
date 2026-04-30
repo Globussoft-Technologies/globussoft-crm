@@ -204,6 +204,71 @@ function conflictFromPrisma(e) {
   return null;
 }
 
+// #165: turn Prisma validation-class errors and our own thrown validation
+// errors into clean 400 responses. Pre-fix the catch-blocks in routes mapped
+// every Prisma exception to a generic 500 + "Failed to create X", which
+// (a) hid the real validation message from the UI and (b) lit up Sentry's
+// 500 channel with what are actually 4xx user errors.
+//
+// Returns null when the error is genuinely unexpected (DB down, OOM, code
+// bug) — those should still propagate as 500.
+//
+// Covered Prisma codes:
+//   P2000 — value too long for column
+//   P2003 — foreign-key constraint failed
+//   P2005 — invalid value for field type
+//   P2006 — provided value not valid
+//   P2007 — data validation error
+//   P2011 — null constraint violation
+//   P2012 — missing required value
+//   P2013 — missing required argument
+//   P2019 — input error
+//   P2020 — value out of range for type
+//   P2025 — record to update/delete not found  (treat as 404)
+// Plus PrismaClientValidationError (which sets `name`, not `code`).
+function httpFromPrismaError(e) {
+  if (!e) return null;
+  // Re-use the unique-constraint handler so callers only need one helper.
+  const conflict = conflictFromPrisma(e);
+  if (conflict) return conflict;
+
+  // Our own helper-style errors get propagated through unchanged. Helpers
+  // return objects shaped {status, error, code} — if a route happens to
+  // throw one (uncommon but legal), surface it directly.
+  if (typeof e === "object" && e.status && e.code && typeof e.error === "string") {
+    return e;
+  }
+
+  if (e.code === "P2025") {
+    return {
+      status: 404,
+      error: e.meta?.cause || "Record not found",
+      code: "NOT_FOUND",
+    };
+  }
+  const validationCodes = new Set([
+    "P2000", "P2003", "P2005", "P2006", "P2007",
+    "P2011", "P2012", "P2013", "P2019", "P2020",
+  ]);
+  if (validationCodes.has(e.code)) {
+    return {
+      status: 400,
+      error: e.message ? String(e.message).split("\n").pop().trim() : "Invalid input",
+      code: "INVALID_INPUT",
+      prismaCode: e.code,
+    };
+  }
+  // Prisma's validation wrapper (bad shape, wrong type) sets `name` only.
+  if (e.name === "PrismaClientValidationError") {
+    return {
+      status: 400,
+      error: "Invalid input shape for this resource",
+      code: "INVALID_INPUT",
+    };
+  }
+  return null;
+}
+
 module.exports = {
   EMAIL_RE,
   ensurePhone,
@@ -216,6 +281,7 @@ module.exports = {
   ensureStringLength,
   ensureEmailList,
   conflictFromPrisma,
+  httpFromPrismaError,
   isValidEmailOrEmpty,
   isValidPhoneOrEmpty,
 };

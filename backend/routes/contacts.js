@@ -3,7 +3,7 @@ const { verifyToken, verifyRole } = require('../middleware/auth');
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
-const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, conflictFromPrisma } = require("../lib/validators");
+const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, conflictFromPrisma, httpFromPrismaError } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const { normalizePhone } = require("../utils/deduplication");
@@ -106,8 +106,11 @@ router.post('/', async (req, res) => {
     res.status(201).json(contact);
   } catch (err) {
     // #178: duplicate email should be 409 Conflict, not 500.
-    const conflict = conflictFromPrisma(err);
-    if (conflict) return res.status(conflict.status).json(conflict);
+    // #165: validation-class Prisma errors (string-too-long, FK miss, …) are
+    //       4xx, not 5xx. Only genuine surprises fall through to 500.
+    const mapped = httpFromPrismaError(err);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    console.error('[contacts] create error:', err && err.message);
     res.status(500).json({ error: 'Failed to create contact' });
   }
 });
@@ -268,8 +271,13 @@ router.put('/:id', async (req, res) => {
 
     res.json(contact);
   } catch (err) {
-    const conflict = conflictFromPrisma(err);
-    if (conflict) return res.status(conflict.status).json(conflict);
+    // #168 #165: PUT used to leak 500s on bad email / out-of-range values
+    // because the Prisma validation error fell through unhandled. Map the
+    // full validation-class set to 400 + INVALID_INPUT so the UI shows the
+    // real reason instead of "Failed to update contact".
+    const mapped = httpFromPrismaError(err);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    console.error('[contacts] update error:', err && err.message);
     res.status(500).json({ error: 'Failed to update contact' });
   }
 });

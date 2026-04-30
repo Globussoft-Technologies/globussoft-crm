@@ -445,28 +445,43 @@ function isValidPhoneOrEmpty(p) {
   return digits.length >= 10 && digits.length <= 15;
 }
 
-const { ensureEmail, ensureDob, ensureVisitDate, ensureEnum, ensureStringLength } = require("../lib/validators");
+const { ensureEmail, ensureDob, ensureVisitDate, ensureEnum, ensureStringLength, httpFromPrismaError } = require("../lib/validators");
 const sanitizeHtml = require("sanitize-html");
 
-// #213: defence-in-depth XSS scrub for free-text patient fields. The legacy
-// regex below ("/[<>]|onerror=|javascript:/i") rejected `<script>` and any
-// angle-bracket payload in `name` but it was a name-only check — `notes` was
-// stored verbatim, so `<img src=x onerror=alert(1)>` was happily persisted
-// and could surface anywhere we render notes outside React's auto-escape
-// (PDF receipts, CSV exports, SMS, the patient portal). sanitize-html with
-// no allowed tags/attributes strips ALL HTML markup while preserving the
-// inner text so a typo like "5 < 6 mg" still saves cleanly as "5  6 mg".
+// #213 / #187: defence-in-depth XSS scrub for free-text patient fields.
+// Strips ALL HTML markup (no whitelist) while preserving the inner text so
+// "5 < 6 mg" saves cleanly as "5  6 mg".
+//
+// #187 fix: sanitize-html's default text filter HTML-encodes `&` → `&amp;`
+// when serialising back, which corrupted ordinary input ("A & B" stored as
+// "A &amp; B" and then displayed literally everywhere we render outside
+// React's auto-escape — PDFs, SMS, patient portal). Storage is raw text;
+// entity encoding is a render-time concern handled by React. Override the
+// text filter to decode the four entities the library re-encodes so the
+// stored value matches what the user typed (minus the stripped tags).
+const ENTITY_DECODE_RE = /&(amp|lt|gt|quot|#x27|#39);/g;
+const ENTITY_DECODE_MAP = {
+  "amp": "&",
+  "lt": "<",
+  "gt": ">",
+  "quot": '"',
+  "#x27": "'",
+  "#39": "'",
+};
+function decodeBasicEntities(text) {
+  return text.replace(ENTITY_DECODE_RE, (_, e) => ENTITY_DECODE_MAP[e] || _);
+}
 function scrubPlainText(value) {
   if (value == null) return value;
   if (typeof value !== "string") return value;
   // allowedTags=[] + allowedAttributes={} + disallowedTagsMode='discard' →
-  // entire tag is dropped (text content kept). This catches every HTML
-  // payload class (<script>, <img onerror>, <svg onload>, <iframe>, …)
-  // not just the angle-bracket-shaped ones the old regex covered.
+  // entire tag is dropped (text content kept). textFilter undoes the
+  // library's default `&` → `&amp;` encoding so storage stays raw.
   return sanitizeHtml(value, {
     allowedTags: [],
     allowedAttributes: {},
     disallowedTagsMode: "discard",
+    textFilter: (text) => decodeBasicEntities(text),
   });
 }
 
@@ -591,6 +606,10 @@ router.post("/patients", async (req, res) => {
     res.status(201).json(patient);
   } catch (e) {
     console.error("[wellness] create patient error:", e.message);
+    // #165: ultra-long names / FK misses / decimal overflow now return 400
+    // with the actual reason instead of "Failed to create patient" 500s.
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to create patient" });
   }
 });
@@ -627,6 +646,9 @@ router.put("/patients/:id", async (req, res) => {
     res.json(updated);
   } catch (e) {
     console.error("[wellness] update patient error:", e.message);
+    // #168 #165: same validation-error → 400 mapping as create.
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update patient" });
   }
 });
@@ -823,6 +845,9 @@ router.post("/visits", async (req, res) => {
     res.status(201).json(visit);
   } catch (e) {
     console.error("[wellness] create visit error:", e.message);
+    // #165: bad FK / overflow / null-on-required → 400 with the real reason.
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to create visit" });
   }
 });
@@ -898,6 +923,9 @@ router.put("/visits/:id", async (req, res) => {
     res.json(updated);
   } catch (e) {
     console.error("[wellness] update visit error:", e.message);
+    // #168 #165: same as POST.
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update visit" });
   }
 });
@@ -1347,6 +1375,9 @@ router.post("/services", verifyWellnessRole(["admin", "manager"]), async (req, r
     res.status(201).json(svc);
   } catch (e) {
     console.error("[wellness] create service error:", e.message);
+    // #165: bad service input now surfaces as 400 with the real reason.
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to create service" });
   }
 });
@@ -1394,6 +1425,9 @@ router.put("/services/:id", verifyWellnessRole(["admin", "manager"]), async (req
     res.json(updated);
   } catch (e) {
     console.error("[wellness] update service error:", e.message);
+    // #168 #165: same mapping as create.
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update service" });
   }
 });

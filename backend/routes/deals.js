@@ -137,7 +137,7 @@ router.get("/:id", async (req, res) => {
 // values seeded in pipeline_stages + already used in code: lead, contacted,
 // proposal, negotiation, won, lost. Lowercase matches existing seed data.
 const ALLOWED_DEAL_STAGES = new Set(["lead", "contacted", "proposal", "negotiation", "won", "lost"]);
-const { ensureNumberInRange, ensureEnum } = require("../lib/validators");
+const { ensureNumberInRange, ensureEnum, httpFromPrismaError } = require("../lib/validators");
 
 function validateDealInput(body, { isUpdate = false } = {}) {
   if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
@@ -206,6 +206,9 @@ router.post("/", async (req, res) => {
     res.status(201).json(deal);
   } catch (error) {
     console.error("[deals] create error:", error.message);
+    // #165: surface Prisma validation errors as 400, not 500.
+    const mapped = httpFromPrismaError(error);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to create deal" });
   }
 });
@@ -289,6 +292,10 @@ router.put("/:id", async (req, res) => {
     res.json(deal);
   } catch (error) {
     console.error("[deals] update error:", error.message);
+    // #168 #165: bad amount / probability that slipped past the validator
+    // (e.g. a Prisma decimal-overflow) returns 400, not 500.
+    const mapped = httpFromPrismaError(error);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update deal" });
   }
 });

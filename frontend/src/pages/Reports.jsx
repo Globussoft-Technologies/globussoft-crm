@@ -56,9 +56,14 @@ export default function Reports() {
 
   const dateParams = () => {
     if (rangeInverted) return '';
+    // #117: backend reports endpoints accept ?from= / ?to= (and the legacy
+    // ?startDate= / ?endDate= aliases). Send both so old + new server builds
+    // both filter correctly — sending just startDate/endDate was being
+    // ignored on the v3.2.x reports route, which is why the date picker
+    // appeared to have no effect.
     let params = '';
-    if (startDate) params += `&startDate=${startDate}`;
-    if (endDate) params += `&endDate=${endDate}`;
+    if (startDate) params += `&from=${startDate}&startDate=${startDate}`;
+    if (endDate) params += `&to=${endDate}&endDate=${endDate}`;
     return params;
   };
 

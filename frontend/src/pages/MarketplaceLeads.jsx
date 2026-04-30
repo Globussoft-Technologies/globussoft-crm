@@ -385,9 +385,17 @@ const MarketplaceLeads = () => {
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
             Configure your marketplace integrations to start receiving leads automatically.
           </p>
-          <button className="btn-primary" onClick={() => setShowConfig(true)} style={{ marginTop: '1rem', padding: '0.5rem 1.25rem' }}>
-            <Settings size={15} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Configure Marketplaces
-          </button>
+          {/* #368: empty-state CTA opens the inline config panel (no /integrations
+              route exists in App.jsx). Secondary link goes to /marketplace, the
+              actual existing integrations browser. */}
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '1rem', flexWrap: 'wrap' }}>
+            <button className="btn-primary" onClick={() => setShowConfig(true)} style={{ padding: '0.5rem 1.25rem' }}>
+              <Settings size={15} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Configure Marketplaces
+            </button>
+            <a href="/marketplace" style={{ padding: '0.5rem 1.25rem', borderRadius: '6px', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '0.875rem', display: 'inline-flex', alignItems: 'center' }}>
+              Browse all integrations
+            </a>
+          </div>
         </div>
       ) : (
         <div className="card" style={{ overflow: 'hidden' }}>

@@ -4,6 +4,49 @@ const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { verifyRole } = require("../middleware/auth");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { httpFromPrismaError } = require("../lib/validators");
+
+// #168: shared validators so PUT mirrors POST. POST already inlines these
+// checks; PUT historically skipped them and returned 500 on bad input.
+// Centralised here so future field additions stay symmetric.
+const ALLOWED_ESTIMATE_STATUSES = new Set([
+  "Draft", "Sent", "Accepted", "Rejected", "Expired", "Converted",
+]);
+function validateEstimateInput(body, { isUpdate = false } = {}) {
+  // title — required on create, optional on update; reject empty string.
+  if (!isUpdate) {
+    if (body.title == null || String(body.title).trim() === "") {
+      return { status: 400, error: "title is required", code: "TITLE_REQUIRED" };
+    }
+  } else if (body.title !== undefined && String(body.title).trim() === "") {
+    return { status: 400, error: "title cannot be empty", code: "TITLE_REQUIRED" };
+  }
+  // status — only meaningful on update (POST always starts as Draft) but
+  // validate on both sides so a junk value can't slip through either path.
+  if (body.status !== undefined && body.status !== null && body.status !== "") {
+    if (!ALLOWED_ESTIMATE_STATUSES.has(body.status)) {
+      return {
+        status: 400,
+        error: `status must be one of: ${[...ALLOWED_ESTIMATE_STATUSES].join(", ")}`,
+        code: "INVALID_STATUS",
+      };
+    }
+  }
+  // validUntil — must parse, must not be in the past. POST inlined this; PUT
+  // didn't, so a stale "2010-01-01" could land via update and the estimate
+  // looked permanently expired in the UI.
+  if (body.validUntil !== undefined && body.validUntil !== null && body.validUntil !== "") {
+    const vu = new Date(body.validUntil);
+    if (Number.isNaN(vu.getTime())) {
+      return { status: 400, error: "validUntil is not a valid date", code: "INVALID_VALID_UNTIL" };
+    }
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    if (vu < todayStart) {
+      return { status: 400, error: "validUntil cannot be in the past", code: "VALID_UNTIL_IN_PAST" };
+    }
+  }
+  return null;
+}
 
 // GET /api/estimates — list with optional status filter
 // #167: soft-deleted rows hidden by default; opt in with ?includeDeleted=true.
@@ -65,6 +108,9 @@ router.post("/", async (req, res) => {
     const title = req.body.title !== undefined ? req.body.title : req.body.name;
     const lineItems = req.body.lineItems !== undefined ? req.body.lineItems : req.body.items;
     if (!title) return res.status(400).json({ error: "title is required (legacy field 'name' also accepted)" });
+    // #168: shared validator — mirrors PUT so future field additions stay aligned.
+    const inputErr = validateEstimateInput({ ...req.body, title }, { isUpdate: false });
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const estimateNum = `EST-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 
@@ -135,6 +181,9 @@ router.post("/", async (req, res) => {
     res.status(201).json(estimate);
   } catch (err) {
     console.error(err);
+    // #165: surface Prisma validation errors as 400, not 500.
+    const mapped = httpFromPrismaError(err);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to create estimate" });
   }
 });
@@ -147,6 +196,12 @@ router.put("/:id", async (req, res) => {
 
     const existing = await prisma.estimate.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Estimate not found" });
+
+    // #168: PUT now runs the same validators as POST. Pre-fix this endpoint
+    // accepted any junk value and 500'd at the DB layer (e.g. validUntil
+    // = "not-a-date" → Prisma threw, surfaced as "Failed to update estimate").
+    const inputErr = validateEstimateInput(req.body, { isUpdate: true });
+    if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const { title, status, validUntil, notes, contactId, dealId } = req.body;
     const data = {};
@@ -170,6 +225,9 @@ router.put("/:id", async (req, res) => {
     res.json(estimate);
   } catch (err) {
     console.error(err);
+    // #168 #165: bad input through PUT now returns 400 with a clear code.
+    const mapped = httpFromPrismaError(err);
+    if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update estimate" });
   }
 });

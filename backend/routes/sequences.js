@@ -10,9 +10,22 @@ const prisma = require("../lib/prisma");
 // but sequence names + step content are pure text fields — no formatting is
 // expected, so we strip everything to avoid stored-XSS sinks (PDF previews,
 // email subject lines, dashboard cards).
+//
+// #187: sanitize-html's default text serialiser HTML-encodes `&` → `&amp;`,
+// which corrupted "Q3 Plan & Brief" into "Q3 Plan &amp; Brief". Override
+// the textFilter to undo the four entities the library re-encodes — storage
+// stays raw, render-time encoding is React's job.
+const ENTITY_DECODE_RE = /&(amp|lt|gt|quot|#x27|#39);/g;
+const ENTITY_DECODE_MAP = {
+  "amp": "&", "lt": "<", "gt": ">", "quot": '"', "#x27": "'", "#39": "'",
+};
 const sanitizeText = (input) => {
   if (typeof input !== "string") return input;
-  return sanitizeHtml(input, { allowedTags: [], allowedAttributes: {} }).trim();
+  return sanitizeHtml(input, {
+    allowedTags: [],
+    allowedAttributes: {},
+    textFilter: (text) => text.replace(ENTITY_DECODE_RE, (_, e) => ENTITY_DECODE_MAP[e] || _),
+  }).trim();
 };
 
 // Walk an array of ReactFlow nodes and strip any text inside data.label so a

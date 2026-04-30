@@ -1,11 +1,14 @@
 import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Search, Users, Filter } from 'lucide-react';
+import { UserPlus, Search, Users, Filter, Undo2 } from 'lucide-react';
+import { useNotify } from '../utils/notify';
 
-const STATUSES = ['Lead', 'Prospect', 'Customer', 'Churned'];
+// #366: include Junk so the chip can show its count if the tenant uses it.
+const STATUSES = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
 
 const ConvertedLeads = () => {
+  const notify = useNotify();
   const [leads, setLeads] = useState([]);
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -13,6 +16,8 @@ const ConvertedLeads = () => {
   const [selectedStatus, setSelectedStatus] = useState('Prospect');
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkAgent, setBulkAgent] = useState('');
+  // #366: per-status counts powering the chip labels, e.g. "Prospect (12)".
+  const [statusCounts, setStatusCounts] = useState({});
 
   const fetchLeads = (status) => {
     setLoading(true);
@@ -40,9 +45,31 @@ const ConvertedLeads = () => {
       .catch(() => {});
   };
 
+  // #366: fetch counts for every chip in parallel so the labels stay live.
+  // Each /by-status response is normalised the same way the main fetcher does.
+  const fetchStatusCounts = () => {
+    Promise.all(
+      STATUSES.map(status =>
+        fetchApi(`/api/contacts/by-status?status=${encodeURIComponent(status)}`)
+          .then(response => {
+            const rows = Array.isArray(response)
+              ? response
+              : (Array.isArray(response?.data) ? response.data
+                : (Array.isArray(response?.data?.data) ? response.data.data
+                  : (Array.isArray(response?.contacts) ? response.contacts : [])));
+            return [status, rows.length];
+          })
+          .catch(() => [status, 0])
+      )
+    ).then(pairs => {
+      setStatusCounts(Object.fromEntries(pairs));
+    });
+  };
+
   useEffect(() => {
     fetchLeads(selectedStatus);
     fetchStaff();
+    fetchStatusCounts();
   }, [selectedStatus]);
 
   const handleStatusChange = (status) => {
@@ -58,6 +85,29 @@ const ConvertedLeads = () => {
       body: JSON.stringify({ assignedToId: assignedToId || null }),
     });
     fetchLeads(selectedStatus);
+  };
+
+  // #367: revert a converted contact back to Lead status. Wraps in a confirm
+  // dialog because it changes the user's working surface (the row disappears
+  // from /converted-leads and reappears in /leads).
+  const handleRevertToLead = async (contactId, name) => {
+    const ok = await notify.confirm({
+      title: 'Revert to Lead',
+      message: `This will move ${name || 'the contact'} back to /leads. Continue?`,
+    });
+    if (!ok) return;
+    try {
+      await fetchApi(`/api/contacts/${contactId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'Lead' }),
+      });
+      notify.success?.('Reverted to Lead');
+      fetchLeads(selectedStatus);
+      fetchStatusCounts();
+    } catch (err) {
+      notify.error?.(`Failed to revert: ${err.message || err}`);
+    }
   };
 
   const handleBulkAssign = async () => {
@@ -183,7 +233,8 @@ const ConvertedLeads = () => {
                   }
                 }}
               >
-                {status}
+                {/* #366: chip count next to label, e.g. "Prospect (12)". */}
+                {status} ({statusCounts[status] ?? 0})
               </button>
             ))}
           </div>
@@ -218,13 +269,15 @@ const ConvertedLeads = () => {
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>
+                {/* #367: per-row Revert to Lead control. */}
+                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="8" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
+                <tr><td colSpan="9" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
               ) : filteredLeads.length === 0 ? (
-                <tr><td colSpan="8" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
+                <tr><td colSpan="9" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
               ) : filteredLeads.map(lead => (
                 <tr key={lead.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                   <td style={{ padding: '1rem' }}>
@@ -272,6 +325,27 @@ const ConvertedLeads = () => {
                   </td>
                   <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
                     {formatDate(lead.createdAt)}
+                  </td>
+                  {/* #367: revert flow — confirm dialog moves the contact back to /leads. */}
+                  <td style={{ padding: '1rem' }}>
+                    <button
+                      onClick={() => handleRevertToLead(lead.id, lead.name)}
+                      title="Revert to Lead — moves this contact back to /leads"
+                      style={{
+                        background: 'transparent',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '6px',
+                        padding: '0.35rem 0.65rem',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        color: 'var(--text-secondary)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.3rem',
+                      }}
+                    >
+                      <Undo2 size={13} /> Revert
+                    </button>
                   </td>
                 </tr>
               ))}

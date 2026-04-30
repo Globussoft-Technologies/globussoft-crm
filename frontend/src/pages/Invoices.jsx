@@ -122,7 +122,11 @@ export default function Invoices() {
   const markPaid = async (id) => {
     try {
       await fetchApi(`/api/billing/${id}/pay`, { method: 'PUT' });
-      loadData();
+      // #119: must refetch so the "Paid This Month" KPI memo recomputes from
+      // the freshly-paid row (with paidAt populated server-side). Awaiting the
+      // refetch keeps the Outstanding/Paid totals consistent with what the
+      // user sees in the table.
+      await loadData();
     } catch (err) {
       notify.error('Failed to mark invoice as paid');
     }
@@ -411,7 +415,11 @@ export default function Invoices() {
                         boxShadow: '-4px 0 8px -4px rgba(0,0,0,0.15)',
                         zIndex: 1,
                       }}>
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                        {/* #119 sub-issue: action buttons could overflow the
+                            260px Actions column on narrow viewports. flexWrap
+                            + minWidth:0 lets them stack instead of bleeding
+                            outside the cell. */}
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap', minWidth: 0 }}>
                           <button
                             onClick={() => downloadPdf(inv.id, inv.invoiceNum)}
                             style={{

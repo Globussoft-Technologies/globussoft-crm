@@ -35,7 +35,9 @@ export default function Services() {
   const [treatmentsLoading, setTreatmentsLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTreatment, setSelectedTreatment] = useState(null);
-  const [form, setForm] = useState({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: 0, durationMin: 60, targetRadiusKm: 30, description: '' });
+  // #115: basePrice starts blank (not 0) so the placeholder shows and the
+  // validity gate rejects submit until the user enters ≥ ₹1.
+  const [form, setForm] = useState({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
 
   const load = () => {
     setLoading(true);
@@ -60,7 +62,7 @@ export default function Services() {
       await fetchApi('/api/wellness/services', { method: 'POST', body: JSON.stringify(form) });
       notify.success(`Service "${form.name}" created`);
       setShowAdd(false);
-      setForm({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: 0, durationMin: 60, targetRadiusKm: 30, description: '' });
+      setForm({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
       load();
     } catch (_err) { /* fetchApi already toasted */ }
   };
@@ -176,11 +178,16 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
       {showAdd && (() => {
         // #115: visible labels for every field; basePrice must be > 0 before save.
         const fieldLabel = { display: 'block', fontSize: '0.7rem', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.04em' };
-        const valid = !!form.name?.trim() && Number(form.basePrice) > 0 && Number(form.durationMin) > 0;
+        // #115: ₹1 minimum is sensible for a clinic; reject 0/blank/negative
+        // before the POST so users get a clear inline error instead of a
+        // server-side 400 with no explanation.
+        const priceNum = Number(form.basePrice);
+        const validPrice = Number.isFinite(priceNum) && priceNum >= 1;
+        const valid = !!form.name?.trim() && validPrice && Number(form.durationMin) > 0;
         const onSubmit = (e) => {
           if (!valid) {
             e.preventDefault();
-            notify.error('Please enter a service name, a base price greater than ₹0, and a positive duration.');
+            notify.error('Please enter a service name, a base price of at least ₹1, and a positive duration.');
             return;
           }
           submit(e);

@@ -38,7 +38,6 @@ async function processTenant(tenant) {
       id: true,
       subject: true,
       priority: true,
-      contactId: true,
       assigneeId: true,
       slaResponseDue: true,
       tenantId: true,

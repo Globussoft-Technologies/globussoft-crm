@@ -1,0 +1,144 @@
+name: Full E2E suite (release validation)
+
+# Heavyweight Playwright run — the FULL chromium project (UI flows,
+# wellness deep, a11y, integration, auth, api-health) against the
+# deployed target URL. Runs ONLY on release-style events:
+#   - push of a tag matching v* (the normal release path: tag a green
+#     main commit AFTER its deploy.yml run has succeeded)
+#   - GitHub Release published (alternate)
+#   - workflow_dispatch (manual; lets you point at any URL)
+#
+# Per-commit CI stays fast — deploy.yml's api_tests job keeps to the
+# 18 gated API specs (~2-3 min). This release validation runs the full
+# Playwright surface (~10-20 min) and is opt-in by tagging.
+#
+# Recommended release flow:
+#   1. Push to main — deploy.yml deploys to demo + smoke-checks
+#   2. Wait for the deploy job to go green
+#   3. Tag the commit:    git tag v3.2.6 && git push origin v3.2.6
+#   4. This workflow fires + runs the full suite against demo
+#   5. If green, the tag stands as a verified release. If red, the
+#      demo isn't broken (deploy.yml's smoke check already passed) but
+#      a deeper UI/flow regression has surfaced — fix it on main and
+#      retag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Target URL for the suite (defaults to demo)'
+        type: string
+        default: 'https://crm.globusdemos.com'
+
+# Don't cancel a release validation that's already running. Two tags
+# in quick succession should both get full coverage.
+concurrency:
+  group: e2e-full-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Resolve target URL
+        id: target
+        run: |
+          # Prefer workflow_dispatch input; else demo.
+          BASE_URL='${{ inputs.base_url }}'
+          if [ -z "$BASE_URL" ]; then
+            BASE_URL='https://crm.globusdemos.com'
+          fi
+          echo "BASE_URL=$BASE_URL" >> $GITHUB_OUTPUT
+          echo "::notice::Running full e2e against $BASE_URL"
+
+      - name: Wait for target health (up to 2 min)
+        env:
+          BASE_URL: ${{ steps.target.outputs.BASE_URL }}
+        run: |
+          # On a tag push immediately after a main push, deploy.yml may still
+          # be in flight. Smoke-check until /api/health responds 200.
+          for i in $(seq 1 24); do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' "$BASE_URL/api/health")
+            if [ "$code" = "200" ]; then
+              echo "Target healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            echo "  [try $i] /api/health -> $code"
+            sleep 5
+          done
+          echo "::error::Target $BASE_URL did not become healthy in 2 min"
+          exit 1
+
+      - name: Install + browsers
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run full chromium project + auth + api-health
+        working-directory: e2e
+        env:
+          BASE_URL: ${{ steps.target.outputs.BASE_URL }}
+          E2E_SKIP_SCRUB: '1'
+        run: |
+          set -euo pipefail
+          # Three projects covered:
+          #   - chromium     — bulk of tests (UI, wellness, integration, a11y)
+          #                    auto-runs `setup` first via `dependencies: ['setup']`
+          #   - auth-tests   — login flow validation (no saved auth state)
+          #   - api-health   — /api/* smoke tests with bearer auth
+          # Skipped (would 3-4x runtime; out of scope for release validation):
+          #   - firefox, webkit, mobile-chrome
+          # If a release also wants cross-browser coverage, add the
+          # corresponding --project flags below.
+          npx playwright test \
+            --project=chromium \
+            --project=auth-tests \
+            --project=api-health \
+            --reporter=list,html
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-full-${{ github.ref_name }}-${{ github.run_id }}
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        env:
+          BASE_URL: ${{ steps.target.outputs.BASE_URL }}
+        run: |
+          {
+            echo "## Full e2e validation"
+            echo ""
+            echo "- Target: \`$BASE_URL\`"
+            echo "- Trigger: \`${{ github.event_name }}\`"
+            if [ "${{ github.event_name }}" = "push" ]; then
+              echo "- Tag: \`${{ github.ref_name }}\`"
+            fi
+            if [ "${{ github.event_name }}" = "release" ]; then
+              echo "- Release: \`${{ github.event.release.tag_name }}\`"
+            fi
+            echo ""
+            echo "Report artifact uploaded — open Actions → Full E2E suite → this run → Artifacts → e2e-full-* to download."
+          } >> $GITHUB_STEP_SUMMARY

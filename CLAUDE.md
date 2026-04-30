@@ -228,8 +228,10 @@ Plus 12 professionals, 2 helpers, 1 telecaller (see `prisma/seed-wellness.js`).
 - **SSL:** Certbot (Let's Encrypt)
 - **PM2:** `globussoft-crm-backend` only (frontend served by Nginx directly)
 - **Monitoring:** Sentry (@sentry/node) for error tracking
-- **Deploy flow:** `python deploy.py` -- SSH pull, npm install, prisma generate/push, pm2 restart, vite build, copy dist, restart nginx
-- **Deployment scripts** (gitignored, local only): deploy.py, deploy_backend.py, deploy_frontend.py, setup.sh, etc.
+- **Deploy flow (canonical):** GitHub Actions workflow `.github/workflows/deploy.yml` — fires on push to `main` (skipping doc/test/script-only changes via `paths-ignore`) plus manual `workflow_dispatch`. Steps: build (vite + node syntax) → api_tests gate (18 specs / 673 tests against ephemeral MySQL) → deploy (SSH pull, npm install, prisma generate, pm2 restart, vite build, sudo rsync to /var/www, chown www-data, smoke check). Health-check + rollback to HEAD~1 on backend deploy fail. Hotfix bypass via `workflow_dispatch.skip_tests=true` (manual only — a regular push can never bypass).
+- **Release validation:** GitHub Actions workflow `.github/workflows/e2e-full.yml` — runs the full Playwright chromium suite (UI flows, wellness deep, a11y, integration, auth, api-health) against the deployed demo on git tag push (`v*`), GitHub Release publish, or manual trigger. Per-commit pipeline stays fast; the heavy suite is opt-in by tagging a green main commit.
+- **Coverage measurement:** GitHub Actions workflow `.github/workflows/coverage.yml` — workflow_dispatch only. Spins an ephemeral backend with c8 instrumentation, runs the 18 gated API specs, reports lines/branches/functions/statements % + top-10 under-covered files. Replaces the old SSH cheat-sheet for the gate-spec methodology.
+- **Local deploy scripts (legacy, gitignored, do NOT use):** deploy.py, deploy_backend.py, deploy_frontend.py, setup.sh, ssh_deploy_*.py — kept for emergency-only manual deploys; the GitHub Actions flow above is the only supported path.
 
 ## Known Security Notes
 

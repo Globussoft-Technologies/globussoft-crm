@@ -275,17 +275,50 @@ jobs:
         run: |
           kill $(cat /tmp/backend.pid) 2>/dev/null || true
 
-  # ── 3. DEPLOY: only runs if build + api_tests pass ───────────────────
+  # ── 3. UNIT_TESTS: vitest unit tests for backend/lib + middleware + ──
+  # services + utils. Runs in parallel with api_tests; no MySQL, no
+  # server boot, no Playwright — pure-fn assertions with prisma + fetch +
+  # web-push mocks. ~1-2s of test runtime; the install step dominates.
+  # Promoted to mandatory same as api_tests on the deploy gate below.
+  unit_tests:
+    if: ${{ inputs.skip_tests != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Backend — npm ci
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Run vitest
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm test
+          echo "::notice::Unit tests passed"
+
+  # ── 4. DEPLOY: only runs if build + api_tests + unit_tests all pass ──
   deploy:
-    needs: [build, api_tests]
-    # BOTH gates mandatory:
+    needs: [build, api_tests, unit_tests]
+    # All three gates mandatory:
     #   - build (vite + node syntax)
-    #   - api_tests (ci-smoke.spec.js against ephemeral MySQL + seeded backend)
-    # Either failure blocks deploy.
+    #   - api_tests (Playwright API specs against ephemeral MySQL + seeded backend)
+    #   - unit_tests (vitest pure-fn coverage of lib + middleware + services + utils)
+    # Any failure blocks deploy.
     # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
     # bypass for emergency hotfixes (still requires manual workflow_dispatch
     # — a regular push can never bypass).
-    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') }}
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -301,7 +334,7 @@ jobs:
           echo "Commit:  ${{ github.sha }}"
           echo "Pusher:  ${{ github.actor }}"
           printf 'Message: %s\n' "$COMMIT_MSG" | head -3
-          echo "Tests:   build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }}"
+          echo "Tests:   build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }} unit_tests=${{ needs.unit_tests.result }}"
 
       # ── Backend deploy ──────────────────────────────────────────────
       # git pull -> npm install -> prisma generate -> pm2 restart -> health.

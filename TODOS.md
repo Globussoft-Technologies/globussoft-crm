@@ -2,7 +2,28 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-30 (late evening — **🎯 GitHub issue inbox still 0 open + 0 PRs**. Picked up from afternoon handoff and pushed coverage further. **Added 3 new API specs (tasks + estimates + push) — 144 new tests; CI gate now 16 specs / 611 tests**. **Caught + fixed 3 pre-existing CI flakes** that had been red on every deploy since their specs landed: cpq quantity NaN bug (REAL prod fix), expenses expenseDate not-nullable schema bug (REAL prod fix), expenses status-filter case-sensitivity (TEST fix). Pickup from home: `git pull origin main` → read "NEXT SESSION" below → continue.)
+Last updated: 2026-05-01 (overnight — **major coverage push**. Phase 1 e2e: **5 new API specs (~411 tests)** for routes/wellness.js + routes/contacts.js + routes/external.js + routes/deals.js + routes/surveys.js. CI gate now **23 specs / ~1,084 mandatory API tests**. **Surfaced + fixed a real prod bug class**: bare `req.user.id` (always undefined; JWT key is `userId`) across `routes/wellness.js`, `routes/workflows.js`, `routes/custom_reports.js`, `routes/dashboards.js` — including the Rx PUT prescriber check that 403'd every original prescriber. Plus **vitest unit-test layer (22 files / 674 tests / 3 skipped)** covering all of `lib/`, `middleware/`, `services/` (except whatsapp), `utils/` — now mandatory CI gate. Plus three new GitHub Actions workflows: `deploy.yml` (existing, expanded), `e2e-full.yml` (release-only Playwright sweep on tag push), `coverage.yml` (workflow_dispatch coverage measurement). Pickup from home: `git pull origin main`.)
+
+## 🛑 Deferred for later (do NOT pick up unless explicitly assigned)
+
+### External-service mocked integration tests
+The vitest unit suite intentionally does NOT cover these external-service paths because they require fault-injection mocks that don't fit cleanly inside the CJS+ESM hybrid we have:
+
+- **Stripe webhooks** — signed payload validation + idempotency-key replay (`backend/routes/payments.js`).
+- **Razorpay webhooks** — same.
+- **OAuth callback success branches** — Google + Microsoft + Calendar flows (`backend/routes/sso.js`, `backend/routes/calendar_*.js`).
+- **Mailgun delivery success branch** — current notificationService email-channel skipped because `vi.mock('global.fetch')` doesn't intercept the SUT's `require('node:fetch')` chain. Need a real Mailgun mock server (msw or nock).
+- **web-push delivery success branch** — same pattern; pushService 410-Gone-cleanup path is covered, the OK path needs a fake VAPID server.
+- **OTP-redaction + DLT-PE-ID branches** in routes/sms.js — currently exercised by sms-api.spec.js's e2e specs, not by vitest.
+
+These belong in a future "integration tests" tier — somewhere between the fast vitest unit suite (~1.2s) and the e2e Playwright suite. Suggested approach: add a `backend/test/integration/` dir with msw + nock fixtures; gate behind a separate CI job (`integration_tests`) that runs alongside `unit_tests` + `api_tests`.
+
+Estimate: 2-3 days dedicated work. Not urgent.
+
+### Frontend test infrastructure
+No vitest / jest setup exists in `frontend/`. The 80 React pages and 11 components have zero unit-test coverage. The e2e Playwright UI specs (e2e/tests/notifications.spec.js, theme.spec.js, navigation.spec.js, wellness*.spec.js) cover frontend behavior end-to-end but don't isolate component logic. Future work: vitest + @testing-library/react in frontend, mock API calls via msw, target `frontend/src/components/*` first (NotificationBell, Sidebar, Layout, DealModal, etc.). Estimate: 2-4 days for the highest-leverage components.
+
+---
 
 ---
 

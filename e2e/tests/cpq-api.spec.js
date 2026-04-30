@@ -391,8 +391,10 @@ test.describe('CPQ API — POST /quotes', () => {
     });
     expect(res.status()).toBe(201);
     const q = await res.json();
-    // 0 * 999 = 0; line is still persisted but quantity is parseInt(0) || 1 = 1.
-    // The math used the raw 0 BEFORE the parseInt fallback, so totalAmount=0.
+    // After the Number.isFinite() fix in cpq.js, parseInt(0) = 0 is finite so
+    // qty stays 0 (no longer silently rewritten to 1 by `|| 1`). lineCost is
+    // 0 * 999 = 0. The earlier ae92cda fix used `parseInt(...) || 1` which
+    // regressed this assertion until the isFinite guard landed.
     expect(Number(q.totalAmount)).toBe(0);
   });
 

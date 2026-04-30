@@ -2,7 +2,7 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-04-27 (end of day — **🎯 GitHub issue inbox: 0 open**. Started day at 50, closed all 50 across the day in two large agent rounds + a finisher round. v3.2.4 ships with: GitHub Actions deploy pipeline, prescription PDF + detail modal, Reports CSV/PDF export across 4 tabs, mobile responsive 80/20 (sidebar drawer + 6 demo-path pages), external-integrations sandbox foundation, P0 OTP-leak fix, lead-routing validation, orchestrator dedup, Owner Dashboard occupancy/no-show fixes, lead conversion + Patient backfill, React mount-race recovery, OTP rate-limit, stylist PHI calendar scope, P3 data-quality + duplicate-patient cleanup. Coverage 66.65% lines / gate 65/50/65/65. All deployed + verified live.)
+Last updated: 2026-04-30 (evening — **🎯 GitHub issue inbox: 0 open + 0 PRs**. Today's haul: ~108 issues closed across 7 commits + PR #400 (Callified SSO) merged + closed PRD §14 demo criterion #4. **CI gate hardened from 4 → 467 mandatory API tests across 13 specs**. Coverage **64.76% → 67.27% lines** (+2.51pt today; gate bumped 65 → 66 lines/funcs/stmts and 50 → 52 branches with 1.3-3pt headroom). **Two real production bugs caught by the gate**: SLA engine silently failing every cron tick from a Ticket.contactId schema mismatch; PR #400 lockfile drift would have broken the deploy pipeline. Pickup from any laptop: `git clone …` → read this file → continue.)
 
 ---
 
@@ -41,14 +41,190 @@ The two ⚠️ items are external-blocked (Callified + AdsGPT teams owe their si
 
 ## 📌 NEXT SESSION — pick up here
 
-**HEAD at end of 2026-04-27**: `ed23f5d` (final 3 multi-day items shipped). Working tree clean. Open issues: **0**.
+**HEAD at end of 2026-04-30**: `19a23a9` (cpq + custom-objects specs + CI gate at 13 specs / 467 tests). Working tree clean. Open issues: **0**. Open PRs: **0**.
+
+### Quick state check before starting
+
+```bash
+git pull origin main
+# expected HEAD: 19a23a9 or later
+# CI gate: 13 specs, 467 mandatory API tests + build + deploy
+# coverage: 67.27% lines, gate 66/52/66/66
+# site: https://crm.globusdemos.com (healthy, last deploy from f7a240f or later)
+```
+
+If `local.env` doesn't have `GH_TOKEN`, you'll need to either re-create
+the PAT (https://github.com/settings/personal-access-tokens) or work
+without one (60 req/hr unauth ceiling — fine for casual checks, painful
+for log fetches). The PAT we used today is in chat history; rotate it.
 
 ### What to work on next (no urgent bug pressure)
 
-With the issue board at zero, the next session should attack quality + the
-remaining technical scope rather than firefighting. In priority order:
+With issue board + PR queue both at zero, options in priority order:
 
-1. **Coverage push toward 70% gate** (~2-3 hours) — current 66.65% lines.
+1. **Coverage push toward 70% gate** — current 67.27% lines, gate 66.
+   Need ~73% measured to safely bump to 70. Top remaining drags from
+   the latest measurement (each ~+0.3-0.5 pt):
+     - `lib/notificationService.js` (29.37%, 143 lines)
+     - `routes/tasks.js` (30.99%, 271 lines)
+     - `cron/lowStockEngine.js` (31.15%)
+     - `routes/push.js` (31.95%)
+     - `routes/communications.js` (32.05%)
+     - `services/whatsappProvider.js` (34.58%)
+     - `services/pushService.js` (35.41%)
+     - `routes/estimates.js` (35.95%) — large file, big lift potential
+     - `cron/sentimentEngine.js` (36.61%)
+   Each spec should follow the proven pattern in
+   `e2e/tests/sla-breach-api.spec.js` (best CI-friendly template) or
+   `e2e/tests/treatment-plans-api.spec.js`. Always add to the CI gate
+   list in `.github/workflows/deploy.yml` after each new spec.
+
+2. **Mobile parity follow-up** — #228 shipped 80/20; complete pass
+   needs per-page audit at 320/375/414/768 across all ~80 pages,
+   replace inline-style grid columns with classes, focus trap on
+   drawer, touch-target 44×44 audit, forms (PublicBooking, NewPatient,
+   signature canvas), Recharts narrow-screen tuning, real iOS/Android
+   device test. Listed in `frontend/src/styles/responsive.css` header
+   comment.
+
+3. **Real sandbox infra** — #137 shipped foundation; complete pass in
+   `docs/wellness-client/SANDBOX.md §5`: admin cron-trigger endpoints
+   + engine refactor (some engines like sequenceEngine + slaBreach
+   already have admin tick endpoints — extend the pattern), 8 new
+   cron specs (campaign, recurringInvoice, scheduledEmail, retention,
+   backup, appointmentReminders, wellnessOps, lowStock — all currently
+   under-covered), Stripe/Razorpay signed-payload replayer,
+   Mailgun/Twilio outbound capture, fake OAuth issuer, CI nightly
+   `sandbox-e2e` job.
+
+4. **CI hardening**:
+   - Bake an `npm install` step into the api_tests workflow run so
+     PR-introduced lockfile drift gets surfaced earlier (today's PR #400
+     hit this; build job did catch it but the error message is dense).
+     Optional `npm audit --omit=dev` on a clean checkout to flag known
+     vulns.
+   - Add a coverage-threshold step in CI: run `c8 check-coverage`
+     against the gate every push. Currently coverage is only measured
+     manually by `ssh_full_coverage.py`. Wiring it into CI would mean
+     either:
+       (a) running c8 over the api_tests run inside the runner (clean
+           but adds ~3-5 min to CI), or
+       (b) keeping the manual server-side measurement but having a CI
+           job assert against a checked-in `coverage-baseline.json`.
+
+5. **Orchestrator depth audit** (PRD §6.7) — verify the engine actually
+   computes occupancy gap → recommends ad budget → drafts campaign vs
+   being a single-recommendation stub. The dedup work in v3.2.4 fixed
+   surface bugs but didn't audit recommendation logic.
+
+6. **Lead-side SLA** (PRD §6.4) — current SLA engine is ticket-side.
+   PRD says "first response in <5 min for high-ticket services"
+   applies to LEADS too. New cron OR enhancement to slaBreachEngine
+   (the engine just got 48 tests + a real bug fix; clean target).
+
+### Today's run (2026-04-30) — what shipped
+
+**~108 GitHub issues closed**, ~25 commits pushed, PR #400 (Callified
+SSO) merged, CI gate hardened to 13-spec / 467-test mandatory pipeline,
+coverage lifted +2.51 pt lines, two real production bugs caught.
+
+| Commit | Closes / What |
+|---|---|
+| `269244d` morning   | #300 P0 OTP leak in /portal/login/request-otp |
+| `4431e03`           | 22-issue P2 batch (RBAC + dashboard + lead routing + frontend) |
+| `277090f`           | 6 stale callified-migrated issue closures |
+| `2897b85`           | Round 2: orchestrator dedup, IST/UTC, AI score, autosave, inventory stub |
+| `6880d51`           | ci(deploy): pass commit message via env (footgun fix) |
+| `3cff373`           | #278 prescription detail modal + PDF download |
+| `2a143a9`           | #200 #201 #211 #241 login chips closed by product decision |
+| `ed23f5d`           | Final 3 multi-day: #227 #228 #137 |
+| ... PR #393 + many ... | active treatments, bug rounds, security hardening |
+| `4cda40c`           | #179 audit log expansion (PRD §11) — closed final issue |
+| `a7962b3`           | ci: pre-create empty playwright/.auth/user.json — gates green |
+| `f3a85b5`           | ci: api_tests promoted to MANDATORY |
+| `231dc27`           | ci: + sms-api  (4 → 48 tests) |
+| `bcf7b74`           | ci: + marketing + reports + sla-breach (189 tests) |
+| `57438f1`           | fix(sla): real bug surfaced by spec — Ticket.contactId removed from engine |
+| `6b98a71`           | + treatment-plans-api (229 tests) |
+| `4fce425`           | + sequence-engine-api (278 tests) |
+| `bbc2c6a`           | Merge PR #400 Callified SSO |
+| `46c01b6`           | chore: regen frontend lockfile (PR #400 build-job catch) |
+| `9a5dffc`           | gate bump 65→66, 50→52 |
+| `f7a240f`           | + expenses + projects + ai-scoring + contracts (412 tests) |
+| `19a23a9`           | + custom-objects + cpq (467 tests) |
+
+### Lessons learned (bake into next-session habits)
+
+1. **Mandatory CI gates pay for themselves.** Today the build+api_tests
+   gate caught:
+     - SLA engine `contactId` schema mismatch (had been silently failing
+       every cron tick in production for who-knows-how-long)
+     - PR #400 lockfile drift (would have broken the deploy pipeline)
+
+2. **`continue-on-error: true` is a soft gate.** With it, the deploy
+   job's `needs.api_tests.result == 'success'` evaluates to `failure`
+   even on green steps. Removing the flag flips api_tests to a real
+   gate. Today's promotion to mandatory was: remove
+   `continue-on-error`, restore the if-clause to require success on
+   needs.api_tests.
+
+3. **PR #400 lockfile drift teaches: never commit package.json without
+   a regenerated lockfile.** `npm install` (no flags) regenerates the
+   lockfile against the current package.json. CI uses `npm ci` which
+   strict-checks parity.
+
+4. **api-health.spec.js is unsuitable for CI.** It tries `admin/admin`
+   legacy bypass that was removed for security hardening. Use
+   `ci-smoke.spec.js` (purpose-built, 4 tests, no prod assumptions)
+   as the gate-baseline spec; api-health stays as a manual smoke vs
+   live demo.
+
+5. **Playwright `--no-deps` skips auth.setup but the chromium project
+   STILL loads `playwright/.auth/user.json` at fixture init.** Pre-
+   create an empty `{cookies:[],origins:[]}` file in CI before running
+   any spec. Same trick as the local coverage script.
+
+6. **Coverage delta interpretation: lines % can drop while net covered
+   lines rise.** Today added ~1850 lines of new code; only ~712 of
+   those got covered by new specs. Net ratio dropped 1.3 pt before
+   targeted specs lifted it back +2.5 pt.
+
+7. **Parallel agent file-affinity discipline still holds**: 4-5 agents
+   in parallel works reliably when each owns a disjoint set of files.
+   Same-file work is one agent.
+
+### CI gate snapshot (HEAD 19a23a9)
+
+```
+build      mandatory  npm ci + prisma generate + node-check + vite build
+api_tests  mandatory  MySQL container + seed + 13 specs / 467 tests:
+                        ci-smoke.spec.js              ( 4 tests)
+                        sms-api.spec.js              (44 tests)
+                        marketing-api.spec.js        (41 tests)
+                        reports-api.spec.js          (52 tests)
+                        sla-breach-api.spec.js       (48 tests)
+                        treatment-plans-api.spec.js  (40 tests)
+                        sequence-engine-api.spec.js  (49 tests)
+                        expenses-api.spec.js         (37 tests)
+                        projects-api.spec.js         (37 tests)
+                        ai-scoring-api.spec.js       (23 tests)
+                        contracts-api.spec.js        (37 tests)
+                        custom-objects-api.spec.js   (29 tests)
+                        cpq-api.spec.js              (26 tests)
+deploy     gated by both  pull → install → prisma → pm2 → health → vite →
+                          rsync → chown → smoke
+```
+
+Bypass available for emergency hotfixes: GitHub UI → Actions →
+Deploy workflow → Run workflow → check "skip_tests" input.
+
+---
+
+### Older state — yesterday's 2026-04-27 inbox-zero handoff (preserved for context)
+
+Original "What to work on next" content from the 2026-04-27 wrap:
+
+
    Top under-covered files (PRD-aligned): `cron/slaBreachEngine.js` (24%),
    `routes/wellness.js` clinical sub-flows. Each spec adds 30-50 tests and
    +2-3pt to global. Once ≥70%, bump gate `65 → 70` in `.c8rc.json`.

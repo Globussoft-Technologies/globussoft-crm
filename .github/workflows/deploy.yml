@@ -221,10 +221,15 @@ jobs:
           #   - push-api.spec.js             (33 tests: routes/push.js)
           #   - communications-api.spec.js   (28 tests: routes/communications.js)
           #   - notifications-api.spec.js    (34 tests: routes/notifications.js + lib/notificationService.js)
-          # Total: 673 API tests run on every push.
-          # Next candidate specs (under-covered list): voice-transcription-api,
-          # knowledge-base-api, portal-api, cron/lowStockEngine.js,
-          # cron/sentimentEngine.js.
+          #   - contacts-api.spec.js         (77 tests: routes/contacts.js)
+          #   - deals-api.spec.js            (73 tests: routes/deals.js)
+          #   - surveys-api.spec.js          (54 tests: routes/surveys.js + public endpoints)
+          #   - external-api.spec.js         (53 tests: routes/external.js — X-API-Key partner endpoints)
+          #   - wellness-clinical-api.spec.js (~154 tests: routes/wellness.js patient/visit/Rx/consent/service/location)
+          # Total: ~1084 API tests run on every push.
+          # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
+          # routes/billing.js, routes/sandbox.js, routes/social.js,
+          # routes/payments.js, routes/auth.js, routes/approvals.js.
           npx playwright test \
             --project=chromium \
             --reporter=list \
@@ -246,7 +251,12 @@ jobs:
             tests/estimates-api.spec.js \
             tests/push-api.spec.js \
             tests/communications-api.spec.js \
-            tests/notifications-api.spec.js
+            tests/notifications-api.spec.js \
+            tests/contacts-api.spec.js \
+            tests/deals-api.spec.js \
+            tests/surveys-api.spec.js \
+            tests/external-api.spec.js \
+            tests/wellness-clinical-api.spec.js
           echo "::notice::API specs passed"
 
       - name: Upload artifacts on failure

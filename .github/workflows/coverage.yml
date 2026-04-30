@@ -153,7 +153,12 @@ jobs:
             tests/estimates-api.spec.js \
             tests/push-api.spec.js \
             tests/communications-api.spec.js \
-            tests/notifications-api.spec.js
+            tests/notifications-api.spec.js \
+            tests/contacts-api.spec.js \
+            tests/deals-api.spec.js \
+            tests/surveys-api.spec.js \
+            tests/external-api.spec.js \
+            tests/wellness-clinical-api.spec.js
 
       - name: Stop backend (SIGTERM → c8 flushes coverage data)
         run: |

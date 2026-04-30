@@ -54,7 +54,6 @@ export async function launchAdsGptAs(login = ADSGPT_DEMO_LOGIN) {
   // Step 3 — open dashboard; its RunBackLog picks up ?forword= and
   // swaps the key for the access-token cookie on its own origin.
   const target = `${ADSGPT_DASHBOARD}/?forword=${encodeURIComponent(saveData.key)}`;
-  const tab = window.open(target, '_blank', 'noopener,noreferrer');
-  if (!tab) throw new Error('Popup blocked — allow popups for this site');
+  window.open(target, '_blank', 'noopener,noreferrer');
   return target;
 }

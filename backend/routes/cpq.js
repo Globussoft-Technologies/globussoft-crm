@@ -53,8 +53,16 @@ router.post("/quotes", verifyToken, async (req, res) => {
       // Normalize numeric inputs BEFORE computing line totals — otherwise
       // missing quantity → undefined * unitPrice → NaN, which Prisma rejects
       // on the Float column and surfaces as a generic 500.
-      const qty = parseInt(item.quantity) || 1;
-      const price = parseFloat(item.unitPrice) || 0;
+      //
+      // Use Number.isFinite to distinguish missing/non-numeric from explicit
+      // zero. `parseInt(0) || 1` returns 1 because 0 is falsy in JS, which
+      // silently rewrote a deliberate quantity=0 into 1 and corrupted
+      // totalAmount (cpq-api spec line 382). isFinite-guard keeps explicit 0
+      // and only falls back to 1 on NaN (undefined / null / 'abc').
+      const parsedQty = parseInt(item.quantity);
+      const qty = Number.isFinite(parsedQty) ? parsedQty : 1;
+      const parsedPrice = parseFloat(item.unitPrice);
+      const price = Number.isFinite(parsedPrice) ? parsedPrice : 0;
       const lineCost = qty * price;
       if (item.isRecurring) computedMrr += lineCost;
       else computedTotal += lineCost;

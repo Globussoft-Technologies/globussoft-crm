@@ -88,13 +88,21 @@ export default function Locations() {
               Editing <strong>{form.name}</strong>
             </div>
           )}
-          <input placeholder="Short name (e.g. Ranchi)" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
-          <input placeholder="Address" required value={form.addressLine} onChange={(e) => setForm({ ...form, addressLine: e.target.value })} style={{ ...inputStyle, gridColumn: 'span 2' }} />
-          <input placeholder="City" required value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} style={inputStyle} />
-          <input placeholder="State" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} style={inputStyle} />
-          <input placeholder="Pincode" value={form.pincode} onChange={(e) => setForm({ ...form, pincode: e.target.value })} style={inputStyle} />
-          <input placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
-          <input placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={inputStyle} />
+          <input placeholder="Short name — e.g. Ranchi" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
+          <input placeholder="Address — e.g. 12, Main Rd, Lalpur" required value={form.addressLine} onChange={(e) => setForm({ ...form, addressLine: e.target.value })} style={{ ...inputStyle, gridColumn: 'span 2' }} />
+          <input placeholder="City — e.g. Ranchi" required value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} style={inputStyle} />
+          <input placeholder="State — e.g. Jharkhand" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} style={inputStyle} />
+          {/* #385: Indian PIN codes are exactly 6 digits — pattern + maxLength keep
+              this field numeric and bounded; backend re-validates with /^\d{6}$/
+              so paste-bypasses still 400 with INVALID_PINCODE. */}
+          <input placeholder="Pincode — 6 digits" inputMode="numeric" pattern="\d{6}" maxLength={6} title="Indian pincode is exactly 6 digits" value={form.pincode} onChange={(e) => setForm({ ...form, pincode: e.target.value.replace(/\D/g, '').slice(0, 6) })} style={inputStyle} />
+          <input placeholder="Phone — e.g. +91 98765 43210" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
+          <input placeholder="Email — e.g. clinic@brand.in" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={inputStyle} />
+          {/* #386: scaffolding — geocoding + Google Maps autofill not wired yet.
+              Tip surfaces the expected affordance without promising behaviour. */}
+          <div style={{ gridColumn: '1 / -1', fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '-0.25rem' }}>
+            Tip: paste a Google Maps share-link to auto-fill (coming soon)
+          </div>
           <button type="submit" disabled={saving} style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
             {saving ? 'Saving…' : (editingId ? 'Save changes' : 'Save location')}
           </button>

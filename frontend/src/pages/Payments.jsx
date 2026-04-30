@@ -9,7 +9,10 @@ import {
   X,
   Settings as SettingsIcon,
   AlertTriangle,
+  Plus,
+  ArrowRight,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
 import { formatMoney } from '../utils/money';
@@ -192,6 +195,52 @@ export default function Payments() {
         </div>
       )}
 
+      {/* #371: surface a clear "Configure provider →" CTA when neither
+          Stripe nor Razorpay is wired up. Previously the page just rendered
+          "Stripe / Razorpay not configured" with no path forward — owners
+          had to dig into Settings to find the integrations panel. */}
+      {!loading && config && !config?.stripe?.configured && !config?.razorpay?.configured && (
+        <div style={{
+          ...GLASS,
+          padding: '1rem 1.25rem',
+          marginBottom: '1.5rem',
+          borderColor: 'rgba(245,158,11,0.35)',
+          background: 'rgba(245,158,11,0.08)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+        }}>
+          <AlertTriangle size={18} style={{ color: '#f59e0b', flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.2rem' }}>
+              Stripe / Razorpay not configured
+            </div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              Add API keys for at least one gateway to start collecting customer payments.
+            </div>
+          </div>
+          <Link
+            to="/settings"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.5rem 1rem',
+              background: '#f59e0b',
+              color: '#0b0b14',
+              borderRadius: '8px',
+              fontWeight: 600,
+              fontSize: '0.85rem',
+              textDecoration: 'none',
+              border: 'none',
+            }}
+          >
+            <SettingsIcon size={14} /> Configure provider <ArrowRight size={14} />
+          </Link>
+        </div>
+      )}
+
       {/* Stats row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard
@@ -252,10 +301,47 @@ export default function Payments() {
             </tr>
           </thead>
           <tbody>
+            {/* #372: empty-state with column headers visible above (the
+                <thead> sits outside this conditional) plus an explicit
+                "Process your first payment" CTA. Previously the empty
+                ledger rendered as a single grey "No payments found."
+                line under what looked like a blank box. */}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                  {loading ? 'Loading payments...' : 'No payments found.'}
+                <td colSpan={7} style={{ padding: '3rem 2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  {loading ? (
+                    'Loading payments...'
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                      <CreditCard size={36} style={{ opacity: 0.35, color: '#635bff' }} />
+                      <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        No payments yet
+                      </div>
+                      <div style={{ fontSize: '0.82rem', maxWidth: 380 }}>
+                        Once a customer pays an invoice via Stripe or Razorpay, the
+                        transaction will appear here with status, amount, and gateway details.
+                      </div>
+                      <Link
+                        to="/invoices"
+                        style={{
+                          marginTop: '0.4rem',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                          padding: '0.5rem 1rem',
+                          background: 'rgba(99,91,255,0.18)',
+                          border: '1px solid rgba(99,91,255,0.4)',
+                          borderRadius: '8px',
+                          color: '#a4a0ff',
+                          fontSize: '0.85rem',
+                          fontWeight: 600,
+                          textDecoration: 'none',
+                        }}
+                      >
+                        <Plus size={14} /> Process your first payment
+                      </Link>
+                    </div>
+                  )}
                 </td>
               </tr>
             )}

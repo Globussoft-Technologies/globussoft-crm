@@ -38,10 +38,15 @@ export default function SequenceBuilder() {
   const reload = async () => {
     setLoading(true);
     try {
+      // #397: pass { silent: true } so a 404 (e.g. fresh sequence with no
+      // steps yet, or non-admin viewer) doesn't surface a "Not found." toast
+      // every time someone opens the builder. The .catch swallowing that
+      // existed before only suppressed the throw — the global toast still
+      // fired from inside fetchApi. silent stops the toast at the source.
       const [allSeq, stepsRes, tplRes] = await Promise.all([
-        fetchApi('/api/sequences').catch(() => []),
-        fetchApi(`/api/sequences/${sequenceId}/steps`).catch(() => []),
-        fetchApi('/api/email-templates').catch(() => []),
+        fetchApi('/api/sequences', { silent: true }).catch(() => []),
+        fetchApi(`/api/sequences/${sequenceId}/steps`, { silent: true }).catch(() => []),
+        fetchApi('/api/email-templates', { silent: true }).catch(() => []),
       ]);
       const seq = (Array.isArray(allSeq) ? allSeq : []).find(s => s.id === sequenceId);
       setSequence(seq || null);
@@ -140,6 +145,47 @@ export default function SequenceBuilder() {
         EmailTemplate-bound steps. Engine pauses enrollment on reply when
         <strong> Pause on reply</strong> is enabled.
       </p>
+
+      {/* #376: lightweight timeline preview so the owner can read the
+          sequence top-to-bottom before activating. Plain rows, no graph
+          rerender. Skipped when there are no steps yet. */}
+      {steps.length > 0 && (
+        <div style={{
+          marginBottom: 16, padding: 12,
+          background: 'var(--bg-secondary)', borderRadius: 8,
+          border: '1px solid var(--border)',
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            Flow preview
+          </div>
+          <ol style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7 }}>
+            {steps.map((s, i) => {
+              const meta = KIND_META[s.kind] || { label: s.kind };
+              let summary = '';
+              if (s.kind === 'email') {
+                const subj = s.emailTemplate?.subject || s.emailTemplate?.name || 'no template';
+                summary = `Email — "${subj}"`;
+              } else if (s.kind === 'sms') {
+                const body = (s.smsBody || '').slice(0, 50) || 'empty body';
+                summary = `SMS — "${body}"`;
+              } else if (s.kind === 'wait') {
+                const mins = s.delayMinutes ?? 0;
+                const days = mins / 1440;
+                summary = days >= 1 ? `Wait ${days % 1 === 0 ? days : days.toFixed(1)}d` : `Wait ${mins}m`;
+              } else if (s.kind === 'condition') {
+                summary = 'Condition branch';
+              } else {
+                summary = meta.label;
+              }
+              return (
+                <li key={s.id} style={{ color: 'var(--text-primary)' }}>
+                  <strong>Step {i + 1}:</strong> {summary}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start' }}>
         {/* Step list */}
@@ -256,7 +302,21 @@ function StepEditor({ step, templates, onSave, onClose }) {
       patch.smsBody = draft.smsBody;
       patch.pauseOnReply = !!draft.pauseOnReply;
     } else if (step.kind === 'wait') {
-      patch.delayMinutes = parseInt(draft.delayMinutes, 10) || 0;
+      // #375: reject non-numeric / negative delays at submit time. The
+      // <input type=number> already filters most junk, but a user can paste
+      // "tomorrow" or set a negative value via devtools — guard here so the
+      // engine never receives NaN.
+      const raw = String(draft.delayMinutes ?? '').trim();
+      if (raw === '' || !/^\d+$/.test(raw)) {
+        alert('Delay must be a non-negative whole number of minutes.');
+        return;
+      }
+      const parsed = parseInt(raw, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        alert('Delay must be a non-negative whole number of minutes.');
+        return;
+      }
+      patch.delayMinutes = parsed;
     } else if (step.kind === 'condition') {
       patch.conditionJson = draft.conditionJson;
     }
@@ -321,9 +381,17 @@ function StepEditor({ step, templates, onSave, onClose }) {
         <>
           <label style={lbl}>Delay (minutes)</label>
           <input
-            type="number" min="0"
+            // #375: numeric-only input. step="1" + min="0" + inputMode prevent
+            // free-text like "tomorrow" / "a bit later" from being typed; the
+            // submit handler re-validates as a defence-in-depth.
+            type="number" min="0" step="1" inputMode="numeric" pattern="[0-9]*"
             value={draft.delayMinutes}
-            onChange={e => setDraft({ ...draft, delayMinutes: e.target.value })}
+            onChange={e => {
+              const v = e.target.value;
+              // strip anything that isn't a digit so paste of "tomorrow" is
+              // visually rejected immediately
+              if (v === '' || /^\d+$/.test(v)) setDraft({ ...draft, delayMinutes: v });
+            }}
             style={inp}
           />
           <small style={{ color: 'var(--text-secondary)' }}>1440 = 24 hours, 10080 = 7 days</small>

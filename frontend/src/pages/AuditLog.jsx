@@ -306,7 +306,14 @@ export default function AuditLog() {
                         />
                       </td>
                       <td style={{ ...tdStyle, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                        {new Date(log.createdAt).toLocaleString()}
+                        {/* #387: forensic timing must be unambiguous. Render
+                            in IST with an explicit timezone label so a row
+                            reads "29/04/2026, 14:30:00 IST" rather than a
+                            naive local-time string. */}
+                        {new Date(log.createdAt).toLocaleString('en-IN', {
+                          timeZone: 'Asia/Kolkata',
+                          timeZoneName: 'short',
+                        })}
                       </td>
                       <td style={tdStyle}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

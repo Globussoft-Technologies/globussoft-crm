@@ -144,15 +144,61 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 export const AuthContext = createContext();
 export const ThemeContext = createContext();
 
+// Issue #207/#214/#216: wellness staff carry RBAC role=USER + an orthogonal
+// `wellnessRole` (doctor/professional/telecaller/helper/stylist). The Owner
+// Dashboard at /wellness exposes org-wide P&L (₹12L) and is for ADMIN/MANAGER
+// only — clinical and operational staff need their own landing page so they
+// don't see financial KPIs they shouldn't see. Login.jsx routes correctly on
+// fresh login; this helper covers refresh / `/` / GenericOnly bounces where
+// the URL would otherwise resolve to /wellness Owner Dashboard for everyone.
+function wellnessLandingFor(user) {
+  if (!user) return '/wellness';
+  if (user.role === 'ADMIN' || user.role === 'MANAGER') return '/wellness';
+  switch (user.wellnessRole) {
+    case 'owner':
+    case 'manager':
+    case 'admin':
+      return '/wellness';
+    case 'doctor':
+    case 'professional':
+      return '/wellness/calendar';
+    case 'telecaller':
+      return '/wellness/telecaller';
+    case 'helper':
+    case 'stylist':
+      return '/wellness/calendar';
+    default:
+      // No wellnessRole + not ADMIN/MANAGER — read-only fallback to calendar
+      // so we never silently drop them on the org-wide dashboard.
+      return '/wellness/calendar';
+  }
+}
+
 // Route guard: bounces wellness tenants away from generic-CRM-only pages.
 // The generic Enterprise Overview, deal pipeline, forecasting, etc. don't apply
 // to a clinic — wellness has its own /wellness Owner Dashboard. Without this
 // guard, typing /dashboard in the URL bar (or following a stale bookmark) would
 // surface "Pipeline Analytics" + "Recent Deals" panels that confuse the user.
+// #207/#214: route to a role-aware wellness landing rather than the org-wide
+// Owner Dashboard so doctors / telecallers / helpers don't see ₹12L P&L.
 function GenericOnly({ children }) {
-  const { tenant } = useContext(AuthContext);
-  if (tenant?.vertical === "wellness") {
-    return <Navigate to="/wellness" replace />;
+  const { tenant, user } = useContext(AuthContext);
+  if (tenant?.vertical === 'wellness') {
+    return <Navigate to={wellnessLandingFor(user)} replace />;
+  }
+  return children;
+}
+
+// #207/#214: doctor/telecaller landing on /wellness directly (e.g. clicking
+// the sidebar logo, typing the URL, or refreshing) would still see the Owner
+// Dashboard with org-wide P&L. Gate the Owner Dashboard route to ADMIN/MANAGER
+// (or `wellnessRole === owner|manager|admin`) and redirect everyone else to
+// their role-appropriate landing.
+function WellnessOwnerOnly({ children }) {
+  const { user } = useContext(AuthContext);
+  const target = wellnessLandingFor(user);
+  if (target !== '/wellness') {
+    return <Navigate to={target} replace />;
   }
   return children;
 }
@@ -573,116 +619,22 @@ export default function App() {
                     <Route path="calendar" element={<CalendarRedirect />} />
                     {/* Wellness vertical — gated by WellnessOnly so generic-CRM
                   tenants can't surface wellness pages by URL (#325). */}
-                    <Route
-                      path="wellness"
-                      element={
-                        <WellnessOnly>
-                          <WellnessOwnerDashboard />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/recommendations"
-                      element={
-                        <WellnessOnly>
-                          <WellnessRecommendations />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/patients"
-                      element={
-                        <WellnessOnly>
-                          <WellnessPatients />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/patients/:id"
-                      element={
-                        <WellnessOnly>
-                          <WellnessPatientDetail />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/services"
-                      element={
-                        <WellnessOnly>
-                          <WellnessServices />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/locations"
-                      element={
-                        <WellnessOnly>
-                          <WellnessLocations />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/calendar"
-                      element={
-                        <WellnessOnly>
-                          <WellnessCalendar />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/reports"
-                      element={
-                        <WellnessOnly>
-                          <WellnessReports />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/telecaller"
-                      element={
-                        <WellnessOnly>
-                          <WellnessTelecallerQueue />
-                        </WellnessOnly>
-                      }
-                    />
-                    {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
-                    <Route
-                      path="telecaller"
-                      element={<Navigate to="/wellness/telecaller" replace />}
-                    />
-                    <Route
-                      path="wellness/per-location"
-                      element={
-                        <WellnessOnly>
-                          <WellnessPerLocation />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/loyalty"
-                      element={
-                        <WellnessOnly>
-                          <WellnessLoyalty />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/waitlist"
-                      element={
-                        <WellnessOnly>
-                          <WellnessWaitlist />
-                        </WellnessOnly>
-                      }
-                    />
-                    <Route
-                      path="wellness/inventory"
-                      element={
-                        <WellnessOnly>
-                          <WellnessInventory />
-                        </WellnessOnly>
-                      }
-                    />
-                    {/* #309: /wellness/invoices used to render a blank page (no
+              <Route path="wellness" element={<WellnessOnly><WellnessOwnerOnly><WellnessOwnerDashboard /></WellnessOwnerOnly></WellnessOnly>} />
+              <Route path="wellness/recommendations" element={<WellnessOnly><WellnessRecommendations /></WellnessOnly>} />
+              <Route path="wellness/patients" element={<WellnessOnly><WellnessPatients /></WellnessOnly>} />
+              <Route path="wellness/patients/:id" element={<WellnessOnly><WellnessPatientDetail /></WellnessOnly>} />
+              <Route path="wellness/services" element={<WellnessOnly><WellnessServices /></WellnessOnly>} />
+              <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
+              <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
+              <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
+              <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
+              {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
+              <Route path="telecaller" element={<Navigate to="/wellness/telecaller" replace />} />
+              <Route path="wellness/per-location" element={<WellnessOnly><WellnessPerLocation /></WellnessOnly>} />
+              <Route path="wellness/loyalty" element={<WellnessOnly><WellnessLoyalty /></WellnessOnly>} />
+              <Route path="wellness/waitlist" element={<WellnessOnly><WellnessWaitlist /></WellnessOnly>} />
+              <Route path="wellness/inventory" element={<WellnessOnly><WellnessInventory /></WellnessOnly>} />
+              {/* #309: /wellness/invoices used to render a blank page (no
                   route binding). Wellness shares the generic CRM Invoices
                   UI — alias the prefixed URL to the canonical /invoices
                   route so the sidebar link, deep links from emails, and

@@ -246,7 +246,11 @@ export default function CalendarGrid() {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {new Date(v.visitDate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} · {v.patient?.name || `#${v.patientId}`}
+                            {/* #361: explicit IST suffix — the wall time on the chip is
+                                already IST-localised (toLocaleTimeString w/ en-IN +
+                                +05:30 fetch window upstream), but receptionists in
+                                shared workspaces couldn't tell at a glance. */}
+                            {new Date(v.visitDate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} IST · {v.patient?.name || `#${v.patientId}`}
                           </div>
                           <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {v.service?.name || '—'}

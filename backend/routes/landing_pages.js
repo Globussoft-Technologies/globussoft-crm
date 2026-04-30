@@ -6,6 +6,12 @@ const router = express.Router();
 const publicRouter = express.Router();
 const prisma = require("../lib/prisma");
 
+// #378: slug validation — only lowercase a-z, 0-9, hyphens; max 50 chars.
+// Anything else produces broken public URLs (spaces, uppercase, special chars).
+const SLUG_PATTERN = /^[a-z0-9-]+$/;
+const isValidSlug = (s) =>
+  typeof s === "string" && s.length > 0 && s.length <= 50 && SLUG_PATTERN.test(s);
+
 // ── Authenticated CRUD ────────────────────────────────────────────
 
 router.get("/", verifyToken, async (req, res) => {
@@ -38,6 +44,14 @@ router.post("/", verifyToken, async (req, res) => {
     }
     const trimmedTitle = title.trim();
 
+    // #378: if a slug is provided by the client, validate before insert.
+    // Auto-generated slugs (built below) already conform to [a-z0-9-]+.
+    if (slug !== undefined && slug !== null && slug !== "" && !isValidSlug(slug)) {
+      return res.status(400).json({
+        error: "Invalid slug. Use lowercase letters, numbers, and hyphens only (max 50 chars).",
+      });
+    }
+
     // #339: dedup-on-create — if a Draft landing page with the same title
     // (case-insensitive trim) already exists for this tenant, reject with 409
     // so the user opens the existing draft instead of accumulating dupes.
@@ -61,7 +75,11 @@ router.post("/", verifyToken, async (req, res) => {
       });
     }
 
-    const finalSlug = slug || trimmedTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now().toString(36);
+    // #378: cap auto-generated slugs at 50 chars (incl. timestamp suffix).
+    const tsSuffix = Date.now().toString(36);
+    const baseSlug = trimmedTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    const truncatedBase = baseSlug.slice(0, Math.max(0, 50 - tsSuffix.length - 1));
+    const finalSlug = slug || (truncatedBase ? `${truncatedBase}-${tsSuffix}` : tsSuffix);
 
     let finalContent = content;
     if (templateType && !content) {
@@ -90,7 +108,15 @@ router.put("/:id", verifyToken, async (req, res) => {
     if (cssOverrides !== undefined) data.cssOverrides = cssOverrides;
     if (metaTitle !== undefined) data.metaTitle = metaTitle;
     if (metaDescription !== undefined) data.metaDescription = metaDescription;
-    if (slug !== undefined) data.slug = slug;
+    if (slug !== undefined) {
+      // #378: reject invalid slugs on update too — same rules as create.
+      if (!isValidSlug(slug)) {
+        return res.status(400).json({
+          error: "Invalid slug. Use lowercase letters, numbers, and hyphens only (max 50 chars).",
+        });
+      }
+      data.slug = slug;
+    }
 
     res.json(await prisma.landingPage.update({ where: { id: existing.id }, data }));
   } catch (err) { res.status(500).json({ error: "Failed to update page" }); }

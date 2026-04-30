@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Send, Plus, Trash2, Edit2, Play, X, ToggleLeft, ToggleRight, Filter } from 'lucide-react';
+import { Send, Plus, Trash2, Edit2, Play, X, ToggleLeft, ToggleRight, Filter, Loader2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -24,6 +24,20 @@ const OP_OPTIONS = [
 // #299: canonical lead pipeline statuses. Must stay in sync with backend
 // ALLOWED_STATUSES in backend/routes/lead_routing.js.
 const STATUS_OPTIONS = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
+
+// #370: country list for the routing-rule typeahead. A long unsearchable
+// <select> was unusable on real devices, so we render a free-text input
+// backed by a <datalist> — the browser narrows suggestions as the user
+// types and still allows free-form values for edge cases (e.g. "Korea,
+// Republic of"). Common ISO 3166 short names, ordered alphabetically.
+const COUNTRY_OPTIONS = [
+  'Australia', 'Bangladesh', 'Brazil', 'Canada', 'China', 'France', 'Germany',
+  'India', 'Indonesia', 'Ireland', 'Italy', 'Japan', 'Kenya', 'Malaysia',
+  'Mexico', 'Nepal', 'Netherlands', 'New Zealand', 'Nigeria', 'Pakistan',
+  'Philippines', 'Poland', 'Russia', 'Saudi Arabia', 'Singapore', 'South Africa',
+  'South Korea', 'Spain', 'Sri Lanka', 'Sweden', 'Switzerland', 'Thailand',
+  'Turkey', 'UAE', 'United Kingdom', 'United States', 'Vietnam',
+];
 
 const emptyRow = () => ({ field: 'source', op: 'eq', value: '' });
 
@@ -228,7 +242,19 @@ export default function LeadRouting() {
     }
   };
 
+  // #369: a single click previously fired the apply across thousands of
+  // contacts with no confirmation and no progress feedback. Gate behind a
+  // notify.confirm() and rely on the existing `applying` state to surface
+  // the in-flight spinner on the button (see render below).
   const applyAll = async () => {
+    const ok = await notify.confirm({
+      title: 'Apply all routing rules?',
+      message: 'This will evaluate every active rule against all contacts in this tenant and re-assign owners. The operation can take a while on large datasets.',
+      confirmText: 'Apply All',
+      cancelText: 'Cancel',
+      destructive: false,
+    });
+    if (!ok) return;
     setApplying(true);
     try {
       const result = await fetchApi('/api/lead-routing/apply-all', { method: 'POST' });
@@ -282,8 +308,9 @@ export default function LeadRouting() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button onClick={applyAll} disabled={applying} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Play size={16} /> {applying ? 'Applying...' : 'Apply All'}
+          <button onClick={applyAll} disabled={applying} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: applying ? 'wait' : 'pointer' }} aria-busy={applying}>
+            {applying ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
+            {applying ? 'Applying…' : 'Apply All'}
           </button>
           <button onClick={openNew} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={16} /> Add Rule
@@ -346,6 +373,12 @@ export default function LeadRouting() {
 
       {showModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '1rem' }}>
+          {/* #370: single shared <datalist> for country typeahead — kept at
+              the modal root so it's outside the row grid (datalist is
+              invisible but is still a layout child). */}
+          <datalist id="country-list">
+            {COUNTRY_OPTIONS.map(c => <option key={c} value={c} />)}
+          </datalist>
           <div className="card" style={{ padding: '1.75rem', width: '100%', maxWidth: 640, maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h3 style={{ fontWeight: 'bold', fontSize: '1.2rem', margin: 0 }}>{editing ? 'Edit Rule' : 'New Routing Rule'}</h3>
@@ -378,12 +411,25 @@ export default function LeadRouting() {
                     {/* #299: when the condition field is "status", constrain the
                         value to the canonical pipeline enum instead of a free
                         text input. "in" still falls back to text since it
-                        accepts a comma-separated list. */}
+                        accepts a comma-separated list.
+                        #370: when the field is "country" use a <datalist>
+                        typeahead instead of a long unsearchable dropdown —
+                        the browser narrows suggestions as the user types
+                        and still accepts free-form text for edge cases. */}
                     {row.field === 'status' && row.op !== 'in' ? (
                       <select className="input-field" value={row.value} onChange={e => updateRow(idx, 'value', e.target.value)}>
                         <option value="">— select —</option>
                         {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
+                    ) : row.field === 'country' && row.op !== 'in' ? (
+                      <input
+                        className="input-field"
+                        list="country-list"
+                        value={row.value}
+                        onChange={e => updateRow(idx, 'value', e.target.value)}
+                        placeholder="Type to search countries…"
+                        autoComplete="off"
+                      />
                     ) : (
                       <input className="input-field" value={row.value} onChange={e => updateRow(idx, 'value', e.target.value)} placeholder={row.op === 'in' ? (row.field === 'status' ? 'Lead,Prospect,Customer' : 'Website,Referral,Ad') : 'value'} />
                     )}

@@ -166,11 +166,15 @@ const TOAST_COLORS = {
 function ToastStack({ toasts, onDismiss }) {
   if (toasts.length === 0) return null;
   return (
+    // #399: bumped `top` from 24px (~1.5rem) to 80px (~5rem) so the toast
+    // stack clears the global header in the top-right (Notifications bell,
+    // profile menu, Logout). Prior placement overlapped those controls and
+    // both visually obscured them and stole pointer events on the bell.
     <div
       role="region"
       aria-label="Notifications"
       style={{
-        position: 'fixed', top: 24, right: 24, zIndex: 10000,
+        position: 'fixed', top: 80, right: 24, zIndex: 10000,
         display: 'flex', flexDirection: 'column', gap: 10,
         maxWidth: 420, pointerEvents: 'none',
       }}

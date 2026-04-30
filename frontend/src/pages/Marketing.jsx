@@ -151,15 +151,53 @@ ${fields.map(f => `  <div style="display: flex; flex-direction: column; gap: 0.2
         </div>
       )}
 
-      {(activeTab === 'sms' || activeTab === 'push') && (
+      {/* #373: each sub-tab renders its own content. Previously SMS, Push,
+          and Forms shared an identical "Configure provider" placeholder which
+          made the tab strip feel broken — every tab looked the same. Each
+          tab now has a heading, a short description, and a tab-specific CTA.
+          Real CRUD lives behind the "Open …" links on dedicated pages. */}
+      {activeTab === 'sms' && (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ textAlign: 'center', padding: '4rem', background: 'var(--subtle-bg-2)', borderRadius: '12px', border: '1px dashed var(--border-color)', maxWidth: '500px' }}>
-            <Megaphone size={48} color="var(--text-secondary)" style={{ opacity: 0.3, margin: '0 auto 1rem' }} />
-            <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem' }}>{activeTab === 'sms' ? 'SMS' : 'Push'} Campaigns</h3>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-              Configure your {activeTab === 'sms' ? 'SMS provider (MSG91 / Twilio)' : 'VAPID keys and push'} settings first, then create templates and send campaigns.
+          <div style={{ textAlign: 'center', padding: '4rem', background: 'var(--subtle-bg-2)', borderRadius: '12px', border: '1px dashed var(--border-color)', maxWidth: '560px' }}>
+            <MessageSquare size={48} color="#10b981" style={{ opacity: 0.85, margin: '0 auto 1rem' }} />
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem' }}>SMS Campaigns</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+              Manage your reusable SMS templates and fire one-off blasts to a contact list or
+              segment. Sender and provider (MSG91 / Twilio) are configured under Channels.
             </p>
-            <a href="/channels" style={{ color: 'var(--accent-color)', fontWeight: '500', textDecoration: 'none' }}>Go to Channels Settings →</a>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+              Templates support {`{{contact.firstName}}`} merge tokens and the same opt-out
+              footer rules as your transactional SMS.
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <a href="/channels" className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none', background: '#10b981', border: 'none' }}>
+                <Send size={14} /> Open SMS Templates &amp; Blast
+              </a>
+              <a href="/channels" style={{ alignSelf: 'center', color: 'var(--accent-color)', fontWeight: 500, textDecoration: 'none' }}>Provider settings →</a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'push' && (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ textAlign: 'center', padding: '4rem', background: 'var(--subtle-bg-2)', borderRadius: '12px', border: '1px dashed var(--border-color)', maxWidth: '560px' }}>
+            <Megaphone size={48} color="#8b5cf6" style={{ opacity: 0.85, margin: '0 auto 1rem' }} />
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem' }}>Push Campaigns</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+              Manage your push-notification templates (title, body, deep link) and send to
+              all subscribers or a contact segment. Requires VAPID keys configured under
+              Channels.
+            </p>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+              Web Push delivery uses the standard W3C Push API — no native app required.
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <a href="/channels" className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none', background: '#8b5cf6', border: 'none' }}>
+                <Send size={14} /> Open Push Templates
+              </a>
+              <a href="/channels" style={{ alignSelf: 'center', color: 'var(--accent-color)', fontWeight: 500, textDecoration: 'none' }}>VAPID settings →</a>
+            </div>
           </div>
         </div>
       )}

@@ -79,6 +79,20 @@ export default function Services() {
             <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
           </button>
         )}
+        {/* #365: Packages tab needs its own primary CTA. The package builder is
+            already rendered inline below, so this just scrolls to the form
+            anchor — no modal needed. */}
+        {tab === 'packages' && (
+          <button
+            onClick={() => {
+              const el = document.getElementById('package-builder-anchor');
+              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+          >
+            <Plus size={16} /> Create Package
+          </button>
+        )}
       </header>
 
       {/* Tabs */}
@@ -190,6 +204,10 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
                 <option value="medium">Medium tier</option>
                 <option value="high">High tier</option>
               </select>
+              {/* #364: explain tier semantics inline so the dropdown isn't a guessing game. */}
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.3rem', lineHeight: 1.4 }}>
+                LOW = quick consult / under ₹2K · MED = standard treatment / ₹2K-₹10K · HIGH = procedure / ₹10K+
+              </div>
             </div>
             <div>
               <label style={fieldLabel}>Base price (₹) <span style={{ color: '#ef4444' }}>*</span></label>
@@ -525,7 +543,7 @@ function PackageBuilder({ services }) {
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}>
+    <div id="package-builder-anchor" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}>
       <div className="glass" style={{ padding: '1.5rem' }}>
         <h2 style={{ fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '1rem' }}>
           <Package size={16} /> Build a package

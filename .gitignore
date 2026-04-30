@@ -68,5 +68,8 @@ e2e/fetch_fathom.js
 # Claude session runtime
 .claude/
 
+# Local coverage snapshot dump (downloaded artifact for backend/scripts/coverage-analysis.js)
+backend/coverage-snapshot/
+
 .env
 .env.docker

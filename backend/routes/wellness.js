@@ -16,6 +16,10 @@ const { ipKeyGenerator } = require("express-rate-limit");
 const prisma = require("../lib/prisma");
 const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
 const {
+  getAllTreatmentPlans,
+  updateTreatmentPlan,
+} = require("../controllers/treatmentPlanController")
+const {
   renderPrescriptionPdf,
   renderConsentPdf,
   renderBrandedInvoicePdf,
@@ -190,6 +194,11 @@ const endOfDay = (d = new Date()) => {
 // strings from a JSON array on the Visit row, NOT the Visit itself. The
 // Visit row + its prescriptions + consent + visit history all stay.
 // ─────────────────────────────────────────────────────────────────────
+
+// Active treatements
+router.get("/activetreatment", getAllTreatmentPlans);
+router.put("/treatment-plans/:id", updateTreatmentPlan);
+
 
 // ── Patients ───────────────────────────────────────────────────────
 
@@ -460,12 +469,12 @@ const ALLOWED_VISIT_STATUSES = new Set(["booked", "arrived", "in-treatment", "co
 // natural forward progression and a few corrective backward transitions
 // (e.g. accidentally marking arrived → back to booked).
 const VISIT_TRANSITIONS = {
-  "booked":       new Set(["booked", "arrived", "in-treatment", "completed", "no-show", "cancelled"]),
-  "arrived":      new Set(["arrived", "booked", "in-treatment", "completed", "no-show", "cancelled"]),
+  "booked": new Set(["booked", "arrived", "in-treatment", "completed", "no-show", "cancelled"]),
+  "arrived": new Set(["arrived", "booked", "in-treatment", "completed", "no-show", "cancelled"]),
   "in-treatment": new Set(["in-treatment", "arrived", "completed", "cancelled"]),
-  "completed":    new Set(["completed"]), // terminal
-  "no-show":      new Set(["no-show", "booked"]), // allow rebook
-  "cancelled":    new Set(["cancelled"]), // terminal
+  "completed": new Set(["completed"]), // terminal
+  "no-show": new Set(["no-show", "booked"]), // allow rebook
+  "cancelled": new Set(["cancelled"]), // terminal
 };
 
 router.post("/patients", async (req, res) => {
@@ -1058,8 +1067,8 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
     // capture before/after drug arrays so the diff is reconstructible without
     // having to read prior versions of the row.
     let priorDrugs = null, newDrugs = null;
-    try { priorDrugs = JSON.parse(existing.drugs || '[]'); } catch (_) {}
-    try { newDrugs = JSON.parse(updated.drugs || '[]'); } catch (_) {}
+    try { priorDrugs = JSON.parse(existing.drugs || '[]'); } catch (_) { }
+    try { newDrugs = JSON.parse(updated.drugs || '[]'); } catch (_) { }
     await writeAudit('Prescription', 'UPDATE_PRESCRIPTION', updated.id, req.user.userId, req.user.tenantId, {
       patientId: updated.patientId,
       visitId: updated.visitId,
@@ -2292,7 +2301,7 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
     ] = await Promise.all([
       prisma.visit.findMany({
         where: visitWhere({ visitDate: { gte: todayStart, lte: todayEnd } }),
-        select: { id: true, status: true, amountCharged: true, serviceId: true },
+        select: { id: true, status: true, serviceId: true, service: { select: { basePrice: true } } },
       }),
       prisma.visit.findMany({
         where: visitWhere({ visitDate: { gte: yesterdayStart, lte: yesterdayEnd } }),
@@ -2305,17 +2314,17 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
       prisma.agentRecommendation.findMany({
         where: locationId
           ? {
-              tenantId,
-              status: "pending",
-              // AgentRecommendation has no direct locationId. The orchestrator
-              // stores per-location recommendations with locationId in the
-              // JSON `payload`. Match either explicit JSON-substring or
-              // tenant-wide recommendations that lack a locationId scope.
-              OR: [
-                { payload: { contains: `"locationId":${locationId}` } },
-                { payload: { contains: `"locationId": ${locationId}` } },
-              ],
-            }
+            tenantId,
+            status: "pending",
+            // AgentRecommendation has no direct locationId. The orchestrator
+            // stores per-location recommendations with locationId in the
+            // JSON `payload`. Match either explicit JSON-substring or
+            // tenant-wide recommendations that lack a locationId scope.
+            OR: [
+              { payload: { contains: `"locationId":${locationId}` } },
+              { payload: { contains: `"locationId": ${locationId}` } },
+            ],
+          }
           : { tenantId, status: "pending" },
         orderBy: { priority: "desc" },
         take: 5,
@@ -2396,6 +2405,12 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
     const completedToday = todayVisits.filter((v) => v.status === "completed").length;
     const capacity = 8 * 17; // 17 staff × 8 slots — generous baseline
     const occupancyPct = Math.min(100, Math.round((filledToday / capacity) * 100));
+
+    // Expected revenue: sum basePrice of booked+completed visits (expected service cost for today)
+    const revenueGeneratingVisits = todayVisits.filter((v) => filledStatuses.has(v.status));
+    const expectedRevenueAmount = revenueGeneratingVisits.reduce((total, v) => {
+      return total + (v.service?.basePrice ? parseFloat(v.service.basePrice) : 0);
+    }, 0);
 
     // ── PRD §6.8: No-show risk scorer ────────────────────────────────
     // Rule-based, no ML. Score 0–100 per upcoming booked visit; aggregate
@@ -2494,7 +2509,7 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
       today: {
         visits: todayVisits.length,
         completed: completedToday,
-        expectedRevenue: sum(todayVisits, "amountCharged"),
+        expectedRevenue: expectedRevenueAmount,
         occupancyPct,
         newLeads: newLeadsToday,
         noShowRisk,
@@ -3406,9 +3421,9 @@ router.get("/loyalty/leaderboard/month", requireManagerPlus, async (req, res) =>
     const ids = grouped.map((g) => g.patientId);
     const patients = ids.length
       ? await prisma.patient.findMany({
-          where: { id: { in: ids }, tenantId: req.user.tenantId },
-          select: { id: true, name: true, phone: true },
-        })
+        where: { id: { in: ids }, tenantId: req.user.tenantId },
+        select: { id: true, name: true, phone: true },
+      })
       : [];
     const byId = Object.fromEntries(patients.map((p) => [p.id, p]));
     res.json(
@@ -3670,65 +3685,65 @@ router.post(
   portalRequestOtpIpLimiter,
   portalRequestOtpPhoneLimiter,
   async (req, res) => {
-  try {
-    const { phone } = req.body || {};
-    if (!phone) return res.status(400).json({ error: "phone is required" });
+    try {
+      const { phone } = req.body || {};
+      if (!phone) return res.status(400).json({ error: "phone is required" });
 
-    const digits = String(phone).replace(/\D/g, "");
-    if (digits.length < 10) {
-      return res.status(400).json({ error: "Invalid phone" });
-    }
-    const last10 = digits.slice(-10);
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      const digits = String(phone).replace(/\D/g, "");
+      if (digits.length < 10) {
+        return res.status(400).json({ error: "Invalid phone" });
+      }
+      const last10 = digits.slice(-10);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    // Patient lookup is tenant-agnostic (visitor has no tenant context).
-    const candidates = await prisma.patient.findMany({
-      where: { phone: { contains: last10 } },
-      select: { id: true, name: true, phone: true, tenantId: true },
-      take: 5,
-    });
-    const patient = candidates.find((p) => {
-      const d = String(p.phone || "").replace(/\D/g, "");
-      return d.slice(-10) === last10;
-    });
-
-    let generatedOtp = null;
-    if (patient) {
-      const otp = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
-      generatedOtp = otp;
-      await prisma.patientOtp.create({
-        data: {
-          phone: last10,
-          otp,
-          expiresAt,
-          tenantId: patient.tenantId,
-        },
+      // Patient lookup is tenant-agnostic (visitor has no tenant context).
+      const candidates = await prisma.patient.findMany({
+        where: { phone: { contains: last10 } },
+        select: { id: true, name: true, phone: true, tenantId: true },
+        take: 5,
       });
-      // Queue an outbound SMS via SmsMessage table (drained by smsProvider).
-      await prisma.smsMessage.create({
-        data: {
-          to: patient.phone || last10,
-          body: `Your verification code is ${otp}. Valid for 10 minutes.`,
-          direction: "OUTBOUND",
-          status: "QUEUED",
-          tenantId: patient.tenantId,
-        },
+      const patient = candidates.find((p) => {
+        const d = String(p.phone || "").replace(/\D/g, "");
+        return d.slice(-10) === last10;
       });
-    }
 
-    // #300 [P0]: NEVER return the OTP in the response body. The previous gate
-    // (NODE_ENV !== 'production') leaked the OTP on the public demo server,
-    // enabling unauthenticated account takeover for any patient phone. The
-    // OTP is delivered out-of-band via SMS only. E2E tests that need to read
-    // the OTP must read it from the PatientOtp DB table directly (no env-var
-    // bypass — easier to forget than to disable). Always return ok:true so
-    // we don't leak whether the phone is registered.
-    res.json({ ok: true, expiresAt });
-  } catch (e) {
-    console.error("[wellness] portal request-otp error:", e.message);
-    res.status(500).json({ error: "Failed to request OTP" });
-  }
-});
+      let generatedOtp = null;
+      if (patient) {
+        const otp = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
+        generatedOtp = otp;
+        await prisma.patientOtp.create({
+          data: {
+            phone: last10,
+            otp,
+            expiresAt,
+            tenantId: patient.tenantId,
+          },
+        });
+        // Queue an outbound SMS via SmsMessage table (drained by smsProvider).
+        await prisma.smsMessage.create({
+          data: {
+            to: patient.phone || last10,
+            body: `Your verification code is ${otp}. Valid for 10 minutes.`,
+            direction: "OUTBOUND",
+            status: "QUEUED",
+            tenantId: patient.tenantId,
+          },
+        });
+      }
+
+      // #300 [P0]: NEVER return the OTP in the response body. The previous gate
+      // (NODE_ENV !== 'production') leaked the OTP on the public demo server,
+      // enabling unauthenticated account takeover for any patient phone. The
+      // OTP is delivered out-of-band via SMS only. E2E tests that need to read
+      // the OTP must read it from the PatientOtp DB table directly (no env-var
+      // bypass — easier to forget than to disable). Always return ok:true so
+      // we don't leak whether the phone is registered.
+      res.json({ ok: true, expiresAt });
+    } catch (e) {
+      console.error("[wellness] portal request-otp error:", e.message);
+      res.status(500).json({ error: "Failed to request OTP" });
+    }
+  });
 
 router.post("/portal/login/verify-otp", async (req, res) => {
   try {

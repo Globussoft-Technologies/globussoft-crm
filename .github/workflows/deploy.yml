@@ -208,8 +208,9 @@ jobs:
           #   - marketing-api.spec.js        (41 tests: routes/marketing.js)
           #   - reports-api.spec.js          (52 tests: routes/reports.js)
           #   - sla-breach-api.spec.js       (48 tests: cron/slaBreachEngine.js)
-          #   - treatment-plans-api.spec.js  (40 tests: controllers/treatmentPlanController.js + routes/wellness treatment-plan endpoints)
-          # Total: 229 API tests run on every push.
+          #   - treatment-plans-api.spec.js  (40 tests: controllers/treatmentPlanController.js)
+          #   - sequence-engine-api.spec.js  (49 tests: cron/sequenceEngine.js)
+          # Total: 278 API tests run on every push.
           # Next: voice-transcription-api, knowledge-base-api, portal-api.
           npx playwright test \
             --project=chromium \
@@ -220,7 +221,8 @@ jobs:
             tests/marketing-api.spec.js \
             tests/reports-api.spec.js \
             tests/sla-breach-api.spec.js \
-            tests/treatment-plans-api.spec.js
+            tests/treatment-plans-api.spec.js \
+            tests/sequence-engine-api.spec.js
           echo "::notice::API specs passed"
 
       - name: Upload artifacts on failure

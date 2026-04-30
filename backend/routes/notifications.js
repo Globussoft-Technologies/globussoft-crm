@@ -126,9 +126,20 @@ router.delete("/:id", async (req, res) => {
 const ALLOWED_NOTIFICATION_TYPES = new Set(["info", "success", "warning", "error", "system", "deal", "task", "ticket"]);
 
 // POST / — create + deliver notification (admin-only for broadcast / cross-user)
+//
+// Targeting parameter naming: the body field is `targetUserId`, NOT `userId`.
+// Reason: the global `stripDangerous` middleware deletes `req.body.userId` for
+// every request before any route handler runs (anti-impersonation guardrail
+// — see middleware/validateInput.js). If the route read `userId` from the
+// body, every targeted call would silently fall into the broadcast branch
+// because `userId` would already be undefined. `targetUserId` is not in the
+// strip list, so it survives the middleware and reaches this handler.
+// The audit-log payload has used the same `targetUserId` field name since
+// #179 — this just lines up the request shape with what the audit row
+// already records.
 router.post("/", async (req, res) => {
   try {
-    const { userId, title, message, type, link, channels } = req.body;
+    const { targetUserId, title, message, type, link, channels } = req.body;
     if (!title || !message) {
       return res.status(400).json({ error: "title and message are required" });
     }
@@ -146,10 +157,10 @@ router.post("/", async (req, res) => {
     const io = req.io || null;
 
     // #169: tighten authorization so a non-admin can't spam every user in the tenant.
-    //   - With a userId targeting another user → admin only.
-    //   - Without a userId (broadcast) → admin only.
-    //   - With userId === own userId → self-notify allowed for any role.
-    if (!userId) {
+    //   - With a targetUserId targeting another user → admin only.
+    //   - Without a targetUserId (broadcast) → admin only.
+    //   - With targetUserId === own userId → self-notify allowed for any role.
+    if (!targetUserId) {
       if (!isAdmin) return res.status(403).json({ error: "Only admins can broadcast notifications", code: "BROADCAST_FORBIDDEN" });
       const result = await notifyTenant({ tenantId, title, message, type, link, channels, io });
       // #179: tenant-wide broadcasts are an admin "blast" surface — must be audited.
@@ -162,7 +173,7 @@ router.post("/", async (req, res) => {
       });
       return res.status(201).json({ delivered: result.length, notifications: result });
     }
-    const targetId = parseInt(userId);
+    const targetId = parseInt(targetUserId);
     if (targetId !== callerId && !isAdmin) {
       return res.status(403).json({ error: "Only admins can notify other users", code: "CROSS_USER_FORBIDDEN" });
     }

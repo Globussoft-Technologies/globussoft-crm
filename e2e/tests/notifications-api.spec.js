@@ -22,11 +22,19 @@
  *   POST   /api/notifications              — auth + validation + RBAC:
  *      400 missing title/message
  *      400 INVALID_NOTIFICATION_TYPE on bad type
- *      403 BROADCAST_FORBIDDEN for non-admin without userId
- *      403 CROSS_USER_FORBIDDEN for non-admin with another userId
- *      201 self-notify (any role)
- *      201 admin targeted (other userId)
- *      201 admin broadcast (no userId) — drives notifyTenant + notifyMany
+ *      403 BROADCAST_FORBIDDEN for non-admin without targetUserId
+ *      403 CROSS_USER_FORBIDDEN for non-admin with another targetUserId
+ *      201 self-notify (any role; targetUserId === own userId)
+ *      201 admin targeted (other targetUserId)
+ *      201 admin broadcast (no targetUserId) — drives notifyTenant + notifyMany
+ *
+ *   Note on the body field name: the route reads `targetUserId` (NOT
+ *   `userId`). The global stripDangerous middleware deletes `req.body.userId`
+ *   before any handler runs (anti-impersonation guardrail), so a body field
+ *   named `userId` would silently never reach this route. `targetUserId` is
+ *   not stripped. This was a real bug pre-2026-04-30: the targeted-notify
+ *   path was unreachable from the API and every targeted call collapsed
+ *   into the broadcast branch.
  *   GET    /api/notifications/preferences  — stub
  *   PUT    /api/notifications/preferences  — stub
  *
@@ -43,6 +51,13 @@
  * 201 with the DB row, which is what every caller depends on.
  */
 const { test, expect } = require('@playwright/test');
+
+// Tests in this file share state through admin@globussoft.com's notification
+// list (e.g. mark-all-read affects unread count seen by later tests). With
+// playwright.config's `fullyParallel: true` + `workers: 2 in CI`, parallel
+// shuffle scrambles ordering and races on shared state. Pin the file to one
+// worker, sequential.
+test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 30000;
@@ -136,7 +151,7 @@ function trackResponse(body) {
 async function createSelfNotif(request, overrides = {}) {
   const { token, userId } = await getAdmin(request);
   const res = await post(request, token, '/api/notifications', {
-    userId,
+    targetUserId: userId,
     title: `${RUN_TAG} ${overrides.title || 'self'}`,
     message: overrides.message || 'self message',
     type: overrides.type || 'info',
@@ -198,7 +213,7 @@ test.describe('Notifications API — GET /', () => {
     if (!adminTok || !regularId || regularId === adminId) test.skip(true, 'need both admin + non-admin user with distinct ids');
 
     const created = await post(request, adminTok, '/api/notifications', {
-      userId: regularId,
+      targetUserId: regularId,
       title: `${RUN_TAG} cross-user-leak-test`,
       message: 'should not appear in admin list',
     });
@@ -328,7 +343,7 @@ test.describe('Notifications API — POST / (validation + RBAC)', () => {
   test('400 when title is missing', async ({ request }) => {
     const { token, userId } = await getAdmin(request);
     const res = await post(request, token, '/api/notifications', {
-      userId, message: 'no-title',
+      targetUserId: userId, message: 'no-title',
     });
     expect(res.status()).toBe(400);
     expect((await res.json()).error).toMatch(/title.*message/i);
@@ -337,7 +352,7 @@ test.describe('Notifications API — POST / (validation + RBAC)', () => {
   test('400 when message is missing', async ({ request }) => {
     const { token, userId } = await getAdmin(request);
     const res = await post(request, token, '/api/notifications', {
-      userId, title: `${RUN_TAG} no-message`,
+      targetUserId: userId, title: `${RUN_TAG} no-message`,
     });
     expect(res.status()).toBe(400);
   });
@@ -345,7 +360,7 @@ test.describe('Notifications API — POST / (validation + RBAC)', () => {
   test('400 INVALID_NOTIFICATION_TYPE on bad type', async ({ request }) => {
     const { token, userId } = await getAdmin(request);
     const res = await post(request, token, '/api/notifications', {
-      userId,
+      targetUserId: userId,
       title: `${RUN_TAG} bad-type`,
       message: 'm',
       type: 'INVALID_TYPE_ZZZ',
@@ -359,7 +374,7 @@ test.describe('Notifications API — POST / (validation + RBAC)', () => {
     const types = ['info', 'success', 'warning', 'error', 'system', 'deal', 'task', 'ticket'];
     for (const t of types) {
       const res = await post(request, token, '/api/notifications', {
-        userId,
+        targetUserId: userId,
         title: `${RUN_TAG} type-${t}`,
         message: 'm',
         type: t,
@@ -385,7 +400,7 @@ test.describe('Notifications API — POST / (validation + RBAC)', () => {
     const { userId: adminId } = await getAdmin(request);
     if (!token || !adminId) test.skip(true, 'no regular USER token or admin id available');
     const res = await post(request, token, '/api/notifications', {
-      userId: adminId,
+      targetUserId: adminId,
       title: `${RUN_TAG} should-403-cross-user`,
       message: 'm',
     });
@@ -401,7 +416,7 @@ test.describe('Notifications API — POST / (create paths)', () => {
     const { token, userId } = await getUser(request);
     if (!token) test.skip(true, 'no regular USER token available');
     const res = await post(request, token, '/api/notifications', {
-      userId,
+      targetUserId: userId,
       title: `${RUN_TAG} user-self-notify`,
       message: 'self ok',
     });
@@ -417,7 +432,7 @@ test.describe('Notifications API — POST / (create paths)', () => {
     const { userId: regularId } = await getUser(request);
     if (!adminTok || !regularId) test.skip(true, 'need admin token + regular user id');
     const res = await post(request, adminTok, '/api/notifications', {
-      userId: regularId,
+      targetUserId: regularId,
       title: `${RUN_TAG} admin-target-user`,
       message: 'm',
       type: 'success',
@@ -449,7 +464,7 @@ test.describe('Notifications API — POST / (create paths)', () => {
   test('channels=["db"] still creates the row (only DB persistence)', async ({ request }) => {
     const { token, userId } = await getAdmin(request);
     const res = await post(request, token, '/api/notifications', {
-      userId,
+      targetUserId: userId,
       title: `${RUN_TAG} db-only`,
       message: 'no socket no push no email',
       channels: ['db'],
@@ -464,7 +479,7 @@ test.describe('Notifications API — POST / (create paths)', () => {
     // exists — delivery outcome on those channels is not asserted here.
     const { token, userId } = await getAdmin(request);
     const res = await post(request, token, '/api/notifications', {
-      userId,
+      targetUserId: userId,
       title: `${RUN_TAG} all-channels`,
       message: 'broadcast across channels',
       channels: ['db', 'socket', 'push', 'email'],

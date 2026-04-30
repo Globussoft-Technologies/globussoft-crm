@@ -2,7 +2,11 @@ const prisma = require("../lib/prisma");
 
 exports.getAllTreatmentPlans = async (req, res) => {
     try {
-        const tenantId = req.user?.tenantId || 1;
+        // Strict tenant scope. The global auth guard guarantees req.user;
+        // never fall back to tenantId=1 (silently leaks across tenants on
+        // a malformed token). Reject with 401 if no tenant.
+        if (!req.user?.tenantId) return res.status(401).json({ error: "no tenant" });
+        const tenantId = req.user.tenantId;
 
         const treatmentPlans = await prisma.treatmentPlan.findMany({
             where: {
@@ -37,7 +41,11 @@ exports.updateTreatmentPlan = async (req, res) => {
     try {
         const { id } = req.params;
         const { status } = req.body;
-        const tenantId = req.user?.tenantId || 1;
+        // Strict tenant scope. The global auth guard guarantees req.user;
+        // never fall back to tenantId=1 (silently leaks across tenants on
+        // a malformed token). Reject with 401 if no tenant.
+        if (!req.user?.tenantId) return res.status(401).json({ error: "no tenant" });
+        const tenantId = req.user.tenantId;
 
         if (!id) return res.status(400).json({ error: "Treatment plan ID required" });
         if (!status) return res.status(400).json({ error: "Status required" });

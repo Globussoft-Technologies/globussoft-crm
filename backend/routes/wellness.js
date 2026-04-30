@@ -195,9 +195,18 @@ const endOfDay = (d = new Date()) => {
 // Visit row + its prescriptions + consent + visit history all stay.
 // ─────────────────────────────────────────────────────────────────────
 
-// Active treatements
-router.get("/activetreatment", getAllTreatmentPlans);
-router.put("/treatment-plans/:id", updateTreatmentPlan);
+// Active treatments — clinical PHI. Read: clinical/ops roles only (matches
+// the consent + treatment-plan posture established in #280, #324, #326).
+// Write (status update): same clinical-write gate used on POST /prescriptions
+// (#326). Without these gates a telecaller / helper / stylist could read all
+// treatment plans and update status — same RBAC class as the prescription
+// hole #326 closed earlier today.
+router.get(
+  "/activetreatment",
+  verifyWellnessRole(["doctor", "professional", "manager", "admin"]),
+  getAllTreatmentPlans
+);
+router.put("/treatment-plans/:id", requireClinicalRole, updateTreatmentPlan);
 
 
 // ── Patients ───────────────────────────────────────────────────────

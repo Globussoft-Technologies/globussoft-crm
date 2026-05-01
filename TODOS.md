@@ -4,6 +4,110 @@
 
 Last updated: 2026-05-01 (overnight — **major coverage push**. Phase 1 e2e: **5 new API specs (~411 tests)** for routes/wellness.js + routes/contacts.js + routes/external.js + routes/deals.js + routes/surveys.js. CI gate now **23 specs / ~1,084 mandatory API tests**. **Surfaced + fixed a real prod bug class**: bare `req.user.id` (always undefined; JWT key is `userId`) across `routes/wellness.js`, `routes/workflows.js`, `routes/custom_reports.js`, `routes/dashboards.js` — including the Rx PUT prescriber check that 403'd every original prescriber. Plus **vitest unit-test layer (22 files / 674 tests / 3 skipped)** covering all of `lib/`, `middleware/`, `services/` (except whatsapp), `utils/` — now mandatory CI gate. Plus three new GitHub Actions workflows: `deploy.yml` (existing, expanded), `e2e-full.yml` (release-only Playwright sweep on tag push), `coverage.yml` (workflow_dispatch coverage measurement). Pickup from home: `git pull origin main`.)
 
+## 🛡️ CI hardening backlog — work top-down
+
+Snapshot of where CI is **today**:
+
+```
+push to main →  build (40s) ─┐
+                api_tests (3min, 23 specs / 1084 tests) ─┐── deploy → demo
+                unit_tests (30s, 22 files / 674 tests) ──┘
+
+tag v* / release →  e2e-full (full chromium project, ~10-20 min)
+
+workflow_dispatch only →  coverage.yml (c8 measurement)
+```
+
+What CI **does** catch: syntax errors, frontend bundle errors, route happy-paths + validation + auth gates, helper/lib regressions, schema mismatches, deploy failures (with rollback).
+
+What CI **does NOT** catch yet — the backlog below. Tackled top-down. Each item has diagnosis, approach, effort, and the file paths it'd touch. Tier 1 items are highest leverage / lowest risk.
+
+### Tier 1 — high leverage, low risk, ship fast
+
+- [ ] **CI-1: ESLint + base rules in CI** (~1 day; would have caught the recent `req.user.id` bug class for free)
+  - **Diagnosis**: the codebase is JS not TS, no ESLint config in CI. `node --check` only catches syntax; semantic bugs slip through. The five-file `req.user.id` sweep we just shipped would have been a single ESLint rule.
+  - **Approach**: add `eslint`, `eslint-plugin-node`, `eslint-config-prettier`, `eslint-plugin-import` as devDeps; create `.eslintrc.json` at repo root with sensible defaults + project-specific custom rules (e.g., a rule that flags bare `req.user.id` and recommends `req.user.userId`); add a `lint` job to `deploy.yml` parallel to build/api_tests/unit_tests. Start with `--max-warnings 0` only on backend/lib + backend/middleware (small surface; expand outward).
+  - **Effort**: 4-6 hours. Most of the time goes to triaging existing warnings on legacy code.
+  - **Files touched**: `.eslintrc.json` (new), `backend/package.json`, `frontend/package.json`, `.github/workflows/deploy.yml`.
+
+- [ ] **CI-2: Dependabot config** (~1 hour; free CVE notifications)
+  - **Diagnosis**: no automated dep-update PRs. Old vulnerable dependencies pile up.
+  - **Approach**: add `.github/dependabot.yml` with weekly cadence for backend, frontend, e2e, and github-actions ecosystems. Group minor + patch updates so PR volume stays manageable.
+  - **Effort**: 30 min config + ~1 hour weekly to merge or triage.
+  - **Files**: `.github/dependabot.yml` (new).
+
+- [ ] **CI-3: gitleaks secret scan** (~2 hours; project has had secret incidents historically)
+  - **Diagnosis**: per CLAUDE.md "Credentials in git history — should rotate". No CI check prevents the next leak.
+  - **Approach**: `.github/workflows/secret-scan.yml` running gitleaks on every push (and a separate full-history scan job that fires once per week). Add `.gitleaks.toml` with project-specific allowlists (demo creds in seed.js are intentional).
+  - **Effort**: 2 hours including allowlist tuning.
+  - **Files**: `.github/workflows/secret-scan.yml` (new), `.gitleaks.toml` (new).
+
+- [ ] **CI-4: `npm audit` in CI + audit fail-on-high** (~1 hour; standard hygiene)
+  - **Diagnosis**: no automated CVE check on backend or frontend deps.
+  - **Approach**: add an `audit` step to the build job (or its own job): `npm audit --audit-level=high --omit=dev`. Fail the build on high or critical CVEs. Document override path for known-acceptable issues in a `.npm-audit-allowlist.json`.
+  - **Effort**: 1 hour + recurring 30 min when a real CVE lands.
+  - **Files**: `.github/workflows/deploy.yml`.
+
+### Tier 2 — medium-leverage, medium-effort
+
+- [ ] **CI-5: Prisma migration safety check** (~1 day; would have caught the `expenseDate not nullable` regression earlier this session)
+  - **Diagnosis**: `prisma db push --accept-data-loss` in the CI api_tests container is fine for tests, but production migrations aren't validated for zero-downtime safety.
+  - **Approach**: on PR, run `prisma migrate diff --from-schema main --to-schema HEAD --script` and feed the SQL through `squawk` or a hand-rolled grep that flags `ALTER TABLE … DROP COLUMN`, `ALTER COLUMN … NOT NULL` on populated tables, `DROP INDEX`, etc. Fail PR on a hit; require explicit override comment to merge.
+  - **Effort**: 1 day (most of it: tuning the allow/deny list of operations).
+  - **Files**: `.github/workflows/migration-safety.yml` (new), `backend/scripts/check-migration.js` (new).
+
+- [ ] **CI-6: Bundle-size budget on vite output** (~2 hours; perf regression early-warning)
+  - **Diagnosis**: `frontend/dist/` is built every push but nobody notices when a chunk doubles. Mobile users on slow connections silently pay for it.
+  - **Approach**: add `size-limit` config in `frontend/package.json` with budgets per chunk (e.g., `assets/index-*.js < 500 KB`, `assets/vendor-*.js < 1 MB`). Add a `bundle-size` step to the build job that runs `npx size-limit` after `vite build`. Fail on overage.
+  - **Effort**: 2 hours including initial budget calibration.
+  - **Files**: `frontend/package.json`, `frontend/.size-limit.json` (new), `.github/workflows/deploy.yml`.
+
+- [ ] **CI-7: OpenAPI contract validation against live routes** (~2 days; biggest leverage on External Partner API drift)
+  - **Diagnosis**: `swagger.yaml` documents the API but nothing checks the live routes match. The External Partner API (`/api/v1/external/*`) consumed by Callified, Globus Phone, AdsGPT is exactly where shape drift breaks integration silently.
+  - **Approach**: option A: `dredd` runs swagger.yaml against the api_tests CI backend (uses the same MySQL container). Option B: `schemathesis` does property-based fuzz testing against the OpenAPI spec. Either way, fail CI on a route shape mismatch. Start with the `/api/v1/external/*` namespace only; expand outward.
+  - **Effort**: 2 days. Most of it: getting `swagger.yaml` accurate and complete (likely has drift already).
+  - **Files**: `.github/workflows/deploy.yml`, `backend/swagger.yaml` (refresh).
+
+- [ ] **CI-8: Frontend vitest + @testing-library/react** (~3 days; mirrors what we just built for backend)
+  - **Diagnosis**: 80 React pages + 11 components + 0 unit tests. Only e2e Playwright UI flows cover frontend, and those run only on release tags.
+  - **Approach**: same playbook as the backend vitest layer. Set up vitest in `frontend/`, write unit tests for the 11 components first (Sidebar, Layout, NotificationBell, DealModal, CommandPalette, EmailSignatureEditor, LanguageSwitcher, Omnibar, Presence, Softphone, CPQBuilder), then expand to high-leverage pages (Dashboard, Login, Pipeline, OwnerDashboard). Mock API via msw. Add `frontend_unit_tests` job to deploy.yml as fourth mandatory gate.
+  - **Effort**: 3 days for components, +5 days for high-leverage pages.
+  - **Files**: `frontend/vitest.config.js` (new), `frontend/test/` (new tree), `frontend/package.json`, `.github/workflows/deploy.yml`.
+
+### Tier 3 — high-effort, project-specific value
+
+- [ ] **CI-9: Lighthouse CI on the demo post-deploy** (~4 hours; perf + a11y trend tracking)
+  - **Diagnosis**: no perf or a11y measurement on the demo. Wellness theme cascades may be triggering CLS regressions invisibly.
+  - **Approach**: `@lhci/cli` runs after deploy on 5-10 critical pages (login, dashboard, pipeline, owner-dashboard, patient-detail). Upload to a free Lighthouse CI server (GitHub Pages) or self-hosted. Fail if performance, a11y, best-practices, or SEO scores drop >5 points vs the last run.
+  - **Effort**: 4 hours including server setup.
+  - **Files**: `.github/workflows/lighthouse.yml` (new), `lighthouserc.json` (new).
+
+- [ ] **CI-10: Visual regression with Playwright screenshots** (~1 day; UI-shift defects)
+  - **Diagnosis**: a button positioned off-screen or a form layout shifted doesn't fail any functional test. Caught only when a human eyeballs the deploy.
+  - **Approach**: add a `visual` project to playwright.config.js that snapshots ~20 critical screens on the demo. Compare against baseline images stored in `e2e/visual-baselines/`. Fail PR on diff over a threshold; require manual approval to update baseline. Runs as part of `e2e-full.yml` on release tags initially; if stable, promote to per-push.
+  - **Effort**: 1 day initial baselines + ongoing baseline maintenance.
+  - **Files**: `e2e/playwright.config.js`, `e2e/visual-baselines/` (new), `e2e/tests/visual.spec.js` (new).
+
+- [ ] **CI-11: Mutation testing with Stryker** (~2 days; tests-quality measurement)
+  - **Diagnosis**: 79% line coverage on helpers and 40% on routes — but is that 79% *meaningful*? Mutation testing answers "if I mutate the code, does any test fail?"
+  - **Approach**: `stryker.config.json` configured to mutate `backend/lib/` + `backend/middleware/` + run vitest as the test runner. Target a mutation score >75% on each module. Add a `mutation` workflow on workflow_dispatch only initially (slow, ~30 min) so it doesn't block per-push CI.
+  - **Effort**: 2 days config + an ongoing investment as score declines.
+  - **Files**: `backend/stryker.config.json` (new), `.github/workflows/mutation.yml` (new).
+
+- [ ] **CI-12: Canary deployment with auto-rollback** (~3-5 days; deploys-don't-break-prod safety)
+  - **Diagnosis**: deploy is "all or nothing" — single PM2 instance. A regression that passes /api/health but breaks `/api/wellness/dashboard` for owners doesn't trigger rollback.
+  - **Approach**: nginx-level traffic split (5% to a canary PM2 instance for the first 10 min after deploy); a synthetic monitor hits 10 critical endpoints every 30s and tracks 5xx + p95 latency; if either spikes vs the baseline, auto-rollback the canary and abort the full rollout. Significant infra work; revisit when team size grows.
+  - **Effort**: 3-5 days infra + permanent ops cost.
+  - **Files**: `nginx/canary.conf` (new), `.github/workflows/deploy.yml` (split into canary + promote), `backend/scripts/synthetic-monitor.js` (new).
+
+### Cross-cutting polish (apply to most of the above)
+
+- **Notifications**: every CI failure should Slack/email the team within 30s. Currently runs in silence.
+- **Trend dashboards**: coverage % over time, test runtime over time, p95 latency over time. Free with Lighthouse CI's GitHub Pages dashboard or a 30-line gh-pages publisher.
+- **PR comments**: every CI tier should bot-comment its result on the PR (coverage delta, bundle-size delta, lint errors). The `post_comments.yml` workflow exists; extend it.
+
+---
+
 ## 📌 NEXT SESSION — pick up here
 
 **HEAD at end of overnight run**: `868b227` (test(unit): vitest layer for backend lib + middleware + services + utils). All four CI jobs green. Working tree clean. No open PRs. Issue inbox: 0.

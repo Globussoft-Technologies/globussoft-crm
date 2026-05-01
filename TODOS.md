@@ -2,7 +2,27 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-05-01 (overnight — **major coverage push**. Phase 1 e2e: **5 new API specs (~411 tests)** for routes/wellness.js + routes/contacts.js + routes/external.js + routes/deals.js + routes/surveys.js. CI gate now **23 specs / ~1,084 mandatory API tests**. **Surfaced + fixed a real prod bug class**: bare `req.user.id` (always undefined; JWT key is `userId`) across `routes/wellness.js`, `routes/workflows.js`, `routes/custom_reports.js`, `routes/dashboards.js` — including the Rx PUT prescriber check that 403'd every original prescriber. Plus **vitest unit-test layer (22 files / 674 tests / 3 skipped)** covering all of `lib/`, `middleware/`, `services/` (except whatsapp), `utils/` — now mandatory CI gate. Plus three new GitHub Actions workflows: `deploy.yml` (existing, expanded), `e2e-full.yml` (release-only Playwright sweep on tag push), `coverage.yml` (workflow_dispatch coverage measurement). Pickup from home: `git pull origin main`.)
+Last updated: 2026-05-01 (afternoon — **repo hygiene pass + e2e-full debrief**. 3 commits shipped: `b281dd6` removed two stale tracked root files (orphan 99-byte `package-lock.json`, ad-hoc `checked_issues.json`), `84129a9` swapped the silently-failing `gitleaks/gitleaks-action@v2` (paid org license required) for `docker://zricethezav/gitleaks:latest` (free OSS binary, same `.gitleaks.toml`) AND bumped `actions/checkout@v4`/`actions/setup-node@v4` → `@v5` across 4 workflow files (clears the Node 20 deprecation warning), `5e364d6` cleared all 180 `no-unused-vars` ESLint warnings via underscore-prefix rename. CI gate now: build + lint + api_tests + unit_tests + deploy ALL green; **secret-scan now actually functional for the first time since CI-3 landed in v3.3.0** (failed silently for 5 consecutive pushes due to license issue); ESLint warnings 180 → 1 (pre-existing `no-useless-escape` in `sandbox.js:206`). Pickup from home: `git pull origin main` — new HEAD `5e364d6`.)
+
+## 🧹 2026-05-01 afternoon — repo hygiene shipped
+
+| SHA | What | Lines | CI |
+|---|---|---|---|
+| `b281dd6` | rm stale root `package-lock.json` (99 bytes, no companion package.json) + `checked_issues.json` (output of close_issues.py, already in .gitignore but landed pre-ignore) | -7 | ✓ green |
+| `84129a9` | secret-scan: gitleaks-action@v2 → docker://zricethezav/gitleaks:latest (free OSS, no license needed). Plus actions/checkout/setup-node v4→v5 across all 4 workflow files | +48 -31 | ✓ green |
+| `5e364d6` | ESLint sweep: 180 warnings → 0. Caught errors → `_err`/`_e`. Multi-line decl/assign cases (`let count`, `let generatedOtp`) had to be touched in pairs. Destructure renames rewritten as `name: _name` form (the naive `{ _name }` reads `obj._name` — different property). 6 unused module imports deleted from require destructures rather than renamed | +183 -184 (56 files) | ✓ green |
+
+**Honest scope**: 1 ESLint warning remains (`no-useless-escape` in `sandbox.js:206`) — pre-existing, not from this sweep. 1-char fix when convenient, not blocking.
+
+**Sweep audit notes** (for the next time this is needed):
+- Naive identifier renames break in 3 ways the column-precise script missed: (1) multi-line `let X = …; X = Y;` where the script only hits the line ESLint reports; (2) destructure patterns where `{ X }` becomes `{ _X }` and silently reads a different property; (3) module imports where `{ used, X }` should drop `X` entirely, not rename it. All 3 surfaced during review and got fixed in the same commit. Audit scripts saved at `C:\Users\Admin\AppData\Local\Temp\check-{stragglers,multi-line,destructures}.js`.
+- All audit scripts return zero remaining real issues post-fix (their output flags pre-existing patterns: Prisma `_count._all` aggregation, SQL `WHERE id = ${id}` template-literal, Prisma model field `_captured`, original `_key` module state in `fieldEncryption.js`).
+
+**Local dev environment note**: backend `npm install` fails on Node 18.15 because Prisma needs ≥18.18. Upgrade to Node 20 LTS (`winget install OpenJS.NodeJS.LTS`) before running `npm run lint` / `npm test` locally; CI uses Node 24 already so it's unaffected.
+
+---
+
+Last updated (overnight previous to today's afternoon pass): 2026-05-01 — **major coverage push**. Phase 1 e2e: **5 new API specs (~411 tests)** for routes/wellness.js + routes/contacts.js + routes/external.js + routes/deals.js + routes/surveys.js. CI gate now **23 specs / ~1,084 mandatory API tests**. **Surfaced + fixed a real prod bug class**: bare `req.user.id` (always undefined; JWT key is `userId`) across `routes/wellness.js`, `routes/workflows.js`, `routes/custom_reports.js`, `routes/dashboards.js` — including the Rx PUT prescriber check that 403'd every original prescriber. Plus **vitest unit-test layer (22 files / 674 tests / 3 skipped)** covering all of `lib/`, `middleware/`, `services/` (except whatsapp), `utils/` — now mandatory CI gate. Plus three new GitHub Actions workflows: `deploy.yml` (existing, expanded), `e2e-full.yml` (release-only Playwright sweep on tag push), `coverage.yml` (workflow_dispatch coverage measurement).
 
 ## 🧪 e2e-full UI test debt — release validation 88% pass-rate
 
@@ -29,12 +49,45 @@ The 201 failing + 114 not-running tests are **pre-existing UI test drift**, not 
 | `custom-objects.spec.js` | 5 | UI |
 | ... (tail of ~70 more, all in 1-4 failures range) | ~70 | UI flows |
 
-### Recommended cleanup approach
+### Deeper investigation (2026-05-01 afternoon — pickup from home)
 
-1. **Investigate api-health.spec.js first** (34 failures) — these are HTTP-level checks, not UI. If they're real route regressions, that's high signal. ~30 min triage. Most likely cause: `admin/admin` legacy bypass that was removed in v3.2.5 — same root cause as the auth.setup fix.
-2. **Mass-skip the navigation + dashboard + theme + pipeline UI flows** with documented reasons (~1 hour). Add each to a "ui-test-debt" tracker similar to auth-test-debt below. These tests pin OLD behavior and need rewrite, not surface-level patches.
-3. **Update wellness UI specs** to match the v3.2.x wellness theme (cream-on-teal cascade). ~2-3 hours. The failing tests assert old colors / heading text.
-4. **Eventually**: rewrite the UI test surface to use accessibility-locator patterns (role + name) instead of brittle text/CSS selectors. Multi-day effort. Park until the API spec surface is comprehensive.
+Pulled `gh run view 25217155402 --log-failed` and dug into the actual error messages, not just the test names. Three distinct failure buckets — they need different fixes, can't be batched.
+
+#### Bucket A — auth state injection broken by sessionStorage migration (~70% of failures)
+
+The dominant pattern. `auth.setup` itself **passes** in every shard (logs "Got token via admin login → Dashboard loaded successfully → Storage state saved"), so playwright/.auth/user.json is written correctly. But the saved `storageState` writes to `localStorage`, while the v3.2.5 SPA reads from `sessionStorage` + an in-memory holder ([CHANGELOG #343](CHANGELOG.md#v325--2026-04-29--security-hardening--8-bug-new-round--nested-patient-endpoints)). When each test loads with the storageState injected, the AuthProvider's loading-flag (#347) doesn't see a valid token, the SPA stays on `/login`, and any locator targeting an authenticated page times out at 15s.
+
+**Symptom signature**: `TimeoutError: locator.click: Timeout 15000ms exceeded` + `Expected: visible`. Includes most navigation.spec.js, dashboard.spec.js, contacts.spec.js, pipeline.spec.js, wellness.spec.js, theme.spec.js failures.
+
+**Fix shape** (~30-60 min):
+- Edit `e2e/auth.setup.js` to write `sessionStorage.setItem('token', …)` not `localStorage.setItem`
+- Verify playwright's `storageState` API actually replays sessionStorage (it does; the format is `{ origins: [{ origin, localStorage: [...], sessionStorage: [...] }] }`)
+- OR: have auth.setup do a real submit-login flow per shard so the in-memory holder gets populated by AuthContext naturally. Slower per-shard but more robust to future auth changes.
+
+This single fix should rescue ~100+ of the 201 failures.
+
+#### Bucket B — `E2E_SKIP_SCRUB=1` vs specs that assume clean state (~15% of failures)
+
+[`.github/workflows/e2e-full.yml:105`](.github/workflows/e2e-full.yml#L105) sets `E2E_SKIP_SCRUB: '1'` — designed to keep the demo data intact for live walkthroughs. But several specs assert empty/zero counts, then fail with shapes like `Expected: 0  Received: 350` and `Expected: >= 2  Received: 0`. The data IS there, just not the data the test expected.
+
+**Fix shape** (~30 min): either drop `E2E_SKIP_SCRUB=1` from `e2e-full.yml` (lets cleanup specs run, but mutates the demo), or annotate offending specs with `test.skip(process.env.E2E_SKIP_SCRUB === '1', 'requires clean tenant state')`. Second option preserves the demo-friendly default.
+
+#### Bucket C — api-health flake at 14:13Z (~5 minutes of red, then green) (~5% of failures)
+
+A 1-minute window where `GET /api/health`, `POST /api/auth/login`, `GET /api/auth/users` all 3-retry'd and failed (387-526ms responses, but content/shape mismatch). Surrounding chromium tests at the same timestamps passed against the same server, so the demo wasn't fully down. **No deploy was running** during this window (mine started 12 minutes later at 14:25Z). Most likely a transient demo blip — possibly Cloudflare/PM2 hiccup, or a momentary DB connection saturation.
+
+**Fix shape** (no immediate action): add `--retries=3` at the api-health project level in `playwright.config.js` (already enabled it appears, since we see "retry #2" lines). If this recurs across multiple runs, then investigate; one occurrence in one run is normal demo noise. Track but don't chase yet.
+
+#### Strict timing evidence: this is NOT caused by today's afternoon commits
+
+Failures started at **14:02:50Z** (earliest = `approvals.spec.js:115` "cannot re-approve already-approved"). My first commit (`b281dd6`) didn't push until **14:22:57Z** and didn't deploy until **~14:25:00Z** — 22 minutes after the first failure. None of today's commits touched runtime code anyway: file deletes are repo-only, workflow edits are CI-only, and the ESLint sweep was either no-op renames (catch params) or trivially-equivalent renames (unused vars/imports). The teammate's commit `287fc1a` (which landed mid-failure-run) explicitly attributes the 12% red as "pre-existing UI test debt".
+
+### Original cleanup approach (still valid, but order revised by buckets above)
+
+1. **First: ship the sessionStorage fix in auth.setup.js** — single highest-leverage change. ~30-60 min, reclaims ~70% of the red.
+2. **Then: triage Bucket B** (E2E_SKIP_SCRUB skips). ~30 min annotating offending specs.
+3. **Re-run e2e-full** via `gh workflow run e2e-full.yml`. Expect to land at 95%+. Anything still red after that is genuinely test debt that needs rewrite.
+4. **Eventually**: rewrite the UI test surface to use accessibility-locator patterns (role + name) instead of brittle text/CSS selectors. Multi-day effort. Park until the per-push API surface is comprehensive.
 
 ### Release decision for v3.3.0
 
@@ -83,29 +136,13 @@ What CI **does NOT** catch yet — the backlog below. Tackled top-down. Each ite
 
 ### Tier 1 — high leverage, low risk, ship fast
 
-- [ ] **CI-1: ESLint + base rules in CI** (~1 day; would have caught the recent `req.user.id` bug class for free)
-  - **Diagnosis**: the codebase is JS not TS, no ESLint config in CI. `node --check` only catches syntax; semantic bugs slip through. The five-file `req.user.id` sweep we just shipped would have been a single ESLint rule.
-  - **Approach**: add `eslint`, `eslint-plugin-node`, `eslint-config-prettier`, `eslint-plugin-import` as devDeps; create `.eslintrc.json` at repo root with sensible defaults + project-specific custom rules (e.g., a rule that flags bare `req.user.id` and recommends `req.user.userId`); add a `lint` job to `deploy.yml` parallel to build/api_tests/unit_tests. Start with `--max-warnings 0` only on backend/lib + backend/middleware (small surface; expand outward).
-  - **Effort**: 4-6 hours. Most of the time goes to triaging existing warnings on legacy code.
-  - **Files touched**: `.eslintrc.json` (new), `backend/package.json`, `frontend/package.json`, `.github/workflows/deploy.yml`.
+- [x] **CI-1: ESLint + base rules in CI** — shipped in v3.3.0 (`ae2f781`). ESLint 9 flat config at `backend/eslint.config.js`; mandatory `lint` job in `deploy.yml`. Custom `no-restricted-syntax` rule blocks bare `req.user.id`. **Warnings cleared 180 → 0** on 2026-05-01 afternoon (`5e364d6`); 1 pre-existing `no-useless-escape` in `sandbox.js:206` remains (1-char fix when convenient).
 
-- [ ] **CI-2: Dependabot config** (~1 hour; free CVE notifications)
-  - **Diagnosis**: no automated dep-update PRs. Old vulnerable dependencies pile up.
-  - **Approach**: add `.github/dependabot.yml` with weekly cadence for backend, frontend, e2e, and github-actions ecosystems. Group minor + patch updates so PR volume stays manageable.
-  - **Effort**: 30 min config + ~1 hour weekly to merge or triage.
-  - **Files**: `.github/dependabot.yml` (new).
+- [x] **CI-2: Dependabot config** — shipped in v3.3.0 (`cadc6bb`). Weekly Mon 06:00 UTC across npm-backend / npm-frontend / npm-e2e / github-actions. Patch+minor grouped per ecosystem; majors individual.
 
-- [ ] **CI-3: gitleaks secret scan** (~2 hours; project has had secret incidents historically)
-  - **Diagnosis**: per CLAUDE.md "Credentials in git history — should rotate". No CI check prevents the next leak.
-  - **Approach**: `.github/workflows/secret-scan.yml` running gitleaks on every push (and a separate full-history scan job that fires once per week). Add `.gitleaks.toml` with project-specific allowlists (demo creds in seed.js are intentional).
-  - **Effort**: 2 hours including allowlist tuning.
-  - **Files**: `.github/workflows/secret-scan.yml` (new), `.gitleaks.toml` (new).
+- [x] **CI-3: gitleaks secret scan** — shipped in v3.3.0 (`a72bba3`) BUT was non-functional from day one: `gitleaks/gitleaks-action@v2` requires a paid `GITLEAKS_LICENSE` secret for organization repos and we never set one, so every push failed in 8-16s with "missing gitleaks license". 5 consecutive pushes failed before this was caught. **Fixed 2026-05-01 afternoon (`84129a9`)** by swapping to `docker://zricethezav/gitleaks:latest` — the same engine the action wraps, but the binary is Apache-2.0 licensed and has no fee. `.gitleaks.toml` allowlist unchanged. First green secret-scan run since CI-3 was added.
 
-- [ ] **CI-4: `npm audit` in CI + audit fail-on-high** (~1 hour; standard hygiene)
-  - **Diagnosis**: no automated CVE check on backend or frontend deps.
-  - **Approach**: add an `audit` step to the build job (or its own job): `npm audit --audit-level=high --omit=dev`. Fail the build on high or critical CVEs. Document override path for known-acceptable issues in a `.npm-audit-allowlist.json`.
-  - **Effort**: 1 hour + recurring 30 min when a real CVE lands.
-  - **Files**: `.github/workflows/deploy.yml`.
+- [x] **CI-4: `npm audit` in CI + audit fail-on-high** — shipped in v3.3.0 (`2728174`). `backend/scripts/check-audit.js` wraps `npm audit --json` against `backend/.audit-allowlist.json`. Fails on new high+critical CVEs. 4 known issues allowlisted with `sunsetBy: 2026-08-01` (xlsx ×2, semver via imap, imap+utf7 transitive).
 
 ### Tier 2 — medium-leverage, medium-effort
 

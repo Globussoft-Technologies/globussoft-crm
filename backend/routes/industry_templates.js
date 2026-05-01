@@ -270,7 +270,7 @@ router.get("/", verifyToken, async (req, res) => {
 router.post("/apply/:industry", verifyToken, async (req, res) => {
   const { industry } = req.params;
   const tenantId = req.user.tenantId || 1;
-  const userId = req.user.id || req.user.userId || null;
+  const userId = req.user.userId || null;
 
   try {
     // Resolve template (DB first, then built-in)

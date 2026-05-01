@@ -133,7 +133,7 @@ router.post("/", verifyToken, async (req, res) => {
         slug,
         title,
         description: description || null,
-        ownerId: req.user.userId || req.user.id || 1,
+        ownerId: req.user.userId || 1,
         durationMins: parseInt(durationMins, 10) || 30,
         bufferMins: parseInt(bufferMins, 10) || 0,
         availability: availStr,

@@ -205,7 +205,7 @@ router.post("/threads/:threadId/archive", async (req, res) => {
 router.post("/reply", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const userId = req.user.id || req.user.userId || null;
+    const userId = req.user.userId || null;
     const { threadId, body, subject } = req.body || {};
 
     if (!threadId || !body) {

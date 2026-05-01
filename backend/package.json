@@ -11,7 +11,10 @@
     "coverage:check": "c8 check-coverage --lines 50 --functions 40 --branches 50 --statements 50",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "lint:strict": "eslint lib middleware services utils test --max-warnings 0"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -53,8 +56,11 @@
     "yamljs": "^0.3.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@vitest/coverage-v8": "^4.1.5",
     "c8": "^11.0.0",
+    "eslint": "^9.39.4",
+    "globals": "^17.5.0",
     "nodemon": "^3.0.1",
     "prisma": "^6.4.1",
     "vitest": "^4.1.5"

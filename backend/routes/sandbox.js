@@ -149,7 +149,7 @@ router.post("/", verifyToken, async (req, res) => {
         description: description || null,
         data: dataString,
         tenantId,
-        userId: req.user.id || req.user.userId || null,
+        userId: req.user.userId || null,
       },
       select: { id: true, name: true, createdAt: true },
     });
@@ -280,7 +280,7 @@ router.post(
       const data = blob.data || blob;
 
       console.warn(
-        `[sandbox] DESTRUCTIVE RESTORE — tenant ${tenantId} initiated by user ${req.user.id || req.user.userId}, snapshot ${id}`
+        `[sandbox] DESTRUCTIVE RESTORE — tenant ${tenantId} initiated by user ${req.user.userId}, snapshot ${id}`
       );
 
       // 1. WIPE all current tenant data
@@ -432,7 +432,7 @@ router.post(
 
       const tenantId = req.user.tenantId;
       console.warn(
-        `[sandbox] DESTRUCTIVE RESET — tenant ${tenantId} initiated by user ${req.user.id || req.user.userId}`
+        `[sandbox] DESTRUCTIVE RESET — tenant ${tenantId} initiated by user ${req.user.userId}`
       );
 
       await wipeTenantData(tenantId);

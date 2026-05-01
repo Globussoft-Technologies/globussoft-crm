@@ -47,9 +47,19 @@ setup('authenticate and save storage state', async ({ page, request }) => {
   await page.goto('/');
   await page.waitForLoadState('domcontentloaded');
 
-  // Verify we're on the dashboard (not redirected to /login)
+  // Verify we're on the dashboard (not redirected to /login).
+  // We deliberately do NOT assert specific brand text here — the
+  // tenant.name on the demo box is "NovaCrest Technologies" (per
+  // backend/prisma/seed.js), and a future tenant rename could break
+  // the assertion. Verifying the URL is enough to know auth was
+  // accepted; sidebar / dashboard rendering correctness is the job
+  // of the spec tests that follow.
   await expect(page).not.toHaveURL(/\/login/, { timeout: 15000 });
-  await expect(page.locator('text=Globussoft').first()).toBeVisible({ timeout: 10000 });
+
+  // Belt-and-braces: wait for the SPA to settle before capturing
+  // storage state. Without this, Playwright may persist a half-loaded
+  // storage state that future tests start from.
+  await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
 
   console.log('[auth.setup] Dashboard loaded successfully');
 

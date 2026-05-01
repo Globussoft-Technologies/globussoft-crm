@@ -1,5 +1,79 @@
 # CHANGELOG
 
+## v3.3.0 — 2026-05-01 — test infrastructure overhaul + Tier 1 CI hardening
+
+A foundational release. **No new product features** — every change is in the test infrastructure, CI/CD pipeline, or under-the-hood bug fixes that surfaced from the new test surface. Two real production bugs were caught + fixed.
+
+### Test surface expanded ~7× (per-push)
+
+| Tier | Tool | Pre-v3.3.0 | v3.3.0 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | 18 specs / 673 tests | 23 specs / ~1,084 tests | +5 specs / +411 tests |
+| Per-push unit tests | vitest | 0 | 22 files / 674 tests | NEW |
+| **Total per-push** |  | **673** | **~1,758** | **+161%** |
+
+### Added
+
+**Phase 1 e2e coverage push (5 new API specs)** — targets the highest-leverage uncovered routes per `backend/scripts/coverage-analysis.js`:
+- `e2e/tests/wellness-clinical-api.spec.js` (~154 tests) — patient + visit + Rx + consent + service + location CRUD with full validation matrix, clinical no-delete policy verification, role-gate matrix (admin/manager/doctor/professional/telecaller/stylist/helper)
+- `e2e/tests/contacts-api.spec.js` (77 tests)
+- `e2e/tests/deals-api.spec.js` (73 tests)
+- `e2e/tests/external-api.spec.js` (53 tests, X-API-Key partner endpoints, bootstraps fresh ApiKey per run)
+- `e2e/tests/surveys-api.spec.js` (54 tests, including public `/surveys/public/:id` endpoints)
+
+**Vitest unit-test layer (new tier)** at `backend/test/`:
+- 22 files / 674 tests covering `lib/audit.js`, `lib/eventBus.js`, `lib/fieldEncryption.js`, `lib/leadAutoRouter.js`, `lib/leadJunkFilter.js`, `lib/leadSla.js`, `lib/notificationService.js`, `lib/validators.js`, `lib/webhookDelivery.js`, all 7 middleware files, `services/landingPageRenderer.js`, `services/pdfRenderer.js`, `services/pushService.js`, `services/smsProvider.js`, `services/telephonyProvider.js`, `utils/deduplication.js`
+- 3 tests intentionally skipped (Mailgun success branch, push delivery success — covered by e2e specs; require msw/nock-style mock servers for unit-level isolation; deferred to a future integration tier)
+- `backend/vitest.config.js` with `server.deps.inline` for lib/middleware/services/utils paths so `vi.mock('../../lib/prisma')` correctly intercepts CJS `require()` chains
+- Total runtime: ~1.2s (separate from the 3-min api_tests gate)
+
+**Tier 1 CI hardening (4 new gates)**:
+- **CI-1: ESLint** — `backend/eslint.config.js` (flat config, ESLint 9). Project-specific `no-restricted-syntax` rule blocks bare `req.user.id` (the JWT payload key is `userId`; bare `req.user.id` evaluates to undefined). Mandatory `lint` job in `deploy.yml`.
+- **CI-2: Dependabot** — `.github/dependabot.yml`. Weekly Mon 06:00 UTC for npm-backend, npm-frontend, npm-e2e, github-actions. Patch + minor grouped per ecosystem; major individual; security-only ignores cadence.
+- **CI-3: gitleaks secret scan** — `.github/workflows/secret-scan.yml`. Incremental scan on every push + PR (~10-20s); full-history scan Mondays 06:30 UTC. Allowlist at `.gitleaks.toml` for known-intentional demo creds + dev-fallback constants.
+- **CI-4: npm audit gate** — `backend/scripts/check-audit.js` wrapper around `npm audit --json` with allowlist at `backend/.audit-allowlist.json`. Fails on high or critical advisories not on the allowlist. Auto-fixed 4 CVEs (path-to-regexp, follow-redirects, nodemailer, brace-expansion); 4 remaining high-severity advisories documented with remediation plan + sunsetBy 2026-08-01 (xlsx ×2, semver via imap, imap+utf7 transitive).
+
+**New GitHub Actions workflows**:
+- `.github/workflows/coverage.yml` — workflow_dispatch only. Spins ephemeral c8-instrumented backend, runs all 23 API specs, reports lines/branches/functions/statements % + top-10 under-covered files + lcov artifact + CSV.
+- `.github/workflows/e2e-full.yml` — full chromium + auth-tests + api-health Playwright projects against deployed demo. Fires on tag push `v*`, GitHub Release publish, or manual trigger.
+- `.github/workflows/secret-scan.yml` — see CI-3 above.
+
+**Standing rules** documented in `CLAUDE.md` for new code (route → API spec required; helper → vitest required; `targetUserId` not `userId` in body fields; high CVE → remediate or allowlist with sunsetBy; etc.). Mirrored as project memory at `feedback_ci_discipline.md`.
+
+### Bug fixes — 2 real production bugs surfaced by the new test surface
+
+- **Rx PUT prescriber-check** (`backend/routes/wellness.js:1131,1156`, commit `7506ebd`) — used `req.user.id` but the JWT payload key is `userId`. Bare `req.user.id` evaluated to undefined, so `existing.doctorId !== undefined` was always true for non-ADMIN. Effect: every original prescriber 403'd (`AMEND_FORBIDDEN`) when trying to amend their own Rx. Audit-log `isOriginalPrescriber` was always false. Surfaced by `wellness-clinical-api.spec.js` PUT-prescriptions test.
+- **Bare `req.user.id` sweep across 4 routes** (commit `6b1470f`) — same bug class:
+  - `routes/wellness.js:1097` — Rx POST `doctorId` default → null in DB
+  - `routes/wellness.js:1604/1618/1727` — approval `resolvedById` / `actorUserId`
+  - `routes/wellness.js:2955` — telecaller queue filter (always-empty result)
+  - `routes/wellness.js:3001` — disposition activity userId orphan
+  - `routes/workflows.js:297` — workflow rule debug-tick mockPayload.userId
+  - `routes/custom_reports.js:167` — custom report create userId orphan
+  - `routes/dashboards.js:75` — dashboard create userId orphan
+- **ESLint surfaced 6 more `req.user.id` sites** (commit `ae2f781`) the manual sweep had missed — all in tolerant fallback patterns (`req.user.userId || req.user.id || …`) where the `.id` branch was dead code. Cleaned across `routes/booking_pages.js`, `email_threading.js`, `industry_templates.js`, `sandbox.js` (3 sites).
+- **`/communications/track` openPath prefix collision** (`backend/server.js:255`, commit `ed44c44`) — global guard's openPath `/communications/track` accidentally also matched `/communications/tracking/:emailId` (the auth-required stats endpoint), bypassing `verifyToken`. Handler then crashed with 500 on `req.user.tenantId`. v3.2.3 audit comment claiming `/communications/tracking … correctly require auth` was wrong because of the prefix collision. One-character fix (trailing slash on the openPath).
+
+### Test coverage measurement
+
+Last `coverage.yml` run (commit `868b227`):
+- **Routes (Playwright + c8)**: 40.52% lines / 73.30% branches / 33.68% functions (was 33.63% / 71.83% / 25.46% pre-Phase 1 — +6.89pp lines)
+- **Helpers (vitest + v8)**: 79.01% lines / 77.42% branches / 78.43% functions (first measurement)
+
+### Workflow housekeeping
+
+- Deleted `.github/workflows/post_comments.yml` — was firing on every push and looping over hardcoded issues #83-97 to post a canned "Deep-Module Proxy Bindings Resolved 🚀" marketing comment + close them. All those issues had been closed long ago, so the loop just no-op'd with `|| true` 15× per push. Stale demo theatre.
+
+### Deferred (logged in TODOS.md)
+
+- Phase 2 e2e — billing, payments, social, approvals, marketplace_leads, knowledge_base specs (Phase 2 launched + 1 spec landed; 4 still in flight as of release tag)
+- External-service mocked integration tests (Stripe webhooks, OAuth callbacks, Mailgun success branches, push delivery) — future `backend/test/integration/` tier
+- Tier 2 CI hardening (CI-5 Prisma migration safety, CI-6 vite bundle-size budget, CI-7 OpenAPI contract validation, CI-8 frontend vitest layer)
+- Tier 3 CI hardening (CI-9 Lighthouse CI, CI-10 visual regression, CI-11 mutation testing, CI-12 canary deploy)
+- Frontend test infrastructure — 80 React pages + 11 components have zero unit tests
+
+---
+
 ## v3.2.5 — 2026-04-29 — security hardening + 8-bug new round + nested patient endpoints
 
 A focused round on a fresh QA pass that surfaced 8 new issues (#341–#348). All closed in a single commit (`d778d6a`) deployed via GitHub Actions. Plus #339 (lingering auto-close lag from v3.2.4) re-asserted and closed.

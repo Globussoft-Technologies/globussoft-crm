@@ -42,9 +42,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── Sharded matrix: chromium project is ~2,578 tests, can't fit in a
+  # single 30-min runner. Playwright's --shard flag splits the test list
+  # into N equal slices that run in parallel; each slice gets ~645 tests
+  # / ~15 min wall time. All 4 shards execute concurrently, so total
+  # release-validation latency stays around 15-20 min.
   e2e-full:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
@@ -64,14 +73,12 @@ jobs:
             BASE_URL='https://crm.globusdemos.com'
           fi
           echo "BASE_URL=$BASE_URL" >> $GITHUB_OUTPUT
-          echo "::notice::Running full e2e against $BASE_URL"
+          echo "::notice::Shard ${{ matrix.shard }}/4 running against $BASE_URL"
 
       - name: Wait for target health (up to 2 min)
         env:
           BASE_URL: ${{ steps.target.outputs.BASE_URL }}
         run: |
-          # On a tag push immediately after a main push, deploy.yml may still
-          # be in flight. Smoke-check until /api/health responds 200.
           for i in $(seq 1 24); do
             code=$(curl -sk -o /dev/null -w '%{http_code}' "$BASE_URL/api/health")
             if [ "$code" = "200" ]; then
@@ -91,45 +98,87 @@ jobs:
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
 
-      - name: Run full chromium project + auth + api-health
+      - name: Run shard ${{ matrix.shard }}/4
         working-directory: e2e
         env:
           BASE_URL: ${{ steps.target.outputs.BASE_URL }}
           E2E_SKIP_SCRUB: '1'
         run: |
           set -euo pipefail
-          # Three projects covered:
+          # Three projects covered (each sharded independently):
           #   - chromium     — bulk of tests (UI, wellness, integration, a11y)
           #                    auto-runs `setup` first via `dependencies: ['setup']`
           #   - auth-tests   — login flow validation (no saved auth state)
           #   - api-health   — /api/* smoke tests with bearer auth
           # Skipped (would 3-4x runtime; out of scope for release validation):
           #   - firefox, webkit, mobile-chrome
-          # If a release also wants cross-browser coverage, add the
-          # corresponding --project flags below.
           npx playwright test \
             --project=chromium \
             --project=auth-tests \
             --project=api-health \
-            --reporter=list,html
+            --shard=${{ matrix.shard }}/4 \
+            --reporter=list,blob
 
-      - name: Upload Playwright report
+      - name: Upload blob report (will be merged across shards)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-full-${{ github.ref_name }}-${{ github.run_id }}
-          path: |
-            e2e/playwright-report/
-            e2e/test-results/
+          name: blob-report-${{ matrix.shard }}
+          path: e2e/blob-report
+          retention-days: 30
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-shard-${{ matrix.shard }}-${{ github.run_id }}
+          path: e2e/test-results/
+          retention-days: 30
+
+  # ── Merge the 4 sharded blob reports into a single HTML report ──
+  merge-reports:
+    if: always()
+    needs: e2e-full
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install playwright (for merge-reports)
+        working-directory: e2e
+        run: npm ci --no-audit --no-fund
+
+      - name: Download all blob reports
+        uses: actions/download-artifact@v4
+        with:
+          path: e2e/all-blob-reports
+          pattern: blob-report-*
+          merge-multiple: true
+
+      - name: Merge into single HTML report
+        working-directory: e2e
+        run: npx playwright merge-reports --reporter html ./all-blob-reports
+
+      - name: Upload merged HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-full-html-report-${{ github.ref_name }}-${{ github.run_id }}
+          path: e2e/playwright-report/
           retention-days: 30
 
       - name: Summary
-        if: always()
         env:
-          BASE_URL: ${{ steps.target.outputs.BASE_URL }}
+          BASE_URL: ${{ inputs.base_url || 'https://crm.globusdemos.com' }}
         run: |
           {
-            echo "## Full e2e validation"
+            echo "## Full e2e validation (4-shard parallel run)"
             echo ""
             echo "- Target: \`$BASE_URL\`"
             echo "- Trigger: \`${{ github.event_name }}\`"
@@ -140,5 +189,6 @@ jobs:
               echo "- Release: \`${{ github.event.release.tag_name }}\`"
             fi
             echo ""
-            echo "Report artifact uploaded — open Actions → Full E2E suite → this run → Artifacts → e2e-full-* to download."
+            echo "Per-shard outcome: see \`e2e-full\` matrix above."
+            echo "Merged HTML report: download \`e2e-full-html-report-*\` artifact."
           } >> $GITHUB_STEP_SUMMARY

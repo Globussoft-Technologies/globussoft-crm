@@ -4,6 +4,25 @@
 
 Last updated: 2026-05-01 (overnight — **major coverage push**. Phase 1 e2e: **5 new API specs (~411 tests)** for routes/wellness.js + routes/contacts.js + routes/external.js + routes/deals.js + routes/surveys.js. CI gate now **23 specs / ~1,084 mandatory API tests**. **Surfaced + fixed a real prod bug class**: bare `req.user.id` (always undefined; JWT key is `userId`) across `routes/wellness.js`, `routes/workflows.js`, `routes/custom_reports.js`, `routes/dashboards.js` — including the Rx PUT prescriber check that 403'd every original prescriber. Plus **vitest unit-test layer (22 files / 674 tests / 3 skipped)** covering all of `lib/`, `middleware/`, `services/` (except whatsapp), `utils/` — now mandatory CI gate. Plus three new GitHub Actions workflows: `deploy.yml` (existing, expanded), `e2e-full.yml` (release-only Playwright sweep on tag push), `coverage.yml` (workflow_dispatch coverage measurement). Pickup from home: `git pull origin main`.)
 
+## 🧪 auth-test-debt — UI auth specs need updating for v3.2.5+ auth model
+
+Surfaced by the v3.3.0 e2e-full release validation. 6 tests in `e2e/tests/auth.spec.js` plus the `e2e/auth.setup.js` fixture were written assuming localStorage-based token persistence — v3.2.5 (#343) migrated to a module-level in-memory holder + sessionStorage fallback for security. The setup fixture was fixed in v3.3.1 (`localStorage.setItem` → `sessionStorage.setItem`); the 6 spec tests are skipped with `test.skip` + a referenced reason.
+
+### Deferred tests (un-skip after fix)
+
+- [ ] `auth.spec.js:34` — "shows demo credentials hint" — locator `text=Demo Credentials` doesn't match current Login.jsx copy. Update to match the actual section title (e.g., `text=Globussoft CRM` or `text=Enhanced Wellness — Demo`).
+- [ ] `auth.spec.js:70` — "successfully logs in with valid credentials" — `waitForURL('/')` times out. /api/auth/login returns 200 + token (verified via curl). Investigate: does Login.jsx redirect to '/' or somewhere else? Does the AuthProvider's loading-flag (#347) interact with the redirect? Possibly switch to `waitForURL('**/dashboard')` or wait for a known dashboard-only element.
+- [ ] `auth.spec.js:84` — "token is stored in localStorage" — assert `sessionStorage.getItem('token')` instead. Note: v3.2.5+ token may live ONLY in module memory if sessionStorage is disabled; the test should be tolerant of either.
+- [ ] `auth.spec.js:95` — "token persists across page reload" — same root cause as :70. Re-enable when redirect flow works.
+- [ ] `auth.spec.js:130` — "clearing token redirects to login" — clear sessionStorage, not localStorage. Note: even after sessionStorage clear, the in-memory holder still has the token until the JS context is destroyed; the page reload achieves that, so the assertion should still hold post-fix.
+- [ ] `auth.spec.js:153` — "authenticated user visiting /signup is redirected" — same UI-login flake as :70.
+
+### Probable root cause for the redirect failures
+
+CHANGELOG #347: "AuthContext on cold start migrates legacy localStorage token once and deletes the key". The migration logic may not fire reliably from a Playwright-injected token (browser reload semantics differ). Or the post-login redirect URL changed. Recommend: open Login.jsx + AuthContext, trace the login submit → redirect target. ~1 hour to fix all 6 tests cleanly.
+
+---
+
 ## 🛡️ CI hardening backlog — work top-down
 
 Snapshot of where CI is **today**:

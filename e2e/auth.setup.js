@@ -1,7 +1,15 @@
 // @ts-check
 /**
- * Auth setup — gets a token via API and injects it into localStorage
+ * Auth setup — gets a token via API and injects it into sessionStorage
  * so all other tests skip the login step.
+ *
+ * NOTE: Pre-v3.2.5 the token lived in localStorage and the AuthContext
+ * read it on cold start. v3.2.5 (#343) migrated to a module-level
+ * in-memory holder + sessionStorage fallback for security (XSS could
+ * exfil any localStorage token; sessionStorage at least clears on tab
+ * close). The cold-start rehydrate in frontend/src/utils/api.js (line
+ * ~55) reads ONLY from sessionStorage. So this setup writes to
+ * sessionStorage to match the new auth model.
  */
 const { test: setup, expect } = require('@playwright/test');
 const path = require('path');
@@ -27,10 +35,12 @@ setup('authenticate and save storage state', async ({ page, request }) => {
 
   console.log('[auth.setup] Got token via admin login');
 
-  // Navigate to the app and inject the token into localStorage
+  // Navigate to the app and inject the token into sessionStorage
+  // (the v3.2.5+ persistence path). Don't write to localStorage —
+  // utils/api.js explicitly skips it on cold-start rehydrate.
   await page.goto('/login');
   await page.evaluate((token) => {
-    localStorage.setItem('token', token);
+    sessionStorage.setItem('token', token);
   }, loginData.token);
 
   // Navigate to dashboard — should now be authenticated

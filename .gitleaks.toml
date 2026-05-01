@@ -1,0 +1,92 @@
+# gitleaks config — CI-3 in TODOS.md.
+#
+# Two layers of allowlist:
+#   1. Inherit gitleaks' default rule set (no `[extend]` override; the
+#      workflow runs without `--config-path` for full-history scans, so
+#      the defaults apply there too).
+#   2. Allow KNOWN-INTENTIONAL strings that are demo-only or
+#      dev-fallback constants. Anything not on this list is a finding.
+#
+# CRITICAL: this allowlist documents what we know is safe. NEVER add a
+# real production credential here — that's the gate's job to catch.
+
+title = "gbs-crm gitleaks config"
+
+[extend]
+# Inherit the default rule set (AWS, Slack, Stripe, GitHub PAT, etc.).
+useDefault = true
+
+[[allowlists]]
+description = "Intentional demo + dev-fallback credentials"
+
+# Files where these strings legitimately appear:
+paths = [
+    # Seed data — demo creds for the public demo box
+    '''backend/prisma/seed\.js''',
+    '''backend/prisma/seed-wellness\.js''',
+    # Auth dev-fallback secret string is documented + flagged in
+    # CLAUDE.md "Known Security Notes" — production must set JWT_SECRET
+    '''backend/middleware/auth\.js''',
+    # Routes that reference the demo password in test/quick-login flows
+    '''backend/routes/auth\.js''',
+    '''backend/routes/auth_2fa\.js''',
+    '''backend/routes/portal\.js''',
+    '''backend/routes/sso\.js''',
+    '''backend/routes/wellness\.js''',
+    # Documentation that references the demo creds
+    '''CLAUDE\.md''',
+    '''README\.md''',
+    '''PRODUCTION_RUNBOOK\.md''',
+    '''TODOS\.md''',
+    '''CHANGELOG\.md''',
+    '''docs/.+\.md''',
+    # Tests that mint test-only tokens / use demo creds
+    '''e2e/tests/.+\.spec\.js''',
+    '''backend/test/.+\.test\.js''',
+    # Local dev sqlite (committed — should be gitignored separately)
+    '''backend/prisma/globussoft\.db''',
+]
+
+# Known-safe content patterns that may appear inside the above paths
+# (and anywhere else where they're used as documentation, not as real
+# credentials):
+regexes = [
+    # The shared demo password used everywhere a quick-login chip is
+    # referenced. Public, intentional, not a real prod password.
+    '''password123''',
+    # The dev-fallback JWT secret used when JWT_SECRET env var is missing.
+    # Documented in CLAUDE.md security notes; production must override.
+    '''enterprise_super_secret_key_2026''',
+    # Test-only JWT secret used by api_tests CI gate
+    '''ci_jwt_secret_for_test_runs_only''',
+    # CI MySQL container's ephemeral root password (not a real DB)
+    '''ci_root_pw''',
+    # Mailgun TEST API key (placeholder; not a real key)
+    '''test-key''',
+    # Test-only VAPID-shaped string used by push-api spec
+    '''BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM''',
+]
+
+# Stop matches based on the surrounding context. Useful for false
+# positives where the same string shape appears in code comments.
+stopwords = [
+    "password123",
+    "demo",
+    "example.com",
+    "fake",
+    "dummy",
+    "TEST_",
+    "ci_jwt_secret_for_test_runs_only",
+    "ENTERPRISE_SUPER_SECRET_KEY_2026",
+]
+
+[[allowlists]]
+description = "Test fixtures + e2e RUN_TAG markers"
+regexTarget = "match"
+
+# E2E specs use deterministic-shaped tokens like
+#   E2E_CONT_<ts>, E2E_NOTIF_<ts>_<rand>, etc.
+# These can match high-entropy heuristics. Allow them anywhere.
+regexes = [
+    '''E2E_[A-Z_]+_\d+''',
+]

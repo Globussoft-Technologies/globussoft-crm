@@ -58,7 +58,7 @@ function verifyPatientToken(req, res, next) {
       phoneLast10: decoded.phoneLast10,
     };
     next();
-  } catch (e) {
+  } catch (_e) {
     return res.status(401).json({ error: "Invalid or expired portal token" });
   }
 }
@@ -943,7 +943,7 @@ router.post("/visits/:id/photos", photoUpload.array("photos", 10), async (req, r
     const added = (req.files || []).map((f) => `/uploads/wellness/visits/${id}/${path.basename(f.path)}`);
     const merged = [...existing, ...added];
 
-    const updated = await prisma.visit.update({
+    const _updated = await prisma.visit.update({
       where: { id },
       data: { [which]: JSON.stringify(merged) },
     });
@@ -966,7 +966,7 @@ router.delete("/visits/:id/photos", async (req, res) => {
     const next = existing.filter((u) => u !== url);
     await prisma.visit.update({ where: { id }, data: { [field]: JSON.stringify(next) } });
     res.json({ ok: true, urls: next });
-  } catch (e) {
+  } catch (_e) {
     res.status(500).json({ error: "Photo delete failed" });
   }
 });
@@ -981,7 +981,7 @@ router.get("/visits/:id/consumptions", async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
     res.json(items);
-  } catch (e) {
+  } catch (_e) {
     res.status(500).json({ error: "Failed to list consumption items" });
   }
 });
@@ -2730,7 +2730,7 @@ router.get("/public/tenant/:slug", async (req, res) => {
     const INTERNAL_LOCATION_NAME_RE = /^(smoke-test|e2e[-_ ]|test[-_ ]|qa[-_ ]|dev[-_ ])/i;
     const locations = allLocations.filter((l) => !INTERNAL_LOCATION_NAME_RE.test(String(l.name || "").trim()));
     res.json({ tenant, services, locations });
-  } catch (e) {
+  } catch (_e) {
     res.status(500).json({ error: "Failed to load clinic profile" });
   }
 });
@@ -3875,10 +3875,10 @@ router.post(
         return d.slice(-10) === last10;
       });
 
-      let generatedOtp = null;
+      let _generatedOtp = null;
       if (patient) {
         const otp = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
-        generatedOtp = otp;
+        _generatedOtp = otp;
         await prisma.patientOtp.create({
           data: {
             phone: last10,

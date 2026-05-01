@@ -25,7 +25,7 @@ async function audit(action, entityId, userId, tenantId, details) {
 
 // Helper: hydrate requester / approver user objects (Prisma model has no
 // declared relations, so we fetch users explicitly and graft them on).
-async function hydrateUsers(requests, tenantId) {
+async function hydrateUsers(requests, _tenantId) {
   if (!Array.isArray(requests) || requests.length === 0) return requests;
 
   const userIds = new Set();

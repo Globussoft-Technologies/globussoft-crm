@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const { verifyToken, verifyRole } = require("../middleware/auth");
+const { verifyToken } = require("../middleware/auth");
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

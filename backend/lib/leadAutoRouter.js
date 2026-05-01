@@ -47,7 +47,7 @@ function detectCategory(text) {
 /**
  * Pick the staff to assign. Returns userId or null.
  */
-async function pickAssignee({ tenantId, name, phone, email, source, note }) {
+async function pickAssignee({ tenantId, name, phone: _phone, email: _email, source, note }) {
   const haystack = [name, source, note].filter(Boolean).join(" ");
   const category = detectCategory(haystack);
   const desiredRole = category ? wellnessRoleByCategory[category] : null;

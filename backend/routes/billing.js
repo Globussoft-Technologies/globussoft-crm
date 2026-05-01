@@ -16,7 +16,7 @@ router.get("/", verifyToken, async (req, res) => {
       orderBy: [{ status: "desc" }, { dueDate: "asc" }]
     });
     res.json(invoices);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to locate invoice ledger" });
   }
 });
@@ -30,7 +30,7 @@ router.get("/:id", verifyToken, async (req, res) => {
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
     res.json(invoice);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch invoice" });
   }
 });
@@ -87,7 +87,7 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
       dueDate: invoice.dueDate,
     });
     res.status(201).json(invoice);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Invoice compilation and issuance failed" });
   }
 });
@@ -250,7 +250,7 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
         req.user.tenantId,
         req.io
       );
-    } catch (e) {}
+    } catch (_e) {}
 
     // #179: audit the transition.
     await writeAudit('Invoice', 'MARK_PAID', invoice.id, req.user.userId, req.user.tenantId, {
@@ -286,7 +286,7 @@ router.post("/:id/pay", verifyToken, async (req, res) => {
           req.user.tenantId,
           req.io
         );
-      } catch(e) {}
+      } catch(_e) {}
       // #179: audit only on the actual UNPAID -> PAID transition.
       await writeAudit('Invoice', 'MARK_PAID', invoice.id, req.user.userId, req.user.tenantId, {
         invoiceNum: invoice.invoiceNum,
@@ -295,7 +295,7 @@ router.post("/:id/pay", verifyToken, async (req, res) => {
       });
     }
     res.json(invoice);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Payment reconciliation operation failed" });
   }
 });
@@ -323,7 +323,7 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
           req.user.tenantId,
           req.io
         );
-      } catch(e) {}
+      } catch(_e) {}
       // #179: audit only on the actual UNPAID -> PAID transition.
       await writeAudit('Invoice', 'MARK_PAID', invoice.id, req.user.userId, req.user.tenantId, {
         invoiceNum: invoice.invoiceNum,
@@ -332,7 +332,7 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
       });
     }
     res.json(invoice);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Payment reconciliation operation failed" });
   }
 });
@@ -429,7 +429,7 @@ router.put("/:id/recurring", verifyToken, async (req, res) => {
       include: { contact: true }
     });
     res.json(updated);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to update recurring status" });
   }
 });
@@ -456,7 +456,7 @@ async function voidInvoiceHandler(req, res) {
       via: req.method,
     });
     res.json(invoice);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to void invoice" });
   }
 }

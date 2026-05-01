@@ -152,7 +152,7 @@ router.post(
     let event;
     try {
       event = JSON.parse(bodyStr);
-    } catch (err) {
+    } catch (_err) {
       return res.status(400).json({ error: "Invalid JSON" });
     }
 

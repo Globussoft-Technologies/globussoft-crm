@@ -1,5 +1,5 @@
 const https = require("https");
-const http = require("http");
+const _http = require("http");
 
 /**
  * Normalize phone number — strip non-digits, prepend 91 for 10-digit Indian numbers
@@ -283,7 +283,7 @@ async function resolveProviderConfig(prisma, tenantId) {
         source: "db",
       };
     }
-  } catch (e) {
+  } catch (_e) {
     // fall through to env-var resolution
   }
 

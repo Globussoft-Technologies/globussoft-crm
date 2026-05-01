@@ -352,7 +352,7 @@ router.post("/chat/:botId", async (req, res) => {
             data: { contactId: c.id, identified: true },
           });
         }
-      } catch (e) { /* ignore */ }
+      } catch (_e) { /* ignore */ }
     }
 
     const status = result.completed ? "COMPLETED" : "ACTIVE";

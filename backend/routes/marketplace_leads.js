@@ -208,7 +208,7 @@ router.put("/dismiss/:id", verifyToken, async (req, res) => {
       data: { status: "Dismissed" },
     });
     res.json(lead);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to dismiss lead." });
   }
 });
@@ -225,7 +225,7 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       glueCrmKey: c.glueCrmKey ? "••••" + c.glueCrmKey.slice(-4) : null,
     }));
     res.json(masked);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch config." });
   }
 });

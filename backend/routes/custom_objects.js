@@ -9,7 +9,7 @@ router.get("/entities", verifyToken, async (req, res) => {
   try {
     const list = await prisma.customEntity.findMany({ where: { tenantId: req.user.tenantId }, include: { fields: true }});
     res.json(list);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to read EAV entity schema mapping." });
   }
 });
@@ -32,7 +32,7 @@ router.post("/entities", verifyToken, async (req, res) => {
       include: { fields: true }
     });
     res.status(201).json(entity);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Custom Object Schema mutation failed" });
   }
 });
@@ -64,7 +64,7 @@ router.get("/records/:entityName", verifyToken, async (req, res) => {
     });
 
     res.json({ entity, records: formatted });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Record query compilation failed." });
   }
 });
@@ -99,7 +99,7 @@ router.post("/records/:entityName", verifyToken, async (req, res) => {
     });
 
     res.status(201).json(record);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Dynamic allocation row creation failed." });
   }
 });

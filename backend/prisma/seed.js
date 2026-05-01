@@ -30,7 +30,7 @@ async function main() {
     'Tenant',
   ];
   for (const table of tables) {
-    try { await prisma.$executeRawUnsafe(`TRUNCATE TABLE \`${table}\``); } catch (e) { /* table may not exist yet */ }
+    try { await prisma.$executeRawUnsafe(`TRUNCATE TABLE \`${table}\``); } catch (_e) { /* table may not exist yet */ }
   }
   await prisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 1');
   console.log('  All tables truncated.\n');

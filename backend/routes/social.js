@@ -21,7 +21,7 @@ async function getIntegration(tenantId, provider) {
     return await prisma.integration.findFirst({
       where: { tenantId, provider, isActive: true },
     });
-  } catch (e) {
+  } catch (_e) {
     return null;
   }
 }
@@ -30,7 +30,7 @@ function parseSettings(settings) {
   if (!settings) return {};
   try {
     return JSON.parse(settings);
-  } catch (e) {
+  } catch (_e) {
     return {};
   }
 }

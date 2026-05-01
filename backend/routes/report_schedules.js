@@ -28,7 +28,7 @@ router.get("/", async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
     res.json(schedules);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch report schedules" });
   }
 });
@@ -162,7 +162,7 @@ router.put("/:id", async (req, res) => {
       include: { user: { select: { id: true, name: true, email: true } } }
     });
     res.json(schedule);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to update report schedule" });
   }
 });
@@ -174,7 +174,7 @@ router.delete("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Schedule not found" });
     await prisma.reportSchedule.delete({ where: { id: existing.id } });
     res.json({ message: "Schedule deleted" });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to delete report schedule" });
   }
 });
@@ -192,7 +192,7 @@ router.put("/:id/toggle", async (req, res) => {
       include: { user: { select: { id: true, name: true, email: true } } }
     });
     res.json(schedule);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to toggle schedule" });
   }
 });

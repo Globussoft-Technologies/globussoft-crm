@@ -389,7 +389,7 @@ router.post("/apply/:industry", verifyToken, async (req, res) => {
           },
         });
         created.contacts += 1;
-      } catch (e) {
+      } catch (_e) {
         // ignore unique-constraint collisions
       }
     }

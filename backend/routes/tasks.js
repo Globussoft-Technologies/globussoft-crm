@@ -89,7 +89,7 @@ router.post("/", verifyToken, async (req, res) => {
       },
       include: { contact: true, user: true },
     });
-    try { require("../lib/eventBus").emitEvent("task.created", { taskId: task.id, title: task.title, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
+    try { require("../lib/eventBus").emitEvent("task.created", { taskId: task.id, title: task.title, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
     // #179: audit task creation.
     await writeAudit('Task', 'CREATE', task.id, req.user.userId, req.user.tenantId, {
       title: task.title,
@@ -151,7 +151,7 @@ router.put("/:id", verifyToken, async (req, res) => {
           req.io
         );
       }
-    } catch (e) {}
+    } catch (_e) {}
 
     // #179: audit only the keys that actually changed.
     const changes = diffFields(existing, task, Object.keys(data));
@@ -198,7 +198,7 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
           req.io
         );
       }
-    } catch (e) {}
+    } catch (_e) {}
 
     // #179: audit completion (only on the actual transition — re-saving
     // an already-Completed task is a no-op and should not generate a row).

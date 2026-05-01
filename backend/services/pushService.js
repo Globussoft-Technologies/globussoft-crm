@@ -4,7 +4,7 @@ let webpushAvailable = false;
 try {
   webpush = require("web-push");
   webpushAvailable = true;
-} catch (err) {
+} catch (_err) {
   console.warn("web-push module not installed. Push notifications will be unavailable. Run: npm install web-push");
 }
 

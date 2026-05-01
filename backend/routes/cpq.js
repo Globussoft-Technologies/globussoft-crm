@@ -12,7 +12,7 @@ router.get("/products", verifyToken, async (req, res) => {
       orderBy: { name: 'asc' }
     });
     res.json(products);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to fetch master product payload." });
   }
 });
@@ -22,7 +22,7 @@ router.post("/products", verifyToken, async (req, res) => {
   try {
     const product = await prisma.product.create({ data: { ...req.body, tenantId: req.user.tenantId } });
     res.status(201).json(product);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Product matrix mutation failed structurally." });
   }
 });
@@ -36,7 +36,7 @@ router.get("/quotes/:dealId", verifyToken, async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
     res.json(quotes);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Fetching CPQ arrays failed." });
   }
 });
@@ -89,7 +89,7 @@ router.post("/quotes", verifyToken, async (req, res) => {
     });
 
     res.status(201).json(quote);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "CPQ SaaS Pipeline matrix compilation failed." });
   }
 });

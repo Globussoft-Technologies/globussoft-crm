@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const prisma = require("../lib/prisma");
-const { notify, notifyMany, notifyTenant } = require("../lib/notificationService");
+const { notify, notifyTenant } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 
 // GET / — list notifications (paginated)

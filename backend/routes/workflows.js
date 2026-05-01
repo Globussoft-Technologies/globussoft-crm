@@ -95,7 +95,7 @@ router.get("/", async (req, res) => {
       where: { tenantId: req.user.tenantId },
     });
     res.json(rules);
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({ error: "Failed to fetch workflows" });
   }
 });
@@ -136,7 +136,7 @@ function validateCondition(raw) {
   if (typeof raw === "string") {
     try {
       parsed = JSON.parse(raw);
-    } catch (e) {
+    } catch (_e) {
       return { ok: false, status: 400, error: "condition is not valid JSON", code: "INVALID_CONDITION" };
     }
   } else {
@@ -257,7 +257,7 @@ router.delete("/:id", async (req, res) => {
 
     await prisma.automationRule.delete({ where: { id: existing.id } });
     res.json({ success: true });
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({ error: "Failed to delete workflow" });
   }
 });
@@ -276,7 +276,7 @@ router.put("/:id/toggle", async (req, res) => {
       data: { isActive: !existing.isActive },
     });
     res.json(rule);
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({ error: "Failed to toggle workflow" });
   }
 });

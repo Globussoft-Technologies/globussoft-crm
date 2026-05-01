@@ -23,7 +23,7 @@ router.get("/", async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
     res.json(tickets);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch tickets." });
   }
 });
@@ -41,7 +41,7 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ error: "Ticket not found." });
     }
     res.json(ticket);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch ticket." });
   }
 });
@@ -92,11 +92,11 @@ router.post("/", async (req, res) => {
           },
         });
       }
-    } catch (e) { /* SLA is non-critical */ }
+    } catch (_e) { /* SLA is non-critical */ }
 
-    try { require("../lib/eventBus").emitEvent("ticket.created", { ticketId: ticket.id, subject: ticket.subject, priority: ticket.priority, contactId: ticket.contactId, status: ticket.status, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
+    try { require("../lib/eventBus").emitEvent("ticket.created", { ticketId: ticket.id, subject: ticket.subject, priority: ticket.priority, contactId: ticket.contactId, status: ticket.status, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
     res.status(201).json(ticket);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to create ticket." });
   }
 });

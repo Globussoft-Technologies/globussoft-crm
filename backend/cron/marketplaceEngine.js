@@ -66,7 +66,7 @@ async function syncIndiaMART(config, onCreated, onDuplicate) {
   const data = await response.json();
   const leads = Array.isArray(data) ? data : data.RESPONSE || [];
 
-  let count = 0;
+  let _count = 0;
   for (const raw of leads) {
     const externalId = String(raw.UNIQUE_QUERY_ID || raw.QUERY_ID || "");
     if (!externalId) continue;
@@ -90,7 +90,7 @@ async function syncIndiaMART(config, onCreated, onDuplicate) {
       },
     });
     onCreated(1);
-    count++;
+    _count++;
   }
 
   return leads.length;
@@ -116,7 +116,7 @@ async function syncJustDial(config, onCreated, onDuplicate) {
     const data = await response.json();
     const leads = Array.isArray(data) ? data : data.leads || [];
 
-    let count = 0;
+    let _count = 0;
     for (const raw of leads) {
       const externalId = String(raw.leadid || raw.lead_id || raw.id || "");
       if (!externalId) continue;
@@ -140,7 +140,7 @@ async function syncJustDial(config, onCreated, onDuplicate) {
         },
       });
       onCreated(1);
-      count++;
+      _count++;
     }
 
     return leads.length;
@@ -169,7 +169,7 @@ async function syncTradeIndia(config, onCreated, onDuplicate) {
     const data = await response.json();
     const leads = Array.isArray(data) ? data : data.inquiries || [];
 
-    let count = 0;
+    let _count = 0;
     for (const raw of leads) {
       const externalId = String(raw.inquiry_id || raw.rfi_id || "");
       if (!externalId) continue;
@@ -193,7 +193,7 @@ async function syncTradeIndia(config, onCreated, onDuplicate) {
         },
       });
       onCreated(1);
-      count++;
+      _count++;
     }
 
     return leads.length;

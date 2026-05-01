@@ -15,7 +15,7 @@ function jsonSize(str) {
 
 function safeStripIds(rec) {
   // strip auto-increment id; keep relational ids since tenant data is fully wiped first
-  const { id, ...rest } = rec;
+  const { id: _id, ...rest } = rec;
   return rest;
 }
 
@@ -273,7 +273,7 @@ router.post(
       let blob;
       try {
         blob = JSON.parse(snap.data);
-      } catch (parseErr) {
+      } catch (_parseErr) {
         return res.status(400).json({ error: "Snapshot data is corrupted (invalid JSON)" });
       }
 

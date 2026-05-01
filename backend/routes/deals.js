@@ -139,7 +139,7 @@ router.get("/:id", async (req, res) => {
 const ALLOWED_DEAL_STAGES = new Set(["lead", "contacted", "proposal", "negotiation", "won", "lost"]);
 const { ensureNumberInRange, ensureEnum, httpFromPrismaError } = require("../lib/validators");
 
-function validateDealInput(body, { isUpdate = false } = {}) {
+function validateDealInput(body, { isUpdate: _isUpdate = false } = {}) {
   if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
     const e = ensureNumberInRange(body.amount, { min: 0, max: 1e12, field: "amount", code: "INVALID_AMOUNT" });
     if (e) return e;
@@ -200,7 +200,7 @@ router.post("/", async (req, res) => {
     }
 
     await audit("CREATE", deal.id, req.user.userId, req.user.tenantId, { title: deal.title, amount: deal.amount, stage: deal.stage });
-    try { require("../lib/eventBus").emitEvent("deal.created", { dealId: deal.id, title: deal.title, amount: deal.amount, stage: deal.stage, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
+    try { require("../lib/eventBus").emitEvent("deal.created", { dealId: deal.id, title: deal.title, amount: deal.amount, stage: deal.stage, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
     if (req.io) req.io.emit("deal_updated", deal);
     res.status(201).json(deal);
@@ -375,7 +375,7 @@ router.post("/:id/won", async (req, res) => {
     }
 
     await audit("UPDATE", deal.id, req.user.userId, req.user.tenantId, { action: "won", from: existing.stage });
-    try { require("../lib/eventBus").emitEvent("deal.won", { dealId: deal.id, title: deal.title, amount: deal.amount, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
+    try { require("../lib/eventBus").emitEvent("deal.won", { dealId: deal.id, title: deal.title, amount: deal.amount, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
     if (req.io) req.io.emit("deal_updated", deal);
     res.json(deal);
@@ -419,7 +419,7 @@ router.post("/:id/lost", async (req, res) => {
     }
 
     await audit("UPDATE", deal.id, req.user.userId, req.user.tenantId, { action: "lost", from: existing.stage, lostReason });
-    try { require("../lib/eventBus").emitEvent("deal.lost", { dealId: deal.id, title: deal.title, amount: deal.amount, lostReason, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(e) {}
+    try { require("../lib/eventBus").emitEvent("deal.lost", { dealId: deal.id, title: deal.title, amount: deal.amount, lostReason, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
     if (req.io) req.io.emit("deal_updated", deal);
     res.json(deal);

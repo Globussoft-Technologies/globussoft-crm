@@ -63,7 +63,7 @@ router.get("/inbox", async (req, res) => {
       take: 50
     });
     res.json(emails);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch inbox load" });
   }
 });
@@ -132,7 +132,7 @@ router.get("/calls", async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
     res.json(calls);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch call history" });
   }
 });
@@ -155,7 +155,7 @@ router.post("/log-call", async (req, res) => {
 
     if (req.io) req.io.emit('call_logged', callLog);
     res.status(201).json(callLog);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Logging phone interaction failed" });
   }
 });
@@ -176,7 +176,7 @@ router.get("/track/:trackingId/open.gif", async (req, res) => {
       // Emit real-time notification
       if (req.io) req.io.emit("email_opened", { emailId: track.emailId, trackingId: track.trackingId });
     }
-  } catch (err) { /* silent — don't break tracking pixel */ }
+  } catch (_err) { /* silent — don't break tracking pixel */ }
 
   // Return 1x1 transparent GIF
   const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
@@ -192,7 +192,7 @@ router.get("/track/:trackingId/click", async (req, res) => {
       data: { clickedAt: new Date(), type: "click", url: url || null },
     });
     if (req.io) req.io.emit("email_clicked", { trackingId: req.params.trackingId, url });
-  } catch (err) { /* silent */ }
+  } catch (_err) { /* silent */ }
   res.redirect(req.query.url || "/");
 });
 
@@ -203,7 +203,7 @@ router.get("/tracking/:emailId", async (req, res) => {
     const opens = tracks.filter(t => t.openedAt).length;
     const clicks = tracks.filter(t => t.clickedAt).length;
     res.json({ emailId: parseInt(req.params.emailId), opens, clicks, events: tracks });
-  } catch (err) { res.status(500).json({ error: "Failed to fetch tracking data" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to fetch tracking data" }); }
 });
 
 module.exports = router;

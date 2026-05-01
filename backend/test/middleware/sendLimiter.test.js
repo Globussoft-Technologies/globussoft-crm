@@ -29,7 +29,7 @@ function makeReqRes({ user = null, ip = '203.0.113.1' } = {}) {
     },
   };
   const headers = {};
-  let statusCode = 200;
+  let _statusCode = 200;
   const res = {
     headers,
     locals: {},
@@ -49,7 +49,7 @@ function makeReqRes({ user = null, ip = '203.0.113.1' } = {}) {
     }),
     status: vi.fn(function (c) {
       this.statusCode = c;
-      statusCode = c;
+      _statusCode = c;
       return this;
     }),
     json: vi.fn(function (data) {

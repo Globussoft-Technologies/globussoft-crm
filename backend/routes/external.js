@@ -21,7 +21,7 @@ const prisma = require("../lib/prisma");
 const externalAuth = require("../middleware/externalAuth");
 const { classifyLead } = require("../lib/leadJunkFilter");
 const { pickAssignee } = require("../lib/leadAutoRouter");
-const { computeFirstResponseDueAt, markFirstResponseIfNeeded } = require("../lib/leadSla");
+const { computeFirstResponseDueAt } = require("../lib/leadSla");
 
 const router = express.Router();
 

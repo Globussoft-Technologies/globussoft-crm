@@ -96,7 +96,7 @@ function renderComponent(component, slug) {
     case "columns": {
       const columns = props.columns || [];
       const gap = props.gap || "24px";
-      const colWidth = columns.length > 0 ? `calc(${100 / columns.length}% - ${gap})` : "100%";
+      const _colWidth = columns.length > 0 ? `calc(${100 / columns.length}% - ${gap})` : "100%";
       const colsHtml = columns
         .map((col) => {
           const innerHtml = (col.components || []).map((c) => renderComponent(c, slug)).join("\n");
@@ -135,7 +135,7 @@ function renderPage(landingPage) {
   if (content) {
     try {
       components = typeof content === "string" ? JSON.parse(content) : content;
-    } catch (e) {
+    } catch (_e) {
       components = [];
     }
   }

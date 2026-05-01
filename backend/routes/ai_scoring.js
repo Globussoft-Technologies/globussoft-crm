@@ -55,7 +55,7 @@ router.get("/score/:dealId", async (req, res) => {
       probability: probabilityScore,
       confidence,
     });
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({ error: "Predictive AI Model crashed" });
   }
 });

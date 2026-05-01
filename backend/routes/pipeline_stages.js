@@ -10,7 +10,7 @@ router.get('/', async (req, res) => {
   try {
     const stages = await prisma.pipelineStage.findMany({ where: { tenantId: req.user.tenantId }, orderBy: { position: 'asc' } });
     res.json(stages);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch pipeline stages' });
   }
 });
@@ -23,7 +23,7 @@ router.post('/', async (req, res) => {
       data: { name, color: color || '#3b82f6', position: position ?? 0, tenantId: req.user.tenantId }
     });
     res.status(201).json(stage);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to create pipeline stage' });
   }
 });
@@ -49,7 +49,7 @@ router.put('/reorder', async (req, res) => {
 
     const updated = await prisma.pipelineStage.findMany({ where: { tenantId: req.user.tenantId }, orderBy: { position: 'asc' } });
     res.json(updated);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to reorder stages' });
   }
 });
@@ -65,7 +65,7 @@ router.put('/:id', async (req, res) => {
       data: { name, color, position }
     });
     res.json(stage);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to update pipeline stage' });
   }
 });
@@ -77,7 +77,7 @@ router.delete('/:id', async (req, res) => {
     if (!existing) return res.status(404).json({ error: 'Pipeline stage not found' });
     await prisma.pipelineStage.delete({ where: { id: existing.id } });
     res.json({ message: 'Stage deleted' });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to delete pipeline stage' });
   }
 });

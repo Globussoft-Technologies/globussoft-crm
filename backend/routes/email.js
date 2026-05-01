@@ -21,7 +21,7 @@ router.get('/threads', verifyToken, async (req, res) => {
     }
     const threads = Object.values(threadMap).sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt));
     res.json(threads.slice(0, 50));
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch email threads' });
   }
 });
@@ -36,7 +36,7 @@ router.get('/stats', verifyToken, async (req, res) => {
       prisma.emailMessage.count({ where: { tenantId, direction: 'INBOUND' } }),
     ]);
     res.json({ total, unread, sent, received });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch email stats' });
   }
 });
@@ -48,7 +48,7 @@ router.get('/scheduled', verifyToken, async (req, res) => {
       orderBy: { scheduledFor: 'asc' },
     });
     res.json(scheduled);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch scheduled emails' });
   }
 });

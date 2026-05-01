@@ -3,7 +3,7 @@ const Sentry = require('@sentry/node');
 // Sentry initialization wrapper.
 // If SENTRY_DSN is not set, this is a no-op so local/dev environments stay quiet.
 
-function initSentry(app) {
+function initSentry(_app) {
   const dsn = process.env.SENTRY_DSN;
   if (!dsn) {
     console.warn('[Sentry] SENTRY_DSN not set — error monitoring disabled');

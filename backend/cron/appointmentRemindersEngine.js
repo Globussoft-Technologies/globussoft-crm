@@ -100,7 +100,7 @@ async function processTenant(tenant) {
   let queued1 = 0;
   let skipped = 0;
 
-  const handle = async (kind, visits, counter) => {
+  const handle = async (kind, visits, _counter) => {
     let q = 0;
     for (const v of visits) {
       try {

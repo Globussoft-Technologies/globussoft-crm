@@ -1,5 +1,5 @@
 const express = require("express");
-const { verifyToken, verifyRole } = require("../middleware/auth");
+const { verifyToken } = require("../middleware/auth");
 const pushService = require("../services/pushService");
 
 const router = express.Router();
@@ -41,7 +41,7 @@ router.post("/subscribe/visitor", async (req, res) => {
       create: { endpoint, p256dh, auth, type: "WEBSITE_VISITOR", contactId: contactId ? parseInt(contactId) : null, tenantId: resolvedTenantId, userAgent: req.headers["user-agent"] || null },
     });
     res.json({ success: true, id: sub.id });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to subscribe" });
   }
 });
@@ -52,7 +52,7 @@ router.delete("/unsubscribe", verifyToken, async (req, res) => {
     const { endpoint } = req.body;
     await prisma.pushSubscription.updateMany({ where: { endpoint, tenantId: req.user.tenantId }, data: { isActive: false } });
     res.json({ success: true });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to unsubscribe" });
   }
 });
@@ -113,7 +113,7 @@ router.post("/send-campaign", verifyToken, async (req, res) => {
     });
 
     res.json({ success: true, sent, failed });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to send campaign" });
   }
 });
@@ -122,14 +122,14 @@ router.post("/send-campaign", verifyToken, async (req, res) => {
 router.get("/templates", verifyToken, async (req, res) => {
   try {
     res.json(await prisma.pushTemplate.findMany({ where: { tenantId: req.user.tenantId }, orderBy: { createdAt: "desc" } }));
-  } catch (err) { res.status(500).json({ error: "Failed to fetch templates" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to fetch templates" }); }
 });
 
 router.post("/templates", verifyToken, async (req, res) => {
   try {
     const { name, title, body, icon, url, category } = req.body;
     res.status(201).json(await prisma.pushTemplate.create({ data: { name, title, body, icon, url, category, tenantId: req.user.tenantId } }));
-  } catch (err) { res.status(500).json({ error: "Failed to create template" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to create template" }); }
 });
 
 router.put("/templates/:id", verifyToken, async (req, res) => {
@@ -137,7 +137,7 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
     const existing = await prisma.pushTemplate.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Template not found" });
     res.json(await prisma.pushTemplate.update({ where: { id: existing.id }, data: req.body }));
-  } catch (err) { res.status(500).json({ error: "Failed to update template" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to update template" }); }
 });
 
 router.delete("/templates/:id", verifyToken, async (req, res) => {
@@ -146,7 +146,7 @@ router.delete("/templates/:id", verifyToken, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Template not found" });
     await prisma.pushTemplate.delete({ where: { id: existing.id } });
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: "Failed to delete template" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to delete template" }); }
 });
 
 // Get VAPID public key (public)
@@ -163,7 +163,7 @@ router.get("/stats", verifyToken, async (req, res) => {
       prisma.pushSubscription.count({ where: { isActive: true, tenantId: req.user.tenantId } }),
     ]);
     res.json({ notifications, subscribers });
-  } catch (err) { res.status(500).json({ error: "Failed to fetch stats" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to fetch stats" }); }
 });
 
 module.exports = router;

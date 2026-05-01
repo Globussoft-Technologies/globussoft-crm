@@ -36,7 +36,7 @@ function buildWhere(req, startDate, endDate, extra = {}, field = "createdAt") {
 router.get("/query", async (req, res) => {
   try {
     const { metric = "revenue", groupBy = "stage", startDate, endDate } = req.query;
-    const tenantId = req.user.tenantId;
+    const _tenantId = req.user.tenantId;
     const dateErr = validateDateRange(startDate, endDate);
     if (dateErr) return res.status(dateErr.status).json(dateErr);
 
@@ -248,7 +248,7 @@ router.get("/detailed/:type", async (req, res) => {
   try {
     const { type } = req.params;
     const { startDate, endDate, ownerId, status, limit = '100' } = req.query;
-    const tenantId = req.user.tenantId;
+    const _tenantId = req.user.tenantId;
     const dateErr = validateDateRange(startDate, endDate);
     if (dateErr) return res.status(dateErr.status).json(dateErr);
     const baseWhere = buildWhere(req, startDate, endDate);

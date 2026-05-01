@@ -183,7 +183,7 @@ router.get("/:id", async (req, res) => {
     });
     if (!tmpl) return res.status(404).json({ error: "Template not found" });
     res.json(tmpl);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch template" });
   }
 });
@@ -226,7 +226,7 @@ router.delete("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Template not found" });
     await prisma.documentTemplate.delete({ where: { id } });
     res.json({ success: true });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to delete template" });
   }
 });

@@ -408,7 +408,7 @@ async function main() {
         "Hair color refresh — covered grays, root touch-up, blow-dry finish.",
       ],
     };
-    const sourceWeighted = ["meta-ad", "meta-ad", "meta-ad", "meta-ad", "google-ad", "google-ad", "google-ad", "walk-in", "walk-in", "referral", "whatsapp", "indiamart"];
+    const _sourceWeighted = ["meta-ad", "meta-ad", "meta-ad", "meta-ad", "google-ad", "google-ad", "google-ad", "walk-in", "walk-in", "referral", "whatsapp", "indiamart"];
 
     let visitsCreated = 0;
     // Historical visits (last 90 days, NOT today/yesterday/tomorrow — those are scheduled separately)
@@ -619,7 +619,7 @@ async function main() {
           },
         });
         leadsCreated++;
-      } catch (e) {
+      } catch (_e) {
         // unique-violation → skip
       }
     }

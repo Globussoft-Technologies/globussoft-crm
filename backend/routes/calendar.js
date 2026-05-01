@@ -12,7 +12,7 @@ router.get('/events', verifyToken, async (req, res) => {
       take: parseInt(req.query.limit) || 50,
     });
     res.json(events);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch calendar events' });
   }
 });
@@ -24,7 +24,7 @@ router.get('/integrations', verifyToken, async (req, res) => {
       select: { id: true, provider: true, syncEnabled: true, lastSyncAt: true, calendarId: true },
     });
     res.json(integrations);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch calendar integrations' });
   }
 });
@@ -38,7 +38,7 @@ router.get('/upcoming', verifyToken, async (req, res) => {
       take: 10,
     });
     res.json(events);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch upcoming events' });
   }
 });

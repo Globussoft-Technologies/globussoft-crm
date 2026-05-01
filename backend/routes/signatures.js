@@ -146,7 +146,7 @@ router.post("/sign/:token", async (req, res) => {
           },
         });
       }
-    } catch (e) { /* non-critical */ }
+    } catch (_e) { /* non-critical */ }
 
     res.json({ success: true });
   } catch (err) {

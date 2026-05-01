@@ -21,7 +21,7 @@ router.get("/", verifyToken, async (req, res) => {
       select: { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, createdAt: true, updatedAt: true },
       orderBy: { createdAt: "desc" },
     }));
-  } catch (err) { res.status(500).json({ error: "Failed to fetch landing pages" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to fetch landing pages" }); }
 });
 
 router.get("/templates/list", verifyToken, (req, res) => {
@@ -33,7 +33,7 @@ router.get("/:id", verifyToken, async (req, res) => {
     const page = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!page) return res.status(404).json({ error: "Page not found" });
     res.json(page);
-  } catch (err) { res.status(500).json({ error: "Failed to fetch page" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to fetch page" }); }
 });
 
 router.post("/", verifyToken, async (req, res) => {
@@ -119,7 +119,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     }
 
     res.json(await prisma.landingPage.update({ where: { id: existing.id }, data }));
-  } catch (err) { res.status(500).json({ error: "Failed to update page" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to update page" }); }
 });
 
 router.delete("/:id", verifyToken, async (req, res) => {
@@ -128,7 +128,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Page not found" });
     await prisma.landingPage.delete({ where: { id: existing.id } });
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: "Failed to delete page" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to delete page" }); }
 });
 
 router.post("/:id/publish", verifyToken, async (req, res) => {
@@ -136,7 +136,7 @@ router.post("/:id/publish", verifyToken, async (req, res) => {
     const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Page not found" });
     res.json(await prisma.landingPage.update({ where: { id: existing.id }, data: { status: "PUBLISHED", publishedAt: new Date() } }));
-  } catch (err) { res.status(500).json({ error: "Failed to publish" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to publish" }); }
 });
 
 router.post("/:id/unpublish", verifyToken, async (req, res) => {
@@ -144,7 +144,7 @@ router.post("/:id/unpublish", verifyToken, async (req, res) => {
     const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Page not found" });
     res.json(await prisma.landingPage.update({ where: { id: existing.id }, data: { status: "DRAFT" } }));
-  } catch (err) { res.status(500).json({ error: "Failed to unpublish" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to unpublish" }); }
 });
 
 router.post("/:id/duplicate", verifyToken, async (req, res) => {
@@ -165,7 +165,7 @@ router.post("/:id/duplicate", verifyToken, async (req, res) => {
       },
     });
     res.status(201).json(copy);
-  } catch (err) { res.status(500).json({ error: "Failed to duplicate" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to duplicate" }); }
 });
 
 router.get("/:id/analytics", verifyToken, async (req, res) => {
@@ -180,7 +180,7 @@ router.get("/:id/analytics", verifyToken, async (req, res) => {
     const visits = events.filter(e => e.eventType === "VISIT").length;
     const submissions = events.filter(e => e.eventType === "FORM_SUBMIT").length;
     res.json({ events, visits, submissions, conversionRate: visits > 0 ? ((submissions / visits) * 100).toFixed(1) : 0 });
-  } catch (err) { res.status(500).json({ error: "Failed to fetch analytics" }); }
+  } catch (_err) { res.status(500).json({ error: "Failed to fetch analytics" }); }
 });
 
 // ── Public routes (no auth) ───────────────────────────────────────
@@ -255,7 +255,7 @@ publicRouter.get("/:slug/track", async (req, res) => {
         data: { landingPageId: page.id, eventType: req.query.event || "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"], tenantId: page.tenantId || 1 },
       });
     }
-  } catch (err) { /* silent */ }
+  } catch (_err) { /* silent */ }
   // 1x1 transparent GIF
   const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
   res.set({ "Content-Type": "image/gif", "Cache-Control": "no-store" }).send(gif);

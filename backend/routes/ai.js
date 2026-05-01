@@ -131,7 +131,7 @@ Context: "${context}"`;
     }
 
     res.json({ subjects: [`Follow up: ${context}`, `Quick question about ${context}`, `RE: ${context}`, `Update on ${context}`, `Action needed: ${context}`] });
-  } catch (err) {
+  } catch (_err) {
     res.json({ subjects: [`Follow up: ${req.body.context}`, `RE: ${req.body.context}`] });
   }
 });

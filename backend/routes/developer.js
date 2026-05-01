@@ -36,7 +36,7 @@ router.get("/apikeys", verifyToken, async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
     res.json(keys);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to locate key registers." });
   }
 });
@@ -48,7 +48,7 @@ router.delete("/apikeys/:id", verifyToken, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "API key not found" });
     await prisma.apiKey.delete({ where: { id: existing.id } });
     res.json({ success: true });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to revoke key." });
   }
 });
@@ -65,7 +65,7 @@ router.post("/webhooks", verifyToken, async (req, res) => {
       }
     });
     res.status(201).json(webhook);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to register webhook trigger link." });
   }
 });
@@ -78,7 +78,7 @@ router.get("/webhooks", verifyToken, async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
     res.json(hooks);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to retrieve webhook nodes." });
   }
 });
@@ -90,7 +90,7 @@ router.delete("/webhooks/:id", verifyToken, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Webhook not found" });
     await prisma.webhook.delete({ where: { id: existing.id } });
     res.json({ success: true });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to deregister webhook target." });
   }
 });

@@ -1,5 +1,5 @@
 const express = require("express");
-const { verifyToken, verifyRole } = require("../middleware/auth");
+const { verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -26,7 +26,7 @@ router.get("/", async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
     res.json(users);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch staff." });
   }
 });

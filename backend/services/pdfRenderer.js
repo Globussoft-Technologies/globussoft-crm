@@ -261,7 +261,7 @@ async function renderConsentPdf(consent, patient, service, clinic, signatureData
         const buf = Buffer.from(m[2], "base64");
         doc.image(buf, 50, sigTop, { fit: [200, 70] });
         sigPlaced = true;
-      } catch (e) {
+      } catch (_e) {
         // fall through to line
       }
     }

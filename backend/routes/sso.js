@@ -2,7 +2,7 @@ const path = require("path");
 // Try to load root .env (where shared API keys live) — non-fatal if missing.
 try {
   require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
-} catch (e) {
+} catch (_e) {
   // dotenv missing or root .env not present — process.env is still honored.
 }
 

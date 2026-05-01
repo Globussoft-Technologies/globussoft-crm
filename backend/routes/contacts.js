@@ -3,7 +3,7 @@ const { verifyToken, verifyRole } = require('../middleware/auth');
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
-const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, conflictFromPrisma, httpFromPrismaError } = require("../lib/validators");
+const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, httpFromPrismaError } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const { normalizePhone } = require("../utils/deduplication");
@@ -66,7 +66,7 @@ router.get('/', async (req, res) => {
       orderBy: { id: 'desc' },
       include: { activities: true, tasks: true, assignedTo: { select: { id: true, name: true, email: true } } },
     }));
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
   }
 });
@@ -84,7 +84,7 @@ router.get('/:id', async (req, res) => {
     // #167: 404 soft-deleted rows unless caller opts in.
     if (contact.deletedAt && !includeDeleted) return res.status(404).json({ error: 'Contact not found' });
     res.json(contact);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contact' });
   }
 });
@@ -100,7 +100,7 @@ router.post('/', async (req, res) => {
     // validator already verified there's at least one non-whitespace char.
     const normalised = { ...req.body, name: typeof req.body.name === "string" ? req.body.name.trim() : req.body.name };
     const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
-    try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (e) { /* event bus optional */ }
+    try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
     // #179: audit row for new contact.
     await writeAudit('Contact', 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
     res.status(201).json(contact);
@@ -127,7 +127,7 @@ router.put('/bulk-assign', async (req, res) => {
       data: { assignedToId: assignedToId ? parseInt(assignedToId) : null }
     });
     res.json({ updated: contactIds.length, assignedToId: assignedToId || null });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to bulk assign agent' });
   }
 });
@@ -142,9 +142,9 @@ router.post('/:id/activities', async (req, res) => {
     // PRD §6.4: lead-side SLA — first activity logged against a Lead stamps
     // firstResponseAt, stopping the SLA clock. Best-effort: any failure
     // here MUST NOT break the activity write.
-    try { await markFirstResponseIfNeeded({ contactId: contact.id }); } catch (e) { /* ignore */ }
+    try { await markFirstResponseIfNeeded({ contactId: contact.id }); } catch (_e) { /* ignore */ }
     res.status(201).json(activity);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to create activity' });
   }
 });
@@ -179,7 +179,7 @@ router.put('/:id', async (req, res) => {
         req.user.tenantId,
         req.io
       );
-    } catch (e) {}
+    } catch (_e) {}
 
     // gap #17: lead.converted — fires when a Contact's status flips from "Lead"
     // to "Customer" or "Prospect". Separate trigger from contact.updated so a
@@ -202,7 +202,7 @@ router.put('/:id', async (req, res) => {
           req.io
         );
       }
-    } catch (e) {}
+    } catch (_e) {}
 
     // Bug #283 [wellness]: when a contact transitions into Customer on a
     // wellness tenant, the downstream wellness app needs a Patient row to
@@ -366,7 +366,7 @@ router.post('/import-csv', async (req, res) => {
       source: 'csv',
     });
     res.json({ imported, skipped, errors });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to import contacts' });
   }
 });
@@ -383,7 +383,7 @@ router.put('/:id/assign', async (req, res) => {
       include: { assignedTo: { select: { id: true, name: true, email: true } } }
     });
     res.json(contact);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to assign agent' });
   }
 });
@@ -517,7 +517,7 @@ router.get('/:id/attachments', async (req, res) => {
     const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     res.json(await prisma.contactAttachment.findMany({ where: { contactId: contact.id, tenantId: req.user.tenantId }, orderBy: { createdAt: 'desc' } }));
-  } catch (err) { res.status(500).json({ error: 'Failed to fetch attachments' }); }
+  } catch (_err) { res.status(500).json({ error: 'Failed to fetch attachments' }); }
 });
 
 // #176: JSON-only contract — UI sends {filename, fileUrl}. Multipart isn't wired
@@ -598,7 +598,7 @@ router.delete('/attachments/:attachId', async (req, res) => {
       filename: existing.filename,
     });
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to delete attachment' }); }
+  } catch (_err) { res.status(500).json({ error: 'Failed to delete attachment' }); }
 });
 
 // #167: soft-delete — flips deletedAt instead of hard-removing the row.
@@ -622,7 +622,7 @@ router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
       data: { deletedAt: new Date() }
     });
     res.json({ ...contact, softDeleted: true });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to delete contact' });
   }
 });
@@ -645,7 +645,7 @@ router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
       data: { deletedAt: null }
     });
     res.json({ ...contact, restored: true });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to restore contact' });
   }
 });

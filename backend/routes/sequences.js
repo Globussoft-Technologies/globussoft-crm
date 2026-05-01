@@ -54,7 +54,7 @@ router.get("/", verifyToken, async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
     res.json(sequences);
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to read marketing sequences." });
   }
 });
@@ -123,7 +123,7 @@ router.patch("/:id/toggle", verifyToken, async (req, res) => {
       data: { isActive }
     });
     res.json({ success: true });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to toggle sequence." });
   }
 });
@@ -182,7 +182,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
     await prisma.sequenceEnrollment.deleteMany({ where: { sequenceId: existing.id } });
     await prisma.sequence.delete({ where: { id: existing.id } });
     res.json({ success: true });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to delete sequence." });
   }
 });
@@ -219,7 +219,7 @@ router.post("/:id/enroll", verifyToken, async (req, res) => {
     });
 
     res.json({ success: true, enrollment });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to enroll contact." });
   }
 });
@@ -247,7 +247,7 @@ router.patch("/enrollments/:id/pause", verifyToken, async (req, res) => {
       data: { status: 'Paused', nextRun: null },
     });
     res.json({ success: true, enrollment: updated });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to pause enrollment." });
   }
 });
@@ -264,7 +264,7 @@ router.patch("/enrollments/:id/resume", verifyToken, async (req, res) => {
       data: { status: 'Active', nextRun: new Date() },
     });
     res.json({ success: true, enrollment: updated });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to resume enrollment." });
   }
 });
@@ -282,7 +282,7 @@ router.delete("/enrollments/:id", verifyToken, async (req, res) => {
       data: { status: 'Unenrolled', nextRun: null },
     });
     res.json({ success: true, enrollment: updated });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Failed to unenroll." });
   }
 });
@@ -316,7 +316,7 @@ router.get("/:id/steps", ...stepGuard, async (req, res) => {
       orderBy: { position: "asc" },
     });
     res.json(steps);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to read steps." });
   }
 });
@@ -498,7 +498,7 @@ router.post("/debug/tick", verifyToken, verifyRole(["ADMIN"]), async (req, res) 
     const { tickSequenceEngine } = require('../cron/sequenceEngine');
     await tickSequenceEngine();
     res.json({ success: true, message: 'Cron tick fired' });
-  } catch(err) {
+  } catch(_err) {
     res.status(500).json({ error: "Tick failed." });
   }
 });

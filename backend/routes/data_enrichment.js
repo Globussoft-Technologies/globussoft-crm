@@ -76,7 +76,7 @@ async function persistEnrichment(contactId, fields) {
       where: { id: contactId },
       data: fields,
     });
-  } catch (fullErr) {
+  } catch (_fullErr) {
     // Schema may not yet have the new optional columns — retry with safe subset
     const safe = {};
     if (fields.company !== undefined) safe.company = fields.company;
@@ -177,7 +177,7 @@ router.post("/auto-enrich-new", async (req, res) => {
           ],
         },
       });
-    } catch (schemaErr) {
+    } catch (_schemaErr) {
       candidates = await prisma.contact.findMany({
         where: {
           tenantId: req.user.tenantId,

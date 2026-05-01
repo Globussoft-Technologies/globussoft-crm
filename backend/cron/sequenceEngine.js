@@ -296,7 +296,7 @@ async function processLegacyEnrollment(enrollment) {
   try {
     nodes = JSON.parse(sequence.nodes);
     edges = JSON.parse(sequence.edges || '[]');
-  } catch (err) {
+  } catch (_err) {
     console.error(`Error parsing sequence graph for ID: ${sequence.id}`);
     return;
   }

@@ -149,7 +149,7 @@ router.get("/:id", async (req, res) => {
     });
     if (!record) return res.status(404).json({ error: "Not found" });
     res.json(record);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch scheduled email" });
   }
 });
@@ -163,7 +163,7 @@ router.delete("/:id", async (req, res) => {
     if (!record) return res.status(404).json({ error: "Not found" });
     await prisma.scheduledEmail.delete({ where: { id: record.id } });
     res.json({ success: true });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to delete scheduled email" });
   }
 });
@@ -183,7 +183,7 @@ router.post("/:id/cancel", async (req, res) => {
       data: { status: "CANCELED" },
     });
     res.json(updated);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to cancel scheduled email" });
   }
 });

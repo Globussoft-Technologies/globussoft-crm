@@ -32,7 +32,7 @@ router.get("/", verifyToken, async (req, res) => {
       id: connectedMap[a.provider]?.id || null,
     }));
     res.json(integrations);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch integrations" });
   }
 });
@@ -48,7 +48,7 @@ router.post("/connect", verifyToken, verifyRole(["ADMIN"]), async (req, res) => 
       create: { provider, isActive: true, token: token || null, settings: settings ? JSON.stringify(settings) : null, tenantId: req.user.tenantId },
     });
     res.json(integration);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to connect integration" });
   }
 });
@@ -61,7 +61,7 @@ router.post("/disconnect", verifyToken, verifyRole(["ADMIN"]), async (req, res) 
       data: { isActive: false, token: null },
     });
     res.json({ success: true });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to disconnect" });
   }
 });
@@ -76,7 +76,7 @@ router.post("/toggle", verifyToken, async (req, res) => {
       create: { provider, isActive, tenantId: req.user.tenantId },
     });
     res.json(integration);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to toggle integration" });
   }
 });

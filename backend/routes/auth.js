@@ -7,7 +7,7 @@ const crypto = require("crypto");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const { writeAudit, diffFields } = require("../lib/audit");
+const { writeAudit } = require("../lib/audit");
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 
 // In-memory store for password reset tokens (token -> { userId, expiresAt })
@@ -194,7 +194,7 @@ router.get("/users", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, 
       select: { id: true, email: true, name: true, role: true, createdAt: true }
     });
     res.json(users);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to fetch directory" });
   }
 });
@@ -218,7 +218,7 @@ router.put("/users/:id/role", verifyToken, verifyRole(["ADMIN"]), async (req, re
       });
     }
     res.json(user);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to update role" });
   }
 });
@@ -239,7 +239,7 @@ router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res)
     });
     await prisma.user.delete({ where: { id: target.id } });
     res.json({ success: true });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to obliterate user" });
   }
 });
@@ -262,7 +262,7 @@ router.post("/forgot-password", async (req, res) => {
     }
 
     res.json(response);
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({ error: "Failed to process password reset request" });
   }
 });
@@ -299,7 +299,7 @@ router.post("/reset-password", async (req, res) => {
     });
 
     res.json({ message: "Password reset successfully" });
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({ error: "Failed to reset password" });
   }
 });
@@ -315,7 +315,7 @@ router.get("/me", verifyToken, async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
     res.json(user);
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({ error: "Failed to fetch profile" });
   }
 });
@@ -373,7 +373,7 @@ router.put("/me", verifyToken, async (req, res) => {
     }
 
     res.json(updatedUser);
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({ error: "Failed to update profile" });
   }
 });

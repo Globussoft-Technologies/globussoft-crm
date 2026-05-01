@@ -16,7 +16,7 @@ router.get('/', verifyToken, async (req, res) => {
       orderBy: { createdAt: 'desc' },
     });
     res.json(tickets);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch tickets' });
   }
 });
@@ -32,7 +32,7 @@ router.get('/stats', verifyToken, async (req, res) => {
       prisma.ticket.groupBy({ by: ['priority'], where: { tenantId }, _count: true }),
     ]);
     res.json({ total, open, pending, resolved, byPriority: byPriority.map(p => ({ priority: p.priority, count: p._count })) });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch ticket stats' });
   }
 });
@@ -45,7 +45,7 @@ router.get('/:id', verifyToken, async (req, res) => {
     });
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
     res.json(ticket);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch ticket' });
   }
 });
@@ -71,7 +71,7 @@ router.post('/', verifyToken, async (req, res) => {
           },
         });
       }
-    } catch (e) { /* SLA is non-critical */ }
+    } catch (_e) { /* SLA is non-critical */ }
 
     if (req.io) req.io.emit('ticket_created', ticket);
     try {
@@ -81,9 +81,9 @@ router.post('/', verifyToken, async (req, res) => {
         req.user.tenantId,
         req.io
       );
-    } catch(e) {}
+    } catch(_e) {}
     res.status(201).json(ticket);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to create ticket' });
   }
 });
@@ -120,7 +120,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     const ticket = await prisma.ticket.update({ where: { id: existing.id }, data });
     if (req.io) req.io.emit('ticket_updated', ticket);
     res.json(ticket);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to update ticket' });
   }
 });
@@ -135,7 +135,7 @@ router.put('/:id/assign', verifyToken, async (req, res) => {
       include: { assignee: { select: { id: true, name: true, email: true } } },
     });
     res.json(ticket);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to assign ticket' });
   }
 });
@@ -146,7 +146,7 @@ router.delete('/:id', verifyToken, async (req, res) => {
     if (!existing) return res.status(404).json({ error: 'Ticket not found' });
     await prisma.ticket.delete({ where: { id: existing.id } });
     res.json({ success: true });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: 'Failed to delete ticket' });
   }
 });

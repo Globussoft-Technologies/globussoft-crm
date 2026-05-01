@@ -39,7 +39,7 @@ async function processInboundEmail(payload, io) {
   let contact = null;
   try {
     contact = await prisma.contact.findUnique({ where: { email: sender } });
-  } catch (e) {
+  } catch (_e) {
     contact = null;
   }
 

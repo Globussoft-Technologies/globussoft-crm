@@ -49,7 +49,7 @@ router.post("/:dealId/upload", upload.single("file"), async (req, res) => {
     });
 
     res.status(201).json(attachment);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "File upload failed" });
   }
 });
@@ -109,7 +109,7 @@ router.get("/:dealId/attachments", async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
     res.json(attachments);
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({ error: "Failed to load attachments" });
   }
 });

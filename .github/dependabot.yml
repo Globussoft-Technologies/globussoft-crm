@@ -1,0 +1,104 @@
+version: 2
+
+# CI-2 in TODOS.md — automated dep-update PRs.
+#
+# Cadence: weekly (Monday 06:00 UTC = 11:30 IST). Frequent enough to
+# stay current on CVEs without burying the PR queue.
+#
+# Strategy:
+#   - patch + minor updates → grouped into one PR per ecosystem (low risk)
+#   - major updates → individual PRs (need human review for breaking changes)
+#   - security-only updates → daily, individual PRs, ignore the cadence
+#
+# All PRs auto-assigned to @indianbill007. Add team mates to reviewers
+# once the team grows.
+
+updates:
+  # ── Backend (Express + Prisma) ─────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    versioning-strategy: "increase"
+    labels:
+      - "dependencies"
+      - "backend"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      backend-patch-minor:
+        applies-to: version-updates
+        update-types: ["patch", "minor"]
+      backend-security:
+        applies-to: security-updates
+        update-types: ["patch", "minor", "major"]
+    # Pin major-version bumps for things that need careful migration.
+    # Prisma + Express + Stripe + Razorpay can all break things across
+    # major versions. Dependabot will still PR them — but as individual
+    # PRs (not in the patch+minor group), so they're easy to defer.
+    ignore: []
+
+  # ── Frontend (React + Vite) ────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    versioning-strategy: "increase"
+    labels:
+      - "dependencies"
+      - "frontend"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      frontend-patch-minor:
+        applies-to: version-updates
+        update-types: ["patch", "minor"]
+      frontend-security:
+        applies-to: security-updates
+        update-types: ["patch", "minor", "major"]
+
+  # ── E2E (Playwright) ───────────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/e2e"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "e2e"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      e2e-patch-minor:
+        applies-to: version-updates
+        update-types: ["patch", "minor"]
+
+  # ── GitHub Actions versions (actions/checkout@v5, etc.) ────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"

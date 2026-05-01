@@ -305,6 +305,15 @@ jobs:
           npm run lint
           echo "::notice::ESLint passed (errors=0; warnings allowed on legacy code)"
 
+      - name: Run npm audit gate
+        working-directory: backend
+        env:
+          AUDIT_FAIL_LEVELS: "high,critical"
+        run: |
+          set -euo pipefail
+          npm run audit:check
+          echo "::notice::npm audit gate passed (no NEW high/critical vulnerabilities outside allowlist)"
+
   # ── 4. UNIT_TESTS: vitest unit tests for backend/lib + middleware + ──
   # services + utils. Runs in parallel with api_tests; no MySQL, no
   # server boot, no Playwright — pure-fn assertions with prisma + fetch +

@@ -1,0 +1,61 @@
+{
+  "//": "Allowlist for backend/scripts/check-audit.js. Each entry must have a GHSA id, a reason, an addedOn date, and ideally a sunsetBy date. Re-review on every release.",
+  "//added-by": "CI-4 in TODOS.md, baseline 2026-05-01",
+
+  "advisories": [
+    {
+      "ghsa": "GHSA-4r6h-8v6p-xvw6",
+      "package": "xlsx",
+      "severity": "high",
+      "title": "Prototype Pollution in sheetJS",
+      "reason": "No fix available upstream — SheetJS community edition is unmaintained vs the paid CDN-hosted version. We use xlsx for one-shot CSV/Excel imports in routes/expenses + routes/contacts. The Prototype Pollution vector requires attacker-controlled input to xlsx.read(); our code only parses files uploaded via authenticated admin routes, mitigating the risk. Long-term: replace with exceljs (CI-4 follow-up).",
+      "addedOn": "2026-05-01",
+      "sunsetBy": "2026-08-01"
+    },
+    {
+      "ghsa": "GHSA-5pgg-2g8v-p4x9",
+      "package": "xlsx",
+      "severity": "high",
+      "title": "SheetJS Regular Expression Denial of Service (ReDoS)",
+      "reason": "Same package as above; same mitigation (auth-gated input). Same long-term fix (replace xlsx with exceljs).",
+      "addedOn": "2026-05-01",
+      "sunsetBy": "2026-08-01"
+    },
+    {
+      "ghsa": "GHSA-c2qf-rxjj-qqgw",
+      "package": "semver",
+      "severity": "high",
+      "title": "semver vulnerable to Regular Expression Denial of Service",
+      "reason": "Transitive: imap@0.8.19 → utf7 → semver@2.x. Fix requires downgrading imap to 0.8.17 (semver-major) or replacing imap entirely with node-imap-simple / nodemailer's IMAP client. The IMAP feature is used by routes/email_inbound.js for Mailgun reply scraping; ReDoS surface is bounded to malformed UTF-7-encoded mailbox names from the IMAP server, which is server-controlled (Mailgun) and not attacker-controlled. Long-term: migrate off imap (CI-4 follow-up).",
+      "addedOn": "2026-05-01",
+      "sunsetBy": "2026-08-01"
+    },
+    {
+      "ghsa": null,
+      "package": "imap",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable utf7 → semver",
+      "reason": "Same root cause as the semver entry above. npm audit reports imap as a separate top-level entry with no direct GHSA. Allowlisted by package name in check-audit.js's transitive-root path.",
+      "addedOn": "2026-05-01",
+      "sunsetBy": "2026-08-01"
+    },
+    {
+      "ghsa": null,
+      "package": "utf7",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable semver",
+      "reason": "Same root cause as the semver entry above. Allowlisted by package name.",
+      "addedOn": "2026-05-01",
+      "sunsetBy": "2026-08-01"
+    },
+    {
+      "ghsa": "GHSA-37ch-88jc-xwx2",
+      "package": "path-to-regexp",
+      "severity": "high",
+      "title": "path-to-regexp vulnerable to Regular Expression Denial of Service via multiple route parameters",
+      "reason": "Transitive via Express. `npm audit fix` couldn't auto-resolve under our current Express major. Risk window is route-parameter parsing where an attacker can craft a URL with adversarial pattern segments. We don't expose dynamic route patterns — every Express route uses simple `:id`-style params. ReDoS surface is bounded to path matching, mitigated by Cloudflare's request-time limits in front of the demo. Long-term: upgrade Express to 4.21.2+ when a non-breaking path becomes available.",
+      "addedOn": "2026-05-01",
+      "sunsetBy": "2026-08-01"
+    }
+  ]
+}

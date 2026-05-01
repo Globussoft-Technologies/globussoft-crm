@@ -48,10 +48,10 @@ jobs:
       functions_pct: ${{ steps.report.outputs.FUNCTIONS_PCT }}
       statements_pct: ${{ steps.report.outputs.STATEMENTS_PCT }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Node 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: "npm"

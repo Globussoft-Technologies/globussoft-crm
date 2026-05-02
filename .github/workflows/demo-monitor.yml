@@ -27,10 +27,12 @@ on:
         type: string
         default: 'https://crm.globusdemos.com'
 
-  # Once cleanup is verified, uncomment the block below to run on a
-  # 30-min schedule. Until then the workflow is opt-in.
-  # schedule:
-  #   - cron: '*/30 * * * *'
+  # 30-min health check against demo. Demo cleanup verified
+  # 2026-05-02 (17/17 manual run green on commit 0d49a6b → see todo
+  # log); schedule turned on so any drift opens a tracker issue
+  # within ~30 min instead of waiting for QA to surface it manually.
+  schedule:
+    - cron: '*/30 * * * *'
 
 permissions:
   contents: read
@@ -64,7 +66,8 @@ jobs:
         id: probe
         working-directory: e2e
         env:
-          BASE_URL: ${{ inputs.base_url }}
+          # On scheduled runs `inputs.*` are empty; fall back to demo.
+          BASE_URL: ${{ inputs.base_url || 'https://crm.globusdemos.com' }}
           E2E_SKIP_SCRUB: '1'
           DEMO_MONITOR: '1'
         # Output JSON so we can parse + post a structured issue body.
@@ -98,9 +101,14 @@ jobs:
 
       - name: Build issue body from failures
         id: report
-        if: ${{ steps.probe.outputs.exit_code != '0' && inputs.open_issue_on_failure == true }}
+        # Open issue by default. workflow_dispatch can pass false to
+        # suppress (e.g. when manually re-running for verification);
+        # scheduled runs always open. The `!= false` reads as
+        # "true OR null/undefined" — which is the intended default.
+        if: ${{ steps.probe.outputs.exit_code != '0' && inputs.open_issue_on_failure != false }}
         env:
-          BASE_URL: ${{ inputs.base_url }}
+          # On scheduled runs `inputs.*` are empty; fall back to demo.
+          BASE_URL: ${{ inputs.base_url || 'https://crm.globusdemos.com' }}
         run: |
           set -euo pipefail
           {
@@ -133,7 +141,11 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Open or update the demo-monitor tracker issue
-        if: ${{ steps.probe.outputs.exit_code != '0' && inputs.open_issue_on_failure == true }}
+        # Open issue by default. workflow_dispatch can pass false to
+        # suppress (e.g. when manually re-running for verification);
+        # scheduled runs always open. The `!= false` reads as
+        # "true OR null/undefined" — which is the intended default.
+        if: ${{ steps.probe.outputs.exit_code != '0' && inputs.open_issue_on_failure != false }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BODY: ${{ steps.report.outputs.body }}

@@ -46,24 +46,35 @@ async function apiLogin(request, creds) {
 }
 
 /**
- * Inject both token and tenant JSON into localStorage (App.jsx reads both;
- * the body[data-vertical] attribute is driven by tenant.vertical), then
- * navigate to `initialPath`. Use `/wellness` for wellness tenants.
+ * Inject token + user + tenant JSON into localStorage (App.jsx reads all
+ * three in its useState initializers; without `user` the Sidebar's
+ * managerOnly/adminOnly filter hides ~30 links, and KPI rendering can
+ * fail since some queries gate on user.role). The body[data-vertical]
+ * attribute is driven by tenant.vertical. Then navigate to `initialPath`.
  */
-async function uiLoginViaToken(page, token, tenant, initialPath = '/') {
+async function uiLoginViaToken(page, token, tenant, initialPath = '/', user = null) {
   await page.goto('/login');
-  await page.evaluate(({ t, ten }) => {
+  await page.evaluate(({ t, ten, u }) => {
     localStorage.setItem('token', t);
     if (ten) localStorage.setItem('tenant', JSON.stringify(ten));
-  }, { t: token, ten: tenant });
+    if (u) localStorage.setItem('user', JSON.stringify(u));
+  }, { t: token, ten: tenant, u: user });
   await page.goto(initialPath);
   await page.waitForLoadState('domcontentloaded');
 }
 
 async function clearBrowserState(page) {
+  // sessionStorage as well as localStorage — per #343 (v3.2.5) the SPA
+  // reads the token from sessionStorage + an in-memory holder; just
+  // clearing localStorage leaves a stale token from auth.setup behind,
+  // so a subsequent uiLoginViaToken-with-different-creds can't replace
+  // the auth context and tests fall back to the previous tenant's data.
   await page.context().clearCookies();
   await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
 }
 
 function uniquePhone10() {
@@ -203,15 +214,15 @@ test.describe.serial('Journey A — Patient portal (real person, phone+OTP)', ()
 test.describe.serial('Journey B — Doctor (real browser)', () => {
   test('B1. Doctor logs in via /login and lands on /wellness', async ({ page, request }) => {
     await clearBrowserState(page);
-    const { token, tenant } = await apiLogin(request, DOCTOR);
-    await uiLoginViaToken(page, token, tenant, '/wellness');
+    const { token, tenant, user } = await apiLogin(request, DOCTOR);
+    await uiLoginViaToken(page, token, tenant, '/wellness', user);
     await page.waitForLoadState('networkidle', { timeout: 20000 });
     await expect(page.locator('body')).toHaveAttribute('data-vertical', 'wellness', { timeout: 10000 });
   });
 
   test('B2. Navigate to Patients page and see 50+ rows', async ({ page, request }) => {
-    const { token, tenant } = await apiLogin(request, DOCTOR);
-    await uiLoginViaToken(page, token, tenant, '/wellness/patients');
+    const { token, tenant, user } = await apiLogin(request, DOCTOR);
+    await uiLoginViaToken(page, token, tenant, '/wellness/patients', user);
     await page.waitForLoadState('networkidle', { timeout: 20000 });
 
     // Be resilient to layout: pick any element that textually contains a patient name.
@@ -222,7 +233,7 @@ test.describe.serial('Journey B — Doctor (real browser)', () => {
   });
 
   test('B3. Click a patient and see tabs render', async ({ page, request }) => {
-    const { token, tenant } = await apiLogin(request, DOCTOR);
+    const { token, tenant, user } = await apiLogin(request, DOCTOR);
     const patientsRes = await request.get(`${API}/wellness/patients?limit=1`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -232,7 +243,7 @@ test.describe.serial('Journey B — Doctor (real browser)', () => {
     expect(items.length).toBeGreaterThan(0);
     const id = items[0].id;
 
-    await uiLoginViaToken(page, token, tenant, `/wellness/patients/${id}`);
+    await uiLoginViaToken(page, token, tenant, `/wellness/patients/${id}`, user);
     await page.waitForLoadState('networkidle', { timeout: 20000 });
     // Expect at least a tab-like UI with common labels. Be lenient about casing/label.
     const anyTab = page.locator('text=/visits|history|prescription|consent|treatment/i').first();
@@ -299,8 +310,8 @@ test.describe.serial('Journey C — Telecaller (SLA queue)', () => {
 test.describe.serial('Journey D — Owner Rishu (dashboard, approve, reports)', () => {
   test('D1. Rishu logs in, lands on /wellness, sees KPI numbers', async ({ page, request }) => {
     await clearBrowserState(page);
-    const { token, tenant } = await apiLogin(request, RISHU);
-    await uiLoginViaToken(page, token, tenant, '/wellness');
+    const { token, tenant, user } = await apiLogin(request, RISHU);
+    await uiLoginViaToken(page, token, tenant, '/wellness', user);
     await page.waitForLoadState('networkidle', { timeout: 20000 });
     await expect(page.locator('body')).toHaveAttribute('data-vertical', 'wellness', { timeout: 10000 });
     // Expect the page to have at least one ₹ currency symbol (INR tenant)

@@ -73,7 +73,13 @@ test.describe('Dashboard', () => {
   });
 
   test('sidebar is visible on dashboard', async ({ page }) => {
-    await expect(page.locator('text=Globussoft').first()).toBeVisible();
+    // Brand text in the sidebar h1 is `tenant?.name || 'Globussoft'`.
+    // Asserting the literal "Globussoft" string used to work only because
+    // tests ran without the tenant object loaded — they now load it via
+    // auth.setup.js, so the seeded NovaCrest tenant.name renders. Just
+    // assert the sidebar h1 is visible with non-empty text.
+    const brandHeading = page.locator('aside h1').first();
+    await expect(brandHeading).toBeVisible({ timeout: 10000 });
     await expect(page.locator('text=Dashboard').first()).toBeVisible();
     await expect(page.locator('text=Contacts').first()).toBeVisible();
   });

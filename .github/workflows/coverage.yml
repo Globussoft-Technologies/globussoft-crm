@@ -161,6 +161,7 @@ jobs:
             tests/wellness-clinical-api.spec.js \
             tests/social-api.spec.js \
             tests/email-api.spec.js \
+            tests/wellness-rbac-api.spec.js \
             tests/teardown-completeness.spec.js
 
       - name: Stop backend (SIGTERM → c8 flushes coverage data)

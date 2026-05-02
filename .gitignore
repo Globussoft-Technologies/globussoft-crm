@@ -77,3 +77,6 @@ backend/.c8tmp/
 
 .env
 .env.docker
+
+# Local-only operator scripts (SSH helper reads .env creds; never commit)
+.scripts/

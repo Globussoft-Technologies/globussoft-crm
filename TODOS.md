@@ -2,7 +2,65 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-05-01 (afternoon — **repo hygiene pass + e2e-full debrief**. 3 commits shipped: `b281dd6` removed two stale tracked root files (orphan 99-byte `package-lock.json`, ad-hoc `checked_issues.json`), `84129a9` swapped the silently-failing `gitleaks/gitleaks-action@v2` (paid org license required) for `docker://zricethezav/gitleaks:latest` (free OSS binary, same `.gitleaks.toml`) AND bumped `actions/checkout@v4`/`actions/setup-node@v4` → `@v5` across 4 workflow files (clears the Node 20 deprecation warning), `5e364d6` cleared all 180 `no-unused-vars` ESLint warnings via underscore-prefix rename. CI gate now: build + lint + api_tests + unit_tests + deploy ALL green; **secret-scan now actually functional for the first time since CI-3 landed in v3.3.0** (failed silently for 5 consecutive pushes due to license issue); ESLint warnings 180 → 1 (pre-existing `no-useless-escape` in `sandbox.js:206`). Pickup from home: `git pull origin main` — new HEAD `5e364d6`.)
+Last updated: 2026-05-02 — **closed-issue regression audit + architect-priority sequencing** added at top. See "🎯 Architect-priority sequencing (2026-05-02)" below. The detailed 24-item regression-coverage backlog mapping every closed issue → which spec would prevent it from regressing is in [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md). Pick from the architect sequencing first.
+
+Previous update: 2026-05-01 (afternoon — repo hygiene pass + e2e-full debrief; 3 commits `b281dd6` / `84129a9` / `5e364d6`. ESLint warnings 180 → 1, secret-scan back to functional, GitHub Actions checkout/setup-node v4→v5).
+
+---
+
+## 🎯 Architect-priority sequencing (2026-05-02)
+
+Everything below in this doc is real backlog. The order matters. Pick from this section top-down — these are the cuts an architect would make on what's most worth doing **next**, given the current state (4-gate CI green, v3.2.5 shipped, 236 substantive closed issues across 9 months, RBAC + seed-pollution clusters keep re-appearing in QA).
+
+Three observations that frame the priorities:
+
+1. **The 4-gate CI is genuinely good. Stop adding more layers; start exploiting what's there.**
+2. **The biggest risk right now is invisible.** Release validation (`e2e-full.yml`) is silently broken — 88% pass rate has been treated as "test debt", but ~70% of those failures trace to one bug ([Bucket A below](#-e2e-full-ui-test-debt--release-validation-88-pass-rate)): `auth.setup.js` writes to `localStorage` but the v3.2.5 SPA reads from `sessionStorage`. **The team thinks it has release validation. It doesn't.** This is the single most dangerous gap.
+3. **Several QA-recurring bugs are architectural, not testable.** Adding more regression specs doesn't fix RBAC drift or seed pollution at the root. Some items below need redesign, not coverage.
+
+### Tier 1 — this week (highest ROI, lowest cost)
+
+| # | Item | Effort | Why now |
+|---|---|---|---|
+| **T1.1** | **Fix `e2e/auth.setup.js` — write `sessionStorage` not `localStorage`** | 30-60 min | Single highest-leverage move available. Reclaims ~100 of 201 failing UI specs and restores release validation that the team thinks it has. Diagnosis already in [Bucket A](#bucket-a--auth-state-injection-broken-by-sessionstorage-migration-70-of-failures). Just hasn't been picked up. |
+| **T1.2** | **Wire a real SMS provider OR feature-flag OTP-dependent flows OFF in prod** | 1 day | [#182](https://github.com/Globussoft-Technologies/globussoft-crm/issues/182) (closed) said the SMS queue had 25 stuck messages 30+ hrs old. The wellness vertical's entire telecaller flow + patient portal + appointment reminders depend on SMS that may not actually be sending. Either pick a provider (MSG91 is cheapest in INR) and ship credentials, or feature-flag the OTP UI off until you do. Right now it's broken-by-default and clinics don't know. |
+| **T1.3** | **Ship P0 of the regression backlog** — `wellness-rbac-api.spec.js` + `auth-security-api.spec.js` + `demo-hygiene-api.spec.js` | 3 days | 42 closed issues get permanent gates; QA stops re-filing the same RBAC + seed-pollution clusters every cycle. Acceptance criteria + revert-and-prove steps in [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md) (P0 bucket). |
+
+### Tier 2 — this month (unblock real users + close the regression loop)
+
+| # | Item | Effort | Why now |
+|---|---|---|---|
+| **T2.1** | **Mobile responsiveness — sidebar collapse + drawer < 900px** | 3-5 days | [#228](https://github.com/Globussoft-Technologies/globussoft-crm/issues/228) is closed but NOT actually fixed. Sidebar is fixed-width with no hamburger. Wellness clinics overwhelmingly run on phones (telecallers, doctors looking up Rx between patients). This is an **adoption blocker, not a polish item.** Move to: CSS Grid sidebar collapse + drawer at <900px, wire the existing Lucide menu icon. One PR. |
+| **T2.2** | **Audit-log coverage build-out — implementation, not just spec** | 4-5 days | [#179](https://github.com/Globussoft-Technologies/globussoft-crm/issues/179) is closed but the audit middleware still only fires on Deal events. Compliance for wellness PHI requires Patient / Visit / Rx / Consent mutations all in AuditLog. This is implementation work — `audit-coverage-api.spec.js` from the regression backlog can't pass until this lands. Use [backend/lib/audit.js](backend/lib/audit.js) helper + Express middleware on `res.json()` for any non-GET. |
+| **T2.3** | **Ship P1 of the regression backlog** — `route-contracts-api.spec.js` + `billing-api.spec.js` + `lead-routing-api.spec.js` + `audit-coverage-api.spec.js` + 5 spec extensions | 7 days | Once T2.2 lands, the audit spec becomes shippable. Closes regression-risk loop on ~100 more closed issues. Detail in [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md) P1 bucket. |
+
+### Tier 3 — this quarter (architecture; close bug classes permanently)
+
+| # | Item | Effort | Why now |
+|---|---|---|---|
+| **T3.1** | **Consolidate RBAC into a real policy engine (CASL or Casbin)** | 2 weeks | Current model has 3 orthogonal axes — `User.role` (ADMIN/MANAGER/USER), `User.wellnessRole` (doctor/professional/telecaller/helper), `Tenant.vertical` (generic/wellness) — enforced by hand-rolled `verifyRole(...)` chains across 91 route files. QA cycles keep finding "doctor sees X they shouldn't" bugs because there is no single source of truth. Move to a policy file naming every (role, action, resource) tuple; replace `verifyRole` with policy-checked middleware. **`wellness-rbac-api.spec.js` from T1.3 then becomes the test of the policy file, not 100 individual route guards.** Closes the entire C2 cluster permanently. Future RBAC bugs become impossible to ship without a policy diff in code review. |
+| **T3.2** | **Separate seed scripts from test fixtures** | 1 week | Demo pollution keeps happening because [prisma/seed.js](backend/prisma/seed.js) + [prisma/seed-wellness.js](backend/prisma/seed-wellness.js) are also where E2E specs originally landed their realistic-data fixtures. Split: `seed.js` produces clean brand-safe demo, tests get their own setup against a separate `gbscrm_test` schema or inside a transaction. Pair with `demo-hygiene-api.spec.js` from T1.3 — together they make pollution structurally impossible. |
+| **T3.3** | **Currency / locale single source of truth + ESLint enforcement** | 3 days | The `$ ₹` and "$3.73 instead of ₹310" bugs ([#242](https://github.com/Globussoft-Technologies/globussoft-crm/issues/242), [#286](https://github.com/Globussoft-Technologies/globussoft-crm/issues/286), [#330](https://github.com/Globussoft-Technologies/globussoft-crm/issues/330)) keep re-appearing because frontend has multiple inline `${amount}` template literals that bypass `formatMoney()`. ESLint custom rule: ban `\$\{.*amount.*\}` and `₹\$\{.*\}` outside [frontend/src/utils/formatMoney.js](frontend/src/utils/formatMoney.js). Plus the unit test from regression-backlog #22. Once the rule lands, the bug class is dead. |
+
+### What I'd explicitly NOT do next
+
+- **Don't add more cron engines.** 19 is already a lot, and several overlap (orchestrator + recommendations + sentiment all touch the same data). Consolidate before adding more.
+- **Don't expand to a third vertical (gym/spa)** until T3.1 lands. Adding a vertical with the current RBAC matrix triples the enforcement bugs.
+- **Don't chase 100% test coverage.** Today's 40% on routes is fine *if* the gated specs cover the high-risk surface. The regression backlog names the under-covered routes — ship those, don't blanket-test everything.
+- **Don't rewrite the UI test suite yet.** T1.1 alone recovers most of it. A full rewrite is a multi-week effort that pays off only after the per-push gate is comprehensive (still in progress — see T1.3 / T2.3).
+
+### Sequencing summary
+
+```
+Week 1   T1.1 sessionStorage fix (1h)  →  T1.2 SMS wiring (1d)  →  T1.3 P0 specs (3d)
+Week 2-3 T2.2 audit impl (5d)         →  T2.3 P1 specs (7d, can parallelize)
+Week 2-4 T2.1 mobile (5d, parallel with T2.2/T2.3)
+Q-end    T3.1 RBAC consolidation (2w) →  T3.2 seed split (1w) → T3.3 currency lint (3d)
+```
+
+Tier 1 + Tier 2 = **~3 weeks of focused work** and closes the loop on ~150 of the 236 substantive closed issues, plus unblocks mobile clinic adoption, plus restores release validation. **That's the bar to hold to before spending architect-time on Tier 3.**
+
+---
 
 ## 🧹 2026-05-01 afternoon — repo hygiene shipped
 

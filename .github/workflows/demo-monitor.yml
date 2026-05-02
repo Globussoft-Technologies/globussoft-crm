@@ -1,0 +1,158 @@
+name: Demo health monitor (read-only)
+
+# Read-only assertions against https://crm.globusdemos.com. Catches
+# regression classes that the per-push api_tests gate can't see because
+# it runs against an ephemeral DB:
+#   - #401 patient duplicates regrowing
+#   - #402 sidebar /api/email 404
+#   - #403 cross-tenant task leak
+#   - #404 public booking empty
+#   - #405 test-data residue accumulation
+#   - #406 wellness SPA routes 404
+#
+# Currently workflow_dispatch only — no schedule yet. Flip the schedule
+# block on once the demo cleanup (scrub + #401 rollout + restore) has
+# verified the box is clean. Each spec is read-only; nothing here ever
+# mutates demo state.
+
+on:
+  workflow_dispatch:
+    inputs:
+      open_issue_on_failure:
+        description: 'Open/comment on a GitHub issue if the monitor fails'
+        type: boolean
+        default: true
+      base_url:
+        description: 'BASE_URL to monitor (defaults to demo)'
+        type: string
+        default: 'https://crm.globusdemos.com'
+
+  # Once cleanup is verified, uncomment the block below to run on a
+  # 30-min schedule. Until then the workflow is opt-in.
+  # schedule:
+  #   - cron: '*/30 * * * *'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  monitor:
+    name: Probe demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx playwright install chromium --with-deps
+          # Pre-create empty storageState so the chromium project loads
+          # cleanly with --no-deps (same trick as deploy.yml).
+          mkdir -p playwright/.auth
+          echo '{"cookies":[],"origins":[]}' > playwright/.auth/user.json
+
+      - name: Run demo-health spec
+        id: probe
+        working-directory: e2e
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          E2E_SKIP_SCRUB: '1'
+          DEMO_MONITOR: '1'
+        # Output JSON so we can parse + post a structured issue body.
+        # Don't fail the step yet; we want to upload artifacts + post
+        # the issue first, then fail at the end.
+        continue-on-error: true
+        run: |
+          set +e
+          npx playwright test \
+            --project=chromium \
+            --no-deps \
+            --reporter=list,json \
+            tests/demo-health.spec.js \
+            > /tmp/probe.stdout.txt 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          # Playwright's JSON reporter writes to playwright-report by
+          # default when configured; fall back to test-results JSON.
+          ls -la test-results/ 2>/dev/null || true
+          cat /tmp/probe.stdout.txt
+
+      - name: Upload probe artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-monitor-${{ github.run_id }}
+          path: |
+            /tmp/probe.stdout.txt
+            e2e/test-results/
+            e2e/playwright-report/
+          retention-days: 14
+
+      - name: Build issue body from failures
+        id: report
+        if: ${{ steps.probe.outputs.exit_code != '0' && inputs.open_issue_on_failure == true }}
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: |
+          set -euo pipefail
+          {
+            echo "body<<EOF_BODY"
+            echo "## Demo monitor failed"
+            echo ""
+            echo "- **Target**: \`$BASE_URL\`"
+            echo "- **Run**: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- **Triggered by**: @$GITHUB_ACTOR"
+            echo "- **Time (UTC)**: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo ""
+            echo "### Failed assertions"
+            echo ""
+            echo "\`\`\`"
+            # Extract just the FAIL lines + their first error line. The
+            # full Playwright output is in the artifact.
+            grep -E "(✘|Error:|expected|received)" /tmp/probe.stdout.txt | head -60 || echo "(see artifact)"
+            echo "\`\`\`"
+            echo ""
+            echo "### What this means"
+            echo ""
+            echo "Each failed assertion in the demo-health spec maps to a"
+            echo "regression class — the test name carries the issue number."
+            echo "A failure here means demo state has drifted from the contract"
+            echo "the spec encodes; the per-push api_tests gate cannot see this"
+            echo "because it runs against a fresh ephemeral DB."
+            echo ""
+            echo "_This issue is auto-managed by_ \`.github/workflows/demo-monitor.yml\`."
+            echo "EOF_BODY"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the demo-monitor tracker issue
+        if: ${{ steps.probe.outputs.exit_code != '0' && inputs.open_issue_on_failure == true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY: ${{ steps.report.outputs.body }}
+        run: |
+          set -euo pipefail
+          # Stable title so re-runs comment on the existing issue rather
+          # than spawning a new one each time. Matches by exact title.
+          TITLE="[demo-monitor] crm.globusdemos.com health-check failing"
+          existing=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #$existing"
+            gh issue comment "$existing" --body "$BODY"
+          else
+            echo "Opening new issue"
+            gh issue create --title "$TITLE" --body "$BODY" --label "demo-monitor"
+          fi
+
+      - name: Fail the job if the probe failed
+        if: ${{ steps.probe.outputs.exit_code != '0' }}
+        run: |
+          echo "::error::Demo health monitor reported failures (exit ${{ steps.probe.outputs.exit_code }})"
+          exit 1

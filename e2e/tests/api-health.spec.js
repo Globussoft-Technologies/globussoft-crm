@@ -15,16 +15,19 @@ let authToken = null;
 
 /**
  * Helper: get a valid auth token by POSTing to /api/auth/login.
- * Uses admin/admin bypass for reliability. Retries once on failure.
+ * Uses the seeded admin@globussoft.com credentials. Retries once on failure.
+ *
+ * Pre-v3.2.x this used the hardcoded admin/admin bypass — that bypass
+ * was removed for security hardening, so the helper is now updated to
+ * use the real seeded credentials documented in CLAUDE.md.
  */
 async function getAuthToken(request) {
   if (authToken) return authToken;
 
-  // Try the hardcoded admin/admin bypass first (fastest, no DB lookup)
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await request.post(`${BASE_URL}/api/auth/login`, {
-        data: { email: 'admin', password: 'admin' },
+        data: { email: 'admin@globussoft.com', password: 'password123' },
         headers: { 'Content-Type': 'application/json' },
         timeout: REQUEST_TIMEOUT,
       });
@@ -81,7 +84,11 @@ test.describe('API Health — Health endpoint', () => {
 
     const body = await response.json();
     expect(body).toHaveProperty('status');
-    expect(body).toHaveProperty('version', '2.0.0');
+    // version field exists and matches semver shape — don't pin to a
+    // specific number since it bumps every release (was '2.0.0' originally,
+    // 3.x as of 2026-05).
+    expect(body).toHaveProperty('version');
+    expect(body.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(body).toHaveProperty('database', 'connected');
     expect(body).toHaveProperty('uptime');
     expect(body).toHaveProperty('timestamp');
@@ -96,7 +103,7 @@ test.describe('API Health — Health endpoint', () => {
 test.describe('API Health — Authentication endpoints', () => {
   test('POST /api/auth/login with valid credentials returns 200 and token', async ({ request }) => {
     const response = await request.post(`${BASE_URL}/api/auth/login`, {
-      data: { email: 'admin', password: 'admin' },
+      data: { email: 'admin@globussoft.com', password: 'password123' },
       headers: { 'Content-Type': 'application/json' },
       timeout: REQUEST_TIMEOUT,
     });

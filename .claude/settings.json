@@ -1,0 +1,31 @@
+{
+  "$comment": [
+    "Project-shared Claude Code permissions. Auto-approves the dev-loop scripts so",
+    "engineers don't get prompted on every iteration. Anything not on the allow",
+    "list still goes through the normal approval flow.",
+    "",
+    "Personal overrides go in .claude/settings.local.json (gitignored)."
+  ],
+  "permissions": {
+    "allow": [
+      "PowerShell(.\\scripts\\test-local.ps1*)",
+      "PowerShell(./scripts/test-local.ps1*)",
+      "PowerShell(.\\scripts\\local-stack-up.ps1*)",
+      "PowerShell(./scripts/local-stack-up.ps1*)",
+      "PowerShell(.\\scripts\\local-stack-down.ps1*)",
+      "PowerShell(./scripts/local-stack-down.ps1*)",
+
+      "Bash(scripts/test-local.sh*)",
+      "Bash(./scripts/test-local.sh*)",
+      "Bash(scripts/local-stack-up.sh*)",
+      "Bash(./scripts/local-stack-up.sh*)",
+      "Bash(scripts/local-stack-down.sh*)",
+      "Bash(./scripts/local-stack-down.sh*)",
+
+      "Bash(docker compose:*)",
+      "Bash(docker ps*)",
+      "Bash(docker inspect*)",
+      "Bash(docker logs*)"
+    ]
+  }
+}

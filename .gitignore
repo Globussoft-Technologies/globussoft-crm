@@ -80,3 +80,6 @@ backend/.c8tmp/
 
 # Local-only operator scripts (SSH helper reads .env creds; never commit)
 .scripts/
+
+# Local-stack runtime state (PID files, backend logs from local-stack-up.ps1)
+.scripts-state/

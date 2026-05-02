@@ -13,30 +13,90 @@
 #   for deploy, then re-run.
 #
 # Usage:
-#   .\scripts\test-local.ps1                    # full gate list (~5 min)
+#   .\scripts\test-local.ps1                       # full gate vs demo (~5 min)
 #   .\scripts\test-local.ps1 tests/billing-api.spec.js   # one spec (~30s)
-#   .\scripts\test-local.ps1 -SkipUnit          # skip vitest
-#   .\scripts\test-local.ps1 -BaseUrl http://127.0.0.1:5000  # local backend
+#   .\scripts\test-local.ps1 -Local                # full gate vs LOCAL Docker stack
+#   .\scripts\test-local.ps1 -Local -KeepStack     # don't tear down after
+#   .\scripts\test-local.ps1 -SkipUnit             # skip vitest
+#   .\scripts\test-local.ps1 -BaseUrl http://...   # custom URL
 #
-# What it does:
-#   1. cd backend && npm test (vitest unit gate, ~1.2s)
-#   2. cd e2e && npx playwright test --project=chromium <specs> (BASE_URL=demo)
-#   3. Exit non-zero if anything fails. Doesn't block commits — you decide.
+# Modes:
+#   default (no flag) — runs against https://crm.globusdemos.com.
+#       Fast for SPEC-LEVEL iteration. WARNING: tests the deployed code,
+#       not your local working tree. If you've changed routes locally,
+#       results are misleading until you push.
+#
+#   -Local            — runs against http://127.0.0.1:5000 backed by
+#       the docker-compose MySQL stack. Tests YOUR local code. The
+#       canonical "did I break anything before push" check.
+#       Auto-boots the stack via local-stack-up.ps1 if it isn't running;
+#       tears down via local-stack-down.ps1 unless -KeepStack is set.
 #
 # The spec list mirrors `.github/workflows/deploy.yml`'s "Run API-only specs"
 # step. Update both together when adding a new gated spec.
 
 param(
     [string[]]$Specs = @(),
-    [string]$BaseUrl = "https://crm.globusdemos.com",
+    [string]$BaseUrl = "",
+    [switch]$Local,           # use Docker Compose stack at http://127.0.0.1:5000
+    [switch]$KeepStack,       # leave the local stack running after tests (faster re-runs)
     [switch]$SkipUnit,
     [switch]$SkipApi,
     [switch]$Verbose
 )
 
+# Resolve BaseUrl based on mode. -Local overrides -BaseUrl.
+if ($Local) {
+    $BaseUrl = "http://127.0.0.1:5000"
+} elseif (-not $BaseUrl) {
+    $BaseUrl = "https://crm.globusdemos.com"
+}
+
+# Safeguard: warn if running against demo with backend code modified locally.
+# Catches the trap where a route fix appears to "still fail" because demo is
+# running the old (deployed) code, not your local edits.
+if (-not $Local -and ($BaseUrl -match "globusdemos\.com|globussoft\.com")) {
+    $dirtyBackend = git diff --name-only HEAD 2>$null | Where-Object { $_ -match "^backend/" }
+    $stagedBackend = git diff --name-only --cached 2>$null | Where-Object { $_ -match "^backend/" }
+    if ($dirtyBackend -or $stagedBackend) {
+        Write-Host ""
+        Write-Host "WARNING: backend/ files have uncommitted changes:" -ForegroundColor Yellow
+        @($dirtyBackend) + @($stagedBackend) | Where-Object { $_ } | Sort-Object -Unique | ForEach-Object {
+            Write-Host "  $_" -ForegroundColor Yellow
+        }
+        Write-Host "You're testing against demo, which runs the deployed (old) code." -ForegroundColor Yellow
+        Write-Host "For route changes, use -Local instead OR push first then re-run." -ForegroundColor Yellow
+        Write-Host ""
+    }
+}
+
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
+
+# ─── 0. (-Local only) auto-boot the Docker stack if it isn't up ──────
+$stackBootedByThisRun = $false
+if ($Local -and -not $SkipApi) {
+    # Probe /api/health — already running?
+    $alreadyUp = $false
+    try {
+        $r = Invoke-WebRequest -Uri "http://127.0.0.1:5000/api/health" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+        if ($r.StatusCode -eq 200 -and $r.Content -match '"healthy"') { $alreadyUp = $true }
+    } catch { }
+    if ($alreadyUp) {
+        Write-Host "    (local stack already running — reusing)" -ForegroundColor DarkGray
+    } else {
+        Write-Host ""
+        Write-Host "=== 0. boot local Docker stack ===" -ForegroundColor Cyan
+        & (Join-Path $PSScriptRoot "local-stack-up.ps1")
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAIL: local-stack-up failed (exit $LASTEXITCODE)" -ForegroundColor Red
+            Pop-Location
+            exit $LASTEXITCODE
+        }
+        $stackBootedByThisRun = $true
+    }
+}
 
 # ─── 1. Backend vitest (fast) ────────────────────────────────────────
 if (-not $SkipUnit) {
@@ -129,4 +189,15 @@ if (-not $SkipApi) {
 
 Write-Host ""
 Write-Host "OK all checks passed" -ForegroundColor Green
+
+# ─── (-Local only) auto-teardown unless -KeepStack ───────────────────
+if ($stackBootedByThisRun -and -not $KeepStack) {
+    Write-Host ""
+    Write-Host "=== teardown local stack ===" -ForegroundColor Cyan
+    & (Join-Path $PSScriptRoot "local-stack-down.ps1")
+}
+if ($Local -and $KeepStack) {
+    Write-Host "    (-KeepStack: local stack still running for re-runs)" -ForegroundColor DarkGray
+}
+
 Pop-Location

@@ -1,0 +1,55 @@
+# Local development stack — mirrors `.github/workflows/deploy.yml`'s
+# api_tests job so engineer iteration loops use the same MySQL CI uses.
+#
+# Why this exists:
+#   Pointing test-local.ps1 at the deployed demo means you're testing
+#   the deployed code, not your local working tree. For ROUTE changes
+#   that's misleading. This stack gives you an isolated MySQL on your
+#   machine; combined with `node server.js` from backend/, your local
+#   code is what's tested.
+#
+# Quickstart:
+#   docker compose up -d                 # boot MySQL
+#   .\scripts\local-stack-up.ps1         # boot MySQL + seed + boot backend
+#   .\scripts\test-local.ps1 -Local      # full gate against local stack
+#   .\scripts\local-stack-down.ps1       # tear down
+#
+# Port + credential notes:
+#   - Local MySQL listens on 3307 (NOT 3306) so it doesn't collide with
+#     any system MySQL the engineer might already be running.
+#   - Database name is `gbscrm_local` — distinct from CI's `gbscrm_ci`
+#     and demo's `gbscrm` so a misconfigured DATABASE_URL can't
+#     accidentally hit the wrong DB.
+#   - Root password is `local_dev_pw` — never used in any deployed
+#     environment. Hardcoded so engineers don't hunt for credentials.
+#
+# Volume:
+#   Named volume `gbscrm_local_data` so DB state survives `docker compose
+#   stop` / `docker compose start` cycles. Use `docker compose down -v`
+#   to wipe + restart fresh (e.g. after a destructive schema change).
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: gbscrm-mysql-local
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: local_dev_pw
+      MYSQL_DATABASE: gbscrm_local
+    ports:
+      # 3307 host : 3306 container — avoids colliding with system MySQL.
+      - "3307:3306"
+    volumes:
+      - gbscrm_local_data:/var/lib/mysql
+    healthcheck:
+      # Same probe CI uses, so test-local can poll for ready state the
+      # exact same way deploy.yml's "Wait for MySQL ready" step does.
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-plocal_dev_pw"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  gbscrm_local_data:
+    name: gbscrm_local_data

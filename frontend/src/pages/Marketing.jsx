@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Copy, Code, Layout, Blocks, CheckCircle2, Megaphone, Plus, BarChart, Send, MousePointerClick } from 'lucide-react';
+import { Copy, Code, Layout, Blocks, CheckCircle2, Megaphone, Plus, BarChart, Send, MousePointerClick, MessageSquare } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 

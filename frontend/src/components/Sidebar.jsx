@@ -235,7 +235,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
         onScroll={(e) => { scrollRef.current = e.currentTarget.scrollTop; }}
         style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}
       >
-        {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle, counts }) : renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, counts })}
+        {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, sectionLabelStyle, counts }) : renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, counts })}
       </nav>
       </aside>
     </>
@@ -244,7 +244,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
 
 // ── Wellness sidebar — slim, clinic-focused ───────────────────────
 
-function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, sectionLabelStyle, counts = {} }) {
+function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, sectionLabelStyle, counts = {} }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   return (
     <>
@@ -333,13 +333,13 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, i
 
 // ── Generic sidebar (preserved unchanged) ─────────────────────────
 
-function renderGenericNav({ Link, ExtLink, AdsGptLink, callifiedUrl, isAdmin, isManager, counts = {} }) {
+function renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, counts = {} }) {
   return (
     <>
       {/* Core — visible to ALL roles */}
       <Link to="/dashboard" icon={LayoutDashboard} label="Dashboard" />
       <AdsGptLink icon={Sparkles} label="AdsGPT" />
-      <ExtLink href={callifiedUrl} icon={PhoneCall} label="Callified" />
+      <CallifiedLink icon={PhoneCall} label="Callified" />
       <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} />
       <Link to="/contacts" icon={Users} label="Contacts" />
       <Link to="/pipeline" icon={Briefcase} label="Pipeline" />

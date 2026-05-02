@@ -276,14 +276,17 @@ jobs:
         run: |
           kill $(cat /tmp/backend.pid) 2>/dev/null || true
 
-  # ── 3. LINT: ESLint over backend/. Gates on errors only (warnings allowed
-  # on legacy code; fix incrementally). Project-specific rule blocks bare
-  # `req.user.id` references — the JWT payload key is `userId`, so bare
-  # `req.user.id` evaluates to undefined. CI-1 in TODOS.md.
+  # ── 3. LINT: ESLint over backend/ + frontend/, plus npm audit gate on
+  # backend deps. Gates on errors only (warnings allowed on legacy code;
+  # fix incrementally). Project-specific rules block bare `req.user.id`
+  # references on backend (JWT payload key is `userId`) and `no-undef` /
+  # `react/jsx-no-undef` on frontend (caught the `callifiedUrl is not
+  # defined` runtime ReferenceError that shipped to v3.3.0). CI-1 in
+  # TODOS.md.
   lint:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     steps:
       - uses: actions/checkout@v5
 
@@ -292,7 +295,9 @@ jobs:
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: backend/package-lock.json
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
 
       - name: Backend — npm ci
         working-directory: backend
@@ -300,14 +305,14 @@ jobs:
           set -euo pipefail
           npm ci --no-audit --no-fund
 
-      - name: Run ESLint
+      - name: Run backend ESLint
         working-directory: backend
         run: |
           set -euo pipefail
           npm run lint
-          echo "::notice::ESLint passed (errors=0; warnings allowed on legacy code)"
+          echo "::notice::Backend ESLint passed (errors=0; warnings allowed on legacy code)"
 
-      - name: Run npm audit gate
+      - name: Run npm audit gate (backend)
         working-directory: backend
         env:
           AUDIT_FAIL_LEVELS: "high,critical"
@@ -315,6 +320,19 @@ jobs:
           set -euo pipefail
           npm run audit:check
           echo "::notice::npm audit gate passed (no NEW high/critical vulnerabilities outside allowlist)"
+
+      - name: Frontend — npm ci
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Run frontend ESLint
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm run lint
+          echo "::notice::Frontend ESLint passed (errors=0; warnings allowed on legacy code)"
 
   # ── 4. UNIT_TESTS: vitest unit tests for backend/lib + middleware + ──
   # services + utils. Runs in parallel with api_tests; no MySQL, no

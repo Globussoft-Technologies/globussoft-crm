@@ -289,18 +289,23 @@ test.describe('Wellness RBAC API gate (#207/#214/#216/#259/#280/#292/#323/#324/#
 
   // ── #348: /api/staff vs /api/wellness/staff consistency ──────────────
 
-  test('#348 /api/staff and /api/wellness/staff resolve consistently for owner', async ({ request }) => {
+  test('#348 /api/staff and /api/wellness/staff resolve sensibly (both 200, OR /api/wellness/staff 410 deprecation)', async ({ request }) => {
     test.skip(!tokens.rishu, 'owner login unavailable');
     const [a, b] = await Promise.all([
       request.get(`${API}/staff`, { headers: authHeader(tokens.rishu), timeout: REQUEST_TIMEOUT }),
       request.get(`${API}/wellness/staff`, { headers: authHeader(tokens.rishu), timeout: REQUEST_TIMEOUT }),
     ]);
-    // Pre-fix: /api/staff returned 200, /api/wellness/staff returned 403.
-    // Post-fix: BOTH must succeed (the wellness namespace redirects to /api/staff).
-    // Or BOTH must deny. What we cannot accept is the mixed-status case.
-    const aOk = a.ok();
-    const bOk = b.ok();
-    expect(aOk, `/api/staff status=${a.status()}, /api/wellness/staff status=${b.status()} — inconsistent`).toBe(bOk);
+    // The original bug (#348): /api/staff returned 200, /api/wellness/staff
+    // returned 403 — owner perms but wrong namespace, broken UX. The fix
+    // either makes /api/wellness/staff return the same data (200) OR
+    // returns a 410 Gone with a Location hint at /api/staff (the
+    // wellnessNamespacedRedirect helper). Both are consistent post-fix
+    // behaviours. The thing we MUST NOT see is 403 (the original bug).
+    expect(a.status(), '/api/staff should return 200 for owner').toBe(200);
+    expect([200, 301, 308, 410]).toContain(b.status());
+    // Belt-and-braces: ensure /api/wellness/staff is NEVER 403 for owner
+    // (the exact regression #348 reported).
+    expect(b.status(), 'never 403 — that was the #348 bug').not.toBe(403);
   });
 
   test('#348 /api/wellness/staff returns the same staff list as /api/staff (when both 200)', async ({ request }) => {
@@ -309,12 +314,12 @@ test.describe('Wellness RBAC API gate (#207/#214/#216/#259/#280/#292/#323/#324/#
       request.get(`${API}/staff`, { headers: authHeader(tokens.rishu), timeout: REQUEST_TIMEOUT }),
       request.get(`${API}/wellness/staff`, { headers: authHeader(tokens.rishu), timeout: REQUEST_TIMEOUT }),
     ]);
-    test.skip(!a.ok() || !b.ok(), 'one of the two is denied; consistency-of-deny tested separately');
+    test.skip(b.status() !== 200, '/api/wellness/staff is a deprecation 410 here — consistency-of-list test only applies when both 200');
+    test.skip(!a.ok(), '/api/staff denied; cannot compare lists');
     const listA = await a.json();
     const listB = await b.json();
     const idsA = new Set((Array.isArray(listA) ? listA : listA.staff || listA.data || []).map((u) => u.id));
     const idsB = new Set((Array.isArray(listB) ? listB : listB.staff || listB.data || []).map((u) => u.id));
-    // Symmetric difference must be empty.
     const onlyInA = [...idsA].filter((id) => !idsB.has(id));
     const onlyInB = [...idsB].filter((id) => !idsA.has(id));
     expect(onlyInA, `staff visible in /api/staff but NOT /api/wellness/staff: ${onlyInA.join(',')}`).toEqual([]);

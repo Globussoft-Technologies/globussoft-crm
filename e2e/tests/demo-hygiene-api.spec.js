@@ -55,6 +55,18 @@ const API = `${BASE_URL}/api`;
 const REQUEST_TIMEOUT = 30000;
 const TOLERATE = process.env.DEMO_HYGIENE_TOLERATE === '1';
 
+// E2E_SKIP_SCRUB=1 (set in .github/workflows/e2e-full.yml so the demo
+// keeps its data between live walkthroughs) means global-teardown.js
+// does NOT clean up E2E_*/Lifecycle/PHI Audit/etc. fixtures other
+// specs created earlier in the same run. This spec's whole reason to
+// exist is asserting those patterns are absent — under SKIP_SCRUB
+// those assertions are guaranteed to fail (and are not signalling a
+// real regression). Skip the entire file in that mode.
+test.skip(
+  process.env.E2E_SKIP_SCRUB === '1' && !TOLERATE,
+  'demo-hygiene assumes teardown ran; under E2E_SKIP_SCRUB=1 set DEMO_HYGIENE_TOLERATE=1 to keep it warn-only'
+);
+
 let genericToken = null;
 let wellnessToken = null;
 
@@ -272,9 +284,12 @@ test.describe('Demo hygiene — seed + payload scan (#120/#237/#265/#268/#285/#3
       counts[name] = (counts[name] || 0) + 1;
     }
     const dupes = Object.entries(counts).filter(([, n]) => n > 3);
-    expect(
-      dupes.map(([n, c]) => `${JSON.stringify(n)} x${c}`),
-      'patient name duplicates (>3x) suggest #401 @@unique was not applied or a seed introduced collisions'
-    ).toEqual([]);
+    if (dupes.length === 0) return;
+    const message = `patient name duplicates (>3x) suggest #401 @@unique was not applied or a seed introduced collisions: ${dupes.map(([n, c]) => `${JSON.stringify(n)} x${c}`).join(', ')}`;
+    if (TOLERATE) {
+      console.warn(`[hygiene-tolerated] ${message}`);
+      return;
+    }
+    expect(dupes, message).toEqual([]);
   });
 });

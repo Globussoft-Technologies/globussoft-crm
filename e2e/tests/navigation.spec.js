@@ -66,8 +66,17 @@ test.describe('Navigation — Sidebar presence', () => {
     await expect(sidebar).toBeVisible({ timeout: 10000 });
   });
 
-  test('Globussoft logo/brand text is in sidebar', async ({ page }) => {
-    await expect(page.locator('text=Globussoft').first()).toBeVisible();
+  test('brand text is in sidebar', async ({ page }) => {
+    // Sidebar renders `tenant?.name || 'Globussoft'` in an <h1>. Pre-2026-05-02
+    // this test asserted literal "Globussoft" — that worked accidentally
+    // because auth.setup.js wasn't populating localStorage.tenant, so the
+    // fallback was always shown. Now that auth.setup writes tenant correctly,
+    // the seeded NovaCrest tenant's name renders. Just assert the h1 is
+    // visible with non-empty text — that's what the test really cares about.
+    const brandHeading = page.locator('aside h1').first();
+    await expect(brandHeading).toBeVisible({ timeout: 10000 });
+    const brandText = (await brandHeading.textContent())?.trim();
+    expect(brandText && brandText.length > 0).toBe(true);
   });
 
   test('all expected sidebar links are present', async ({ page }) => {

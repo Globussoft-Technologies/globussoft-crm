@@ -39,6 +39,17 @@ const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 15000;
 const IS_DEPLOYED = /globusdemos\.com|crm\.|globussoft\.com/i.test(BASE_URL) || process.env.DEMO_MONITOR === '1';
 
+// E2E_SKIP_SCRUB=1 (set in .github/workflows/e2e-full.yml) keeps the
+// demo's accumulated test data intact for live walkthroughs. This
+// monitor's whole point is detecting that residue — under SKIP_SCRUB
+// the failures are not signalling a real regression, just confirming
+// the design choice. Set DEMO_MONITOR=1 to force-run anyway (the
+// scheduled demo-monitor.yml workflow does this).
+test.skip(
+  process.env.E2E_SKIP_SCRUB === '1' && process.env.DEMO_MONITOR !== '1',
+  'demo-health assumes scrubbed state; under E2E_SKIP_SCRUB=1 it duplicates the demo-monitor.yml schedule'
+);
+
 test.describe('Demo health monitor (read-only)', () => {
   test.skip(!IS_DEPLOYED, 'BASE_URL is not a deployed env — skipping (set DEMO_MONITOR=1 to force)');
 

@@ -68,16 +68,19 @@ test.describe('Notifications — Bell icon and dropdown', () => {
     await page.waitForLoadState('domcontentloaded');
   });
 
+  // Target the bell by aria-label — `header button:first` would match the
+  // sidebar-toggle hamburger added by #228 (display:none on desktop, visible
+  // on <768px). NotificationBell.jsx sets `aria-label="Notifications..."`.
+  const BELL_LOCATOR = 'header button[aria-label^="Notifications" i]';
+
   test('notification bell icon is visible on all pages', async ({ page }) => {
-    // The bell is in a header bar — a button containing a Bell SVG
-    const bellButton = page.locator('header button').first();
+    const bellButton = page.locator(BELL_LOCATOR);
     await expect(bellButton).toBeVisible({ timeout: 10000 });
   });
 
   test('clicking bell opens notification dropdown', async ({ page }) => {
     await page.waitForTimeout(1500);
-    // Click the bell button in the header
-    const bellButton = page.locator('header button').first();
+    const bellButton = page.locator(BELL_LOCATOR);
     await bellButton.click();
     await page.waitForTimeout(500);
 
@@ -89,7 +92,7 @@ test.describe('Notifications — Bell icon and dropdown', () => {
 
   test('notification dropdown shows mark all as read or empty state', async ({ page }) => {
     await page.waitForTimeout(1500);
-    const bellButton = page.locator('header button').first();
+    const bellButton = page.locator(BELL_LOCATOR);
     await bellButton.click();
     await page.waitForTimeout(500);
 

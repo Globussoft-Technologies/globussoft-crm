@@ -48,10 +48,16 @@ for (const viewport of VIEWPORTS) {
     }
 
     test(`login page renders correctly at ${viewport.name}`, async ({ page, context }) => {
-      // Clear auth state for this test
+      // Clear auth state for this test. Per #343 the v3.2.5+ SPA reads from
+      // sessionStorage (and an in-memory holder); just clearing localStorage
+      // is not enough — the SPA finds the token in sessionStorage, rehydrates,
+      // and redirects /login → /dashboard, so input[type=email] never renders.
       await context.clearCookies();
       await page.goto('/'); // establish origin
-      await page.evaluate(() => localStorage.clear()); // clear correctly
+      await page.evaluate(() => {
+        localStorage.clear();
+        sessionStorage.clear();
+      });
       await page.goto('/login');
       await page.waitForLoadState('domcontentloaded');
 
@@ -119,9 +125,14 @@ test.describe('Responsive — Touch interactions (mobile)', () => {
   });
 
   test('login form is usable on mobile', async ({ page, context }) => {
+    // Same sessionStorage-clear note as the viewport login test above —
+    // without it the SPA rehydrates from sessionStorage and bypasses /login.
     await context.clearCookies();
     await page.goto('/'); // establish origin
-    await page.evaluate(() => localStorage.clear());
+    await page.evaluate(() => {
+      localStorage.clear();
+      sessionStorage.clear();
+    });
     await page.goto('/login');
     await page.waitForLoadState('domcontentloaded');
 

@@ -24,8 +24,17 @@ router.get("/", verifyToken, async (req, res) => {
 // #196: deep-link / portal / SMS-link load — fetch a single invoice by id.
 router.get("/:id", verifyToken, async (req, res) => {
   try {
+    // #196: validate the path param before letting it reach Prisma —
+    // parseInt("foo") returns NaN and findFirst({where:{id:NaN}}) throws,
+    // which the catch translated to a generic 500 (caught by the new
+    // billing-api spec). Match the pattern already in PATCH /:id and
+    // /mark-paid for consistency.
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ error: "invalid invoice id", code: "INVALID_ID" });
+    }
     const invoice = await prisma.invoice.findFirst({
-      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      where: { id, tenantId: req.user.tenantId },
       include: { contact: true, deal: true }
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });

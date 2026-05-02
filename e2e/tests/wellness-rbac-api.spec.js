@@ -76,7 +76,11 @@ function authHeader(token) {
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 }
 
-test.describe.serial('Wellness RBAC API gate (#207/#214/#216/#259/#280/#292/#323/#324/#325/#326/#348/#357)', () => {
+// Not `.serial` — each assertion is independent. A failure on one test
+// (e.g. #325 cross-tenant gate) shouldn't mask the others (e.g. #324
+// doctor-scope, #326 telecaller-prescribe). Lets the gate report ALL
+// affected regressions per CI run.
+test.describe('Wellness RBAC API gate (#207/#214/#216/#259/#280/#292/#323/#324/#325/#326/#348/#357)', () => {
   test.beforeAll(async ({ request }) => {
     for (const [k, f] of Object.entries(FIXTURES)) {
       const data = await login(request, f);

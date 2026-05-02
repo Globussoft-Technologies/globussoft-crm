@@ -77,7 +77,9 @@ router.post("/register", async (req, res) => {
       data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
     });
 
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id });
+    // #325: include vertical on the JWT so verifyWellnessRole can check
+    // tenant vertical without an extra DB lookup per request.
+    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
@@ -114,7 +116,9 @@ router.post("/signup", async (req, res) => {
       data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
     });
 
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id });
+    // #325: include vertical on the JWT so verifyWellnessRole can check
+    // tenant vertical without an extra DB lookup per request.
+    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
@@ -173,7 +177,9 @@ router.post("/login", async (req, res) => {
     // Issue #207/#214/#216: include wellnessRole on the JWT so verifyWellnessRole
     // (orthogonal to verifyRole) can gate clinical / operational endpoints
     // without re-reading the user row on every request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId });
+    // #325: include vertical on the JWT so verifyWellnessRole can check
+    // tenant vertical without an extra DB lookup per request.
+    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId, vertical: user.tenant?.vertical || "generic" });
 
     res.json({
       token,

@@ -4,28 +4,60 @@
     "engineers don't get prompted on every iteration. Anything not on the allow",
     "list still goes through the normal approval flow.",
     "",
+    "Categories:",
+    "  1. Local dev-loop scripts under scripts/ (PowerShell + Bash equivalents)",
+    "  2. Common Node/Prisma/npm commands needed during the inner-loop (db push,",
+    "     seed, test, build) — these never touch the demo DB; DATABASE_URL is",
+    "     scoped per command",
+    "  3. Read-only docker queries against the local stack",
+    "  4. Read-only gh CLI for monitoring CI runs",
+    "",
     "Personal overrides go in .claude/settings.local.json (gitignored)."
   ],
   "permissions": {
     "allow": [
-      "PowerShell(.\\scripts\\test-local.ps1*)",
-      "PowerShell(./scripts/test-local.ps1*)",
-      "PowerShell(.\\scripts\\local-stack-up.ps1*)",
-      "PowerShell(./scripts/local-stack-up.ps1*)",
-      "PowerShell(.\\scripts\\local-stack-down.ps1*)",
-      "PowerShell(./scripts/local-stack-down.ps1*)",
+      "PowerShell(.\\scripts\\*)",
+      "PowerShell(./scripts/*)",
 
-      "Bash(scripts/test-local.sh*)",
-      "Bash(./scripts/test-local.sh*)",
-      "Bash(scripts/local-stack-up.sh*)",
-      "Bash(./scripts/local-stack-up.sh*)",
-      "Bash(scripts/local-stack-down.sh*)",
-      "Bash(./scripts/local-stack-down.sh*)",
+      "Bash(scripts/*)",
+      "Bash(./scripts/*)",
+
+      "Bash(npx prisma db push*)",
+      "Bash(npx prisma generate*)",
+      "Bash(npx prisma migrate*)",
+      "PowerShell(npx prisma db push*)",
+      "PowerShell(npx prisma generate*)",
+      "PowerShell(npx prisma migrate*)",
+
+      "Bash(node prisma/seed.js*)",
+      "Bash(node prisma/seed-wellness.js*)",
+      "Bash(node backend/scripts/*)",
+      "PowerShell(node prisma/seed.js*)",
+      "PowerShell(node prisma/seed-wellness.js*)",
+      "PowerShell(node backend/scripts/*)",
+
+      "Bash(npm test*)",
+      "Bash(npm run test*)",
+      "Bash(npm run build*)",
+      "Bash(npx vitest*)",
+      "Bash(npx playwright test*)",
+      "PowerShell(npm test*)",
+      "PowerShell(npm run test*)",
+      "PowerShell(npm run build*)",
+      "PowerShell(npx vitest*)",
+      "PowerShell(npx playwright test*)",
 
       "Bash(docker compose:*)",
       "Bash(docker ps*)",
       "Bash(docker inspect*)",
-      "Bash(docker logs*)"
+      "Bash(docker logs*)",
+
+      "Bash(gh run list*)",
+      "Bash(gh run view*)",
+      "Bash(gh issue list*)",
+      "Bash(gh workflow run*)",
+      "Bash(gh pr list*)",
+      "Bash(gh pr view*)"
     ]
   }
 }

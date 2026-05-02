@@ -163,6 +163,7 @@ jobs:
             tests/email-api.spec.js \
             tests/wellness-rbac-api.spec.js \
             tests/auth-security-api.spec.js \
+            tests/route-contracts-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

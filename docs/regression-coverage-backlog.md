@@ -120,7 +120,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 # Priority bucket P1 — ship this month
 
-## ☐ 4. New gated spec: `route-contracts-api.spec.js`
+## ☑ 4. New gated spec: `route-contracts-api.spec.js` ✓ shipped
 
 **Closes:** #165, #170, #175, #176, #188, #196, #217, #220, #309, #341, #346, #348, #358 (13 issues — the 404/500/blank-page cluster)
 
@@ -136,7 +136,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 - [ ] Both `/api/wellness/patients/:id/visits` and `/api/wellness/patients/:id/prescriptions` return 200 when patient exists (#346 — was 404).
 - [ ] Wired into deploy.yml + coverage.yml.
 
-**Estimated effort:** 1 day. Commit: ___________
+**Estimated effort:** 1 day. Commit: ___________ _(shipped — 44 tests across 15 resources × {200 list / 404 bogus-id / 400 empty-body} matrix, plus targeted #341 SPA-fallback, #346 patient-nested, #348 staff-namespace tests. Wired in deploy.yml + coverage.yml.)_
 
 ---
 

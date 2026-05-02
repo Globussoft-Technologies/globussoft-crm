@@ -53,7 +53,7 @@ export default function SequenceBuilder() {
       setSteps(Array.isArray(stepsRes) ? stepsRes : []);
       setTemplates(Array.isArray(tplRes) ? tplRes : (tplRes?.templates || []));
     } catch (err) {
-      notify({ type: 'error', message: 'Failed to load sequence' });
+      notify.error('Failed to load sequence');
     } finally {
       setLoading(false);
     }
@@ -70,11 +70,11 @@ export default function SequenceBuilder() {
         method: 'POST',
         body: JSON.stringify(body),
       });
-      notify({ type: 'success', message: `Added ${KIND_META[kind].label} step` });
+      notify.success(`Added ${KIND_META[kind].label} step`);
       await reload();
       setEditing(created);
     } catch (err) {
-      notify({ type: 'error', message: `Failed to add step: ${err.message}` });
+      notify.error(`Failed to add step: ${err.message}`);
     }
   };
 
@@ -85,22 +85,26 @@ export default function SequenceBuilder() {
         method: 'PUT',
         body: JSON.stringify(patch),
       });
-      notify({ type: 'success', message: 'Step saved' });
+      notify.success('Step saved');
       setEditing(updated);
       await reload();
     } catch (err) {
-      notify({ type: 'error', message: `Save failed: ${err.message}` });
+      notify.error(`Save failed: ${err.message}`);
     }
   };
 
   const deleteStep = async (step) => {
-    if (!confirm(`Delete step #${step.position} (${step.kind})?`)) return;
+    if (!(await notify.confirm({
+      message: `Delete step #${step.position} (${step.kind})?`,
+      destructive: true,
+      confirmText: 'Delete',
+    }))) return;
     try {
       await fetchApi(`/api/sequences/steps/${step.id}`, { method: 'DELETE' });
       if (editing?.id === step.id) setEditing(null);
       await reload();
     } catch (err) {
-      notify({ type: 'error', message: `Delete failed: ${err.message}` });
+      notify.error(`Delete failed: ${err.message}`);
     }
   };
 
@@ -113,7 +117,7 @@ export default function SequenceBuilder() {
       });
       await reload();
     } catch (err) {
-      notify({ type: 'error', message: `Toggle failed: ${err.message}` });
+      notify.error(`Toggle failed: ${err.message}`);
     }
   };
 
@@ -285,6 +289,7 @@ function addBtn(color) {
 }
 
 function StepEditor({ step, templates, onSave, onClose }) {
+  const notify = useNotify();
   const [draft, setDraft] = useState({
     emailTemplateId: step.emailTemplateId ?? '',
     smsBody: step.smsBody ?? '',
@@ -308,12 +313,12 @@ function StepEditor({ step, templates, onSave, onClose }) {
       // engine never receives NaN.
       const raw = String(draft.delayMinutes ?? '').trim();
       if (raw === '' || !/^\d+$/.test(raw)) {
-        alert('Delay must be a non-negative whole number of minutes.');
+        notify.error('Delay must be a non-negative whole number of minutes.');
         return;
       }
       const parsed = parseInt(raw, 10);
       if (!Number.isFinite(parsed) || parsed < 0) {
-        alert('Delay must be a non-negative whole number of minutes.');
+        notify.error('Delay must be a non-negative whole number of minutes.');
         return;
       }
       patch.delayMinutes = parsed;

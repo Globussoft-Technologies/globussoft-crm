@@ -523,6 +523,17 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   return null;
 }
 
+// #401: Prisma surfaces the unique-constraint target differently per
+// connector — on MySQL `e.meta.target` is the constraint NAME (string,
+// e.g. "patient_tenant_normalized_phone_unique"), on Postgres it's the
+// column-name array (["tenantId","normalizedPhone"]). Match either so
+// the route correctly translates P2002 to DUPLICATE_PHONE on both DBs.
+function isNormalizedPhoneTarget(target) {
+  if (Array.isArray(target)) return target.includes("normalizedPhone");
+  if (typeof target === "string") return /normalized.?phone|patient_tenant_normalized_phone/i.test(target);
+  return false;
+}
+
 const ALLOWED_VISIT_STATUSES = new Set(["booked", "arrived", "in-treatment", "completed", "no-show", "cancelled"]);
 
 // #197: visit status state machine. Terminal statuses (completed, cancelled,
@@ -613,15 +624,11 @@ router.post("/patients", async (req, res) => {
   } catch (e) {
     console.error("[wellness] create patient error:", e.message);
     // #401: specific 409 for the (tenantId, normalizedPhone) unique
-    // constraint. Surfaced to the UI as `DUPLICATE_PHONE` so the
-    // form can show "A patient with this phone already exists" instead
-    // of the generic "Duplicate value for tenantId+normalizedPhone".
-    if (
-      e &&
-      e.code === "P2002" &&
-      Array.isArray(e.meta?.target) &&
-      e.meta.target.includes("normalizedPhone")
-    ) {
+    // constraint. Surfaced to the UI as `DUPLICATE_PHONE` so the form
+    // can show "A patient with this phone already exists" instead of
+    // the generic UNIQUE_CONSTRAINT path. isNormalizedPhoneTarget()
+    // handles the MySQL-string vs. Postgres-array shape difference.
+    if (e && e.code === "P2002" && isNormalizedPhoneTarget(e.meta?.target)) {
       return res.status(409).json({
         error: "A patient with this phone already exists in your tenant",
         code: "DUPLICATE_PHONE",
@@ -678,12 +685,7 @@ router.put("/patients/:id", async (req, res) => {
     console.error("[wellness] update patient error:", e.message);
     // #401: same DUPLICATE_PHONE 409 as create — happens when an edit
     // would collide with another patient's phone in the same tenant.
-    if (
-      e &&
-      e.code === "P2002" &&
-      Array.isArray(e.meta?.target) &&
-      e.meta.target.includes("normalizedPhone")
-    ) {
+    if (e && e.code === "P2002" && isNormalizedPhoneTarget(e.meta?.target)) {
       return res.status(409).json({
         error: "Another patient in your tenant already has this phone",
         code: "DUPLICATE_PHONE",

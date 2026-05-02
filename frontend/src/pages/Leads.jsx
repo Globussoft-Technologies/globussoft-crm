@@ -1,4 +1,5 @@
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-react';
@@ -7,6 +8,7 @@ const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website
 
 const Leads = () => {
   const navigate = useNavigate();
+  const notify = useNotify();
   const [leads, setLeads] = useState([]);
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -51,12 +53,12 @@ const Leads = () => {
     // Trim and validate before the network call.
     const trimmedName = (newLead.name || '').trim();
     if (trimmedName.length < 1) {
-      // Keep this consistent with the field-level UX elsewhere — no toast,
-      // just a native alert is jarring on a form, but Leads.jsx doesn't
-      // import the global notify helper. Use window.alert as the cheapest
-      // immediate-block-and-tell. The companion backend validator will be
-      // the second line of defence (see backend follow-up note in PR).
-      window.alert('Name is required');
+      // #337: reject whitespace-only names. The HTML `required` attribute
+      // only checks length, not whether the value is meaningful, so "   "
+      // was being persisted as a Contact with a blank-looking name. Surface
+      // a non-blocking error toast via the global notify helper. The
+      // companion backend validator will be the second line of defence.
+      notify.error('Name is required');
       return;
     }
     // #315: refetch leads after a successful create so the "All Leads" pipeline

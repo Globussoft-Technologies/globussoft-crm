@@ -448,6 +448,16 @@ jobs:
             echo "=== prisma generate ==="
             npx prisma generate 2>&1 | tail -3
 
+            # Self-healing schema sync. Pre-this, additive schema changes
+            # (e.g. new columns from commit d0fe131's lead-SLA work) had
+            # to be applied manually via SSH; if anyone forgot, every
+            # POST /external/leads (and any other writer of those columns)
+            # 500'd until someone noticed. --skip-generate avoids re-running
+            # the generator; --accept-data-loss allows additive changes
+            # only — drops are still gated on schema.prisma.
+            echo "=== prisma db push (schema sync) ==="
+            npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
+
             echo "=== pm2 restart ==="
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
 

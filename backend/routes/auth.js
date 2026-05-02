@@ -320,7 +320,24 @@ router.get("/me", verifyToken, async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
-    res.json(user);
+
+    // T1.2: surface tenant-scoped feature flags so the frontend can gate
+    // UI it can't deliver right now. SMS provider is the first one — when
+    // no provider is configured (no SmsConfig DB row + no MSG91/Twilio/
+    // Fast2SMS env vars), the patient portal phone+OTP flow is broken-by-
+    // default (cron drains queued messages as FAILED per #182). Frontend
+    // checks `features.smsConfigured` and hides/disables OTP UI when false
+    // instead of silently sending users to a dead end.
+    let smsConfigured = false;
+    try {
+      const { resolveProviderConfig } = require("../services/smsProvider");
+      const cfg = await resolveProviderConfig(prisma, user.tenant?.id);
+      smsConfigured = !!cfg;
+    } catch (_e) {
+      smsConfigured = false;
+    }
+
+    res.json({ ...user, features: { smsConfigured } });
   } catch (_error) {
     res.status(500).json({ error: "Failed to fetch profile" });
   }

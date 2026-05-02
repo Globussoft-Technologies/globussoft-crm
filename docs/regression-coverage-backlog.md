@@ -158,7 +158,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 6. New gated spec: `billing-api.spec.js`
+## ☑ 6. New gated spec: `billing-api.spec.js` ✓ shipped
 
 **Closes:** #119, #122, #124, #138, #158, #167, #177, #196, #198, #202, #242, #243, #304 (13 issues)
 
@@ -179,7 +179,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 - [ ] Paid-this-month KPI endpoint (if separate) responds to mark-paid mutation (#119).
 - [ ] Wired into deploy.yml + coverage.yml.
 
-**Estimated effort:** 1.5 days. Commit: ___________
+**Estimated effort:** 1.5 days. Commit: ___________ _(shipped — 25 tests covering 10 of 13 issues. #124 frontend-only, #242/#243/#256 are formatMoney() concerns with no API surface to assert against.)_
 
 ---
 

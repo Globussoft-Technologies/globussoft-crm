@@ -2,9 +2,24 @@
 
 > A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail. **Mobile-responsive** sidebar drawer + 6 demo-path pages. Backend line coverage: **66.65%** (1,191 tests, gate 65% lines / 50% branches; aspirational target 100%).
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.2.5
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.3.0
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md)
-**Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompt:** [QA_CLOUD4CHROME_PROMPT.md](docs/QA_CLOUD4CHROME_PROMPT.md).
+**Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.3.0 (May 1 2026 — test infrastructure overhaul + Tier 1 CI hardening)
+
+A foundational release. **No new product features** — every change is in test infrastructure, CI/CD pipeline, or under-the-hood bug fixes the new test surface caught.
+
+- **Test surface ~7×** per push: Playwright API specs grew 18 → 23 (673 → ~1,084 tests), and a brand-new **vitest unit-test layer** (22 files / 674 tests covering all `lib/` + `middleware/` + `services/` + `utils/`).
+- **CI-1 ESLint** — flat config; project-specific rule blocks bare `req.user.id` (the JWT key is `userId`). 180 → 0 warnings cleared on 2026-05-01 afternoon.
+- **CI-2 Dependabot** — weekly grouped PRs across npm-backend / npm-frontend / npm-e2e / github-actions.
+- **CI-3 gitleaks secret scan** — incremental on push, full-history Mondays. (Initially shipped using a paid action, swapped to the free OSS Docker image on 2026-05-01.)
+- **CI-4 npm audit gate** — fails on new high/critical CVEs; allowlist with sunsetBy dates.
+- **2 real prod bugs fixed**: bare `req.user.id` was always undefined (silently broke prescriber checks, telecaller queue, audit rows); `/communications/track` openPath collision bypassed auth on `/communications/tracking/:emailId`.
+- **Coverage measurement workflow** (`coverage.yml`) — workflow_dispatch, c8 against the gate specs.
+- **Release-validation workflow** (`e2e-full.yml`) — full chromium project on tag push, sharded 4-way to fit the 30-min runner budget.
+
+See [CHANGELOG.md](CHANGELOG.md#v330--2026-05-01--test-infrastructure-overhaul--tier-1-ci-hardening) for the full v3.3.0 entry.
 
 ## What's new in v3.2.5 (April 29 2026 — security hardening + fresh QA round + nested patient endpoints)
 

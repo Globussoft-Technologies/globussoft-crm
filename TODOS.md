@@ -369,7 +369,9 @@ What CI **does NOT** catch yet — the backlog below. Tackled top-down. Each ite
 
 ---
 
-## 📌 NEXT SESSION — pick up here
+## 📌 (HISTORICAL snapshot — superseded) NEXT SESSION pick-up
+
+> **⚠️ Historical**: kept for context only. The authoritative pickup point is now [🎯 Architect-priority sequencing (2026-05-02)](#-architect-priority-sequencing-2026-05-02) at the top of this file. The HEAD reference + CI gate counts below are stale. The Phase 2 route-coverage table (under-covered routes by absolute uncovered lines) is still useful as a reference but mostly superseded by [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md).
 
 **HEAD at end of overnight run**: `868b227` (test(unit): vitest layer for backend lib + middleware + services + utils). All four CI jobs green. Working tree clean. No open PRs. Issue inbox: 0.
 
@@ -465,7 +467,9 @@ The two ⚠️ items are external-blocked (Callified + AdsGPT teams owe their si
 
 ---
 
-## 📌 NEXT SESSION — pick up here
+## 📌 (HISTORICAL snapshot — superseded) NEXT SESSION pick-up (older)
+
+> **⚠️ Historical**: kept for context only. The authoritative pickup point is now [🎯 Architect-priority sequencing (2026-05-02)](#-architect-priority-sequencing-2026-05-02) at the top of this file. The HEAD reference, gate counts, and "What to work on next" list below are stale.
 
 **HEAD at end of 2026-04-30 late evening**: `da5ba56` (push-api spec wired into gate + 3 pre-existing flakes fixed: cpq quantity NaN, expenses nullable expenseDate, expenses status case-insensitivity). Working tree clean. Open issues: **0**. Open PRs: **0**.
 

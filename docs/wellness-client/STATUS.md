@@ -1,10 +1,10 @@
 # Enhanced Wellness — Build Status
 
 **Companion to:** [PRD.md](PRD.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EXTERNAL_API.md](EXTERNAL_API.md), [SANDBOX.md](SANDBOX.md)
-**Last updated:** 2026-04-29 (end of day — v3.2.5 deployed; **GitHub issue inbox: 0 open**. ~70 issues closed across two sessions. New CI/CD via GitHub Actions; mobile-responsive 80/20; reports CSV/PDF export; security hardening pass.)
+**Last updated:** 2026-05-02 (v3.3.0 tagged 2026-05-01 — test-infrastructure release with no wellness feature changes; the wellness vertical itself remains at v3.2.5 feature parity. Subsequent post-release commits added regression-coverage specs + bug fixes — see [TODOS.md](../../TODOS.md) for the architect-priority sequencing.)
 **Live at:** https://crm.globusdemos.com
 **Tenant:** `enhanced-wellness` (id 2, vertical `wellness`)
-**Production HEAD:** `d778d6a` (v3.2.5) — auto-deployed via [.github/workflows/deploy.yml](../../.github/workflows/deploy.yml)
+**Production HEAD:** continually advances on every push to `main` — check [GitHub Actions deploy runs](https://github.com/Globussoft-Technologies/globussoft-crm/actions/workflows/deploy.yml) for the latest deployed commit. Last release tag: `v3.3.0` (2026-05-01).
 
 ---
 

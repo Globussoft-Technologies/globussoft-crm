@@ -1,6 +1,6 @@
 # Production runbook — Globussoft CRM
 
-For ops + on-call engineers. Last updated: v3.2.5 (2026-04-29).
+For ops + on-call engineers. Last updated: v3.3.0 (2026-05-01).
 
 > **Engineering backlog:** see [TODOS.md](TODOS.md) at repo root for the prioritised list of multi-day / architectural work that's been deferred from cron + overnight runs. Includes the PRD-gap analysis vs `docs/wellness-client/PRD.md`. Read this before scheduling new feature work.
 

@@ -98,7 +98,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 3. New gated spec: `demo-hygiene-api.spec.js`
+## ☑ 3. New gated spec: `demo-hygiene-api.spec.js` ✓ shipped
 
 **Closes:** #120, #237, #265, #268, #271, #272, #285, #306, #311, #318, #319, #320, #322, #327, #328, #401 (16 issues — the entire seed-pollution cluster)
 
@@ -114,7 +114,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 - [ ] Wired into deploy.yml as the LAST entry in the gate-spec list + coverage.yml.
 - [ ] **Revert-and-prove**: revert commit 46fc13f and 2cee744 — confirm new spec goes red.
 
-**Estimated effort:** 1 day. Commit: ___________
+**Estimated effort:** 1 day. Commit: ___________ _(shipped — 12 tests scanning 10 endpoints for XSS markers / test residue / bad dates / slug shape, plus a "no patient name >3x" duplicate detector to lock in the #265/#401 fix. Reuses pattern philosophy from e2e/test-data-patterns.js. Wired LAST in deploy.yml + coverage.yml so it runs after every other spec's afterAll has executed.)_
 
 ---
 

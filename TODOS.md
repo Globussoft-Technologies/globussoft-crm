@@ -62,6 +62,113 @@ Tier 1 + Tier 2 = **~3 weeks of focused work** and closes the loop on ~150 of th
 
 ---
 
+## 📦 Parallelization batches (2026-05-02)
+
+Pick a batch, spin up N agents in a single message with disjoint file scopes, ship. The constraint that decides "what runs together" is the file-affinity discipline from the lessons-learned section ([TODOS.md:529-531](TODOS.md#L529-L531) below) — *4-5 agents in parallel works reliably when each owns a disjoint set of files; same-file work is one agent*. The groups below are pre-cut along those lines so a developer doesn't have to do the conflict analysis from scratch.
+
+**Sweet-spot capacity per round: 5 agents.** Beyond that, file-affinity starts breaking down even when the targets look disjoint on paper (shared workflow files, shared seed fixtures, shared route helpers).
+
+### Group A — Tier 1 unblockers (5 parallel agents, ship this week)
+
+All disjoint files, no inter-dependencies. **Start here** — single highest-leverage batch in the backlog.
+
+| Slot | Item | Files | Effort | Ref |
+|---|---|---|---|---|
+| A1 | **T1.1** Fix `auth.setup.js` to write `sessionStorage` not `localStorage` | [e2e/auth.setup.js](e2e/auth.setup.js) | 30-60 min | T1.1 + Bucket A |
+| A2 | **T1.2** Wire SMS provider OR feature-flag OTP-dependent flows OFF | [backend/services/smsProvider.js](backend/services/smsProvider.js), env, possibly [PatientPortal.jsx](frontend/src/pages/wellness/PatientPortal.jsx) | 1 day | T1.2 |
+| A3 | **T1.3a** `wellness-rbac-api.spec.js` (P0 regression) | `e2e/tests/wellness-rbac-api.spec.js` (NEW) | 1 day | T1.3 + [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md) |
+| A4 | **T1.3b** `auth-security-api.spec.js` | `e2e/tests/auth-security-api.spec.js` (NEW) | 1 day | T1.3 |
+| A5 | **T1.3c** `demo-hygiene-api.spec.js` | `e2e/tests/demo-hygiene-api.spec.js` (NEW) | 1 day | T1.3 |
+
+⚠️ Shared touch-point: A3-A5 each need to be added to the gate list in [.github/workflows/deploy.yml](.github/workflows/deploy.yml). Coordinate as a **single follow-up commit** after the spec agents finish — not parallel edits.
+
+### Group B — Coverage push specs (5 parallel agents, anytime)
+
+Each spec is a single new file in `e2e/tests/`. Pattern proven by `tasks-api.spec.js` / `estimates-api.spec.js` / `push-api.spec.js`. Top under-covered routes from the Phase-2 list above:
+
+| Slot | Spec | Target route | Notes |
+|---|---|---|---|
+| B1 | `billing-api.spec.js` | [backend/routes/billing.js](backend/routes/billing.js) | PATCH + mark-paid (#202). Clean. |
+| B2 | `social-api.spec.js` | [backend/routes/social.js](backend/routes/social.js) | Internal CRUD. |
+| B3 | `marketplace-leads-api.spec.js` | [backend/routes/marketplace_leads.js](backend/routes/marketplace_leads.js) | Includes public `/webhook`. |
+| B4 | `knowledge-base-api.spec.js` | `backend/routes/knowledge_base.js` | Clean. |
+| B5 | `approvals-api.spec.js` (extension) | [backend/routes/approvals.js](backend/routes/approvals.js) | State-machine partly covered. |
+
+Same `deploy.yml` gate-list coordination caveat as Group A. **Skip in this round**: payments / auth / sandbox / chatbots — they have rate-limit / external-service / destructive-state issues that warrant a single careful agent, not a parallel slot.
+
+⛔ **Do NOT parallel-spec** `routes/whatsapp.js` / `routes/voice.js` / `routes/voice_transcription.js` per PRD §6.5 (Callified.ai territory).
+
+### Group C — CI hardening (3 parallel agents, anytime)
+
+Most CI items touch disjoint files; the exceptions are CI-6 / CI-7 / CI-12 which all edit `deploy.yml` and must serialize.
+
+**Parallel slots:**
+| Slot | Item | Files | Effort |
+|---|---|---|---|
+| C1 | **CI-5** Prisma migration safety check | `.github/workflows/migration-safety.yml`, `backend/scripts/check-migration.js` (both NEW) | 1 day |
+| C2 | **CI-9** Lighthouse CI on demo post-deploy | `.github/workflows/lighthouse.yml`, `lighthouserc.json` (both NEW) | 4 hours |
+| C3 | **CI-11** Mutation testing with Stryker | `backend/stryker.config.json`, `.github/workflows/mutation.yml` (both NEW) | 2 days |
+
+**Sequential** (each touches `deploy.yml`, do one at a time): CI-6 bundle size → CI-7 OpenAPI contract → CI-12 canary deploy.
+
+**Big standalone**: CI-8 frontend vitest + @testing-library/react is its own 3-day effort confined to `frontend/` — runs cleanly in parallel with anything outside `frontend/`.
+
+### Group D — Tier 2 (2 parallel agents max)
+
+| Slot | Item | Files | Effort |
+|---|---|---|---|
+| D1 | **T2.1** Mobile responsiveness — sidebar collapse + drawer < 900px | [frontend/src/components/Sidebar.jsx](frontend/src/components/Sidebar.jsx), [frontend/src/styles/responsive.css](frontend/src/styles/responsive.css), ~80 page CSS | 3-5 days |
+| D2 | **T2.2** Audit-log middleware build-out (Patient/Visit/Rx/Consent mutations) | `backend/middleware/audit.js` (NEW) + [backend/lib/audit.js](backend/lib/audit.js) + ~5 wellness routes | 4-5 days |
+
+D1 (frontend) and D2 (backend) are disjoint and can run together. **T2.3 P1 specs are blocked by D2** — `audit-coverage-api.spec.js` cannot pass until the audit middleware lands.
+
+After D2 ships, T2.3's specs (`route-contracts-api.spec.js`, `billing-api.spec.js`, `lead-routing-api.spec.js`, `audit-coverage-api.spec.js`) become a fresh round of 4 parallel agents.
+
+### Group E — UI test debt cleanup (sequential, **blocked by A1**)
+
+These cannot start until A1 (sessionStorage fix) ships:
+
+1. Un-skip the 6 deferred tests in [e2e/tests/auth.spec.js](e2e/tests/auth.spec.js) (auth-test-debt section above) — 1 hour
+2. Annotate Bucket B specs with `test.skip(process.env.E2E_SKIP_SCRUB === '1', …)` — 30 min
+3. Re-run `e2e-full.yml` and triage what's left
+
+### Group F — Tier 3 architecture (mostly sequential)
+
+- **T3.1 RBAC policy engine (CASL/Casbin)** — touches all 91 route files. **Cannot parallelize with anything else** that edits routes. 2 weeks, single coordinated effort.
+- **T3.2 Seed split** ([prisma/seed.js](backend/prisma/seed.js) + [prisma/seed-wellness.js](backend/prisma/seed-wellness.js)) — disjoint from T3.3.
+- **T3.3 Currency lint rule** — frontend + [backend/eslint.config.js](backend/eslint.config.js) — disjoint from T3.2.
+
+**T3.2 + T3.3 are the only Tier-3 pair safe to run together (2 parallel agents).** T3.1 must run alone.
+
+### Recommended order
+
+```
+Week 1   ┌─ A1 sessionStorage (1h)
+         ├─ A2 SMS wiring (1d)
+         ├─ A3 wellness-rbac spec (1d)         ── 5 agents in parallel ──
+         ├─ A4 auth-security spec (1d)
+         └─ A5 demo-hygiene spec (1d)
+                    │
+                    └─→ Group E (sequential after A1)
+
+Week 2   ┌─ D1 mobile (5d)                ┐
+         └─ D2 audit middleware (5d)      ┘── 2 agents in parallel ──
+                                              + Group B/C agents to fill capacity
+
+Week 3   ┌─ T2.3 P1 specs (4 parallel after D2 lands)
+         └─ Continue Group B/C as bandwidth allows
+
+Q-end    Tier 3: T3.1 alone (2w), then T3.2 + T3.3 in parallel (1w)
+```
+
+### What CANNOT be parallelized
+
+- **Anything editing [.github/workflows/deploy.yml](.github/workflows/deploy.yml)** — gate-list updates, CI-6, CI-7, CI-12 — must serialize. Either one agent at a time, or batch all `deploy.yml` changes into a single follow-up commit after the file-creating agents finish.
+- **T3.1 RBAC consolidation** vs anything else touching `backend/routes/*.js` — policy migration touches all 91 route files.
+- **Same-route coverage specs** — e.g. `wellness-dashboard-api.spec.js` + `wellness-reports-api.spec.js` + `wellness-telecaller-api.spec.js` cannot parallel because they'd all share `routes/wellness.js` test helpers / test patient pool. Fold splits into one agent.
+
+---
+
 ## 🧹 2026-05-01 afternoon — repo hygiene shipped
 
 | SHA | What | Lines | CI |

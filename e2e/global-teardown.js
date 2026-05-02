@@ -146,12 +146,28 @@ module.exports = async function globalTeardown() {
     );
     results.locations = l.affectedRows || 0;
 
-    const total = results.patients + results.contacts + results.services + results.tasks + results.locations;
+    // G-8: low-stock-api.spec.js (and cpq-api.spec.js) create Product rows
+    // tagged with their RUN_TAG prefix. routes/cpq.js exposes no DELETE
+    // endpoint, so the in-spec afterAll cannot clean them. Bulk-delete by
+    // name regex here. Product has FK from QuoteLineItem.productId
+    // (onDelete: SetNull per schema), so removing test products doesn't
+    // cascade-corrupt real quotes — just nulls out historical productId
+    // pointers on test-tagged quote lines (which we also scrub by quote
+    // title prefix above? — no, we don't, but Quote rows aren't surfaced
+    // on demo dashboards, so this is acceptable test-debris drift).
+    const [pr] = await conn.query(
+      `DELETE FROM Product WHERE name REGEXP ?`,
+      [PAT_REGEX]
+    );
+    results.products = pr.affectedRows || 0;
+
+    const total = results.patients + results.contacts + results.services + results.tasks + results.locations + results.products;
     if (total > 0) {
       console.log(
         `[teardown] scrubbed E2E rows: ${results.patients} patient(s), ` +
           `${results.contacts} contact(s), ${results.services} service(s), ` +
-          `${results.tasks} task(s), ${results.locations} location(s) ` +
+          `${results.tasks} task(s), ${results.locations} location(s), ` +
+          `${results.products} product(s) ` +
           `(cascades auto-remove visits/Rx/consents/plans/waitlist/loyalty/referrals)`
       );
     } else {

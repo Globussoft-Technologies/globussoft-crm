@@ -202,7 +202,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 8. Extend [contacts-api.spec.js](e2e/tests/contacts-api.spec.js)
+## ☑ 8. Extend [contacts-api.spec.js](e2e/tests/contacts-api.spec.js) ✓ shipped
 
 **Closes:** #154, #160, #166, #168, #176, #178
 
@@ -217,7 +217,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 9. Extend [deals-api.spec.js](e2e/tests/deals-api.spec.js)
+## ☑ 9. Extend [deals-api.spec.js](e2e/tests/deals-api.spec.js) ✓ shipped
 
 **Closes:** #162, #168, #173, #188, #190
 

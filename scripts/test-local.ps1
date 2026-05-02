@@ -1,15 +1,15 @@
-# test-local.ps1 — fast pre-push test loop against the deployed demo.
+# test-local.ps1 - fast pre-push test loop against the deployed demo.
 #
 # Why this exists:
 #   Waiting for `deploy.yml` to spin up MySQL, seed, boot a backend, and
 #   run the gate spec list takes 10-12 minutes per push. For most spec-
 #   level changes (locators, asserts, fixtures) the deployed demo is a
-#   perfectly good target — the code under test is already running there.
+#   perfectly good target - the code under test is already running there.
 #
 # Trade-off:
 #   This runs specs against `https://crm.globusdemos.com`. If you've only
 #   touched test files, you're good. If you've touched ROUTE code that
-#   isn't deployed yet, you're testing the OLD route — push first, wait
+#   isn't deployed yet, you're testing the OLD route - push first, wait
 #   for deploy, then re-run.
 #
 # Usage:
@@ -21,12 +21,12 @@
 #   .\scripts\test-local.ps1 -BaseUrl http://...   # custom URL
 #
 # Modes:
-#   default (no flag) — runs against https://crm.globusdemos.com.
+#   default (no flag) - runs against https://crm.globusdemos.com.
 #       Fast for SPEC-LEVEL iteration. WARNING: tests the deployed code,
 #       not your local working tree. If you've changed routes locally,
 #       results are misleading until you push.
 #
-#   -Local            — runs against http://127.0.0.1:5000 backed by
+#   -Local            - runs against http://127.0.0.1:5000 backed by
 #       the docker-compose MySQL stack. Tests YOUR local code. The
 #       canonical "did I break anything before push" check.
 #       Auto-boots the stack via local-stack-up.ps1 if it isn't running;
@@ -40,8 +40,10 @@ param(
     [string]$BaseUrl = "",
     [switch]$Local,           # use Docker Compose stack at http://127.0.0.1:5000
     [switch]$KeepStack,       # leave the local stack running after tests (faster re-runs)
-    [switch]$SkipUnit,
-    [switch]$SkipApi,
+    [switch]$SkipBuild,       # skip the build gate (prisma generate + node --check + vite build)
+    [switch]$SkipLint,        # skip the lint gate (ESLint + npm audit)
+    [switch]$SkipUnit,        # skip the unit_tests gate (vitest)
+    [switch]$SkipApi,         # skip the api_tests gate (Playwright)
     [switch]$Verbose
 )
 
@@ -70,21 +72,24 @@ if (-not $Local -and ($BaseUrl -match "globusdemos\.com|globussoft\.com")) {
     }
 }
 
-$ErrorActionPreference = "Stop"
+# Continue (not Stop) — Playwright + npm + docker all write progress to
+# stderr in non-error situations, which PowerShell would convert to
+# terminating exceptions under "Stop". Check $LASTEXITCODE explicitly.
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 
-# ─── 0. (-Local only) auto-boot the Docker stack if it isn't up ──────
+# --- 0. (-Local only) auto-boot the Docker stack if it isn't up ------
 $stackBootedByThisRun = $false
 if ($Local -and -not $SkipApi) {
-    # Probe /api/health — already running?
+    # Probe /api/health - already running?
     $alreadyUp = $false
     try {
         $r = Invoke-WebRequest -Uri "http://127.0.0.1:5000/api/health" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
         if ($r.StatusCode -eq 200 -and $r.Content -match '"healthy"') { $alreadyUp = $true }
     } catch { }
     if ($alreadyUp) {
-        Write-Host "    (local stack already running — reusing)" -ForegroundColor DarkGray
+        Write-Host "    (local stack already running - reusing)" -ForegroundColor DarkGray
     } else {
         Write-Host ""
         Write-Host "=== 0. boot local Docker stack ===" -ForegroundColor Cyan
@@ -98,10 +103,90 @@ if ($Local -and -not $SkipApi) {
     }
 }
 
-# ─── 1. Backend vitest (fast) ────────────────────────────────────────
+# --- 1. BUILD gate (mirrors deploy.yml :38-93) -----------------------
+# prisma generate + node --check on every backend .js + vite build.
+# Cheapest gate to skip if you know nothing in the build path changed.
+if (-not $SkipBuild) {
+    Write-Host ""
+    Write-Host "=== 1. build gate (prisma + node --check + vite build) ===" -ForegroundColor Cyan
+    Push-Location backend
+    try {
+        Write-Host "  prisma generate..."
+        npx prisma generate 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAIL prisma generate (exit $LASTEXITCODE)" -ForegroundColor Red
+            Pop-Location; Pop-Location; exit $LASTEXITCODE
+        }
+
+        Write-Host "  node --check on every backend .js..."
+        $fails = 0
+        Get-ChildItem -Recurse -Filter *.js -Path . -Exclude node_modules |
+            Where-Object { $_.FullName -notmatch "\\node_modules\\" } |
+            ForEach-Object {
+                node --check $_.FullName 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "    parse-fail: $($_.FullName)" -ForegroundColor Red
+                    $fails++
+                }
+            }
+        if ($fails -gt 0) {
+            Write-Host "FAIL $fails backend file(s) failed parse-check" -ForegroundColor Red
+            Pop-Location; Pop-Location; exit 1
+        }
+        Write-Host "    all backend .js files parse cleanly" -ForegroundColor Green
+    } finally { Pop-Location }
+
+    Push-Location frontend
+    try {
+        Write-Host "  vite build..."
+        npx vite build 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAIL vite build (exit $LASTEXITCODE)" -ForegroundColor Red
+            Pop-Location; Pop-Location; exit $LASTEXITCODE
+        }
+        Write-Host "    vite build OK" -ForegroundColor Green
+    } finally { Pop-Location }
+}
+
+# --- 2. LINT gate (mirrors deploy.yml :306-355) ----------------------
+# Backend ESLint (errors only) + npm audit gate (high/critical) +
+# Frontend ESLint (errors only).
+if (-not $SkipLint) {
+    Write-Host ""
+    Write-Host "=== 2. lint gate (eslint + npm audit) ===" -ForegroundColor Cyan
+    Push-Location backend
+    try {
+        Write-Host "  backend ESLint..."
+        npx eslint . 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAIL backend ESLint (exit $LASTEXITCODE)" -ForegroundColor Red
+            Pop-Location; Pop-Location; exit $LASTEXITCODE
+        }
+
+        Write-Host "  npm audit gate..."
+        npm run audit:check --silent 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAIL npm audit gate (exit $LASTEXITCODE)" -ForegroundColor Red
+            Pop-Location; Pop-Location; exit $LASTEXITCODE
+        }
+    } finally { Pop-Location }
+
+    Push-Location frontend
+    try {
+        Write-Host "  frontend ESLint..."
+        npx eslint . 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAIL frontend ESLint (exit $LASTEXITCODE)" -ForegroundColor Red
+            Pop-Location; Pop-Location; exit $LASTEXITCODE
+        }
+        Write-Host "    lint OK" -ForegroundColor Green
+    } finally { Pop-Location }
+}
+
+# --- 3. UNIT_TESTS gate (vitest) -------------------------------------
 if (-not $SkipUnit) {
     Write-Host ""
-    Write-Host "=== 1. backend vitest (unit) ===" -ForegroundColor Cyan
+    Write-Host "=== 3. backend vitest (unit) ===" -ForegroundColor Cyan
     Push-Location backend
     try {
         npm test --silent 2>&1 | Tee-Object -Variable vitestOut | Out-Null
@@ -116,10 +201,10 @@ if (-not $SkipUnit) {
     } finally { Pop-Location }
 }
 
-# ─── 2. Playwright API specs ─────────────────────────────────────────
+# --- 4. API_TESTS gate (Playwright API specs) ------------------------
 if (-not $SkipApi) {
     Write-Host ""
-    Write-Host "=== 2. playwright api_tests gate ===" -ForegroundColor Cyan
+    Write-Host "=== 4. playwright api_tests gate ===" -ForegroundColor Cyan
     Write-Host "    BASE_URL = $BaseUrl"
 
     # Default to the canonical gate list from deploy.yml. Update both
@@ -166,7 +251,7 @@ if (-not $SkipApi) {
         $env:BASE_URL = $BaseUrl
         # E2E_SKIP_SCRUB=1 against demo: don't run global-teardown
         # (matches what e2e-full.yml does). Local-backend runs SHOULD
-        # scrub — only set this when targeting demo.
+        # scrub - only set this when targeting demo.
         if ($BaseUrl -match "globusdemos\.com|globussoft\.com") {
             $env:E2E_SKIP_SCRUB = "1"
         } else {
@@ -190,7 +275,7 @@ if (-not $SkipApi) {
 Write-Host ""
 Write-Host "OK all checks passed" -ForegroundColor Green
 
-# ─── (-Local only) auto-teardown unless -KeepStack ───────────────────
+# --- (-Local only) auto-teardown unless -KeepStack -------------------
 if ($stackBootedByThisRun -and -not $KeepStack) {
     Write-Host ""
     Write-Host "=== teardown local stack ===" -ForegroundColor Cyan

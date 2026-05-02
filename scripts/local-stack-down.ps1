@@ -1,4 +1,4 @@
-# local-stack-down.ps1 — stop the local backend + (optionally) MySQL.
+# local-stack-down.ps1 - stop the local backend + (optionally) MySQL.
 #
 # Default: stops backend, leaves MySQL running so the next up is fast.
 # `-Full`: stops MySQL too.
@@ -13,7 +13,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $stateDir = Join-Path $root ".scripts-state"
 $pidFile = Join-Path $stateDir "backend.pid"
 
-# ─── 1. stop backend ────────────────────────────────────────────────
+# --- 1. stop backend ------------------------------------------------
 if (Test-Path $pidFile) {
     $backendPid = Get-Content $pidFile -ErrorAction SilentlyContinue
     if ($backendPid) {
@@ -29,7 +29,7 @@ if (Test-Path $pidFile) {
     }
     Remove-Item $pidFile -ErrorAction SilentlyContinue
 } else {
-    Write-Host "no backend PID file — assumed already stopped" -ForegroundColor DarkGray
+    Write-Host "no backend PID file - assumed already stopped" -ForegroundColor DarkGray
 }
 
 # Belt-and-braces: kill any node listening on 5000 (covers cases where
@@ -45,7 +45,7 @@ if ($listening) {
     }
 }
 
-# ─── 2. stop / wipe MySQL ───────────────────────────────────────────
+# --- 2. stop / wipe MySQL -------------------------------------------
 Push-Location $root
 try {
     if ($Wipe) {

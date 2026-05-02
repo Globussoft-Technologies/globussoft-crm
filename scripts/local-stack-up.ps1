@@ -1,4 +1,4 @@
-# local-stack-up.ps1 — boot the local Docker MySQL + seed + start backend.
+# local-stack-up.ps1 - boot the local Docker MySQL + seed + start backend.
 #
 # What it does:
 #   1. `docker compose up -d mysql`
@@ -15,7 +15,7 @@
 #
 # To tear down: .\scripts\local-stack-down.ps1
 #
-# All env vars are set as overrides — your project-root .env file is
+# All env vars are set as overrides - your project-root .env file is
 # NOT modified.
 
 param(
@@ -24,12 +24,16 @@ param(
     [switch]$VerboseDb       # show prisma + seed output (default: tails only)
 )
 
-$ErrorActionPreference = "Stop"
+# Don't use "Stop" globally — docker compose writes progress to stderr
+# ("Network foo Creating") which PowerShell would otherwise convert to a
+# terminating error. We check $LASTEXITCODE explicitly after each native
+# command call instead.
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 $stateDir = Join-Path $root ".scripts-state"
 if (-not (Test-Path $stateDir)) { New-Item -ItemType Directory -Path $stateDir | Out-Null }
 
-# Local-stack credentials — match docker-compose.yml exactly. Hardcoded
+# Local-stack credentials - match docker-compose.yml exactly. Hardcoded
 # because no real environment uses these and engineers shouldn't need
 # to hunt for them.
 $LOCAL_DB_URL = "mysql://root:local_dev_pw@127.0.0.1:3307/gbscrm_local"
@@ -37,16 +41,18 @@ $LOCAL_JWT = "local_dev_jwt_secret_not_for_real_use"
 
 Push-Location $root
 try {
-    # ─── 1. boot MySQL ──────────────────────────────────────────────
+    # --- 1. boot MySQL ----------------------------------------------
     Write-Host ""
     Write-Host "=== 1. docker compose up -d mysql ===" -ForegroundColor Cyan
-    docker compose up -d mysql 2>&1 | Out-Host
+    # Don't pipe stderr into PowerShell — docker progress output trips
+    # the error stream. Let it write directly to console.
+    docker compose up -d mysql
     if ($LASTEXITCODE -ne 0) {
         Write-Host "FAIL: docker compose failed. Is Docker Desktop running?" -ForegroundColor Red
         exit 1
     }
 
-    # ─── 2. wait for MySQL healthy ──────────────────────────────────
+    # --- 2. wait for MySQL healthy ----------------------------------
     Write-Host ""
     Write-Host "=== 2. wait for MySQL healthy ===" -ForegroundColor Cyan
     $ready = $false
@@ -64,7 +70,7 @@ try {
         exit 1
     }
 
-    # ─── 3. prisma db push + seed ───────────────────────────────────
+    # --- 3. prisma db push + seed -----------------------------------
     if (-not $NoSeed) {
         Write-Host ""
         Write-Host "=== 3. prisma db push + seed (both tenants) ===" -ForegroundColor Cyan
@@ -90,7 +96,7 @@ try {
         Write-Host "    (--NoSeed: skipping prisma + seed)" -ForegroundColor Yellow
     }
 
-    # ─── 4. boot backend ────────────────────────────────────────────
+    # --- 4. boot backend --------------------------------------------
     if (-not $NoBackend) {
         Write-Host ""
         Write-Host "=== 4. start backend on http://127.0.0.1:5000 ===" -ForegroundColor Cyan
@@ -127,7 +133,7 @@ try {
         Set-Content -Path $pidFile -Value $proc.Id
         Write-Host "  spawned PID $($proc.Id) (log: $logFile)"
 
-        # ─── 5. wait for /api/health ─────────────────────────────────
+        # --- 5. wait for /api/health ---------------------------------
         Write-Host ""
         Write-Host "=== 5. wait for backend healthy ===" -ForegroundColor Cyan
         $ready = $false

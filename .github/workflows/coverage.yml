@@ -166,6 +166,7 @@ jobs:
             tests/route-contracts-api.spec.js \
             tests/billing-api.spec.js \
             tests/lead-routing-api.spec.js \
+            tests/search-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

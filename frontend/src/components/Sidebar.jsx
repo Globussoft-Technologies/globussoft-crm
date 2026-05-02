@@ -13,9 +13,11 @@ import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
 import { launchCallifiedSSO } from '../utils/callified';
+import { useNotify } from '../utils/notify';
 
 const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
   const { user, tenant } = useContext(AuthContext);
+  const notify = useNotify();
   const role = user?.role || 'USER';
   const isAdmin = role === 'ADMIN';
   const isManager = role === 'ADMIN' || role === 'MANAGER';
@@ -178,7 +180,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
         await launchCallifiedSSO();
       } catch (err) {
         console.error('[Sidebar] Callified SSO error:', err.message);
-        alert(`Failed to open Callified: ${err.message}`);
+        notify.error(`Failed to open Callified: ${err.message}`);
       } finally {
         setCallifiedLoading(false);
       }

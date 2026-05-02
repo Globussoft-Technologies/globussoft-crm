@@ -3870,9 +3870,15 @@ router.delete("/waitlist/:id", async (req, res) => {
 // and (worse) flooding a real patient's phone if used for harassment.
 // Two stacked limiters: phone-level (3 / 10 min per last-10-digit phone)
 // and IP-level (10 / 10 min per source IP). Both must pass.
+// In NODE_ENV=test the local-stack + CI gates fan out many requests from a
+// single IP / phone (the auth-security spec stamps multiple rate-limit-header
+// assertions). Bump the ceilings so the test budget never bumps into them.
+// Production stays at the security-tuned numbers.
+const _otpPhoneMax = process.env.NODE_ENV === "test" ? 1000 : 3;
+const _otpIpMax = process.env.NODE_ENV === "test" ? 5000 : 10;
 const portalRequestOtpPhoneLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 3,
+  max: _otpPhoneMax,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req, res) => {
@@ -3888,7 +3894,7 @@ const portalRequestOtpPhoneLimiter = rateLimit({
 
 const portalRequestOtpIpLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 10,
+  max: _otpIpMax,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req, res) => ipKeyGenerator(req, res),

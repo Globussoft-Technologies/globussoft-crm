@@ -179,13 +179,21 @@ async function fetchSmsForPhone(request, token, phone) {
 }
 
 test.afterAll(async ({ request }) => {
-  // Best-effort cascade-delete of the patients we seeded. The wellness
-  // route does not expose DELETE /patients (#327 — clinical write-gate),
-  // so we lean on global-teardown's NAME-regex sweep matching `^E2E_FLOW_/`
-  // to clean these up. This block is a no-op for now; left in place as a
-  // hook for the day a public DELETE endpoint lands.
-  for (const _id of createdPatientIds) {
-    /* no-op: deletion happens in global-teardown via name regex */
+  // Per-spec cleanup. The wellness route does not expose DELETE /patients
+  // (#327 — clinical write-gate), so we cannot hard-delete. Instead we
+  // PUT-rename each patient to a NON-residue name so demo-hygiene-api +
+  // teardown-completeness (which run later in the same suite, BEFORE
+  // global-teardown) don't see `^E2E_FLOW_REMINDERS_/`. Global-teardown's
+  // regex won't catch the renamed rows either, so they survive on the
+  // ephemeral CI DB as inert noise — but the FK-cascaded Visit + SmsMessage
+  // rows are unaffected and the demo dashboards see a non-test name.
+  if (!tokens.wellnessAdmin) return;
+  for (const id of createdPatientIds) {
+    await request.put(`${API}/wellness/patients/${id}`, {
+      headers: authHeader(tokens.wellnessAdmin),
+      data: { name: `_teardown_g6_${id}` },
+      timeout: REQUEST_TIMEOUT,
+    }).catch(() => { /* best-effort — don't fail the suite on cleanup miss */ });
   }
 });
 

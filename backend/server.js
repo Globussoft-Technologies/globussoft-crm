@@ -63,9 +63,13 @@ app.use(sanitizeBody);
 app.use(stripTenantOverride);
 
 // Rate limiting
+//
+// Local dev / CI gate: NODE_ENV=test bumps the ceiling enormously so the
+// full Playwright API gate (~1450 tests, retries, helper auth flows) doesn't
+// exhaust the 5000 req/15min budget. Production stays at 5000.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5000,
+  max: process.env.NODE_ENV === "test" ? 100000 : 5000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },

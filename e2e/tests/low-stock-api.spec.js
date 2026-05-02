@@ -176,6 +176,48 @@ test.beforeAll(async ({ request }) => {
   expect(a, 'admin@wellness.demo must be seeded').toBeTruthy();
 });
 
+// ── afterAll: scrub Notification rows the engine wrote ────────────────
+//
+// The engine creates Notification rows whose `title` is "Low stock: <name>"
+// and whose `message` echoes the product name. Both fields end up matching
+// the demo-hygiene + teardown-completeness regexes (`/ E2E[_ ]/` embedded
+// tag) — and those gate specs run LATER in the same suite, BEFORE
+// global-teardown gets a chance. Without this hook, the assertion specs
+// trip on residue every run.
+//
+// We can't bulk-delete by query — there's no `/api/notifications?title=...`
+// filter route — so we list, filter by RUN_TAG marker in title/link, and
+// DELETE one by one via the existing `DELETE /api/notifications/:id`
+// (#179 — admin-only, tenant-scoped, audited). Best-effort: a 404 / 500
+// here doesn't fail the suite, since we can't do worse than the residue
+// global-teardown wouldn't have caught anyway.
+test.afterAll(async ({ request }) => {
+  const token = await login(request, 'admin');
+  if (!token) return;
+  // Pull a wide page so RUN_TAG matches across all tests in this spec land
+  // in one fetch. limit=500 covers the worst-case fan-out (one notif per
+  // admin per low product per test invocation).
+  const res = await request.get(`${BASE_URL}/api/notifications?limit=500`, {
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: REQUEST_TIMEOUT,
+  }).catch(() => null);
+  if (!res || !res.ok()) return;
+  const body = await res.json().catch(() => ({}));
+  const list = Array.isArray(body) ? body : (body.notifications || []);
+  // RUN_TAG is unique per test-process invocation, so this filter is
+  // strictly scoped to OUR rows — never deletes a real customer notif.
+  const ours = list.filter((n) =>
+    (n.title && n.title.includes(RUN_TAG)) ||
+    (n.message && n.message.includes(RUN_TAG))
+  );
+  for (const n of ours) {
+    await request.delete(`${BASE_URL}/api/notifications/${n.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: REQUEST_TIMEOUT,
+    }).catch(() => { /* best-effort */ });
+  }
+});
+
 // ─── Auth + RBAC gates (run independently — no DB seed required) ──────
 
 test.describe('Low-stock /run — auth + RBAC gates', () => {

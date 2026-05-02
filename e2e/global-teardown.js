@@ -161,13 +161,26 @@ module.exports = async function globalTeardown() {
     );
     results.products = pr.affectedRows || 0;
 
-    const total = results.patients + results.contacts + results.services + results.tasks + results.locations + results.products;
+    // G-8: low-stock-api.spec.js triggers cron/lowStockEngine.js which
+    // writes Notification rows whose title is "Low stock: <product-name>"
+    // and message echoes the product name. The product name carries the
+    // RUN_TAG prefix (E2E_FLOW_LOWSTOCK_…), so PAT_REGEX matches both
+    // title and message. Notification has no inbound FKs from real-data
+    // tables — safe to bulk-delete by regex. (Other engines that produce
+    // notifications referencing test fixtures land here too.)
+    const [n] = await conn.query(
+      `DELETE FROM Notification WHERE title REGEXP ? OR message REGEXP ?`,
+      [PAT_REGEX, PAT_REGEX]
+    );
+    results.notifications = n.affectedRows || 0;
+
+    const total = results.patients + results.contacts + results.services + results.tasks + results.locations + results.products + results.notifications;
     if (total > 0) {
       console.log(
         `[teardown] scrubbed E2E rows: ${results.patients} patient(s), ` +
           `${results.contacts} contact(s), ${results.services} service(s), ` +
           `${results.tasks} task(s), ${results.locations} location(s), ` +
-          `${results.products} product(s) ` +
+          `${results.products} product(s), ${results.notifications} notification(s) ` +
           `(cascades auto-remove visits/Rx/consents/plans/waitlist/loyalty/referrals)`
       );
     } else {

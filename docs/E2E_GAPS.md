@@ -21,11 +21,11 @@
 
 | ID | Title | Effort | Risk if skipped | Status |
 |---|---|---|---|---|
-| **G-1** | landing-pages-api spec (10 endpoints, zero coverage) | 4-6h | High — 311 lines untested in PRD-critical marketing flow | ⬜ open |
-| **G-2** | workflows-api spec (9 endpoints, smoke-only) | 6-8h | High — automation engine route surface untested | ⬜ open |
-| **G-3** | integrations-api spec (6 endpoints + Callified SSO) | 4-6h | Med — admin-only but Callified.ai contract surface | ⬜ open |
-| **G-4** | search-api spec (1 endpoint, smoke-only) | 1-2h | Low — small route, but used by Omnibar | ⬜ open |
-| **G-5** | audit-api spec (1 endpoint, smoke-only) | 2-3h | Med — compliance-relevant; tenant scoping must be proven | ⬜ open |
+| **G-1** | landing-pages-api spec (10 endpoints, zero coverage) | 4-6h | High — 311 lines untested in PRD-critical marketing flow | ✅ shipped (1e5bd3e — 41 tests) |
+| **G-2** | workflows-api spec (9 endpoints, smoke-only) | 6-8h | High — automation engine route surface untested | ✅ shipped (21f8333 — 48 tests; flagged `/test` not a true dry-run) |
+| **G-3** | integrations-api spec (6 endpoints + Callified SSO) | 4-6h | Med — admin-only but Callified.ai contract surface | ✅ shipped (47023a0 — 30 tests; flagged toggle missing admin guard) |
+| **G-4** | search-api spec (1 endpoint, smoke-only) | 1-2h | Low — small route, but used by Omnibar | ✅ shipped (2f02cde — 14 tests) |
+| **G-5** | audit-api spec (1 endpoint, smoke-only) | 2-3h | Med — compliance-relevant; tenant scoping must be proven | ✅ shipped (f5e9c7c — 20 tests; flagged audit.js missing role guard) |
 | **G-6** | appointment-reminders-engine spec | 3-4h | High — wellness PRD-critical; SMS dispatch logic | ⬜ open |
 | **G-7** | wellness-ops-engine spec (NPS + retention) | 3-4h | High — GDPR retention path | ⬜ open |
 | **G-8** | low-stock-engine spec | 2-3h | Med — inventory alerts | ⬜ open |
@@ -48,6 +48,8 @@
 | **G-25** | Security headers spec against deployed demo | 4h | Low — Helmet/CSP regression detection | ⬜ open |
 
 **Recommended first parallel batch (5 disjoint, no rate-limit / external-service issues):** G-1, G-2, G-3, G-4, G-6.
+
+> **Status update 2026-05-02:** G-1 + G-2 + G-3 + G-4 + G-5 all shipped (~150 new tests). G-6 (appointment-reminders-engine) is the natural next pickup — wellness PRD-critical, blocked nothing today. **Two compliance findings opened by the new specs:** `routes/audit.js` ships without `verifyRole(['ADMIN'])` (G-5), and `POST /api/integrations/toggle` ships without admin guard (G-3) — both let MANAGER/USER reach data the spec'd contract restricts to ADMIN. Captured as `test.fixme()` blocks in the specs; route fixes pending.
 
 ---
 

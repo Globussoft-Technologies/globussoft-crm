@@ -260,6 +260,47 @@ Plus 12 professionals, 2 helpers, 1 telecaller (see `prisma/seed-wellness.js`).
 5. **Deployment scripts with credentials** -- removed from git tracking, added to .gitignore
 6. **Credentials in git history** -- SSH and MySQL passwords in old commits, should rotate
 
+## Local 4/4 deploy-gate mirror
+
+Every CI gate runs locally before pushing — same containerised MySQL, same backend, same spec list. Avoids the ~10-min round-trip of waiting for GitHub Actions.
+
+```powershell
+# Windows
+.\scripts\test-local.ps1 -Local              # boot stack + run all 4 gates
+.\scripts\test-local.ps1 -Local -KeepStack   # leave stack up between iterations
+.\scripts\test-local.ps1 -Local -SkipBuild   # only lint + api_tests + unit_tests
+```
+
+```bash
+# macOS / Linux / git-bash
+./scripts/test-local.sh --local              # same flags, --keep-stack, --skip-build, etc.
+```
+
+`-Local` mode auto-boots [docker-compose.yml](docker-compose.yml) (MySQL 8.0 on host port `3307` to avoid colliding with a system MySQL on `3306`), pushes the Prisma schema, seeds both tenants, then starts the backend on `:5000` with `DISABLE_CRONS=1` so cron engines don't pollute test data. PID is tracked in [.scripts-state/backend.pid](.scripts-state/) (gitignored).
+
+**Manual stack management (if you want to iterate without re-running all 4 gates):**
+
+```powershell
+.\scripts\local-stack-up.ps1                 # boot mysql + seed + backend
+.\scripts\local-stack-up.ps1 -NoSeed         # faster re-boot if seed unchanged
+.\scripts\local-stack-up.ps1 -NoBackend      # only mysql + seed (debug-attach the backend yourself)
+.\scripts\local-stack-down.ps1               # stop backend, leave mysql for fast next-up
+.\scripts\local-stack-down.ps1 -Full         # stop mysql too (volume preserved)
+.\scripts\local-stack-down.ps1 -Wipe         # nuke the volume (full reset)
+```
+
+### Why local stack instead of demo
+
+Don't iterate route changes against `https://crm.globusdemos.com`. The demo runs **already-deployed** code — your local edits aren't there until the next deploy. Running tests against demo to "validate" a local change tests last commit's behaviour, not yours. This trap caused multiple confused debugging cycles before the local stack landed.
+
+Local stack mirrors the deploy.yml `api_tests` gate exactly (same Prisma schema, same seed, same `BASE_URL=http://127.0.0.1:5000`). When the local gate goes green, the CI gate will go green for the same reason.
+
+The narrow exception: when you specifically want to verify a deployed change against demo's accumulated real seed data, point at demo explicitly with `BASE_URL=https://crm.globusdemos.com`. The release-validation `e2e-full.yml` workflow does this on tag push and self-cleans afterwards via the `scrub-demo` job (commit db932ab).
+
+### `.claude/settings.json` allow-list
+
+Project-shared at [.claude/settings.json](.claude/settings.json) — auto-approves the inner-loop commands (scripts/, prisma db push / generate / migrate, npm test / build, npx vitest / playwright test, read-only docker + read-only gh CLI) so engineers don't get prompted on every iteration. Anything not on the allow list still goes through the normal approval flow. Personal overrides go in [.claude/settings.local.json](.claude/) (gitignored).
+
 ## E2E Testing
 
 Tests live in `e2e/` using Playwright. Run with:
@@ -270,9 +311,10 @@ cd e2e && BASE_URL=https://crm.globusdemos.com npx playwright test --project=chr
 
 - `tests/ship-readiness.spec.js` — 74 tests covering auth, 50 API endpoints, security, public endpoints, UI page serving
 - `tests/wellness.spec.js` — 50+ wellness-specific tests: tenant + currency, dashboard, patients/visits/Rx/consent flow, recommendations, full external API flow, reports, junk filter, auto-router, public booking, orchestrator, SPA route smoke
-- Plus 30+ legacy spec files per module
+- `tests/demo-health.spec.js` + `tests/demo-hygiene-api.spec.js` + `tests/teardown-completeness.spec.js` — closed-loop demo cleanliness assertions backed by [demo-monitor.yml](.github/workflows/demo-monitor.yml) cron (every 30 min, opens a tracker issue on failure)
+- Plus ~150 module-level api specs (each `routes/*.js` has a `tests/<route>-api.spec.js` partner). Latest additions: `landing-pages-api`, `workflows-api`, `integrations-api`, `audit-api`, `search-api`, `email-api`.
 
-**124+ tests currently passing on production.**
+**~1,182 API tests on every push (deploy.yml api_tests gate) + ~2,500 broader UI/wellness/a11y tests on every release tag (e2e-full.yml).**
 
 ## GitHub
 

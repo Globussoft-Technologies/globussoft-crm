@@ -226,6 +226,23 @@ router.put("/:id", async (req, res) => {
     // amount / out-of-range probability / unknown stage.
     const inputErr = validateDealInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
+
+    // #173: terminal-stage state machine. Once a deal is `won` or
+    // `lost`, the stage is closed — re-opening or flipping to the
+    // other terminal stage corrupts forecasting (Closed-Won pipeline
+    // counts) and audit history. Reject 422 with the same shape the
+    // billing route uses.
+    if (stage !== undefined && stage !== existing.stage) {
+      const terminalStages = new Set(["won", "lost"]);
+      if (terminalStages.has(existing.stage)) {
+        return res.status(422).json({
+          error: `Cannot transition deal from ${existing.stage} to ${stage}`,
+          code: "INVALID_DEAL_TRANSITION",
+          currentStage: existing.stage,
+        });
+      }
+    }
+
     const data = {};
 
     if (title !== undefined) data.title = title;

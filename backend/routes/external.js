@@ -293,10 +293,18 @@ router.post("/leads", async (req, res) => {
       verdict.reasons.length && `junk-filter: ${verdict.reasons.join("; ")}`,
     ].filter(Boolean);
     if (activityBits.length) {
+      // Activity.description maps to VARCHAR(191) on MySQL (bare String
+      // in schema.prisma). Partner payloads with utm + verbose notes +
+      // junk-filter reasons routinely overflow that and trigger Prisma's
+      // "value too long for column" — caught only by the generic 500 in
+      // the outer catch. Clamp at 188 chars + ellipsis. Long-term fix:
+      // promote description to @db.Text — separate schema-migration PR.
+      const descRaw = activityBits.join(" | ");
+      const description = descRaw.length > 191 ? descRaw.slice(0, 188) + "..." : descRaw;
       await prisma.activity.create({
         data: {
           type: verdict.isJunk ? "JunkFilter" : "Note",
-          description: activityBits.join(" | "),
+          description,
           contactId: contact.id,
           tenantId: req.tenantId,
         },

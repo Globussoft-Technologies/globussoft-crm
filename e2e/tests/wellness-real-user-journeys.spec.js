@@ -152,7 +152,14 @@ test.describe.serial('Journey A — Patient portal (real person, phone+OTP)', ()
     patient.rxId = rxBody.id;
   });
 
-  test('A3. Patient opens /patient-portal and logs in with phone + any 4-digit OTP (v1 bypass)', async ({ page, request }) => {
+  test.fixme('A3. Patient opens /patient-portal and logs in with phone + any 4-digit OTP (v1 bypass)', async ({ page, request }) => {
+    // Deferred: the v1 OTP bypass referenced in this test name was removed
+    // by security fixes #292/#300 (routes/wellness.js:3068-3134 now
+    // validates against the PatientOtp table). The hardcoded '1234' in
+    // this test will return 401. Restoring the test requires DB-side OTP
+    // injection (out of API-only e2e scope) or full SMS-loop integration.
+    // Cascades into A4-A8 which chain off `portalToken` set here — those
+    // are also expected to fixme but only A3/F5 are in scope of this fix.
     await clearBrowserState(page);
 
     // Direct API portal login (portal v1 accepts any 4-digit OTP) — mirrors what
@@ -257,8 +264,16 @@ test.describe.serial('Journey B — Doctor (real browser)', () => {
 
     await uiLoginViaToken(page, token, tenant, `/wellness/patients/${id}`, user);
     await page.waitForLoadState('networkidle', { timeout: 20000 });
-    // Expect at least a tab-like UI with common labels. Be lenient about casing/label.
-    const anyTab = page.locator('text=/visits|history|prescription|consent|treatment/i').first();
+    // Wait for the patient detail page header to mount before scanning
+    // for tabs — the previous text-only locator was racing the render.
+    await expect(page.locator('h1, h2').first()).toBeVisible({ timeout: 15000 });
+    // Tab labels per PatientDetail.jsx:102-110 — match either the
+    // Lucide-style buttons OR the legacy text spans. getByRole picks
+    // the actual <button> elements, less ambiguous than text selectors.
+    const tabPattern = /case history|prescription|consent|treatment|log visit|photos|inventory|telehealth/i;
+    const anyTab = page.getByRole('button', { name: tabPattern })
+      .or(page.locator('[role="tab"]').filter({ hasText: tabPattern }))
+      .first();
     await expect(anyTab).toBeVisible({ timeout: 10000 });
   });
 });
@@ -549,7 +564,10 @@ test.describe.serial('Journey F — Website visitor → lead → telecaller → 
     expect(res.ok()).toBeTruthy();
   });
 
-  test('F5. New patient can now log in to the portal with phone+OTP', async ({ request }) => {
+  test.fixme('F5. New patient can now log in to the portal with phone+OTP', async ({ request }) => {
+    // Same v1-bypass deferral as A3 — security fixes #292/#300 removed
+    // the "any 4-digit OTP wins" cheat. Hardcoded '0000' now returns 401.
+    // Restoring needs DB-side OTP injection (out of scope).
     const res = await request.post(`${API}/wellness/portal/login`, {
       data: { phone: leadPhone, otp: '0000' },
     });

@@ -170,6 +170,7 @@ jobs:
             tests/workflows-api.spec.js \
             tests/integrations-api.spec.js \
             tests/audit-api.spec.js \
+            tests/appointment-reminders-api.spec.js \
             tests/security-headers.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js

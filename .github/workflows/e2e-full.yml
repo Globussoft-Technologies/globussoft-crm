@@ -102,6 +102,14 @@ jobs:
         working-directory: e2e
         env:
           BASE_URL: ${{ steps.target.outputs.BASE_URL }}
+          # E2E_SKIP_SCRUB stays ON for the per-shard step. Each shard
+          # would otherwise run its OWN globalTeardown at the end of its
+          # slice and DELETE all rows matching `^E2E_FLOW_/Race_/...`,
+          # including fixtures the other 3 shards are still using mid-test
+          # (they all hit the same demo DB). The race is real — shard 2's
+          # spec creates a fixture, shard 1 finishes + teardown wipes it,
+          # shard 2's next assertion fails. The single post-matrix
+          # `scrub-demo` job below handles cleanup once for the whole run.
           E2E_SKIP_SCRUB: '1'
         run: |
           set -euo pipefail
@@ -192,3 +200,61 @@ jobs:
             echo "Per-shard outcome: see \`e2e-full\` matrix above."
             echo "Merged HTML report: download \`e2e-full-html-report-*\` artifact."
           } >> $GITHUB_STEP_SUMMARY
+
+  # ── Post-matrix demo scrub ─────────────────────────────────────────
+  # The 4-shard e2e-full matrix runs with E2E_SKIP_SCRUB=1 to avoid
+  # an inter-shard race (each shard's globalTeardown would otherwise
+  # delete all E2E_*/Race_*/PHI Audit/etc. rows, including fixtures
+  # the other 3 shards are still using mid-test). This job runs ONCE
+  # after all shards complete and runs the same scrub the demo
+  # operator would have run by hand: regex-delete test residue +
+  # merge real-name patient duplicates that the suite's seed-and-write
+  # paths produce (Kavita Reddy x9 etc).
+  #
+  # `if: always()` so a failed shard (which still left residue) gets
+  # cleaned. Gated on the target being demo — if someone points
+  # workflow_dispatch at a non-demo URL we skip rather than SSH into
+  # a different host.
+  scrub-demo:
+    if: always()
+    needs: e2e-full
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Decide whether to scrub
+        id: gate
+        env:
+          BASE_URL: ${{ inputs.base_url || 'https://crm.globusdemos.com' }}
+        run: |
+          if [[ "$BASE_URL" == *"crm.globusdemos.com"* ]]; then
+            echo "should_scrub=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Target is demo — will run scrub + dedup"
+          else
+            echo "should_scrub=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Target $BASE_URL is not demo — skipping scrub"
+          fi
+
+      - name: Scrub demo + merge dup patients
+        if: steps.gate.outputs.should_scrub == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          # 4 min cap — scrub typically finishes in ~30s, dedup in <10s,
+          # but headroom for a degenerate run that created 1000s of rows.
+          command_timeout: 4m
+          script: |
+            set -euo pipefail
+            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+            cd ~/globussoft-crm
+            echo "=== scrub-test-data-pollution.js --apply ==="
+            node backend/scripts/scrub-test-data-pollution.js --apply
+            echo ""
+            echo "=== merge-duplicate-patients.js --commit ==="
+            node backend/scripts/merge-duplicate-patients.js --commit
+
+      - name: Skipped notice
+        if: steps.gate.outputs.should_scrub != 'true'
+        run: echo "::notice::Skipped scrub — target was not the demo box"

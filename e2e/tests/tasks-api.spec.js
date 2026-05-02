@@ -552,3 +552,57 @@ test.describe('Tasks API — auth gate', () => {
     expect([401, 403]).toContain(res.status());
   });
 });
+
+// #403: cross-tenant isolation regression. On 2026-05-02 the QA pass on
+// the wellness tenant saw 9 task rows titled `Tenant B scoped E2E_FLOW_<ts>`
+// — these are created by a generic-tenant test but were leaking into the
+// wellness owner's task queue. Root cause was a missing tenantId filter
+// in the GET /api/tasks query.
+//
+// This describe-block creates a task in the GENERIC tenant, then logs in
+// as the WELLNESS admin and verifies the task does NOT show up in their
+// list (regardless of pagination). Failing this test would have caught
+// the regression before it shipped to demo.
+test.describe('Tasks API — cross-tenant isolation (#403)', () => {
+  test('GET /api/tasks as wellness admin does not include generic-tenant task', async ({ request }) => {
+    // Step 1: as generic admin (this spec's normal user), create a task
+    // tagged so we can find it.
+    const tag = `Tenant B scoped E2E_FLOW_${Date.now()}`;
+    const create = await authPost(request, '/api/tasks', {
+      title: tag,
+      priority: 'Medium',
+    });
+    expect(create.status(), `create: ${await create.text()}`).toBe(201);
+    const created = await create.json();
+    createdTaskIds.push(created.id);
+
+    // Step 2: log in as wellness admin (different tenant).
+    const wellnessLogin = await request.post(`${BASE_URL}/api/auth/login`, {
+      data: { email: 'admin@wellness.demo', password: 'password123' },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(wellnessLogin.status(), 'wellness login should succeed').toBe(200);
+    const wellnessToken = (await wellnessLogin.json()).token;
+
+    // Step 3: fetch /api/tasks as wellness admin. Walk the entire list
+    // (limit=500 in case the generic task is buried far down).
+    const res = await request.get(`${BASE_URL}/api/tasks?limit=500`, {
+      headers: { Authorization: `Bearer ${wellnessToken}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    const tasks = Array.isArray(body) ? body : body.tasks || body.data || [];
+
+    // Hard assertion: the tagged task MUST NOT appear in another tenant's view.
+    const leaked = tasks.filter((t) => t.title === tag);
+    expect(leaked, `cross-tenant leak — wellness admin sees generic task "${tag}"`).toHaveLength(0);
+
+    // Belt-and-braces: no task in the wellness response should carry
+    // the `Tenant B scoped` prefix at all (catches future regressions
+    // where the leak uses a different timestamp).
+    const anyTenantBPrefix = tasks.filter((t) => /^Tenant B scoped/.test(t.title || ''));
+    expect(anyTenantBPrefix, 'no task in wellness view should be tagged "Tenant B scoped"').toHaveLength(0);
+  });
+});

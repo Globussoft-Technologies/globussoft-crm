@@ -1917,3 +1917,51 @@ test.describe('Wellness API — auth gate', () => {
     });
   }
 });
+
+// #404: public booking endpoint regression. On 2026-05-02 the demo had
+// `Location.id=1` renamed from "Ranchi" → "smoke-test", which matches
+// `INTERNAL_LOCATION_NAME_RE` at backend/routes/wellness.js:2775 and
+// got filtered out of the public response. Result: public booking
+// page step 2 ("Pick a clinic") was empty, customer-facing widget
+// non-functional. This is the regression test that would have caught
+// it: assert the public response always returns at least one location
+// AND none of the returned rows match the internal-name regex.
+//
+// No auth — the endpoint is intentionally public for the embedded
+// booking widget.
+test.describe('Wellness API — public booking visibility (#404)', () => {
+  // The wellness tenant slug stays stable across deploys (seed-wellness.js).
+  const SLUG = 'enhanced-wellness';
+
+  test('GET /api/wellness/public/tenant/:slug returns ≥1 visible location', async ({ request }) => {
+    const res = await request.get(`${BASE_URL}/api/wellness/public/tenant/${SLUG}`);
+    expect(res.status(), `unexpected status: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    // Endpoint shape: { tenant: {...}, locations: [...], services: [...] }.
+    // The locations field is the one the booking page renders in step 2.
+    expect(Array.isArray(body.locations), 'locations should be an array').toBe(true);
+    expect(body.locations.length, 'public booking page would show empty clinic picker').toBeGreaterThanOrEqual(1);
+  });
+
+  test('public locations exclude internal/test names (smoke-test, e2e_*, qa_*, test_*, dev_*)', async ({ request }) => {
+    const res = await request.get(`${BASE_URL}/api/wellness/public/tenant/${SLUG}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // Mirror INTERNAL_LOCATION_NAME_RE at backend/routes/wellness.js:2775.
+    const INTERNAL = /^(smoke-test|e2e[-_ ]|test[-_ ]|qa[-_ ]|dev[-_ ])/i;
+    const leaked = (body.locations || []).filter((loc) => INTERNAL.test(loc.name || ''));
+    expect(leaked, `internal-named locations leaked into public response: ${JSON.stringify(leaked.map((l) => l.name))}`).toHaveLength(0);
+  });
+
+  test('every public location has a non-empty name + city', async ({ request }) => {
+    const res = await request.get(`${BASE_URL}/api/wellness/public/tenant/${SLUG}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    for (const loc of body.locations || []) {
+      expect(loc.name, `location ${loc.id} has empty name`).toBeTruthy();
+      // The booking widget needs city to render the clinic card. If
+      // city is null the card collapses to "(unknown)" — UX bug.
+      expect(loc.city, `location "${loc.name}" has no city`).toBeTruthy();
+    }
+  });
+});

@@ -35,24 +35,13 @@ const prisma = require("../lib/prisma");
 
 const APPLY = process.argv.includes("--apply");
 
-const TEST_NAME_PATTERNS = [
-  /^Test /,                  // "Test Lead 001 ..."
-  /^E2E /,                   // "E2E Branch ..."
-  / E2E /,                   // "Foo E2E Bar"
-  /CRM Test/i,
-  /^Race /,                  // "Race Patient A"
-  /^Dedupe /i,
-  /^Playwright/i,
-  /^Coverage /,
-  / 17[67]\d{10,11}$/,       // 13-digit unix-ms timestamp suffix
-];
-
-const TEST_EMAIL_PATTERNS = [
-  /@racecond\.test$/i,
-  /^dup-/i,
-  /^valid-17[67]\d/,
-  /@e2e\.test$/i,
-];
+// #405: shared with e2e/global-teardown.js so the post-suite scrub
+// (CI ephemeral) and this one-shot demo cleanup can never drift.
+// New patterns must be added in ONE place: e2e/test-data-patterns.js.
+const {
+  TEST_NAME_PATTERNS,
+  TEST_EMAIL_PATTERNS,
+} = require("../../e2e/test-data-patterns");
 
 const isTestName = (s) =>
   typeof s === "string" && s.length > 0 && TEST_NAME_PATTERNS.some((p) => p.test(s));
@@ -142,6 +131,51 @@ async function scrubEmails() {
   return bad.length;
 }
 
+async function scrubTasks() {
+  // #405: tasks slip past the patient/contact sweep because their
+  // titles are independent ("Today's occupancy only 1%", "Tenant B
+  // scoped E2E_FLOW_<ts>", "Q3 Renewal Call 17<ts>", "qa", "far").
+  // Task has no inbound FKs (Task.id is never referenced), so a bulk
+  // delete is safe.
+  const all = await prisma.task.findMany({ select: { id: true, title: true, tenantId: true } });
+  const bad = all.filter((r) => isTestName(r.title));
+  console.log(`Tasks: ${bad.length} of ${all.length} are test rows`);
+  if (bad.length) {
+    previewRows(bad, (r) => `task ${r.id} (tenant ${r.tenantId}): "${r.title}"`);
+    if (APPLY) {
+      const r = await prisma.task.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
+      console.log(`     → DELETED ${r.count} tasks`);
+    }
+  }
+  return bad.length;
+}
+
+async function scrubAgentRecommendations() {
+  // #405: orchestratorEngine.js can fan a single occupancy_alert into
+  // 9 identical "Today's occupancy only N%" rows when it runs more than
+  // once a day. Trim historical occupancy rows older than today; the
+  // current day's row stays so the Owner Dashboard renders correctly.
+  // (The orchestrator regenerates today's row on next run anyway.)
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const all = await prisma.agentRecommendation.findMany({
+    select: { id: true, title: true, tenantId: true, createdAt: true, type: true },
+  });
+  const bad = all.filter((r) =>
+    r.type === "occupancy_alert" &&
+    r.createdAt < startOfToday
+  );
+  console.log(`AgentRecommendations (occupancy_alert, pre-today): ${bad.length} of ${all.length}`);
+  if (bad.length) {
+    previewRows(bad, (r) => `rec ${r.id} (tenant ${r.tenantId}): "${r.title}" @ ${r.createdAt.toISOString().slice(0, 10)}`);
+    if (APPLY) {
+      const r = await prisma.agentRecommendation.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
+      console.log(`     → DELETED ${r.count} historical occupancy_alert rows`);
+    }
+  }
+  return bad.length;
+}
+
 async function scrubCallLogs() {
   // CallLog has no `summary` field — notes is the closest free-text. Transcript
   // URL is stored under recordingUrl (the schema doesn't have transcriptUrl).
@@ -177,6 +211,8 @@ async function main() {
     estimates: await scrubEstimates(),
     emails: await scrubEmails(),
     callLogs: await scrubCallLogs(),
+    tasks: await scrubTasks(),
+    agentRecs: await scrubAgentRecommendations(),
   };
 
   const total = Object.values(counts).reduce((a, b) => a + b, 0);

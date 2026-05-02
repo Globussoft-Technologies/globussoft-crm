@@ -269,7 +269,9 @@ jobs:
             tests/surveys-api.spec.js \
             tests/external-api.spec.js \
             tests/wellness-clinical-api.spec.js \
-            tests/social-api.spec.js
+            tests/social-api.spec.js \
+            tests/email-api.spec.js \
+            tests/teardown-completeness.spec.js
           echo "::notice::API specs passed"
 
       - name: Upload artifacts on failure

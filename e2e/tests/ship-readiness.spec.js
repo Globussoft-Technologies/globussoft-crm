@@ -252,6 +252,33 @@ test.describe.serial('Ship Readiness — Full System E2E', () => {
     }
   });
 
+  // #406: stale URLs documented in QA prompts pointed at routes that
+  // never existed (`/wellness/service-catalog`, `/wellness/telecaller-queue`).
+  // The real routes are `/wellness/services` and `/wellness/telecaller`.
+  // Lock down the canonical wellness SPA routes + assert the SPA serves
+  // a 200 with the React root for each — Vite's history fallback should
+  // resolve any path to index.html, but a misconfigured nginx/build can
+  // start 404'ing them silently.
+  test('70b. UI: Wellness SPA route inventory — canonical paths return HTML', async ({ request }) => {
+    const wellnessRoutes = [
+      '/wellness',
+      '/wellness/patients',
+      '/wellness/services',           // NOT /wellness/service-catalog
+      '/wellness/telecaller',         // NOT /wellness/telecaller-queue
+      '/wellness/calendar',
+      '/wellness/locations',
+      '/wellness/loyalty',
+      '/wellness/reports',
+      '/wellness/recommendations',
+    ];
+    for (const route of wellnessRoutes) {
+      const res = await request.get(`${BASE_URL}${route}`);
+      expect(res.ok(), `${route} should return 200 (got ${res.status()})`).toBeTruthy();
+      const html = await res.text();
+      expect(html, `${route} should serve the SPA shell`).toContain('<div id="root">');
+    }
+  });
+
   test('71. UI: Portal page serves HTML', async ({ request }) => {
     const res = await request.get(`${BASE_URL}/portal.html`);
     expect(res.ok()).toBeTruthy();

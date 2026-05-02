@@ -24,17 +24,19 @@
 const fs = require('fs');
 const path = require('path');
 
-// Same regex used by the one-off scrub we ran on 2026-04-23. Anchored at
-// start, so a real patient named "Loyalty" (no number) is never matched.
-// Also matches E2E_FLOW_<timestamp> / E2E_AUDIT_<timestamp> tags that the
-// deep-flow + smoke specs added in 2026-04-26 use across patient/contact
-// names AND inside notes/title fields.
-const PAT_REGEX =
-  '^(E2E |E2E_FLOW_|E2E_AUDIT_|Coverage |Loyalty [0-9]{6}|Referrer [0-9]{6}|' +
-  'Waitlist [0-9]{6}|Lifecycle [0-9]{6}|Friend [0-9]{6}|' +
-  'Junk [0-9]{6}|Telecaller Queue Lead [0-9]{6}|Race Visit Patient |Aarav Nair |Priya Sharma E2E)';
-const EMAIL_REGEX = '(@example\\.test$|@example\\.in$|@inbound\\.local$|^e2e[-_]|\\.e2e_(flow|audit)_)';
-const SVC_DESC_LIKE = '%wellness-real-user-journeys%';
+// Single source of truth for test-data patterns — shared with
+// backend/scripts/scrub-test-data-pollution.js so the regex can never
+// drift between the post-suite teardown and the one-shot demo cleanup.
+// See e2e/test-data-patterns.js for why this exists (#405).
+const {
+  NAME_REGEX_SQL,
+  EMAIL_REGEX_SQL,
+  TEST_SERVICE_DESCRIPTION_LIKE,
+} = require('./test-data-patterns');
+
+const PAT_REGEX = NAME_REGEX_SQL;
+const EMAIL_REGEX = EMAIL_REGEX_SQL;
+const SVC_DESC_LIKE = TEST_SERVICE_DESCRIPTION_LIKE;
 
 /**
  * Parse DATABASE_URL like:
@@ -127,11 +129,29 @@ module.exports = async function globalTeardown() {
     );
     results.services = s.affectedRows || 0;
 
-    const total = results.patients + results.contacts + results.services;
+    // #405: also scrub Task + Location rows that match the test-data
+    // patterns. Tasks have no inbound FKs (Task.contactId / Task.userId
+    // are SetNull on the parent's delete; nothing references Task.id).
+    // Locations are SetNull on Patient.locationId / Visit.locationId.
+    // Both are safe to bulk-delete by regex.
+    const [t] = await conn.query(
+      `DELETE FROM Task WHERE title REGEXP ?`,
+      [PAT_REGEX]
+    );
+    results.tasks = t.affectedRows || 0;
+
+    const [l] = await conn.query(
+      `DELETE FROM Location WHERE name REGEXP ?`,
+      [PAT_REGEX]
+    );
+    results.locations = l.affectedRows || 0;
+
+    const total = results.patients + results.contacts + results.services + results.tasks + results.locations;
     if (total > 0) {
       console.log(
         `[teardown] scrubbed E2E rows: ${results.patients} patient(s), ` +
-          `${results.contacts} contact(s), ${results.services} service(s) ` +
+          `${results.contacts} contact(s), ${results.services} service(s), ` +
+          `${results.tasks} task(s), ${results.locations} location(s) ` +
           `(cascades auto-remove visits/Rx/consents/plans/waitlist/loyalty/referrals)`
       );
     } else {

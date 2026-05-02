@@ -111,10 +111,11 @@ test.describe('Developer Portal — API Keys & Webhooks', () => {
       .first();
     await generateBtn.click();
 
-    // Toast may take a tick to mount. The notify component renders a
-    // `[data-notify-modal]` (success | warning | error | info) attribute
-    // on the toast root.
-    const toast = page.locator('[data-notify-modal]').first();
+    // notify.success() renders the toast with `[data-notify-toast]`;
+    // [data-notify-modal] is reserved for notify.confirm/prompt (modal
+    // dialogs). Developer.jsx:36 calls notify.success() on key generation,
+    // so the right locator here is the toast attribute.
+    const toast = page.locator('[data-notify-toast]').first();
     await expect(toast).toBeVisible({ timeout: 8000 });
 
     const text = await toast.innerText();

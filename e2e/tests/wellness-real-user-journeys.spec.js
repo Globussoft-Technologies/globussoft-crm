@@ -112,11 +112,23 @@ test.describe.serial('Journey A — Patient portal (real person, phone+OTP)', ()
 
   test('A2. Doctor logs a completed visit + writes a prescription for this patient', async ({ request }) => {
     const { token, user } = await apiLogin(request, DOCTOR);
+    // Issue #109 added a SERVICE_REQUIRED gate: completed visits must
+    // carry a serviceId so reports can attribute revenue to a service.
+    // Pre-this-fix the test was 400'ing because serviceId was missing.
+    const svcRes = await request.get(`${API}/wellness/services`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const list = await svcRes.json();
+    const items = Array.isArray(list) ? list : (list.services || list.items || list.data || []);
+    expect(items.length, 'no services seeded — cannot complete visit').toBeGreaterThan(0);
+    const serviceId = items[0].id;
+
     const visit = await request.post(`${API}/wellness/visits`, {
       headers: { Authorization: `Bearer ${token}` },
       data: {
         patientId: patient.id,
         doctorId: user.id,
+        serviceId,
         status: 'completed',
         notes: 'Routine consultation — scalp check.',
         amountCharged: 500,

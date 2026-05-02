@@ -431,7 +431,11 @@ test.describe.serial('Journey M — Service consumption', () => {
     const pid = (await p.json()).patients[0].id;
     const v = await request.post(`${API}/wellness/visits`, {
       headers: auth(token),
-      data: { patientId: pid, status: 'in-treatment' },
+      // status:'booked' to dodge the #109 SERVICE_REQUIRED + DOCTOR_REQUIRED
+      // gates that fire for completed/in-treatment visits. The Journey-M
+      // consumption flow only needs a Visit row to attach consumptions to;
+      // the visit's status is incidental.
+      data: { patientId: pid, status: 'booked' },
     });
     expect(v.ok()).toBeTruthy();
     visitId = (await v.json()).id;

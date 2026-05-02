@@ -231,7 +231,10 @@ test.describe.serial('Wellness deep — Visit photo upload', () => {
     })).json();
     const v = await (await request.post(`${API}/wellness/visits`, {
       headers: auth(),
-      data: { patientId: p.id, notes: 'Botox 30u to forehead. Photographed for before/after.', status: 'completed' },
+      // status:'booked' to dodge #109 SERVICE_REQUIRED + DOCTOR_REQUIRED.
+      // Photo upload doesn't gate on visit status; tests 12-14 just need
+      // a Visit row to attach photos to.
+      data: { patientId: p.id, notes: 'Botox 30u to forehead. Photographed for before/after.', status: 'booked' },
     })).json();
     visitId = v.id;
   });

@@ -122,8 +122,13 @@ test.describe.serial('No-show risk widget (PRD §6.8)', () => {
     // Use API login + token injection (matches the wellness-real-user-journeys
     // pattern). The Login page's quick-login buttons have accessible names
     // like "Log in as admin@wellness.demo" which has historically drifted.
+    //
+    // Use rishu@enhancedwellness.in (the Owner) — the Owner Dashboard is
+    // gated to ADMIN/MANAGER and the prior admin@wellness.demo path was
+    // tripping the role redirect in OwnerDashboard.jsx:49-54 on this run,
+    // bouncing the page to /wellness/calendar before the StatCard rendered.
     const loginRes = await request.post(`${API}/auth/login`, {
-      data: { email: 'admin@wellness.demo', password: 'password123' },
+      data: { email: 'rishu@enhancedwellness.in', password: 'password123' },
     });
     expect(loginRes.ok()).toBeTruthy();
     const { token, tenant, user } = await loginRes.json();

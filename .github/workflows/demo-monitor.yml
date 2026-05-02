@@ -103,9 +103,12 @@ jobs:
         id: report
         # Open issue by default. workflow_dispatch can pass false to
         # suppress (e.g. when manually re-running for verification);
-        # scheduled runs always open. The `!= false` reads as
-        # "true OR null/undefined" — which is the intended default.
-        if: ${{ steps.probe.outputs.exit_code != '0' && inputs.open_issue_on_failure != false }}
+        # scheduled runs always open.
+        # Note: `inputs.x` evaluates to '' (empty string) on scheduled
+        # runs, and `'' != false` evaluates to FALSE in GHA expressions
+        # (empty string coerces to false). So the conditional must
+        # branch on event_name explicitly, not on inputs.
+        if: ${{ steps.probe.outputs.exit_code != '0' && (github.event_name == 'schedule' || inputs.open_issue_on_failure == true) }}
         env:
           # On scheduled runs `inputs.*` are empty; fall back to demo.
           BASE_URL: ${{ inputs.base_url || 'https://crm.globusdemos.com' }}
@@ -143,9 +146,12 @@ jobs:
       - name: Open or update the demo-monitor tracker issue
         # Open issue by default. workflow_dispatch can pass false to
         # suppress (e.g. when manually re-running for verification);
-        # scheduled runs always open. The `!= false` reads as
-        # "true OR null/undefined" — which is the intended default.
-        if: ${{ steps.probe.outputs.exit_code != '0' && inputs.open_issue_on_failure != false }}
+        # scheduled runs always open.
+        # Note: `inputs.x` evaluates to '' (empty string) on scheduled
+        # runs, and `'' != false` evaluates to FALSE in GHA expressions
+        # (empty string coerces to false). So the conditional must
+        # branch on event_name explicitly, not on inputs.
+        if: ${{ steps.probe.outputs.exit_code != '0' && (github.event_name == 'schedule' || inputs.open_issue_on_failure == true) }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BODY: ${{ steps.report.outputs.body }}

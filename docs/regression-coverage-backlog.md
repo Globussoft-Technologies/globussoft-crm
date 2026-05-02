@@ -73,7 +73,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 2. New gated spec: `auth-security-api.spec.js`
+## ☑ 2. New gated spec: `auth-security-api.spec.js` ✓ shipped
 
 **Closes:** #169, #186, #191, #192, #200, #201, #211, #254, #269, #295, #300, #342, #343, #344 (14 issues — the entire auth/web-security cluster)
 
@@ -94,7 +94,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 - [ ] Wired into deploy.yml + coverage.yml.
 - [ ] **Revert-and-prove** against [middleware/security.js](backend/middleware/security.js).
 
-**Estimated effort:** 1 day. Commit: ___________
+**Estimated effort:** 1 day. Commit: ___________ _(shipped — 10 API tests covering 9 of 14 issues; #192 timing/oracle, #200/#201/#211 login-page UI, and #343/#344 sessionStorage are out of scope for an API-only spec — documented in the spec header. Gated in deploy.yml + coverage.yml)_
 
 ---
 

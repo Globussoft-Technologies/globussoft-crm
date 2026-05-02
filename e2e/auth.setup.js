@@ -53,23 +53,37 @@ setup('authenticate and save storage state', async ({ page, request }) => {
   expect(loginResponse.ok()).toBeTruthy();
   const loginData = await loginResponse.json();
   expect(loginData.token).toBeTruthy();
+  expect(loginData.user).toBeTruthy();
+  expect(loginData.tenant).toBeTruthy();
 
   console.log('[auth.setup] Got token via admin login');
 
   // Navigate to /login (sets the origin so storage writes are scoped to
-  // the demo origin) then seed BOTH localStorage and sessionStorage with
-  // the token. localStorage is the one Playwright actually captures via
-  // storageState; sessionStorage is belt-and-braces in case the app's
-  // migration path changes. Same key name ('token') in both places.
+  // the demo origin) then seed localStorage with token + user + tenant.
+  //
+  // KEY INSIGHT (the bug that broke ~100 chromium tests in e2e-full release
+  // validation): App.jsx reads `user` and `tenant` from localStorage in its
+  // useState initializers. Without those, `isAdmin` and `isManager` are
+  // false on first render, and Sidebar.jsx's `managerOnly` filter hides
+  // Marketing / Sequences / Reports / Forecasting / Approvals / etc. UI
+  // tests asserting those sidebar links time out at 8s with "element not
+  // found". So token alone isn't enough — we need user + tenant too.
+  //
+  // sessionStorage gets the token as belt-and-braces (Playwright's
+  // storageState only captures localStorage + cookies; the App.jsx legacy-
+  // localStorage migration on cold start moves token → sessionStorage so
+  // production users would have it that way).
   await page.goto('/login');
-  await page.evaluate((token) => {
+  await page.evaluate(({ token, user, tenant }) => {
     localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(user));
+    localStorage.setItem('tenant', JSON.stringify(tenant));
     try {
       sessionStorage.setItem('token', token);
     } catch (_e) {
       // sessionStorage can be disabled in some private modes; ignore.
     }
-  }, loginData.token);
+  }, { token: loginData.token, user: loginData.user, tenant: loginData.tenant });
 
   // Visit / so the SPA boots, runs its legacy-localStorage migration
   // (App.jsx), and confirms it sees the token. If we save storageState

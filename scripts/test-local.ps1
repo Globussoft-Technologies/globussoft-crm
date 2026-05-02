@@ -207,6 +207,20 @@ if (-not $SkipApi) {
     Write-Host "=== 4. playwright api_tests gate ===" -ForegroundColor Cyan
     Write-Host "    BASE_URL = $BaseUrl"
 
+    # The chromium project's playwright.config has
+    # `storageState: 'playwright/.auth/user.json'`. CI's deploy.yml
+    # pre-creates an empty stub before running specs (since we use
+    # --no-deps, the auth.setup project that would normally write
+    # this file doesn't run). Mirror that here so Playwright doesn't
+    # hang on the missing file.
+    $authDir = Join-Path $root "e2e\playwright\.auth"
+    $authFile = Join-Path $authDir "user.json"
+    if (-not (Test-Path $authFile)) {
+        New-Item -ItemType Directory -Path $authDir -Force | Out-Null
+        Set-Content -Path $authFile -Value '{"cookies":[],"origins":[]}' -NoNewline
+        Write-Host "    (pre-created Playwright storage state stub)" -ForegroundColor DarkGray
+    }
+
     # Default to the canonical gate list from deploy.yml. Update both
     # when adding a new gated spec.
     if ($Specs.Count -eq 0) {

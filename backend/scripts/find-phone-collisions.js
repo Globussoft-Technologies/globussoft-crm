@@ -29,5 +29,23 @@ const TENANT_ID = parseInt(process.env.TENANT_ID || '2', 10);
     }
   }
   console.log(`\nTotal collision groups: ${groups}`);
+
+  // Also report rows with phone but no normalizedPhone (failed to backfill)
+  // and what they'd conflict with if we tried to set it.
+  const stuck = all.filter((p) => !p.normalizedPhone);
+  if (stuck.length) {
+    console.log(`\nRows with phone but normalizedPhone=null (${stuck.length}):`);
+    for (const r of stuck) {
+      const norm = normalizePhone(r.phone);
+      const conflict = await prisma.patient.findFirst({
+        where: { tenantId: TENANT_ID, normalizedPhone: norm, NOT: { id: r.id } },
+        select: { id: true, name: true, phone: true },
+      });
+      console.log(
+        `  id=${r.id}  name=${JSON.stringify(r.name)}  phone=${r.phone}  would-norm-to=${norm}  conflicts-with=${conflict ? `id=${conflict.id} name=${JSON.stringify(conflict.name)}` : 'NONE'}`
+      );
+    }
+  }
+
   await prisma.$disconnect();
 })();

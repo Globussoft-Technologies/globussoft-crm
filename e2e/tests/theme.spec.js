@@ -39,7 +39,14 @@ test.describe('Settings — Theme Toggle', () => {
     expect(['dark', 'light', null]).toContain(dataTheme);
   });
 
-  test('toggles to light mode when switch button is clicked', async ({ page }) => {
+  // SKIPPED 5 tests below — the dark-mode toggle was deliberately disabled
+  // in v3.2.3 (#264) with "coming soon" copy until a real dark theme
+  // stylesheet ships. The toggle button still renders but is `disabled`,
+  // and the "Switch to Light Mode" / "Switch to Dark Mode" labels were
+  // dropped. These tests pin the OLD interactive behavior; un-skip them
+  // when the dark theme actually lands. Tracked in TODOS.md.
+
+  test.skip('toggles to light mode when switch button is clicked', async ({ page }) => {
     await page.waitForTimeout(1500);
 
     const toggleBtn = page
@@ -55,7 +62,7 @@ test.describe('Settings — Theme Toggle', () => {
     expect(dataTheme).toBe('light');
   });
 
-  test('light mode changes background color', async ({ page }) => {
+  test.skip('light mode changes background color', async ({ page }) => {
     await page.waitForTimeout(1500);
 
     // Toggle to light mode
@@ -74,7 +81,7 @@ test.describe('Settings — Theme Toggle', () => {
     expect(bgColor).not.toBe('rgb(11, 12, 16)');
   });
 
-  test('toggles back to dark mode', async ({ page }) => {
+  test.skip('toggles back to dark mode', async ({ page }) => {
     await page.waitForTimeout(1500);
 
     // First toggle to light
@@ -98,7 +105,7 @@ test.describe('Settings — Theme Toggle', () => {
     expect(dataTheme).toBe('dark');
   });
 
-  test('persists theme choice across page reload', async ({ page }) => {
+  test.skip('persists theme choice across page reload', async ({ page }) => {
     await page.waitForTimeout(1500);
 
     // Toggle to light
@@ -122,12 +129,10 @@ test.describe('Settings — Theme Toggle', () => {
     expect(dataTheme).toBe('light');
   });
 
-  test('light mode screenshot', async ({ page }) => {
-    // Visual screenshot is informational only and doesn't compare against a
-    // baseline. In CI we skip it because the baseline can drift across
-    // browsers/viewports and provides no signal beyond the assertions in the
-    // other tests. Run locally for visual review.
-    test.skip(!!process.env.CI, 'Visual screenshots skipped in CI (no baseline comparison)');
+  test.skip('light mode screenshot', async ({ page }) => {
+    // SKIPPED — same root cause as the toggle tests above (#264).
+    // Original gate was CI-only; now permanently skipped because there
+    // is no working "Switch to Light Mode" button to click.
 
     await page.waitForTimeout(1500);
 

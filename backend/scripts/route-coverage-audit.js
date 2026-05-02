@@ -29,23 +29,54 @@ const PRD_SKIPPED = new Set([
 // Build a map: routeFile.js → mountPath
 function readMountsFromServerJs() {
   const src = fs.readFileSync(SERVER_JS, 'utf8');
-  // Pattern: app.use("/api/<path>", <routeVarName>);
-  // Plus the require lines: const fooRoutes = require("./routes/foo");
-  const requireRe = /const\s+(\w+)\s*=\s*require\(["']\.\/routes\/([\w/-]+)["']\)/g;
+
+  // Two `require` patterns:
+  //   const fooRoutes = require("./routes/foo");
+  //   const { router: fooRoutes, publicRouter: fooPublic } = require("./routes/foo");
+  // Both need to map every variable name introduced to the same file.
+  const singleRe = /const\s+(\w+)\s*=\s*require\(["']\.\/routes\/([\w/-]+)["']\)/g;
+  const destructRe = /const\s*\{([^}]+)\}\s*=\s*require\(["']\.\/routes\/([\w/-]+)["']\)/g;
   const useRe = /app\.use\(["']\/api\/?([^"']*)["']\s*,\s*(\w+)\s*\)/g;
+  const useNonApiRe = /app\.use\(["']\/((?:p|book)[^"']*)["']\s*,\s*(\w+)\s*\)/g;
+  // ^ matches public mounts like `app.use("/p", landingPagesPublic)` or
+  // `app.use("/book", ...)` — these aren't under /api but still belong to
+  // a route file.
 
   const varToFile = {};
   let m;
-  while ((m = requireRe.exec(src))) {
+  while ((m = singleRe.exec(src))) {
     varToFile[m[1]] = m[2] + '.js';
   }
-  const fileToMount = {};
-  while ((m = useRe.exec(src))) {
-    const mountPath = '/' + m[1]; // strip leading "/api/" was the literal; we kept the rest
-    const file = varToFile[m[2]];
-    if (file) fileToMount[file] = '/api/' + m[1];
+  while ((m = destructRe.exec(src))) {
+    const file = m[2] + '.js';
+    // Parse the destructure body: "router: fooRoutes, publicRouter: fooPublic"
+    // → variables fooRoutes and fooPublic both map to file.
+    for (const piece of m[1].split(',')) {
+      const trimmed = piece.trim();
+      if (!trimmed) continue;
+      // "name" or "name: alias" — alias is the variable name we want
+      const parts = trimmed.split(':').map((s) => s.trim());
+      const varName = parts.length > 1 ? parts[1] : parts[0];
+      if (/^\w+$/.test(varName)) varToFile[varName] = file;
+    }
   }
-  return fileToMount;
+
+  // fileToMounts: file → array of mount paths (one file may mount at
+  // both /api/landing-pages AND /p, so we keep them as a list).
+  const fileToMounts = {};
+  function record(file, mount) {
+    if (!file) return;
+    if (!fileToMounts[file]) fileToMounts[file] = [];
+    fileToMounts[file].push(mount);
+  }
+  while ((m = useRe.exec(src))) {
+    record(varToFile[m[2]], '/api/' + m[1]);
+  }
+  while ((m = useNonApiRe.exec(src))) {
+    // Captures public mounts like /p (landing pages) or /book (booking).
+    record(varToFile[m[2]], '/' + m[1]);
+  }
+  return fileToMounts;
 }
 
 // Get the gated spec list from deploy.yml
@@ -72,12 +103,12 @@ const routeFiles = fs
   .filter((f) => f.endsWith('.js'))
   .sort();
 
-const fileToMount = readMountsFromServerJs();
+const fileToMounts = readMountsFromServerJs();
 
-// For each route, find which specs reference it
+// For each route, find which specs reference any of its mount paths.
 const audit = routeFiles.map((rf) => {
-  const apiPath = fileToMount[rf];
-  if (!apiPath) {
+  const mounts = fileToMounts[rf];
+  if (!mounts || mounts.length === 0) {
     return {
       file: rf,
       mount: '(not mounted in server.js — orphan route file)',
@@ -88,9 +119,11 @@ const audit = routeFiles.map((rf) => {
       orphan: true,
     };
   }
+  const mountDisplay = mounts.join(' + ');
 
+  // Match a spec if ANY of the route's mount paths appear in its content.
   const refs = specFiles
-    .filter((sf) => sf.content.includes(apiPath))
+    .filter((sf) => mounts.some((m) => sf.content.includes(m)))
     .map((sf) => sf.name);
 
   const gatedRefs = refs.filter((s) => gatedSpecs.has(s));
@@ -98,7 +131,7 @@ const audit = routeFiles.map((rf) => {
 
   return {
     file: rf,
-    mount: apiPath,
+    mount: mountDisplay,
     prdSkipped: PRD_SKIPPED.has(rf),
     gatedSpecs: gatedRefs,
     ungatedSpecs: ungatedRefs,

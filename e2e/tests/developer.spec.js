@@ -90,19 +90,19 @@ test.describe('Developer Portal — API Keys & Webhooks', () => {
     await expect(registerBtn).toBeVisible({ timeout: 8000 });
   });
 
-  test('generating an API key shows the raw key in an alert', async ({ page }) => {
+  test('generating an API key shows the raw key in a notify toast', async ({ page }) => {
+    // The original test pinned `window.alert(rawKey)` and listened for the
+    // browser dialog event. v3.2.1 (commit e2c0b88) migrated 238 native
+    // window.alert/confirm/prompt calls to HTML notify modals + toasts via
+    // frontend/src/utils/notify.jsx. Developer.jsx:36 now calls
+    // notify.success(`ATTENTION: This is the ONLY time...${rawKey}`, ...).
+    // The toast renders as a `[data-notify-modal]` element with the message
+    // as its text content. This rewrite asserts against that.
     await page.waitForTimeout(1000);
 
     const keyNameInput = page
       .locator('input[placeholder*="key name" i], input[placeholder*="name" i]')
       .first();
-
-    let alertText = '';
-    page.on('dialog', async (dialog) => {
-      alertText = dialog.message();
-      await dialog.accept();
-    });
-
     await keyNameInput.fill(`E2E Test Key ${Date.now()}`);
 
     const generateBtn = page
@@ -111,13 +111,16 @@ test.describe('Developer Portal — API Keys & Webhooks', () => {
       .first();
     await generateBtn.click();
 
-    await page.waitForTimeout(2000);
+    // Toast may take a tick to mount. The notify component renders a
+    // `[data-notify-modal]` (success | warning | error | info) attribute
+    // on the toast root.
+    const toast = page.locator('[data-notify-modal]').first();
+    await expect(toast).toBeVisible({ timeout: 8000 });
 
-    // The key should have been shown in an alert
-    if (alertText) {
-      expect(alertText).toContain('ATTENTION');
-    }
-    // No crash regardless
+    const text = await toast.innerText();
+    expect(text).toContain('ATTENTION');
+
+    // No crash; still on the developer page.
     await expect(page).toHaveURL(/\/developer/);
   });
 

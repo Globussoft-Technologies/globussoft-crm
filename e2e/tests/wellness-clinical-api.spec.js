@@ -165,10 +165,16 @@ test.afterAll(async ({ request }) => {
   for (const id of createdServiceIds) {
     await authPut(request, `/api/wellness/services/${id}`, { isActive: false }).catch(() => {});
   }
-  // Locations: best-effort name-stamp so a reviewer can tell they're test rows.
+  // Locations: no DELETE endpoint exists. Best-effort cleanup combines
+  // (a) RUN_TAG-prefixed rename so a reviewer can grep the test rows,
+  // (b) isActive=false so list/public/booking endpoints filter them out.
+  // Without (b), demo accumulates ~7 active "Ranchi" locations per spec
+  // run (2026-05-02 incident: 11 stranded rows on demo, all renamed but
+  // still active, polluted the admin /wellness/locations page).
   for (const id of createdLocationIds) {
     await authPut(request, `/api/wellness/locations/${id}`, {
       name: `${RUN_TAG}_CLEANED_LOC_${id}`,
+      isActive: false,
     }).catch(() => {});
   }
 });

@@ -135,19 +135,35 @@ test.describe.serial('No-show risk widget (PRD §6.8)', () => {
 
     await page.goto(`${BASE_URL}/login`);
     // App.jsx reads token + user + tenant from localStorage in its useState
-    // initializers — without `user` the Sidebar's managerOnly filter hides
-    // most links and the Owner Dashboard renders incomplete (missing the
-    // admin-gated KPI tiles). All three must be set.
+    // initializers, then migrates token to sessionStorage on cold start
+    // (App.jsx:262-267 per #343). Write to BOTH so we don't race the
+    // migration on the second goto.
     await page.evaluate(({ t, ten, u }) => {
       localStorage.setItem('token', t);
+      sessionStorage.setItem('token', t);
       if (ten) localStorage.setItem('tenant', JSON.stringify(ten));
       if (u) localStorage.setItem('user', JSON.stringify(u));
     }, { t: token, ten: tenant, u: user });
-    await page.goto(`${BASE_URL}/wellness`);
-    await page.waitForLoadState('networkidle', { timeout: 20000 });
 
-    // The card label is "No-show risk".
-    await expect(page.getByText(/No-show risk/i).first()).toBeVisible({ timeout: 15000 });
+    // Don't `waitForLoadState('networkidle')` — the Sidebar opens a
+    // socket.io connection on mount (Sidebar.jsx:76) which polls and
+    // never settles. Instead, deterministically wait for the dashboard
+    // data fetch to come back. The route runs ~6 Prisma queries and
+    // can take 5-8s on a busy demo, so the response wait is the right
+    // signal for "data is ready, StatCards are about to render".
+    const [, dashboardRes] = await Promise.all([
+      page.goto(`${BASE_URL}/wellness`),
+      page.waitForResponse(
+        (r) => /\/api\/wellness\/dashboard/.test(r.url()) && r.status() === 200,
+        { timeout: 25000 }
+      ),
+    ]);
+    expect(dashboardRes.ok()).toBeTruthy();
+
+    // The card label is "No-show risk". Bump the visibility timeout —
+    // even after data is in, the card needs a paint cycle and the
+    // grid layout to settle.
+    await expect(page.getByText(/No-show risk/i).first()).toBeVisible({ timeout: 20000 });
     // Sub-line shows "of N upcoming"
     await expect(page.getByText(/of \d+ upcoming/i).first()).toBeVisible();
   });

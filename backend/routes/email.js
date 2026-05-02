@@ -4,6 +4,32 @@ const prisma = require('../lib/prisma');
 
 const router = express.Router();
 
+// #402: the sidebar at frontend/src/components/Sidebar.jsx:56 polls
+// `GET /api/email?unread=1` every 60s to render the Inbox counter.
+// Pre-this-handler the route was undefined, Express fell through to
+// the SPA static handler, returned the index.html shell, the JSON
+// parser threw, fetchApi raised, and the global toast surfaced as
+// "Not found." on every page.
+//
+// Shape contract with the sidebar (Sidebar.jsx:51):
+//   safeLen = (p) => p.then(r => Array.isArray(r) ? r.length : (r?.total ?? 0))
+//
+// So either an array or `{ total }` works. Returning `{ total }` is
+// cheap (count query) and avoids paginating an unbounded list.
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+    if (req.query.unread === '1') where.read = false;
+    if (req.query.folder === 'inbox') where.direction = 'INBOUND';
+    if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
+    const total = await prisma.emailMessage.count({ where });
+    res.json({ total });
+  } catch (_err) {
+    // Soft-fail: the sidebar should never blow up the page.
+    res.json({ total: 0 });
+  }
+});
+
 router.get('/threads', verifyToken, async (req, res) => {
   try {
     const emails = await prisma.emailMessage.findMany({

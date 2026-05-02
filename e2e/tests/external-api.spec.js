@@ -309,6 +309,60 @@ test.describe('External API — /leads', () => {
     createdLeadId = body.id;
   });
 
+  test('POST /leads 201 with verbose payload — Activity.description not truncated (#X-db.Text migration)', async ({ request }) => {
+    // Regression for the schema migration that promoted Activity.description
+    // from VARCHAR(191) to @db.Text. Before the migration the route had a
+    // 188-char clamp to prevent Prisma "value too long" errors; without it
+    // a verbose lead payload (note + utm + junk-filter reasons concatenated
+    // with " | ") routinely overflowed and 500'd the entire POST.
+    //
+    // This test sends a payload guaranteed to produce a >191-char
+    // description, then verifies via the bearer-token CRM read path that
+    // the activity row carries the full text.
+    const key = await requireKey(request);
+    const longNote = `${RUN_TAG} ` +
+      'Patient called asking about treatment options for melasma, ' +
+      'mentioned previous dermatologist had recommended hydroquinone but ' +
+      'they had concerns about long-term use. Wants to know about ' +
+      'alternative pigmentation treatments and pricing.';
+    const verboseEmail = `verbose.${RUN_TAG}@example.in`;
+    const res = await post(request, '/api/v1/external/leads', {
+      name: `Anjali Mehta ${RUN_TAG}`,
+      phone: '9988776655',
+      email: verboseEmail,
+      source: 'callified',
+      note: longNote,
+      utm: { source: 'instagram', medium: 'organic', campaign: 'melasma-aug', content: 'reel-12', term: 'pigmentation' },
+    }, key);
+    expect(res.status(), `lead create with verbose payload: ${await res.text()}`).toBe(201);
+    const created = await res.json();
+    expect(typeof created.id).toBe('number');
+
+    // Read back via the CRM bearer-auth path to inspect the Activity row
+    // the route created. /api/contacts/:id includes activities[] inline.
+    if (!jwtToken) test.skip(true, 'wellness admin JWT unavailable; cannot verify activity description');
+    const readRes = await request.get(`${BASE_URL}/api/contacts/${created.id}`, {
+      headers: { Authorization: `Bearer ${jwtToken}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(readRes.status()).toBe(200);
+    const contact = await readRes.json();
+    expect(Array.isArray(contact.activities)).toBe(true);
+
+    // The route writes ONE activity (type=Note for clean lead, JunkFilter
+    // when verdict.isJunk). Find the one carrying our note text.
+    const a = contact.activities.find((x) => typeof x.description === 'string' && x.description.includes(RUN_TAG));
+    expect(a, `expected to find activity with RUN_TAG ${RUN_TAG} in: ${JSON.stringify(contact.activities.map((x) => (x.description || '').slice(0, 60)))}`).toBeTruthy();
+
+    // The description is built as `[note, utm=..., junk-filter: ...].join(" | ")`.
+    // With the long note + 5-field utm JSON, this is comfortably > 191 chars.
+    expect(a.description.length, 'pre-migration this would be clamped at 191').toBeGreaterThan(191);
+    // Full longNote text round-trips intact (no truncation).
+    expect(a.description).toContain('alternative pigmentation treatments and pricing.');
+    // Last char is not the ellipsis from the old 188-char clamp.
+    expect(a.description.endsWith('...')).toBe(false);
+  });
+
   test('POST /leads 200 + _deduped on duplicate email under same tenant', async ({ request }) => {
     // Re-POST the same email — should hit the existing-row branch and return
     // 200 instead of 201, with _deduped=true.

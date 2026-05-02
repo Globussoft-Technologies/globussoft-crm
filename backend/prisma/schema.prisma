@@ -221,7 +221,7 @@ model Contact {
 model Activity {
   id          Int      @id @default(autoincrement())
   type        String // Email, Call, Meeting, Note
-  description String
+  description String   @db.Text
   createdAt   DateTime @default(now())
   contactId   Int
   contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)

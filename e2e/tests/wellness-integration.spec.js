@@ -41,7 +41,12 @@ const auth = () => ({ Authorization: `Bearer ${TOKEN}` });
 test.describe.serial('Wellness integration — Concurrent race conditions', () => {
   test.beforeAll(async ({ request }) => { await getToken(request); });
 
-  test('1. Two parallel Patient creates with the same phone → both 201, distinct IDs', async ({ request }) => {
+  test('1. Two parallel Patient creates with the same phone → exactly one 201 + one 409 (#401)', async ({ request }) => {
+    // Pre-#401 the test asserted "both 201, distinct IDs" because phone
+    // uniqueness wasn't enforced. #401 added a Prisma @@unique constraint
+    // on (tenantId, phoneNormalized) and the route returns 409 DUPLICATE_PHONE
+    // on the second insert. Under concurrent POST one wins (201) and the
+    // other loses on the constraint (409). Test now asserts that contract.
     const phone = `+9197${Date.now().toString().slice(-8)}`;
     const body1 = { name: `Race Patient A ${Date.now()}`, phone, source: 'walk-in' };
     const body2 = { name: `Race Patient B ${Date.now()}`, phone, source: 'walk-in' };
@@ -50,15 +55,13 @@ test.describe.serial('Wellness integration — Concurrent race conditions', () =
       request.post(`${API}/wellness/patients`, { headers: auth(), data: body1 }),
       request.post(`${API}/wellness/patients`, { headers: auth(), data: body2 }),
     ]);
-    expect(r1.status()).toBe(201);
-    expect(r2.status()).toBe(201);
-    const p1 = await r1.json();
-    const p2 = await r2.json();
-    expect(p1.id).toBeTruthy();
-    expect(p2.id).toBeTruthy();
-    expect(p1.id).not.toBe(p2.id);
-    expect(p1.phone).toBe(phone);
-    expect(p2.phone).toBe(phone);
+    const statuses = [r1.status(), r2.status()].sort();
+    expect(statuses, `expected one 201 + one 409, got ${JSON.stringify(statuses)}`).toEqual([201, 409]);
+
+    // Whichever one won should have a real id + the requested phone
+    const winner = r1.status() === 201 ? await r1.json() : await r2.json();
+    expect(winner.id).toBeTruthy();
+    expect(winner.phone).toBe(phone);
   });
 
   test('2. Two parallel Visit updates → no merge corruption; final state is one of the two', async ({ request }) => {

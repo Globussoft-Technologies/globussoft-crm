@@ -126,13 +126,18 @@ test.describe.serial('No-show risk widget (PRD §6.8)', () => {
       data: { email: 'admin@wellness.demo', password: 'password123' },
     });
     expect(loginRes.ok()).toBeTruthy();
-    const { token, tenant } = await loginRes.json();
+    const { token, tenant, user } = await loginRes.json();
 
     await page.goto(`${BASE_URL}/login`);
-    await page.evaluate(({ t, ten }) => {
+    // App.jsx reads token + user + tenant from localStorage in its useState
+    // initializers — without `user` the Sidebar's managerOnly filter hides
+    // most links and the Owner Dashboard renders incomplete (missing the
+    // admin-gated KPI tiles). All three must be set.
+    await page.evaluate(({ t, ten, u }) => {
       localStorage.setItem('token', t);
       if (ten) localStorage.setItem('tenant', JSON.stringify(ten));
-    }, { t: token, ten: tenant });
+      if (u) localStorage.setItem('user', JSON.stringify(u));
+    }, { t: token, ten: tenant, u: user });
     await page.goto(`${BASE_URL}/wellness`);
     await page.waitForLoadState('networkidle', { timeout: 20000 });
 

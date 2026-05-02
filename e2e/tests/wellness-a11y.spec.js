@@ -107,6 +107,10 @@ test.describe('Wellness a11y — public + login pages', () => {
 test.describe.serial('Wellness a11y — owner pages (authenticated as Demo Admin)', () => {
   /** @type {string} */
   let token;
+  /** @type {object|null} */
+  let user = null;
+  /** @type {object|null} */
+  let tenant = null;
 
   test.beforeAll(async ({ request }) => {
     const r = await request.post(`${BASE_URL}/api/auth/login`, {
@@ -115,13 +119,23 @@ test.describe.serial('Wellness a11y — owner pages (authenticated as Demo Admin
     expect(r.ok()).toBeTruthy();
     const d = await r.json();
     token = d.token;
+    user = d.user || null;
+    tenant = d.tenant || null;
     expect(token).toBeTruthy();
   });
 
   async function loginAsWellnessAdmin(page) {
-    // Visit a non-API path first so localStorage is bound to the right origin
+    // Visit a non-API path first so localStorage is bound to the right origin.
+    // App.jsx reads token + user + tenant in its useState initializers — without
+    // user the Sidebar's managerOnly filter hides clinical nav and the page
+    // axe scans (Owner Dashboard, Patients, Services) renders in a degraded
+    // unauthenticated-ish state.
     await page.goto(`${BASE_URL}/login`);
-    await page.evaluate((t) => localStorage.setItem('token', t), token);
+    await page.evaluate(({ t, u, ten }) => {
+      localStorage.setItem('token', t);
+      if (u) localStorage.setItem('user', JSON.stringify(u));
+      if (ten) localStorage.setItem('tenant', JSON.stringify(ten));
+    }, { t: token, u: user, ten: tenant });
   }
 
   test('2. /wellness — owner dashboard', async ({ page }) => {

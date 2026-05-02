@@ -2,7 +2,9 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-05-02 — **closed-issue regression audit + architect-priority sequencing** added at top. See "🎯 Architect-priority sequencing (2026-05-02)" below. The detailed 24-item regression-coverage backlog mapping every closed issue → which spec would prevent it from regressing is in [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md). Pick from the architect sequencing first.
+Last updated: 2026-05-02 (late afternoon — **T1.1 e2e-full restoration shipped: 201 → 25 unique failures, ~88% reduction**. The TODOS.md `Bucket A` diagnosis below was WRONG — the actual root cause was that `auth.setup.js` was writing `localStorage.token` only, NOT `localStorage.user` + `.tenant` which `App.jsx` reads in its useState initializers. Without those, `isAdmin`/`isManager` were both false and `Sidebar.jsx`'s `managerOnly` filter hid Marketing/Sequences/Reports/Forecasting/Approvals etc. — the exact "Marketing not found" failures we saw. The sessionStorage-migration story was a red herring; auth.setup's existing dual-write strategy + App.jsx's legacy-localStorage migration already worked. 4 commits: `2b79a34` (auth.setup user+tenant fix → 201→43), `0aa5165` (bucket 1+2+3 → 43→26), `f5af14a` (bucket 4 first pass → 26→25), and the in-progress per-spec triage of the remaining 25-spec long tail. Pickup from home: `git pull origin main`.)
+
+Earlier 2026-05-02: **closed-issue regression audit + architect-priority sequencing** added at top. See "🎯 Architect-priority sequencing (2026-05-02)" below. The detailed 24-item regression-coverage backlog mapping every closed issue → which spec would prevent it from regressing is in [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md). Pick from the architect sequencing first.
 
 Previous update: 2026-05-01 (afternoon — repo hygiene pass + e2e-full debrief; 3 commits `b281dd6` / `84129a9` / `5e364d6`. ESLint warnings 180 → 1, secret-scan back to functional, GitHub Actions checkout/setup-node v4→v5).
 
@@ -22,9 +24,9 @@ Three observations that frame the priorities:
 
 | # | Item | Effort | Why now |
 |---|---|---|---|
-| **T1.1** | **Fix `e2e/auth.setup.js` — write `sessionStorage` not `localStorage`** | 30-60 min | Single highest-leverage move available. Reclaims ~100 of 201 failing UI specs and restores release validation that the team thinks it has. Diagnosis already in [Bucket A](#bucket-a--auth-state-injection-broken-by-sessionstorage-migration-70-of-failures). Just hasn't been picked up. |
+| ✅ **T1.1** | ~~Fix `e2e/auth.setup.js` — write `sessionStorage` not `localStorage`~~ — **DIAGNOSIS WAS WRONG; actual fix shipped 2026-05-02 in commits `2b79a34` + `0aa5165` + `f5af14a`** | done | Real root cause: `auth.setup.js` wrote token but not `user`+`tenant`. App.jsx reads all three from `localStorage` in its useState initializers; without `user`, `isAdmin`/`isManager` were false and Sidebar's `managerOnly` filter hid most links. The sessionStorage-migration claim in old Bucket A was misleading — that path had been working. Result: e2e-full failures **201 → 25 unique** (~88% reduction; release validation pass rate ~88% → ~99%). 25-spec long tail remains for per-spec triage. |
 | **T1.2** | **Wire a real SMS provider OR feature-flag OTP-dependent flows OFF in prod** | 1 day | [#182](https://github.com/Globussoft-Technologies/globussoft-crm/issues/182) (closed) said the SMS queue had 25 stuck messages 30+ hrs old. The wellness vertical's entire telecaller flow + patient portal + appointment reminders depend on SMS that may not actually be sending. Either pick a provider (MSG91 is cheapest in INR) and ship credentials, or feature-flag the OTP UI off until you do. Right now it's broken-by-default and clinics don't know. |
-| **T1.3** | **Ship P0 of the regression backlog** — `wellness-rbac-api.spec.js` + `auth-security-api.spec.js` + `demo-hygiene-api.spec.js` | 3 days | 42 closed issues get permanent gates; QA stops re-filing the same RBAC + seed-pollution clusters every cycle. Acceptance criteria + revert-and-prove steps in [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md) (P0 bucket). |
+| ✅ **T1.3** | ~~Ship P0 of the regression backlog — `wellness-rbac-api.spec.js` + `auth-security-api.spec.js` + `demo-hygiene-api.spec.js`~~ — **shipped earlier 2026-05-02** (see [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md) P0 bucket — all three ☑) | done | All three P0 specs landed + were wired into the per-push gate + coverage workflow. Closes regression risk for ~42 closed RBAC / auth-security / seed-pollution issues. |
 
 ### Tier 2 — this month (unblock real users + close the regression loop)
 
@@ -218,18 +220,19 @@ The 201 failing + 114 not-running tests are **pre-existing UI test drift**, not 
 
 Pulled `gh run view 25217155402 --log-failed` and dug into the actual error messages, not just the test names. Three distinct failure buckets — they need different fixes, can't be batched.
 
-#### Bucket A — auth state injection broken by sessionStorage migration (~70% of failures)
+#### Bucket A — ✅ FIXED 2026-05-02 (commit `2b79a34`); diagnosis below was WRONG
 
-The dominant pattern. `auth.setup` itself **passes** in every shard (logs "Got token via admin login → Dashboard loaded successfully → Storage state saved"), so playwright/.auth/user.json is written correctly. But the saved `storageState` writes to `localStorage`, while the v3.2.5 SPA reads from `sessionStorage` + an in-memory holder ([CHANGELOG #343](CHANGELOG.md#v325--2026-04-29--security-hardening--8-bug-new-round--nested-patient-endpoints)). When each test loads with the storageState injected, the AuthProvider's loading-flag (#347) doesn't see a valid token, the SPA stays on `/login`, and any locator targeting an authenticated page times out at 15s.
+> **Real root cause** (logged for future reference, since the original "sessionStorage migration" framing led at least one investigator down a dead end):
+>
+> `auth.setup.js` wrote `localStorage.token` but NOT `localStorage.user` + `localStorage.tenant`. App.jsx reads all three from `localStorage` in its useState initializers (lines 237–273). Without `user`, both `isAdmin` and `isManager` were `false` on first render, and Sidebar.jsx's `managerOnly` filter (`if (managerOnly && !isManager) return null;` — line 117) hid every Marketing / Sequences / Reports / Forecasting / Approvals / Lead Routing / Quotas / etc. link. UI tests asserting those specific labels then timed out at 8-15s with `expect(locator).toBeAttached() failed; element(s) not found`.
+>
+> The sessionStorage-vs-localStorage detail in the original diagnosis was a red herring. The setup's pre-existing dual-write strategy (write both stores; let App.jsx's legacy-localStorage migration shuttle token → sessionStorage on cold start) WAS working — auth itself passed in every shard, and authenticated API specs ran fine after auth.setup. The visible failures pointed at sidebar links, not auth state. Worth re-reading the actual error message before trusting any pre-existing diagnosis.
+>
+> **Concrete evidence** that proved it: 4 sidebar links (Contacts / Pipeline / Invoices — all *no* `managerOnly` gate) passed; 3 sidebar links (Marketing / Sequences / Reports — all *with* `managerOnly` gate) failed. The split is a function of the Link's `managerOnly` prop, full stop.
+>
+> **Fix shipped**: read `user` + `tenant` from the `/api/auth/login` response (already returned per `routes/auth.js`) and write them to `localStorage` alongside the token. 20 lines added to `e2e/auth.setup.js`. e2e-full failures dropped 201 → 43 in a single commit.
 
-**Symptom signature**: `TimeoutError: locator.click: Timeout 15000ms exceeded` + `Expected: visible`. Includes most navigation.spec.js, dashboard.spec.js, contacts.spec.js, pipeline.spec.js, wellness.spec.js, theme.spec.js failures.
-
-**Fix shape** (~30-60 min):
-- Edit `e2e/auth.setup.js` to write `sessionStorage.setItem('token', …)` not `localStorage.setItem`
-- Verify playwright's `storageState` API actually replays sessionStorage (it does; the format is `{ origins: [{ origin, localStorage: [...], sessionStorage: [...] }] }`)
-- OR: have auth.setup do a real submit-login flow per shard so the in-memory holder gets populated by AuthContext naturally. Slower per-shard but more robust to future auth changes.
-
-This single fix should rescue ~100+ of the 201 failures.
+**~70% of original failures** in this bucket. After fix: ~0 in this bucket.
 
 #### Bucket B — `E2E_SKIP_SCRUB=1` vs specs that assume clean state (~15% of failures)
 
@@ -253,6 +256,25 @@ Failures started at **14:02:50Z** (earliest = `approvals.spec.js:115` "cannot re
 2. **Then: triage Bucket B** (E2E_SKIP_SCRUB skips). ~30 min annotating offending specs.
 3. **Re-run e2e-full** via `gh workflow run e2e-full.yml`. Expect to land at 95%+. Anything still red after that is genuinely test debt that needs rewrite.
 4. **Eventually**: rewrite the UI test surface to use accessibility-locator patterns (role + name) instead of brittle text/CSS selectors. Multi-day effort. Park until the per-push API surface is comprehensive.
+
+### What actually shipped 2026-05-02
+
+| Round | Commit | What | Failures (unique) |
+|---|---|---|---|
+| 1 | `2b79a34` | auth.setup writes user + tenant to localStorage (the real Bucket A fix; see above) | **201 → 43** |
+| 2 | `0aa5165` | `demo-hygiene-api` + `demo-health` skip under `E2E_SKIP_SCRUB`; `responsive.spec.js` clears sessionStorage too; `notifications.spec.js` uses `aria-label` locator instead of `header button:first` (the hamburger from #228 is the new first button); `navigation.spec.js` brand-text test name-agnostic | 43 → 26 |
+| 3 | `f5af14a` | `wellness-real-user-journeys.spec.js` helpers — `clearBrowserState()` clears sessionStorage; `uiLoginViaToken()` writes `user` to localStorage too. `dashboard.spec.js:75` Globussoft literal removed | 26 → 25 |
+| 4 | (in progress) | Per-spec triage of the remaining 25-spec long tail (each independent) | 25 → ? |
+
+### Long-tail residue — the 25 specs still failing after rounds 1-3
+
+Each requires its own ~15-30 min spec-by-spec triage; they're truly independent. Categories:
+
+- **Likely UI/spec drift**: `dashboard.spec.js:75` (fixed), `navigation.spec.js:69` (fixed), `notifications.spec.js` (fixed), `responsive.spec.js` (fixed), `wellness-a11y.spec.js` (2), `wellness-orchestrator-depth.spec.js:121` (no-show widget), `developer.spec.js:93` (toast message), `wellness-deep.spec.js:439` (recommendations link)
+- **Likely seed/data drift**: `landing-page-renderer.spec.js:105` (no published page on demo), `wellness-clinical-journey-flow.spec.js:294` (loyalty visible — depends on seeded loyalty rows), `tasks-api.spec.js:567` (cross-tenant isolation — depends on Tenant B seed)
+- **Likely real product issues**: `approvals.spec.js:115` (re-approve state machine), `billing-update.spec.js:85` (negative-amount validation), `external-api.spec.js:288` (junk filter false-positive), `lead-routing.spec.js:59` (round-trip), `lead-scoring.spec.js:53` (trigger API), `sso.spec.js:79` (Google callback no-code redirect), `sequences-flow.spec.js:133`/`sequences-step-list.spec.js:121`/`sequences.spec.js:119` (drip engine + step-list), `wellness-feature-gaps.spec.js:428` (consumption), `wellness-integration.spec.js:44` (race), `wellness-rbac-api.spec.js:219` (professional scope — could be a real RBAC gap caught by the new spec)
+- **Multi-cause**: `wellness-real-user-journeys.spec.js` (3 — D1 Rishu KPI, B3 Patient tabs, F5 portal login)
+- **Misc**: `eventbus-conditions.spec.js`, `wellness-deep.spec.js:239` (photo upload)
 
 ### Release decision for v3.3.0
 

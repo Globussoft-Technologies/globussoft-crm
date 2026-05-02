@@ -183,7 +183,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 7. New gated spec: `lead-routing-api.spec.js`
+## ☑ 7. New gated spec: `lead-routing-api.spec.js` ✓ shipped
 
 **Closes:** #245, #258, #299, #301, #302, #320, #332, #333, #350, #369, #370 (11 issues)
 
@@ -198,7 +198,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 - [ ] No rule names contain 13-digit timestamp suffixes after seed cleanup (caught by `demo-hygiene-api.spec.js`, but assert here too — #320).
 - [ ] Wired into deploy.yml + coverage.yml.
 
-**Estimated effort:** 1 day. Commit: ___________
+**Estimated effort:** 1 day. Commit: ___________ _(shipped — 25 tests covering 8 of 11 issues. #320 covered by demo-hygiene-api; #333 unrelated to this route; #370 is a UI dropdown.)_
 
 ---
 

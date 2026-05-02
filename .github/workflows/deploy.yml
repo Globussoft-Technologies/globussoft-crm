@@ -85,6 +85,18 @@ jobs:
           du -sh dist
           echo "::notice::Frontend bundle builds cleanly"
 
+      - name: Frontend — bundle-size budget gate (CI-6)
+        working-directory: frontend
+        # Compare per-chunk + total sizes against
+        # frontend/.bundle-size-budget.json. Fails if any chunk exceeds
+        # its budget OR total JS/CSS exceeds the global budget. Catches
+        # the class of regressions where a new dep silently bloats a
+        # vendor chunk by 10x without anyone noticing.
+        run: |
+          set -euo pipefail
+          npm run check:bundle-size
+          echo "::notice::Bundle-size budget OK"
+
   # ── 2. API_TESTS: run our pure-API specs against a CI-local backend ──
   # Spins up MySQL 8 service container, seeds, boots backend on :5000,
   # runs ci-smoke.spec.js (4 tests). Promoted from informational to

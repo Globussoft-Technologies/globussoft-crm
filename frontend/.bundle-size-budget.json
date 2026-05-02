@@ -1,0 +1,52 @@
+{
+  "//": "Bundle-size budget (CI-6 in TODOS.md). Chunks matched by glob pattern against dist/assets/. Each entry's `maxKB` is the hard cap — exceed it and CI fails with a per-chunk diff. The `comment` field is for humans + grep, not enforced.",
+  "//generated-on": "2026-05-02 — initial baseline + 30-50% headroom for organic growth",
+  "//baseline": {
+    "vendor-charts": "415 KB",
+    "vendor-react":  "175 KB",
+    "index":         "132 KB",
+    "vendor-flow":   "132 KB",
+    "vendor-icons":   "68 KB",
+    "all-js-total":  "~2 MB",
+    "all-css-total": "varies; ~150 KB"
+  },
+
+  "chunks": [
+    {
+      "pattern": "vendor-charts-*.js",
+      "maxKB": 600,
+      "comment": "recharts. Heavy chart library; keep watching. If this exceeds budget, evaluate lighter alternatives (chart.js, victory) or per-page lazy-load."
+    },
+    {
+      "pattern": "vendor-react-*.js",
+      "maxKB": 250,
+      "comment": "React + ReactDOM. Should NOT grow much; if it does, an unrelated dep is bundling React internals."
+    },
+    {
+      "pattern": "vendor-flow-*.js",
+      "maxKB": 200,
+      "comment": "reactflow (only the workflow + sequence builder need it; consider per-route lazy-load if size matters)"
+    },
+    {
+      "pattern": "vendor-icons-*.js",
+      "maxKB": 120,
+      "comment": "lucide-react icon barrel. Tree-shakable — bloat means someone imported the whole barrel instead of named icons."
+    },
+    {
+      "pattern": "index-*.js",
+      "maxKB": 250,
+      "comment": "Main SPA entry chunk. Critical-path; keep tight."
+    },
+    {
+      "pattern": "Dashboards-*.js",
+      "maxKB": 120,
+      "comment": "Dashboards page is the heaviest single feature page. Already 71 KB."
+    }
+  ],
+
+  "totals": {
+    "all-js-maxKB": 4096,
+    "all-css-maxKB": 300,
+    "comment": "Whole frontend/dist/assets/ JS + CSS. Catches the case where a new chunk pops in without being budgeted explicitly."
+  }
+}

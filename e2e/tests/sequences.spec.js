@@ -146,11 +146,14 @@ test.describe('Sequences — Workflow Automation (ReactFlow)', () => {
       const sequenceItem = page.locator('.sequence-list h4').filter({ hasText: 'E2E Automated Sequence Test' }).first();
       await expect(sequenceItem).toBeVisible({ timeout: 5000 });
 
-      // Trigger the backend debug tick
+      // Trigger the backend debug tick. Post-v3.2.5 the JWT lives in
+      // sessionStorage (#343); fall back to localStorage for older
+      // deployments.
       const res = await page.evaluate(async () => {
-        const resp = await fetch('/api/sequences/debug/tick', { 
+        const token = sessionStorage.getItem('token') || localStorage.getItem('token');
+        const resp = await fetch('/api/sequences/debug/tick', {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+          headers: { 'Authorization': `Bearer ${token}` }
         });
         return resp.json();
       });

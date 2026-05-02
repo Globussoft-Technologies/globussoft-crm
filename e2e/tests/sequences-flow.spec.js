@@ -132,12 +132,17 @@ test.describe('Sequences flow — drip engine business logic', () => {
   // ── Flow 1.a — sequence creation ────────────────────────────────────
   test('creates a 2-email + 24h-delay sequence with valid graph JSON', async ({ request }) => {
     const graph = buildGraph();
+    // Post-#374 (commit cfc0ec6), POST /api/sequences defaults
+    // isActive=false unless the body explicitly sends `isActive: true`
+    // (DRAFT-by-default safety). Pre-#374 the default was true; this
+    // test was written under the old contract. Send true explicitly.
     const res = await request.post(`${API}/sequences`, {
       headers: auth(),
       data: {
         name: `Onboarding Drip ${RUN_TAG}`,
         nodes: graph.nodes,
         edges: graph.edges,
+        isActive: true,
       },
     });
     expect(res.status(), `create body: ${await res.text()}`).toBe(201);

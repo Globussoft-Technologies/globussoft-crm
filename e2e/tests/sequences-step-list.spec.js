@@ -72,11 +72,15 @@ test.describe('Sequence step-list rebuild (#9) + reply detection (#7)', () => {
     expect(templateId).toBeTruthy();
 
     // Sequence (no nodes/edges — pure step-list).
+    // Post-#374 isActive defaults to false; engine line 433 skips
+    // inactive sequences. Send isActive=true so the engine tick this
+    // spec exercises actually runs.
     const sRes = await request.post(`${API}/sequences`, {
       headers: { Authorization: `Bearer ${adminToken}` },
       data: {
         name: `Step-list Drip ${RUN_TAG}`,
         nodes: [], edges: [],
+        isActive: true,
       },
     });
     expect(sRes.ok()).toBeTruthy();

@@ -241,10 +241,12 @@ jobs:
           #   - workflows-api.spec.js        (48 tests: routes/workflows.js — G-2)
           #   - integrations-api.spec.js     (30 tests: routes/integrations.js + Callified SSO — G-3)
           #   - audit-api.spec.js            (20 tests: routes/audit.js compliance — G-5)
-          # Total: ~1182 API tests run on every push.
+          #   - appointment-reminders-api.spec.js (16 tests: cron/appointmentRemindersEngine.js — G-6)
+          #   - security-headers.spec.js     ( 3 tests: helmet/CSP regression detection — G-25)
+          # Total: ~1201 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
-          # routes/auth.js, routes/approvals.js, cron/appointmentRemindersEngine.js (G-6).
+          # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
           npx playwright test \
             --project=chromium \
             --reporter=list \
@@ -283,6 +285,8 @@ jobs:
             tests/workflows-api.spec.js \
             tests/integrations-api.spec.js \
             tests/audit-api.spec.js \
+            tests/appointment-reminders-api.spec.js \
+            tests/security-headers.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

@@ -553,11 +553,17 @@ router.post("/patients", async (req, res) => {
     // the Patients list, search index, prescriptions, and SMS templates all
     // see the clean form.
     const normalisedName = typeof name === "string" ? name.trim() : name;
+    // #401: compute normalizedPhone for the @@unique(tenantId,
+    // normalizedPhone) gate. Reuses the existing helper so dedup
+    // semantics match contacts + marketplace leads.
+    const { normalizePhone } = require("../utils/deduplication");
+    const normalizedPhone = phone ? normalizePhone(phone) : null;
     const patient = await prisma.patient.create({
       data: {
         name: normalisedName,
         email,
         phone,
+        normalizedPhone,
         dob: dob ? new Date(dob) : null,
         gender,
         bloodGroup,
@@ -606,6 +612,21 @@ router.post("/patients", async (req, res) => {
     res.status(201).json(patient);
   } catch (e) {
     console.error("[wellness] create patient error:", e.message);
+    // #401: specific 409 for the (tenantId, normalizedPhone) unique
+    // constraint. Surfaced to the UI as `DUPLICATE_PHONE` so the
+    // form can show "A patient with this phone already exists" instead
+    // of the generic "Duplicate value for tenantId+normalizedPhone".
+    if (
+      e &&
+      e.code === "P2002" &&
+      Array.isArray(e.meta?.target) &&
+      e.meta.target.includes("normalizedPhone")
+    ) {
+      return res.status(409).json({
+        error: "A patient with this phone already exists in your tenant",
+        code: "DUPLICATE_PHONE",
+      });
+    }
     // #165: ultra-long names / FK misses / decimal overflow now return 400
     // with the actual reason instead of "Failed to create patient" 500s.
     const mapped = httpFromPrismaError(e);
@@ -628,6 +649,15 @@ router.put("/patients/:id", async (req, res) => {
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.dob !== undefined) data.dob = req.body.dob ? new Date(req.body.dob) : null;
 
+    // #401: keep normalizedPhone in sync with phone on every PUT that
+    // touches phone. Without this, an edit-phone flow would leave the
+    // dedup gate's index pointing at the OLD phone — second create
+    // attempt with the new phone would slip past the constraint.
+    if (req.body.phone !== undefined) {
+      const { normalizePhone } = require("../utils/deduplication");
+      data.normalizedPhone = req.body.phone ? normalizePhone(req.body.phone) : null;
+    }
+
     const updated = await prisma.patient.update({ where: { id }, data });
     // #179: audit only the keys that changed. PII (email/phone) is recorded
     // by name only — the actual values are not stored in the audit blob to
@@ -646,6 +676,19 @@ router.put("/patients/:id", async (req, res) => {
     res.json(updated);
   } catch (e) {
     console.error("[wellness] update patient error:", e.message);
+    // #401: same DUPLICATE_PHONE 409 as create — happens when an edit
+    // would collide with another patient's phone in the same tenant.
+    if (
+      e &&
+      e.code === "P2002" &&
+      Array.isArray(e.meta?.target) &&
+      e.meta.target.includes("normalizedPhone")
+    ) {
+      return res.status(409).json({
+        error: "Another patient in your tenant already has this phone",
+        code: "DUPLICATE_PHONE",
+      });
+    }
     // #168 #165: same validation-error → 400 mapping as create.
     const mapped = httpFromPrismaError(e);
     if (mapped) return res.status(mapped.status).json(mapped);

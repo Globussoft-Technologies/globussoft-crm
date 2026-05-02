@@ -1875,6 +1875,13 @@ model Patient {
   name       String
   email      String?
   phone      String?
+  // #401 — canonical form of `phone` for dedup. Last-10-digits with
+  // country code prepended (per backend/utils/deduplication.js's
+  // normalizePhone helper). Backfilled by
+  // backend/scripts/backfill-patient-normalized-phone.js. Used as the
+  // unique key for (tenantId, normalizedPhone) to PREVENT the
+  // recurring "Kavita Reddy × 10" inflation pattern.
+  normalizedPhone String?
   dob        DateTime?
   gender     String? // M, F, Other
   bloodGroup String?
@@ -1908,6 +1915,14 @@ model Patient {
   @@index([tenantId, phone])
   @@index([tenantId, locationId])
   @@index([contactId])
+  // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
+  // lived in lib/leadJunkFilter + the route handler's best-effort
+  // findFirst — both bypassable. With @@unique enforced, Prisma throws
+  // P2002 on the second create with the same (tenant, normalizedPhone)
+  // pair; the route handler's catch translates to HTTP 409 with code
+  // DUPLICATE_PHONE. Backfill + merge MUST run before this can apply
+  // — see backend/scripts/backfill-patient-normalized-phone.js.
+  @@unique([tenantId, normalizedPhone], name: "patient_tenant_normalized_phone_unique")
 }
 
 model Service {

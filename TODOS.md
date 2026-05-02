@@ -2,7 +2,7 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-05-02 (late afternoon — **T1.1 e2e-full restoration shipped: 201 → 25 unique failures, ~88% reduction**. The TODOS.md `Bucket A` diagnosis below was WRONG — the actual root cause was that `auth.setup.js` was writing `localStorage.token` only, NOT `localStorage.user` + `.tenant` which `App.jsx` reads in its useState initializers. Without those, `isAdmin`/`isManager` were both false and `Sidebar.jsx`'s `managerOnly` filter hid Marketing/Sequences/Reports/Forecasting/Approvals etc. — the exact "Marketing not found" failures we saw. The sessionStorage-migration story was a red herring; auth.setup's existing dual-write strategy + App.jsx's legacy-localStorage migration already worked. 4 commits: `2b79a34` (auth.setup user+tenant fix → 201→43), `0aa5165` (bucket 1+2+3 → 43→26), `f5af14a` (bucket 4 first pass → 26→25), and the in-progress per-spec triage of the remaining 25-spec long tail. Pickup from home: `git pull origin main`.)
+Last updated: 2026-05-02 (evening — **T1.1 e2e-full restoration shipped + bucket-4 partial + T1.2 partial**. HEAD: `e941d7b`. e2e-full failures **201 → 25 unique** so far via 4 test commits; a 5th commit (`cbf9d27`) and the run validating it (`25255193623`) were in flight at session end — check when picking up. Plus T1.2 partial (commit `e941d7b`): `/api/auth/me` now exposes `features.smsConfigured` so admin pages can detect the broken-by-default SMS pipeline; the frontend consumer side (admin banner + patient portal graceful degrade) is NOT yet shipped — see "🚧 T1.2 — remaining work" below. Pickup from home: `git pull origin main`. Verify `gh run view 25255193623` shows the expected ~25-failure count before grinding the long tail further.)
 
 Earlier 2026-05-02: **closed-issue regression audit + architect-priority sequencing** added at top. See "🎯 Architect-priority sequencing (2026-05-02)" below. The detailed 24-item regression-coverage backlog mapping every closed issue → which spec would prevent it from regressing is in [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md). Pick from the architect sequencing first.
 
@@ -27,6 +27,33 @@ Three observations that frame the priorities:
 | ✅ **T1.1** | ~~Fix `e2e/auth.setup.js` — write `sessionStorage` not `localStorage`~~ — **DIAGNOSIS WAS WRONG; actual fix shipped 2026-05-02 in commits `2b79a34` + `0aa5165` + `f5af14a`** | done | Real root cause: `auth.setup.js` wrote token but not `user`+`tenant`. App.jsx reads all three from `localStorage` in its useState initializers; without `user`, `isAdmin`/`isManager` were false and Sidebar's `managerOnly` filter hid most links. The sessionStorage-migration claim in old Bucket A was misleading — that path had been working. Result: e2e-full failures **201 → 25 unique** (~88% reduction; release validation pass rate ~88% → ~99%). 25-spec long tail remains for per-spec triage. |
 | **T1.2** | **Wire a real SMS provider OR feature-flag OTP-dependent flows OFF in prod** | 1 day | [#182](https://github.com/Globussoft-Technologies/globussoft-crm/issues/182) (closed) said the SMS queue had 25 stuck messages 30+ hrs old. The wellness vertical's entire telecaller flow + patient portal + appointment reminders depend on SMS that may not actually be sending. Either pick a provider (MSG91 is cheapest in INR) and ship credentials, or feature-flag the OTP UI off until you do. Right now it's broken-by-default and clinics don't know. |
 | ✅ **T1.3** | ~~Ship P0 of the regression backlog — `wellness-rbac-api.spec.js` + `auth-security-api.spec.js` + `demo-hygiene-api.spec.js`~~ — **shipped earlier 2026-05-02** (see [docs/regression-coverage-backlog.md](docs/regression-coverage-backlog.md) P0 bucket — all three ☑) | done | All three P0 specs landed + were wired into the per-push gate + coverage workflow. Closes regression risk for ~42 closed RBAC / auth-security / seed-pollution issues. |
+
+### 🚧 T1.2 — what's still missing
+
+`features.smsConfigured` shipped on `/api/auth/me` (commit `e941d7b`). Three consumer pieces remain — pick the most pressing first:
+
+1. **Admin banner on staff dashboard** when `smsConfigured === false`. ~30 min. Read from `/api/auth/me`, render a non-dismissable warning bar at the top of `Layout.jsx`: "SMS provider not configured — patient portal OTP login + appointment reminders are not delivering. [Configure SMS](#/wellness/locations) (or contact ops)." Closes the silent-failure gap for staff who think OTP works.
+
+2. **Patient portal graceful-degrade**. PatientPortal is a public unauth page so it needs a public health endpoint (`GET /api/wellness/portal/health` → `{ smsConfigured: bool }`). When false, the phone-OTP form is replaced with: "Phone-OTP login is temporarily unavailable. Please contact your clinic to log in." ~1 hour incl. backend + frontend.
+
+3. **Real SMS provider creds** (the actual fix): pick MSG91 (cheapest in INR) or Fast2SMS, get an account, set `MSG91_AUTH_KEY` + `MSG91_SENDER_ID` (or Fast2SMS equivalents) in the demo server's `.env`, restart PM2. Tests should auto-detect via `resolveProviderConfig()`. ~30 min once creds are in hand. Without this, the OTP flow stays cosmetically gated but functionally broken.
+
+### 🧹 e2e-full long-tail residue (after T1.1) — pick up from home
+
+After 4 test-fix commits (`2b79a34`/`0aa5165`/`f5af14a`/`cbf9d27`), e2e-full's ~25 unique failures break down as:
+
+| Status | Type | Count | What |
+|---|---|---|---|
+| ✅ test-fix shipped (cbf9d27) | Stale spec drift | 4 | wellness-integration #401 expectation flip, wellness-orchestrator-depth user injection, wellness-a11y user injection, billing-update count tolerance |
+| ⬜ deferred — test rewrite | Locator drift | ~5 | wellness-deep "Pending" filter, wellness-real-user-journeys patient tabs, developer.spec [data-notify-modal], etc. |
+| ⬜ deferred — seed/data drift | Demo-state-dependent | ~3 | landing-page-renderer needs published page, wellness-clinical-journey-flow loyalty balance, tasks-api cross-tenant seed |
+| 🐛 needs FILED bug + fix | Real product issue | ~13 | eventbus neq/nin off-by-one (engine), external-api leads 500, lead-routing 400 round-trip, lead-scoring trigger missing field, sequences engine flow (3 specs), approvals re-approve state machine, sso google-callback redirect, **wellness-rbac-api professional scope leak (#280 regression?)**, **tasks-api cross-tenant leak (#403 regression?)**, wellness-feature-gaps consumption, wellness-real-user-journeys F5 portal-login 401 |
+
+The two starred items (RBAC scope leak + cross-tenant task leak) are P0/P1 PHI / data-isolation issues that the new gated specs SURFACED. They warrant filing as GitHub issues + fixing the routes — exactly the kind of regression the new specs are designed to catch. Open these as `[regression] [P1] #280 professional sees other clinicians' visits` and `[regression] [P1] #403 wellness admin sees Tenant B tasks`, link to the failing spec, fix in `routes/wellness.js` (visit query) and `routes/tasks.js` (cross-tenant filter).
+
+The remaining ~11 product issues are independent — each needs ~30-60 min triage to either ship a real fix or skip the spec with a documented reason linking to a GitHub issue.
+
+
 
 ### Tier 2 — this month (unblock real users + close the regression loop)
 

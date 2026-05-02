@@ -141,10 +141,13 @@ test.describe('Auth/Security — broadcast endpoint admin-only (#169)', () => {
     });
     test.skip(!login.ok(), 'user@crm.com seed unavailable');
     const token = (await login.json()).token;
-    // No targetUserId → triggers the broadcast branch.
+    // No targetUserId → triggers the broadcast branch. Field name is
+    // `message` not `body` per the route's input validation; the
+    // validator fires BEFORE the role check, so a missing `message`
+    // would short-circuit to 400 and mask the BROADCAST_FORBIDDEN test.
     const r = await request.post(`${API}/notifications`, {
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      data: { title: 'should-fail', body: 'should-fail' },
+      data: { title: 'should-fail', message: 'should-fail' },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r.status(), `body: ${await r.text()}`).toBe(403);

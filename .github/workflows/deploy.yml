@@ -225,6 +225,7 @@ jobs:
           #   - surveys-api.spec.js          (54 tests: routes/surveys.js + public endpoints)
           #   - external-api.spec.js         (53 tests: routes/external.js — X-API-Key partner endpoints)
           #   - wellness-clinical-api.spec.js (~154 tests: routes/wellness.js patient/visit/Rx/consent/service/location)
+          #   - social-api.spec.js           (62 tests: routes/social.js)
           # Total: ~1084 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/social.js,
@@ -255,7 +256,8 @@ jobs:
             tests/deals-api.spec.js \
             tests/surveys-api.spec.js \
             tests/external-api.spec.js \
-            tests/wellness-clinical-api.spec.js
+            tests/wellness-clinical-api.spec.js \
+            tests/social-api.spec.js
           echo "::notice::API specs passed"
 
       - name: Upload artifacts on failure

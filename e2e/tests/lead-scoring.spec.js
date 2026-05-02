@@ -51,10 +51,16 @@ test.describe('Lead Scoring — AI Lead Intelligence', () => {
   });
 
   test('scores are updated via trigger API', async ({ page }) => {
+    // Post-v3.2.5 the JWT lives in sessionStorage, not localStorage.
+    // Pre-fix this test was reading localStorage.getItem('token') which
+    // returns null → the request went out as `Bearer null` → 401 → no
+    // `success` field on the response body → test failed. Fall back to
+    // localStorage so the spec still works against older deployments.
     const res = await page.evaluate(async () => {
+      const token = sessionStorage.getItem('token') || localStorage.getItem('token');
       const resp = await fetch('/api/ai_scoring/trigger', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       return resp.json();
     });

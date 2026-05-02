@@ -136,7 +136,12 @@ function redirectWithToken(res, frontendBase, token, tenant) {
 }
 
 function redirectWithError(res, frontendBase, message) {
-  const url = `${frontendBase}/sso/return?error=${encodeURIComponent(message)}`;
+  // fix: redirect to /login?sso_error=… per the file docstring (line 10)
+  // and the contract asserted by tests/sso.spec.js. Pre-fix the helper
+  // sent users to /sso/return?error= which the SPA had no handler for,
+  // so SSO failures rendered a blank page instead of the login form
+  // with an inline error.
+  const url = `${frontendBase}/login?sso_error=${encodeURIComponent(message)}`;
   return res.redirect(url);
 }
 

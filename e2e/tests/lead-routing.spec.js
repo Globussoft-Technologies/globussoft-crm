@@ -73,9 +73,15 @@ test.describe('lead-routing API smoke', () => {
     expect(rule.id).toBeTruthy();
     createdRuleIds.push(rule.id);
 
+    // The test's intent is "PUT round-trip toggles isActive"; priority
+    // is incidental. Pre-fix it sent priority=1000 which the typo-guard
+    // (issue #332/#350) correctly rejects with 400 — that contract is
+    // locked by tests/lead-routing-api.spec.js:253. The two specs were
+    // contradicting each other; this drops the spurious priority field
+    // so the round-trip can land cleanly on isActive.
     const upd = await request.put(`${API}/lead-routing/${rule.id}`, {
       headers: auth(),
-      data: { isActive: false, priority: 1000 },
+      data: { isActive: false },
     });
     expect(upd.status()).toBe(200);
     const updated = await upd.json();

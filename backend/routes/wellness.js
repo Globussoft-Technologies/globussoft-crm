@@ -733,10 +733,12 @@ router.get("/visits", async (req, res) => {
       if (to) where.visitDate.lte = new Date(to);
     }
 
-    // #280: stylist/helper PHI scope. Bypass for ADMIN/MANAGER (org oversight).
+    // #280: professional/helper PHI scope. Bypass for ADMIN/MANAGER (org oversight).
+    // "professional" is the canonical wellnessRole post-#214; "stylist" kept
+    // for back-compat with older tokens / hypothetical future seeds.
     const wRole = req.user?.wellnessRole;
     const isOrgRole = req.user?.role === "ADMIN" || req.user?.role === "MANAGER";
-    if (!isOrgRole && (wRole === "stylist" || wRole === "helper")) {
+    if (!isOrgRole && (wRole === "professional" || wRole === "stylist" || wRole === "helper")) {
       where.OR = [
         { doctorId: req.user.userId }, // own column
         {

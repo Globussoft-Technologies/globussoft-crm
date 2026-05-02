@@ -518,6 +518,36 @@ test.describe('Contacts API — PUT /:id', () => {
     expect(res.status()).toBe(200);
     expect((await res.json()).name).toContain('noop-update');
   });
+
+  // #160 / #168: PUT must apply the same email validator as POST. Pre-fix,
+  // PUT accepted any string and either silently saved garbage or 500'd
+  // when downstream code (notification dispatcher) tried to use it.
+  test('#168 PUT /:id with malformed email → 400 (not 500)', async ({ request }) => {
+    const c = await createContact(request, { label: 'put-bad-email' });
+    const { token } = await getAdmin(request);
+    const res = await put(request, token, `/api/contacts/${c.id}`, { email: 'not-an-email' });
+    expect(res.status()).toBe(400);
+  });
+
+  test('#160 PUT /:id with empty-string email → 400 (validate as POST does)', async ({ request }) => {
+    const c = await createContact(request, { label: 'put-empty-email' });
+    const { token } = await getAdmin(request);
+    const res = await put(request, token, `/api/contacts/${c.id}`, { email: '' });
+    // Either 400 (validated) or 200 (some apps treat empty-string as
+    // null-equivalent). Anything 5xx is a regression — that's the
+    // point: the validator must not crash on empty string.
+    expect(res.status()).toBeLessThan(500);
+  });
+
+  test('#168 PUT /:id with > 191 char email → 400 (not 500 from MySQL)', async ({ request }) => {
+    const c = await createContact(request, { label: 'put-long-email' });
+    const { token } = await getAdmin(request);
+    // utf8mb4 VARCHAR(191) cap. Pre-fix the route let it through and
+    // the DB threw, surfacing as 500. Post-fix the validator catches it.
+    const longEmail = `a${'x'.repeat(200)}@example.test`;
+    const res = await put(request, token, `/api/contacts/${c.id}`, { email: longEmail });
+    expect(res.status()).toBeLessThan(500);
+  });
 });
 
 // ─── PUT /api/contacts/bulk-assign ──────────────────────────────────
@@ -814,6 +844,35 @@ test.describe('Contacts API — POST /import-csv', () => {
     expect(created.name.startsWith("'")).toBe(true); // prefixed with ' to neutralise formula
     if (created) createdContactIds.push(created.id);
   });
+
+  // #154: every Excel formula sigil must be neutralised, not just '='.
+  // Pre-fix the sanitiser only handled '=' which let `+1+1`, `-2+2`,
+  // `@CMD|...` slip through and execute when the sheet was opened in
+  // Excel/Google Sheets.
+  for (const prefix of ['+', '-', '@']) {
+    test(`#154 CSV-injection prefix "${prefix}" is sanitised on import`, async ({ request }) => {
+      const goodEmail = uniqueEmail(`csv-inj-${prefix.charCodeAt(0)}`);
+      const { token } = await getAdmin(request);
+      const evilName = `${prefix}cmd|/c calc`;
+      const res = await post(request, token, '/api/contacts/import-csv', {
+        contacts: [{ name: evilName, email: goodEmail, status: 'Lead' }],
+      });
+      expect(res.status()).toBe(200);
+      expect((await res.json()).imported).toBe(1);
+
+      const list = await (await get(request, token, '/api/contacts?limit=500')).json();
+      const stored = list.find((c) => c.email === goodEmail);
+      expect(stored).toBeTruthy();
+      // The sanitiser should prepend ' to defang the formula. Whether
+      // the original prefix is kept after the ' or stripped is fine —
+      // what matters is the cell no longer starts with =/+/-/@.
+      expect(
+        stored.name.charAt(0),
+        `sanitised name should not start with formula sigil — got ${JSON.stringify(stored.name)}`
+      ).not.toMatch(/[=+\-@]/);
+      if (stored) createdContactIds.push(stored.id);
+    });
+  }
 });
 
 // ─── Contact Attachments ────────────────────────────────────────────

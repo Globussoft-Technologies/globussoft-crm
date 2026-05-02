@@ -191,17 +191,28 @@ router.post(
         return res.status(404).json({ error: "Approval request not found" });
       }
 
-      // State-machine guards. Pre-fix the APPROVED branch was 200-
-      // idempotent and the REJECTED/other branches were 422; tests
-      // expect 400 across the board for a stable terminal-state
-      // contract that mirrors billing.js (INVALID_INVOICE_TRANSITION)
-      // and deals.js (INVALID_DEAL_TRANSITION). Same shape: 400 with
-      // code INVALID_APPROVAL_TRANSITION + currentStatus echo.
+      // State-machine guards (the contract approvals-flow.spec.js
+      // exercises). Same-state re-mutation is idempotent-200 (no-op,
+      // no double audit). Cross-state mutation is rejected with 422
+      // INVALID_APPROVAL_TRANSITION. An earlier iteration of this
+      // handler tried to align with billing.js / deals.js (400 across
+      // the board) but that broke approvals-flow.spec.js which was
+      // designed to lock in the idempotent-200 behaviour. Reverted
+      // to the original mixed contract.
+      if (existing.status === "APPROVED") {
+        const [hydrated] = await hydrateUsers([existing], tenantId);
+        return res.json({ ...hydrated, idempotent: true });
+      }
+      if (existing.status === "REJECTED") {
+        return res.status(422).json({
+          error: "Cannot approve a rejected request",
+          code: "INVALID_APPROVAL_TRANSITION",
+          currentStatus: existing.status,
+        });
+      }
       if (existing.status !== "PENDING") {
-        return res.status(400).json({
-          error: existing.status === "APPROVED"
-            ? "Cannot approve an already-approved request"
-            : `Cannot approve from status '${existing.status}'`,
+        return res.status(422).json({
+          error: `Cannot approve from status '${existing.status}'`,
           code: "INVALID_APPROVAL_TRANSITION",
           currentStatus: existing.status,
         });
@@ -295,14 +306,22 @@ router.post(
         return res.status(404).json({ error: "Approval request not found" });
       }
 
-      // State-machine guards (mirrors the /approve handler above —
-      // 400 INVALID_APPROVAL_TRANSITION on every non-PENDING transition
-      // for a stable, symmetric contract).
+      // Mirror of the /approve handler's state-machine guards
+      // (idempotent-200 same-state, 422 cross-state).
+      if (existing.status === "REJECTED") {
+        const [hydrated] = await hydrateUsers([existing], tenantId);
+        return res.json({ ...hydrated, idempotent: true });
+      }
+      if (existing.status === "APPROVED") {
+        return res.status(422).json({
+          error: "Cannot reject an already-approved request",
+          code: "INVALID_APPROVAL_TRANSITION",
+          currentStatus: existing.status,
+        });
+      }
       if (existing.status !== "PENDING") {
-        return res.status(400).json({
-          error: existing.status === "REJECTED"
-            ? "Cannot reject an already-rejected request"
-            : `Cannot reject from status '${existing.status}'`,
+        return res.status(422).json({
+          error: `Cannot reject from status '${existing.status}'`,
           code: "INVALID_APPROVAL_TRANSITION",
           currentStatus: existing.status,
         });

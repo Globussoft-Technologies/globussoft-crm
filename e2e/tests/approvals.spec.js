@@ -112,7 +112,14 @@ test.describe('Approvals — /api/approvals', () => {
     expect(body.status).toBe('APPROVED');
   });
 
-  test('cannot re-approve an already-approved request (400)', async ({ request }) => {
+  test('re-approve an already-APPROVED request returns 200 idempotent', async ({ request }) => {
+    // The /approve handler is idempotent-200 on same-state re-mutation
+    // by design (no double audit, no double event emit). Cross-state
+    // (e.g. approve a REJECTED row) returns 422 — see approvals-flow.spec.js
+    // for those assertions. An earlier version of this test asserted
+    // 400 here trying to align with billing.js / deals.js terminal-
+    // status conventions, but approvals-flow.spec.js explicitly locks
+    // in the idempotent-200 contract — they conflicted. Matching that.
     const created = await createApproval(request);
     await request.post(`${API}/approvals/${created.id}/approve`, {
       headers: auth(),
@@ -122,7 +129,9 @@ test.describe('Approvals — /api/approvals', () => {
       headers: auth(),
       data: { comment: 'again' },
     });
-    expect(second.status()).toBe(400);
+    expect(second.status()).toBe(200);
+    const body = await second.json();
+    expect(body.idempotent).toBe(true);
   });
 
   test('POST /:id/reject requires comment with 400', async ({ request }) => {

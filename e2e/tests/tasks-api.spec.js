@@ -599,10 +599,13 @@ test.describe('Tasks API — cross-tenant isolation (#403)', () => {
     const leaked = tasks.filter((t) => t.title === tag);
     expect(leaked, `cross-tenant leak — wellness admin sees generic task "${tag}"`).toHaveLength(0);
 
-    // Belt-and-braces: no task in the wellness response should carry
-    // the `Tenant B scoped` prefix at all (catches future regressions
-    // where the leak uses a different timestamp).
-    const anyTenantBPrefix = tasks.filter((t) => /^Tenant B scoped/.test(t.title || ''));
-    expect(anyTenantBPrefix, 'no task in wellness view should be tagged "Tenant B scoped"').toHaveLength(0);
+    // Note: a previous version of this test had a belt-and-braces check
+    // for "no task whose title starts with 'Tenant B scoped' appears in
+    // the wellness view". That conflicted with eventbus-emit.spec.js,
+    // which legitimately creates wellness-tenant tasks with that exact
+    // prefix as part of its tenant-isolation test (line 153 — TENANT_B
+    // = admin@wellness.demo). The specific-tag check above is enough;
+    // demo-hygiene-api.spec.js sweeps the broader residue class on the
+    // ephemeral CI gate, and demo-health.spec.js does the same on demo.
   });
 });

@@ -449,8 +449,9 @@ test.describe.serial('Wellness deep — Real browser UI flows', () => {
     await page.waitForURL(/\/wellness\/recommendations/, { timeout: 10000 });
 
     await expect(page.getByRole('heading', { name: /Agent Recommendations/i })).toBeVisible();
-    // At least one filter chip
-    await expect(page.getByRole('button', { name: /^pending$/i })).toBeVisible();
+    // At least one filter chip — label format is "pending (N)" where N is the
+    // per-stage count appended in #359, so anchor on the leading word.
+    await expect(page.getByRole('button', { name: /^pending\b/i })).toBeVisible();
   });
 
   test('25. Public booking page renders 3-step UI for Enhanced Wellness slug', async ({ page }) => {

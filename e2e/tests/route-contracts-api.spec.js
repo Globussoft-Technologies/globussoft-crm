@@ -117,8 +117,11 @@ const RESOURCES = [
   { path: '/api/sequences',             tenant: 'generic',  list: true, getById: true, postEmpty: true },
   { path: '/api/notifications',         tenant: 'generic',  list: true, getById: false, postEmpty: false },
   { path: '/api/staff',                 tenant: 'generic',  list: true, getById: false, postEmpty: false },
-  { path: '/api/funnel',                tenant: 'generic',  list: true, getById: false, postEmpty: false }, // #188
-  { path: '/api/lead-routing/rules',    tenant: 'generic',  list: true, getById: true, postEmpty: true },
+  // /api/funnel doesn't expose a GET / — only sub-routes (/stages,
+  // /conversion-by-source, etc.). The actual #188 id-shadow bug was
+  // GET /api/deals/funnel falling through the /:id matcher to a 500;
+  // tested explicitly below. Don't enumerate /api/funnel here.
+  { path: '/api/lead-routing',          tenant: 'generic',  list: true, getById: true, postEmpty: true },
 
   // Wellness tenant resources
   { path: '/api/wellness/patients',     tenant: 'wellness', list: true, getById: true, postEmpty: true },
@@ -187,6 +190,21 @@ test.describe('Route contracts — #165/#170/#175/#176/#188/#196/#217/#220/#309/
       });
     }
   }
+
+  // ── #188: GET /api/deals/funnel must not 500 (id-shadow regression) ──
+
+  test('#188 GET /api/deals/funnel does not 500 (id-shadow guard)', async ({ request }) => {
+    test.skip(!genericToken, 'auth unavailable');
+    // Pre-fix routes/deals.js was matching this against /:id and
+    // crashing on parseInt("funnel") = NaN. The fix short-circuits
+    // non-numeric :id at the top of the handler. Acceptable codes:
+    //   - 200 if /deals/funnel is a real endpoint (some envs have it)
+    //   - 404 if no such route (correct refusal)
+    //   - 400 if validation fires first (also fine)
+    // The regression we MUST NOT see is 5xx.
+    const res = await authGet(request, '/api/deals/funnel', genericToken);
+    expect(res.status(), `${res.status()} from /api/deals/funnel — id-shadow regress?`).toBeLessThan(500);
+  });
 
   // ── #341 / #358: unknown /api path returns 404 (NOT a 200 SPA shell) ──
 

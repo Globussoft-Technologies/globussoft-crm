@@ -1,8 +1,41 @@
 const express = require('express');
-const { verifyToken } = require('../middleware/auth');
+const crypto = require('crypto');
+const { verifyToken, verifyRole } = require('../middleware/auth');
 const prisma = require('../lib/prisma');
 
 const router = express.Router();
+
+// Mailgun config (mirrors email_scheduling.js + cron/scheduledEmailEngine.js).
+const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
+const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || 'crm.globusdemos.com';
+const FROM_EMAIL = `Globussoft CRM <noreply@${MAILGUN_DOMAIN}>`;
+
+async function sendMailgun(to, subject, body) {
+  const key = process.env.MAILGUN_API_KEY || MAILGUN_API_KEY;
+  const domain = process.env.MAILGUN_DOMAIN || MAILGUN_DOMAIN;
+  if (!key) return { sent: false, reason: 'no_api_key' };
+  const fd = new URLSearchParams();
+  fd.append('from', `Globussoft CRM <noreply@${domain}>`);
+  fd.append('to', to);
+  fd.append('subject', subject);
+  fd.append('text', body);
+  fd.append('html', body.replace(/\n/g, '<br>'));
+  try {
+    const r = await fetch(`https://api.mailgun.net/v3/${domain}/messages`, {
+      method: 'POST',
+      headers: { Authorization: 'Basic ' + Buffer.from('api:' + key).toString('base64') },
+      body: fd,
+    });
+    if (r.ok) {
+      const data = await r.json().catch(() => ({}));
+      return { sent: true, id: data.id };
+    }
+    const txt = await r.text().catch(() => '');
+    return { sent: false, reason: `mailgun ${r.status}: ${txt}` };
+  } catch (err) {
+    return { sent: false, reason: err.message };
+  }
+}
 
 // #402: the sidebar at frontend/src/components/Sidebar.jsx:56 polls
 // `GET /api/email?unread=1` every 60s to render the Inbox counter.
@@ -76,6 +109,116 @@ router.get('/scheduled', verifyToken, async (req, res) => {
     res.json(scheduled);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch scheduled emails' });
+  }
+});
+
+// ── G-10: Scheduled-email engine manual trigger ────────────────────
+// POST /api/email/scheduled/run — admin-gated trigger for the
+// scheduled-email cron engine (cron/scheduledEmailEngine.js).
+// Mirror of POST /api/billing/recurring/run + /api/forecasting/snapshot/run
+// + /api/wellness/ops/run. Cron runs every minute (when DISABLE_CRONS≠1);
+// this is the manual one-tenant variant.
+//
+// Differences from cron/scheduledEmailEngine.js:
+//   - Tenant-scoped (cron sweeps all tenants; this scopes to req.user.tenantId).
+//   - Admin-gated (cron is server-internal; the manual route writes
+//     EmailMessage rows on behalf of the admin's tenant).
+//   - Same status-machine: PENDING + scheduledFor<=now → either SENT (with
+//     EmailMessage row + tracking pixel) or FAILED (errorMessage populated).
+//
+// Returns: { success, tenantId, processed, sent, failed, errors }
+//   - processed = count of due rows we walked
+//   - sent      = count moved to status='SENT'
+//   - failed    = count moved to status='FAILED'
+//   - errors    = per-row error details (mirror of engine's try/catch)
+router.post('/scheduled/run', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const now = new Date();
+    const due = await prisma.scheduledEmail.findMany({
+      where: {
+        tenantId,
+        status: 'PENDING',
+        scheduledFor: { lte: now },
+      },
+      take: 50,
+    });
+
+    let sent = 0;
+    let failed = 0;
+    const errors = [];
+    for (const item of due) {
+      try {
+        // Persist as EmailMessage for inbox visibility (mirrors engine).
+        const emailRecord = await prisma.emailMessage.create({
+          data: {
+            subject: item.subject,
+            body: item.body,
+            from: FROM_EMAIL,
+            to: item.to,
+            direction: 'OUTBOUND',
+            read: true,
+            contactId: item.contactId,
+            userId: item.userId,
+            tenantId: item.tenantId,
+          },
+        });
+
+        const trackingId = crypto.randomUUID();
+        await prisma.emailTracking.create({
+          data: {
+            emailId: emailRecord.id,
+            trackingId,
+            type: 'open',
+            tenantId: item.tenantId,
+          },
+        });
+
+        const baseUrl = process.env.BASE_URL || 'https://crm.globusdemos.com';
+        const trackedBody = `${item.body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
+
+        // When MAILGUN_API_KEY is unset (CI default), sendMailgun returns
+        // { sent:false, reason:'no_api_key' } → row flips to FAILED.
+        // That's the exact path the spec verifies under "failed transitions".
+        const result = await sendMailgun(item.to, item.subject, trackedBody);
+
+        if (result.sent) {
+          await prisma.scheduledEmail.update({
+            where: { id: item.id },
+            data: { status: 'SENT', sentAt: new Date(), errorMessage: null },
+          });
+          sent++;
+        } else {
+          await prisma.scheduledEmail.update({
+            where: { id: item.id },
+            data: { status: 'FAILED', errorMessage: result.reason || 'send failed' },
+          });
+          failed++;
+          errors.push({ id: item.id, reason: result.reason || 'send failed' });
+        }
+      } catch (err) {
+        try {
+          await prisma.scheduledEmail.update({
+            where: { id: item.id },
+            data: { status: 'FAILED', errorMessage: err.message },
+          });
+        } catch (_e) { /* ignore */ }
+        failed++;
+        errors.push({ id: item.id, reason: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      tenantId,
+      processed: due.length,
+      sent,
+      failed,
+      errors,
+    });
+  } catch (err) {
+    console.error('[email/scheduled/run]', err);
+    res.status(500).json({ error: 'Failed to run scheduled email engine', detail: err.message });
   }
 });
 

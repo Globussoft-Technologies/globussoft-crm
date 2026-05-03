@@ -359,6 +359,17 @@ test.describe.serial('Journey B — Doctor (real browser)', () => {
     if (!(await isSpaServed(request))) {
       test.skip(true, `SPA not served at ${BASE_URL} — browser test.`);
     }
+    // Same auth-residue gotcha B1 + D1 work around: auth.setup writes the
+    // generic-CRM admin token to BOTH localStorage AND sessionStorage. The
+    // SPA's getAuthToken() prefers the in-memory holder seeded from
+    // sessionStorage, so a doctor token written via uiLoginViaToken (which
+    // only touches localStorage, relying on the App.jsx legacy-localStorage
+    // → sessionStorage migration) gets shadowed by the still-live admin
+    // token. The SPA boots as admin@globussoft.com (generic tenant) and the
+    // patient-detail fetch for a wellness-tenant patient 404s → "Patient
+    // not found" → no tabs. clearBrowserState wipes both stores so the
+    // migration path is the only one populating auth state on next boot.
+    await clearBrowserState(page);
     const { token, tenant, user } = await apiLogin(request, DOCTOR);
     const patientsRes = await request.get(`${API}/wellness/patients?limit=1`, {
       headers: { Authorization: `Bearer ${token}` },

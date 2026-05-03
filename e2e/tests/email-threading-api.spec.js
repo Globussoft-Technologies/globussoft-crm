@@ -10,17 +10,26 @@
  * Endpoints covered (mounted at /api/email-threading):
  *   POST /auto-thread                 — bulk back-fill threadId on null rows
  *   GET  /threads                     — paginated list, ?contactId filter,
- *                                       ?limit (cap 100) + ?offset
- *   GET  /threads/:threadId           — full thread, 404 on unknown id
+ *                                       ?limit (cap 100) + ?offset,
+ *                                       ?includeArchived=1 to surface
+ *                                       __ARCHIVED__: threads (drift #1 fix)
+ *   GET  /threads/:threadId           — full thread, 404 on unknown id,
+ *                                       ?limit (1-200, default 50) + ?offset
+ *                                       (drift #2 fix), returns { total,
+ *                                       limit, offset, messageCount, messages }
  *   POST /threads/:threadId/mark-read — bulk flip unread→read, returns
  *                                       { updated: N }; 200 always (no 404)
- *   POST /threads/:threadId/archive   — stub (schema lacks `archived`),
- *                                       always 200 with note
+ *   POST /threads/:threadId/archive   — drift #1 fix: actually persists by
+ *                                       re-keying every message with the
+ *                                       __ARCHIVED__: prefix; 404 if no
+ *                                       messages; idempotent
  *   POST /reply                       — create OUTBOUND row on existing
  *                                       thread, swap from/to, "Re:" prefix
  *                                       only if subject doesn't already
  *                                       start with /^re\s*:/i
- *                                       400 when threadId or body missing
+ *                                       400 when threadId or body missing,
+ *                                       400 when body includes tenantId
+ *                                       (drift #3 fix: IMMUTABLE_FIELD code)
  *                                       404 when thread has no messages
  *   GET  /messages?contactId=N        — raw EmailMessage rows for contact;
  *                                       400 missing/non-numeric contactId,
@@ -394,6 +403,63 @@ test.describe('Email Threading — GET /threads/:threadId', () => {
     expect(res.status()).toBe(404);
     expect((await res.json()).error).toMatch(/not found/i);
   });
+
+  // Drift #2 of issue #422: pagination now honoured.
+  test('?limit and ?offset paginate the message list', async ({ request }) => {
+    const token = await getGeneric(request);
+    const ts = Date.now();
+    const subj = `pagination-${ts}`;
+    const a = `pg-a-${ts}@example.test`;
+    const b = `pg-b-${ts}@example.test`;
+    // Seed 4 messages in the same thread so we can paginate.
+    await seedInbound(request, token, { subject: subj, sender: a, recipient: b });
+    await seedInbound(request, token, { subject: `Re: ${RUN_TAG} ${subj}`, sender: b, recipient: a });
+    await seedInbound(request, token, { subject: `Re: ${RUN_TAG} ${subj}`, sender: a, recipient: b });
+    await seedInbound(request, token, { subject: `Re: ${RUN_TAG} ${subj}`, sender: b, recipient: a });
+    await autoThread(request, token);
+    const t = await findThreadBySubject(request, token, subj);
+    expect(t).toBeTruthy();
+    expect(t.messageCount).toBeGreaterThanOrEqual(4);
+
+    // limit=2 returns at most 2 messages but `total` reports all.
+    const page1 = await get(request, token, `/api/email-threading/threads/${t.threadId}?limit=2&offset=0`);
+    expect(page1.status()).toBe(200);
+    const p1 = await page1.json();
+    expect(p1.limit).toBe(2);
+    expect(p1.offset).toBe(0);
+    expect(p1.total).toBeGreaterThanOrEqual(4);
+    expect(p1.messages.length).toBe(2);
+
+    const page2 = await get(request, token, `/api/email-threading/threads/${t.threadId}?limit=2&offset=2`);
+    expect(page2.status()).toBe(200);
+    const p2 = await page2.json();
+    expect(p2.limit).toBe(2);
+    expect(p2.offset).toBe(2);
+    expect(p2.messages.length).toBeGreaterThanOrEqual(2);
+    // Page 1 and page 2 must be disjoint.
+    const p1Ids = p1.messages.map((m) => m.id);
+    const p2Ids = p2.messages.map((m) => m.id);
+    for (const id of p2Ids) expect(p1Ids).not.toContain(id);
+  });
+
+  test('400 when limit is out of [1, 200]', async ({ request }) => {
+    const token = await getGeneric(request);
+    const ts = Date.now();
+    const subj = `pagination-bad-${ts}`;
+    const a = `pb-a-${ts}@example.test`;
+    const b = `pb-b-${ts}@example.test`;
+    await seedInbound(request, token, { subject: subj, sender: a, recipient: b });
+    await autoThread(request, token);
+    const t = await findThreadBySubject(request, token, subj);
+    expect(t).toBeTruthy();
+
+    const tooBig = await get(request, token, `/api/email-threading/threads/${t.threadId}?limit=999`);
+    expect(tooBig.status()).toBe(400);
+    const tooSmall = await get(request, token, `/api/email-threading/threads/${t.threadId}?limit=0`);
+    expect(tooSmall.status()).toBe(400);
+    const negOffset = await get(request, token, `/api/email-threading/threads/${t.threadId}?offset=-1`);
+    expect(negOffset.status()).toBe(400);
+  });
 });
 
 // ── POST /threads/:threadId/mark-read ─────────────────────────────────
@@ -431,19 +497,98 @@ test.describe('Email Threading — POST /threads/:threadId/mark-read', () => {
 });
 
 // ── POST /threads/:threadId/archive ───────────────────────────────────
+//
+// Drift #1 of issue #422: stub no longer. Archive now persists by re-keying
+// every message with the `__ARCHIVED__:` prefix on threadId. Schema agent
+// still owns adding a proper `archived Boolean` column in a follow-up; this
+// piggyback gets us the contract right today.
 
 test.describe('Email Threading — POST /threads/:threadId/archive', () => {
-  test('200 stub returns { archived: true, threadId, note }', async ({ request }) => {
-    // Schema lacks `archived` field, so the route just logs + returns OK.
-    // Spec locks this down so a future migration that ADDS the field
-    // (and presumably persistence) shows up here.
+  test('404 when thread has no messages', async ({ request }) => {
     const token = await getGeneric(request);
-    const res = await post(request, token, '/api/email-threading/threads/whatever123/archive', {});
+    const res = await post(request, token, '/api/email-threading/threads/0000000000000000/archive', {});
+    expect(res.status()).toBe(404);
+  });
+
+  test('archives a real thread and hides it from /threads by default', async ({ request }) => {
+    const token = await getGeneric(request);
+    const ts = Date.now();
+    const subj = `archive-real-${ts}`;
+    const a = `ar-a-${ts}@example.test`;
+    const b = `ar-b-${ts}@example.test`;
+    await seedInbound(request, token, { subject: subj, sender: a, recipient: b });
+    await seedInbound(request, token, { subject: `Re: ${RUN_TAG} ${subj}`, sender: b, recipient: a });
+    await autoThread(request, token);
+    const t = await findThreadBySubject(request, token, subj);
+    expect(t, 'pre-archive thread should be visible').toBeTruthy();
+
+    const res = await post(request, token, `/api/email-threading/threads/${t.threadId}/archive`, {});
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.archived).toBe(true);
-    expect(body.threadId).toBe('whatever123');
-    expect(body.note).toMatch(/archive/i);
+    expect(body.threadId).toBe(t.threadId);
+    // New contract: route reports an archivedThreadId + how many messages it
+    // re-keyed. `note` field from the old stub is gone.
+    expect(typeof body.archivedThreadId).toBe('string');
+    expect(body.archivedThreadId.startsWith('__ARCHIVED__:')).toBe(true);
+    expect(body.updated).toBeGreaterThanOrEqual(2);
+
+    // Default /threads list must NOT include the archived thread anymore.
+    const after = await findThreadBySubject(request, token, subj);
+    expect(after, 'archived thread should be hidden from default list').toBeFalsy();
+
+    // GET /threads/:bareId still resolves (route accepts both forms) so
+    // bookmarked links survive archiving.
+    const detail = await get(request, token, `/api/email-threading/threads/${t.threadId}`);
+    expect(detail.status()).toBe(200);
+    const d = await detail.json();
+    expect(d.total).toBeGreaterThanOrEqual(2);
+  });
+
+  test('?includeArchived=1 surfaces archived threads in the list', async ({ request }) => {
+    const token = await getGeneric(request);
+    const ts = Date.now();
+    const subj = `archive-include-${ts}`;
+    const a = `ai-a-${ts}@example.test`;
+    const b = `ai-b-${ts}@example.test`;
+    await seedInbound(request, token, { subject: subj, sender: a, recipient: b });
+    await autoThread(request, token);
+    const t = await findThreadBySubject(request, token, subj);
+    expect(t).toBeTruthy();
+
+    const archiveRes = await post(request, token, `/api/email-threading/threads/${t.threadId}/archive`, {});
+    expect(archiveRes.status()).toBe(200);
+
+    const list = await get(request, token, '/api/email-threading/threads?limit=200&includeArchived=1');
+    expect(list.status()).toBe(200);
+    const body = await list.json();
+    const found = body.threads.find((x) => x.subject.includes(subj.toLowerCase()));
+    expect(found, 'archived thread should appear when includeArchived=1').toBeTruthy();
+    expect(found.archived).toBe(true);
+  });
+
+  test('archiving an already-archived thread is idempotent', async ({ request }) => {
+    const token = await getGeneric(request);
+    const ts = Date.now();
+    const subj = `archive-idempotent-${ts}`;
+    const a = `id-a-${ts}@example.test`;
+    const b = `id-b-${ts}@example.test`;
+    await seedInbound(request, token, { subject: subj, sender: a, recipient: b });
+    await autoThread(request, token);
+    const t = await findThreadBySubject(request, token, subj);
+    expect(t).toBeTruthy();
+
+    const first = await post(request, token, `/api/email-threading/threads/${t.threadId}/archive`, {});
+    expect(first.status()).toBe(200);
+    const archivedId = (await first.json()).archivedThreadId;
+
+    // Calling archive again with the archived id (or with the bare id and
+    // no remaining bare-id messages) should still succeed.
+    const second = await post(request, token, `/api/email-threading/threads/${archivedId}/archive`, {});
+    expect(second.status()).toBe(200);
+    const body = await second.json();
+    expect(body.archived).toBe(true);
+    expect(body.alreadyArchived).toBe(true);
   });
 });
 
@@ -500,6 +645,33 @@ test.describe('Email Threading — POST /reply', () => {
     // Subject prefixed with Re: only if not already present.
     expect(body.message.subject).toMatch(/^Re:\s*/i);
     expect(typeof body.computedThreadId).toBe('string');
+  });
+
+  // Drift #3 of issue #422: a request that included `tenantId` in the body
+  // used to silently no-op (stripDangerous deleted the field, route 200'd
+  // anyway). Now the route rejects with 400 + IMMUTABLE_FIELD code so the
+  // client knows the cross-tenant write was refused.
+  test('400 when body includes tenantId (cross-tenant write attempt)', async ({ request }) => {
+    const token = await getGeneric(request);
+    const ts = Date.now();
+    const subj = `tenant-reject-${ts}`;
+    const a = `tr-a-${ts}@example.test`;
+    const b = `tr-b-${ts}@example.test`;
+    await seedInbound(request, token, { subject: subj, sender: a, recipient: b });
+    await autoThread(request, token);
+    const t = await findThreadBySubject(request, token, subj);
+    expect(t).toBeTruthy();
+
+    const res = await post(request, token, '/api/email-threading/reply', {
+      threadId: t.threadId,
+      body: 'reply body',
+      tenantId: 99999, // attempted cross-tenant write
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/tenantid/i);
+    expect(body.code).toBe('IMMUTABLE_FIELD');
+    expect(body.field).toBe('tenantId');
   });
 
   test('does NOT double-prefix Re: when subject already starts with Re:', async ({ request }) => {

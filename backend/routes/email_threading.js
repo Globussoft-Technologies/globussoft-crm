@@ -6,6 +6,24 @@
  * messages that lack a threadId can be back-filled in bulk.
  *
  * All endpoints are tenant-scoped via req.user.tenantId and require verifyToken.
+ *
+ * Issue #422 contract-drift fixes:
+ *   1. POST /threads/:threadId/archive — was a stub. The EmailMessage schema
+ *      has no `archived` field, and adding one is out of scope for this route
+ *      fix (schema agent owns it). Workaround: piggyback on `threadId` itself
+ *      with a sentinel prefix `__ARCHIVED__:`. All messages in the thread are
+ *      atomically re-keyed to the archived form, the list endpoint hides them
+ *      by default, and the detail endpoint can still resolve either form. This
+ *      persists archive state across restarts using only existing columns.
+ *      Documented in commit message; agent E will replace with a proper
+ *      `archived` field in a follow-up.
+ *   2. GET /threads/:threadId — now honours `?limit` (1-200, default 50) and
+ *      `?offset` (≥0, default 0) so 1000-message threads don't blow request
+ *      size. Returns `{ threadId, messageCount, total, limit, offset, messages }`.
+ *   3. POST /reply — fail-loud on attempted cross-tenant write. The global
+ *      stripDangerous middleware deletes req.body.tenantId before any route
+ *      handler runs, but it now records the stripped value on
+ *      req.strippedFields so we can 400 instead of silently 200'ing a no-op.
  */
 const express = require("express");
 const crypto = require("crypto");
@@ -13,6 +31,13 @@ const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
+
+// Sentinel for archive piggyback (drift #1). All messages whose threadId
+// begins with this prefix are considered archived. Long enough that no
+// legitimate md5-hash threadId could ever collide.
+const ARCHIVED_PREFIX = "__ARCHIVED__:";
+const isArchivedThreadId = (id) => typeof id === "string" && id.startsWith(ARCHIVED_PREFIX);
+const toArchivedId = (id) => (isArchivedThreadId(id) ? id : `${ARCHIVED_PREFIX}${id}`);
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -43,6 +68,22 @@ function computeThreadId(subject, from, to) {
     .join("|");
   const key = `${cleaned}::${participants}`;
   return crypto.createHash("md5").update(key).digest("hex").slice(0, 16);
+}
+
+/**
+ * Reject body that attempts to set tenantId (or other dangerous fields) —
+ * drift #3 fix. stripDangerous runs first and stashes the value on
+ * req.strippedFields, so by the time we get here we know intent vs accident.
+ */
+function rejectImmutableTenant(req, res, next) {
+  if (req.strippedFields && "tenantId" in req.strippedFields) {
+    return res.status(400).json({
+      error: "tenantId is read-only",
+      code: "IMMUTABLE_FIELD",
+      field: "tenantId",
+    });
+  }
+  next();
 }
 
 // All endpoints require auth
@@ -77,6 +118,8 @@ router.post("/auto-thread", async (req, res) => {
 
 // ── GET /threads ─────────────────────────────────────────────────────────
 // List email threads for tenant, optionally filtered by contactId.
+// Archived threads (threadId starts with __ARCHIVED__:) are hidden unless
+// `?includeArchived=1` is passed.
 router.get("/threads", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -85,6 +128,8 @@ router.get("/threads", async (req, res) => {
     const contactId = req.query.contactId
       ? parseInt(req.query.contactId, 10)
       : null;
+    const includeArchived =
+      req.query.includeArchived === "1" || req.query.includeArchived === "true";
 
     const where = { tenantId, threadId: { not: null } };
     if (contactId) where.contactId = contactId;
@@ -97,6 +142,8 @@ router.get("/threads", async (req, res) => {
     // Group by threadId
     const threadMap = new Map();
     for (const m of messages) {
+      // drift #1: hide archived threads by default
+      if (!includeArchived && isArchivedThreadId(m.threadId)) continue;
       let t = threadMap.get(m.threadId);
       if (!t) {
         t = {
@@ -107,6 +154,7 @@ router.get("/threads", async (req, res) => {
           lastMessageAt: m.createdAt,
           unreadCount: 0,
           contactId: m.contactId || null,
+          archived: isArchivedThreadId(m.threadId),
         };
         threadMap.set(m.threadId, t);
       }
@@ -133,24 +181,70 @@ router.get("/threads", async (req, res) => {
 });
 
 // ── GET /threads/:threadId ───────────────────────────────────────────────
-// Full thread: all messages in order.
+// Full thread with pagination (drift #2 fix).
+// Query params:
+//   ?limit  — 1-200, default 50
+//   ?offset — ≥0, default 0
+// Returns { threadId, messageCount, total, limit, offset, messages }.
+// `messageCount` is preserved as the count in the page (legacy clients) and
+// `total` is the count across the whole thread (new clients).
+// Resolves both bare threadId and the archived-prefix form.
 router.get("/threads/:threadId", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const { threadId } = req.params;
 
-    const messages = await prisma.emailMessage.findMany({
-      where: { tenantId, threadId },
-      orderBy: { createdAt: "asc" },
+    // Validate pagination params explicitly so a bad client sees 400 instead
+    // of silently getting page 0.
+    const rawLimit = req.query.limit;
+    const rawOffset = req.query.offset;
+    let limit = 50;
+    if (rawLimit !== undefined) {
+      const n = parseInt(rawLimit, 10);
+      if (Number.isNaN(n) || n < 1 || n > 200) {
+        return res
+          .status(400)
+          .json({ error: "limit must be an integer between 1 and 200" });
+      }
+      limit = n;
+    }
+    let offset = 0;
+    if (rawOffset !== undefined) {
+      const n = parseInt(rawOffset, 10);
+      if (Number.isNaN(n) || n < 0) {
+        return res
+          .status(400)
+          .json({ error: "offset must be a non-negative integer" });
+      }
+      offset = n;
+    }
+
+    // Accept both forms: clients may have bookmarked the bare id pre-archive.
+    const candidates = isArchivedThreadId(threadId)
+      ? [threadId]
+      : [threadId, toArchivedId(threadId)];
+
+    const total = await prisma.emailMessage.count({
+      where: { tenantId, threadId: { in: candidates } },
     });
 
-    if (messages.length === 0) {
+    if (total === 0) {
       return res.status(404).json({ error: "Thread not found" });
     }
 
+    const messages = await prisma.emailMessage.findMany({
+      where: { tenantId, threadId: { in: candidates } },
+      orderBy: { createdAt: "asc" },
+      skip: offset,
+      take: limit,
+    });
+
     res.json({
       threadId,
-      messageCount: messages.length,
+      messageCount: messages.length, // legacy field — count in this page
+      total, // total across whole thread (drift #2)
+      limit,
+      offset,
       messages,
     });
   } catch (err) {
@@ -165,8 +259,14 @@ router.post("/threads/:threadId/mark-read", async (req, res) => {
     const tenantId = req.user.tenantId;
     const { threadId } = req.params;
 
+    // Match either bare or archived form so mark-read still works on archived
+    // threads (e.g. when a client opens an archived conversation).
+    const candidates = isArchivedThreadId(threadId)
+      ? [threadId]
+      : [threadId, toArchivedId(threadId)];
+
     const result = await prisma.emailMessage.updateMany({
-      where: { tenantId, threadId, read: false },
+      where: { tenantId, threadId: { in: candidates }, read: false },
       data: { read: true },
     });
 
@@ -178,21 +278,46 @@ router.post("/threads/:threadId/mark-read", async (req, res) => {
 });
 
 // ── POST /threads/:threadId/archive ──────────────────────────────────────
-// NOTE: EmailMessage schema currently has no `archived` field. To fully
-// support archiving, add `archived Boolean @default(false)` to the
-// EmailMessage model and run `prisma db push`. For now this endpoint just
-// logs the intent and returns success so the UI can wire up the action.
+// Drift #1 fix: actually persist archive state. Re-keys every message in the
+// thread with the __ARCHIVED__: prefix (atomic via updateMany). Returns 404
+// if no messages exist for the thread in this tenant.
 router.post("/threads/:threadId/archive", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const { threadId } = req.params;
-    console.log(
-      `[email_threading] archive requested for thread ${threadId} (tenant ${tenantId}) — schema needs 'archived' field to persist`
-    );
+
+    // Already archived → idempotent success, count zero.
+    if (isArchivedThreadId(threadId)) {
+      const existing = await prisma.emailMessage.count({
+        where: { tenantId, threadId },
+      });
+      if (existing === 0) {
+        return res.status(404).json({ error: "Thread not found" });
+      }
+      return res.json({
+        archived: true,
+        threadId,
+        archivedThreadId: threadId,
+        updated: 0,
+        alreadyArchived: true,
+      });
+    }
+
+    const archivedThreadId = toArchivedId(threadId);
+    const result = await prisma.emailMessage.updateMany({
+      where: { tenantId, threadId },
+      data: { threadId: archivedThreadId },
+    });
+
+    if (result.count === 0) {
+      return res.status(404).json({ error: "Thread not found" });
+    }
+
     res.json({
       archived: true,
       threadId,
-      note: "Archive logged only. Add 'archived Boolean @default(false)' to EmailMessage model to persist.",
+      archivedThreadId,
+      updated: result.count,
     });
   } catch (err) {
     console.error("[email_threading] archive error:", err);
@@ -202,7 +327,9 @@ router.post("/threads/:threadId/archive", async (req, res) => {
 
 // ── POST /reply ──────────────────────────────────────────────────────────
 // Create new OUTBOUND EmailMessage attached to an existing thread.
-router.post("/reply", async (req, res) => {
+// Drift #3 fix: rejectImmutableTenant fires 400 if the client included
+// `tenantId` in the body (stripDangerous deleted it but recorded the intent).
+router.post("/reply", rejectImmutableTenant, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const userId = req.user.userId || null;
@@ -212,9 +339,13 @@ router.post("/reply", async (req, res) => {
       return res.status(400).json({ error: "threadId and body required" });
     }
 
-    // Pull the most recent message in the thread to derive participants/subject
+    // Pull the most recent message in the thread to derive participants/subject.
+    // Resolve archived form too — replying to an archived thread should work.
+    const candidates = isArchivedThreadId(threadId)
+      ? [threadId]
+      : [threadId, toArchivedId(threadId)];
     const last = await prisma.emailMessage.findFirst({
-      where: { tenantId, threadId },
+      where: { tenantId, threadId: { in: candidates } },
       orderBy: { createdAt: "desc" },
     });
 
@@ -234,7 +365,7 @@ router.post("/reply", async (req, res) => {
     }
 
     // Re-compute threadId via the same helper to ensure it matches if subject
-    // changes — but we always honor the provided threadId for continuity.
+    // changes — but we always honor the supplied threadId for continuity.
     const computed = computeThreadId(replySubject, replyFrom, replyTo);
 
     const created = await prisma.emailMessage.create({

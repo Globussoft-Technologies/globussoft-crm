@@ -26,16 +26,25 @@ function whitelist(entity) {
   };
 }
 
-// Generic: just strip dangerous fields
+// Generic: just strip dangerous fields.
+//
+// Records every key it deleted on `req.strippedFields` so route handlers that
+// want to fail-loud (e.g. reject an attempted cross-tenant write with 400
+// instead of silently no-op'ing it) can introspect what came in. Routes that
+// don't care continue to work unchanged.
+const DANGEROUS_FIELDS = ['id', 'createdAt', 'updatedAt', 'tenantId', 'userId'];
+
 function stripDangerous(req, res, next) {
-  if (req.body) {
-    delete req.body.id;
-    delete req.body.createdAt;
-    delete req.body.updatedAt;
-    delete req.body.tenantId;
-    delete req.body.userId;
+  req.strippedFields = req.strippedFields || {};
+  if (req.body && typeof req.body === 'object') {
+    for (const f of DANGEROUS_FIELDS) {
+      if (f in req.body) {
+        req.strippedFields[f] = req.body[f];
+        delete req.body[f];
+      }
+    }
   }
   next();
 }
 
-module.exports = { whitelist, stripDangerous, ALLOWED_FIELDS };
+module.exports = { whitelist, stripDangerous, ALLOWED_FIELDS, DANGEROUS_FIELDS };

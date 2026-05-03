@@ -96,10 +96,23 @@ function sanitizeObject(obj) {
 }
 
 // 3. Prevent tenantId injection — strip tenantId from req.body
+//
+// Records what it stripped on req.strippedFields so route handlers that want
+// to fail-loud (e.g. issue #422 drift #3 — POST /reply rejecting attempted
+// cross-tenant writes with 400 IMMUTABLE_FIELD instead of silently 200'ing
+// a no-op) can introspect what came in. Routes that don't care continue to
+// work unchanged.
 function stripTenantOverride(req, res, next) {
+  req.strippedFields = req.strippedFields || {};
   if (req.body && typeof req.body === 'object') {
-    delete req.body.tenantId; // routes add tenantId from req.user.tenantId, never from input
-    delete req.body.userId; // same protection
+    if ('tenantId' in req.body) {
+      req.strippedFields.tenantId = req.body.tenantId;
+      delete req.body.tenantId; // routes add tenantId from req.user.tenantId, never from input
+    }
+    if ('userId' in req.body) {
+      req.strippedFields.userId = req.body.userId;
+      delete req.body.userId; // same protection
+    }
   }
   next();
 }

@@ -42,6 +42,11 @@ jobs:
       DISABLE_CRONS: "1"
       NODE_ENV: "test"
       PORT: "5000"
+      # G-15: enable field-level encryption so backup-engine-api.spec.js's
+      # PII-safety assertion grades the dump for plaintext PII against a
+      # real ENC:v1: ciphertext value (mirrors the deploy.yml api_tests
+      # gate). 64 hex chars = 32 bytes per lib/fieldEncryption.js.
+      WELLNESS_FIELD_KEY: "ci0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab"
     outputs:
       lines_pct: ${{ steps.report.outputs.LINES_PCT }}
       branches_pct: ${{ steps.report.outputs.BRANCHES_PCT }}
@@ -58,6 +63,17 @@ jobs:
           cache-dependency-path: |
             backend/package-lock.json
             e2e/package-lock.json
+
+      - name: Install mysql-client (for G-15 backup-engine-api.spec.js)
+        # ubuntu-latest ships mysqladmin (used by the wait loop below)
+        # but NOT mysqldump — mysqldump lives in the mysql-client
+        # package. cron/backupEngine.js shells `mysqldump` from PATH.
+        # Mirrors the deploy.yml api_tests gate.
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends mysql-client
+          mysqldump --version
 
       - name: Wait for MySQL ready
         run: |
@@ -179,6 +195,8 @@ jobs:
             tests/scheduled-email-api.spec.js \
             tests/retention-api.spec.js \
             tests/campaign-engine-api.spec.js \
+            tests/backup-engine-api.spec.js \
+            tests/ab-tests-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

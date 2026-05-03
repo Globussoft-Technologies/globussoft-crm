@@ -775,15 +775,18 @@ test.describe.serial('Wellness — Prescriptions + Consents + Treatments + PDFs'
     expect(r.headers()['content-type']).toContain('application/pdf');
   });
 
-  test('68. GET /treatments returns active plans', async ({ request }) => {
-    const r = await request.get(`${API}/wellness/treatments?status=active`, { headers: headers() });
+  // #420: canonical path is /wellness/treatment-plans (was /treatments).
+  // Legacy /treatments now returns 410 Gone — see treatment-plans-api.spec.js
+  // for explicit deprecation coverage.
+  test('68. GET /treatment-plans returns active plans', async ({ request }) => {
+    const r = await request.get(`${API}/wellness/treatment-plans?status=active`, { headers: headers() });
     expect(r.ok()).toBeTruthy();
   });
 
-  test('69. POST /treatments creates a multi-session plan', async ({ request }) => {
+  test('69. POST /treatment-plans creates a multi-session plan', async ({ request }) => {
     const patients = await (await request.get(`${API}/wellness/patients?limit=1`, { headers: headers() })).json();
     const services = await (await request.get(`${API}/wellness/services?limit=1`, { headers: headers() })).json();
-    const r = await request.post(`${API}/wellness/treatments`, {
+    const r = await request.post(`${API}/wellness/treatment-plans`, {
       headers: headers(), data: {
         name: 'Hair PRP — 6 session bundle', totalSessions: 6, totalPrice: 25000,
         patientId: patients.patients[0].id, serviceId: services[0].id,
@@ -794,8 +797,8 @@ test.describe.serial('Wellness — Prescriptions + Consents + Treatments + PDFs'
     expect(tp.totalSessions).toBe(6);
   });
 
-  test('70. POST /treatments 400 missing name', async ({ request }) => {
-    const r = await request.post(`${API}/wellness/treatments`, {
+  test('70. POST /treatment-plans 400 missing name', async ({ request }) => {
+    const r = await request.post(`${API}/wellness/treatment-plans`, {
       headers: headers(), data: { totalSessions: 4, patientId: 1 },
     });
     expect(r.status()).toBe(400);

@@ -12,9 +12,11 @@
  * Endpoints covered:
  *   GET    /api/wellness/activetreatment              — controller getAllTreatmentPlans
  *   PUT    /api/wellness/treatment-plans/:id          — controller updateTreatmentPlan
- *   POST   /api/wellness/treatments                   — route create
- *   GET    /api/wellness/treatments                   — route list (filter sanity)
+ *   POST   /api/wellness/treatment-plans              — route create (canonical, #420)
+ *   GET    /api/wellness/treatment-plans              — route list  (canonical, #420)
+ *   GET    /api/wellness/treatment-plans/:id          — route read  (canonical, #420)
  *   GET    /api/wellness/patients/:id/treatment-plans — nested-resource read (#346)
+ *   ALL    /api/wellness/treatments[/*]               — legacy 410 Gone (#420)
  *
  * Branches exercised in controllers/treatmentPlanController.js:
  *   getAllTreatmentPlans:
@@ -168,7 +170,10 @@ test.afterAll(async ({ request }) => {
 // ── factories ──────────────────────────────────────────────────────────
 
 async function createPlan(request, overrides = {}) {
-  const res = await authPost(request, '/api/wellness/treatments', {
+  // #420: canonical create path is /wellness/treatment-plans. Legacy
+  // /wellness/treatments now returns 410 Gone — see the dedicated describe
+  // block at the bottom of this file.
+  const res = await authPost(request, '/api/wellness/treatment-plans', {
     name: `${RUN_TAG} ${overrides.name || 'plan'}`,
     totalSessions: overrides.totalSessions ?? 6,
     totalPrice: overrides.totalPrice ?? 12000,
@@ -414,11 +419,11 @@ test.describe('TreatmentPlan controller — PUT /treatment-plans/:id', () => {
   });
 });
 
-// ─── POST /treatments (route — create) ──────────────────────────────────
+// ─── POST /treatment-plans (route — create, canonical #420) ─────────────
 
-test.describe('Treatment routes — POST /treatments', () => {
+test.describe('Treatment routes — POST /treatment-plans (canonical)', () => {
   test('happy path: creates a plan and returns 201 with id', async ({ request }) => {
-    const res = await authPost(request, '/api/wellness/treatments', {
+    const res = await authPost(request, '/api/wellness/treatment-plans', {
       name: `${RUN_TAG} happy`,
       totalSessions: 4,
       totalPrice: 8000,
@@ -435,7 +440,7 @@ test.describe('Treatment routes — POST /treatments', () => {
   });
 
   test('400 when name missing', async ({ request }) => {
-    const res = await authPost(request, '/api/wellness/treatments', {
+    const res = await authPost(request, '/api/wellness/treatment-plans', {
       totalSessions: 4,
       patientId: seededPatientId,
     });
@@ -444,7 +449,7 @@ test.describe('Treatment routes — POST /treatments', () => {
   });
 
   test('400 when patientId missing', async ({ request }) => {
-    const res = await authPost(request, '/api/wellness/treatments', {
+    const res = await authPost(request, '/api/wellness/treatment-plans', {
       name: `${RUN_TAG} no-pat`,
       totalSessions: 4,
     });
@@ -452,7 +457,7 @@ test.describe('Treatment routes — POST /treatments', () => {
   });
 
   test('400 when totalSessions missing', async ({ request }) => {
-    const res = await authPost(request, '/api/wellness/treatments', {
+    const res = await authPost(request, '/api/wellness/treatment-plans', {
       name: `${RUN_TAG} no-sessions`,
       patientId: seededPatientId,
     });
@@ -460,7 +465,7 @@ test.describe('Treatment routes — POST /treatments', () => {
   });
 
   test('400 when totalSessions is 0 (falsy)', async ({ request }) => {
-    const res = await authPost(request, '/api/wellness/treatments', {
+    const res = await authPost(request, '/api/wellness/treatment-plans', {
       name: `${RUN_TAG} zero-sessions`,
       totalSessions: 0,
       patientId: seededPatientId,
@@ -471,7 +476,7 @@ test.describe('Treatment routes — POST /treatments', () => {
   });
 
   test('serviceId optional: omit → null on the row', async ({ request }) => {
-    const res = await authPost(request, '/api/wellness/treatments', {
+    const res = await authPost(request, '/api/wellness/treatment-plans', {
       name: `${RUN_TAG} no-service`,
       totalSessions: 2,
       patientId: seededPatientId,
@@ -483,7 +488,7 @@ test.describe('Treatment routes — POST /treatments', () => {
   });
 
   test('totalPrice defaults to 0 when omitted', async ({ request }) => {
-    const res = await authPost(request, '/api/wellness/treatments', {
+    const res = await authPost(request, '/api/wellness/treatment-plans', {
       name: `${RUN_TAG} no-price`,
       totalSessions: 3,
       patientId: seededPatientId,
@@ -496,7 +501,7 @@ test.describe('Treatment routes — POST /treatments', () => {
 
   test('nextDueAt accepted as ISO string', async ({ request }) => {
     const due = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
-    const res = await authPost(request, '/api/wellness/treatments', {
+    const res = await authPost(request, '/api/wellness/treatment-plans', {
       name: `${RUN_TAG} due`,
       totalSessions: 5,
       patientId: seededPatientId,
@@ -509,7 +514,7 @@ test.describe('Treatment routes — POST /treatments', () => {
   });
 
   test('tenantId is server-stamped — request body cannot override it', async ({ request }) => {
-    const res = await authPost(request, '/api/wellness/treatments', {
+    const res = await authPost(request, '/api/wellness/treatment-plans', {
       name: `${RUN_TAG} tenant-stamp`,
       totalSessions: 2,
       patientId: seededPatientId,
@@ -522,12 +527,12 @@ test.describe('Treatment routes — POST /treatments', () => {
   });
 });
 
-// ─── GET /treatments (route — list) ─────────────────────────────────────
+// ─── GET /treatment-plans (route — list, canonical #420) ────────────────
 
-test.describe('Treatment routes — GET /treatments', () => {
+test.describe('Treatment routes — GET /treatment-plans (canonical)', () => {
   test('returns array with patient + service trimmed selects', async ({ request }) => {
     const plan = await createPlan(request, { name: 'list-includes' });
-    const res = await authGet(request, '/api/wellness/treatments');
+    const res = await authGet(request, '/api/wellness/treatment-plans');
     expect(res.status()).toBe(200);
     const list = await res.json();
     expect(Array.isArray(list)).toBe(true);
@@ -541,7 +546,7 @@ test.describe('Treatment routes — GET /treatments', () => {
 
   test('?patientId filter narrows the result set', async ({ request }) => {
     await createPlan(request, { name: 'filter-A' });
-    const res = await authGet(request, `/api/wellness/treatments?patientId=${seededPatientId}`);
+    const res = await authGet(request, `/api/wellness/treatment-plans?patientId=${seededPatientId}`);
     expect(res.status()).toBe(200);
     const list = await res.json();
     for (const row of list) {
@@ -553,11 +558,92 @@ test.describe('Treatment routes — GET /treatments', () => {
     // Create plan, set its status, then filter — round-trip exercise.
     const plan = await createPlan(request, { name: 'status-filter' });
     await authPut(request, `/api/wellness/treatment-plans/${plan.id}`, { status: 'paused' });
-    const res = await authGet(request, '/api/wellness/treatments?status=paused');
+    const res = await authGet(request, '/api/wellness/treatment-plans?status=paused');
     expect(res.status()).toBe(200);
     const list = await res.json();
     expect(list.find((p) => p.id === plan.id)).toBeTruthy();
     for (const row of list) expect(row.status).toBe('paused');
+  });
+});
+
+// ─── GET /treatment-plans/:id (route — read one, canonical #420) ────────
+
+test.describe('Treatment routes — GET /treatment-plans/:id (canonical)', () => {
+  test('happy path: returns the plan with patient + service joined', async ({ request }) => {
+    const plan = await createPlan(request, { name: 'read-one' });
+    const res = await authGet(request, `/api/wellness/treatment-plans/${plan.id}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.id).toBe(plan.id);
+    expect(body.patient).toMatchObject({ id: seededPatientId });
+    if (plan.serviceId) {
+      expect(body.service).toBeTruthy();
+      expect(body.service.id).toBe(plan.serviceId);
+    }
+  });
+
+  test('404 on unknown id', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/treatment-plans/99999999');
+    expect(res.status()).toBe(404);
+    expect((await res.json()).error).toMatch(/not found/i);
+  });
+
+  test('400 on non-numeric id (router :id gate)', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/treatment-plans/not-a-number');
+    expect([400, 404]).toContain(res.status());
+  });
+
+  test('cross-tenant: generic admin sees 404 (tenant-scoped findFirst)', async ({ request }) => {
+    const plan = await createPlan(request, { name: 'read-cross-tenant' });
+    const res = await authGet(
+      request,
+      `/api/wellness/treatment-plans/${plan.id}`,
+      'generic',
+    );
+    // generic admin is tenant=1; wellness plan is tenant=2 → findFirst → null → 404.
+    expect([403, 404]).toContain(res.status());
+  });
+});
+
+// ─── #420 — legacy /treatments paths return 410 Gone with canonical ─────
+//
+// Pre-fix, POST/GET /treatments were the live create+list endpoints while
+// PUT lived at /treatment-plans/:id — same Prisma model, two URLs. The fix
+// consolidated everything onto /treatment-plans and turned /treatments into
+// a deprecation signal so callers self-heal explicitly. See API_NAMESPACING.md.
+
+test.describe('Treatment routes — legacy /treatments → 410 Gone (#420)', () => {
+  test('POST /treatments returns 410 with canonical pointer', async ({ request }) => {
+    const res = await authPost(request, '/api/wellness/treatments', {
+      name: `${RUN_TAG} legacy-post`,
+      totalSessions: 4,
+      patientId: seededPatientId,
+    });
+    expect(res.status()).toBe(410);
+    const body = await res.json();
+    expect(body.code).toBe('WELLNESS_TREATMENTS_RENAMED');
+    expect(body.canonical).toBe('/api/wellness/treatment-plans');
+    expect(body.error).toMatch(/treatment-plans/i);
+  });
+
+  test('GET /treatments returns 410 with canonical pointer', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/treatments');
+    expect(res.status()).toBe(410);
+    const body = await res.json();
+    expect(body.code).toBe('WELLNESS_TREATMENTS_RENAMED');
+    expect(body.canonical).toBe('/api/wellness/treatment-plans');
+  });
+
+  test('GET /treatments?patientId=X also returns 410 (no path-with-query bypass)', async ({ request }) => {
+    const res = await authGet(request, `/api/wellness/treatments?patientId=${seededPatientId}`);
+    expect(res.status()).toBe(410);
+    expect((await res.json()).code).toBe('WELLNESS_TREATMENTS_RENAMED');
+  });
+
+  test('PUT /treatments/123 returns 410 (subpath also dead)', async ({ request }) => {
+    const res = await authPut(request, '/api/wellness/treatments/123', { status: 'paused' });
+    expect(res.status()).toBe(410);
+    expect((await res.json()).code).toBe('WELLNESS_TREATMENTS_RENAMED');
   });
 });
 

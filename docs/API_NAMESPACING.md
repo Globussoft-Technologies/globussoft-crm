@@ -32,7 +32,7 @@ These are clinical-domain entities and only make sense for `tenant.vertical = 'w
 - `/api/wellness/visits`
 - `/api/wellness/prescriptions`
 - `/api/wellness/consents`
-- `/api/wellness/treatments`
+- `/api/wellness/treatment-plans` (full CRUD; `/api/wellness/treatments` was consolidated here in #420 and now returns 410 Gone with `canonical` pointer)
 - `/api/wellness/services` (clinical service catalog)
 - `/api/wellness/locations`
 - `/api/wellness/recommendations`, `/api/wellness/orchestrator/run`

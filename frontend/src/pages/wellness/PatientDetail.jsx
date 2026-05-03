@@ -674,7 +674,9 @@ function PlansTab({ patient, services, onSaved }) {
     if (submitting) return;
     setSubmitting(true);
     try {
-      await fetchApi('/api/wellness/treatments', {
+      // #420: canonical path is /wellness/treatment-plans (was /treatments).
+      // Legacy /treatments now returns 410 Gone with `canonical` pointer.
+      await fetchApi('/api/wellness/treatment-plans', {
         method: 'POST',
         body: JSON.stringify({
           patientId: patient.id,

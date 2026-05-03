@@ -1315,8 +1315,21 @@ router.put("/consents/:id", verifyWellnessRole(["admin"]), async (req, res) => {
 });
 
 // ── Treatment plans ────────────────────────────────────────────────
+//
+// #420: Path consolidation. Pre-fix this resource straddled two paths —
+// POST /wellness/treatments (create) but PUT /wellness/treatment-plans/:id
+// (update). Same Prisma model, two URLs. That broke the G-20 tenant-isolation
+// framework (which assumes one canonical path per resource) and confused
+// integration builders. Canonical is now /wellness/treatment-plans for the
+// full CRUD; the legacy /treatments paths return 410 Gone with a `canonical`
+// pointer per docs/API_NAMESPACING.md so callers self-heal explicitly rather
+// than silently working forever on a stale URL.
+//
+// No DELETE: TreatmentPlan is in the clinical-no-delete cluster (#21). See the
+// retention-policy comment block at the top of this file.
 
-router.get("/treatments", async (req, res) => {
+// GET /treatment-plans — list (filterable by patientId / status)
+router.get("/treatment-plans", async (req, res) => {
   try {
     const { patientId, status } = req.query;
     const where = tenantWhere(req);
@@ -1332,12 +1345,32 @@ router.get("/treatments", async (req, res) => {
     });
     res.json(plans);
   } catch (e) {
-    console.error("[wellness] list treatments error:", e.message);
+    console.error("[wellness] list treatment-plans error:", e.message);
     res.status(500).json({ error: "Failed to list treatment plans" });
   }
 });
 
-router.post("/treatments", async (req, res) => {
+// GET /treatment-plans/:id — read one (tenant-scoped via findFirst)
+router.get("/treatment-plans/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const plan = await prisma.treatmentPlan.findFirst({
+      where: tenantWhere(req, { id }),
+      include: {
+        patient: { select: { id: true, name: true, phone: true } },
+        service: { select: { id: true, name: true, category: true } },
+      },
+    });
+    if (!plan) return res.status(404).json({ error: "Treatment plan not found" });
+    res.json(plan);
+  } catch (e) {
+    console.error("[wellness] read treatment-plan error:", e.message);
+    res.status(500).json({ error: "Failed to read treatment plan" });
+  }
+});
+
+// POST /treatment-plans — create
+router.post("/treatment-plans", async (req, res) => {
   try {
     const { name, totalSessions, totalPrice, patientId, serviceId, nextDueAt } = req.body;
     if (!name || !totalSessions || !patientId) {
@@ -1366,10 +1399,32 @@ router.post("/treatments", async (req, res) => {
     } catch (auditErr) { console.warn('[audit]', auditErr.message); }
     res.status(201).json(plan);
   } catch (e) {
-    console.error("[wellness] create treatment error:", e.message);
+    console.error("[wellness] create treatment-plan error:", e.message);
     res.status(500).json({ error: "Failed to create treatment plan" });
   }
 });
+
+// ── Legacy /treatments paths — 410 Gone with canonical pointer (#420) ──
+//
+// Same shape as the namespacing redirect helper at the top of the file
+// (WELLNESS_NAMESPACE_INVALID for /staff and /audit). Callers get a strong,
+// machine-readable signal that the URL has moved instead of a silent 404 or,
+// worse, silently-working forever on a stale URL.
+//
+// Timeline note: keep the 410 in place until backend logs show zero hits
+// (estimate: one release with no callers). The frontend has been migrated in
+// the same commit; partner integrations consume /api/v1/external/* which has
+// its own URL contract and is unaffected.
+const TREATMENT_PLANS_CANONICAL = "/api/wellness/treatment-plans";
+const treatmentsGone = (req, res) => {
+  res.status(410).json({
+    error: "Use /api/wellness/treatment-plans. Treatments path was consolidated to treatment-plans.",
+    code: "WELLNESS_TREATMENTS_RENAMED",
+    canonical: TREATMENT_PLANS_CANONICAL,
+  });
+};
+router.all("/treatments", treatmentsGone);
+router.all("/treatments/*", treatmentsGone);
 
 // ── Services (catalog) ─────────────────────────────────────────────
 

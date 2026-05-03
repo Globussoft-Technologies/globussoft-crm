@@ -2,7 +2,16 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-05-03 (**v3.4.2 shipped — same-day continuation of v3.4.0 / v3.4.1.** HEAD: `e834266`. **Per-push gate is now ~37 specs / ~1,525 tests + 23 vitest files / 700 tests = ~2,225 passing on every push.** Major movements since v3.4.1:
+Last updated: 2026-05-03 (**v3.4.3 shipped — eight-agent parallel wave continuing v3.4.2 same day.** HEAD: post-014ac6a. **Per-push gate is now 50 specs / ~1,665 API tests + 30 vitest files / 803 unit tests = ~2,468 passing on every push.** Major movements since v3.4.2:
+
+- **Six new gate specs** (G-12 campaign + G-13 deal-insights + G-15 backup + R-1 trio: ab-tests/accounting/canned-responses) totalling +140 API tests
+- **Six new vitest unit-test files** (lib/prisma + lib/sentry + cron/recurringInvoice + cron/retention + cron/wellnessOps + cron/appointmentReminders, plus schema/schema-invariants for G-24) = +103 unit tests
+- **Both v3.4.2 contract-drift bugs closed**: #410 recurring-invoice VOID/VOIDED + #411 retention no-op AuditLog. Plus bonus vitest.config.js cron/ deps.inline unblock that the engine-fixes agent shipped en route — was silently blocking ALL cron-engine unit tests.
+- **2 spec-discipline cleanups**: B3 wellness-real-user-journeys (sessionStorage admin token shadowing — NOT tab-locator drift); wellness-clinical-api Location rename (`_teardown_wc_loc_*` mirrors G-6 pattern; demo-hygiene's residue regex misses).
+- **G-24 schema invariants** with revert-and-prove verification; surfaced 49 models with `tenantId` but no formal `tenant Tenant @relation` + 21 `@@unique` constraints without docs + `MarketplaceLead.@@unique([provider, externalLeadId])` may prevent cross-tenant lead import.
+- **Outstanding contract-drift findings worth filing**: Campaign in-memory `global._campaignSchedules` (silent data loss on restart); the 3 schema findings from G-24.
+
+**Earlier same-day arc (v3.4.0 / v3.4.1 / v3.4.2):**
 
 - **Six more gate specs landed** (G-7 + G-9 + G-10 + G-11 + G-14 + G-16) on top of the v3.4.0 batch. Gate growth: 31 → 37 specs, 1,435 → ~1,525 API tests; vitest 677 → 700.
 - **Four new admin-gated cron-trigger endpoints** added so each engine becomes deterministically testable from the manual path: `POST /api/forecasting/snapshot/run` (G-14), `POST /api/billing/recurring/run` (G-9), `POST /api/email/scheduled/run` (G-10), `POST /api/gdpr/retention/run` (G-11 — additional `confirmDestructive: true` body guard + per-deletion AuditLog row for GDPR audit-trail completeness). All mirror the established pattern: per-tenant scoped, `verifyRole(['ADMIN'])`, return `{success, tenantId, ...counters, errors}`.

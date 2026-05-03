@@ -2,9 +2,22 @@
 
 > A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **2,112 tests on every push** (1,435 Playwright + 677 vitest); release-validation full chromium suite on every tag.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.2
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.3
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.4.3 (May 3 2026 — eight-agent parallel wave: 6 more gate specs + 6 unit-test files + 2 engine fixes + 2 spec cleanups)
+
+A single-day continuation of v3.4.2 where 8 parallel agents shipped 14 commits in one wave.
+
+- **6 new gate specs**: G-12 campaign-engine, G-13 deal-insights-engine, G-15 backup-engine (with PII-safety check on dump contents), R-1 trio (ab_tests, accounting, canned_responses). Per-push gate now **50 specs / ~1,665 tests** + 30 vitest files / 803 unit tests = **~2,468 tests on every push**.
+- **2 contract-drift fixes** (closes #410 + #411): `recurringInvoiceEngine` now excludes both `VOID` and `VOIDED`; `retentionEngine` writes AuditLog regardless of deletion count.
+- **6 new vitest unit-test files**: `lib/prisma`, `lib/sentry`, `cron/recurringInvoiceEngine`, `cron/retentionEngine`, `cron/wellnessOpsEngine`, `cron/appointmentRemindersEngine`, plus `schema/schema-invariants` (G-24 schema-level data-leak guard with revert-and-prove verification).
+- **2 spec-discipline cleanups**: B3 wellness-journeys (sessionStorage admin shadow, NOT tab drift); wellness-clinical-api Location rename (`_teardown_wc_loc_*` so demo-hygiene's regex misses).
+- **Bonus infra fix**: `vitest.config.js` `cron/` `deps.inline` gap was silently blocking ALL cron-engine unit tests; now fixed.
+- **Schema findings worth follow-up**: 49 models have `tenantId` without formal `@relation`; `MarketplaceLead.@@unique([provider, externalLeadId])` doesn't include `tenantId` (could prevent cross-tenant imports of same lead).
+
+See [CHANGELOG.md](CHANGELOG.md#v343--2026-05-03--eight-agent-parallel-wave-6-more-gate-specs--6-unit-test-files--2-engine-fixes--2-spec-cleanups) for the full v3.4.3 entry.
 
 ## What's new in v3.4.2 (May 3 2026 — six more gate specs + four new admin trigger endpoints + portable monitor-pattern docs)
 

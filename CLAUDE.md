@@ -11,7 +11,7 @@ The persistent backlog of multi-day / architectural work that's been deferred fr
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.4.2 (continuation of same-day v3.4.0 / v3.4.1: 6 more gate specs landed (G-7/G-9/G-10/G-11/G-14/G-16) + 4 new admin-gated cron trigger endpoints (forecasting + recurring-invoice + scheduled-email + GDPR retention with `confirmDestructive` guard); per-push gate now ~1,525 Playwright + 700 vitest = **~2,225**; 2 contract-drift bugs surfaced + filed (#410, #411); 2 portable cross-project monitor-pattern docs shipped (DEMO_MONITOR_PATTERN.md + LIVE_MONITOR_PATTERN.md); demo-monitor cadence relaxed to every 2h. See [CHANGELOG.md](CHANGELOG.md))
+- **Version:** v3.4.3 (eight-agent parallel wave continuing v3.4.2: 6 more gate specs (G-12/G-13/G-15 + R-1 trio for ab-tests/accounting/canned-responses), 6 new vitest unit-test files (lib/prisma, lib/sentry, cron/recurringInvoice, cron/retention, cron/wellnessOps, cron/appointmentReminders, schema/invariants), 2 engine fixes (#410 #411 closed), 2 spec-discipline cleanups (B3 sessionStorage shadow, wellness-clinical afterAll rename); per-push gate now **50 Playwright specs / ~1,665 tests + 30 vitest files / 803 unit tests = ~2,468 per-push**; bonus vitest.config.js cron/ unblock. See [CHANGELOG.md](CHANGELOG.md))
 - **Branch:** main (single-branch workflow)
 - **Deploy:** GitHub Actions auto-deploy on push to main ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) — health-check + rollback to HEAD~1 on fail. Local `ssh_deploy_*.py` scripts are legacy.
 
@@ -314,7 +314,7 @@ cd e2e && BASE_URL=https://crm.globusdemos.com npx playwright test --project=chr
 - `tests/demo-health.spec.js` + `tests/demo-hygiene-api.spec.js` + `tests/teardown-completeness.spec.js` — closed-loop demo cleanliness assertions backed by [demo-monitor.yml](.github/workflows/demo-monitor.yml) cron (every 30 min, opens a tracker issue on failure)
 - Plus ~150 module-level api specs (each `routes/*.js` has a `tests/<route>-api.spec.js` partner). Latest additions: `landing-pages-api`, `workflows-api`, `integrations-api`, `audit-api`, `search-api`, `email-api`.
 
-**~1,525 API tests on every push** (deploy.yml api_tests gate, ~37 specs) **+ 700 vitest unit tests** (deploy.yml unit_tests gate, 23 files) = **~2,225 total per-push**. Plus ~2,500 broader UI/wellness/a11y tests on every release tag (e2e-full.yml). Demo-monitor cron polls the deployed box every 2 hours; auto-issue on failure (filed against a stable-title issue so re-runs comment instead of spamming).
+**~1,665 API tests on every push** (deploy.yml api_tests gate, **50 specs**) **+ 803 vitest unit tests** (deploy.yml unit_tests gate, **30 files**) = **~2,468 total per-push**. Plus ~2,500 broader UI/wellness/a11y tests on every release tag (e2e-full.yml). Demo-monitor cron polls the deployed box every 2 hours; auto-issue on failure (filed against a stable-title issue so re-runs comment instead of spamming).
 
 ## GitHub
 

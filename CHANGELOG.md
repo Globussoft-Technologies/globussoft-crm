@@ -1,5 +1,78 @@
 # CHANGELOG
 
+## v3.4.3 — 2026-05-03 — eight-agent parallel wave: 6 more gate specs + 6 unit-test files + 2 engine fixes + 2 spec cleanups
+
+A single-day continuation of v3.4.2 where 8 parallel agents shipped 14 commits in one wave. **No new product features**; this release finishes off the engine-spec backlog (G-12 / G-13 / G-15), kicks off the under-covered-routes batch (R-1 trio), closes both contract-drift findings from v3.4.2 (#410 + #411), adds 6 new vitest unit-test files (lib + cron + schema), and ships 2 spec-discipline cleanups (B3 sessionStorage shadow + wellness-clinical afterAll rename pattern).
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.2 | v3.4.3 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | 37 specs / ~1,525 tests | **50 specs** / ~1,665 tests | +13 specs / +140 tests |
+| Per-push unit tests | vitest | 23 files / 700 tests | **30 files** / 803 tests | +7 files / +103 tests |
+| **Total per-push** |  | ~2,225 | **~2,468** | **+11%** |
+
+### Added — 6 new gate specs (~+140 API tests)
+
+| ID | Spec | Commit | Tests | Notable |
+|---|---|---|---|---|
+| **G-12** | `campaign-engine-api.spec.js` | `f681ff2` | 11 | Added `POST /api/marketing/campaigns/run` admin-gated; surfaced 4 design-debt findings (most important: Campaign uses in-memory `global._campaignSchedules` map → backend restart wipes ALL pending schedules silently — production-impacting) |
+| **G-13** | `deal-insights-engine-api.spec.js` | `515c316` (multi-agent collision commit) | 14 | Added `POST /api/deal-insights/run` admin-gated; surfaced DealInsight orphan-row pollution (no FK cascade to Deal); discovered the cron engine is heuristic-only, NOT Gemini-backed (gap card was wrong) |
+| **G-15** | `backup-engine-api.spec.js` | `515c316` | 14 | Added `POST /api/admin/backup/run` + `GET /list` + `GET /file/:name` admin-gated; refactored `cron/backupEngine.js` to expose return values; added docker-exec mode for Windows dev hosts; PII-safety assertion grades dump for `ENC:v1:` ciphertext when `WELLNESS_FIELD_KEY` set; CI runner now installs `mysql-client` via apt-get |
+| **R-1a** | `ab-tests-api.spec.js` | `8632050` | 38 | Was previously zero gated coverage on `routes/ab_tests.js` (259 lines) |
+| **R-1b** | `accounting-api.spec.js` | `515c316` | 37 | Webhook openPaths assertion + sync/all idempotency + 3-tenant cross-isolation matrix |
+| **R-1c** | `canned-responses-api.spec.js` | `014ac6a` | 23 | Ordering contract + `'General'` default category + cross-tenant matrix |
+
+### Added — 7 new vitest unit-test files (+103 tests)
+
+| File | Commit | Tests | Coverage |
+|---|---|---|---|
+| `backend/test/lib/prisma.test.js` (R-2) | `90eddac` | 21 | 88.33% lines on `lib/prisma.js` |
+| `backend/test/lib/sentry.test.js` (R-3) | `90eddac` | 11 | 100% on `lib/sentry.js` |
+| `backend/test/cron/recurringInvoiceEngine.test.js` (#410) | `7f9567a` | 5 | New |
+| `backend/test/cron/retentionEngine.test.js` (#411) | `da54afd` | 7 | New |
+| `backend/test/cron/wellnessOpsEngine.test.js` (R-5) | `8303272` | 30 | 76.92% lines (gap is cron-shell init/orchestrator; per-tenant runners are 100%) |
+| `backend/test/cron/appointmentRemindersEngine.test.js` (R-5) | `d86fbdb` | 23 | 93.5% lines |
+| `backend/test/schema/schema-invariants.test.js` (G-24) | `08b29fd` | 6 | n/a (schema test) |
+
+The `lib/` test pair caught a vitest-CJS-require interop quirk: `vi.mock('@sentry/node')` doesn't intercept CJS requires under this repo's setup. Worked around using `createRequire` + monkey-patch on the real CJS `module.exports` — the SUT's `require('@sentry/node')` resolves to the same cached instance. Documented in the test file headers for future agents.
+
+### Compliance fixes — both v3.4.2 contract-drift bugs closed
+
+- **#410 closed** (commit `7f9567a`) — `recurringInvoiceEngine.js` now uses `status: { notIn: ['VOID', 'VOIDED'] }`. Voided recurring invoices can no longer regenerate via the cron path.
+- **#411 closed** (commit `da54afd`) — `retentionEngine.js` writes the AuditLog row regardless of deletion count. The agent corrected the issue's recommended diff: it suggested `action: 'RETENTION_SWEEP'` but the existing e2e spec asserts `action: 'DELETE'`, so the fix uses `'DELETE'` with `via: 'cron'` in details (mirrors the manual route's precedent). Spec contract preserved.
+
+**Bonus fixes the engine-fixes agent shipped en route:**
+- **`backend/vitest.config.js` cron/ deps.inline gap** — `cron/` wasn't in `server.deps.inline` or coverage globs. Was silently blocking ALL cron-engine unit tests. Adding it unblocked the R-5 sibling agent's 53 cron-engine vitest tests in the same wave.
+- **`retentionEngine.js` ENTITY_MAP eager-binding refactor** — module captured prisma model proxies at load time, making the engine un-mockable. Refactored to lazy property lookup (`prisma[propName]` inside the loop). Functionally identical; meaningfully more testable.
+
+### Spec-discipline cleanups (long-tail residue)
+
+- **B3 wellness-real-user-journeys** (commit `967cbdc`) — root cause was NOT tab-locator drift (the original L3 diagnosis). The `auth.setup` admin token (generic CRM tenant) was lingering in sessionStorage and shadowing the doctor token written via `uiLoginViaToken` (which only touches localStorage). The SPA's `getAuthToken()` prefers the in-memory holder seeded from sessionStorage, so the SPA booted as `admin@globussoft.com` (generic tenant), the wellness patient-detail fetch 404'd, and the page rendered "Patient not found" — no tabs to find. Fix: `clearBrowserState(page)` at top of B3, mirroring B1 + D1.
+- **wellness-clinical-api afterAll Location rename** (commit `02a4d1e`) — existing rename target was `${RUN_TAG}_CLEANED_LOC_${id}` where `RUN_TAG = E2E_WC_<ts>`. Renamed rows STILL started with `E2E_` and STILL matched demo-hygiene's residue regex. demo-hygiene runs in the same suite BEFORE global-teardown and was catching residue mid-run. Fix: rename to `_teardown_wc_loc_${id}` (mirrors G-6's pattern). Plus a one-time SQL cleanup of 12 stale rows.
+
+### G-24 schema invariants — surfaced 4 schema findings worth follow-up
+
+The new `schema-invariants.test.js` flagged real schema drift the codebase has been carrying:
+
+1. **49 models have `tenantId Int` but NO formal `tenant Tenant @relation`** — the data-leak invariant only requires the column (Prisma uses `tenantId` for filtering); the relation is convenience for joins/cascades. Concrete impact: `prisma.tenant.delete()` cascade only works for the ~60 models that DO have the relation; the 49 above leak rows on tenant deletion.
+2. **`Currency` is in the no-relation bucket but is per-tenant** (`@@unique([code, tenantId])`) — already corrected in the test's whitelist commentary.
+3. **21 `@@unique` constraints lack documenting comments** — soft-warn output; most are obvious composites but `MarketplaceLead.@@unique([provider, externalLeadId])` is worth scrutinizing — could prevent two tenants from importing the same provider lead.
+4. **`Currency.code` is NOT marked `@unique` per-tenant alone** — only `(code, tenantId)`. Means two tenants CAN both have a "USD" row, which is correct but worth confirming the conversion logic doesn't assume global uniqueness.
+
+### Carry-over for v3.4.4
+
+- **Outstanding contract-drift findings worth filing** as separate `[regression]` issues:
+  - **#412** (proposed) — Campaign uses in-memory `global._campaignSchedules` map; backend restart wipes pending schedules silently. Real production-impacting.
+  - **Schema cleanup pass** — convert 49 `tenantId`-only models to also declare `tenant Tenant @relation`, document remaining `@@unique` constraints with comments.
+- **R-4 next-batch route specs** — `booking_pages` (353L), `knowledge_base` (357L), `email_threading` (358L), `document_templates` (367L) — 1.5-2h each.
+- **R-5 batch 2 cron engines** — `lowStock` (already covered by sibling work indirectly), `forecastSnapshot`, `leadScoring`, `slaBreach`, `sentiment`, `marketplace` — 3-4h each.
+- **R-6 integration-heavy routes** — `calendar_google`, `sso`, `calendar_outlook`, `zapier`, `chatbots` — 2-3h each.
+- **G-20 tenant-isolation-api** still the highest-severity multi-day pickup.
+- **G-17/G-18/G-19** wellness.js route split — best after G-20.
+
+---
+
 ## v3.4.2 — 2026-05-03 — six more gate specs + four new admin trigger endpoints + portable monitor-pattern docs
 
 A continuation of the same-day v3.4.0 / v3.4.1 arc. **No new product features**, but six more gate specs landed plus four new admin-gated trigger endpoints (each one mirroring an existing cron engine), and two cross-project pattern docs got written for hand-off to sister Globussoft products.

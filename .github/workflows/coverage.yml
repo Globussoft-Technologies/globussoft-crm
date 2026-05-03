@@ -207,6 +207,7 @@ jobs:
             tests/email-threading-api.spec.js \
             tests/numeric-id-sweep.spec.js \
             tests/migration-safety.spec.js \
+            tests/wellness-telecaller-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

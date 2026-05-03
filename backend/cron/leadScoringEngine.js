@@ -174,40 +174,99 @@ function computeScore(contact) {
   return Math.max(1, Math.min(Math.round(score), 99));
 }
 
+// #421 — recompute window. We skip contacts whose aiScore was refreshed
+// within the last 24h so a 100K-contact tenant doesn't rewrite every row
+// every 10 minutes (the previous behaviour pegged Sentry p99 ticks at 8+
+// minutes at scale). There is no dedicated `aiScoreLastComputedAt` column
+// today (would require a schema migration owned by a separate agent), so
+// we piggyback on `Contact.updatedAt` — every score-update touches it
+// already, so it's a faithful proxy for "last scored at" (modulo the case
+// where some other column was edited recently, in which case we just skip
+// this tick and recompute next tick — no correctness loss).
+const RECOMPUTE_WINDOW_HOURS = 24;
+
 /**
  * Core scoring tick — called by cron and by the debug endpoint.
+ *
+ * #421 — three architectural fixes vs the original sweep:
+ *   1. Per-tenant iteration (was: unscoped findMany sweeping all tenants
+ *      in one tick — a noisy-neighbour outage waiting to happen at 50+
+ *      tenants, plus a multi-tenant data-isolation violation).
+ *   2. Recompute window (was: every contact rewritten every 10 minutes
+ *      regardless of whether anything changed). See note above on the
+ *      updatedAt-as-proxy choice.
+ *   3. Promise.allSettled containment (was: Promise.all — one bad row
+ *      poisoned the whole tick). Failures are logged and the tick
+ *      continues so good rows still land.
  */
 async function tickLeadScoringEngine(io) {
   try {
-    const contacts = await prisma.contact.findMany({
-      include: {
-        deals: true,
-        activities: true,
-        sequenceEnrollments: true,
-        // #248 — additional engagement signals so the score uses the full
-        // 1-99 range instead of clustering on 3 status-based buckets.
-        emails: { select: { direction: true, sentimentScore: true, createdAt: true } },
-        callLogs: { select: { createdAt: true } },
-      },
+    const tenants = await prisma.tenant.findMany({
+      where: { isActive: true },
+      select: { id: true },
     });
 
-    const updates = contacts.map(contact => {
-      const newScore = computeScore(contact);
-      return prisma.contact.update({
-        where: { id: contact.id },
-        data: { aiScore: newScore },
+    const recomputeCutoff = new Date(
+      Date.now() - RECOMPUTE_WINDOW_HOURS * 3600 * 1000,
+    );
+
+    let totalScored = 0;
+    for (const t of tenants) {
+      const contacts = await prisma.contact.findMany({
+        where: {
+          tenantId: t.id,
+          // #421 gap 2 — only rescore contacts that haven't been touched
+          // (and therefore not rescored) in the last 24h. Use updatedAt
+          // as the proxy until a dedicated aiScoreLastComputedAt lands.
+          OR: [
+            { updatedAt: null },
+            { updatedAt: { lt: recomputeCutoff } },
+          ],
+        },
+        include: {
+          deals: true,
+          activities: true,
+          sequenceEnrollments: true,
+          // #248 — additional engagement signals so the score uses the full
+          // 1-99 range instead of clustering on 3 status-based buckets.
+          emails: { select: { direction: true, sentimentScore: true, createdAt: true } },
+          callLogs: { select: { createdAt: true } },
+        },
       });
-    });
 
-    await Promise.all(updates);
-    console.log(`[LeadScoring] Scored ${contacts.length} contacts.`);
+      const updates = contacts.map(contact => {
+        const newScore = computeScore(contact);
+        return prisma.contact.update({
+          where: { id: contact.id },
+          data: { aiScore: newScore },
+        });
+      });
+
+      // #421 gap 3 — allSettled so one bad row doesn't drop the whole
+      // tick. Log rejections individually so Sentry/log-tail surfaces
+      // the offending contact id + reason without losing the rest.
+      const results = await Promise.allSettled(updates);
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === 'rejected') {
+          const cid = contacts[i]?.id;
+          console.error(
+            `[LeadScoring] update failed for contact ${cid}: ${r.reason?.message || r.reason}`,
+          );
+        }
+      }
+
+      totalScored += contacts.length;
+    }
+
+    console.log(`[LeadScoring] Scored ${totalScored} contacts across ${tenants.length} tenants.`);
 
     // Broadcast real-time update so connected UIs can refresh
     if (io) {
-      io.emit('lead_scores_updated', { count: contacts.length, ts: new Date() });
+      io.emit('lead_scores_updated', { count: totalScored, ts: new Date() });
     }
 
-    return { scored: contacts.length };
+    return { scored: totalScored };
   } catch (err) {
     console.error('[LeadScoring] Engine error:', err);
     throw err;

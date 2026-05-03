@@ -55,31 +55,25 @@
  *   ✅ findMany failure → re-throws (engine surface contract for the
  *      cron-init layer's .catch(console.error) wrapper).
  *
- * Engine bugs flagged for separate issues (NOT fixed here per agent
- * coordination — only documented):
+ * #421 — three architectural fixes verified by this suite (was: GAP
+ * docs pinning the broken behaviour; flipped on #421 close):
  *
- *   ⚠ NO tenant scope on the findMany. The engine fans out across ALL
- *     contacts of ALL tenants in a single sweep — there is no
- *     `where: { tenantId }` filter. In a multi-tenant deployment a
- *     newly-onboarded tenant immediately hijacks scoring CPU for
- *     unrelated tenants. The acceptance criterion "Per-tenant scope
- *     mandatory" is documented as failing here — this test pins the
- *     CURRENT (cross-tenant) behaviour so any future fix that adds
- *     tenant scoping will surface in the diff.
+ *   ✅ Per-tenant iteration. The engine now loads active tenants first
+ *     and runs the existing scoring inside a tenantId-filtered findMany,
+ *     so a slow Contact table on tenant A can't stall scoring for
+ *     tenants B + C. Mirrors the cron/wellnessOpsEngine.js pattern.
  *
- *   ⚠ NO recompute window / dedup. Every 10-min tick rescans every
- *     contact and rewrites Contact.aiScore even when no inputs have
- *     changed. There is no `where: { aiScoreUpdatedAt: { lt: ... } }`
- *     gate, no last-scored-at column. The acceptance criterion
- *     "Recompute window — deal scored recently is skipped" is
- *     documented as MISSING. This test confirms the engine ALWAYS
- *     issues an update per contact regardless of recency.
+ *   ✅ Recompute window (24h). The findMany filters out contacts whose
+ *     updatedAt is within the last 24h, using updatedAt as a proxy for
+ *     "last scored at" until a dedicated aiScoreLastComputedAt column
+ *     is added. Eliminates the "100K updates per 10-min tick at scale"
+ *     pathology Sentry was flagging.
  *
- *   ⚠ NO per-row error containment. The fan-out uses Promise.all over
- *     update promises — a single failed update causes the entire tick
- *     to reject (the .catch in initLeadScoringCron prevents process
- *     death but loses ALL the other update writes from the same tick).
- *     This test pins the rejection behaviour.
+ *   ✅ Per-row error containment via Promise.allSettled. A single
+ *     corrupted contact (deadlock, JSON-decode failure on
+ *     customAttributes, FK violation) no longer rejects the whole tick
+ *     — failures are logged with the contact id and the rest of the
+ *     batch lands.
  *
  * NOT covered (intentional — explain why):
  *   - initLeadScoringCron — schedules a real node-cron job; invoking
@@ -110,12 +104,21 @@ beforeAll(() => {
     findMany: vi.fn(),
     update: vi.fn(),
   };
+  // #421 — engine now iterates per tenant, so we must mock prisma.tenant
+  // alongside prisma.contact. Default to a single active tenant so the
+  // legacy single-tenant tests keep semantics; multi-tenant tests below
+  // override this.
+  prisma.tenant = {
+    findMany: vi.fn(),
+  };
 });
 
 beforeEach(() => {
   prisma.contact.findMany.mockReset();
   prisma.contact.update.mockReset();
+  prisma.tenant.findMany.mockReset();
 
+  prisma.tenant.findMany.mockResolvedValue([{ id: 1 }]);
   prisma.contact.findMany.mockResolvedValue([]);
   prisma.contact.update.mockResolvedValue({});
 });
@@ -732,6 +735,8 @@ describe('tickLeadScoringEngine — orchestration', () => {
   test('findMany include shape: pulls deals/activities/sequences/emails/callLogs', async () => {
     await tickLeadScoringEngine(null);
 
+    // #421 — one findMany per active tenant. The default beforeEach mock
+    // returns a single tenant, so we still expect exactly one call.
     expect(prisma.contact.findMany).toHaveBeenCalledTimes(1);
     const arg = prisma.contact.findMany.mock.calls[0][0];
     expect(arg.include).toHaveProperty('deals', true);
@@ -783,41 +788,73 @@ describe('tickLeadScoringEngine — orchestration', () => {
   });
 });
 
-// ─── Engine-shape contracts (acceptance criteria — ENGINE BUGS DOCUMENTED) ──
+// ─── Engine-shape contracts (acceptance criteria — ENGINE FIXES VERIFIED) ──
+//
+// These three tests previously documented the GAP (the engine's
+// architectural debt at the time of commit 53e3299). Issue #421 closed
+// those gaps; the tests are now FIXED-state assertions that prove the
+// per-tenant scope, recompute window, and per-row error containment are
+// all in place. Any regression that re-removes one of these properties
+// will fail the corresponding test loudly.
 
-describe('tickLeadScoringEngine — engine-shape contracts (gap docs)', () => {
-  test('GAP: findMany has NO tenant scope — sweeps all tenants in one tick', async () => {
-    // Documented engine bug. Acceptance criterion "Per-tenant scope
-    // mandatory" is NOT met. This test pins the current cross-tenant
-    // behaviour. If a future fix adds a `where: { tenantId }` filter,
-    // this test will fail loudly and force the maintainer to rewrite
-    // it as a positive tenant-scope assertion.
+describe('tickLeadScoringEngine — engine-shape contracts (#421 fixes verified)', () => {
+  test('FIXED: findMany IS tenant-scoped — iterates active tenants', async () => {
+    // #421 gap 1 — per-tenant iteration. The engine now loads tenants
+    // first, then runs the existing scoring per tenant inside a
+    // tenantId-filtered findMany. A multi-tenant deployment is bounded
+    // per tenant; cross-tenant noisy-neighbour outages can no longer
+    // happen.
+    prisma.tenant.findMany.mockResolvedValue([{ id: 7 }, { id: 11 }]);
+
     await tickLeadScoringEngine(null);
-    const arg = prisma.contact.findMany.mock.calls[0][0] || {};
-    expect(arg.where).toBeUndefined();
+
+    // One contact.findMany call per active tenant.
+    expect(prisma.contact.findMany).toHaveBeenCalledTimes(2);
+    // Each carries an explicit tenantId filter.
+    const tenantIds = prisma.contact.findMany.mock.calls.map(
+      ([arg]) => arg.where.tenantId,
+    );
+    expect(tenantIds.sort((a, b) => a - b)).toEqual([7, 11]);
+    // Tenant lookup is itself scoped to active tenants only.
+    expect(prisma.tenant.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.tenant.findMany.mock.calls[0][0].where).toEqual({
+      isActive: true,
+    });
   });
 
-  test('GAP: no recompute window — every contact rescored every tick', async () => {
-    // Documented engine bug. Acceptance criterion "Recompute window
-    // — deal scored recently is skipped" is NOT met. The findMany
-    // has no aiScoreUpdatedAt or last-scored gate.
-    prisma.contact.findMany.mockResolvedValue([
-      contactWith({ id: 1, aiScore: 50 }),
-      contactWith({ id: 2, aiScore: 70 }),
-      contactWith({ id: 3, aiScore: 30 }),
-    ]);
+  test('FIXED: recompute window — findMany filters out recently-scored contacts', async () => {
+    // #421 gap 2 — recompute window via updatedAt proxy. The findMany
+    // now carries an OR clause that excludes contacts whose updatedAt
+    // is within the last 24h. Production no longer pays 100K updates
+    // per 10-min tick on stale data.
     await tickLeadScoringEngine(null);
-    // ALL three contacts get an update issued, including ones whose
-    // computed score equals the existing aiScore.
-    expect(prisma.contact.update).toHaveBeenCalledTimes(3);
+
+    const arg = prisma.contact.findMany.mock.calls[0][0];
+    expect(arg.where).toBeDefined();
+    expect(arg.where.OR).toBeDefined();
+    expect(Array.isArray(arg.where.OR)).toBe(true);
+
+    // The two clauses: updatedAt is null OR updatedAt is older than 24h.
+    const orClauses = arg.where.OR;
+    const nullClause = orClauses.find(c => c.updatedAt === null);
+    const ltClause = orClauses.find(c => c.updatedAt && c.updatedAt.lt);
+    expect(nullClause).toBeDefined();
+    expect(ltClause).toBeDefined();
+
+    // Cutoff is approximately 24h ago.
+    const cutoff = ltClause.updatedAt.lt;
+    expect(cutoff).toBeInstanceOf(Date);
+    const ageHours = (Date.now() - cutoff.getTime()) / 3600000;
+    expect(ageHours).toBeGreaterThan(23);
+    expect(ageHours).toBeLessThan(25);
   });
 
-  test('GAP: Promise.all means one failed update rejects the whole tick', async () => {
-    // Documented engine bug. Acceptance criterion "Per-row error
-    // containment" is NOT met. A single mid-tick prisma failure aborts
-    // the remaining writes from this tick (the cron-init wrapper just
-    // logs and waits 10 minutes for the next tick — those writes are
-    // simply lost for that interval).
+  test('FIXED: Promise.allSettled — one failed update no longer rejects the tick', async () => {
+    // #421 gap 3 — per-row error containment. A single corrupted
+    // contact (e.g. JSON-decode failure on customAttributes, deadlock,
+    // FK violation) used to abort the whole tick. allSettled now lets
+    // the other contacts land their score updates and the engine
+    // resolves cleanly.
     prisma.contact.findMany.mockResolvedValue([
       contactWith({ id: 1 }),
       contactWith({ id: 2 }),
@@ -828,6 +865,75 @@ describe('tickLeadScoringEngine — engine-shape contracts (gap docs)', () => {
       .mockRejectedValueOnce(new Error('write fail'))
       .mockResolvedValueOnce({});
 
-    await expect(tickLeadScoringEngine(null)).rejects.toThrow('write fail');
+    // Engine no longer rejects; returns a clean count of attempted
+    // contacts (the per-row failure is logged, not propagated).
+    const result = await tickLeadScoringEngine(null);
+    expect(result).toEqual({ scored: 3 });
+    // All three update calls were issued.
+    expect(prisma.contact.update).toHaveBeenCalledTimes(3);
+  });
+
+  // ─── Edge cases added for the #421 fix ───────────────────────────────
+
+  test('multi-tenant scoring sums across tenants in returned count', async () => {
+    // Two tenants, two contacts each → engine reports 4 scored.
+    prisma.tenant.findMany.mockResolvedValue([{ id: 1 }, { id: 2 }]);
+    prisma.contact.findMany
+      .mockResolvedValueOnce([
+        contactWith({ id: 100 }),
+        contactWith({ id: 101 }),
+      ])
+      .mockResolvedValueOnce([
+        contactWith({ id: 200 }),
+        contactWith({ id: 201 }),
+      ]);
+
+    const result = await tickLeadScoringEngine(null);
+    expect(result).toEqual({ scored: 4 });
+    expect(prisma.contact.update).toHaveBeenCalledTimes(4);
+  });
+
+  test('recompute window: contact with updatedAt=null still scored (new contact bootstrap)', async () => {
+    // The OR clause is `updatedAt: null OR updatedAt < cutoff`. Brand-
+    // new contacts with no updatedAt are correctly included so they
+    // pick up an initial aiScore on first tick.
+    await tickLeadScoringEngine(null);
+    const orClauses = prisma.contact.findMany.mock.calls[0][0].where.OR;
+    const hasNullBranch = orClauses.some(
+      c => Object.prototype.hasOwnProperty.call(c, 'updatedAt') && c.updatedAt === null,
+    );
+    expect(hasNullBranch).toBe(true);
+  });
+
+  test('partial-failure tick still emits lead_scores_updated to io', async () => {
+    // Contract: even with mid-tick failures, the io broadcast still
+    // fires so connected dashboards refresh on the contacts that DID
+    // score successfully.
+    prisma.contact.findMany.mockResolvedValue([
+      contactWith({ id: 1 }),
+      contactWith({ id: 2 }),
+    ]);
+    prisma.contact.update
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error('row fail'));
+    const io = { emit: vi.fn() };
+
+    await tickLeadScoringEngine(io);
+
+    expect(io.emit).toHaveBeenCalledWith(
+      'lead_scores_updated',
+      expect.objectContaining({ count: 2 }),
+    );
+  });
+
+  test('zero active tenants: tick is a clean no-op', async () => {
+    // Edge case: a fresh deployment with no active tenants. The engine
+    // must not throw, must not call contact.findMany at all, and must
+    // resolve with scored: 0.
+    prisma.tenant.findMany.mockResolvedValue([]);
+    const result = await tickLeadScoringEngine(null);
+    expect(result).toEqual({ scored: 0 });
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 });

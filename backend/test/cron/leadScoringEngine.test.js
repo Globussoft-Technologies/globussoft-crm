@@ -64,7 +64,7 @@
  *     tenants B + C. Mirrors the cron/wellnessOpsEngine.js pattern.
  *
  *   ✅ Recompute window (24h). The findMany filters out contacts whose
- *     updatedAt is within the last 24h, using updatedAt as a proxy for
+ *     aiScoreLastComputedAt is within the last 24h, using aiScoreLastComputedAt as a proxy for
  *     "last scored at" until a dedicated aiScoreLastComputedAt column
  *     is added. Eliminates the "100K updates per 10-min tick at scale"
  *     pathology Sentry was flagging.
@@ -823,8 +823,8 @@ describe('tickLeadScoringEngine — engine-shape contracts (#421 fixes verified)
   });
 
   test('FIXED: recompute window — findMany filters out recently-scored contacts', async () => {
-    // #421 gap 2 — recompute window via updatedAt proxy. The findMany
-    // now carries an OR clause that excludes contacts whose updatedAt
+    // #421 gap 2 — recompute window via aiScoreLastComputedAt proxy. The findMany
+    // now carries an OR clause that excludes contacts whose aiScoreLastComputedAt
     // is within the last 24h. Production no longer pays 100K updates
     // per 10-min tick on stale data.
     await tickLeadScoringEngine(null);
@@ -834,15 +834,15 @@ describe('tickLeadScoringEngine — engine-shape contracts (#421 fixes verified)
     expect(arg.where.OR).toBeDefined();
     expect(Array.isArray(arg.where.OR)).toBe(true);
 
-    // The two clauses: updatedAt is null OR updatedAt is older than 24h.
+    // The two clauses: aiScoreLastComputedAt is null OR aiScoreLastComputedAt is older than 24h.
     const orClauses = arg.where.OR;
-    const nullClause = orClauses.find(c => c.updatedAt === null);
-    const ltClause = orClauses.find(c => c.updatedAt && c.updatedAt.lt);
+    const nullClause = orClauses.find(c => c.aiScoreLastComputedAt === null);
+    const ltClause = orClauses.find(c => c.aiScoreLastComputedAt && c.aiScoreLastComputedAt.lt);
     expect(nullClause).toBeDefined();
     expect(ltClause).toBeDefined();
 
     // Cutoff is approximately 24h ago.
-    const cutoff = ltClause.updatedAt.lt;
+    const cutoff = ltClause.aiScoreLastComputedAt.lt;
     expect(cutoff).toBeInstanceOf(Date);
     const ageHours = (Date.now() - cutoff.getTime()) / 3600000;
     expect(ageHours).toBeGreaterThan(23);
@@ -893,14 +893,14 @@ describe('tickLeadScoringEngine — engine-shape contracts (#421 fixes verified)
     expect(prisma.contact.update).toHaveBeenCalledTimes(4);
   });
 
-  test('recompute window: contact with updatedAt=null still scored (new contact bootstrap)', async () => {
-    // The OR clause is `updatedAt: null OR updatedAt < cutoff`. Brand-
-    // new contacts with no updatedAt are correctly included so they
+  test('recompute window: contact with aiScoreLastComputedAt=null still scored (new contact bootstrap)', async () => {
+    // The OR clause is `aiScoreLastComputedAt: null OR aiScoreLastComputedAt < cutoff`. Brand-
+    // new contacts with no aiScoreLastComputedAt are correctly included so they
     // pick up an initial aiScore on first tick.
     await tickLeadScoringEngine(null);
     const orClauses = prisma.contact.findMany.mock.calls[0][0].where.OR;
     const hasNullBranch = orClauses.some(
-      c => Object.prototype.hasOwnProperty.call(c, 'updatedAt') && c.updatedAt === null,
+      c => Object.prototype.hasOwnProperty.call(c, 'aiScoreLastComputedAt') && c.aiScoreLastComputedAt === null,
     );
     expect(hasNullBranch).toBe(true);
   });

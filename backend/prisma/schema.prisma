@@ -152,7 +152,13 @@ model Contact {
   title   String?
   status  String  @default("Lead") // Lead, Prospect, Customer, Churned
   source  String? @default("Organic")
-  aiScore Int     @default(0) // 1-100 predictive close probability
+  aiScore                Int       @default(0) // 1-100 predictive close probability
+  /// Last time leadScoringEngine wrote aiScore for this contact. Used as
+  /// the recompute-window key so the cron only re-scores contacts whose
+  /// score is older than RECOMPUTE_WINDOW_HOURS (default 24h). Without
+  /// this, every tick re-scored every contact (#421 gap 2). Nullable so
+  /// pre-existing rows backfill on first tick.
+  aiScoreLastComputedAt  DateTime?
 
   // Data enrichment
   industry       String?

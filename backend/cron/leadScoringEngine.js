@@ -215,12 +215,13 @@ async function tickLeadScoringEngine(io) {
       const contacts = await prisma.contact.findMany({
         where: {
           tenantId: t.id,
-          // #421 gap 2 — only rescore contacts that haven't been touched
-          // (and therefore not rescored) in the last 24h. Use updatedAt
-          // as the proxy until a dedicated aiScoreLastComputedAt lands.
+          // #421 gap 2 — only rescore contacts whose score is null OR
+          // older than RECOMPUTE_WINDOW_HOURS. Pre-existing rows have
+          // aiScoreLastComputedAt = null and are treated as needing
+          // a score on the first tick after the column was introduced.
           OR: [
-            { updatedAt: null },
-            { updatedAt: { lt: recomputeCutoff } },
+            { aiScoreLastComputedAt: null },
+            { aiScoreLastComputedAt: { lt: recomputeCutoff } },
           ],
         },
         include: {
@@ -234,11 +235,17 @@ async function tickLeadScoringEngine(io) {
         },
       });
 
+      const tickStart = new Date();
       const updates = contacts.map(contact => {
         const newScore = computeScore(contact);
         return prisma.contact.update({
           where: { id: contact.id },
-          data: { aiScore: newScore },
+          data: {
+            aiScore: newScore,
+            // Stamp the recompute-window key so subsequent ticks within
+            // the window skip this row.
+            aiScoreLastComputedAt: tickStart,
+          },
         });
       });
 

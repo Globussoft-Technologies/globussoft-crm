@@ -25,7 +25,17 @@ const sanitizeText = (input) => {
 // what POST enforces. Returns null on success, or { status, body } on failure.
 const NAME_MIN = 1;
 const NAME_MAX = 100;
-const ALLOWED_FIELD_TYPES = new Set(["Text", "Number", "Boolean", "Date"]);
+// Field-type whitelist. Includes BOTH the original "String" vocabulary
+// the existing seed + custom-objects-api.spec.js fixtures use AND the
+// "Text" vocabulary the App Builder UI's new-entity form emits. Some
+// older entities have type strings like "Integer" / "Float" / "DateTime"
+// — accept them all to avoid breaking existing tenant data. Future
+// cleanup can pick a canonical set + migrate old rows; out of scope
+// for the #419 validator.
+const ALLOWED_FIELD_TYPES = new Set([
+  "String", "Text", "Number", "Integer", "Float",
+  "Boolean", "Date", "DateTime", "JSON",
+]);
 
 function validateEntityPayload({ name, description, fields }, { partial }) {
   if (!partial || name !== undefined) {

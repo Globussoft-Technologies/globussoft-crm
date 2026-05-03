@@ -129,11 +129,40 @@ test.describe('eventBus.emitEvent() — entry-point + orchestration', () => {
     return (rows || []).filter((r) => r.entityId === ruleId).length;
   }
 
+  // Count audit rows for a rule whose serialized payload carries a unique tag.
+  // Used by the cross-tenant test to distinguish audit rows produced by THIS
+  // test's emit from rows produced by parallel specs that legitimately fire
+  // the same tenant-A rule via the multi-rule fan-out (Playwright runs spec
+  // files in parallel workers, and several other eventbus / approvals /
+  // workflows specs emit `deal.created` on tenant A; emitEvent correctly
+  // fans out to all matching active rules, so their fires DO produce an
+  // audit row with entityId === ruleA.id even though they have nothing to
+  // do with our tenant-B emit. By tagging our emit's payload we filter to
+  // only the rows our emit produced.)
+  async function auditCountTagged(request, headers, ruleId, payloadTag) {
+    const res = await request.get(`${API}/audit?entity=AutomationRule&action=WORKFLOW`, { headers });
+    expect(res.ok()).toBeTruthy();
+    const rows = await res.json();
+    return (rows || []).filter(
+      (r) => r.entityId === ruleId && (r.details || '').includes(payloadTag)
+    ).length;
+  }
+
   // ── tenant scoping ─────────────────────────────────────────────────
   // emitEvent's findMany has `where: {tenantId, triggerType, isActive}`. A
   // rule on tenant A must not run on a tenant-B emit. We POST /:id/test
   // under each tenant's auth — the route reads req.user.tenantId — and
   // confirm tenant A's rule audit count only changes when fired by tenant A.
+  //
+  // Concurrency note: this spec runs in parallel with eventbus-actions /
+  // eventbus-conditions / eventbus-template / approvals-flow / workflows-*
+  // — several of those create tenant-A rules on `deal.created` and fire
+  // them via /workflows/:id/test. emitEvent correctly fans out to ALL
+  // active tenant-A rules with that trigger, so our ruleA legitimately
+  // gets fired by THEIR emits too — producing audit rows we don't want
+  // to count against this test. To filter: we stamp our tenant-B emit
+  // payload with a unique `_specBus` token and only count audit rows
+  // whose `details` JSON contains that token.
   test('rule on tenant A does not fire when tenant B emits the same event', async ({ request }) => {
     const ruleA = await createRule(request, authA(), {
       name: `emit-tenantscope-A-${TAG}`,
@@ -154,20 +183,28 @@ test.describe('eventBus.emitEvent() — entry-point + orchestration', () => {
     });
     created.rulesB.push(ruleB.id);
 
-    const beforeA = await auditCount(request, authA(), ruleA.id);
+    // Unique payload signatures so we can filter audit rows belonging to
+    // THIS test's emits, ignoring noise from concurrent specs firing the
+    // same trigger on the same tenant.
+    const tagB = `__tenantscope_B_${TAG}`;
+    const tagA = `__tenantscope_A_${TAG}`;
+
+    const beforeA = await auditCountTagged(request, authA(), ruleA.id, tagB);
 
     // Tenant B emits — under tenant B's auth, /workflows/:id/test reads
     // req.user.tenantId = B, so emitEvent runs with tenantId=B and
     // findMany excludes tenant A's rule entirely.
-    await fire(request, authB(), ruleB.id, { dealId: 99 });
+    await fire(request, authB(), ruleB.id, { dealId: 99, _specBus: tagB });
 
-    const afterA = await auditCount(request, authA(), ruleA.id);
+    const afterA = await auditCountTagged(request, authA(), ruleA.id, tagB);
     expect(afterA - beforeA, 'tenant A rule must NOT fire on tenant B emit').toBe(0);
 
-    // Sanity check: tenant A firing under its own auth still works.
-    const beforeASelf = await auditCount(request, authA(), ruleA.id);
-    await fire(request, authA(), ruleA.id, { dealId: 100 });
-    const afterASelf = await auditCount(request, authA(), ruleA.id);
+    // Sanity check: tenant A firing under its own auth still works. Use a
+    // distinct payload tag so we count only THIS fire's audit row, not any
+    // parallel-spec ruleA fires that happen to land in the same window.
+    const beforeASelf = await auditCountTagged(request, authA(), ruleA.id, tagA);
+    await fire(request, authA(), ruleA.id, { dealId: 100, _specBus: tagA });
+    const afterASelf = await auditCountTagged(request, authA(), ruleA.id, tagA);
     expect(afterASelf - beforeASelf, 'tenant A rule fires on tenant A emit').toBeGreaterThanOrEqual(1);
   });
 

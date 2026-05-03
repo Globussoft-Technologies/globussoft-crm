@@ -199,6 +199,7 @@ jobs:
             tests/ab-tests-api.spec.js \
             tests/deal-insights-engine-api.spec.js \
             tests/accounting-api.spec.js \
+            tests/canned-responses-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

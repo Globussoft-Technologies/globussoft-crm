@@ -263,7 +263,8 @@ jobs:
           #   - ab-tests-api.spec.js         (38 tests: routes/ab_tests.js — R-1)
           #   - deal-insights-engine-api.spec.js (14 tests: cron/dealInsightsEngine.js + POST /run — G-13)
           #   - accounting-api.spec.js       (37 tests: routes/accounting.js — R-1)
-          # Total: ~1290 API tests run on every push.
+          #   - canned-responses-api.spec.js (23 tests: routes/canned_responses.js — R-1)
+          # Total: ~1313 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -318,6 +319,7 @@ jobs:
             tests/ab-tests-api.spec.js \
             tests/deal-insights-engine-api.spec.js \
             tests/accounting-api.spec.js \
+            tests/canned-responses-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

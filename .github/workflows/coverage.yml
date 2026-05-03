@@ -203,6 +203,7 @@ jobs:
             tests/tenant-isolation-api.spec.js \
             tests/attribution-api.spec.js \
             tests/tests/booking-pages-api.spec.js \
+            tests/document-templates-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

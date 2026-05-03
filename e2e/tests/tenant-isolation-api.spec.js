@@ -18,16 +18,24 @@
  *   4. **DELETE /:id** (when supported) — Tenant B DELETE on Tenant A's
  *      id → [403, 404]. The row is still readable by Tenant A after.
  *
- * Resources covered in this first wave (12 of ~109 multi-tenant models —
- * the highest-PII / highest-financial / highest-volume surfaces):
+ * Resources covered (G-20 wave 1 + wave 2 = ~17 of ~109 multi-tenant
+ * models — the highest-PII / highest-financial / highest-volume
+ * surfaces):
  *
  *   Generic CRM:    contacts, deals, tasks, billing, estimates,
- *                   notifications, workflows
- *   Wellness PHI:   wellness/patients, wellness/visits,
- *                   wellness/prescriptions, wellness/services,
- *                   wellness/locations
+ *                   workflows, sequences, projects, tickets,
+ *                   developer-webhooks, scheduled-emails
+ *   Wellness PHI:   wellness/patients, wellness/services,
+ *                   wellness/locations, wellness/visits,
+ *                   wellness/prescriptions, wellness/consents
  *
- * Subsequent commits will widen the coverage to the remaining ~95
+ * Wave 2 (this commit) added the wellness clinical FK chain
+ * (Patient → Visit → Prescription, plus Patient → Consent). Those
+ * sub-resources need an upstream Patient (and Visit, for Rx) seeded
+ * in the owner tenant first; see `wellnessFk.*` below for the
+ * shared-upstream pattern used by their `createBody`.
+ *
+ * Subsequent commits will widen the coverage to the remaining ~90
  * tenant-scoped models. The framework here (`probeIsolation`) is the
  * load-bearing piece — adding a new resource is one entry in the
  * RESOURCES array.
@@ -236,12 +244,183 @@ const RESOURCES = [
     cleanupField: 'name',
     listKey: null,
   },
-  // wellness/visits + wellness/prescriptions need a Patient FK first;
-  // the framework here doesn't compose FKs. They're covered indirectly
-  // by the Patient probe (if you can't get the patient, you can't get
-  // their visits). A future widening pass will add explicit FK-aware
-  // probes once the Patient probe lands.
+  // ── Wellness clinical FK chain (Tenant B creates; Tenant A probes) ─
+  //
+  // Visits, prescriptions and consents all reference a Patient FK
+  // (Rx additionally needs a Visit FK). The framework's per-resource
+  // `createBody()` is called at test time, *after* the outer
+  // `beforeAll` has already populated `wellnessFk.{patientId,visitId}`
+  // by POSTing one Patient + one Visit into Tenant B. If either seed
+  // step fails, `wellnessFk.*` stays null and the affected describe
+  // block's `createInOwnerTenant` short-circuits — the spec then
+  // skips with a "POST … did not return a usable id" message rather
+  // than blowing up. Same graceful-degrade discipline as the rest of
+  // the catalog.
+  {
+    name: 'wellness/visits',
+    path: '/wellness/visits',
+    createBody: () => ({
+      patientId: wellnessFk.patientId,
+      // 'booked' status sidesteps the #109 service+doctor requirement
+      // for completed visits — we only need a row that exists in
+      // tenant B, the visit's clinical content is irrelevant to a
+      // tenant-isolation probe.
+      status: 'booked',
+      notes: `IsoTest Visit ${RUN_TAG}`,
+      visitDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    }),
+    ownerToken: 'B',
+    supportsDelete: false,         // clinical no-delete policy (#21)
+    cleanupField: 'notes',
+    listKey: null,
+  },
+  {
+    name: 'wellness/prescriptions',
+    path: '/wellness/prescriptions',
+    createBody: () => ({
+      visitId: wellnessFk.visitId,
+      patientId: wellnessFk.patientId,
+      // #114: drugs must be a non-empty array of named entries.
+      drugs: [{ name: `IsoRxDrug ${RUN_TAG}`, dosage: '1 tab', frequency: 'BD', duration: '7d' }],
+      instructions: `IsoTest Rx ${RUN_TAG}`,
+    }),
+    ownerToken: 'B',
+    supportsDelete: false,         // clinical no-delete policy (#21)
+    cleanupField: 'instructions',  // PUT only allows drugs/instructions amends
+    listKey: null,
+  },
+  {
+    name: 'wellness/consents',
+    path: '/wellness/consents',
+    createBody: () => ({
+      patientId: wellnessFk.patientId,
+      templateName: `IsoTest Consent ${RUN_TAG}`,
+      // #118 defense-in-depth: signatureSvg must be ≥500 chars (a
+      // blank canvas is ~220, a real signature is several KB). Pad
+      // a minimal data-URL to clear the floor.
+      signatureSvg: `data:image/svg+xml;base64,${'A'.repeat(600)}`,
+    }),
+    ownerToken: 'B',
+    supportsDelete: false,         // clinical no-delete policy (#21)
+    cleanupField: 'templateName',  // signatureSvg is post-sign-immutable per #118
+    listKey: null,
+  },
+
+  // ── Generic CRM (wave 2) ───────────────────────────────────────────
+  {
+    name: 'workflows',
+    path: '/workflows',
+    createBody: () => ({
+      name: `IsoTest Workflow ${RUN_TAG}`,
+      // The route validates triggerType + actionType against a
+      // whitelist (#18). Pick the most universally-supported pair:
+      // contact.created → send_email is always present.
+      triggerType: 'contact.created',
+      actionType: 'send_email',
+      targetState: { to: 'iso@example.test', subject: 'probe', body: 'probe' },
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    name: 'sequences',
+    path: '/sequences',
+    createBody: () => ({
+      name: `IsoTest Sequence ${RUN_TAG}`,
+      // #395: nodes must be an array (may be empty for a draft canvas).
+      nodes: [],
+      edges: [],
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    name: 'projects',
+    path: '/projects',
+    createBody: () => ({
+      name: `IsoTest Project ${RUN_TAG}`,
+      description: 'cross-tenant probe',
+      priority: 'Medium',
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    name: 'tickets',
+    path: '/tickets',
+    createBody: () => ({
+      subject: `IsoTest Ticket ${RUN_TAG}`,
+      description: 'cross-tenant probe',
+      priority: 'Low',
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    // POST + DELETE only — there is no GET /:id or PUT /:id at
+    // /developer/webhooks. The framework's id-targeted GET/PUT probes
+    // therefore land on a non-existent route and return 404, which
+    // satisfies [403, 404]. The list-leak test is the meaningful gate
+    // here: tenant B's webhook list must NEVER include tenant A's row
+    // (and the route additionally scopes by userId, which makes leak
+    // doubly unlikely — a regression that drops EITHER filter is
+    // caught).
+    name: 'developer-webhooks',
+    path: '/developer/webhooks',
+    createBody: () => ({
+      event: 'contact.created',
+      // RUN_TAG embedded in the URL path so the list-scan regex picks
+      // it up if a leak ever happens.
+      targetUrl: `https://example.test/iso/${RUN_TAG}/${Math.random().toString(36).slice(2, 8)}`,
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    // POST + GET/:id + DELETE/:id exist; PUT/:id does NOT (the route
+    // exposes /cancel and /send-now action verbs instead). Probe-side
+    // PUT 404s are acceptable [403, 404]. List uses scheduledFor
+    // window (next 7 days by default) — our seed is +1d so it lands
+    // inside that window without `?all=`.
+    name: 'scheduled-emails',
+    path: '/email-scheduling',
+    createBody: () => ({
+      to: `iso-${Date.now()}@example.test`,
+      subject: `IsoTest Scheduled ${RUN_TAG}`,
+      body: `cross-tenant probe ${RUN_TAG}`,
+      scheduledFor: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
 ];
+
+// ── Wellness FK chain seed ─────────────────────────────────────────
+//
+// Visits + prescriptions + consents all need at least a Patient FK
+// (Rx also needs a Visit FK). Rather than seeding inside each
+// resource's beforeAll (which would create N redundant patients and
+// burn audit-log volume), we seed ONE Patient + ONE Visit in the
+// outer beforeAll and have the wellness/{visits,prescriptions,consents}
+// createBody factories pull from this shared object.
+//
+// Owner tenant is B (wellness). If seeding fails (route 5xx, schema
+// mismatch, anything), the resource's createInOwnerTenant returns
+// null and the per-resource probes skip with a clear message — same
+// graceful-degrade contract as the rest of the catalog. Cleanup is
+// handled by per-resource afterAll for the leaf rows; the upstream
+// Patient + Visit are renamed in the wellness-FK afterAll below to
+// clear the RUN_TAG marker (clinical rows are no-delete per #21).
+const wellnessFk = {
+  patientId: null,
+  visitId: null,
+};
 
 // ── Probe helpers ──────────────────────────────────────────────────
 
@@ -310,6 +489,71 @@ test.describe('Tenant isolation — API gate (G-20)', () => {
     tokenB = b?.token || null;
     userIdA = a?.user?.id || null;
     userIdB = b?.user?.id || null;
+
+    // ── Wellness FK seed (Tenant B) ──────────────────────────────
+    // Best-effort. If any step fails, the dependent resources skip
+    // with `wellnessFk.{patientId,visitId} == null` — the framework
+    // already short-circuits createInOwnerTenant on a falsy POST,
+    // which propagates `ownerId == null` and skips the leaf probes.
+    if (tokenB) {
+      try {
+        const patientRes = await request.post(`${API}/wellness/patients`, {
+          headers: authHeader(tokenB),
+          data: {
+            name: `IsoFk Patient ${RUN_TAG}`,
+            phone: `+9197${(Date.now() % 100000000).toString().padStart(8, '0')}`,
+            source: 'walk-in',
+          },
+          timeout: REQUEST_TIMEOUT,
+        });
+        if (patientRes.ok()) {
+          const pBody = await patientRes.json();
+          wellnessFk.patientId = pBody?.id ?? null;
+        }
+      } catch (_e) { /* swallow — leaf probes will skip */ }
+
+      if (wellnessFk.patientId != null) {
+        try {
+          const visitRes = await request.post(`${API}/wellness/visits`, {
+            headers: authHeader(tokenB),
+            data: {
+              patientId: wellnessFk.patientId,
+              status: 'booked',
+              notes: `IsoFk Visit ${RUN_TAG}`,
+              visitDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            },
+            timeout: REQUEST_TIMEOUT,
+          });
+          if (visitRes.ok()) {
+            const vBody = await visitRes.json();
+            wellnessFk.visitId = vBody?.id ?? null;
+          }
+        } catch (_e) { /* swallow */ }
+      }
+    }
+  });
+
+  test.afterAll(async ({ request }) => {
+    // Rename the FK-chain Patient + Visit rows to clear the RUN_TAG
+    // marker so demo-hygiene's residue regex doesn't trip on them
+    // post-suite. Clinical rows are no-delete per #21, so we PUT-rename
+    // the same way wellness-clinical-api.spec.js does (commit 02a4d1e).
+    // Failures swallowed — best-effort, by this point pass/fail is
+    // already reported.
+    if (tokenB && wellnessFk.visitId != null) {
+      await request.put(`${API}/wellness/visits/${wellnessFk.visitId}`, {
+        headers: authHeader(tokenB),
+        data: { notes: `_teardown_iso_fk_visit_${wellnessFk.visitId}` },
+        timeout: REQUEST_TIMEOUT,
+      }).catch(() => {});
+    }
+    if (tokenB && wellnessFk.patientId != null) {
+      await request.put(`${API}/wellness/patients/${wellnessFk.patientId}`, {
+        headers: authHeader(tokenB),
+        data: { name: `_teardown_iso_fk_patient_${wellnessFk.patientId}` },
+        timeout: REQUEST_TIMEOUT,
+      }).catch(() => {});
+    }
   });
 
   test('beforeAll-sanity: both tenant logins succeeded', () => {

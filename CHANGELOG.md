@@ -1,5 +1,113 @@
 # CHANGELOG
 
+## v3.4.4 — 2026-05-03/04 — multi-session arc: G-20 tenant-isolation flagship + skills library + 5 audit follow-up fixes + agent-progress infra
+
+A multi-session continuation of v3.4.3. **No new product features outside T2.1 (mobile sidebar drawer at <900px)**; this release lands the highest-severity multi-day item from the gap card (G-20 tenant-isolation, 3 waves), closes 5 audit-follow-up bugs the previous waves' agents surfaced, builds a 7-skill reusable library for parallel-agent dispatch, ships agent-progress visibility infra, and adds 4 R-4 medium-route specs + 5 R-5 batch 2 cron-engine vitests.
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.3 | v3.4.4 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | 50 specs / ~1,665 tests | **55 specs** / ~1,950 tests | +5 specs / +285 tests |
+| Per-push unit tests | vitest | 30 files / 803 tests | **35 files** / 964 tests | +5 files / +161 tests |
+| **Total per-push** |  | ~2,468 | **~2,914** | **+18%** |
+
+### Added — G-20 tenant-isolation (the flagship)
+
+The single highest-severity multi-day item on `docs/E2E_GAPS.md` ("single highest-severity bug class for multi-tenant CRM"). Three waves landed across the multi-session arc:
+
+| Wave | Commit | Resources covered | Tests added |
+|---|---|---|---|
+| Wave 1 | `a9154ac` | 12 (contacts, deals, tasks, billing, estimates, ...) + framework | ~25 |
+| Wave 2 | `8064fda` | +9 (workflows, sequences, projects, tickets, developer-webhooks, scheduled-emails) + wellness clinical FK chain (Patient → Visit → Rx → Consent) | ~37 |
+| Wave 3 | `f4b4ebe` | +8 (expenses, contracts, currencies, custom-objects/entities, kb-articles, kb-categories, scim-tokens, wellness/treatment-plans) | +31 |
+
+**Net: 29 resources covered, 93 tests on `e2e/tests/tenant-isolation-api.spec.js`.** Each resource asserts: (a) row created in tenant A is invisible to tenant B's bearer token; (b) cross-tenant id-bearing operations return 404 not 403 (id-enumeration prevention); (c) post-DELETE owner-read or list-lookup confirms no silent mutation across tenants. Pattern is extensible — adding a 30th resource is now a 5-line config block.
+
+### Added — 6 reusable Claude Skills + 1 agent-progress skill
+
+`.claude/skills/` now ships project-shared skills that encode the standing rules each parallel agent re-derived during the v3.4.x arc. Agent prompts shrink from ~250-line preambles to ~30-line "Use the X skill" pointers; the skill metadata pre-loads at session start, body loads on demand.
+
+| Skill | Captures |
+|---|---|
+| **`writing-api-gate-spec`** (commit `4724ad5`) | Standing rules + pattern selection + RUN_TAG + afterAll _teardown_ pattern; bundled TEMPLATE.md |
+| **`wiring-spec-into-gate`** (commit `4724ad5`, fixed `67129bc`) | Two-file edit, trailing-backslash gotcha, rebase-on-collision; bundled wire-in.sh script (now accepts either `tests/foo.spec.js` or `foo.spec.js` after the R-4 wave's double-prepend bug) |
+| **`writing-vitest-unit-test`** (commit `4724ad5`) | vi.mock prisma, CJS-require quirk + createRequire workaround, 4 mock shapes by SUT type; bundled TEMPLATE + MOCK_PATTERNS |
+| **`adding-admin-trigger-endpoint`** (commit `d7b17b7`) | Mirror `/api/forecasting/snapshot/run` pattern, optional `confirmDestructive` guard, AuditLog writes, wellness `verifyWellnessRole` carve-out; bundled TEMPLATE.js with 3 variants |
+| **`bumping-version-docs`** (commit `d7b17b7`) | The 5-file dance for vX.Y.Z bumps; bundled CHANGELOG_ENTRY + TODO_HANDOFF + README_WHATSNEW templates |
+| **`dispatching-parallel-agent-wave`** (commit `d7b17b7`) | Disjoint-files invariant, 4-agent default cap, discovery-first vs jump-to-closers, role-specific prompt skeletons |
+| **`reporting-agent-progress`** (commit `1b00dd8`) | The new visibility protocol — agents append start/milestone/commit/done events to a JSONL log; CRM `/developer` page polls every 3s and shows them live |
+
+### Added — agent-activity infra (visibility for parallel waves)
+
+Closes the visibility gap when 4-8 parallel agents are in flight. Pre-this-commit, the user only saw a notification when each agent FINISHED. Now:
+
+- **Backend route** `GET/POST /api/developer/agent-activity` (admin-only) — reads/writes `.scripts-state/agent-activity.jsonl`. Length-capped, validated.
+- **Frontend widget** on `/developer` — polls every 3 seconds, shows newest-first table with color-coded action badges (start=blue, done=green, failed=red), file paths, commit short-SHAs, message text.
+- **Helper script** `.claude/skills/reporting-agent-progress/log.sh` — single-call interface; caches admin token; falls back to JSONL append if backend hiccups; never fails (returns 0 on errors so logging hiccups don't crash agents).
+- **End-to-end verified** with the G-20 wave 3 agent — first agent to use the protocol; logged start / milestone / commit / done events visible live on `/developer`.
+
+### Fixed — 5 audit follow-up bugs the parallel agents surfaced
+
+| # | Subject | Commit |
+|---|---|---|
+| **#412** | Campaign schedules in-memory (`global._campaignSchedules`) → backend restart wipes pending; persisted to DB now (Campaign.scheduledAt/scheduleStatus/scheduleFilters columns + DB-driven cron) | `5ca0849` |
+| **#416** | backup engine respects MYSQLDUMP_BIN strictly (no PATH fallback) — pre-flight `fs.accessSync` + rename `CMD_BUILD_FAILED` → `MYSQLDUMP_FAILED`. Per-push deploys unblocked. | `51b299a` |
+| **#417** | backup engine pipeline-exit-code masking — replace `mysqldump | gzip` shell pipeline (POSIX sh has no `pipefail` so gzip masks dump's exit code) with two-child `spawn` pipe. New `MYSQLDUMP_TIMEOUT` watchdog. Streams end-to-end. | `03071ff` |
+| **#418** | `routes/workflows.js` add `GET /:id` — fills the gap that forced G-20 wave 2 to use list-fallback | `2eb7dbc` |
+| **#419** | `routes/custom_objects.js` add `GET/PUT/DELETE /entities/:id` full CRUD with refuse-when-records-exist DELETE policy (409 ENTITY_HAS_RECORDS). Bonus: pre-#419 POST crashed on `fields=undefined`; now treats as `[]`. | `b90ac7c` (+ `1f5f35a`, `81ec5ad`) |
+| **#420** | wellness treatments → treatment-plans single canonical path. Legacy `POST /wellness/treatments` returns 410 Gone with `code: WELLNESS_TREATMENTS_RENAMED`. Frontend `PatientDetail.jsx` PlansTab migrated. | `cea9bc0` |
+
+### Added — 4 R-4 medium-route specs + 5 R-5 batch 2 cron-engine vitests
+
+| ID | Spec | Commit | Tests |
+|---|---|---|---|
+| R-1 substitute | `attribution-api.spec.js` | `c1c3b3d` | 24 |
+| R-4a | `document-templates-api.spec.js` | `1cb1a93` | 42 |
+| R-4b | `booking-pages-api.spec.js` | `53e3299` (bundled) + `325dc13` (wire-in fix) | 43 |
+| R-4c | `email-threading-api.spec.js` | `9db1f26` | 33 |
+| R-5a | `cron/forecastSnapshotEngine.test.js` | `78082d0` | 28 |
+| R-5b | `cron/leadScoringEngine.test.js` | `53e3299` | 49 |
+| R-5c | `cron/slaBreachEngine.test.js` | `4bcc98c` | 25 |
+| R-5d | `cron/sentimentEngine.test.js` | `76bf2a4` | 53 |
+| #410 follow-up | `cron/recurringInvoiceEngine.test.js` | (already in v3.4.3) | 5 |
+| #411 follow-up | `cron/retentionEngine.test.js` | (already in v3.4.3) | 7 |
+
+### Added — T2.1 mobile sidebar drawer (the only product-visible change)
+
+`feat(T2.1): mobile sidebar collapse + drawer at <900px` (commit `590011d`) — CSS-class hamburger (replaces the inline `display:none` that was beating responsive.css), transform-based slide-in drawer, ARIA dialog/modal + focus trap, 44×44 touch target. Mobile users on iOS/Android now have a working hamburger; previously the desktop sidebar collapsed but the toggle was unreachable.
+
+### Notable contract-drift findings filed for follow-up
+
+- **#421** — `cron/leadScoringEngine.js` has 3 architectural gaps: no tenant scope (sweeps ALL tenants per tick), no recompute window (rescores every contact every 10 min), no per-row error containment (`Promise.all` rejects whole tick). Surfaced by `53e3299`'s 49-test vitest. P1.
+- **#422** — `routes/email_threading.js` has 3 contract drifts: stub `/archive` (schema lacks `archived` field), `Contact.email` not `@unique` but `findUnique` silently fails (auto-link broken since route shipped), `/reply` returns 200 not 201. Surfaced by `9db1f26`. P1 for the silent-fail; P3 for cosmetic.
+- **#423** — Multiple id-bearing routes return 500 (not 400/404) on non-numeric `:id` because `parseInt('abc')` → NaN → Prisma throws → outer catch returns 500. Surfaced by `1cb1a93` document-templates spec. P3 sweep.
+
+Plus the carry-over from v3.4.3:
+- **#413** — 49 models without `tenant Tenant @relation` (cascade leak on `Tenant.delete()`) — open
+- **#414** — `MarketplaceLead.@@unique` excludes `tenantId` — open
+- **#415** — 21 `@@unique` constraints lack docs — open
+
+### Operations
+
+- **Backend agent-activity log** lives at `.scripts-state/agent-activity.jsonl` (gitignored). Append-only.
+- **`.claude/settings.json` widened** to allow `Bash(.claude/skills/*)` so future skill-bundled scripts (wire-in.sh, log.sh, and any future helpers) run without permission prompts.
+- **Demo-monitor cron** unchanged at `0 */2 * * *` from v3.4.2.
+
+### Carry-over for v3.4.5
+
+- **G-21** frontend vitest+RTL setup (3-5 days) — biggest remaining unknown
+- **G-22** msw/nock integration tier — Stripe webhook signing (2 days)
+- **G-23** migration safety check — `prisma migrate` dry-run in CI (1 day)
+- **G-17/G-18/G-19** wellness.js route split (1 day each — best after a focused day)
+- **G-20** wave 4 — there are still ~80 multi-tenant models left to systematically cover
+- **R-5 batch 3** — `marketplaceEngine` (skipped this batch due to external HTTP fan-out complexity), `orchestratorEngine`, `reportEngine`, `sequenceEngine`
+- **R-6** integration-heavy routes: `calendar_google`, `sso`, `calendar_outlook`, `zapier`, `chatbots`
+- **Tier 3 skills** (`closing-contract-drift-bug`, `local-heal-loop`, `scrubbing-demo`, `filing-contract-drift-issue`, `tagging-release`)
+- The 4 contract-drift issues filed this release (#421-#423 + the carry-over #413-#415) — engine + schema fixes
+
+---
+
 ## v3.4.3 — 2026-05-03 — eight-agent parallel wave: 6 more gate specs + 6 unit-test files + 2 engine fixes + 2 spec cleanups
 
 A single-day continuation of v3.4.2 where 8 parallel agents shipped 14 commits in one wave. **No new product features**; this release finishes off the engine-spec backlog (G-12 / G-13 / G-15), kicks off the under-covered-routes batch (R-1 trio), closes both contract-drift findings from v3.4.2 (#410 + #411), adds 6 new vitest unit-test files (lib + cron + schema), and ships 2 spec-discipline cleanups (B3 sessionStorage shadow + wellness-clinical afterAll rename pattern).

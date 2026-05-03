@@ -1,10 +1,25 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **2,112 tests on every push** (1,435 Playwright + 677 vitest); release-validation full chromium suite on every tag.
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **~2,914 tests on every push** (~2,237 Playwright + 677 vitest); release-validation full chromium suite on every tag. **7 reusable Claude Skills** + **live agent-activity widget** at /developer for parallel-wave visibility.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.3
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.4
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.4.4 (May 3 2026 — autonomous-orchestrator session: G-20 tenant-isolation flagship + 7 reusable Skills + live agent-activity widget)
+
+A single autonomous-orchestrator session that landed 43 commits across three parallel waves (12 + 9 + 8 resources), the first cohort of reusable Claude Skills, and end-to-end visibility into the wave system itself.
+
+- **G-20 tenant-isolation flagship** — new `tenant-isolation-api.spec.js` covers **29 resources / 93 cross-tenant assertions** across 3 waves (deals/contacts/leads/tasks; wellness FK chain Patient→Visit→Rx→Consent→TreatmentPlan; admin surfaces audit/notifications/email-templates/scheduled-emails; rename-on-cleanup pattern for no-DELETE resources). Per-push gate now **~64 specs / ~2,237 tests** + 35 vitest files / 677 unit tests = **~2,914 tests on every push** (+18% vs v3.4.3).
+- **7 reusable Claude Skills** under `.claude/skills/` — Tier 1 (`writing-api-gate-spec`, `wiring-spec-into-gate`, `writing-vitest-unit-test`) + Tier 2 (`adding-admin-trigger-endpoint`, `bumping-version-docs`, `dispatching-parallel-agent-wave`) + the visibility skill (`reporting-agent-progress`). Each captures standing rules + bundled templates so parallel agents stop re-deriving conventions every wave. `wiring-spec-into-gate/wire-in.sh` is idempotent + accepts `tests/foo.spec.js` or `foo.spec.js`.
+- **Live agent-activity widget** at `/developer` — backend `GET/POST /api/developer/agent-activity` (admin-only, JSONL-backed) + 3-second polling React widget. Background agents now log start / milestone / commit / done events via `.claude/skills/reporting-agent-progress/log.sh`; user can watch waves in real time instead of waiting for the final report.
+- **5 audit-followup bug fixes** closed: #412 Campaign schedules persist in DB (was in-memory global, lost on restart); #416 backup engine respects `MYSQLDUMP_BIN` strictly; #417 backup engine uses spawn pipe to observe both exit codes; #418 `routes/workflows.js` adds GET /:id; #419 `routes/custom_objects` widens to existing `String` vocabulary + adds GET/PUT/DELETE /:id; #420 wellness treatments consolidated → single `/treatment-plans` canonical path.
+- **R-4 medium-route batch** — 4 new gate specs: attribution-api (POST /track + report + revenue models), document-templates-api (42 tests, full CRUD + render), email-threading-api (33 tests across 8 endpoints), booking-pages-api wired in.
+- **R-5 batch 2 vitest** — 5 new unit-test files: `cron/forecastSnapshotEngine`, `cron/leadScoringEngine`, `cron/sentimentEngine`, `cron/slaBreachEngine`, plus the schema invariants suite already shipped in v3.4.3.
+- **T2.1 mobile sidebar drawer** — overlay + backdrop at <900px breakpoint with focus-trap; closes one of the two T2.x mobile follow-ups.
+- **3 contract-drift findings filed**: #421, #422, #423 — surfaced by the new R-4 specs, queued for separate planning passes.
+
+See [CHANGELOG.md](CHANGELOG.md#v344--2026-05-03--autonomous-orchestrator-session-g-20-tenant-isolation-flagship--7-reusable-skills--live-agent-activity-widget) for the full v3.4.4 entry.
 
 ## What's new in v3.4.3 (May 3 2026 — eight-agent parallel wave: 6 more gate specs + 6 unit-test files + 2 engine fixes + 2 spec cleanups)
 

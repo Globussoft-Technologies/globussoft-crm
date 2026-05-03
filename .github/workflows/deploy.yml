@@ -293,6 +293,7 @@ jobs:
             tests/recurring-invoice-api.spec.js \
             tests/scheduled-email-api.spec.js \
             tests/retention-api.spec.js \
+            tests/campaign-engine-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

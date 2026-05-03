@@ -1,7 +1,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 const { sendSms } = require("../services/smsProvider");
 const { computeFirstResponseDueAt } = require("../lib/leadSla");
 
@@ -457,6 +457,86 @@ router.post("/campaigns/:id/pause", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[Marketing] Pause campaign error:", err.message);
     res.status(500).json({ error: "Failed to pause campaign." });
+  }
+});
+
+// ── POST /campaigns/run ────────────────────────────────────────────
+// G-12: Manual trigger for the campaign cron engine. Mirrors
+// POST /api/billing/recurring/run + /api/forecasting/snapshot/run.
+// Drives cron/campaignEngine logic but scoped to the requesting
+// tenant only (the cron runs across all tenants every minute).
+// Reusing the engine's per-tick body keeps cron + manual paths
+// aligned on field semantics (status='Scheduled' window, schedule
+// metadata in global._campaignSchedules, status flip to Sending
+// then Completed). Gated to ADMIN — dispatching a campaign sends
+// real outbound emails/SMS to contacts.
+//
+// Returns { success, tenantId, processed, dispatched, skipped, errors }.
+//   processed   — count of Scheduled rows we walked (tenant-scoped)
+//   dispatched  — count we actually sent (status flipped to Completed)
+//   skipped     — count whose schedule.scheduledAt is still in the future
+//   errors      — per-row failures, mirrors engine's try/catch shape
+router.post("/campaigns/run", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const now = new Date();
+
+    // Mirror engine query but scoped to req.user.tenantId. Engine picks
+    // up status='Scheduled' rows; status='Completed'/'Sending'/'Draft'
+    // are excluded by the where clause itself.
+    const scheduled = await prisma.campaign.findMany({
+      where: { tenantId, status: "Scheduled" },
+    });
+
+    const scheduleMap = global._campaignSchedules || {};
+    let dispatched = 0;
+    let skipped = 0;
+    const errors = [];
+
+    for (const campaign of scheduled) {
+      const schedule = scheduleMap[campaign.id];
+      // Mirror engine: if schedule metadata exists AND scheduledAt is
+      // in the future → skip. If no schedule metadata at all → send
+      // immediately (engine fallback path).
+      if (schedule && schedule.scheduledAt > now) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        if (schedule && schedule.filters) {
+          campaign._audienceFilter = schedule.filters;
+        }
+        campaign._userId = req.user.userId;
+        await sendCampaign(campaign, req.io);
+        dispatched++;
+
+        // Clean up schedule metadata so a subsequent /run doesn't
+        // re-scan a Completed row's stale schedule entry.
+        if (global._campaignSchedules) {
+          delete global._campaignSchedules[campaign.id];
+        }
+      } catch (sendErr) {
+        errors.push({ id: campaign.id, error: sendErr.message });
+        // Mirror engine's failure path: flip back to Draft for retry.
+        await prisma.campaign.update({
+          where: { id: campaign.id },
+          data: { status: "Draft" },
+        }).catch(() => { /* best-effort */ });
+      }
+    }
+
+    res.json({
+      success: true,
+      tenantId,
+      processed: scheduled.length,
+      dispatched,
+      skipped,
+      errors,
+    });
+  } catch (err) {
+    console.error("[marketing/campaigns/run]", err);
+    res.status(500).json({ error: "Failed to run campaign engine", detail: err.message });
   }
 });
 

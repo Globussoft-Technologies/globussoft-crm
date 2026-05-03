@@ -158,16 +158,17 @@ test.describe('Custom Objects API — POST /entities', () => {
     expect(types).toEqual(['Boolean', 'Date', 'Number', 'String'].sort());
   });
 
-  test('500 (or 400) when fields array missing — handler maps over undefined', async ({ request }) => {
-    // The handler does `fields.map(...)` without a guard, so passing
-    // {name, description} alone causes a TypeError → caught → 500.
+  test('missing fields array — handler defaults to [] (post-#419)', async ({ request }) => {
+    // Pre-#419 the handler did `fields.map(...)` without a guard →
+    // TypeError → 500. Commit b90ac7c hardened the validator to treat
+    // missing fields as []; the entity is created with no fields and
+    // returns 201. Accept 400 too in case a future stricter validator
+    // decides "missing fields" should be an explicit reject.
     const res = await authPost(request, '/api/custom_objects/entities', {
       name: entityName('no-fields'),
-      description: 'should-fail',
+      description: 'created-with-empty-fields',
     });
-    // Route catches all and 500s — accept 400/500 to be tolerant if the
-    // route is later hardened with explicit validation.
-    expect([400, 500]).toContain(res.status());
+    expect([201, 400]).toContain(res.status());
   });
 
   test('500 when "fields" is the wrong type (string instead of array)', async ({ request }) => {

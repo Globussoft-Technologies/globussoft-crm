@@ -16,6 +16,9 @@
     "     queries, and ad-hoc one-liners come up too often to enumerate.",
     "     Destructive git/gh operations (push --force, gh pr merge, etc.) and",
     "     SSH to demo are NOT covered by this — those still need confirmation.",
+    "  6. Skill-bundled scripts under .claude/skills/* — wire-in.sh, log.sh,",
+    "     and any future helper bundled with a skill. Future skill authors",
+    "     don't need to expand this list per-skill; the glob covers them.",
     "",
     "Personal overrides go in .claude/settings.local.json (gitignored)."
   ],
@@ -63,6 +66,11 @@
       "Bash(gh workflow run*)",
       "Bash(gh pr list*)",
       "Bash(gh pr view*)",
+
+      "Bash(.claude/skills/*)",
+      "Bash(./.claude/skills/*)",
+      "Bash(bash .claude/skills/*)",
+      "Bash(bash ./.claude/skills/*)",
 
       "PowerShell(*)"
     ]

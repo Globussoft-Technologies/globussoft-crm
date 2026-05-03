@@ -1,10 +1,18 @@
 /*
- * Mobile responsive layer — Issue #228 (80/20 pass).
+ * Mobile responsive layer — Issue #228 (80/20 pass) + T2.1 follow-up.
  *
  * Scope: sidebar drawer + 6 critical wellness pages
  * (OwnerDashboard, Patients, PatientDetail, Calendar, Reports, TelecallerQueue).
  * Modals globally constrain to viewport. Forms / charts / marketing are
  * intentionally untouched — most already work via existing auto-fit grids.
+ *
+ * Breakpoint history:
+ *   - #228 shipped at <=768px (phones only)
+ *   - T2.1 raised to <=899px to catch tablets in landscape (iPad mini at
+ *     768x1024, iPad in portrait, small Android tablets, plus split-screen
+ *     phones in landscape mode). Wellness clinics overwhelmingly use phones
+ *     and tablets, and the 240px sidebar + 50+ generic-vertical nav items
+ *     was crowding tablet content at <900px.
  *
  * Full mobile parity (every page audited at 320/375/414/768) remains a
  * follow-up multi-day task.
@@ -28,8 +36,20 @@
   transition: opacity 200ms ease;
 }
 
-/* ── Mobile (<=768px): sidebar becomes off-canvas drawer ─────────── */
-@media (max-width: 768px) {
+/* ── Hamburger toggle baseline (desktop): hidden. T2.1 moved this from an
+   inline style on the button to a CSS class so the @media block below can
+   flip it on at <900px without an !important war with React's inline style
+   wins-over-stylesheet rule. ─────────────────────────────────────── */
+.sidebar-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Mobile / tablet-portrait (<=899px): sidebar becomes off-canvas drawer.
+   T2.1 raised the breakpoint from 768px to 899px so iPads in portrait
+   (768px) and tablets in landscape get the drawer treatment too. ─── */
+@media (max-width: 899px) {
   .app-sidebar {
     position: fixed;
     top: 0;
@@ -62,9 +82,13 @@
     min-width: 0 !important;
   }
 
-  /* Hamburger becomes visible. Push it to the left of the header. */
+  /* Hamburger becomes visible. WCAG 2.5.5 wants 44x44 minimum touch
+     targets — bumped from the desktop 36px. Pushed to the left of the
+     header via margin-right: auto on the button itself. */
   .sidebar-toggle {
     display: inline-flex !important;
+    width: 44px !important;
+    height: 44px !important;
   }
 
   /* Slimmer chrome on mobile — header padding, main padding. */
@@ -190,8 +214,10 @@
   }
 }
 
-/* ── Tablet (769-1024px): sidebar still static; just tighten paddings. */
-@media (min-width: 769px) and (max-width: 1024px) {
+/* ── Small laptop / large tablet (900-1024px): sidebar is static again
+   (drawer only kicks in below 900px), just tighten its width so the
+   main content gets enough horizontal room for grids + tables. */
+@media (min-width: 900px) and (max-width: 1024px) {
   .app-sidebar {
     width: 220px !important;
   }

@@ -15,7 +15,14 @@ import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/ad
 import { launchCallifiedSSO } from '../utils/callified';
 import { useNotify } from '../utils/notify';
 
-const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
+// T2.1: focus trap selector. Limited to actually-focusable elements inside the
+// drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
+// when the drawer is open at <900px so Tab cycles within the drawer instead of
+// escaping to the (visually hidden) main content.
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewport = false }) => {
   const { user, tenant } = useContext(AuthContext);
   const notify = useNotify();
   const role = user?.role || 'USER';
@@ -24,9 +31,14 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
   const isWellness = tenant?.vertical === 'wellness';
   const location = useLocation();
 
-  // #228: ESC closes the mobile drawer (a11y). Also auto-close on route change
-  // so navigating from the drawer doesn't leave it stuck open over the
-  // destination page.
+  // T2.1: ref to the <aside> so the focus-trap effect below can locate
+  // focusable descendants. Also used to read the drawer's bounding rect for
+  // the click-outside check on the backdrop.
+  const asideRef = useRef(null);
+
+  // T2.1 (extends #228): ESC closes the mobile drawer (a11y). Also auto-close
+  // on route change so navigating from the drawer doesn't leave it stuck open
+  // over the destination page.
   useEffect(() => {
     if (!mobileOpen) return;
     const onKey = (e) => { if (e.key === 'Escape') onMobileClose(); };
@@ -38,6 +50,49 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
     if (mobileOpen) onMobileClose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
+
+  // T2.1: focus trap + initial-focus. When the drawer opens at <900px, move
+  // focus to the first focusable element inside it (skipping the brand
+  // header which has no interactive elements) and intercept Tab/Shift-Tab so
+  // focus cycles within the drawer. Closing the drawer returns focus to the
+  // hamburger — that side is handled in Layout.jsx via toggleRef.
+  useEffect(() => {
+    if (!mobileOpen || !isMobileViewport) return undefined;
+    const aside = asideRef.current;
+    if (!aside) return undefined;
+
+    // Initial focus — defer one frame so the slide-in transition has started
+    // and the element is actually visible / scrollable into view.
+    const focusables = () => Array.from(aside.querySelectorAll(FOCUSABLE_SELECTOR));
+    const initialFocusFrame = requestAnimationFrame(() => {
+      const first = focusables()[0];
+      first?.focus();
+    });
+
+    const onTabKey = (e) => {
+      if (e.key !== 'Tab') return;
+      const list = focusables();
+      if (list.length === 0) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      // Shift-Tab on first → wrap to last
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+        return;
+      }
+      // Tab on last → wrap to first
+      if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onTabKey);
+    return () => {
+      cancelAnimationFrame(initialFocusFrame);
+      document.removeEventListener('keydown', onTabKey);
+    };
+  }, [mobileOpen, isMobileViewport]);
 
   // #392: Live sidebar counters. Previously counters were stale until
   // a manual page reload (initial-fetch-on-mount only). Strategy:
@@ -201,18 +256,29 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {} }) => {
     );
   };
 
+  // T2.1: when the drawer is open at <900px, the sidebar IS a modal dialog —
+  // it's the focused, foregrounded layer over a backdrop and the rest of the
+  // app is inert. Switch role from "navigation" to "dialog" + add aria-modal
+  // so screen readers announce it correctly. On desktop (or when closed),
+  // it's plain navigation.
+  const isDrawerOpen = mobileOpen && isMobileViewport;
+  const asideRole = isDrawerOpen ? 'dialog' : 'navigation';
+  const asideAriaModal = isDrawerOpen ? true : undefined;
+
   return (
     <>
-      {/* #228: backdrop is only visible at <=768px (responsive.css) and only
-          when the drawer is open. Tap dismisses. */}
+      {/* T2.1 (extends #228): backdrop is only visible at <900px (responsive.css)
+          and only when the drawer is open. Tap dismisses. */}
       <div
         className={`sidebar-backdrop ${mobileOpen ? 'is-open' : ''}`}
         onClick={onMobileClose}
         aria-hidden="true"
       />
       <aside
+        ref={asideRef}
         id="app-sidebar"
-        role="navigation"
+        role={asideRole}
+        aria-modal={asideAriaModal}
         aria-label="Main navigation"
         className={`glass app-sidebar ${mobileOpen ? 'is-open' : ''}`}
         style={{ width: '250px', height: '100vh', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', borderRadius: '0', borderLeft: 'none', borderTop: 'none', borderBottom: 'none' }}

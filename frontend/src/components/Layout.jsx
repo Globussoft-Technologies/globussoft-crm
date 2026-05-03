@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { LogOut, ChevronDown, Menu } from 'lucide-react';
 import Sidebar from './Sidebar';
@@ -9,13 +9,63 @@ import NotificationBell from './NotificationBell';
 import { AuthContext } from '../App';
 import { setupPush } from '../utils/pushSetup';
 
+// T2.1: drawer breakpoint. Mirror of the @media (max-width: 899px) rule in
+// frontend/src/styles/responsive.css. CSS owns the visual contract; JS uses
+// this constant only to decide when the sidebar is in "drawer" mode and
+// therefore needs role="dialog" + aria-modal="true" + a focus trap.
+const MOBILE_BREAKPOINT_PX = 900;
+
 const Layout = () => {
   const { user, setUser, setToken, token, tenant } = useContext(AuthContext);
   const navigate = useNavigate();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === 'wellness';
-  // #228: drawer state for mobile sidebar (<=768px). Desktop ignores this.
+  // T2.1 (extends #228): drawer state for the mobile sidebar (<900px). Desktop
+  // (>=900px) ignores this — CSS keeps the sidebar statically positioned.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Track viewport so we can apply role="dialog" + aria-modal only when the
+  // sidebar is actually rendering as a drawer. SSR-safe initial value: assume
+  // desktop, then sync on mount via the resize listener below.
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  // Keep a ref to the hamburger so we can return focus to it when the drawer
+  // closes — required for keyboard / screen-reader users (WAI-ARIA APG dialog
+  // pattern: focus must return to the trigger).
+  const toggleRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT_PX - 1}px)`);
+    const update = () => setIsMobileViewport(mql.matches);
+    update();
+    // matchMedia change events: addEventListener is the modern API; some
+    // older Safari builds only have addListener. Try modern first.
+    if (mql.addEventListener) {
+      mql.addEventListener('change', update);
+      return () => mql.removeEventListener('change', update);
+    }
+    mql.addListener(update);
+    return () => mql.removeListener(update);
+  }, []);
+
+  // When the drawer closes (either via backdrop, ESC, route change, or the
+  // user resizing back to desktop), return focus to the hamburger so keyboard
+  // users don't lose their place. Only fires when transitioning from
+  // open → closed; the open path (focus into the drawer) is handled in
+  // Sidebar.jsx where the first focusable link lives.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (wasOpenRef.current && !sidebarOpen) {
+      toggleRef.current?.focus();
+    }
+    wasOpenRef.current = sidebarOpen;
+  }, [sidebarOpen]);
+
+  // If the user resizes from mobile back to desktop while the drawer is open,
+  // close it — otherwise the drawer state lingers and the next mobile-resize
+  // re-opens it unexpectedly. Cheap and idempotent.
+  useEffect(() => {
+    if (!isMobileViewport && sidebarOpen) setSidebarOpen(false);
+  }, [isMobileViewport, sidebarOpen]);
 
   // T1.2: warn admin/manager when SMS provider is not configured. Patient
   // portal OTP login + appointment reminders silently fail without it. The
@@ -44,7 +94,11 @@ const Layout = () => {
 
   return (
     <div className="app-shell" style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--bg-color)' }}>
-      <Sidebar mobileOpen={sidebarOpen} onMobileClose={() => setSidebarOpen(false)} />
+      <Sidebar
+        mobileOpen={sidebarOpen}
+        onMobileClose={() => setSidebarOpen(false)}
+        isMobileViewport={isMobileViewport}
+      />
       <div className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {showSmsBanner && (
           <div
@@ -80,8 +134,13 @@ const Layout = () => {
           minHeight: 48,
           flexShrink: 0,
         }}>
-          {/* #228: hamburger toggle — hidden on desktop via responsive.css. */}
+          {/* T2.1: hamburger toggle. Visibility is controlled entirely by the
+              .sidebar-toggle class in responsive.css (hidden on desktop,
+              inline-flex at <900px with 44x44 touch target). The inline
+              display:none was removed because React's inline style wins over
+              stylesheets, which made the desktop @media flip impossible. */}
           <button
+            ref={toggleRef}
             type="button"
             className="sidebar-toggle"
             onClick={() => setSidebarOpen((v) => !v)}
@@ -89,8 +148,6 @@ const Layout = () => {
             aria-expanded={sidebarOpen}
             aria-controls="app-sidebar"
             style={{
-              display: 'none',
-              alignItems: 'center', justifyContent: 'center',
               background: 'none', border: '1px solid var(--border-color)',
               color: 'var(--text-primary)', borderRadius: 8,
               width: 36, height: 36, cursor: 'pointer',

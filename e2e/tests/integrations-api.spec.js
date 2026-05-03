@@ -385,20 +385,14 @@ test.describe('Integrations API — POST /toggle (legacy)', () => {
     expect([401, 403]).toContain(res.status());
   });
 
-  // FIXME — security finding: routes/integrations.js line 70 wires /toggle
-  // through verifyToken only, NOT verifyRole(['ADMIN']) like /connect and
-  // /disconnect. Non-admin users in any tenant can flip any provider's
-  // isActive flag (and the upsert path will silently CREATE an Integration
-  // row if none exists). This is documented as a "legacy compat" endpoint
-  // but should either inherit the admin guard or be removed.
-  // TODO: file separate issue + fix in route. Do not fix in this spec.
-  test.fixme('toggle should require admin role (currently does not)', async ({ request }) => {
+  // /toggle now inherits verifyRole(['ADMIN']) — issue #409 closed by adding
+  // the guard alongside its sister /connect + /disconnect endpoints.
+  test('toggle requires admin role', async ({ request }) => {
     const { token } = await getGenericUser(request);
     const res = await post(request, token, '/api/integrations/toggle', {
       provider: 'indiamart',
       isActive: true,
     });
-    // Desired: 403. Current behaviour: 200. Marked .fixme until route fixed.
     expect(res.status()).toBe(403);
   });
 });

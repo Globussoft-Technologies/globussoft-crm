@@ -66,8 +66,10 @@ router.post("/disconnect", verifyToken, verifyRole(["ADMIN"]), async (req, res) 
   }
 });
 
-// Legacy toggle endpoint (kept for backwards compat)
-router.post("/toggle", verifyToken, async (req, res) => {
+// Legacy toggle endpoint (kept for backwards compat). ADMIN-only — sister
+// /connect + /disconnect already require ADMIN; toggle is the same write
+// surface. Closes #409.
+router.post("/toggle", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { provider, isActive } = req.body;
     const integration = await prisma.integration.upsert({

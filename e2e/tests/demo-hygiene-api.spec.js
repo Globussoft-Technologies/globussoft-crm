@@ -225,8 +225,8 @@ test.describe('Demo hygiene — seed + payload scan (#120/#237/#265/#268/#285/#3
     ['/api/billing?limit=500',                      'generic', { name: 1 }],
     ['/api/wellness/services?limit=500',            'wellness', { name: 1, body: 1 }],
     ['/api/wellness/locations',                     'wellness', { name: 1, slug: 1 }],
-    ['/api/lead-routing/rules?limit=500',           'generic', { name: 1 }],
-    ['/api/kb/articles?limit=500',                  'generic', { name: 1, body: 1, slug: 1 }],
+    ['/api/lead-routing?limit=500',                 'generic', { name: 1 }],
+    ['/api/knowledge-base/articles?limit=500',      'generic', { name: 1, body: 1, slug: 1 }],
   ];
 
   for (const [path, tenant, fields] of ENDPOINTS) {

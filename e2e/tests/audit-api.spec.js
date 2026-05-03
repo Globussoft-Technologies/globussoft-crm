@@ -409,57 +409,23 @@ test.describe('Audit API — filter parameters', () => {
 
 // ── RBAC contract ──────────────────────────────────────────────────
 //
-// The G-5 acceptance criterion says "non-ADMIN gets 403 — verify
-// against current behavior". Current behavior on 2026-05-02:
-//   routes/audit.js has NO `verifyRole` — global auth gate is the
-//   only check, so MANAGER and USER both get 200.
-// This is a real compliance gap (audit logs include patient PII via
-// the `details` JSON column) but fixing it is a SEPARATE PR — see
-// TODOS.md "audit middleware build-out" / D2.
-//
-// Captured below as `test.fixme` so the day audit.js gains a role
-// guard the spec turns green and we don't regress back to no-guard.
+// G-5 acceptance: non-ADMIN gets 403. Closed by the route fix that
+// added verifyRole(['ADMIN']) to routes/audit.js (issue #408). The
+// previous "CURRENT BEHAVIOR: 200" pinning tests have been removed
+// since they would now fail (which is the desired result of the fix).
 
-test.describe('Audit API — RBAC contract (compliance gap, currently FIXME)', () => {
-  test.fixme('non-ADMIN MANAGER should get 403 (currently returns 200 — no role guard)', async ({ request }) => {
+test.describe('Audit API — RBAC contract', () => {
+  test('non-ADMIN MANAGER gets 403', async ({ request }) => {
     const { token } = await getGenericManager(request);
     expect(token, 'manager login').toBeTruthy();
     const res = await get(request, token, '/api/audit');
     expect(res.status()).toBe(403);
   });
 
-  test.fixme('non-ADMIN USER should get 403 (currently returns 200 — no role guard)', async ({ request }) => {
+  test('non-ADMIN USER gets 403', async ({ request }) => {
     const { token } = await getGenericUser(request);
     expect(token, 'user login').toBeTruthy();
     const res = await get(request, token, '/api/audit');
     expect(res.status()).toBe(403);
-  });
-
-  // Today's actual behavior — pinned so the day a guard is added,
-  // these tests fail and force somebody to flip the FIXMEs above and
-  // delete these. Documents the contract drift instead of hiding it.
-  test('CURRENT BEHAVIOR: MANAGER receives 200 (gap vs gap-card spec)', async ({ request }) => {
-    const { token } = await getGenericManager(request);
-    if (!token) test.skip(true, 'manager login unavailable in this env');
-    const res = await get(request, token, '/api/audit');
-    expect(res.status()).toBe(200);
-    // Even without a role guard, tenant scoping must hold.
-    const body = await res.json();
-    const { tenantId } = await getGenericAdmin(request); // same tenant as manager
-    for (const row of body) {
-      expect(row.tenantId).toBe(tenantId);
-    }
-  });
-
-  test('CURRENT BEHAVIOR: USER receives 200 (gap vs gap-card spec)', async ({ request }) => {
-    const { token } = await getGenericUser(request);
-    if (!token) test.skip(true, 'user login unavailable in this env');
-    const res = await get(request, token, '/api/audit');
-    expect(res.status()).toBe(200);
-    const body = await res.json();
-    const { tenantId } = await getGenericAdmin(request);
-    for (const row of body) {
-      expect(row.tenantId).toBe(tenantId);
-    }
   });
 });

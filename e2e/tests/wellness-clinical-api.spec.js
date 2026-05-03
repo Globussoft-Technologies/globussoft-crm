@@ -62,8 +62,9 @@
  * have NO DELETE endpoints. Any "cleanup" of those rows happens via the
  * teardown's name-regex scrub (cascades wipe Visit/Rx/ConsentForm).
  * Locations and Services have no DELETE either; we soft-disable services
- * via PUT { isActive: false } and leave locations behind (their names
- * carry the RUN_TAG so they're identifiable in the dashboard).
+ * via PUT { isActive: false } and PUT-rename locations to a non-residue
+ * `_teardown_wc_loc_${id}` name + isActive=false so demo-hygiene-api's
+ * `^E2E[_ ]/` regex doesn't catch them mid-run. Mirrors the G-6 pattern.
  */
 const { test, expect } = require('@playwright/test');
 
@@ -166,14 +167,23 @@ test.afterAll(async ({ request }) => {
     await authPut(request, `/api/wellness/services/${id}`, { isActive: false }).catch(() => {});
   }
   // Locations: no DELETE endpoint exists. Best-effort cleanup combines
-  // (a) RUN_TAG-prefixed rename so a reviewer can grep the test rows,
-  // (b) isActive=false so list/public/booking endpoints filter them out.
-  // Without (b), demo accumulates ~7 active "Ranchi" locations per spec
-  // run (2026-05-02 incident: 11 stranded rows on demo, all renamed but
-  // still active, polluted the admin /wellness/locations page).
+  // (a) PUT-rename to a NON-residue name so demo-hygiene-api's regex
+  //     (/^E2E[_ ]/, / E2E[_ ]/) doesn't catch it. Pre-fix the rename
+  //     was `${RUN_TAG}_CLEANED_LOC_${id}` — but RUN_TAG itself starts
+  //     with `E2E_WC_` so the renamed row STILL matched the residue
+  //     regex, and demo-hygiene-api (which runs BEFORE global-teardown
+  //     in the same suite) caught it mid-run (2026-05-03 heal-loop).
+  // (b) isActive=false so list/public/booking endpoints filter them
+  //     out regardless. Without (b), demo accumulates ~7 active "Ranchi"
+  //     locations per spec run (2026-05-02 incident: 11 stranded rows
+  //     on demo, all renamed but still active, polluted the admin
+  //     /wellness/locations page).
+  // Mirrors the G-6 (appointment-reminders-api.spec.js:194) cleanup
+  // pattern: rename to `_teardown_<spec>_${id}` underscore-prefixed
+  // so the residue regex (which anchors on `E2E`) misses it.
   for (const id of createdLocationIds) {
     await authPut(request, `/api/wellness/locations/${id}`, {
-      name: `${RUN_TAG}_CLEANED_LOC_${id}`,
+      name: `_teardown_wc_loc_${id}`,
       isActive: false,
     }).catch(() => {});
   }

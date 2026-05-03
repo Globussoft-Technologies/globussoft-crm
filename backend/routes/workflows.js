@@ -100,6 +100,25 @@ router.get("/", async (req, res) => {
   }
 });
 
+// GET /:id — fetch a single automation rule by id (tenant-scoped).
+// #418: brings workflows in line with sequences/contacts/deals/etc., where
+// every resource exposes a direct GET /:id rather than forcing a list-scan.
+router.get("/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id) || id < 1) {
+      return res.status(400).json({ error: "id must be a positive integer", code: "INVALID_ID" });
+    }
+    const wf = await prisma.automationRule.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!wf) return res.status(404).json({ error: "Workflow not found" });
+    res.json(wf);
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to fetch workflow" });
+  }
+});
+
 // Helper: validate that a triggerType / actionType is in the supported whitelist.
 // #18: previously accepted any string; engine would silently log "Unknown actionType"
 // at execute time. Now we reject at create/update time with 400 + machine code.

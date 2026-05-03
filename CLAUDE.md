@@ -11,7 +11,7 @@ The persistent backlog of multi-day / architectural work that's been deferred fr
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.3.0 (test infrastructure overhaul + Tier 1 CI hardening: ESLint + Dependabot + gitleaks + npm audit gate; vitest unit-test layer; see [CHANGELOG.md](CHANGELOG.md))
+- **Version:** v3.4.0 (gate-spec push: 8 new gate specs / +351 tests bringing total per-push to 1,435 Playwright + 677 vitest = **2,112**; demo-monitor cron + e2e-full scrub-demo job; #408 + #409 compliance fixes; Activity.description → @db.Text; see [CHANGELOG.md](CHANGELOG.md))
 - **Branch:** main (single-branch workflow)
 - **Deploy:** GitHub Actions auto-deploy on push to main ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) — health-check + rollback to HEAD~1 on fail. Local `ssh_deploy_*.py` scripts are legacy.
 
@@ -314,7 +314,7 @@ cd e2e && BASE_URL=https://crm.globusdemos.com npx playwright test --project=chr
 - `tests/demo-health.spec.js` + `tests/demo-hygiene-api.spec.js` + `tests/teardown-completeness.spec.js` — closed-loop demo cleanliness assertions backed by [demo-monitor.yml](.github/workflows/demo-monitor.yml) cron (every 30 min, opens a tracker issue on failure)
 - Plus ~150 module-level api specs (each `routes/*.js` has a `tests/<route>-api.spec.js` partner). Latest additions: `landing-pages-api`, `workflows-api`, `integrations-api`, `audit-api`, `search-api`, `email-api`.
 
-**~1,182 API tests on every push (deploy.yml api_tests gate) + ~2,500 broader UI/wellness/a11y tests on every release tag (e2e-full.yml).**
+**1,435 API tests on every push** (deploy.yml api_tests gate, 31 specs) **+ 677 vitest unit tests** (deploy.yml unit_tests gate, 22 files) = 2,112 total per-push. Plus ~2,500 broader UI/wellness/a11y tests on every release tag (e2e-full.yml). Demo-monitor cron polls the deployed box every 30 min; auto-issue on failure.
 
 ## GitHub
 

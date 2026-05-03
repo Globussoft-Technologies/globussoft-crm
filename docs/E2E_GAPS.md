@@ -26,9 +26,9 @@
 | **G-3** | integrations-api spec (6 endpoints + Callified SSO) | 4-6h | Med — admin-only but Callified.ai contract surface | ✅ shipped (47023a0 — 30 tests; flagged toggle missing admin guard) |
 | **G-4** | search-api spec (1 endpoint, smoke-only) | 1-2h | Low — small route, but used by Omnibar | ✅ shipped (2f02cde — 14 tests) |
 | **G-5** | audit-api spec (1 endpoint, smoke-only) | 2-3h | Med — compliance-relevant; tenant scoping must be proven | ✅ shipped (f5e9c7c — 20 tests; flagged audit.js missing role guard) |
-| **G-6** | appointment-reminders-engine spec | 3-4h | High — wellness PRD-critical; SMS dispatch logic | ⬜ open |
+| **G-6** | appointment-reminders-engine spec | 3-4h | High — wellness PRD-critical; SMS dispatch logic | ✅ shipped (cdbca1e — 16 tests; T-24h + T-1h windows, idempotency, cancellation exempt, RBAC) |
 | **G-7** | wellness-ops-engine spec (NPS + retention) | 3-4h | High — GDPR retention path | ⬜ open |
-| **G-8** | low-stock-engine spec | 2-3h | Med — inventory alerts | ⬜ open |
+| **G-8** | low-stock-engine spec | 2-3h | Med — inventory alerts | ✅ shipped (310296f — 12 tests; threshold semantics, idempotency, tenant isolation, RBAC) |
 | **G-9** | recurring-invoice-engine spec | 4-6h | High — billing-critical, no trigger endpoint exists yet | ⬜ open |
 | **G-10** | scheduled-email-engine spec | 3-4h | Med — needs admin trigger endpoint | ⬜ open |
 | **G-11** | retention-engine spec (GDPR daily 03:00) | 4-6h | High — compliance + destructive | ⬜ open |
@@ -45,11 +45,11 @@
 | **G-22** | Integration test tier (msw/nock) — Stripe webhook signing | 2 days | High — webhook forgery is a real attack | ⬜ open |
 | **G-23** | Migration safety check (dry-run prisma migrate in CI) | 1 day | High — NOT-NULL on populated table = prod outage | ⬜ open |
 | **G-24** | Schema invariants vitest (every multi-tenant model has tenantId) | 1 day | High — silent data leak risk | ⬜ open |
-| **G-25** | Security headers spec against deployed demo | 4h | Low — Helmet/CSP regression detection | ⬜ open |
+| **G-25** | Security headers spec against deployed demo | 4h | Low — Helmet/CSP regression detection | ✅ shipped (ef7b151 — 3 tests; snapshot-pins all 11 helmet headers, HSTS regex, x-powered-by absent, CSP-absent-by-design) |
 
 **Recommended first parallel batch (5 disjoint, no rate-limit / external-service issues):** G-1, G-2, G-3, G-4, G-6.
 
-> **Status update 2026-05-02:** G-1 + G-2 + G-3 + G-4 + G-5 all shipped (~150 new tests). G-6 (appointment-reminders-engine) is the natural next pickup — wellness PRD-critical, blocked nothing today. **Two compliance findings opened by the new specs:** `routes/audit.js` ships without `verifyRole(['ADMIN'])` (G-5), and `POST /api/integrations/toggle` ships without admin guard (G-3) — both let MANAGER/USER reach data the spec'd contract restricts to ADMIN. Captured as `test.fixme()` blocks in the specs; route fixes pending.
+> **Status update 2026-05-03:** **G-1 + G-2 + G-3 + G-4 + G-5 + G-6 + G-8 + G-25 shipped** (~351 new tests; gate is now 31 specs / 1,435 tests). **Two compliance findings closed:** #408 (audit.js) and #409 (integrations toggle) both got `verifyRole(['ADMIN'])` route fixes in `2df54de` and the matching `test.fixme()` blocks were flipped to active `test()` assertions. **Next pickup recommendations** (per the discovery agent's parallel-batch survey): G-7 wellness-ops-engine, G-14 forecast-snapshot-engine, G-16 whatsappProvider vitest — all unblocked, all 3-4h each, can run in parallel on disjoint files. The G-9/G-10/G-11 trio (recurring-invoice / scheduled-email / retention) needs new admin trigger endpoints first; pick one agent to sequence those. G-17/G-18/G-19 (wellness route split) is a 1-day-each effort best done after G-7/G-14/G-16.
 
 ---
 

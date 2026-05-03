@@ -1,5 +1,91 @@
 # CHANGELOG
 
+## v3.4.0 — 2026-05-03 — gate-spec push, demo cleanup automation, compliance fixes
+
+A follow-on release continuing v3.3.0's test-infra arc. **No new product features** — every change is gate coverage, route-side compliance fixes, or operations automation. Demo-monitor cron is now live and running every 30 min against the deployed box.
+
+### Test surface continued growth (per-push)
+
+| Tier | Tool | v3.3.0 | v3.4.0 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | 23 specs / ~1,084 tests | 31 specs / **1,435 tests** | +8 specs / +351 tests |
+| Per-push unit tests | vitest | 22 files / 674 tests | 22 files / 677 tests | +3 |
+| **Total per-push** |  | ~1,758 | **2,112** | **+20%** |
+
+### Added — 8 new gate specs (~351 new tests)
+
+All from the `docs/E2E_GAPS.md` priority backlog (G-1 to G-25). Each spec asserts: happy path + auth gate + tenant isolation + RBAC where applicable + `test.fixme()` blocks documenting any compliance gaps the spec author surfaced (those gaps are fixed in this release; see "Compliance fixes" below).
+
+- **G-1** `landing-pages-api.spec.js` (1e5bd3e — 41 tests) — covers all 10 endpoints of `routes/landing_pages.js` (zero coverage prior). State-machine drift documented (publish/unpublish are idempotent, not 422-on-state-conflict).
+- **G-2** `workflows-api.spec.js` (21f8333 — 48 tests) — 9 endpoints of `routes/workflows.js`. Surfaced contract drift: `/test` is NOT a true dry-run — it calls `emitEvent → executeAction` and DB-mutating actions (create_task, send_notification, etc.) ARE side-effected.
+- **G-3** `integrations-api.spec.js` (47023a0 — 30 tests) — 6 endpoints + Callified SSO. Surfaced **#409** (toggle missing admin guard).
+- **G-4** `search-api.spec.js` (2f02cde — 14 tests) — 1 endpoint, 10-table prisma fan-out. Documented `?type=` is a no-op; no `leads` bucket.
+- **G-5** `audit-api.spec.js` (f5e9c7c — 20 tests) — compliance-relevant; surfaced **#408** (audit.js missing admin role guard, leaking PII via the `details` JSON column).
+- **G-6** `appointment-reminders-api.spec.js` (cdbca1e — 16 tests) — wellness PRD-critical SMS dispatch (T-24h + T-1h windows, idempotency, cancellation exemption, RBAC).
+- **G-8** `low-stock-api.spec.js` (310296f — 12 tests) — wellness inventory threshold alerts (notification dispatch, idempotency, tenant isolation).
+- **G-25** `security-headers.spec.js` (ef7b151 — 3 tests) — Helmet/CSP regression detection. Snapshot-pins all 11 helmet-managed headers + HSTS regex + `x-powered-by` absent + CSP-absent-by-design (the embed widget contract).
+
+### Schema migration
+
+- **`Activity.description` → `@db.Text`** (commit `849f08f`). Was VARCHAR(191); partner payloads to `POST /api/v1/external/leads` with utm + verbose notes + junk-filter reasons concatenated would overflow → 500 the route. Earlier hand-fix `84a606d` clamped at 188 chars + ellipsis to dodge the overflow; this release drops the clamp and lets the full text round-trip. `prisma db push --accept-data-loss` self-heals on demo via `51ad352`.
+
+### Compliance fixes (closes 2 issues)
+
+- **#408** — `routes/audit.js` now requires `verifyToken, verifyRole(['ADMIN'])`. Audit log row `details` JSON carries PII for several entity classes (Contact name+email on SOFT_DELETE, wellness Patient/Visit writes). Was readable by MANAGER and USER tenant-wide; now ADMIN-only.
+- **#409** — `routes/integrations.js POST /toggle` now requires `verifyRole(['ADMIN'])` to match its sister `/connect` and `/disconnect`. Was documented as "legacy compat" but lacked the admin guard its peers had — non-admins could flip any provider's `isActive` flag and silently CREATE Integration rows via the upsert path.
+
+### Operations automation
+
+- **e2e-full `scrub-demo` job** (commit `db932ab`) — every release-validation run against demo now self-cleans. Per-shard step still uses `E2E_SKIP_SCRUB=1` to avoid inter-shard teardown race; one final job runs `scrub-test-data-pollution.js --apply` + `merge-duplicate-patients.js --commit` over SSH after the matrix completes. Result: 605-row pollution windows like 2026-05-02 18:53 (manual e2e-full kicked off without scrub) no longer leave residue for demo-monitor to flag 30 min later.
+- **Demo-monitor cron enabled** — `.github/workflows/demo-monitor.yml` switched from workflow_dispatch-only to `schedule: '*/30 * * * *'`. Auto-opens (or comments on) a tracker GitHub issue with a stable title on failure, so any drift surfaces within 30 min.
+- **`Activity.description` deploy self-heal** — deploy.yml step `51ad352` runs `prisma db push --accept-data-loss` on every deploy, so the column-type migration applied without manual intervention.
+- **Demo seed scripts cleaned up** — emergency manual scrub on 2026-05-02 cleared 605 polluted rows + 68 real-name patient duplicates (Kavita Reddy x9, Aarav Sharma x9, etc. that had accumulated from earlier e2e-full runs).
+
+### Local 4-gate mirror docs (CLAUDE.md)
+
+`scripts/test-local.ps1 -Local` and `scripts/test-local.sh --local` now documented in CLAUDE.md as the canonical pre-push iteration loop. `-Local` mode auto-boots `docker-compose.yml` (MySQL 8.0 on host port 3307), seeds both tenants, starts backend on `:5000` with `DISABLE_CRONS=1`, and runs all 4 gates (build / lint / api_tests / unit_tests). `-KeepStack` keeps the stack between iterations. Includes the "demo runs old code" trap warning so route changes are tested against actual local edits, not the previously-deployed code.
+
+### `.claude/settings.json` allow-list
+
+Project-shared file at `.claude/settings.json` was added in v3.3.x and broadened in this release. Auto-approves: `scripts/*` (PS + bash), `npx prisma db push / generate / migrate`, `node prisma/seed*.js`, `node backend/scripts/*`, `npm test / build / vitest / playwright test`, read-only `docker ps / inspect / logs / compose:*`, read-only `gh run list / view`, `gh issue list`, `gh workflow run`, `gh pr list / view`. Plus wildcard `PowerShell(*)` for incidental Windows shell work. Destructive ops (`git push --force`, `gh pr merge`, SSH to demo) deliberately NOT covered — they still go through the normal approval flow.
+
+### Native dialog sweep
+
+Native `window.alert()` / `window.confirm()` / `window.prompt()` calls block browser-automation tools (the user's Claude Chrome plugin, Playwright dialog handlers, Selenium). The vast majority were migrated to `useNotify()` (HTML toast + modal) in commit `e2c0b88` (2026-04-26). This release caught 3 stragglers the prior sweep missed:
+- `Sidebar.jsx` Callified-SSO error path (`6d35209`)
+- `Leads.jsx` "Name is required" validation (`ee842c9`)
+- `SequenceBuilder.jsx` 6 broken `notify({type, message})` invocations + 2 bare alerts in StepEditor + 1 bare confirm (`d95df5a`) — these would have thrown at runtime since `notify({…})` isn't a valid form of the API.
+
+### Heal-loop fixes (commit `ccfb97e`)
+
+The full local 4-gate run against accumulated state surfaced cross-spec issues no individual spec saw:
+
+- **G-6 `afterAll` PUT-rename cleanup** — `^E2E_FLOW_REMINDERS_/`-prefixed Patients were leaking past G-6's spec into `demo-hygiene-api` and `teardown-completeness` (which run later in the same suite). Replaced the trust-global-teardown comment with a `PUT /api/wellness/patients/:id { name: '_teardown_g6_<id>' }` rename sweep so the next spec sees clean rows.
+- **G-8 `afterAll` notification cleanup** — engine writes `Notification` rows with `title: "Low stock: <RUN_TAG-prefixed product>"` matching demo-hygiene's `/ E2E[_ ]/` regex. Spec now lists notifications, filters by RUN_TAG, deletes via `/api/notifications/:id`.
+- **Rate-limit bumps for `NODE_ENV === 'test'`** — full-gate (~1,450 tests + retries + login helpers) blew past `5000 req/15min apiLimiter` and `10/IP/10min portalRequestOtpIpLimiter`. Test-env-only bump applied to both. Production limits unchanged.
+- **Global-teardown Notification sweep** — defence-in-depth in `e2e/global-teardown.js`: any future engine that fans out notifications referencing test fixtures auto-cleans by matching `NAME_REGEX_SQL` against `title`/`message`.
+- **DB residue scrub + reseed** — one-shot cleanup of accumulated state from concurrent test iteration. Not a code change, but the resulting DB state is what the heal-loop's "0 failed" measurement was taken against.
+
+### Skipped-test triage (commit `2df54de`)
+
+`api_tests` gate had 8 skipped tests at the start of this work; ended at 2 (both intentional and documented):
+- 3× `test.fixme` waiting on real route fixes — flipped to active `test()` once #408 + #409 landed
+- 2× conditional skips on stale endpoint paths in `demo-hygiene-api.spec.js` (`/api/lead-routing/rules` → `/api/lead-routing`, `/api/kb/articles` → `/api/knowledge-base/articles`) — corrected so the hygiene scan actually scans those endpoints
+- 1× `test.skip(name, fn)` asserting an `onerror=` literal-substring guard that doesn't exist by design — deleted (XSS defence belongs at render time)
+- 2× intentional conditional skips left as documented (sequence-engine no-email-contact branch covered elsewhere; wellness-rbac `/staff` consistency check only relevant when both endpoints return 200)
+
+### Final test counts at v3.4.0 release
+
+| Gate | Spec count | Test count | Skipped | Runtime |
+|---|---|---|---|---|
+| api_tests (deploy.yml) | 31 | 1,435 passed | 2 (intentional) | ~1.6 min |
+| vitest (deploy.yml) | 22 files | 677 passed | 3 (documented v3.3.0 deferrals) | ~1.4s |
+| **Total per-push** | — | **2,112 passed** | 5 | — |
+
+Plus release-validation: `e2e-full.yml` runs the full chromium project (~2,500 tests across UI flows + wellness deep + a11y + integration + auth + api-health) on every git tag push, sharded 4-way to fit the 30-min runner.
+
+---
+
 ## v3.3.0 — 2026-05-01 — test infrastructure overhaul + Tier 1 CI hardening
 
 A foundational release. **No new product features** — every change is in the test infrastructure, CI/CD pipeline, or under-the-hood bug fixes that surfaced from the new test surface. Two real production bugs were caught + fixed.

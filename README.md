@@ -1,10 +1,23 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail. **Mobile-responsive** sidebar drawer + 6 demo-path pages. Backend line coverage: **66.65%** (1,191 tests, gate 65% lines / 50% branches; aspirational target 100%).
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **2,112 tests on every push** (1,435 Playwright + 677 vitest); release-validation full chromium suite on every tag.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.3.0
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.0
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.4.0 (May 3 2026 — gate-spec push, demo cleanup automation, compliance fixes)
+
+A follow-on test-infra release. **No new product features.**
+
+- **Gate grew to 31 specs / 1,435 tests** (was 23 / ~1,084). 8 new specs from the [docs/E2E_GAPS.md](docs/E2E_GAPS.md) priority backlog: G-1 landing-pages-api, G-2 workflows-api, G-3 integrations-api, G-4 search-api, G-5 audit-api, G-6 appointment-reminders-api (wellness PRD-critical), G-8 low-stock-api, G-25 security-headers (Helmet/CSP regression detection).
+- **2 compliance bugs fixed**: `routes/audit.js` now requires `verifyRole(['ADMIN'])` (#408 — was leaking PII via the `details` JSON column to MANAGER + USER); `routes/integrations.js POST /toggle` now requires admin (#409 — was the odd one out vs. its sister `/connect` + `/disconnect`).
+- **`Activity.description` → `@db.Text`** schema migration. Drops the 188-char clamp workaround in the external partner API; full notes + utm + junk-filter reasons round-trip intact.
+- **e2e-full `scrub-demo` job** — every release-validation run against demo now self-cleans via a post-matrix SSH job. Solves the 605-row pollution windows that previously appeared after manual `e2e-full.yml` triggers.
+- **Demo-monitor cron live** — `*/30 * * * *` against the deployed box, auto-opens a tracker GitHub issue with a stable title on failure. Catches drift within 30 min instead of waiting for QA.
+- **Local 4-gate mirror** — `scripts/test-local.ps1 -Local` + bash equivalent boot a Docker MySQL stack on host port 3307 and run all 4 deploy gates locally. See CLAUDE.md for the full workflow.
+
+See [CHANGELOG.md](CHANGELOG.md#v340--2026-05-03--gate-spec-push-demo-cleanup-automation-compliance-fixes) for the full v3.4.0 entry.
 
 ## What's new in v3.3.0 (May 1 2026 — test infrastructure overhaul + Tier 1 CI hardening)
 

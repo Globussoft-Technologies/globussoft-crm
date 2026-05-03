@@ -1,0 +1,32 @@
+// DANGEROUS fixture — narrows FixturePost.title from VARCHAR(255)
+// to VARCHAR(50). Existing rows whose title is longer than 50 chars
+// get truncated. Flagged by the TYPE_NARROWING detector via the
+// width<=50 heuristic.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model FixtureUser {
+  id       Int     @id @default(autoincrement())
+  email    String  @unique
+  name     String? @db.VarChar(255)
+  bio      String? @db.Text
+  age      Int?
+  tenantId Int
+}
+
+model FixturePost {
+  id        Int      @id @default(autoincrement())
+  // CHANGED: was VARCHAR(255), now VARCHAR(50). Truncation risk.
+  title     String   @db.VarChar(50)
+  body      String   @db.Text
+  authorId  Int?
+  tenantId  Int
+  createdAt DateTime @default(now())
+}

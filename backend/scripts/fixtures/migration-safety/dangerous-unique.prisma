@@ -1,0 +1,32 @@
+// DANGEROUS fixture — adds @unique to FixtureUser.name. If the
+// existing rows have any duplicate name (which they almost certainly
+// do — name was nullable and unconstrained), the migration fails.
+// Flagged by UNIQUE_ADDITION detector.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model FixtureUser {
+  id       Int     @id @default(autoincrement())
+  email    String  @unique
+  // CHANGED: name now @unique. Will fail on populated rows with dup names.
+  name     String? @unique @db.VarChar(255)
+  bio      String? @db.Text
+  age      Int?
+  tenantId Int
+}
+
+model FixturePost {
+  id        Int      @id @default(autoincrement())
+  title     String   @db.VarChar(255)
+  body      String   @db.Text
+  authorId  Int?
+  tenantId  Int
+  createdAt DateTime @default(now())
+}

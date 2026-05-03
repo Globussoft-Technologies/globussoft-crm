@@ -1,0 +1,32 @@
+// Baseline fixture for backend/scripts/check-migration-safety.js.
+// Represents "what the demo schema currently looks like" — the FROM
+// side of every diff. Tiny on purpose — the point is to exercise the
+// detectors against narrow shape changes, not to mirror the full
+// 114-model production schema.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model FixtureUser {
+  id       Int     @id @default(autoincrement())
+  email    String  @unique
+  name     String? @db.VarChar(255)
+  bio      String? @db.Text
+  age      Int?
+  tenantId Int
+}
+
+model FixturePost {
+  id        Int      @id @default(autoincrement())
+  title     String   @db.VarChar(255)
+  body      String   @db.Text
+  authorId  Int?
+  tenantId  Int
+  createdAt DateTime @default(now())
+}

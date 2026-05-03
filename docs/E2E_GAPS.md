@@ -43,7 +43,7 @@
 | **G-20** | tenant-isolation-api spec (cross-tenant data leak prevention) | 2-3 days | **Critical** — single highest-severity bug class for multi-tenant CRM | ✅ shipped (3 waves: a9154ac wave 1 / 8064fda wave 2 / f4b4ebe wave 3 — 29 resources / 93 cross-tenant assertions; new pattern: rename-on-cleanup `_teardown_<area>_<id>` for no-DELETE resources; surfaced #418 + #419 + #420 missing GET-by-id contracts; wellness FK chain Patient→Visit→Rx→Consent→TreatmentPlan covered) |
 | **G-21** | Frontend vitest + RTL setup + first 5 component tests | 3-5 days | Med — 80 pages + 11 components have zero isolated tests | ⬜ open |
 | **G-22** | Integration test tier (msw/nock) — Stripe webhook signing | 2 days | High — webhook forgery is a real attack | ⬜ open |
-| **G-23** | Migration safety check (dry-run prisma migrate in CI) | 1 day | High — NOT-NULL on populated table = prod outage | ⬜ open |
+| **G-23** | Migration safety check (dry-run prisma migrate in CI) | 1 day | High — NOT-NULL on populated table = prod outage | ✅ shipped (10 tests; .github/workflows/migration-check.yml + backend/scripts/check-migration-safety.js + 5 fixture pairs; 5 detectors: NOT_NULL_WITHOUT_DEFAULT / COLUMN_DROP / TYPE_NARROWING / UNIQUE_ADDITION / FK_WITHOUT_ON_DELETE; deploy.yml gains a 5th gate `migration_check`) |
 | **G-24** | Schema invariants vitest (every multi-tenant model has tenantId) | 1 day | High — silent data leak risk | ✅ shipped (08b29fd — 6 tests; revert-and-prove verified; surfaced 49 models with `tenantId` but no formal `tenant Tenant @relation` + 21 `@@unique` constraints without explanatory comments + `MarketplaceLead.@@unique([provider, externalLeadId])` may prevent two tenants from importing the same provider lead) |
 | **G-25** | Security headers spec against deployed demo | 4h | Low — Helmet/CSP regression detection | ✅ shipped (ef7b151 — 3 tests; snapshot-pins all 11 helmet headers, HSTS regex, x-powered-by absent, CSP-absent-by-design) |
 
@@ -443,7 +443,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-23 — Migration safety check
+## ✅ G-23 — Migration safety check
 
 **File to create:** `.github/workflows/migration-safety.yml` + `backend/scripts/check-migration.js`
 **Why:** `prisma migrate deploy` runs in deploy.yml without dry-run validation. NOT-NULL on a populated table or a missing rollback = guaranteed prod outage.

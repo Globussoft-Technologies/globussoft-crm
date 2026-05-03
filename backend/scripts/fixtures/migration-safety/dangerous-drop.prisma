@@ -1,0 +1,30 @@
+// DANGEROUS fixture — drops the FixtureUser.bio column. Drop on a
+// (potentially) populated table is a data-loss class — flagged
+// always unless --allow-drop is passed.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model FixtureUser {
+  id       Int     @id @default(autoincrement())
+  email    String  @unique
+  name     String? @db.VarChar(255)
+  // bio dropped
+  age      Int?
+  tenantId Int
+}
+
+model FixturePost {
+  id        Int      @id @default(autoincrement())
+  title     String   @db.VarChar(255)
+  body      String   @db.Text
+  authorId  Int?
+  tenantId  Int
+  createdAt DateTime @default(now())
+}

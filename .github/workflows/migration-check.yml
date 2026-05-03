@@ -1,0 +1,318 @@
+name: Migration safety check (G-23)
+
+# Dry-runs `prisma migrate diff` between the merge-base of the PR
+# (or HEAD~1 on a push) and the proposed schema, then post-processes
+# the emitted SQL DDL through `backend/scripts/check-migration-safety.js`
+# to flag five high-severity prod-outage risk classes:
+#   1. NOT NULL added to existing column without DEFAULT
+#   2. Column drop on a (potentially) populated table
+#   3. Type narrowing (varchar(255) → varchar(50), text → varchar, etc.)
+#   4. UNIQUE constraint added to a column with potential duplicates
+#   5. Foreign key added without explicit ON DELETE strategy
+#
+# This runs BEFORE the deploy.yml api_tests gate fires the real
+# `prisma db push --accept-data-loss`. The deploy job declares
+# migration-check as a soft prerequisite (the deploy job's `if`
+# condition treats success or skipped as acceptable), so a clean
+# baseline still deploys even if this workflow hadn't run on a
+# legacy commit.
+#
+# Trigger:
+#   - Every PR (so reviewers see the risk count in the PR comment)
+#   - Every push to main (so a direct push doesn't escape the check)
+#   - workflow_dispatch (manual rerun + ad-hoc fixture validation)
+#
+# When this gate goes red, the dev has three paths:
+#   - Fix the schema to remove the risk (preferred)
+#   - Stage the change as a two-deploy migration (rename → backfill →
+#     drop in a follow-up deploy)
+#   - Pass --allow-drop or --allow-unique inside the script invocation
+#     locally to confirm intent, then add the same flag here for the
+#     specific commit (rare; should be reviewer-approved)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "backend/prisma/schema.prisma"
+      - "backend/scripts/check-migration-safety.js"
+      - "backend/scripts/fixtures/migration-safety/**"
+      - ".github/workflows/migration-check.yml"
+      - "e2e/tests/migration-safety.spec.js"
+  push:
+    branches: [main]
+    paths:
+      - "backend/prisma/schema.prisma"
+      - "backend/scripts/check-migration-safety.js"
+      - "backend/scripts/fixtures/migration-safety/**"
+      - ".github/workflows/migration-check.yml"
+      - "e2e/tests/migration-safety.spec.js"
+  workflow_dispatch:
+
+# Only one in-flight run per branch; cancel older ones so a quick
+# follow-up commit doesn't queue behind a stale check.
+concurrency:
+  group: migration-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration_check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history for merge-base)
+        uses: actions/checkout@v5
+        with:
+          # We need git history so we can resolve the FROM schema as
+          # whatever schema.prisma looked like at the merge-base
+          # (PR) or HEAD~1 (push). Shallow clones default to depth=1
+          # which would make `git show` of older revisions fail.
+          fetch-depth: 0
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Backend — npm ci (for prisma binary)
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          # `prisma migrate diff` lives in the prisma package; no
+          # need to `prisma generate` since we don't load the client
+          # in the diff path.
+
+      # Resolve the FROM schema. Two cases:
+      #   - PR: diff against the schema at the merge-base of the PR
+      #     branch and main. This is what the diff would actually
+      #     apply when the PR merges.
+      #   - Push to main: diff against HEAD~1 so we catch any direct-
+      #     push regression.
+      # Either way, we extract the OLD schema.prisma into a temp
+      # file and pass --against <that-file> to the script.
+      - name: Resolve baseline schema (FROM side of the diff)
+        id: baseline
+        run: |
+          set -euo pipefail
+          BASELINE_REV=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Merge-base between the PR head and the target branch
+            BASELINE_REV=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            BASELINE_REV="HEAD~1"
+          else
+            # workflow_dispatch — diff against latest main
+            BASELINE_REV="origin/main"
+          fi
+          echo "Baseline rev: $BASELINE_REV ($(git rev-parse --short "$BASELINE_REV" 2>/dev/null || echo 'unknown'))"
+
+          BASELINE_FILE="$(mktemp --suffix=.prisma)"
+          # If schema.prisma didn't exist at the baseline (e.g. a
+          # pre-prisma commit), fall back to an empty datamodel — the
+          # script then diffs against --from-empty implicitly via the
+          # --against path being absent. Capture that as
+          # BASELINE_AVAILABLE=false so the next step can branch.
+          if git show "$BASELINE_REV:backend/prisma/schema.prisma" > "$BASELINE_FILE" 2>/dev/null; then
+            BASELINE_AVAILABLE=true
+          else
+            BASELINE_AVAILABLE=false
+            rm -f "$BASELINE_FILE"
+          fi
+
+          echo "BASELINE_FILE=$BASELINE_FILE"             >> "$GITHUB_OUTPUT"
+          echo "BASELINE_AVAILABLE=$BASELINE_AVAILABLE"   >> "$GITHUB_OUTPUT"
+          echo "BASELINE_REV=$BASELINE_REV"               >> "$GITHUB_OUTPUT"
+
+      - name: Run migration-safety check on schema.prisma
+        id: check
+        run: |
+          set -euo pipefail
+          BASELINE_FILE="${{ steps.baseline.outputs.BASELINE_FILE }}"
+          BASELINE_AVAILABLE="${{ steps.baseline.outputs.BASELINE_AVAILABLE }}"
+
+          REPORT_JSON="/tmp/migration-safety-report.json"
+
+          # Capture both human-readable lines and a JSON report.
+          # `|| true` so we can branch on the report file's
+          # riskCount rather than the script's exit code. The exit
+          # code goes into the next step (final-gate).
+          if [ "$BASELINE_AVAILABLE" = "true" ]; then
+            node backend/scripts/check-migration-safety.js \
+              --schema backend/prisma/schema.prisma \
+              --against "$BASELINE_FILE" \
+              --json > "$REPORT_JSON" 2> /tmp/migration-safety-stderr.log || true
+          else
+            echo "::warning::No baseline schema available — diffing from empty (every NOT NULL / UNIQUE / FK will fire)"
+            node backend/scripts/check-migration-safety.js \
+              --schema backend/prisma/schema.prisma \
+              --json > "$REPORT_JSON" 2> /tmp/migration-safety-stderr.log || true
+          fi
+
+          # Pull the totals out for the summary step.
+          RISK_COUNT=$(node -e "console.log(require('$REPORT_JSON').riskCount || 0)")
+          STMT_COUNT=$(node -e "console.log(require('$REPORT_JSON').statementCount || 0)")
+          echo "RISK_COUNT=$RISK_COUNT" >> "$GITHUB_OUTPUT"
+          echo "STMT_COUNT=$STMT_COUNT" >> "$GITHUB_OUTPUT"
+          echo "REPORT_JSON=$REPORT_JSON" >> "$GITHUB_OUTPUT"
+
+          # Always print the human-readable lines so the Actions log
+          # has the same content as the PR comment.
+          if [ -s /tmp/migration-safety-stderr.log ]; then
+            cat /tmp/migration-safety-stderr.log
+          fi
+          echo "::group::Migration safety report (JSON)"
+          cat "$REPORT_JSON"
+          echo "::endgroup::"
+
+      - name: Step summary
+        run: |
+          set -euo pipefail
+          REPORT="${{ steps.check.outputs.REPORT_JSON }}"
+          RISK_COUNT="${{ steps.check.outputs.RISK_COUNT }}"
+          STMT_COUNT="${{ steps.check.outputs.STMT_COUNT }}"
+          BASELINE_REV="${{ steps.baseline.outputs.BASELINE_REV }}"
+
+          {
+            echo "## Migration safety check (G-23)"
+            echo ""
+            echo "- Baseline: \`$BASELINE_REV\`"
+            echo "- DDL statements analyzed: $STMT_COUNT"
+            echo "- Risks detected: **$RISK_COUNT**"
+            echo ""
+            if [ "$RISK_COUNT" != "0" ]; then
+              echo "### Findings"
+              echo ""
+              node -e "
+                const r = require('$REPORT');
+                for (const f of r.risks) {
+                  console.log('- **' + f.class + '** — ' + f.message);
+                }
+              "
+            else
+              echo "No risk patterns detected. Schema change is additive-safe."
+            fi
+            echo ""
+            echo "Detector classes: NOT_NULL_WITHOUT_DEFAULT · COLUMN_DROP · TYPE_NARROWING · UNIQUE_ADDITION · FK_WITHOUT_ON_DELETE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR (risk summary)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('${{ steps.check.outputs.REPORT_JSON }}', 'utf8'));
+            const baselineRev = '${{ steps.baseline.outputs.BASELINE_REV }}';
+            const riskCount = report.riskCount || 0;
+            const stmtCount = report.statementCount || 0;
+            const verdict = riskCount === 0
+              ? 'PASS — no migration risks detected.'
+              : `FAIL — ${riskCount} risk(s) detected. Review before merging.`;
+
+            let body = `## Migration safety check (G-23)\n\n` +
+                       `- Baseline: \`${baselineRev}\`\n` +
+                       `- DDL statements analyzed: ${stmtCount}\n` +
+                       `- Risks detected: **${riskCount}**\n` +
+                       `- Verdict: **${verdict}**\n\n`;
+            if (riskCount > 0) {
+              body += `### Findings\n\n`;
+              for (const r of report.risks) {
+                body += `- **${r.class}** — ${r.message}\n`;
+              }
+              body += `\n_If a finding is intentional and safe (e.g. a deliberate column drop after a two-deploy rename), bless it locally with \`--allow-drop\` or \`--allow-unique\` and document the reasoning in the PR description._\n`;
+            } else {
+              body += `_Detector classes:_ NOT_NULL_WITHOUT_DEFAULT · COLUMN_DROP · TYPE_NARROWING · UNIQUE_ADDITION · FK_WITHOUT_ON_DELETE\n`;
+            }
+
+            // Find an existing migration-safety comment from this
+            // workflow on the PR and update it; otherwise create a
+            // new one. Prevents the bot from spamming the PR with a
+            // new comment on every push.
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number }
+            );
+            const marker = '## Migration safety check (G-23)';
+            const existing = comments.find((c) => c.user.type === 'Bot' && c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo,
+                issue_number,
+                body,
+              });
+            }
+
+      - name: Final gate
+        run: |
+          set -euo pipefail
+          RISK_COUNT="${{ steps.check.outputs.RISK_COUNT }}"
+          if [ "$RISK_COUNT" != "0" ]; then
+            echo "::error::$RISK_COUNT migration risk(s) detected — see step summary + PR comment for details."
+            exit 1
+          fi
+          echo "::notice::Migration safety check passed (0 risks across ${{ steps.check.outputs.STMT_COUNT }} DDL statements)"
+
+  # Independent job that exercises the script against the curated
+  # fixture set. This is the regression-detection layer: if a future
+  # commit weakens or accidentally disables a detector, this job
+  # turns red even when the production schema isn't changing.
+  fixture_regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: |
+            backend/package-lock.json
+            e2e/package-lock.json
+
+      - name: Backend + e2e install
+        run: |
+          set -euo pipefail
+          (cd backend && npm ci --no-audit --no-fund)
+          (cd e2e     && npm ci --no-audit --no-fund)
+
+      - name: Install Playwright chromium
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          npx playwright install chromium --with-deps
+          # The chromium project loads storageState from
+          # playwright/.auth/user.json; pre-create an empty stub the
+          # same way deploy.yml does so the project's fixture init
+          # doesn't ENOENT.
+          mkdir -p playwright/.auth
+          echo '{"cookies":[],"origins":[]}' > playwright/.auth/user.json
+
+      - name: Run migration-safety regression spec
+        working-directory: e2e
+        env:
+          # The spec doesn't hit a server but the chromium project's
+          # global setup may; point at a no-op so any accidental fetch
+          # fails fast rather than waiting for a timeout.
+          BASE_URL: "http://127.0.0.1:1"
+          E2E_SKIP_SCRUB: "1"
+        run: |
+          set -euo pipefail
+          npx playwright test \
+            --project=chromium \
+            --reporter=list \
+            --no-deps \
+            tests/migration-safety.spec.js
+          echo "::notice::Migration-safety regression spec passed"

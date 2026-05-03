@@ -1,0 +1,37 @@
+// "Safe" fixture — the proposed schema is identical to baseline plus
+// one ADDITIVE column with a DEFAULT, which is the canonical safe
+// migration. The detector should flag NOTHING: no NOT-NULL without
+// default, no drop, no narrowing, no UNIQUE, no FK without ON DELETE.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model FixtureUser {
+  id        Int     @id @default(autoincrement())
+  email     String  @unique
+  name      String? @db.VarChar(255)
+  bio       String? @db.Text
+  age       Int?
+  tenantId  Int
+  // NEW field — nullable, so backfill is implicit (NULL on existing rows).
+  // This is the safe pattern.
+  nickname  String? @db.VarChar(100)
+}
+
+model FixturePost {
+  id        Int      @id @default(autoincrement())
+  title     String   @db.VarChar(255)
+  body      String   @db.Text
+  authorId  Int?
+  tenantId  Int
+  createdAt DateTime @default(now())
+  // NEW field — NOT NULL but with a DEFAULT. Engine can backfill
+  // existing rows with the default value. Safe.
+  status    String   @default("draft") @db.VarChar(20)
+}

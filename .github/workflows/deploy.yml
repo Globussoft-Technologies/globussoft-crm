@@ -267,7 +267,8 @@ jobs:
           #   - document-templates-api.spec.js (42 tests: routes/document_templates.js — R-4)
           #   - booking-pages-api.spec.js    (43 tests: routes/booking_pages.js — R-4)
           #   - email-threading-api.spec.js  (33 tests: routes/email_threading.js — R-4)
-          # Total: ~1431 API tests run on every push.
+          #   - migration-safety.spec.js     (10 tests: backend/scripts/check-migration-safety.js fixture regression — G-23)
+          # Total: ~1441 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -328,6 +329,8 @@ jobs:
             tests/booking-pages-api.spec.js \
             tests/document-templates-api.spec.js \
             tests/email-threading-api.spec.js \
+            tests/numeric-id-sweep.spec.js \
+            tests/migration-safety.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"
@@ -438,19 +441,67 @@ jobs:
           npm test
           echo "::notice::Unit tests passed"
 
-  # ── 5. DEPLOY: only runs if build + api_tests + unit_tests + lint all pass ──
+  # ── 5. MIGRATION_CHECK: dry-run prisma migrate diff between HEAD~1 and ──
+  # the proposed schema, flag prod-outage risk patterns (G-23). The
+  # standalone .github/workflows/migration-check.yml runs on PRs (so
+  # reviewers see the risk count comment); this in-workflow job is the
+  # gate that BLOCKS the deploy job on push to main. Skipping logic
+  # mirrors the other gates so workflow_dispatch.skip_tests=true is the
+  # only emergency bypass.
+  migration_check:
+    if: ${{ inputs.skip_tests != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history for HEAD~1 baseline)
+        uses: actions/checkout@v5
+        with:
+          # We need git history so `git show HEAD~1:backend/prisma/schema.prisma`
+          # resolves the prior schema. Default fetch-depth=1 wouldn't.
+          fetch-depth: 0
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Backend — npm ci (for prisma binary)
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Resolve baseline schema (HEAD~1) + run safety check
+        run: |
+          set -euo pipefail
+          BASELINE_FILE="$(mktemp --suffix=.prisma)"
+          if git show HEAD~1:backend/prisma/schema.prisma > "$BASELINE_FILE" 2>/dev/null; then
+            echo "Baseline: HEAD~1 ($(git rev-parse --short HEAD~1))"
+            node backend/scripts/check-migration-safety.js \
+              --schema backend/prisma/schema.prisma \
+              --against "$BASELINE_FILE"
+          else
+            echo "::warning::No HEAD~1 schema available (first commit?) — skipping diff"
+          fi
+          echo "::notice::Migration safety check passed"
+
+  # ── 6. DEPLOY: only runs if build + api_tests + unit_tests + lint + ────
+  # migration_check all pass.
   deploy:
-    needs: [build, api_tests, unit_tests, lint]
-    # All four gates mandatory:
-    #   - build       (vite + node syntax)
-    #   - api_tests   (Playwright API specs against ephemeral MySQL + seeded backend)
-    #   - unit_tests  (vitest pure-fn coverage of lib + middleware + services + utils)
-    #   - lint        (ESLint — semantic checks + project-specific req.user.id rule)
+    needs: [build, api_tests, unit_tests, lint, migration_check]
+    # All five gates mandatory:
+    #   - build            (vite + node syntax)
+    #   - api_tests        (Playwright API specs against ephemeral MySQL + seeded backend)
+    #   - unit_tests       (vitest pure-fn coverage of lib + middleware + services + utils)
+    #   - lint             (ESLint — semantic checks + project-specific req.user.id rule)
+    #   - migration_check  (G-23 — dry-run prisma migrate diff vs HEAD~1)
     # Any failure blocks deploy.
     # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
     # bypass for emergency hotfixes (still requires manual workflow_dispatch
     # — a regular push can never bypass).
-    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -466,7 +517,7 @@ jobs:
           echo "Commit:  ${{ github.sha }}"
           echo "Pusher:  ${{ github.actor }}"
           printf 'Message: %s\n' "$COMMIT_MSG" | head -3
-          echo "Tests:   build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }} unit_tests=${{ needs.unit_tests.result }} lint=${{ needs.lint.result }}"
+          echo "Tests:   build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }} unit_tests=${{ needs.unit_tests.result }} lint=${{ needs.lint.result }} migration_check=${{ needs.migration_check.result }}"
 
       # ── Backend deploy ──────────────────────────────────────────────
       # git pull -> npm install -> prisma generate -> pm2 restart -> health.

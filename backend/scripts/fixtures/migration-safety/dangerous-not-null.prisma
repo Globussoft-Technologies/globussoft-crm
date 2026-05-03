@@ -1,0 +1,40 @@
+// DANGEROUS fixture — adds NOT NULL to an existing nullable column
+// (FixtureUser.name) and ADDS a new NOT NULL column without a
+// DEFAULT (FixturePost.requiredField). Both are the canonical
+// prod-outage pattern: engine tries to enforce NOT NULL on rows
+// where the column is currently NULL, statement fails, deploy aborts
+// (or worse, succeeds in a way that subsequent writes break).
+//
+// The check should emit NOT_NULL_WITHOUT_DEFAULT for both columns
+// and exit 1.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model FixtureUser {
+  id       Int     @id @default(autoincrement())
+  email    String  @unique
+  // CHANGED: was String? — now NOT NULL, no default. Outage class.
+  name     String  @db.VarChar(255)
+  bio      String? @db.Text
+  age      Int?
+  tenantId Int
+}
+
+model FixturePost {
+  id        Int      @id @default(autoincrement())
+  title     String   @db.VarChar(255)
+  body      String   @db.Text
+  authorId  Int?
+  tenantId  Int
+  createdAt DateTime @default(now())
+  // NEW: NOT NULL field added without a DEFAULT. Engine can't
+  // backfill existing rows → migration fails on populated table.
+  requiredField String @db.VarChar(50)
+}

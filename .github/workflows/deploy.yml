@@ -266,7 +266,8 @@ jobs:
           #   - canned-responses-api.spec.js (23 tests: routes/canned_responses.js — R-1)
           #   - document-templates-api.spec.js (42 tests: routes/document_templates.js — R-4)
           #   - booking-pages-api.spec.js    (43 tests: routes/booking_pages.js — R-4)
-          # Total: ~1398 API tests run on every push.
+          #   - email-threading-api.spec.js  (33 tests: routes/email_threading.js — R-4)
+          # Total: ~1431 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -326,6 +327,7 @@ jobs:
             tests/attribution-api.spec.js \
             tests/booking-pages-api.spec.js \
             tests/document-templates-api.spec.js \
+            tests/email-threading-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

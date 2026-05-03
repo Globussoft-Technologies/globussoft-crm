@@ -204,6 +204,7 @@ jobs:
             tests/attribution-api.spec.js \
             tests/booking-pages-api.spec.js \
             tests/document-templates-api.spec.js \
+            tests/email-threading-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

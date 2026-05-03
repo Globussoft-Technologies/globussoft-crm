@@ -563,4 +563,110 @@ router.post("/:id/credit-note", verifyToken, verifyRole(["ADMIN", "MANAGER"]), a
 // for backwards-compat with any old client, but the data is preserved.
 router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), voidInvoiceHandler);
 
+// ─── POST /recurring/run ─────────────────────────────────────────
+// G-9: Manual trigger for the recurring-invoice cron engine. Mirrors
+// POST /api/forecasting/snapshot/run + /api/wellness/ops/run.
+// Drives cron/recurringInvoiceEngine.processRecurringInvoices logic, but
+// scoped to the requesting tenant only (the cron version is all-tenant).
+// Reusing the engine's per-tenant body keeps cron + manual paths aligned
+// on field semantics (nextRecurDate window, recurFrequency advancement,
+// audit row write). Gated to ADMIN — generating an invoice is a
+// money-mutating action.
+//
+// Returns { success, tenantId, processed, generated, errors } where
+// `processed` is the count of due rows we walked, `generated` is the
+// count of new Invoice rows created, and `errors` is any per-row
+// failures (mirrors the engine's try/catch shape).
+function addInterval(date, frequency) {
+  const d = new Date(date);
+  switch (frequency) {
+    case "monthly": d.setMonth(d.getMonth() + 1); break;
+    case "quarterly": d.setMonth(d.getMonth() + 3); break;
+    case "yearly": d.setFullYear(d.getFullYear() + 1); break;
+    default: d.setMonth(d.getMonth() + 1);
+  }
+  return d;
+}
+
+router.post("/recurring/run", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const now = new Date();
+    // Mirror engine query but scoped to req.user.tenantId. Engine excludes
+    // status='VOID'; we follow that contract so paused/voided templates
+    // never re-generate. (Engine uses 'VOID' literal — schema supports
+    // 'VOIDED' as a synonym in /void route; we accept either by excluding
+    // BOTH so any state that the void route writes is honoured.)
+    const due = await prisma.invoice.findMany({
+      where: {
+        tenantId,
+        isRecurring: true,
+        status: { notIn: ["VOID", "VOIDED"] },
+        nextRecurDate: { lte: now },
+      },
+      include: { contact: true },
+    });
+
+    let generated = 0;
+    const errors = [];
+    for (const inv of due) {
+      try {
+        const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+        const newDueDate = addInterval(now, inv.recurFrequency);
+        await prisma.invoice.create({
+          data: {
+            invoiceNum: invNum,
+            amount: inv.amount,
+            status: "UNPAID",
+            dueDate: newDueDate,
+            contactId: inv.contactId,
+            dealId: inv.dealId,
+            parentInvoiceId: inv.id,
+            tenantId,
+          },
+        });
+        // Advance nextRecurDate by the recurrence interval. Mirror the
+        // engine: advance OFF the existing nextRecurDate (not now), so
+        // a missed-tick recovery still lands on the correct schedule.
+        const nextDate = addInterval(inv.nextRecurDate, inv.recurFrequency);
+        await prisma.invoice.update({
+          where: { id: inv.id },
+          data: { nextRecurDate: nextDate },
+        });
+        // Audit, mirroring the engine's write so the manual + cron paths
+        // emit identical AuditLog rows.
+        await prisma.auditLog.create({
+          data: {
+            action: "CREATE",
+            entity: "Invoice",
+            entityId: inv.id,
+            details: JSON.stringify({
+              source: "Recurring",
+              parentInvoice: inv.invoiceNum,
+              newInvoice: invNum,
+              via: "manual",
+            }),
+            tenantId,
+            userId: req.user.userId || null,
+          },
+        }).catch(() => { /* best-effort */ });
+        generated++;
+      } catch (err) {
+        errors.push({ id: inv.id, error: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      tenantId,
+      processed: due.length,
+      generated,
+      errors,
+    });
+  } catch (err) {
+    console.error("[billing/recurring/run]", err);
+    res.status(500).json({ error: "Failed to run recurring invoice engine", detail: err.message });
+  }
+});
+
 module.exports = router;

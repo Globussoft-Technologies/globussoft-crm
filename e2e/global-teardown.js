@@ -174,13 +174,32 @@ module.exports = async function globalTeardown() {
     );
     results.notifications = n.affectedRows || 0;
 
-    const total = results.patients + results.contacts + results.services + results.tasks + results.locations + results.products + results.notifications;
+    // G-14: forecast-snapshot-api.spec.js drives cron/forecastSnapshotEngine
+    // via POST /api/forecasting/snapshot/run. The Forecast model has no
+    // `name` / `title` field — just numeric metrics + period + tenantId —
+    // so PAT_REGEX can't match it. /api/forecasting exposes no DELETE
+    // route either. Sweep any Forecast row created in the last 8 days
+    // (the engine's week-window plus a day of slack). CI starts from an
+    // empty Forecast table so this only ever scrubs E2E residue. On the
+    // demo box this could touch real cron-written Forecast rows; the
+    // demo deploys nightly with DISABLE_CRONS=1 in CI but the real cron
+    // runs on the prod box at Mon 01:00 UTC, so re-running the spec
+    // mid-week deletes a handful of historical snapshots. Acceptable
+    // tradeoff vs. leaving polluted rows behind. If this proves too
+    // aggressive, narrow to a tag column on Forecast (schema change).
+    const [f] = await conn.query(
+      `DELETE FROM Forecast WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 8 DAY)`
+    );
+    results.forecasts = f.affectedRows || 0;
+
+    const total = results.patients + results.contacts + results.services + results.tasks + results.locations + results.products + results.notifications + results.forecasts;
     if (total > 0) {
       console.log(
         `[teardown] scrubbed E2E rows: ${results.patients} patient(s), ` +
           `${results.contacts} contact(s), ${results.services} service(s), ` +
           `${results.tasks} task(s), ${results.locations} location(s), ` +
-          `${results.products} product(s), ${results.notifications} notification(s) ` +
+          `${results.products} product(s), ${results.notifications} notification(s), ` +
+          `${results.forecasts} forecast(s) ` +
           `(cascades auto-remove visits/Rx/consents/plans/waitlist/loyalty/referrals)`
       );
     } else {

@@ -171,8 +171,10 @@ jobs:
             tests/integrations-api.spec.js \
             tests/audit-api.spec.js \
             tests/appointment-reminders-api.spec.js \
+            tests/wellness-ops-api.spec.js \
             tests/security-headers.spec.js \
             tests/low-stock-api.spec.js \
+            tests/forecast-snapshot-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

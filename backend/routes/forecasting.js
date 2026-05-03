@@ -1,5 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const { verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -239,6 +240,140 @@ router.get("/trend", async (req, res) => {
   } catch (err) {
     console.error("[forecasting/trend]", err);
     res.status(500).json({ error: "Failed to fetch trend" });
+  }
+});
+
+// ─── POST /snapshot/run ──────────────────────────────────────────
+// Manual trigger for the weekly Forecast snapshot cron engine.
+// Mirrors POST /api/wellness/ops/run / /api/wellness/inventory/low-stock/run.
+// Drives cron/forecastSnapshotEngine.runForecastSnapshot() — but scoped to
+// the requesting tenant only, not all-tenants. Reporting layer depends on
+// these snapshots; gate to ADMIN since it writes Forecast rows.
+//
+// Returns { tenantId, period, weekStart, savedCount, total } where
+// `total` is the tenant-level rollup metrics for at-a-glance verification.
+router.post("/snapshot/run", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const {
+      currentQuarter,
+      quarterRange,
+    } = require("../cron/forecastSnapshotEngine");
+    const period = currentQuarter();
+    const { start: qStart, end: qEnd } = quarterRange(period);
+
+    // Reuse the tenant body of runForecastSnapshot so cron + manual paths
+    // stay byte-identical. Inline the per-tenant logic here (the engine's
+    // public surface is all-tenant; we only want this tenant).
+    const deals = await prisma.deal.findMany({
+      where: { tenantId },
+      select: {
+        id: true,
+        amount: true,
+        probability: true,
+        stage: true,
+        expectedClose: true,
+        ownerId: true,
+      },
+    });
+
+    // Same window helpers the engine uses (Monday week-start, +7d end).
+    const startOfWeek = (date) => {
+      const d = new Date(date);
+      const day = d.getDay();
+      const diff = day === 0 ? -6 : 1 - day;
+      d.setDate(d.getDate() + diff);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    };
+    const weekStart = startOfWeek(new Date());
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+
+    const computeForecast = (dealList) => {
+      let expectedRevenue = 0;
+      let committedRevenue = 0;
+      let bestCaseRevenue = 0;
+      let closedRevenue = 0;
+      for (const deal of dealList) {
+        const amount = deal.amount || 0;
+        const probability = deal.probability || 0;
+        const stage = (deal.stage || "").toLowerCase();
+        const isOpen = stage !== "won" && stage !== "lost";
+        const expectedClose = deal.expectedClose ? new Date(deal.expectedClose) : null;
+        const closesInQuarter = expectedClose && expectedClose >= qStart && expectedClose <= qEnd;
+        if (isOpen) bestCaseRevenue += amount;
+        if (isOpen && closesInQuarter) expectedRevenue += amount * (probability / 100);
+        if (stage === "won" || probability >= 90) committedRevenue += amount;
+        if (stage === "won" && closesInQuarter) closedRevenue += amount;
+      }
+      return { expectedRevenue, committedRevenue, bestCaseRevenue, closedRevenue };
+    };
+
+    const upsertWeekly = async (userId, metrics) => {
+      const existing = await prisma.forecast.findFirst({
+        where: {
+          tenantId,
+          userId: userId == null ? null : userId,
+          period,
+          createdAt: { gte: weekStart, lt: weekEnd },
+        },
+      });
+      if (existing) {
+        return prisma.forecast.update({
+          where: { id: existing.id },
+          data: {
+            expectedRevenue: metrics.expectedRevenue,
+            committedRevenue: metrics.committedRevenue,
+            bestCaseRevenue: metrics.bestCaseRevenue,
+            closedRevenue: metrics.closedRevenue,
+          },
+        });
+      }
+      return prisma.forecast.create({
+        data: {
+          tenantId,
+          userId: userId == null ? null : userId,
+          period,
+          expectedRevenue: metrics.expectedRevenue,
+          committedRevenue: metrics.committedRevenue,
+          bestCaseRevenue: metrics.bestCaseRevenue,
+          closedRevenue: metrics.closedRevenue,
+        },
+      });
+    };
+
+    let savedCount = 0;
+    // Per-owner forecasts (skip unowned deals).
+    const byOwner = new Map();
+    for (const deal of deals) {
+      if (deal.ownerId == null) continue;
+      const key = String(deal.ownerId);
+      if (!byOwner.has(key)) byOwner.set(key, []);
+      byOwner.get(key).push(deal);
+    }
+    for (const [ownerKey, ownerDeals] of byOwner.entries()) {
+      const metrics = computeForecast(ownerDeals);
+      await upsertWeekly(parseInt(ownerKey, 10), metrics);
+      savedCount++;
+    }
+
+    // Tenant-level rollup (userId=null) over ALL deals.
+    const totalMetrics = computeForecast(deals);
+    const total = await upsertWeekly(null, totalMetrics);
+    savedCount++;
+
+    res.json({
+      success: true,
+      tenantId,
+      period,
+      weekStart: weekStart.toISOString(),
+      savedCount,
+      total,
+    });
+  } catch (err) {
+    console.error("[forecasting/snapshot/run]", err);
+    res.status(500).json({ error: "Failed to run forecast snapshot", detail: err.message });
   }
 });
 

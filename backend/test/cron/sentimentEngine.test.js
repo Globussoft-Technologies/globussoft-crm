@@ -122,6 +122,20 @@ import prisma from '../../lib/prisma.js';
 // then resolves to our stub class because the require cache is shared and
 // the monkey-patch lands BEFORE the engine import executes.
 const { mockGenerateContent } = vi.hoisted(() => {
+  // CRITICAL: set GEMINI_API_KEY BEFORE the engine import. The engine's
+  // top-level code does `if (process.env.GEMINI_API_KEY) { ... init ... }`
+  // and captures `geminiModel` ONCE at module load. In dev, a real key
+  // arrives via dotenv from repo-root .env. In CI (deploy.yml unit_tests
+  // job), no GEMINI_API_KEY is set anywhere — without this line, the
+  // engine skips init, `geminiModel` stays null, and every "Gemini-on
+  // path" test falls through to ruleBasedAnalyze and never invokes the
+  // mocked SDK. This is the asymmetry that made tests pass locally but
+  // fail in CI on commit 76bf2a4.
+  //
+  // The fake key value is intentionally non-credential — engine only
+  // checks truthiness; the mock SDK ignores it entirely.
+  process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-fake-key';
+
   const { createRequire } = require('node:module');
   const requireCJS = createRequire(__filename || process.cwd() + '/');
   const genAIModule = requireCJS('@google/generative-ai');

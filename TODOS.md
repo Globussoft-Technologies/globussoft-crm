@@ -188,14 +188,24 @@ The `.claude/skills/` directory now ships project-shared Skills that encode the 
 
 Claude Code auto-loads each skill's metadata into the system prompt at session start. When an agent asks "write a new gate spec for routes/foo.js", Claude triggers `writing-api-gate-spec` and reads its `SKILL.md` from disk via bash. The bundled `TEMPLATE.md` + scripts only load if explicitly referenced. Net effect on agent prompts: drop the 150-line standing-rule preamble; just say "Use the `writing-api-gate-spec` skill. Target: routes/foo.js. Pattern: clone notifications-api.spec.js. Acceptance: standard set. Wire-in via wiring-spec-into-gate skill afterward."
 
-**Tier 2+ skills planned but not yet built** (build these from office when you have a moment — each is ~30 min to author):
-- `adding-admin-trigger-endpoint` — mirror `/api/forecasting/snapshot/run` pattern with optional `confirmDestructive` guard
-- `closing-contract-drift-bug` — engine-side fix + unit-test pattern, with the "verify against existing spec contract first" lesson from #411
-- `dispatching-parallel-agent-wave` — orchestration meta-skill (disjoint files, max 4-5 agents, rebase-on-collision)
-- `bumping-version-docs` — the 5-file CHANGELOG/README/CLAUDE.md/TODOS/E2E_GAPS dance
-- `local-heal-loop` — boot stack → run gate → diagnose → fix → retry
+**Tier 2 skills now shipped** (alongside the Tier 1 trio above):
+
+| Skill | Use when | What it captures |
+|---|---|---|
+| [`adding-admin-trigger-endpoint`](.claude/skills/adding-admin-trigger-endpoint/SKILL.md) | Cron-engine spec needs a manual trigger surface (G-9/G-10/G-11/G-12/G-14/G-15 pattern) | Mirror `/api/forecasting/snapshot/run` shape with `verifyToken + verifyRole(['ADMIN'])` and per-tenant scope; optional `confirmDestructive` guard for destructive ops; AuditLog row writes for GDPR; the wellness-vertical `verifyWellnessRole` carve-out. Bundled `TEMPLATE.js` with all 3 variants. |
+| [`bumping-version-docs`](.claude/skills/bumping-version-docs/SKILL.md) | A wave shipped enough commits to warrant a vX.Y.Z bump (4+ closer agents, or a focused multi-day pickup) | The 5-file dance: CHANGELOG (with test-surface delta table + Carry-over section), README (version + What's-new max-6-bullets), CLAUDE.md (version + count refresh), TODOS (handoff block rewrite), E2E_GAPS (✅ markers). Bundled `CHANGELOG_ENTRY_TEMPLATE.md` + `TODO_HANDOFF_TEMPLATE.md` + `README_WHATSNEW_TEMPLATE.md`. |
+| [`dispatching-parallel-agent-wave`](.claude/skills/dispatching-parallel-agent-wave/SKILL.md) | User asks to "fire up parallel agents" or there's a batch of 3+ unblocked items | Disjoint-files invariant; 4-agent default cap (5 worked, 8 bundles); discovery-first vs jump-to-closers patterns; the standing-rule preamble that points agents at the existing skills (saves ~150 prompt-lines per agent); rebase-on-collision recovery; consolidation steps after the wave returns. Bundled `AGENT_PROMPT_TEMPLATE.md` with role-specific adaptations (closer / discovery / engine-fix / heal-loop). |
+
+**Tier 3+ skills still planned** (build inline-with-first-use when those tasks come up):
+- `closing-contract-drift-bug` — engine-side fix + unit test with anti-regression assertion against the old broken form (the #410/#411 pattern)
+- `local-heal-loop` — boot stack → run gate → diagnose → fix → retry → cap at 5 iterations
 - `scrubbing-demo` — the SSH operator pattern via `.scripts/ssh-run.py`
 - `filing-contract-drift-issue` — the 5-section issue-body format used for #408–#411
+- `tagging-release` — pre-tag verification + `git tag -a` + e2e-full release-validation watch
+- `writing-tenant-isolation-resource` — the G-20 per-resource-config snippet pattern (build inline with G-20 wave 3+)
+- `splitting-large-route-file` — the G-17/G-18/G-19 wellness.js split pattern (build inline)
+- `adding-frontend-page-spec` — patient-portal-style E2E pattern (build inline with G-21 prep)
+- `writing-claude-skill` — the meta-recipe (build LAST so it captures lessons from authoring the others)
 
 **Local stack state when this handoff was written:** Docker MySQL on `:3307` is running, backend may or may not be up depending on whether anyone hits `local-stack-down.ps1`. If you boot fresh: `.\scripts\local-stack-up.ps1` then `.\scripts\test-local.ps1 -Local` to verify all 4 gates green.
 

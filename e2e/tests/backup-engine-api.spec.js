@@ -638,10 +638,16 @@ test.describe('runBackup() engine — mysqldump-failure error contract', () => {
     //     file:null, sizeBytes:0, durationMs:>=0 }
     //   - NOT throw / crash the process.
     //   - NOT leave a zero-byte file behind.
+    //
+    // This branch is caught by the #416 fs.accessSync pre-flight in
+    // buildMysqldumpCommand, NOT by spawn — see the "ALWAYS-FAILS-BINARY"
+    // test below for the spawn-pipe runtime-failure path that #417 adds.
     const tmpDir = path.join(BACKEND_DIR, '..', 'backups-e2e-error-probe');
     // The engine writes `console.log/warn/error` lines on every run.
     // Silence those here so process.stdout carries ONLY the JSON we
     // want to parse — otherwise JSON.parse trips on "[Backup] …" noise.
+    // runBackup() became async in #417 — the child script awaits the
+    // promise before serialising the envelope to stdout.
     const wrapped = `
       console.log = console.warn = console.error = () => {};
       process.env.MYSQLDUMP_BIN = '/definitely/not/a/real/binary/mysqldump-${Date.now()}';
@@ -649,8 +655,13 @@ test.describe('runBackup() engine — mysqldump-failure error contract', () => {
       process.env.BACKUP_DIR = ${JSON.stringify(tmpDir)};
       process.env.DATABASE_URL = process.env.DATABASE_URL || ${JSON.stringify(cachedDbUrl || candidateDbUrls()[0])};
       const { runBackup } = require('./cron/backupEngine');
-      const out = runBackup({ filename: 'E2E_ERROR_PROBE_${Date.now()}.sql.gz' });
-      process.stdout.write(JSON.stringify(out));
+      (async () => {
+        const out = await runBackup({ filename: 'E2E_ERROR_PROBE_${Date.now()}.sql.gz' });
+        process.stdout.write(JSON.stringify(out));
+      })().catch((e) => {
+        process.stdout.write(JSON.stringify({ __crash: true, message: e && e.message }));
+        process.exitCode = 1;
+      });
     `;
     let out;
     try {
@@ -684,5 +695,94 @@ test.describe('runBackup() engine — mysqldump-failure error contract', () => {
       // Cleanup the probe dir itself.
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_e) { /* best-effort */ }
     }
+  });
+
+  // ─── #417 spawn-pipe runtime-failure path ─────────────────────────────
+  //
+  // Background: the original engine ran `mysqldump … | gzip > file` via
+  // execSync + shell. Under POSIX `sh` without `pipefail`, a pipeline's
+  // exit code is the LAST stage's exit code — gzip happily writes a
+  // 0-byte archive when its stdin is empty (mysqldump exited non-zero
+  // before producing output) and exits 0. The engine therefore reported
+  // success: true with a useless file. The #416 fix added an
+  // fs.accessSync pre-flight that catches "binary missing" but does
+  // nothing for actual runtime mysqldump failures (DB unreachable, wrong
+  // creds, schema lock, disk full, version mismatch).
+  //
+  // This test exercises the runtime-failure path by pointing MYSQLDUMP_BIN
+  // at a real, existing executable that ALWAYS exits non-zero (/bin/false
+  // on POSIX). The fs.accessSync pre-flight passes (the file IS X_OK).
+  // The spawn-pipe pattern in #417 is the ONLY thing that catches the
+  // failure — execSync would have reported success here.
+  //
+  // Skipped on Windows (no /bin/false; the engine isn't run on Windows
+  // in production anyway). CI is Linux-only.
+  test('returns { success:false, code:"MYSQLDUMP_FAILED" } when bin runs but exits non-zero (#417 runtime-failure path)', async () => {
+    test.skip(!probePrismaClient(), 'backend not installable in this env (no Prisma client) — engine probe impossible');
+    test.skip(process.platform === 'win32', '/bin/false not present on Windows; engine runs on Linux in production');
+    test.skip(!fs.existsSync('/bin/false'), '/bin/false not on this host — cannot exercise runtime-failure path');
+
+    const tmpDir = path.join(BACKEND_DIR, '..', 'backups-e2e-runtime-fail');
+    // /bin/false ignores all args + stdin and exits 1 immediately. With
+    // an execSync shell pipeline + no pipefail, the wrapping `gzip > file`
+    // would still exit 0 and the engine would have wrongly returned
+    // { success: true, sizeBytes: <small> } pointing at a 0-byte gzip.
+    // The spawn-pipe pattern catches the dump child's non-zero exit and
+    // returns the structured MYSQLDUMP_FAILED envelope instead — that's
+    // the contract this test pins.
+    const probeFilename = `E2E_RUNTIME_FAIL_${Date.now()}.sql.gz`;
+    const wrapped = `
+      console.log = console.warn = console.error = () => {};
+      process.env.MYSQLDUMP_BIN = '/bin/false';
+      process.env.MYSQLDUMP_DOCKER_CONTAINER = ''; // force PATH mode
+      process.env.BACKUP_DIR = ${JSON.stringify(tmpDir)};
+      process.env.DATABASE_URL = process.env.DATABASE_URL || ${JSON.stringify(cachedDbUrl || candidateDbUrls()[0])};
+      const { runBackup } = require('./cron/backupEngine');
+      (async () => {
+        const out = await runBackup({ filename: ${JSON.stringify(probeFilename)} });
+        process.stdout.write(JSON.stringify(out));
+      })().catch((e) => {
+        process.stdout.write(JSON.stringify({ __crash: true, message: e && e.message }));
+        process.exitCode = 1;
+      });
+    `;
+    let out;
+    try {
+      out = execFileSync(process.execPath, ['-e', wrapped], {
+        cwd: BACKEND_DIR, encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      throw new Error(`runBackup runtime-failure probe child crashed: ${e.message}`);
+    }
+
+    const result = JSON.parse(out);
+    expect(result.__crash, 'runBackup must not throw — must return structured failure').toBeUndefined();
+
+    // The contract the spawn-pipe pattern pins:
+    //   - dump child exits 1 (not 0) — engine sees this and reports
+    //     MYSQLDUMP_FAILED with a non-empty error string.
+    //   - sizeBytes=0, file=null — no leak of a partial / 0-byte gzip
+    //     into the response envelope.
+    //   - the produced file (if any) is unlinked from disk, so a
+    //     subsequent listBackups() would NOT enumerate it.
+    expect(result.success).toBe(false);
+    expect(result.code).toBe('MYSQLDUMP_FAILED');
+    expect(result.file).toBeNull();
+    expect(result.sizeBytes).toBe(0);
+    expect(typeof result.durationMs).toBe('number');
+    expect(typeof result.error).toBe('string');
+
+    // Confirm no file with our tagged name leaked into the backup dir.
+    // /bin/false produces no stdout, gzip writes a valid 18-byte empty
+    // gzip frame, the file briefly exists; the engine MUST unlink it on
+    // failure.
+    const probePath = path.join(tmpDir, probeFilename);
+    expect(
+      fs.existsSync(probePath),
+      `engine left ${probeFilename} on disk after MYSQLDUMP_FAILED — partial file would confuse listBackups()`,
+    ).toBe(false);
+
+    // Cleanup the probe dir.
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_e) { /* best-effort */ }
   });
 });

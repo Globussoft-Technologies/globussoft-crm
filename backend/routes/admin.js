@@ -66,7 +66,9 @@ router.use(verifyToken);
 router.post('/backup/run', verifyRole(['ADMIN']), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const result = runBackup();
+    // runBackup() is async since #417 — the spawn-pipe pattern can't be
+    // implemented sync without buffering the full dump in memory.
+    const result = await runBackup();
     if (!result.success) {
       // 500 with structured error code — the spec asserts the route
       // doesn't crash when mysqldump is unreachable; it returns a

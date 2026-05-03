@@ -591,9 +591,17 @@ test.describe('Surveys API — PUBLIC GET /public/:id', () => {
     expect(res.status()).toBe(404);
   });
 
-  test('404 on non-numeric id (no auth)', async ({ request }) => {
+  test('400 on non-numeric id (no auth)', async ({ request }) => {
+    // Post-#423: validateNumericId middleware fires globally on every
+    // `:id` param — including no-auth public routes — and returns 400
+    // before the route handler can return its own 404. The contract
+    // change here is "non-numeric ids fail loudly with a structured
+    // 400 + INVALID_ID code", not "silently 404 like the resource
+    // didn't exist". Cleaner from a debugging-bad-client-IDs POV.
     const res = await getPublic(request, '/api/surveys/public/not-a-number');
-    expect(res.status()).toBe(404);
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_ID');
   });
 
   test('410 when survey is inactive (no auth)', async ({ request }) => {

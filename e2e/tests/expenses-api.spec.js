@@ -264,7 +264,8 @@ test.describe('Expenses API — GET /:id', () => {
   test('400 on non-numeric id', async ({ request }) => {
     const res = await authGet(request, '/api/expenses/not-a-number');
     expect(res.status()).toBe(400);
-    expect((await res.json()).error).toMatch(/invalid expense id/i);
+    // Post-#423: middleware-level error message is generic.
+    const _body = await res.json(); expect(_body.error).toMatch(/invalid id/i); expect(_body.code).toBe('INVALID_ID');
   });
 
   test('404 on unknown id', async ({ request }) => {

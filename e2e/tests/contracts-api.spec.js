@@ -175,7 +175,9 @@ test.describe('Contracts API — GET /:id', () => {
   test('400 for non-numeric id', async ({ request }) => {
     const res = await authGet(request, '/api/contracts/not-a-number');
     expect(res.status()).toBe(400);
-    expect((await res.json()).error).toMatch(/invalid contract id/i);
+    // Post-#423: validateNumericId middleware short-circuits before
+    // the route handler. Message is generic; contract is the code.
+    const _body = await res.json(); expect(_body.error).toMatch(/invalid id/i); expect(_body.code).toBe('INVALID_ID');
   });
 
   test('404 for unknown id', async ({ request }) => {

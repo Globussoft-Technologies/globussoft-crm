@@ -18,24 +18,42 @@
  *   4. **DELETE /:id** (when supported) — Tenant B DELETE on Tenant A's
  *      id → [403, 404]. The row is still readable by Tenant A after.
  *
- * Resources covered (G-20 wave 1 + wave 2 = ~17 of ~109 multi-tenant
+ * Resources covered (G-20 wave 1 + wave 2 + wave 3 = ~25 of ~109 multi-tenant
  * models — the highest-PII / highest-financial / highest-volume
  * surfaces):
  *
  *   Generic CRM:    contacts, deals, tasks, billing, estimates,
  *                   workflows, sequences, projects, tickets,
- *                   developer-webhooks, scheduled-emails
+ *                   developer-webhooks, scheduled-emails,
+ *                   expenses, contracts, currencies,
+ *                   custom-objects/entities, kb-articles, kb-categories,
+ *                   scim-tokens
  *   Wellness PHI:   wellness/patients, wellness/services,
  *                   wellness/locations, wellness/visits,
- *                   wellness/prescriptions, wellness/consents
+ *                   wellness/prescriptions, wellness/consents,
+ *                   wellness/treatment-plans
  *
- * Wave 2 (this commit) added the wellness clinical FK chain
- * (Patient → Visit → Prescription, plus Patient → Consent). Those
- * sub-resources need an upstream Patient (and Visit, for Rx) seeded
- * in the owner tenant first; see `wellnessFk.*` below for the
- * shared-upstream pattern used by their `createBody`.
+ * Wave 2 added the wellness clinical FK chain (Patient → Visit →
+ * Prescription, plus Patient → Consent). Those sub-resources need an
+ * upstream Patient (and Visit, for Rx) seeded in the owner tenant
+ * first; see `wellnessFk.*` below for the shared-upstream pattern used
+ * by their `createBody`.
  *
- * Subsequent commits will widen the coverage to the remaining ~90
+ * Wave 3 (this commit) widens coverage with billing-adjacent +
+ * platform-config surfaces (expenses, contracts, currencies, custom
+ * entities, KB articles + categories, SCIM tokens) plus the wellness
+ * treatment-plans clinical resource (which joins the no-delete cluster
+ * per #21). Notable shapes:
+ *   - `currencies`     creates a non-base row so DELETE is allowed.
+ *   - `scim-tokens`    POST + DELETE only (no GET/:id, no PUT/:id) —
+ *                      same shape class as developer-webhooks.
+ *   - `wellness/treatment-plans` PUT only accepts `status`, so the
+ *                      framework's cleanup PUT-rename is best-effort
+ *                      and silently no-ops (acceptable: the seeded
+ *                      `IsoTest…` name doesn't match demo-hygiene's
+ *                      residue regex, so no pollution surfaces).
+ *
+ * Subsequent commits will widen the coverage to the remaining ~80+
  * tenant-scoped models. The framework here (`probeIsolation`) is the
  * load-bearing piece — adding a new resource is one entry in the
  * RESOURCES array.
@@ -129,6 +147,15 @@ function authHeader(token) {
 //                    shape that this generic flow can't drive (rare;
 //                    usually means the resource is read-mostly or
 //                    requires an upstream FK that's expensive to seed).
+//   mutateBody     — optional () => body for the PUT-probe step. Defaults
+//                    to `{ name: 'HACKED <RUN_TAG>' }`. Override when the
+//                    route's PUT validates required body fields BEFORE
+//                    its tenant-scoped findFirst (e.g. wellness/treatment-plans
+//                    requires `status` and 400s if missing — that 400
+//                    would falsely fail the [403, 404] assertion even
+//                    though no leak occurred). Pass a body that satisfies
+//                    the validators so the request reaches the tenant
+//                    check and the route returns the expected 404.
 const RESOURCES = [
   // ── Generic CRM resources (Tenant A creates; Tenant B probes) ──────
   {
@@ -399,6 +426,170 @@ const RESOURCES = [
     supportsDelete: true,
     listKey: null,
   },
+
+  // ── Generic CRM (wave 3) ───────────────────────────────────────────
+  {
+    name: 'expenses',
+    path: '/expenses',
+    createBody: () => ({
+      title: `IsoTest Expense ${RUN_TAG}`,
+      amount: 250.00,
+      category: 'Travel',
+      notes: 'cross-tenant probe',
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    name: 'contracts',
+    path: '/contracts',
+    createBody: () => ({
+      title: `IsoTest Contract ${RUN_TAG}`,
+      status: 'Draft',
+      value: 10000,
+      terms: 'cross-tenant probe',
+      startDate: new Date().toISOString(),
+      endDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    // routes/currencies.js: full CRUD. CAUTION — DELETE refuses (400) on
+    // the tenant base currency; we explicitly create with isBase=false so
+    // the framework's owner-side DELETE cleanup path is allowed. Code
+    // chosen at random per-call to avoid the per-tenant unique-code
+    // constraint colliding across runs in the same MySQL second.
+    name: 'currencies',
+    path: '/currencies',
+    createBody: () => ({
+      // 3-letter ISO-ish code; not a real currency, won't collide with seeds.
+      code: `Z${Math.random().toString(36).slice(2, 4).toUpperCase()}`,
+      symbol: '¤',
+      name: `IsoTest Currency ${RUN_TAG}`,
+      exchangeRate: 1.0,
+      isBase: false,
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    // routes/custom_objects.js entities surface — full CRUD added in
+    // #419 (commit b90ac7c). The seed creates an entity with no records
+    // so DELETE /:id is allowed (the route 409s with ENTITY_HAS_RECORDS
+    // when records exist; we don't hit that path).
+    //
+    // Path quirk: the list endpoint is /custom-objects/entities but the
+    // by-id endpoints are /custom-objects/entities/:id. The framework's
+    // template `${path}/${id}` resolves to the latter; the list-leak
+    // probe hits the former (with `?limit=500` ignored — list returns
+    // unbounded array, which the framework treats as a flat array
+    // since listKey is null).
+    name: 'custom-objects/entities',
+    path: '/custom-objects/entities',
+    createBody: () => ({
+      // NAME_MAX is 100 chars — RUN_TAG plus a tiny salt fits comfortably.
+      name: `IsoTest Entity ${RUN_TAG} ${Math.random().toString(36).slice(2, 6)}`,
+      description: 'cross-tenant probe',
+      fields: [{ name: 'TestField', type: 'String' }],
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    // routes/knowledge_base.js articles surface. Slug is derived
+    // server-side from title via slugify+ensureUniqueSlug, so we only
+    // need to vary the title to keep slugs unique across runs.
+    name: 'kb-articles',
+    path: '/knowledge-base/articles',
+    createBody: () => ({
+      title: `IsoTest KB Article ${RUN_TAG} ${Math.random().toString(36).slice(2, 6)}`,
+      content: 'cross-tenant probe body',
+      isPublished: false,
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    // routes/knowledge_base.js categories surface. Same slug-from-name
+    // generation as articles. DELETE detaches articles in the category
+    // before the row drop, which is moot here since the category has
+    // no articles.
+    name: 'kb-categories',
+    path: '/knowledge-base/categories',
+    createBody: () => ({
+      name: `IsoTest KB Cat ${RUN_TAG} ${Math.random().toString(36).slice(2, 6)}`,
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+  {
+    // routes/scim.js token-management surface (NOT the SCIM v2 endpoints,
+    // which use a different bearer scheme). Same shape class as
+    // developer-webhooks: POST + DELETE only — no GET/:id, no PUT/:id.
+    // The framework's id-targeted GET/PUT probes therefore land on a
+    // non-existent route and return 404 (which satisfies [403, 404]).
+    // The list-leak probe is the meaningful gate here: tenant B's
+    // /scim/tokens list must NEVER include tenant A's token row.
+    name: 'scim-tokens',
+    path: '/scim/tokens',
+    createBody: () => ({
+      // Token name is the only writable field; embed RUN_TAG so the
+      // list-leak probe's tag-scan picks it up. The route returns the
+      // hashed token's mask (scim_••••••••XXXX), not plaintext, so we
+      // can't tag the value column — name is enough.
+      name: `IsoTest SCIM Token ${RUN_TAG} ${Math.random().toString(36).slice(2, 6)}`,
+    }),
+    ownerToken: 'A',
+    supportsDelete: true,
+    listKey: null,
+  },
+
+  // ── Wellness clinical (wave 3) ─────────────────────────────────────
+  {
+    // routes/wellness.js treatment-plans (#420 consolidated path,
+    // commit cea9bc0). PUT only accepts `status` (per
+    // controllers/treatmentPlanController.js), so the framework's
+    // cleanup PUT-rename is a best-effort no-op — that's acceptable
+    // because `IsoTest…` doesn't match demo-hygiene's residue regex
+    // (e2e/test-data-patterns.js anchors on E2E_, Race, PHI Audit,
+    // etc.; our marker is the suffix RUN_TAG, never the prefix).
+    //
+    // Joins the clinical-no-delete cluster per #21: no DELETE
+    // endpoint exists for the resource, so supportsDelete=false.
+    // patientId FK pulls from the shared wellnessFk seed populated in
+    // the outer beforeAll.
+    name: 'wellness/treatment-plans',
+    path: '/wellness/treatment-plans',
+    createBody: () => ({
+      patientId: wellnessFk.patientId,
+      name: `IsoTest Treatment Plan ${RUN_TAG}`,
+      totalSessions: 5,
+      totalPrice: 5000,
+    }),
+    // Controller validates `status` before tenant scope (see
+    // controllers/treatmentPlanController.js#updateTreatmentPlan); without
+    // this override the cross-tenant probe would 400 on missing status
+    // rather than 404 on tenant miss. Status string is harmless on a
+    // 404 path — the row is never reached.
+    mutateBody: () => ({ status: 'active' }),
+    ownerToken: 'B',
+    supportsDelete: false,         // clinical no-delete policy (#21)
+    // No cleanupField — PUT only accepts `status` (would set it to a
+    // junk value like `_teardown_iso_<id>`), and `name` is not in the
+    // PUT whitelist so we can't rename. That's acceptable here:
+    // `IsoTest Treatment Plan …` doesn't match demo-hygiene's residue
+    // regex (e2e/test-data-patterns.js anchors on E2E_, Race, PHI Audit,
+    // etc.). Row is left in place; downstream cleanup is a manual ops
+    // task if it ever matters.
+    listKey: null,
+  },
 ];
 
 // ── Wellness FK chain seed ─────────────────────────────────────────
@@ -625,9 +816,19 @@ test.describe('Tenant isolation — API gate (G-20)', () => {
         test.skip(!tokenA || !tokenB, 'tenant fixtures not seeded');
         test.skip(ownerId == null, `${ownerLabel} POST ${resource.path} did not return a usable id`);
 
+        // Default probe body: a `name` rename. Some routes validate
+        // required fields before the tenant-scoped findFirst (e.g.
+        // wellness/treatment-plans requires `status`); they expose a
+        // `mutateBody` factory that returns a body satisfying the
+        // validators so the request reaches the tenant check and 404s
+        // instead of 400ing on missing fields.
+        const probeBody = resource.mutateBody
+          ? resource.mutateBody()
+          : { name: `HACKED ${RUN_TAG}` };
+
         const r = await request.put(`${API}${resource.path}/${ownerId}`, {
           headers: authHeader(probeToken()),
-          data: { name: `HACKED ${RUN_TAG}` },
+          data: probeBody,
           timeout: REQUEST_TIMEOUT,
         });
         expect(
@@ -658,11 +859,12 @@ test.describe('Tenant isolation — API gate (G-20)', () => {
           // probe attempted to delete it. Catches silent-mutation
           // variants: probe DELETE returns 403/404 BUT the row was
           // actually deleted server-side. We try GET /:id first; if the
-          // resource doesn't have a by-id endpoint (workflows,
-          // developer-webhooks, scheduled-emails — list-only routes),
-          // fall back to checking the LIST response for the row's id.
-          // Either way, finding the row post-DELETE proves no silent
-          // mutation occurred.
+          // resource doesn't have a by-id endpoint (developer-webhooks,
+          // scim-tokens — list+POST+DELETE only), fall back to checking
+          // the LIST response for the row's id. Either way, finding the
+          // row post-DELETE proves no silent mutation occurred.
+          // (NOTE: workflows used to live in this list pre-#418 — that
+          //  route now has GET /:id, so it's no longer list-only.)
           const ownerToken = resource.ownerToken === 'A' ? tokenA : tokenB;
           const ownerRead = await request.get(`${API}${resource.path}/${ownerId}`, {
             headers: authHeader(ownerToken),

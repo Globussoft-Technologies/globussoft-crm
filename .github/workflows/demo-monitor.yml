@@ -27,12 +27,17 @@ on:
         type: string
         default: 'https://crm.globusdemos.com'
 
-  # 30-min health check against demo. Demo cleanup verified
-  # 2026-05-02 (17/17 manual run green on commit 0d49a6b → see todo
-  # log); schedule turned on so any drift opens a tracker issue
-  # within ~30 min instead of waiting for QA to surface it manually.
+  # 2-hour cadence (relaxed from */30 on 2026-05-03). Demo cleanup is
+  # automated end-to-end now (e2e-full has its own scrub-demo job per
+  # db932ab; per-push gate runs against ephemeral DB so can't pollute).
+  # The remaining drift class — sibling-agent verification runs leaving
+  # residue, ~once/week — doesn't justify 48 runs/day. Detection latency
+  # of ~2h is acceptable given there's no live customer traffic at risk
+  # on demo. If sister Globussoft products move to "live" cadence, copy
+  # docs/LIVE_MONITOR_PATTERN.md instead — that template defaults to
+  # */10 with PagerDuty fan-out.
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 */2 * * *'
 
 permissions:
   contents: read

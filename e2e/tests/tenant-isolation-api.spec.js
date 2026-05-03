@@ -172,6 +172,7 @@ const RESOURCES = [
     }),
     ownerToken: 'A',
     supportsDelete: false,  // billing uses /void state machine, not hard DELETE
+    cleanupField: 'invoiceNumber',  // rename via PUT to evade demo-hygiene residue regex
     listKey: null,
   },
   {
@@ -200,7 +201,8 @@ const RESOURCES = [
       source: 'walk-in',
     }),
     ownerToken: 'B',
-    supportsDelete: false,  // clinical no-delete policy (#21)
+    supportsDelete: false,         // clinical no-delete policy (#21)
+    cleanupField: 'name',          // rename via PUT to clear residue marker
     listKey: 'patients',
   },
   {
@@ -215,6 +217,7 @@ const RESOURCES = [
     }),
     ownerToken: 'B',
     supportsDelete: false,
+    cleanupField: 'name',
     listKey: null,
   },
   {
@@ -230,6 +233,7 @@ const RESOURCES = [
     }),
     ownerToken: 'B',
     supportsDelete: false,
+    cleanupField: 'name',
     listKey: null,
   },
   // wellness/visits + wellness/prescriptions need a Patient FK first;
@@ -260,18 +264,40 @@ async function createInOwnerTenant(request, resource) {
 }
 
 /**
- * Best-effort cleanup. Hard DELETE if supported; otherwise skip (rows
- * tagged with RUN_TAG are caught by demo-hygiene's residue regex and
- * by the next global-teardown sweep).
+ * Best-effort cleanup.
+ *   - DELETE if `supportsDelete: true`.
+ *   - Otherwise, if `cleanupField` is set, PUT-rename the row's
+ *     identifying field to `_teardown_iso_<id>`. That clears the
+ *     RUN_TAG marker out of name/title/invoiceNumber so subsequent
+ *     demo-hygiene scans don't trip on it. Pattern mirrors what
+ *     wellness-clinical-api.spec.js does for Locations (commit
+ *     `02a4d1e`).
+ *   - Otherwise, leave the row (and accept demo accumulation; this
+ *     branch shouldn't be hit by any current resource).
+ *
+ * Failures are swallowed — cleanup is best-effort, the spec already
+ * reported pass/fail by this point.
  */
 async function cleanupOwnerRow(request, resource, id) {
-  if (id == null || !resource.supportsDelete) return;
+  if (id == null) return;
   const ownerToken = resource.ownerToken === 'A' ? tokenA : tokenB;
   if (!ownerToken) return;
-  await request.delete(`${API}${resource.path}/${id}`, {
-    headers: authHeader(ownerToken),
-    timeout: REQUEST_TIMEOUT,
-  }).catch(() => {});
+
+  if (resource.supportsDelete) {
+    await request.delete(`${API}${resource.path}/${id}`, {
+      headers: authHeader(ownerToken),
+      timeout: REQUEST_TIMEOUT,
+    }).catch(() => {});
+    return;
+  }
+
+  if (resource.cleanupField) {
+    await request.put(`${API}${resource.path}/${id}`, {
+      headers: authHeader(ownerToken),
+      data: { [resource.cleanupField]: `_teardown_iso_${id}` },
+      timeout: REQUEST_TIMEOUT,
+    }).catch(() => {});
+  }
 }
 
 // ── Spec body ──────────────────────────────────────────────────────

@@ -210,6 +210,7 @@ model Contact {
   pushSubscriptions   PushSubscription[]
   attachments         ContactAttachment[]
 
+  /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
@@ -484,6 +485,7 @@ model Integration {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// One Integration row per (tenant, provider) pair. A tenant connects to e.g. Slack ONCE; reconnecting overwrites the existing token rather than creating a duplicate. Different tenants each have their own independent Slack workspace, so the same provider name appears across tenants.
   @@unique([tenantId, provider])
 }
 
@@ -499,6 +501,7 @@ model CustomEntity {
   fields  CustomField[]
   records CustomRecord[]
 
+  /// CustomEntity name is tenant-scoped; tenant A's "Vehicle" object is independent from tenant B's "Vehicle". Prevents accidental name collisions within one tenant's no-code object catalog while allowing the same logical name across tenants.
   @@unique([tenantId, name])
 }
 
@@ -603,6 +606,7 @@ model SequenceStep {
 
   createdAt DateTime @default(now())
 
+  /// One step per (sequence, position) — drip sequences are linear, so position N must be unambiguous. Tenant scoping is inherited via the parent Sequence (SequenceStep is on the NON_TENANT_MODELS whitelist in schema-invariants.test.js for this reason).
   @@unique([sequenceId, position])
   @@index([sequenceId])
 }
@@ -886,7 +890,8 @@ model MarketplaceLead {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@unique([provider, externalLeadId])
+  /// #414 — Prevents the same external lead from being ingested twice by the same tenant; cross-tenant duplicates are allowed (different customers using the same source-system, e.g. IndiaMART, may legitimately receive the same external lead independently). Pre-fix: this constraint excluded tenantId, which globally locked any (provider, externalLeadId) pair to the first tenant that imported it.
+  @@unique([tenantId, provider, externalLeadId])
   @@index([tenantId, status])
   @@index([tenantId, provider])
 }
@@ -906,6 +911,7 @@ model MarketplaceConfig {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// One credentials row per (tenant, marketplace provider). A tenant has at most one IndiaMART API key on file; rotating the key updates this row in place. Different tenants of course have their own independent provider credentials.
   @@unique([tenantId, provider])
 }
 
@@ -967,6 +973,7 @@ model SmsConfig {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// One SMS provider credential row per (tenant, provider). A tenant configures MSG91 once; reconfiguring updates the row. Different tenants run their own MSG91 / Twilio accounts independently.
   @@unique([tenantId, provider])
 }
 
@@ -1016,6 +1023,7 @@ model WhatsAppTemplate {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// WhatsApp template names are tenant-scoped. Meta itself enforces uniqueness within a Business Account, so a tenant cannot have two templates named "appointment_reminder", but tenant A and tenant B can each independently register a template named "appointment_reminder" against their own WABA.
   @@unique([tenantId, name])
 }
 
@@ -1034,6 +1042,7 @@ model WhatsAppConfig {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// One WhatsApp credentials row per (tenant, provider). A tenant connects to Meta Cloud API once with their WABA + phone number ID. Different tenants own different WABAs and operate independently.
   @@unique([tenantId, provider])
 }
 
@@ -1054,6 +1063,7 @@ model TelephonyConfig {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// One telephony credentials row per (tenant, provider). A tenant configures e.g. MyOperator once; the virtual number + API key live there. Different tenants run on different virtual-number pools.
   @@unique([tenantId, provider])
 }
 
@@ -1206,6 +1216,7 @@ model SsoConfig {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  /// One SSO config row per (tenant, identity provider). A tenant binds to Google Workspace ONCE with their own clientId/secret. Different tenants of course own separate Google Workspace tenants and separate Microsoft Entra IDs.
   @@unique([tenantId, provider])
 }
 
@@ -1226,6 +1237,7 @@ model CalendarIntegration {
 
   tenantId Int @default(1)
 
+  /// One calendar connection per (user, provider). A user connects their Google calendar once; reconnecting refreshes tokens in place. Note: scoped on userId (already globally unique across tenants), so tenantId is redundant in this key.
   @@unique([userId, provider])
 }
 
@@ -1247,6 +1259,7 @@ model CalendarEvent {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  /// Dedup key for inbound calendar sync: provider's externalId is globally unique by construction (Google/Microsoft event IDs are UUID-shaped and namespaced by the provider's account system), so the same event won't legitimately appear twice in our DB even across tenants. Keeping the constraint tenantId-free is intentional — each provider event has exactly one canonical row, regardless of which tenant's user owns it.
   @@unique([provider, externalId])
 }
 
@@ -1287,6 +1300,7 @@ model RetentionPolicy {
 
   tenantId Int @default(1)
 
+  /// One GDPR retention policy row per (tenant, entity-type). A tenant declares "delete EmailMessage older than 90 days" exactly once; policies are tenant-specific because retention is a tenant compliance choice (e.g. EU vs APAC tenants set different windows).
   @@unique([tenantId, entity])
 }
 
@@ -1356,6 +1370,7 @@ model Quota {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// One quota row per (user, period, tenant). A sales rep has exactly one quota per quarter; resetting the target updates this row in place. tenantId is included defensively even though userId already constrains tenant — guards against cross-tenant userId collision in the unlikely event a user is moved.
   @@unique([userId, period, tenantId])
 }
 
@@ -1490,6 +1505,7 @@ model KbCategory {
   tenantId  Int      @default(1)
   createdAt DateTime @default(now())
 
+  /// KB category slug uniqueness is tenant-scoped; "/billing" can exist as a category in tenant A's knowledge base AND tenant B's independently. Slugs are user-facing URL segments, so collisions only matter within one tenant's KB tree.
   @@unique([slug, tenantId])
 }
 
@@ -1505,6 +1521,7 @@ model KbArticle {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  /// KB article slug uniqueness is tenant-scoped; "/getting-started" is a perfectly valid slug for tenant A's article AND tenant B's article. Slugs feed public KB URLs (/portal/kb/<slug>) so collisions only matter within one tenant's portal.
   @@unique([slug, tenantId])
 }
 
@@ -1679,6 +1696,7 @@ model Currency {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  /// One Currency row per (ISO code, tenant). Each tenant maintains its own exchange-rate table relative to its base currency, so "USD" can exist in tenant A (rate=1.0 base) and tenant B (rate=83.4 vs INR base) independently.
   @@unique([code, tenantId])
 }
 
@@ -1694,6 +1712,7 @@ model FieldPermission {
   tenantId  Int      @default(1)
   createdAt DateTime @default(now())
 
+  /// One field-permission row per (role, entity, field, tenant). Tenants configure their own RBAC rules — tenant A can hide "Deal.amount" from MANAGER while tenant B exposes it. The compound key prevents duplicate rules within one tenant while keeping permissions per-tenant configurable.
   @@unique([role, entity, field, tenantId])
 }
 
@@ -1726,6 +1745,7 @@ model AccountingSync {
   syncedAt   DateTime @default(now())
   tenantId   Int      @default(1)
 
+  /// Mapping table from local entity → external accounting system ID. One mapping per (provider, entityType, entityId) within a tenant — Invoice #42 in tenant A maps to ONE QuickBooks invoice ID. tenantId prevents cross-tenant mapping bleed; entityId is only unique within a tenant in our schema.
   @@unique([provider, entityType, entityId, tenantId])
 }
 
@@ -1816,6 +1836,7 @@ model PlaybookProgress {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  /// One progress row per (deal, playbook). A deal can run multiple playbooks in parallel, but a given playbook against a given deal has exactly one progress record (resuming updates the row). tenantId is implicit via dealId — Deals are tenant-scoped and dealIds don't collide across tenants in our id-allocation scheme.
   @@unique([dealId, playbookId])
 }
 
@@ -1933,6 +1954,7 @@ model Patient {
   @@index([tenantId, phone])
   @@index([tenantId, locationId])
   @@index([contactId])
+  /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
   // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
   // lived in lib/leadJunkFilter + the route handler's best-effort
   // findFirst — both bypassable. With @@unique enforced, Prisma throws

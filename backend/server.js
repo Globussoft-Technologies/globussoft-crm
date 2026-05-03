@@ -23,6 +23,37 @@ const swaggerUi = require("swagger-ui-express");
 const YAML = require("yamljs");
 const rateLimit = require("express-rate-limit");
 
+// ── Issue #423 — validate numeric `:id` path params BEFORE any route file
+// is loaded ─────────────────────────────────────────────────────────────
+// Handlers like `/deals/:id`, `/tasks/:id`, `/tickets/:id` did
+// `parseInt(req.params.id)` without isNaN check, then handed NaN to Prisma
+// which threw and surfaced as a 500. The fix is one param callback that
+// fires on every `:id`-bearing route. See middleware/validateNumericId.js
+// for the audit (every `:id` in the codebase is numeric) and the
+// 400-vs-404 trade-off.
+//
+// IMPORTANT: `app.param('id', fn)` does NOT propagate to mounted sub-routers
+// (Express docs: "Param callback functions are local to the router on which
+// they are defined. They are not inherited by mounted apps or routers.").
+// Each `routes/*.js` exports its own `express.Router()`, so we monkey-patch
+// the Router factory to auto-register the validator on every Router that
+// gets constructed. The patch MUST run before any `require("./routes/...")`
+// below — that's why this block sits up here, not down by the route mounts.
+const { validateNumericId } = require("./middleware/validateNumericId");
+{
+  const _RouterFactory = express.Router;
+  // express.Router is a callable factory (not a class). Wrap it to attach
+  // the param callback to every Router we construct from now on.
+  express.Router = function patchedRouter(...args) {
+    const r = _RouterFactory.apply(this, args);
+    try { r.param("id", validateNumericId); } catch (_) { /* defensive */ }
+    return r;
+  };
+  // Preserve any static props the factory carries so `express.Router.someProp`
+  // (rare) keeps working.
+  Object.assign(express.Router, _RouterFactory);
+}
+
 const { verifyToken } = require("./middleware/auth");
 
 const app = express();
@@ -266,6 +297,12 @@ app.use("/api", (req, res, next) => {
 // Strip dangerous fields (id, createdAt, updatedAt, tenantId, userId) from all request bodies
 const { stripDangerous } = require('./middleware/validateInput');
 app.use(stripDangerous);
+
+// Apply the #423 numeric-id validator to the app itself too — covers any
+// future `app.get('/foo/:id', …)` registered directly on the app rather
+// than on a sub-router. The Router factory was already patched up top so
+// every imported sub-router has the callback attached.
+app.param("id", validateNumericId);
 
 // Map API Endpoints
 app.use("/api/auth", authRoutes);

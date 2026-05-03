@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## v3.4.1 — 2026-05-03 — T1.2 SMS provider live + e2e-full long-tail fully closed
+
+A continuation of v3.4.0's same-day session. **No new product features**, but two production-impacting items closed end-to-end:
+
+### Added — patient SMS pipeline functionally live
+
+- **Fast2SMS API key wired on demo + local** — `FAST2SMS_API_KEY` set in `backend/.env` (local) and appended to demo's `backend/.env` via the operator SSH path; `pm2 restart globussoft-crm-backend --update-env` to pick up. Verified end-to-end: `/api/wellness/portal/health` returns `{"smsConfigured":true}` on both ends. The OTP-driven flows that were broken-by-default since #182 (closed Apr 15) — patient portal phone+OTP login, T-24h + T-1h appointment reminders, telecaller follow-up SMS — now actually deliver messages.
+
+- **T1.2 SMS-not-configured graceful-degrade** (commit `3e63b82`):
+  - **Layout.jsx** — non-dismissable amber warning bar at the top of every staff page when `role ∈ {ADMIN, MANAGER}` AND `user.features.smsConfigured === false`. Hidden for regular USERs since they can't fix it. Closes the silent-failure window where staff thought OTP worked.
+  - **`GET /api/wellness/portal/health`** — new public endpoint (`backend/routes/wellness.js`). Probes the env-var fallback only (MSG91 or Fast2SMS) since the patient portal is anonymous pre-OTP — no tenant context to look up per-tenant SmsConfig. Exposes a single boolean; doesn't leak provider name or env-var keys.
+  - **PatientPortal.jsx** — fetches `/portal/health` on mount; if `smsConfigured === false`, replaces the phone-input form with "Phone-OTP login is temporarily unavailable. Please contact your clinic for help accessing your records." Patients with a working SMS path see no change.
+
+### Fixed — e2e-full long-tail (3 final buckets)
+
+The 13 "real product issues" from 2026-05-02 evening triage were already mostly fixed by today's heal-loop work. The 3 remaining buckets (L1, L2, L3) all turned out to be test/env drift, not product bugs:
+
+- **L1 — eventbus cross-tenant rule isolation** (`3dc49c2`). `backend/lib/eventBus.js:176-178` correctly scopes rule lookup with `where: { tenantId, triggerType, isActive: true }`. The failing test was contaminated by parallel sibling specs all creating tenant-A rules on `deal.created` and firing them concurrently. Fix: tag the audit-count query with a unique `_specBus` token so each spec only counts its own emits. **No backend code changed; tenant scoping was already correct.**
+
+- **L2 — lead-scoring UI** (`35fedc7`). All 7 tests pass against `BASE_URL=https://crm.globusdemos.com` (Nginx serves SPA). Failure reproduces only against the local `127.0.0.1:5000` stack which is backend-only by design. **Standing rule** added to TODOS.md: UI specs need the SPA served (demo or local Vite at :5173).
+
+- **L3 — wellness-real-user-journeys** (`fe91c36`). B1 doctor login + D1 owner Rishu login share L2's SPA-served issue (added `test.skip()` with descriptive message when SPA not served). C1 telecaller lead seed + F1 lifecycle GOOD lead had a hardcoded `PARTNER_KEY = 'glbs_6ba9...'` (demo's seeded value); `prisma/seed-wellness.js` mints a random key per fresh DB. New `resolvePartnerKey(request)` helper: tries static key → if 401, logs in as wellness admin and reads `/api/developer/apikeys` to discover the local Callified key. Cached per worker. **Verified:** local 22 passed / 11 SPA-skipped / 0 failed; demo 25 passed / 7 SPA-skipped / 1 pre-existing tab-locator drift (B3 — out of scope, ~30 min follow-up).
+
+### Documentation
+
+- **TODOS.md** — T1.2 marked complete; e2e-full long-tail closed (L1/L2/L3 all resolved); next-gap recommendation refreshed (G-7 + G-14 + G-16 parallel batch, then G-9/G-10/G-11 trigger-endpoint trio, then G-20 tenant-isolation as highest-severity multi-day pickup).
+
+### Carry-over (NOT in this release)
+
+- **B3 wellness-real-user-journeys tab-locator drift** against demo — was failing before today's L3 work (verified by stashing L3 edits and re-running); isn't a regression from this session. ~30 min next session.
+- **G-7/G-14/G-16 + G-9/G-10/G-11 + G-20** gate specs — recommended next batch in TODOS.md.
+
+---
+
 ## v3.4.0 — 2026-05-03 — gate-spec push, demo cleanup automation, compliance fixes
 
 A follow-on release continuing v3.3.0's test-infra arc. **No new product features** — every change is gate coverage, route-side compliance fixes, or operations automation. Demo-monitor cron is now live and running every 30 min against the deployed box.

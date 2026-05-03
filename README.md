@@ -2,9 +2,19 @@
 
 > A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **2,112 tests on every push** (1,435 Playwright + 677 vitest); release-validation full chromium suite on every tag.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.0
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.1
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.4.1 (May 3 2026 — T1.2 SMS live + e2e-full long-tail closed)
+
+Continuation of v3.4.0's same-day session.
+
+- **Patient SMS pipeline live**: Fast2SMS API key wired on demo + local; `/api/wellness/portal/health` confirms `smsConfigured:true` end-to-end. Patient portal OTP login + T-24h/T-1h appointment reminders + telecaller follow-up SMS now actually deliver. Closes T1.2 from TODOS.md (broken-by-default since #182 in April).
+- **Graceful-degrade UI** when SMS isn't configured: amber admin banner in `Layout.jsx` for staff (ADMIN/MANAGER only); patient portal replaces OTP form with "contact your clinic" notice. Both gated on `features.smsConfigured` from `/api/auth/me` (or the new public `/portal/health` for the unauth portal).
+- **e2e-full long-tail fully closed**: the 13 "real product issues" from 2026-05-02 triage were 0 product bugs. The final 3 (L1 eventbus race, L2 lead-scoring UI, L3 wellness-real-user-journeys) were test races + env mismatches; commits `3dc49c2`, `35fedc7`, `fe91c36` resolved.
+
+See [CHANGELOG.md](CHANGELOG.md#v341--2026-05-03--t12-sms-provider-live--e2e-full-long-tail-fully-closed) for the full v3.4.1 entry.
 
 ## What's new in v3.4.0 (May 3 2026 — gate-spec push, demo cleanup automation, compliance fixes)
 

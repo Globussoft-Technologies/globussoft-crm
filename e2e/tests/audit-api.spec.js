@@ -7,9 +7,9 @@
  *
  * routes/audit.js is a *separate* router from routes/audit_viewer.js —
  * audit_viewer is the rich UI-driven endpoint with pagination, date
- * range filters, role guard, and CSV export. routes/audit.js is the
- * unprivileged read API that:
- *   1. relies entirely on the global auth guard (no `verifyRole`),
+ * range filters, and CSV export. routes/audit.js is the simple read API:
+ *   1. ADMIN-only (verifyToken + verifyRole(['ADMIN']) — closes #408
+ *      after the original spec surfaced the missing role guard),
  *   2. scopes `where: { tenantId: req.user.tenantId }` (multi-tenant
  *      data-isolation is the whole point of this spec),
  *   3. accepts only `entity` and `action` query filters,
@@ -34,11 +34,10 @@
  *   ✅ Tenant isolation — generic-tenant rows never appear in the
  *      wellness response, and vice versa. row.tenantId === requester's
  *      tenantId for every row in every response (defence-in-depth).
- *   ⚠️  RBAC: gap card says "verify against current behavior". Current
- *      behavior is that the route has NO `verifyRole` — MANAGER and
- *      USER both get 200, not 403. Captured here as `test.fixme` so
- *      the contract is documented and the day audit.js gains a role
- *      guard those tests start failing and force an update.
+ *   ✅ RBAC: routes/audit.js requires verifyRole(['ADMIN']). MANAGER
+ *      and USER receive 403. Two specs in the "RBAC contract" describe
+ *      block assert this; the originally-fixme'd tests were flipped
+ *      to active assertions when #408 shipped (commit 2df54de).
  *   ✅ Filter parameters: `entity` and `action` honored.
  *      `?limit=` is silently ignored (route hard-caps at 100); the
  *      `?userId` / `?startDate` / `?endDate` filters live on

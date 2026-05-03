@@ -1,3 +1,32 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Schema invariants — read before adding/editing models.
+//
+// 1. Multi-tenancy gate. Every model that holds tenant-owned data MUST have
+//    `tenantId Int @default(1)` and `tenant Tenant @relation(fields: [tenantId],
+//    references: [id], onDelete: Cascade)`. The vitest schema-invariants test
+//    enforces the column; the formal `@relation` is a separate cleanup tracked
+//    under #413 (49 legacy models without `@relation` — being closed in batches
+//    of ~10 by criticality, financial / PHI first). Globally-shared models
+//    (Tenant itself, IndustryTemplate, junction tables that derive scope from
+//    a parent) are listed in NON_TENANT_MODELS in the test.
+//
+// 2. Uniqueness gate. `@@unique([...])` constraints on tenant-scoped models
+//    MUST include tenantId as one of the keyed fields, otherwise a single row
+//    can collide across tenants. The CalendarEvent fix (#424, wave 17) was the
+//    last known violator — kept the historical regression in mind when adding
+//    new uniqueness constraints.
+//
+// 3. Soft-delete gate. Any `deletedAt` column MUST be `DateTime?` (nullable) —
+//    the codebase's filter pattern is `{ deletedAt: null }` for live rows.
+//
+// 4. Relation criticality batching for #413. Batches add `tenant` @relation in
+//    PHI/financial-first order so future reads (and onDelete: Cascade) work
+//    correctly even before the umbrella issue closes. Wave 17 batch 1: Payment,
+//    AccountingSync, Forecast, Quota, Currency, DealInsight, PatientOtp,
+//    ConsentRecord, DataExportRequest, SignatureRequest. Remaining 39 models
+//    in subsequent batches. See `backend/test/schema/schema-invariants.test.js`.
+// ─────────────────────────────────────────────────────────────────────────────
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -88,6 +117,20 @@ model Tenant {
   // Agent D: loyalty + referrals
   loyaltyTransactions  LoyaltyTransaction[]
   referrals            Referral[]
+
+  // #413 batch 1 (wave 17): financial / PHI back-relations. Required because
+  // each child model now declares `tenant Tenant @relation`; Prisma rejects
+  // one-sided relations.
+  payments             Payment[]
+  accountingSyncs      AccountingSync[]
+  forecasts            Forecast[]
+  quotaRows            Quota[]
+  currenciesList       Currency[]
+  dealInsights         DealInsight[]
+  patientOtps          PatientOtp[]
+  consentRecords       ConsentRecord[]
+  dataExportRequests   DataExportRequest[]
+  signatureRequests    SignatureRequest[]
 }
 
 model User {
@@ -1265,8 +1308,8 @@ model CalendarEvent {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  /// Dedup key for inbound calendar sync: provider's externalId is globally unique by construction (Google/Microsoft event IDs are UUID-shaped and namespaced by the provider's account system), so the same event won't legitimately appear twice in our DB even across tenants. Keeping the constraint tenantId-free is intentional — each provider event has exactly one canonical row, regardless of which tenant's user owns it.
-  @@unique([provider, externalId])
+  /// Dedup key for inbound calendar sync. Originally `@@unique([provider, externalId])` on the load-bearing assumption that Google/Microsoft event IDs are globally unique by construction — but that put CalendarEvent as the ONLY tenant-scoped model in the codebase whose unique key didn't include tenantId, and a hostile or buggy provider that re-used an externalId across tenants would silently collide. Adding tenantId as the first key field is strictly more permissive than the old constraint (every prior unique pair is still unique under the new one) so no migration risk. Provider-globally-unique IDs still work; tenant-local provider IDs no longer collide. (#424, wave 17.)
+  @@unique([tenantId, provider, externalId])
 }
 
 // ── GDPR / Compliance ────────────────────────────────────────────
@@ -1281,7 +1324,8 @@ model ConsentRecord {
   source    String? // where consent was captured
   createdAt DateTime @default(now())
 
-  tenantId Int @default(1)
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model DataExportRequest {
@@ -1293,7 +1337,8 @@ model DataExportRequest {
   requestedAt DateTime  @default(now())
   completedAt DateTime?
 
-  tenantId Int @default(1)
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model RetentionPolicy {
@@ -1351,6 +1396,7 @@ model Forecast {
   closedRevenue    Float    @default(0)
   userId           Int?
   tenantId         Int      @default(1)
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -1373,6 +1419,7 @@ model Quota {
   target    Float
   achieved  Float    @default(0)
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1592,6 +1639,7 @@ model SignatureRequest {
   status       String    @default("PENDING") // PENDING, SIGNED, DECLINED, EXPIRED
   signToken    String    @unique // unique URL token for signer
   tenantId     Int       @default(1)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())
   expiresAt    DateTime?
 }
@@ -1699,6 +1747,7 @@ model Currency {
   exchangeRate Float    @default(1.0) // relative to base
   isBase       Boolean  @default(false)
   tenantId     Int      @default(1)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1735,6 +1784,7 @@ model Payment {
   paidAt    DateTime?
   metadata  String?   @db.Text
   tenantId  Int       @default(1)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime  @default(now())
 
   @@index([tenantId, status])
@@ -1750,6 +1800,7 @@ model AccountingSync {
   externalId String // ID in external system
   syncedAt   DateTime @default(now())
   tenantId   Int      @default(1)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// Mapping table from local entity → external accounting system ID. One mapping per (provider, entityType, entityId) within a tenant — Invoice #42 in tenant A maps to ONE QuickBooks invoice ID. tenantId prevents cross-tenant mapping bleed; entityId is only unique within a tenant in our schema.
   @@unique([provider, entityType, entityId, tenantId])
@@ -1766,6 +1817,7 @@ model DealInsight {
   isResolved  Boolean  @default(false)
   generatedAt DateTime @default(now())
   tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, dealId])
   @@index([tenantId, isResolved])
@@ -2239,6 +2291,7 @@ model PatientOtp {
   used      Boolean  @default(false)
   expiresAt DateTime
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 
   @@index([phone, otp])

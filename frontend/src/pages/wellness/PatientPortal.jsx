@@ -43,6 +43,20 @@ function Login({ onSuccess }) {
   // Agent B: real SMS-based OTP — resend cooldown (seconds remaining).
   const [resendIn, setResendIn] = useState(0);
 
+  // T1.2: probe whether the SMS provider is configured before showing the
+  // OTP form. If not, the request-otp endpoint silently queues a message
+  // that's never delivered; better to render a graceful-degrade notice
+  // that points patients at their clinic. null = still loading.
+  const [smsConfigured, setSmsConfigured] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/wellness/portal/health')
+      .then((r) => (r.ok ? r.json() : { smsConfigured: false }))
+      .then((d) => { if (!cancelled) setSmsConfigured(!!d?.smsConfigured); })
+      .catch(() => { if (!cancelled) setSmsConfigured(false); });
+    return () => { cancelled = true; };
+  }, []);
+
   // Tick the resend cooldown.
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -137,7 +151,28 @@ function Login({ onSuccess }) {
           Access your visits, prescriptions, and treatment plans securely.
         </p>
 
-        {stage === 'phone' && (
+        {smsConfigured === false && (
+          <div
+            role="alert"
+            data-testid="portal-sms-unavailable"
+            style={{
+              background: 'rgba(239, 68, 68, 0.08)',
+              border: '1px solid rgba(239, 68, 68, 0.35)',
+              color: 'var(--text-primary, #1f2937)',
+              padding: '1rem',
+              borderRadius: 10,
+              fontSize: '0.85rem',
+              lineHeight: 1.5,
+            }}
+          >
+            <strong style={{ display: 'block', marginBottom: '0.35rem' }}>
+              Phone-OTP login is temporarily unavailable.
+            </strong>
+            Please contact your clinic for help accessing your records.
+          </div>
+        )}
+
+        {smsConfigured !== false && stage === 'phone' && (
           <form onSubmit={sendOtp}>
             <label
               style={{

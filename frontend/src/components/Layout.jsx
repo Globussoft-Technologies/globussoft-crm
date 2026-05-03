@@ -17,6 +17,15 @@ const Layout = () => {
   // #228: drawer state for mobile sidebar (<=768px). Desktop ignores this.
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // T1.2: warn admin/manager when SMS provider is not configured. Patient
+  // portal OTP login + appointment reminders silently fail without it. The
+  // /api/auth/me response includes features.smsConfigured (set in
+  // backend/routes/auth.js:331). Hide for regular USERs since they can't
+  // do anything about it.
+  const role = user?.role;
+  const isStaff = role === 'ADMIN' || role === 'MANAGER';
+  const showSmsBanner = isStaff && user?.features?.smsConfigured === false;
+
   // Auto-register push notifications after login (silent failures OK)
   useEffect(() => {
     if (token) setupPush(token).catch(() => {});
@@ -37,6 +46,29 @@ const Layout = () => {
     <div className="app-shell" style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--bg-color)' }}>
       <Sidebar mobileOpen={sidebarOpen} onMobileClose={() => setSidebarOpen(false)} />
       <div className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {showSmsBanner && (
+          <div
+            role="alert"
+            data-testid="sms-not-configured-banner"
+            style={{
+              background: '#fef3c7',
+              borderBottom: '1px solid #f59e0b',
+              color: '#92400e',
+              padding: '10px 24px',
+              fontSize: '0.85rem',
+              lineHeight: 1.4,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              flexShrink: 0,
+            }}
+          >
+            <span aria-hidden="true" style={{ fontSize: '1.1rem' }}>⚠️</span>
+            <span style={{ flex: 1 }}>
+              <strong>SMS provider not configured.</strong> Patient portal OTP login and appointment reminders are not delivering. Configure `MSG91_AUTH_KEY` (or another provider) in the backend `.env` to restore SMS dispatch.
+            </span>
+          </div>
+        )}
         <header style={{
           display: 'flex',
           justifyContent: 'flex-end',

@@ -3065,6 +3065,26 @@ router.post("/telecaller/dispose", verifyWellnessRole(["telecaller", "admin", "m
 
 // ── Patient portal (public login + patient-JWT reads) ─────────────
 
+// T1.2: public health probe so PatientPortal.jsx can graceful-degrade
+// when the SMS provider is not configured. The phone-OTP form silently
+// fails without it; better to render a "contact your clinic" notice
+// than a button that emits OTPs that never arrive. No auth: this is
+// the patient-facing portal; we expose a single boolean and nothing
+// else (don't leak provider name or env-var keys).
+//
+// Probes the env-var fallback only (MSG91_AUTH_KEY+SENDER_ID or
+// FAST2SMS_API_KEY). Per-tenant DB SmsConfig is unreachable here —
+// the patient hasn't yet identified which clinic — and a clinic with
+// only a DB config but no env-var fallback would still hit the same
+// "send fails for THIS patient's tenant" problem the env path catches.
+router.get("/portal/health", (req, res) => {
+  const smsConfigured = !!(
+    (process.env.MSG91_AUTH_KEY && process.env.MSG91_SENDER_ID) ||
+    process.env.FAST2SMS_API_KEY
+  );
+  res.json({ smsConfigured });
+});
+
 // POST /portal/login  body: {phone, otp}
 // SECURITY: previously accepted any 4-digit OTP without verification — anyone
 // who knew a patient's phone could mint a 30-day portal JWT. Now validates

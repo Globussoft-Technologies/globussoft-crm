@@ -66,10 +66,12 @@ e2e/fathom_*.html
 e2e/fetch_fathom.js
 
 # Claude session runtime — directory ignored EXCEPT settings.json
-# (project-shared permissions). settings.local.json stays gitignored
-# for personal overrides.
+# (project-shared permissions) and skills/ (project-shared skill library).
+# settings.local.json stays gitignored for personal overrides.
 .claude/*
 !.claude/settings.json
+!.claude/skills/
+!.claude/skills/**
 
 # Local coverage snapshot dump (downloaded artifact for backend/scripts/coverage-analysis.js)
 backend/coverage-snapshot/

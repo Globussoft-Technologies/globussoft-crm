@@ -174,6 +174,29 @@ Plus issues filed earlier this multi-session arc still pending: #412, #413, #414
 - [docs/SYSTEM_TEST_PLAN.md](docs/SYSTEM_TEST_PLAN.md) — system-test-layer planning doc that landed mid-wave; useful context for if/when we add a fourth test tier between API and UI/E2E
 - This file's tier sections below — the long-tail backlog
 
+**🎯 Reusable skills (NEW — read these BEFORE dispatching parallel agents):**
+
+The `.claude/skills/` directory now ships project-shared Skills that encode the standing rules each parallel agent re-derived in earlier sessions. Each skill is a directory with a `SKILL.md` + bundled templates. Claude auto-loads metadata at startup; the body loads only when the skill is triggered. **Have agents use these instead of repeating the standing-rule preamble in every prompt — saves ~150 lines per agent prompt and eliminates re-derivation drift.**
+
+| Skill | Use when | What it captures |
+|---|---|---|
+| [`writing-api-gate-spec`](.claude/skills/writing-api-gate-spec/SKILL.md) | Adding a new `e2e/tests/<area>-api.spec.js` | Standing rules (JWT key is userId, body strips id/createdAt/etc, header JSDoc, RUN_TAG, afterAll _teardown_ pattern not _CLEANED_), pattern selection table by route shape, acceptance-criteria standard set, verification flow. Bundled `TEMPLATE.md` (spec skeleton). |
+| [`wiring-spec-into-gate`](.claude/skills/wiring-spec-into-gate/SKILL.md) | Just landed a new gate spec and need to add it to `deploy.yml` + `coverage.yml` | The two-file edit, BEFORE `tests/teardown-completeness.spec.js` with trailing backslash (the c8a8ad4 incident lesson), rebase-on-collision pattern. Bundled `wire-in.sh` script — idempotent, handles both files. |
+| [`writing-vitest-unit-test`](.claude/skills/writing-vitest-unit-test/SKILL.md) | Adding a `backend/test/<area>/<module>.test.js` for lib/cron/services/middleware | vi.mock prisma pattern, the CJS-require quirk + createRequire workaround for SDK modules like @sentry/node, mock patterns by SUT type (https.request, fetch, prisma fan-out), ≥80% coverage target. Bundled `TEMPLATE.md` + `MOCK_PATTERNS.md` (prisma + https + fetch + CJS-require workaround). |
+
+**How agents use them:**
+
+Claude Code auto-loads each skill's metadata into the system prompt at session start. When an agent asks "write a new gate spec for routes/foo.js", Claude triggers `writing-api-gate-spec` and reads its `SKILL.md` from disk via bash. The bundled `TEMPLATE.md` + scripts only load if explicitly referenced. Net effect on agent prompts: drop the 150-line standing-rule preamble; just say "Use the `writing-api-gate-spec` skill. Target: routes/foo.js. Pattern: clone notifications-api.spec.js. Acceptance: standard set. Wire-in via wiring-spec-into-gate skill afterward."
+
+**Tier 2+ skills planned but not yet built** (build these from office when you have a moment — each is ~30 min to author):
+- `adding-admin-trigger-endpoint` — mirror `/api/forecasting/snapshot/run` pattern with optional `confirmDestructive` guard
+- `closing-contract-drift-bug` — engine-side fix + unit-test pattern, with the "verify against existing spec contract first" lesson from #411
+- `dispatching-parallel-agent-wave` — orchestration meta-skill (disjoint files, max 4-5 agents, rebase-on-collision)
+- `bumping-version-docs` — the 5-file CHANGELOG/README/CLAUDE.md/TODOS/E2E_GAPS dance
+- `local-heal-loop` — boot stack → run gate → diagnose → fix → retry
+- `scrubbing-demo` — the SSH operator pattern via `.scripts/ssh-run.py`
+- `filing-contract-drift-issue` — the 5-section issue-body format used for #408–#411
+
 **Local stack state when this handoff was written:** Docker MySQL on `:3307` is running, backend may or may not be up depending on whether anyone hits `local-stack-down.ps1`. If you boot fresh: `.\scripts\local-stack-up.ps1` then `.\scripts\test-local.ps1 -Local` to verify all 4 gates green.
 
 ---

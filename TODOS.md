@@ -2,6 +2,44 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
+---
+
+## 🏁 OFFICE-PICKUP HANDOFF (2026-05-03 evening)
+
+**HEAD on origin/main:** `97a6428` (after the v3.4.3 doc bump). All work from today's session is pushed. Pull from office: `git pull origin main`.
+
+**State of the world:**
+- Per-push gate: 50 Playwright specs / ~1,665 API tests + 30 vitest files / 803 unit tests = **~2,468 tests on every push, 0 failures, 5 intentional skips**.
+- Vitest verified locally just before this handoff (30 files / 803 passed / 3 skipped / 2.95s).
+- Demo box clean; demo-monitor on `0 */2 * * *` cron (every 2 hours).
+- T1.2 SMS provider live end-to-end via Fast2SMS.
+- All v3.4.x compliance issues closed: #408, #409, #410, #411.
+
+**Three things to do first when picking this up:**
+
+1. **File the 4 outstanding contract-drift findings** as `[regression]` GitHub issues (~5 min). The diagnoses are written in v3.4.3 CHANGELOG; you just paste + create:
+   - **Campaign in-memory schedule** — `cron/campaignEngine.js` + `routes/marketing.js` use `global._campaignSchedules[id]` map. Backend restart wipes ALL pending schedules silently. Multi-instance deploys would desync. Fix: add `Campaign.scheduledAt DateTime?` column + migrate the read path. Production-impacting.
+   - **49 models without `tenant Tenant @relation`** — list is in the G-24 schema-invariants test (`backend/test/schema/schema-invariants.test.js` warn output). Concrete impact: `prisma.tenant.delete()` cascade only works for the ~60 models that DO have the relation; the 49 leak rows on tenant deletion. Fix: convert model-by-model.
+   - **`MarketplaceLead.@@unique([provider, externalLeadId])` doesn't include `tenantId`** — could prevent two tenants from importing the same lead from the same provider. Fix: change the constraint to `@@unique([provider, externalLeadId, tenantId])`.
+   - **21 `@@unique` constraints lack documenting comments** — soft warn from G-24. Sweep one PR.
+
+2. **Pick the next batch of gate work.** Two paths, your call:
+   - **Path A — keep widening coverage in parallel:** R-4 (4 more route specs) + R-5 batch 2 (5 more cron-engine vitests) in parallel agents. ~1 day wall, +60-80 tests. Continues the pattern of today's wave.
+   - **Path B — flagship multi-day pickup:** **G-20 tenant-isolation-api** (2-3 days). Single highest-severity multi-day item per E2E_GAPS.md. Tests every model that has a `tenantId` for cross-tenant leak both in API responses AND in queries. The 4 compliance bugs we closed today (#408, #409, #410, #411) all belonged to this regression class — G-20 locks down the contract before any further structural changes (G-17/G-18/G-19 wellness route split should follow).
+   - **Recommended:** Path B — the parallel-wave gains are diminishing (today's agents started flagging design-debt findings rather than missing tests); a focused 2-3 day investment on G-20 buys broader assurance than another 60 tests.
+
+3. **Decide on the contract-drift findings' fixes.** The Campaign in-memory schedule bug is real and worth a small focused PR (~3-4h). The 49-models-without-relation sweep is structural; consider doing it in batches as part of G-17/G-18/G-19 prep, not as a separate task.
+
+**Reference docs (start here, in order):**
+- [CHANGELOG.md](CHANGELOG.md) v3.4.3 entry — what shipped and why
+- [docs/E2E_GAPS.md](docs/E2E_GAPS.md) status block — what's left
+- [docs/SYSTEM_TEST_PLAN.md](docs/SYSTEM_TEST_PLAN.md) — system-test-layer planning doc that landed mid-wave; useful context for if/when we add a fourth test tier between API and UI/E2E
+- This file's tier sections below — the long-tail backlog
+
+**Local stack state when this handoff was written:** Docker MySQL on `:3307` is running, backend may or may not be up depending on whether anyone hits `local-stack-down.ps1`. If you boot fresh: `.\scripts\local-stack-up.ps1` then `.\scripts\test-local.ps1 -Local` to verify all 4 gates green.
+
+---
+
 Last updated: 2026-05-03 (**v3.4.3 shipped — eight-agent parallel wave continuing v3.4.2 same day.** HEAD: post-014ac6a. **Per-push gate is now 50 specs / ~1,665 API tests + 30 vitest files / 803 unit tests = ~2,468 passing on every push.** Major movements since v3.4.2:
 
 - **Six new gate specs** (G-12 campaign + G-13 deal-insights + G-15 backup + R-1 trio: ab-tests/accounting/canned-responses) totalling +140 API tests

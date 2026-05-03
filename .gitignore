@@ -86,3 +86,6 @@ backend/.c8tmp/
 
 # Local-stack runtime state (PID files, backend logs from local-stack-up.ps1)
 .scripts-state/
+
+# Local triage scratch (gate.json dumps, agent output buffers — never commit)
+e2e/.scratch/

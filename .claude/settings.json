@@ -19,6 +19,11 @@
     "  6. Skill-bundled scripts under .claude/skills/* — wire-in.sh, log.sh,",
     "     and any future helper bundled with a skill. Future skill authors",
     "     don't need to expand this list per-skill; the glob covers them.",
+    "  7. Authoring + editing skills under .claude/skills/** — Write + Edit",
+    "     are auto-approved so the agent doesn't get prompted on every new",
+    "     SKILL.md / template / helper script. Skills live in-tree so they",
+    "     ship with the repo; this is not config that should require",
+    "     human-in-the-loop on each edit.",
     "",
     "Personal overrides go in .claude/settings.local.json (gitignored)."
   ],
@@ -71,6 +76,11 @@
       "Bash(./.claude/skills/*)",
       "Bash(bash .claude/skills/*)",
       "Bash(bash ./.claude/skills/*)",
+
+      "Write(.claude/skills/**)",
+      "Edit(.claude/skills/**)",
+      "Write(./.claude/skills/**)",
+      "Edit(./.claude/skills/**)",
 
       "PowerShell(*)"
     ]

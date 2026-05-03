@@ -129,8 +129,8 @@ Mix both: discovery agent synchronous, then dispatch closers in background.
 When all agents in a wave return:
 1. Pull origin to sync (one or more pushed)
 2. Verify the gate is still green (`cd backend && npm test` for vitest; spot-check a few new specs locally)
-3. Run `bumping-version-docs` skill to capture the wave in CHANGELOG / README / CLAUDE.md / TODOS / E2E_GAPS
-4. Surface any contract-drift findings the agents flagged → file as issues (per `filing-contract-drift-issue` skill when authored)
+3. **Run `capturing-wave-findings` skill** over the combined per-agent finding lists — every drift / bug / missing route / shipped spec / standing-rule pattern lands in the right doc (TODOS.md, docs/E2E_GAPS.md, CHANGELOG.md) or a fresh GitHub issue. Do this BEFORE the doc bump so the captured items are reflected.
+4. Run `bumping-version-docs` skill to capture the wave in CHANGELOG / README / CLAUDE.md / TODOS / E2E_GAPS at release time (only on version-bump waves)
 5. Recommend next wave's batch in your message back to user
 
 ## Pitfalls

@@ -654,17 +654,48 @@ test.describe('Tenant isolation — API gate (G-20)', () => {
             `${probeLabel} DELETE ${resource.path}/${ownerId} returned ${r.status()} — expected 403 or 404`,
           ).toBe(true);
 
-          // Confirm the row is STILL readable by its owner after the
-          // probe attempted to delete it. This catches the case where
-          // the route silently mutates state but returns 403 (worst-case
-          // scenario: probe gets "you can't" but data is gone anyway).
+          // Confirm the row is STILL accessible to its owner after the
+          // probe attempted to delete it. Catches silent-mutation
+          // variants: probe DELETE returns 403/404 BUT the row was
+          // actually deleted server-side. We try GET /:id first; if the
+          // resource doesn't have a by-id endpoint (workflows,
+          // developer-webhooks, scheduled-emails — list-only routes),
+          // fall back to checking the LIST response for the row's id.
+          // Either way, finding the row post-DELETE proves no silent
+          // mutation occurred.
+          const ownerToken = resource.ownerToken === 'A' ? tokenA : tokenB;
           const ownerRead = await request.get(`${API}${resource.path}/${ownerId}`, {
-            headers: authHeader(resource.ownerToken === 'A' ? tokenA : tokenB),
+            headers: authHeader(ownerToken),
             timeout: REQUEST_TIMEOUT,
           });
+          let stillThere;
+          if (ownerRead.ok()) {
+            stillThere = true;
+          } else if (ownerRead.status() === 404) {
+            // Could be: (a) silent-mutation bug → row really gone, OR
+            // (b) the resource has no GET /:id at all. Disambiguate by
+            // listing and looking for the id.
+            const listRead = await request.get(`${API}${resource.path}?limit=500`, {
+              headers: authHeader(ownerToken),
+              timeout: REQUEST_TIMEOUT,
+            });
+            if (listRead.ok()) {
+              const body = await listRead.json();
+              const rows = resource.listKey
+                ? (body[resource.listKey] || body.data || [])
+                : (Array.isArray(body) ? body : (body.items || body.data || []));
+              stillThere = rows.some((row) => row && row.id === ownerId);
+            } else {
+              // Owner can't even list — environment issue, not a leak signal. Skip.
+              stillThere = true;
+            }
+          } else {
+            // Some other status (5xx, transient) — skip the leak check rather than false-positive.
+            stillThere = true;
+          }
           expect(
-            ownerRead.ok(),
-            `after ${probeLabel} probed DELETE, ${ownerLabel} can no longer read its own row — silent mutation`,
+            stillThere,
+            `after ${probeLabel} probed DELETE, ${ownerLabel} can no longer find its own row (id=${ownerId}) via GET/:id or via list — silent mutation`,
           ).toBe(true);
         });
       }

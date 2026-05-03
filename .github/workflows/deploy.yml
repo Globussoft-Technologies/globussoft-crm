@@ -320,6 +320,7 @@ jobs:
             tests/deal-insights-engine-api.spec.js \
             tests/accounting-api.spec.js \
             tests/canned-responses-api.spec.js \
+            tests/tenant-isolation-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

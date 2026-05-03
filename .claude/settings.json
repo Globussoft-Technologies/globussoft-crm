@@ -11,6 +11,11 @@
     "     scoped per command",
     "  3. Read-only docker queries against the local stack",
     "  4. Read-only gh CLI for monitoring CI runs",
+    "  5. Wildcard PowerShell — Windows is the user's primary shell. Process",
+    "     management (Get-NetTCPConnection / Stop-Process / Get-Process), file",
+    "     queries, and ad-hoc one-liners come up too often to enumerate.",
+    "     Destructive git/gh operations (push --force, gh pr merge, etc.) and",
+    "     SSH to demo are NOT covered by this — those still need confirmation.",
     "",
     "Personal overrides go in .claude/settings.local.json (gitignored)."
   ],
@@ -57,7 +62,9 @@
       "Bash(gh issue list*)",
       "Bash(gh workflow run*)",
       "Bash(gh pr list*)",
-      "Bash(gh pr view*)"
+      "Bash(gh pr view*)",
+
+      "PowerShell(*)"
     ]
   }
 }

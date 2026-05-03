@@ -58,7 +58,7 @@ After today's heal-loop work (`ccfb97e` + `2df54de`) and earlier session fixes, 
 | # | Spec | Failing tests | Diagnosis (suspected) | Effort |
 |---|---|---|---|---|
 | **L1** | `eventbus-emit.spec.js:137` | "rule on tenant A does not fire when tenant B emits the same event" | Cross-tenant rule isolation in `lib/eventBus.js` — emit on tenant B may be matching tenant A's rules. **P1 data-isolation** if real. | 1-2h: read engine, check `where: { tenantId }` on rule lookup, fix route or fix test if rule-loading is correct |
-| **L2** | `lead-scoring.spec.js:14, 31, 40, 53` | 4 UI tests on Lead Scoring page (heading, KPI cards, Re-score All button, scores updated via trigger API) | Likely UI locator drift after page redesign — page renders differently than spec expects. Re-score-via-API test may be the only real product issue (trigger endpoint contract). | ~1h: open page in browser, fix locators; check trigger endpoint shape |
+| ~~**L2**~~ | ~~`lead-scoring.spec.js:14, 31, 40, 53`~~ | ✅ **Not a real bug — environment mismatch.** All 7 tests pass against `BASE_URL=https://crm.globusdemos.com` (verified 2026-05-03). The "failure" reproduces only when run against `BASE_URL=http://127.0.0.1:5000`, because `local-stack-up.ps1` boots backend only — backend doesn't serve the SPA, so `page.goto('/lead-scoring')` returns Express's 404 and every UI locator times out. Lead Scoring UI (`Lead Intelligence` h1, `#trigger-rescore-btn`, `.card` KPI cards) and `POST /api/ai_scoring/trigger` contract (`{success: true, scored: <number>}`) both match spec exactly. | 0h — close as no-fix |
 | **L3** | `wellness-real-user-journeys.spec.js:238, 292, 342, 502` | 4 browser-flow tests: B1 doctor login (`drharsh@enhancedwellness.in`), C1 lead-seed via partner API, D1 owner Rishu dashboard, F1 website-visitor partner API | Probably auth-state-write mismatch for the doctor login + the partner-API tests need a fresh API key per run. The earlier T1.1 fix landed for owner login but may not cover doctor's wellnessRole=doctor path. | 2-3h: read auth.setup, debug each journey, fix |
 
 **Already fixed since 2026-05-02 evening notes (passing locally now):**
@@ -72,9 +72,11 @@ After today's heal-loop work (`ccfb97e` + `2df54de`) and earlier session fixes, 
 - ✅ tasks-api cross-tenant leak (heal-loop fixes + tasks-api gate spec at line 566 has cross-tenant assertion that's passing)
 - ✅ wellness-feature-gaps consumption (passing)
 
-**Net:** the 13 "real product issues" from 2026-05-02 evening are down to **3-4 real issues** (1 P1 data-isolation in eventbus + 1 set of UI locator drift + 1 set of browser-auth flow drift). Worth running e2e-full.yml manually against demo to confirm CI agrees before grinding further.
+**Net:** the 13 "real product issues" from 2026-05-02 evening are down to **2 real issues** (1 P1 data-isolation in eventbus + 1 set of browser-auth flow drift). L2 dropped after 2026-05-03 verification — it was an environment mismatch, not a product or test bug. Worth running e2e-full.yml manually against demo to confirm CI agrees before grinding further.
 
-**Pickup recommendation:** L1 first (P1 cross-tenant if confirmed real). L2 + L3 can be parallelized — they touch different specs/areas.
+**Pickup recommendation:** L1 first (P1 cross-tenant if confirmed real), then L3.
+
+> **Standing rule on running UI specs locally:** UI specs (`lead-scoring`, `dashboard`, `navigation`, `theme`, `sequences`, `responsive`, `developer`, `notifications`, `custom-objects`, `wellness-real-user-journeys`, etc.) need the SPA served. The local `127.0.0.1:5000` stack is backend-only — UI specs against it will report cosmetic locator-not-found failures that don't reflect real bugs. For UI specs, run against `BASE_URL=https://crm.globusdemos.com` (or `cd frontend && npm run dev` and target `http://localhost:5173`). The gate-spec list in `deploy.yml` / `test-local.ps1` is **API-only** for exactly this reason.
 
 
 

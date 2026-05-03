@@ -65,7 +65,12 @@ for FILE in \
   # for the npx playwright test invocation. The double backslash escapes
   # for sed.
   TMP="$FILE.wireintmp.$$"
+  # Strip a leading "tests/" if the caller passed the full path. The
+  # awk insertion adds "tests/" itself, so accepting either form
+  # avoids the "tests/tests/" double-prefix bug surfaced by the
+  # attribution-api agent on c1c3b3d.
   awk -v spec="$SPEC" '
+    BEGIN { sub(/^tests\//, "", spec) }
     /tests\/teardown-completeness\.spec\.js/ && !inserted {
       print "            tests/" spec " \\"
       inserted = 1

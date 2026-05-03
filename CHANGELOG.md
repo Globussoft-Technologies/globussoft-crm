@@ -2,6 +2,8 @@
 
 ## v3.4.4 — 2026-05-03/04 — multi-session arc: G-20 tenant-isolation flagship + skills library + 5 audit follow-up fixes + agent-progress infra
 
+  - off-backlog shipped (abb0d1c) — 17 tests; non-numeric :id sweep — middleware-level fix
+
   - G-23 shipped (d63955a) — 10 tests; 5 detectors (NOT_NULL_WITHOUT_DEFAULT/COLUMN_DROP/TYPE_NARROWING/UNIQUE_ADDITION/FK_WITHOUT_ON_DELETE) + 6 fixture pairs + new migration-check.yml workflow with sticky PR comment + 5th deploy gate in deploy.yml
 
 A multi-session continuation of v3.4.3. **No new product features outside T2.1 (mobile sidebar drawer at <900px)**; this release lands the highest-severity multi-day item from the gap card (G-20 tenant-isolation, 3 waves), closes 5 audit-follow-up bugs the previous waves' agents surfaced, builds a 7-skill reusable library for parallel-agent dispatch, ships agent-progress visibility infra, and adds 4 R-4 medium-route specs + 5 R-5 batch 2 cron-engine vitests.

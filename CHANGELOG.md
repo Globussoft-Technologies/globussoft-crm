@@ -2,6 +2,8 @@
 
 ## v3.4.4 — 2026-05-03/04 — multi-session arc: G-20 tenant-isolation flagship + skills library + 5 audit follow-up fixes + agent-progress infra
 
+  - G-22 shipped (953cca5) — 11 tests; first integration tier file: msw + supertest; 7 webhook scenarios + 1 fail-closed bonus; singleton-patch pattern documented for future routes/ tests
+
   - G-19 shipped (09d7328) — 30 tests; queue + 6-disposition matrix; surfaced no contract drift in code; documented prompt drift (no SLA timer field, dispose route is /dispose with body contactId not /:id/dispose)
 
   - off-backlog shipped (abb0d1c) — 17 tests; non-numeric :id sweep — middleware-level fix

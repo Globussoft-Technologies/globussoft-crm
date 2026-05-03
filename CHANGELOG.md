@@ -2,6 +2,8 @@
 
 ## v3.4.4 — 2026-05-03/04 — multi-session arc: G-20 tenant-isolation flagship + skills library + 5 audit follow-up fixes + agent-progress infra
 
+  - G-19 shipped (09d7328) — 30 tests; queue + 6-disposition matrix; surfaced no contract drift in code; documented prompt drift (no SLA timer field, dispose route is /dispose with body contactId not /:id/dispose)
+
   - off-backlog shipped (abb0d1c) — 17 tests; non-numeric :id sweep — middleware-level fix
 
   - G-23 shipped (d63955a) — 10 tests; 5 detectors (NOT_NULL_WITHOUT_DEFAULT/COLUMN_DROP/TYPE_NARROWING/UNIQUE_ADDITION/FK_WITHOUT_ON_DELETE) + 6 fixture pairs + new migration-check.yml workflow with sticky PR comment + 5th deploy gate in deploy.yml

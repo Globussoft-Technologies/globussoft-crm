@@ -39,7 +39,7 @@
 | **G-16** | whatsappProvider vitest | 2-3h | Low — last service module without unit test | ✅ shipped (6871d8d — 23 tests, 100% coverage on whatsappProvider.js; `https.request` mock pattern from smsProvider.test.js) |
 | **G-17** | wellness-dashboard-api spec (split from wellness.js) | 1-2 days | Med — wellness.js sits at 41% coverage; 4,050 lines | ⬜ open |
 | **G-18** | wellness-reports-api spec (split from wellness.js) | 1 day | Med | ⬜ open |
-| **G-19** | wellness-telecaller-api spec (split from wellness.js) | 1 day | Med | ⬜ open |
+| **G-19** | wellness-telecaller-api spec (split from wellness.js) | 1 day | Med | ✅ shipped (09d7328 — 30 tests; queue + 6-disposition matrix; surfaced no contract drift in code; documented prompt drift (no SLA timer field, dispose route is /dispose with body contactId not /:id/dispose)) |
 | **G-20** | tenant-isolation-api spec (cross-tenant data leak prevention) | 2-3 days | **Critical** — single highest-severity bug class for multi-tenant CRM | ✅ shipped (3 waves: a9154ac wave 1 / 8064fda wave 2 / f4b4ebe wave 3 — 29 resources / 93 cross-tenant assertions; new pattern: rename-on-cleanup `_teardown_<area>_<id>` for no-DELETE resources; surfaced #418 + #419 + #420 missing GET-by-id contracts; wellness FK chain Patient→Visit→Rx→Consent→TreatmentPlan covered) |
 | **G-21** | Frontend vitest + RTL setup + first 5 component tests | 3-5 days | Med — 80 pages + 11 components have zero isolated tests | ⬜ open |
 | **G-22** | Integration test tier (msw/nock) — Stripe webhook signing | 2 days | High — webhook forgery is a real attack | ⬜ open |

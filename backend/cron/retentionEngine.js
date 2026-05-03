@@ -1,18 +1,32 @@
 const cron = require('node-cron');
 const prisma = require("../lib/prisma");
 
-// Map RetentionPolicy.entity → prisma model accessor with deleteMany
+// Map RetentionPolicy.entity → prisma model property name. Resolved
+// lazily (prisma[propName]) at sweep time rather than eagerly captured
+// at module load — important so unit tests can monkey-patch the prisma
+// singleton's model accessors AFTER importing this module without
+// fighting a stale captured reference.
 const ENTITY_MAP = {
-  EmailMessage: prisma.emailMessage,
-  CallLog: prisma.callLog,
-  Activity: prisma.activity,
-  SmsMessage: prisma.smsMessage,
-  WhatsAppMessage: prisma.whatsAppMessage,
+  EmailMessage: 'emailMessage',
+  CallLog: 'callLog',
+  Activity: 'activity',
+  SmsMessage: 'smsMessage',
+  WhatsAppMessage: 'whatsAppMessage',
 };
 
 /**
  * Core retention sweep — purges records older than each tenant's policy.
  * Returns a summary array: [{ tenantId, entity, deleted, cutoff }]
+ *
+ * Why we always write the AuditLog row (even on deleted=0): GDPR Art. 30
+ * + SOC-2 require a complete trail of when retention was *attempted*, not
+ * just when it actually deleted. Previously the engine only wrote an
+ * AuditLog when `deleted > 0`, which left a 30-day stretch of no-op runs
+ * indistinguishable from "the cron never ran" in an audit. The manual
+ * trigger in routes/gdpr.js (POST /api/gdpr/retention/run, G-11 commit
+ * cb96793) already writes regardless; the cron path now matches the same
+ * contract. The `via:'cron'` marker in details lets audit consumers
+ * distinguish automated sweeps from human-triggered ones. Closes #411.
  */
 async function runRetentionSweep() {
   const summary = [];
@@ -24,7 +38,8 @@ async function runRetentionSweep() {
     }
 
     for (const policy of policies) {
-      const model = ENTITY_MAP[policy.entity];
+      const propName = ENTITY_MAP[policy.entity];
+      const model = propName ? prisma[propName] : null;
       if (!model) {
         console.warn(`[Retention] Unknown entity in policy: ${policy.entity}`);
         continue;
@@ -38,21 +53,25 @@ async function runRetentionSweep() {
         summary.push({ tenantId: policy.tenantId, entity: policy.entity, deleted, cutoff });
         if (deleted > 0) {
           console.log(`[Retention] Tenant ${policy.tenantId} — ${policy.entity}: deleted ${deleted} records older than ${policy.retainDays}d (cutoff ${cutoff.toISOString()}).`);
-          // Audit
-          await prisma.auditLog.create({
-            data: {
-              action: 'DELETE',
-              entity: policy.entity,
-              details: JSON.stringify({
-                source: 'RetentionEngine',
-                deleted,
-                retainDays: policy.retainDays,
-                cutoff: cutoff.toISOString(),
-              }),
-              tenantId: policy.tenantId,
-            },
-          }).catch(() => {});
         }
+        // Always write an AuditLog row — even when deleted=0 — so the
+        // sweep attempt is captured for GDPR/SOC-2 trail compliance. The
+        // `deleted` count is included in details so downstream consumers
+        // can filter no-op runs from real deletions.
+        await prisma.auditLog.create({
+          data: {
+            action: 'DELETE',
+            entity: policy.entity,
+            details: JSON.stringify({
+              source: 'RetentionEngine',
+              deleted,
+              retainDays: policy.retainDays,
+              cutoff: cutoff.toISOString(),
+              via: 'cron',
+            }),
+            tenantId: policy.tenantId,
+          },
+        }).catch(() => { /* best-effort */ });
       } catch (err) {
         console.error(`[Retention] Tenant ${policy.tenantId} — ${policy.entity}: deleteMany failed:`, err.message);
       }

@@ -51,20 +51,30 @@ Three observations that frame the priorities:
 
 3. **Real SMS provider creds** (the actual fix): pick MSG91 (cheapest in INR) or Fast2SMS, get an account, set `MSG91_AUTH_KEY` + `MSG91_SENDER_ID` (or Fast2SMS equivalents) in the demo server's `.env`, restart PM2. Tests should auto-detect via `resolveProviderConfig()`. ~30 min once creds are in hand. Without this, the OTP flow stays cosmetically gated but functionally broken.
 
-### 🧹 e2e-full long-tail residue (after T1.1) — pick up from home
+### 🧹 e2e-full long-tail — current state (re-triaged 2026-05-03)
 
-After 4 test-fix commits (`2b79a34`/`0aa5165`/`f5af14a`/`cbf9d27`), e2e-full's ~25 unique failures break down as:
+After today's heal-loop work (`ccfb97e` + `2df54de`) and earlier session fixes, **the long-tail is down to 3 spec files / 9 failing tests** (verified by running the relevant 11 long-tail specs against the local stack at HEAD `7bc0195`). Most of the 2026-05-02 list is now ✅ fixed; what remains:
 
-| Status | Type | Count | What |
-|---|---|---|---|
-| ✅ test-fix shipped (cbf9d27) | Stale spec drift | 4 | wellness-integration #401 expectation flip, wellness-orchestrator-depth user injection, wellness-a11y user injection, billing-update count tolerance |
-| ⬜ deferred — test rewrite | Locator drift | ~5 | wellness-deep "Pending" filter, wellness-real-user-journeys patient tabs, developer.spec [data-notify-modal], etc. |
-| ⬜ deferred — seed/data drift | Demo-state-dependent | ~3 | landing-page-renderer needs published page, wellness-clinical-journey-flow loyalty balance, tasks-api cross-tenant seed |
-| 🐛 needs FILED bug + fix | Real product issue | ~13 | eventbus neq/nin off-by-one (engine), external-api leads 500, lead-routing 400 round-trip, lead-scoring trigger missing field, sequences engine flow (3 specs), approvals re-approve state machine, sso google-callback redirect, **wellness-rbac-api professional scope leak (#280 regression?)**, **tasks-api cross-tenant leak (#403 regression?)**, wellness-feature-gaps consumption, wellness-real-user-journeys F5 portal-login 401 |
+| # | Spec | Failing tests | Diagnosis (suspected) | Effort |
+|---|---|---|---|---|
+| **L1** | `eventbus-emit.spec.js:137` | "rule on tenant A does not fire when tenant B emits the same event" | Cross-tenant rule isolation in `lib/eventBus.js` — emit on tenant B may be matching tenant A's rules. **P1 data-isolation** if real. | 1-2h: read engine, check `where: { tenantId }` on rule lookup, fix route or fix test if rule-loading is correct |
+| **L2** | `lead-scoring.spec.js:14, 31, 40, 53` | 4 UI tests on Lead Scoring page (heading, KPI cards, Re-score All button, scores updated via trigger API) | Likely UI locator drift after page redesign — page renders differently than spec expects. Re-score-via-API test may be the only real product issue (trigger endpoint contract). | ~1h: open page in browser, fix locators; check trigger endpoint shape |
+| **L3** | `wellness-real-user-journeys.spec.js:238, 292, 342, 502` | 4 browser-flow tests: B1 doctor login (`drharsh@enhancedwellness.in`), C1 lead-seed via partner API, D1 owner Rishu dashboard, F1 website-visitor partner API | Probably auth-state-write mismatch for the doctor login + the partner-API tests need a fresh API key per run. The earlier T1.1 fix landed for owner login but may not cover doctor's wellnessRole=doctor path. | 2-3h: read auth.setup, debug each journey, fix |
 
-The two starred items (RBAC scope leak + cross-tenant task leak) are P0/P1 PHI / data-isolation issues that the new gated specs SURFACED. They warrant filing as GitHub issues + fixing the routes — exactly the kind of regression the new specs are designed to catch. Open these as `[regression] [P1] #280 professional sees other clinicians' visits` and `[regression] [P1] #403 wellness admin sees Tenant B tasks`, link to the failing spec, fix in `routes/wellness.js` (visit query) and `routes/tasks.js` (cross-tenant filter).
+**Already fixed since 2026-05-02 evening notes (passing locally now):**
+- ✅ eventbus neq/nin off-by-one (now passing)
+- ✅ external-api leads 500 (the 188-char clamp + #408 fixes addressed downstream chain)
+- ✅ lead-routing 400 round-trip (resolved by `a557e18` revert of approvals contract; lead-routing.spec.js was downstream)
+- ✅ sequences engine flow 3 specs (passing locally)
+- ✅ approvals re-approve state machine (`a557e18` reverted to idempotent-200 same-state, 422 cross-state — original canonical contract)
+- ✅ sso google-callback redirect (`2c036e5`)
+- ✅ wellness-rbac professional scope leak (`bc729b7` added `wRole === "professional"` to scope check)
+- ✅ tasks-api cross-tenant leak (heal-loop fixes + tasks-api gate spec at line 566 has cross-tenant assertion that's passing)
+- ✅ wellness-feature-gaps consumption (passing)
 
-The remaining ~11 product issues are independent — each needs ~30-60 min triage to either ship a real fix or skip the spec with a documented reason linking to a GitHub issue.
+**Net:** the 13 "real product issues" from 2026-05-02 evening are down to **3-4 real issues** (1 P1 data-isolation in eventbus + 1 set of UI locator drift + 1 set of browser-auth flow drift). Worth running e2e-full.yml manually against demo to confirm CI agrees before grinding further.
+
+**Pickup recommendation:** L1 first (P1 cross-tenant if confirmed real). L2 + L3 can be parallelized — they touch different specs/areas.
 
 
 

@@ -326,7 +326,13 @@ test.describe('Accounting API — POST /:provider/sync/invoice/:id', () => {
     const token = await getGenericAdmin(request);
     const res = await post(request, token, '/api/accounting/quickbooks/sync/invoice/abc', {});
     expect(res.status()).toBe(400);
-    expect((await res.json()).error).toMatch(/invalid invoice id/i);
+    // Post-#423: the global validateNumericId middleware short-circuits
+    // before the route-specific handler, so the message is generic
+    // ("Invalid id: ...") not the prior "invalid invoice id". Pin the
+    // durable contract (status + code), let the message text be generic.
+    const body = await res.json();
+    expect(body.error).toMatch(/invalid id/i);
+    expect(body.code).toBe('INVALID_ID');
   });
 
   test('404 unknown invoice id', async ({ request }) => {

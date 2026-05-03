@@ -59,7 +59,11 @@ function validateNumericId(req, res, next, value, name) {
     // Special-case: "0" is a valid integer but not a valid Prisma row id
     // (auto-increment starts at 1). Reject it the same way.
     return res.status(400).json({
-      error: `Path parameter '${name || "id"}' must be a positive integer`,
+      // Phrasing chosen to match pre-existing spec assertions like
+      // /invalid id/i and /invalid (invoice|entity)? ?id/i. Keeping the
+      // raw value out of the message to avoid log-injection / reflected
+      // XSS via the error path.
+      error: `Invalid ${name || "id"}: must be a positive integer`,
       code: "INVALID_ID",
     });
   }

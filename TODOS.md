@@ -2,6 +2,8 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
+**Closed gap-files** (every entry shipped, zero open markers remaining) live under [docs/gaps/archive/](docs/gaps/archive/) — see that folder's README for the archival convention. Active backlogs (this file, `docs/E2E_GAPS.md`, `docs/regression-coverage-backlog.md`) stay at their root locations as long as ≥1 item is open.
+
 ---
 
 ## 🏁 NEXT-SESSION HANDOFF (2026-05-03 overnight — autonomous-orchestrator session, v3.4.4 release candidate)

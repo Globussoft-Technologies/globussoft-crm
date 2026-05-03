@@ -6,6 +6,10 @@ The persistent backlog of multi-day / architectural work that's been deferred fr
 
 **On session start, read TODOS.md before picking up new work** so you don't duplicate something already triaged or skip an item that's already been planned.
 
+### Closed gap-files live under [docs/gaps/archive/](docs/gaps/archive/)
+
+When a gap / backlog / regression-tracking file is **fully closed** (every entry shipped, zero `⬜` / `☐` / `TODO` / `open` markers remaining), it moves under `docs/gaps/archive/` rather than getting deleted — see [docs/gaps/archive/README.md](docs/gaps/archive/README.md) for the convention. Active backlogs (`TODOS.md`, `docs/E2E_GAPS.md`, `docs/regression-coverage-backlog.md`) STAY at their root locations as long as ≥1 item is open. Don't archive a file just because most items are closed — cohesion of the original file beats archive cleanliness.
+
 ## Overview
 
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).

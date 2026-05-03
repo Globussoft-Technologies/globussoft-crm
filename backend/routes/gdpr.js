@@ -1,11 +1,23 @@
 const express = require('express');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyRole } = require('../middleware/auth');
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
 
 // All GDPR routes require auth
 router.use(verifyToken);
+
+// G-11: Mirror of cron/retentionEngine.js ENTITY_MAP. Hard-coded list of
+// model accessors the retention sweep is allowed to touch. We keep this
+// in sync with the engine to guarantee identical behaviour on cron + manual
+// ticks. Anything NOT in this map is silently skipped (defence in depth).
+const RETENTION_ENTITY_MAP = {
+  EmailMessage: prisma.emailMessage,
+  CallLog: prisma.callLog,
+  Activity: prisma.activity,
+  SmsMessage: prisma.smsMessage,
+  WhatsAppMessage: prisma.whatsAppMessage,
+};
 
 // ──────────────────────────────────────────────────────────────────
 // POST /api/gdpr/export/contact/:id — full data export for a contact
@@ -302,6 +314,107 @@ router.put('/retention-policies', async (req, res) => {
   } catch (err) {
     console.error('[GDPR] Retention policies upsert error:', err);
     res.status(500).json({ error: 'Failed to update retention policies' });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
+// POST /api/gdpr/retention/run — manual trigger for retention sweep
+// (G-11). Mirror of POST /api/billing/recurring/run +
+// /api/forecasting/snapshot/run + /api/wellness/ops/run.
+//
+// CRITICAL: this endpoint DELETES rows. Three guards stack:
+//   1. verifyToken (router-level) — must be authenticated.
+//   2. verifyRole(['ADMIN'])      — must be tenant admin.
+//   3. body.confirmDestructive === true — explicit "yes I mean it"
+//      flag. Without it: 400 with code='CONFIRMATION_REQUIRED'.
+//      No DB mutation; no AuditLog row. Reverse only with a redeploy.
+//
+// Engine semantics (mirrors cron/retentionEngine.js):
+//   - For every active RetentionPolicy on the requesting tenant, compute
+//     `cutoff = now - retainDays * 86400000`.
+//   - prisma.<entity>.deleteMany where tenantId=req.user.tenantId AND
+//     createdAt < cutoff. Hard-delete. (The engine map is the same.)
+//   - Per-entity AuditLog row with action='DELETE', entity=<entityName>,
+//     details={ source:'RetentionEngine', deleted, retainDays, cutoff,
+//     via:'manual' }, userId=req.user.userId, tenantId.
+//
+// Response: { success, tenantId, summary: [{ entity, deleted, cutoff,
+//   retainDays }] }. `summary` is an empty array if no active policies
+//   on this tenant.
+//
+// Tenant isolation contract — ABSOLUTE: a generic admin running this
+// must NEVER touch wellness rows (and vice versa). The deleteMany WHERE
+// always carries `tenantId: req.user.tenantId`. A leak here would be a
+// catastrophic mass-deletion bug; the spec asserts this is impossible.
+router.post('/retention/run', verifyRole(['ADMIN']), async (req, res) => {
+  // Hard guard #3 — the destructive flag.
+  if (req.body?.confirmDestructive !== true) {
+    return res.status(400).json({
+      error: 'Retention sweep requires explicit confirmDestructive:true in body',
+      code: 'CONFIRMATION_REQUIRED',
+    });
+  }
+
+  try {
+    const tenantId = req.user.tenantId;
+    const userId = req.user.userId || null;
+    const policies = await prisma.retentionPolicy.findMany({
+      where: { tenantId, isActive: true },
+    });
+
+    const summary = [];
+    for (const policy of policies) {
+      const model = RETENTION_ENTITY_MAP[policy.entity];
+      if (!model) {
+        summary.push({ entity: policy.entity, deleted: 0, skipped: true, reason: 'unknown_entity' });
+        continue;
+      }
+      const cutoff = new Date(Date.now() - policy.retainDays * 24 * 60 * 60 * 1000);
+      try {
+        const result = await model.deleteMany({
+          where: { tenantId, createdAt: { lt: cutoff } },
+        });
+        const deleted = result?.count || 0;
+        summary.push({
+          entity: policy.entity,
+          deleted,
+          retainDays: policy.retainDays,
+          cutoff: cutoff.toISOString(),
+        });
+        // Always write an AuditLog row — even when deleted=0 — so the
+        // operator who triggered the manual sweep is captured for
+        // GDPR audit-trail compliance. (cron/retentionEngine.js skips
+        // the audit on deleted=0; we differ here intentionally because
+        // a MANUAL trigger needs the WHO/WHEN even if it was a no-op.)
+        await prisma.auditLog.create({
+          data: {
+            action: 'DELETE',
+            entity: policy.entity,
+            details: JSON.stringify({
+              source: 'RetentionEngine',
+              deleted,
+              retainDays: policy.retainDays,
+              cutoff: cutoff.toISOString(),
+              via: 'manual',
+            }),
+            userId,
+            tenantId,
+          },
+        }).catch(() => { /* best-effort */ });
+      } catch (err) {
+        console.error(`[GDPR/retention] ${policy.entity} deleteMany failed:`, err.message);
+        summary.push({ entity: policy.entity, deleted: 0, error: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      tenantId,
+      summary,
+    });
+  } catch (err) {
+    console.error('[GDPR/retention/run] error:', err);
+    res.status(500).json({ error: 'Failed to run retention engine', detail: err.message });
   }
 });
 

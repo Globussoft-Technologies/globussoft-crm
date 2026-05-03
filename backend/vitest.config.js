@@ -42,6 +42,16 @@ module.exports = defineConfig({
           /backend\/services\//,
           /backend\/utils\//,
           /backend\/cron\//,
+          // routes/ is inlined for the integration tier under
+          // test/integration/, which mounts single route handlers
+          // into a fresh express app + supertest to drive end-to-end
+          // (signature verification → DB-mock side effects) flows
+          // without booting MySQL. See test/integration/stripe-webhook.test.js
+          // (G-22) for the canonical use case. The cost is small:
+          // routes/ inlining only matters for files that are
+          // actually imported by a test, so the rest of the unit
+          // suite is unaffected.
+          /backend\/routes\//,
         ],
       },
     },

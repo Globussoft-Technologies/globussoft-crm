@@ -3,7 +3,7 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 
 const prisma = require("../lib/prisma");
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const router = express.Router();
@@ -292,6 +292,72 @@ router.delete("/:id", async (req, res) => {
   } catch (err) {
     console.error("[DealInsights DELETE /:id] ", err);
     res.status(500).json({ error: "Failed to delete insight" });
+  }
+});
+
+// ─── POST /run ─────────────────────────────────────────
+// G-13: Manual trigger for the deal-insights cron engine. Mirrors
+// POST /api/billing/recurring/run + /api/forecasting/snapshot/run.
+//
+// Drives the same heuristic-rule engine that cron/dealInsightsEngine.js
+// invokes every 6 hours, but scoped to the requesting tenant only (the
+// cron version is all-tenant). Reuses runHeuristicRules + persistInsights
+// from this file so cron + manual paths can never drift on field
+// semantics (dedup-by-(dealId,type,insight,isResolved=false), severity
+// defaulting to INFO, etc.).
+//
+// Note: the cron engine does NOT call Gemini — only the heuristic rules.
+// Gemini is invoked only by POST /generate/:dealId, which is a separate
+// per-deal flow. This endpoint mirrors the cron's heuristic-only path.
+//
+// Gated to ADMIN — generating insights is a tenant-wide write.
+//
+// Returns { success, tenantId, scanned, generated, errors } where:
+//   - scanned   = open deals walked (stage NOT IN [won, lost])
+//   - generated = new DealInsight rows persisted (after dedup)
+//   - errors    = per-deal failures (mirror engine's per-deal try/catch)
+router.post("/run", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const openDeals = await prisma.deal.findMany({
+      where: {
+        tenantId,
+        stage: { notIn: ["won", "lost"] },
+        deletedAt: null,
+      },
+      include: {
+        contact: {
+          include: {
+            activities: { orderBy: { createdAt: "desc" }, take: 50 },
+            emails: { orderBy: { createdAt: "desc" }, take: 50 },
+            callLogs: { orderBy: { createdAt: "desc" }, take: 50 },
+          },
+        },
+      },
+    });
+
+    let generated = 0;
+    const errors = [];
+    for (const deal of openDeals) {
+      try {
+        const candidates = await runHeuristicRules(deal);
+        const saved = await persistInsights(deal.id, tenantId, candidates);
+        generated += saved.length;
+      } catch (dealErr) {
+        errors.push({ dealId: deal.id, error: dealErr.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      tenantId,
+      scanned: openDeals.length,
+      generated,
+      errors,
+    });
+  } catch (err) {
+    console.error("[deal-insights/run]", err);
+    res.status(500).json({ error: "Failed to run deal-insights engine", detail: err.message });
   }
 });
 

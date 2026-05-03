@@ -246,6 +246,8 @@ const emailThreadingRoutes = require("./routes/email_threading");
 const wellnessRoutes = require("./routes/wellness");
 // External partner API v1 (Callified.ai, Globus Phone, etc. — API key auth)
 const externalRoutes = require("./routes/external");
+// Admin tooling — manual triggers + read APIs for ops actions (G-15 backup)
+const adminRoutes = require("./routes/admin");
 
 // OpenAPI Swagger Bootloader
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -363,6 +365,8 @@ app.use("/api/email-threading", emailThreadingRoutes);
 app.use("/api/wellness", wellnessRoutes);
 // External partner API (API key auth, versioned)
 app.use("/api/v1/external", externalRoutes);
+// Admin tooling (ADMIN-only ops triggers + read APIs)
+app.use("/api/admin", adminRoutes);
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);

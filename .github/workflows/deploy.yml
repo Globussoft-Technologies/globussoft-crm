@@ -261,7 +261,9 @@ jobs:
           #   - appointment-reminders-api.spec.js (16 tests: cron/appointmentRemindersEngine.js — G-6)
           #   - security-headers.spec.js     ( 3 tests: helmet/CSP regression detection — G-25)
           #   - ab-tests-api.spec.js         (38 tests: routes/ab_tests.js — R-1)
-          # Total: ~1239 API tests run on every push.
+          #   - deal-insights-engine-api.spec.js (14 tests: cron/dealInsightsEngine.js + POST /run — G-13)
+          #   - accounting-api.spec.js       (37 tests: routes/accounting.js — R-1)
+          # Total: ~1290 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -314,6 +316,8 @@ jobs:
             tests/campaign-engine-api.spec.js \
             tests/backup-engine-api.spec.js \
             tests/ab-tests-api.spec.js \
+            tests/deal-insights-engine-api.spec.js \
+            tests/accounting-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

@@ -174,6 +174,27 @@ module.exports = async function globalTeardown() {
     );
     results.notifications = n.affectedRows || 0;
 
+    // G-13: deal-insights-engine-api.spec.js creates Deal rows tagged with
+    // RUN_TAG (E2E_FLOW_INSIGHT_…). The in-spec afterAll soft-deletes
+    // (DELETE /api/deals/:id flips deletedAt; the row stays). DealInsight
+    // has no FK cascade to Deal — just a `dealId` index — so we sweep
+    // both. DealInsight rows have no name field, only dealId, so we join
+    // through Deal.title regex to find the children. Then we hard-delete
+    // the Deal rows (test-only) AFTER the children are gone (the engine's
+    // where-clause excludes deletedAt!=null on subsequent runs anyway,
+    // but residual Deal rows would still surface on /deals?includeDeleted).
+    const [di] = await conn.query(
+      `DELETE FROM DealInsight WHERE dealId IN (SELECT id FROM Deal WHERE title REGEXP ?)`,
+      [PAT_REGEX]
+    );
+    results.dealInsights = di.affectedRows || 0;
+
+    const [d] = await conn.query(
+      `DELETE FROM Deal WHERE title REGEXP ?`,
+      [PAT_REGEX]
+    );
+    results.deals = d.affectedRows || 0;
+
     // G-14: forecast-snapshot-api.spec.js drives cron/forecastSnapshotEngine
     // via POST /api/forecasting/snapshot/run. The Forecast model has no
     // `name` / `title` field — just numeric metrics + period + tenantId —
@@ -192,13 +213,14 @@ module.exports = async function globalTeardown() {
     );
     results.forecasts = f.affectedRows || 0;
 
-    const total = results.patients + results.contacts + results.services + results.tasks + results.locations + results.products + results.notifications + results.forecasts;
+    const total = results.patients + results.contacts + results.services + results.tasks + results.locations + results.products + results.notifications + results.dealInsights + results.deals + results.forecasts;
     if (total > 0) {
       console.log(
         `[teardown] scrubbed E2E rows: ${results.patients} patient(s), ` +
           `${results.contacts} contact(s), ${results.services} service(s), ` +
           `${results.tasks} task(s), ${results.locations} location(s), ` +
           `${results.products} product(s), ${results.notifications} notification(s), ` +
+          `${results.dealInsights} dealInsight(s), ${results.deals} deal(s), ` +
           `${results.forecasts} forecast(s) ` +
           `(cascades auto-remove visits/Rx/consents/plans/waitlist/loyalty/referrals)`
       );

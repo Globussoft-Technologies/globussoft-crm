@@ -33,9 +33,9 @@
 | **G-10** | scheduled-email-engine spec | 3-4h | Med — needs admin trigger endpoint | ✅ shipped (76b2416 — 12 tests; added `POST /api/email/scheduled/run`; pending → sent / pending → failed status machine) |
 | **G-11** | retention-engine spec (GDPR daily 03:00) | 4-6h | High — compliance + destructive | ✅ shipped (cb96793 — 11 tests; added `POST /api/gdpr/retention/run` with `confirmDestructive:true` body guard + per-deletion AuditLog; surfaced #411 — engine misses AuditLog on no-op) |
 | **G-12** | campaign-engine spec | 3-4h | Med | ⬜ open (in flight 2026-05-03) |
-| **G-13** | deal-insights-engine spec | 3-4h | Low — AI-generated content | ⬜ open (in flight 2026-05-03) |
+| **G-13** | deal-insights-engine spec | 3-4h | Low — AI-generated content | ✅ shipped (14 tests; added `POST /api/deal-insights/run` admin-gated trigger; heuristic-only path, AI failure tolerated via existing `/generate/:dealId` try/catch around Gemini; surfaced orphan-row pollution in DealInsight — added Deal/DealInsight sweep to global-teardown.js) |
 | **G-14** | forecast-snapshot-engine spec | 3-4h | Low — weekly cron | ✅ shipped (2d4372d — 18 tests; added `POST /api/forecasting/snapshot/run`; idempotent UPDATE-not-INSERT on `(tenantId, userId, period)`; tenant isolation hard-scoped at SQL layer) |
-| **G-15** | backup-engine spec | 2-3h | Med — `mysqldump` exec; must verify no PII leaks in dump | ⬜ open (in flight 2026-05-03) |
+| **G-15** | backup-engine spec | 2-3h | Med — `mysqldump` exec; must verify no PII leaks in dump | ✅ shipped (14 tests; POST /api/admin/backup/run + /list + /file/:name; PII-safety assertion grades dump for plaintext PII against ENC:v1: ciphertext when WELLNESS_FIELD_KEY set; mysqldump-failure error contract; PATH + docker-exec invocation modes) |
 | **G-16** | whatsappProvider vitest | 2-3h | Low — last service module without unit test | ✅ shipped (6871d8d — 23 tests, 100% coverage on whatsappProvider.js; `https.request` mock pattern from smsProvider.test.js) |
 | **G-17** | wellness-dashboard-api spec (split from wellness.js) | 1-2 days | Med — wellness.js sits at 41% coverage; 4,050 lines | ⬜ open |
 | **G-18** | wellness-reports-api spec (split from wellness.js) | 1 day | Med | ⬜ open |

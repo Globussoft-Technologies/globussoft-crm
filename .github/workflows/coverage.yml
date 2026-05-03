@@ -197,6 +197,8 @@ jobs:
             tests/campaign-engine-api.spec.js \
             tests/backup-engine-api.spec.js \
             tests/ab-tests-api.spec.js \
+            tests/deal-insights-engine-api.spec.js \
+            tests/accounting-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

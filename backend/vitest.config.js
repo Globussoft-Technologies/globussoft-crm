@@ -41,6 +41,7 @@ module.exports = defineConfig({
           /backend\/middleware\//,
           /backend\/services\//,
           /backend\/utils\//,
+          /backend\/cron\//,
         ],
       },
     },
@@ -52,6 +53,7 @@ module.exports = defineConfig({
         'middleware/**/*.js',
         'services/**/*.js',
         'utils/**/*.js',
+        'cron/**/*.js',
       ],
       exclude: [
         'node_modules/**',

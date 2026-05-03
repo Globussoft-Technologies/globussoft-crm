@@ -13,13 +13,23 @@ function addInterval(date, frequency) {
   return d;
 }
 
+// Cron entry point — picks up Invoice rows where isRecurring=true and
+// nextRecurDate has elapsed, then mints a child invoice + advances the
+// schedule. Why the explicit notIn against BOTH spellings: the engine
+// originally filtered only status='VOID', but routes/billing.js's public
+// POST /api/billing/invoices/:id/void route writes status='VOIDED' (line
+// 456). Without the second spelling, a voided recurring template could
+// still be picked up by the cron and silently regenerate child invoices
+// after the operator had explicitly voided it. The /api/billing/recurring/run
+// manual endpoint already excluded both spellings (defensive); this
+// alignment closes the cron-side gap. Closes #410.
 async function processRecurringInvoices(io) {
   try {
     const now = new Date();
     const due = await prisma.invoice.findMany({
       where: {
         isRecurring: true,
-        status: { not: "VOID" },
+        status: { notIn: ["VOID", "VOIDED"] },
         nextRecurDate: { lte: now },
       },
       include: { contact: true },

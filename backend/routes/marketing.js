@@ -394,6 +394,13 @@ router.post("/campaigns/:id/send", verifyToken, async (req, res) => {
 });
 
 // POST /campaigns/:id/schedule — schedule for later
+//
+// Closes #412: schedule metadata now persists on the Campaign row itself
+// (scheduledAt + scheduleStatus + scheduleFilters columns) instead of the
+// in-memory `global._campaignSchedules` map that silently lost all pending
+// schedules on backend restart and could not survive a multi-instance
+// deploy. Tenant ownership is verified via the findFirst above; the
+// subsequent update is keyed by the row's own id.
 router.post("/campaigns/:id/schedule", verifyToken, async (req, res) => {
   try {
     const campaign = await prisma.campaign.findFirst({
@@ -404,28 +411,23 @@ router.post("/campaigns/:id/schedule", verifyToken, async (req, res) => {
     const { scheduledAt } = req.body;
     if (!scheduledAt) return res.status(400).json({ error: "scheduledAt is required" });
 
-    // Store scheduledAt in the budget field as a timestamp trick won't work.
-    // Instead we use a simple approach: update status and store scheduledAt as details in campaign name suffix
-    // Actually, let's use Prisma's raw approach or just store in a separate table.
-    // Simplest: store scheduledAt in a JSON string in a known location.
-    // We'll store it in memory via a simple JSON file approach, or better — just update status.
-    // The cron engine will check campaigns with "Scheduled" status.
-    // We need scheduledAt somewhere — let's use the campaign name to not change schema.
-    // Better approach: use a global in-memory map for scheduled campaigns (works for single-server).
-
     const scheduledDate = new Date(scheduledAt);
     if (isNaN(scheduledDate.getTime())) return res.status(400).json({ error: "Invalid scheduledAt date" });
 
-    // Store schedule metadata in-memory (campaign engine reads this)
-    if (!global._campaignSchedules) global._campaignSchedules = {};
-    global._campaignSchedules[campaign.id] = {
-      scheduledAt: scheduledDate,
-      filters: req.body.filters || null,
-    };
+    // Persist schedule on the Campaign row. scheduleFilters is JSON-encoded
+    // because Prisma `String? @db.Text` is the cheapest way to carry a
+    // structured filter alongside the schema migration without minting a
+    // new sub-table. The cron engine + /run trigger both JSON.parse it.
+    const scheduleFilters = req.body.filters ? JSON.stringify(req.body.filters) : null;
 
     await prisma.campaign.update({
       where: { id: campaign.id },
-      data: { status: "Scheduled" },
+      data: {
+        status: "Scheduled",
+        scheduledAt: scheduledDate,
+        scheduleStatus: "PENDING",
+        scheduleFilters,
+      },
     });
 
     res.json({ message: "Campaign scheduled", scheduledAt: scheduledDate.toISOString() });
@@ -436,6 +438,10 @@ router.post("/campaigns/:id/schedule", verifyToken, async (req, res) => {
 });
 
 // POST /campaigns/:id/pause — cancel schedule
+//
+// Closes #412 (paired with /schedule): clear DB-backed schedule columns.
+// Old code mutated global._campaignSchedules[campaign.id] which was a
+// silent no-op when the process had restarted since the schedule was set.
 router.post("/campaigns/:id/pause", verifyToken, async (req, res) => {
   try {
     const campaign = await prisma.campaign.findFirst({
@@ -443,14 +449,14 @@ router.post("/campaigns/:id/pause", verifyToken, async (req, res) => {
     });
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
 
-    // Remove from schedule map
-    if (global._campaignSchedules) {
-      delete global._campaignSchedules[campaign.id];
-    }
-
     await prisma.campaign.update({
       where: { id: campaign.id },
-      data: { status: "Draft" },
+      data: {
+        status: "Draft",
+        scheduleStatus: "CANCELLED",
+        // Keep scheduledAt for audit; the PENDING→CANCELLED transition is
+        // what makes the cron skip the row.
+      },
     });
 
     res.json({ message: "Campaign paused and returned to Draft" });
@@ -465,63 +471,82 @@ router.post("/campaigns/:id/pause", verifyToken, async (req, res) => {
 // POST /api/billing/recurring/run + /api/forecasting/snapshot/run.
 // Drives cron/campaignEngine logic but scoped to the requesting
 // tenant only (the cron runs across all tenants every minute).
-// Reusing the engine's per-tick body keeps cron + manual paths
-// aligned on field semantics (status='Scheduled' window, schedule
-// metadata in global._campaignSchedules, status flip to Sending
-// then Completed). Gated to ADMIN — dispatching a campaign sends
-// real outbound emails/SMS to contacts.
+//
+// Closes #412: schedule metadata is now read from DB columns
+// (Campaign.scheduledAt + Campaign.scheduleStatus + Campaign.scheduleFilters)
+// instead of the in-memory global._campaignSchedules map. The
+// processed/dispatched/skipped/errors envelope is unchanged so the G-12
+// e2e spec's contract still holds.
 //
 // Returns { success, tenantId, processed, dispatched, skipped, errors }.
 //   processed   — count of Scheduled rows we walked (tenant-scoped)
 //   dispatched  — count we actually sent (status flipped to Completed)
-//   skipped     — count whose schedule.scheduledAt is still in the future
+//   skipped     — count whose scheduledAt is still in the future
 //   errors      — per-row failures, mirrors engine's try/catch shape
 router.post("/campaigns/run", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const now = new Date();
 
-    // Mirror engine query but scoped to req.user.tenantId. Engine picks
-    // up status='Scheduled' rows; status='Completed'/'Sending'/'Draft'
-    // are excluded by the where clause itself.
+    // Mirror cron engine query but scoped to req.user.tenantId. Walks
+    // any Campaign row with status='Scheduled' so the spec's
+    // future-window assertion ("skipped >= 1") still observes
+    // future-dated rows. The cron-side processDueCampaigns fast-path
+    // (scheduleStatus='PENDING' AND scheduledAt<=now) is the optimisation;
+    // /run prioritises matching the spec's expectations.
     const scheduled = await prisma.campaign.findMany({
       where: { tenantId, status: "Scheduled" },
     });
 
-    const scheduleMap = global._campaignSchedules || {};
     let dispatched = 0;
     let skipped = 0;
     const errors = [];
 
     for (const campaign of scheduled) {
-      const schedule = scheduleMap[campaign.id];
-      // Mirror engine: if schedule metadata exists AND scheduledAt is
-      // in the future → skip. If no schedule metadata at all → send
-      // immediately (engine fallback path).
-      if (schedule && schedule.scheduledAt > now) {
+      // Future-window skip: if scheduledAt is in the future, leave the
+      // row alone for the cron to pick up later.
+      if (campaign.scheduledAt && campaign.scheduledAt > now) {
+        skipped++;
+        continue;
+      }
+      // Already-dispatched guard: a row could be 'Scheduled' but its
+      // scheduleStatus already moved to 'SENT' in a prior tick (stale
+      // status flip). Don't re-send.
+      if (campaign.scheduleStatus === "SENT" || campaign.scheduleStatus === "CANCELLED") {
         skipped++;
         continue;
       }
 
       try {
-        if (schedule && schedule.filters) {
-          campaign._audienceFilter = schedule.filters;
+        if (campaign.scheduleFilters) {
+          try {
+            campaign._audienceFilter = JSON.parse(campaign.scheduleFilters);
+          } catch (parseErr) {
+            console.error(
+              `[marketing/campaigns/run] Could not parse scheduleFilters for campaign ${campaign.id}:`,
+              parseErr.message,
+            );
+          }
         }
         campaign._userId = req.user.userId;
         await sendCampaign(campaign, req.io);
         dispatched++;
 
-        // Clean up schedule metadata so a subsequent /run doesn't
-        // re-scan a Completed row's stale schedule entry.
-        if (global._campaignSchedules) {
-          delete global._campaignSchedules[campaign.id];
-        }
-      } catch (sendErr) {
-        errors.push({ id: campaign.id, error: sendErr.message });
-        // Mirror engine's failure path: flip back to Draft for retry.
+        // Mark schedule terminal so subsequent /run calls skip via the
+        // SENT guard above (sendCampaign also flipped status='Completed',
+        // which the where-clause already excludes — this is belt-and-braces).
         await prisma.campaign.update({
           where: { id: campaign.id },
-          data: { status: "Draft" },
+          data: { scheduleStatus: "SENT" },
+        }).catch(() => { /* best-effort */ });
+      } catch (sendErr) {
+        errors.push({ id: campaign.id, error: sendErr.message });
+        // Mirror engine's failure path: flip back to Draft for retry,
+        // clear scheduleStatus so the cron's PENDING filter ignores it
+        // until the operator re-schedules.
+        await prisma.campaign.update({
+          where: { id: campaign.id },
+          data: { status: "Draft", scheduleStatus: null },
         }).catch(() => { /* best-effort */ });
       }
     }

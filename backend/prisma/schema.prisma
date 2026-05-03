@@ -308,6 +308,24 @@ model Campaign {
   budget    Float    @default(0.0)
   createdAt DateTime @default(now())
 
+  // Schedule persistence (#412): replaces in-memory global._campaignSchedules
+  // map which silently dropped pending schedules on backend restart and could
+  // not survive multi-instance deploys. All three columns are nullable so
+  // existing rows survive `prisma db push --accept-data-loss` without a
+  // backfill.
+  //
+  //   scheduledAt     — when the campaign should dispatch (UTC). Null on
+  //                     Draft rows. The cron engine queries `lte: now()`.
+  //   scheduleStatus  — 'PENDING' (waiting on cron) | 'SENT' (cron
+  //                     dispatched successfully) | 'CANCELLED' (paused
+  //                     before dispatch) | null. Cron matches PENDING.
+  //   scheduleFilters — JSON-serialised audience filter (formerly
+  //                     schedule.filters in the in-memory map). Read by
+  //                     sendCampaign via campaign._audienceFilter.
+  scheduledAt     DateTime?
+  scheduleStatus  String?
+  scheduleFilters String?   @db.Text
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

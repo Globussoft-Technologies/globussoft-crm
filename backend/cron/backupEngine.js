@@ -69,6 +69,32 @@ function parseDbUrl(dbUrl) {
 function buildMysqldumpCommand({ user, pass, host, port, dbName, filepath }) {
   const bin = process.env.MYSQLDUMP_BIN || 'mysqldump';
   const container = process.env.MYSQLDUMP_DOCKER_CONTAINER;
+
+  // When MYSQLDUMP_BIN is explicitly configured, verify the binary exists
+  // before attempting to build/run the command.  The shell pipeline
+  // (`mysqldump … | gzip > file`) masks the mysqldump exit code under
+  // default sh semantics (no pipefail) — gzip happily writes an empty
+  // archive and exits 0 even when mysqldump was not found.  Pre-flight
+  // prevents a false-success: if the caller set an explicit path that
+  // doesn't resolve to an executable file, throw immediately so runBackup()
+  // can return { success:false, code:'MYSQLDUMP_FAILED' }.
+  //
+  // We only apply this check when MYSQLDUMP_BIN is explicitly set (not the
+  // default 'mysqldump') and not in Docker mode (where the binary lives
+  // inside the container, not on the host FS).
+  if (process.env.MYSQLDUMP_BIN && !container) {
+    let accessible = false;
+    try {
+      fs.accessSync(bin, fs.constants.X_OK);
+      accessible = true;
+    } catch (_e) {
+      // Not executable or does not exist — fall through to throw below.
+    }
+    if (!accessible) {
+      throw new Error(`MYSQLDUMP_BIN '${bin}' is not executable or does not exist`);
+    }
+  }
+
   // Common mysqldump args. --single-transaction --quick is the standard
   // hot-backup combo for InnoDB; --no-tablespaces silences the 8.0
   // "PROCESS privilege required" warning on shared hosts.
@@ -131,13 +157,16 @@ function runBackup(opts = {}) {
   try {
     cmd = buildMysqldumpCommand({ ...parsed, filepath });
   } catch (err) {
+    // buildMysqldumpCommand throws when the explicitly-configured
+    // MYSQLDUMP_BIN is not executable — treat this the same as a
+    // runtime binary-unavailable failure so the contract matches.
     return {
       success: false,
       file: null,
       sizeBytes: 0,
       durationMs: Date.now() - start,
       error: err.message,
-      code: 'CMD_BUILD_FAILED',
+      code: 'MYSQLDUMP_FAILED',
     };
   }
 

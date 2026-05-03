@@ -2,9 +2,21 @@
 
 > A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **2,112 tests on every push** (1,435 Playwright + 677 vitest); release-validation full chromium suite on every tag.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.1
-**Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md)
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.2
+**Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.4.2 (May 3 2026 — six more gate specs + four new admin trigger endpoints + portable monitor-pattern docs)
+
+Continuation of the same-day v3.4.0 / v3.4.1 arc.
+
+- **Six new gate specs**: G-7 wellness-ops, G-9 recurring-invoice, G-10 scheduled-email, G-11 retention-engine, G-14 forecast-snapshot, G-16 whatsappProvider vitest. Per-push gate now ~37 specs / ~1,525 tests + 23 vitest files / 700 unit tests = **~2,225 tests on every push**.
+- **Four new admin-gated trigger endpoints** added to make the corresponding cron engines manually invocable + deterministically testable: `POST /api/forecasting/snapshot/run`, `POST /api/billing/recurring/run`, `POST /api/email/scheduled/run`, and `POST /api/gdpr/retention/run` (the GDPR one carries an additional `confirmDestructive: true` body guard + per-deletion AuditLog row).
+- **Two contract-drift bugs surfaced + filed for follow-up**: #410 (`recurringInvoiceEngine` excludes `VOID` but `/void` writes `VOIDED`) and #411 (`retentionEngine` skips AuditLog on no-op runs — GDPR audit-trail incomplete).
+- **Two cross-project pattern docs**: [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) for demo-environment monitoring; [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md) for production-grade monitoring with severity tiers + PagerDuty + dry-run rollout. Hand to sister Globussoft products.
+- **Demo-monitor cadence relaxed** `*/30` → `0 */2` (every 2h, 12 runs/day). Today's automation closed the bulk of the residue class.
+
+See [CHANGELOG.md](CHANGELOG.md#v342--2026-05-03--six-more-gate-specs--four-new-admin-trigger-endpoints--portable-monitor-pattern-docs) for the full v3.4.2 entry.
 
 ## What's new in v3.4.1 (May 3 2026 — T1.2 SMS live + e2e-full long-tail closed)
 

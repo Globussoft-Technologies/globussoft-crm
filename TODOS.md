@@ -2,18 +2,27 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
-Last updated: 2026-05-03 (**v3.4.0 shipped — gate-spec push + demo cleanup automation + compliance fixes**. HEAD: `7feb13c`. **Per-push gate is now 31 specs / 1,435 tests + 22 vitest files / 677 tests = 2,112 passing on every push, 2 intentional skips, 0 failures.** Major movements:
+Last updated: 2026-05-03 (**v3.4.2 shipped — same-day continuation of v3.4.0 / v3.4.1.** HEAD: `e834266`. **Per-push gate is now ~37 specs / ~1,525 tests + 23 vitest files / 700 tests = ~2,225 passing on every push.** Major movements since v3.4.1:
 
-- **8 new gate specs landed** (G-1 + G-2 + G-3 + G-4 + G-5 + G-6 + G-8 + G-25 from `docs/E2E_GAPS.md`) totalling +351 tests. Gate runtime ~1.6 min on local stack, ~2 min on CI.
-- **Two real compliance bugs closed**: #408 (`audit.js` missing `verifyRole(['ADMIN'])`, was leaking PII via `details` JSON column) and #409 (integrations `POST /toggle` missing admin guard). Both surfaced by the new G-3 + G-5 specs as `test.fixme()` blocks; route fixes shipped in `2df54de` and the fixmes flipped to active assertions.
-- **Demo cleanup automation live**: `e2e-full.yml` now has a post-matrix `scrub-demo` SSH job (`db932ab`) so release-validation no longer pollutes demo. `demo-monitor.yml` is on `*/30 * * * *` cron, auto-opens a tracker GitHub issue with a stable title on failure (caught + cleared a 605-row pollution event from a manual e2e-full trigger live during the session).
-- **Schema migration**: `Activity.description` → `@db.Text` (commit `849f08f`) drops the 188-char clamp in `routes/external.js`. Self-applied on demo via deploy.yml `prisma db push --accept-data-loss` self-heal.
-- **Local 4-gate mirror docs** in CLAUDE.md — `scripts/test-local.ps1 -Local` (and `.sh` equivalent) now the canonical pre-push iteration loop. Avoids the "demo runs old code" trap.
-- **Native dialog sweep** — 3 stragglers caught (Sidebar / Leads / SequenceBuilder) past the prior bulk migration `e2c0b88`. SequenceBuilder had 6 broken `notify({type, message})` calls that would have thrown at runtime.
-- **Heal-loop fixes** (`ccfb97e`): G-6 + G-8 afterAll cleanup, rate-limit bumps for `NODE_ENV === 'test'`, global-teardown Notification sweep.
-- **Skipped-test triage** (`2df54de`): 8 → 2. Both remaining are intentional + documented (sequence-engine no-email branch covered elsewhere; wellness-rbac /staff consistency only when both endpoints 200).
+- **Six more gate specs landed** (G-7 + G-9 + G-10 + G-11 + G-14 + G-16) on top of the v3.4.0 batch. Gate growth: 31 → 37 specs, 1,435 → ~1,525 API tests; vitest 677 → 700.
+- **Four new admin-gated cron-trigger endpoints** added so each engine becomes deterministically testable from the manual path: `POST /api/forecasting/snapshot/run` (G-14), `POST /api/billing/recurring/run` (G-9), `POST /api/email/scheduled/run` (G-10), `POST /api/gdpr/retention/run` (G-11 — additional `confirmDestructive: true` body guard + per-deletion AuditLog row for GDPR audit-trail completeness). All mirror the established pattern: per-tenant scoped, `verifyRole(['ADMIN'])`, return `{success, tenantId, ...counters, errors}`.
+- **Two contract-drift bugs surfaced + filed** by the new specs (engine-side, NOT fixed in their PRs):
+  - #410 — `recurringInvoiceEngine` excludes `'VOID'` but `/void` route writes `'VOIDED'`; voided recurring invoices may regenerate via cron path
+  - #411 — `retentionEngine` skips AuditLog on no-op runs; GDPR Art. 30 / SOC-2 expects every sweep logged
+- **Two cross-project pattern docs shipped** for hand-off to sister Globussoft products:
+  - [docs/DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) — copy-paste guide for demo-monitor pattern (commit `c27d862`)
+  - [docs/LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md) — production-grade variant with severity tiers + PagerDuty + dry-run rollout (commit `331cdd6`)
+- **Demo-monitor cadence relaxed** `*/30` → `0 */2` (12 runs/day instead of 48). Justified by today's automation: `e2e-full.yml`'s `scrub-demo` post-matrix job + ephemeral-CI architecture close the bulk of the residue class.
+- **Audit-api spec header refresh** (`e834266`) — cleared stale comments claiming `routes/audit.js` had no role guard (#408 fixed in v3.4.0; comments hadn't caught up).
 
-**Pickup from home:** `git pull origin main`. Full local gate green at HEAD `fe91c36` (1,435 Playwright + 677 vitest, 0 failures). **T1.2 SMS is fully complete** — Fast2SMS API key is live on demo + local; both `/api/wellness/portal/health` endpoints return `{"smsConfigured":true}`. **All 3 e2e-full long-tail buckets (L1/L2/L3) closed as no-fix** — they were test races and env mismatches, not product bugs. **Next gap-spec batch (per discovery agent's parallel-batch survey):** G-7 wellness-ops + G-14 forecast-snapshot + G-16 whatsappProvider vitest in parallel (3 disjoint files, 3-4h each). After that, the G-9/G-10/G-11 trigger-endpoint trio sequentially (each requires adding a new admin trigger endpoint first). G-17/G-18/G-19 (wellness route split, 1-day each) is best after G-7/G-14/G-16. **G-20 tenant-isolation-api spec** (2-3 days) is the highest-severity multi-day item — single highest-risk bug class for multi-tenant CRM; consider tackling it after the next quick-batch.
+**Carried over from v3.4.0 / v3.4.1** (still relevant context for new picker-uppers):
+- T1.2 SMS provider live end-to-end via Fast2SMS (admin banner + portal/health + PatientPortal degrade + real key on demo + local). Patient OTP + appointment reminders + telecaller SMS now actually deliver.
+- e2e-full long-tail (L1/L2/L3) all closed as no-fix — they were test races and env mismatches, not product bugs.
+- 8 earlier gate specs (G-1/G-2/G-3/G-4/G-5/G-6/G-8/G-25) from v3.4.0.
+- 2 earlier compliance bugs closed (#408 audit role guard, #409 integrations toggle).
+- `Activity.description` → `@db.Text` schema migration.
+
+**Pickup from home:** `git pull origin main`. Full local gate green at HEAD. **Next gap-spec batch:** G-12 campaign-engine + G-13 deal-insights-engine + G-15 backup-engine in parallel (3 disjoint files; G-15 includes a PII-safety check on dump contents). **G-20 tenant-isolation-api spec** (2-3 days) is the highest-severity multi-day pickup — single highest-risk bug class for multi-tenant CRM; natural to tackle after the engine specs settle. **G-17/G-18/G-19 wellness.js route split** (1 day each) best after G-20 since the isolation contract should be locked down before structural changes.
 
 Earlier session notes (2026-05-02 evening — context for prior commits): T1.1 e2e-full restoration shipped + bucket-4 partial + T1.2 partial. e2e-full failures **201 → 25 unique** via 4 test commits + `cbf9d27`. T1.2 partial (`e941d7b`): `/api/auth/me` now exposes `features.smsConfigured`; consumer side (admin banner + patient portal graceful degrade) is NOT yet shipped — see "🚧 T1.2 — remaining work" below.)
 

@@ -27,16 +27,16 @@
 | **G-4** | search-api spec (1 endpoint, smoke-only) | 1-2h | Low — small route, but used by Omnibar | ✅ shipped (2f02cde — 14 tests) |
 | **G-5** | audit-api spec (1 endpoint, smoke-only) | 2-3h | Med — compliance-relevant; tenant scoping must be proven | ✅ shipped (f5e9c7c — 20 tests; flagged audit.js missing role guard) |
 | **G-6** | appointment-reminders-engine spec | 3-4h | High — wellness PRD-critical; SMS dispatch logic | ✅ shipped (cdbca1e — 16 tests; T-24h + T-1h windows, idempotency, cancellation exempt, RBAC) |
-| **G-7** | wellness-ops-engine spec (NPS + retention) | 3-4h | High — GDPR retention path | ⬜ open |
+| **G-7** | wellness-ops-engine spec (NPS + retention) | 3-4h | High — GDPR retention path | ✅ shipped (853f41e — 13 tests; engine window `[now-14d, now-72h]`, NPS dedup via Survey row, junk retention is HARD-delete, tenant isolation, RBAC) |
 | **G-8** | low-stock-engine spec | 2-3h | Med — inventory alerts | ✅ shipped (310296f — 12 tests; threshold semantics, idempotency, tenant isolation, RBAC) |
-| **G-9** | recurring-invoice-engine spec | 4-6h | High — billing-critical, no trigger endpoint exists yet | ⬜ open |
-| **G-10** | scheduled-email-engine spec | 3-4h | Med — needs admin trigger endpoint | ⬜ open |
-| **G-11** | retention-engine spec (GDPR daily 03:00) | 4-6h | High — compliance + destructive | ⬜ open |
-| **G-12** | campaign-engine spec | 3-4h | Med | ⬜ open |
-| **G-13** | deal-insights-engine spec | 3-4h | Low — AI-generated content | ⬜ open |
-| **G-14** | forecast-snapshot-engine spec | 3-4h | Low — weekly cron | ⬜ open |
-| **G-15** | backup-engine spec | 2-3h | Med — `mysqldump` exec; must verify no PII leaks in dump | ⬜ open |
-| **G-16** | whatsappProvider vitest | 2-3h | Low — last service module without unit test | ⬜ open |
+| **G-9** | recurring-invoice-engine spec | 4-6h | High — billing-critical, no trigger endpoint exists yet | ✅ shipped (902e439 — 13 tests; added `POST /api/billing/recurring/run` admin-gated trigger endpoint; surfaced #410 — engine-side `VOID` vs `VOIDED` mismatch) |
+| **G-10** | scheduled-email-engine spec | 3-4h | Med — needs admin trigger endpoint | ✅ shipped (76b2416 — 12 tests; added `POST /api/email/scheduled/run`; pending → sent / pending → failed status machine) |
+| **G-11** | retention-engine spec (GDPR daily 03:00) | 4-6h | High — compliance + destructive | ✅ shipped (cb96793 — 11 tests; added `POST /api/gdpr/retention/run` with `confirmDestructive:true` body guard + per-deletion AuditLog; surfaced #411 — engine misses AuditLog on no-op) |
+| **G-12** | campaign-engine spec | 3-4h | Med | ⬜ open (in flight 2026-05-03) |
+| **G-13** | deal-insights-engine spec | 3-4h | Low — AI-generated content | ⬜ open (in flight 2026-05-03) |
+| **G-14** | forecast-snapshot-engine spec | 3-4h | Low — weekly cron | ✅ shipped (2d4372d — 18 tests; added `POST /api/forecasting/snapshot/run`; idempotent UPDATE-not-INSERT on `(tenantId, userId, period)`; tenant isolation hard-scoped at SQL layer) |
+| **G-15** | backup-engine spec | 2-3h | Med — `mysqldump` exec; must verify no PII leaks in dump | ⬜ open (in flight 2026-05-03) |
+| **G-16** | whatsappProvider vitest | 2-3h | Low — last service module without unit test | ✅ shipped (6871d8d — 23 tests, 100% coverage on whatsappProvider.js; `https.request` mock pattern from smsProvider.test.js) |
 | **G-17** | wellness-dashboard-api spec (split from wellness.js) | 1-2 days | Med — wellness.js sits at 41% coverage; 4,050 lines | ⬜ open |
 | **G-18** | wellness-reports-api spec (split from wellness.js) | 1 day | Med | ⬜ open |
 | **G-19** | wellness-telecaller-api spec (split from wellness.js) | 1 day | Med | ⬜ open |
@@ -49,7 +49,7 @@
 
 **Recommended first parallel batch (5 disjoint, no rate-limit / external-service issues):** G-1, G-2, G-3, G-4, G-6.
 
-> **Status update 2026-05-03:** **G-1 + G-2 + G-3 + G-4 + G-5 + G-6 + G-8 + G-25 shipped** (~351 new tests; gate is now 31 specs / 1,435 tests). **Two compliance findings closed:** #408 (audit.js) and #409 (integrations toggle) both got `verifyRole(['ADMIN'])` route fixes in `2df54de` and the matching `test.fixme()` blocks were flipped to active `test()` assertions. **Next pickup recommendations** (per the discovery agent's parallel-batch survey): G-7 wellness-ops-engine, G-14 forecast-snapshot-engine, G-16 whatsappProvider vitest — all unblocked, all 3-4h each, can run in parallel on disjoint files. The G-9/G-10/G-11 trio (recurring-invoice / scheduled-email / retention) needs new admin trigger endpoints first; pick one agent to sequence those. G-17/G-18/G-19 (wellness route split) is a 1-day-each effort best done after G-7/G-14/G-16.
+> **Status update 2026-05-03 (v3.4.2):** **14 gate specs shipped** — G-1..G-11 + G-14 + G-16 + G-25 (~+440 API tests + 23 vitest tests; per-push gate is now ~37 specs / ~1,525 API tests + 23 vitest files / 700 unit tests = **~2,225 per-push**). **Four new admin-gated cron-trigger endpoints added** as a side effect: `/api/forecasting/snapshot/run`, `/api/billing/recurring/run`, `/api/email/scheduled/run`, `/api/gdpr/retention/run` (the GDPR one carries `confirmDestructive:true` body guard). **Four compliance items closed** (#408 audit role guard, #409 integrations toggle, plus the new `confirmDestructive` guard + per-deletion AuditLog in the GDPR retention endpoint). **Two contract-drift bugs surfaced + filed for follow-up**: #410 (recurring-invoice VOID/VOIDED status mismatch in cron path), #411 (retention engine misses AuditLog on no-op runs). **Currently in flight:** G-12 campaign-engine + G-13 deal-insights-engine + G-15 backup-engine in parallel. **Next pickup recommendations** (after the in-flight trio lands): **G-20 tenant-isolation-api spec** (2-3 days, single highest-severity multi-day item per E2E_GAPS.md), then **G-17/G-18/G-19** wellness.js route split (1 day each — best done after G-20 since the isolation contract should be locked down before structural changes).
 
 ---
 

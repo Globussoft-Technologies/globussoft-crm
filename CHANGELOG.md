@@ -1,5 +1,61 @@
 # CHANGELOG
 
+## v3.4.2 — 2026-05-03 — six more gate specs + four new admin trigger endpoints + portable monitor-pattern docs
+
+A continuation of the same-day v3.4.0 / v3.4.1 arc. **No new product features**, but six more gate specs landed plus four new admin-gated trigger endpoints (each one mirroring an existing cron engine), and two cross-project pattern docs got written for hand-off to sister Globussoft products.
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.1 | v3.4.2 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | 31 specs / 1,435 tests | 37 specs / **~1,525 tests** | +6 specs / +90 tests |
+| Per-push unit tests | vitest | 22 files / 677 tests | 23 files / **700 tests** | +1 file / +23 tests |
+| **Total per-push** |  | 2,112 | **~2,225** | **+5%** |
+
+### Added — six gate specs (~+90 API tests, +23 unit tests)
+
+| ID | Spec | Commit | Tests | Adds an admin trigger endpoint? |
+|---|---|---|---|---|
+| **G-7** | `wellness-ops-api.spec.js` | `853f41e` | 13 | No (`/wellness/ops/run` already existed) |
+| **G-14** | `forecast-snapshot-api.spec.js` | `2d4372d` | 18 | Yes — `POST /api/forecasting/snapshot/run` (ADMIN-gated) |
+| **G-16** | `whatsappProvider.test.js` (vitest) | `6871d8d` | 23 | n/a — unit test |
+| **G-9** | `recurring-invoice-api.spec.js` | `902e439` | 13 | Yes — `POST /api/billing/recurring/run` (ADMIN) |
+| **G-10** | `scheduled-email-api.spec.js` | `76b2416` | 12 | Yes — `POST /api/email/scheduled/run` (ADMIN) |
+| **G-11** | `retention-api.spec.js` | `cb96793` | 11 | Yes — `POST /api/gdpr/retention/run` (ADMIN + body `confirmDestructive: true` + per-deletion AuditLog) |
+
+The four new endpoints all mirror the same shape: per-tenant scoped (`req.user.tenantId`), admin-gated via `verifyToken, verifyRole(['ADMIN'])`, return `{ success, tenantId, ...counters, errors }`. They replace the previous "no manual trigger surface" gap that made the cron engines effectively impossible to test deterministically.
+
+### Notable contract drifts surfaced by the new specs (filed as separate issues, NOT fixed here)
+
+- **#410 — `recurringInvoiceEngine` excludes `'VOID'` but `/void` route writes `'VOIDED'`** — surfaced by G-9. Voided recurring invoices may regenerate via the cron path. The new manual-trigger endpoint excludes both spellings defensively; the cron should match.
+- **#411 — `retentionEngine` doesn't write AuditLog on no-op runs** — surfaced by G-11. GDPR Art. 30 / SOC-2 expect a complete trail of when retention was *attempted*, not just when it *deleted*. The new manual-trigger endpoint writes the audit row regardless of deletion count; the cron should match.
+
+Both are concrete diff-sized fixes; tracked for follow-up. Not blocking demo or production.
+
+### Added — portable cross-project pattern docs
+
+The demo-monitor pattern this repo runs is genuinely valuable for any Globussoft product that has a deployed test environment. Two self-contained pattern docs:
+
+- **[docs/DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md)** (commit `c27d862`, 506 lines) — self-contained, copy-paste-able guide for setting up the same monitor pattern in any project. Includes templated workflow YAML, templated Playwright spec, customization checklist, what-to-put-in-assertions guide, tuning section (cadence, auto-self-heal, single-failure-suppression), and what-this-isn't (vs APM, vs release validation, vs uptime pinger).
+- **[docs/LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)** (commit `331cdd6`, 806 lines) — sibling guide for **production** environments with the safety dial cranked all the way up: HARD read-only enforcement (Proxy-wrapped request fixture rejects POST/PUT/PATCH/DELETE), severity-tiered alerts (P1 → PagerDuty + Slack + GH; P2 → Slack + GH; P3 → GH only), dedicated read-only service account (audit-trail-friendly), 4-week dry-run-to-paging rollout plan, GDPR/HIPAA/SOC-2/PCI-DSS-specific guidance.
+
+Both docs reference each other and explicitly distinguish demo vs live use cases.
+
+### Operations
+
+- **Demo-monitor cadence relaxed** `*/30 * * * *` → `0 */2 * * *` (commit `ed5ae4f`). 12 runs/day instead of 48. Justified by today's automation: `e2e-full.yml`'s `scrub-demo` post-matrix job (`db932ab`) cleans after every release-validation run; the per-push `api_tests` gate runs against ephemeral DB so can't pollute. Remaining drift class (~1×/week sibling-agent residue) doesn't justify denser cadence.
+- **Audit-api spec header refresh** (commit `e834266`) — cleared stale comments claiming `routes/audit.js` had no role guard. The route was fixed in `2df54de` (v3.4.0); the spec header hadn't caught up.
+
+### Carry-over (NOT in this release)
+
+- **G-12 campaign-engine, G-13 deal-insights-engine, G-15 backup-engine** — three more gate specs in flight as of this release; landing in v3.4.3.
+- **#410 + #411** — engine-side fixes for the contract drifts surfaced this release.
+- **G-20 tenant-isolation-api** — flagged as "single highest-severity bug class for multi-tenant CRM" per E2E_GAPS.md; 2-3 day investment that's the natural pickup after the engine specs settle.
+- **B3 wellness-real-user-journeys tab-locator drift** — pre-existing, deferred from L3 closure (~30 min next session).
+- **wellness-clinical-api afterAll discipline** — leaves `E2E_WC_*` Locations for demo-hygiene to catch mid-suite (~30 min).
+
+---
+
 ## v3.4.1 — 2026-05-03 — T1.2 SMS provider live + e2e-full long-tail fully closed
 
 A continuation of v3.4.0's same-day session. **No new product features**, but two production-impacting items closed end-to-end:

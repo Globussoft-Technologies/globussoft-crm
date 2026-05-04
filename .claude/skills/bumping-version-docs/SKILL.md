@@ -61,6 +61,19 @@ We've stayed in v3.4.x throughout this multi-session arc. Loose convention:
 
 If unsure, default to patch. The CHANGELOG entry's contents communicate weight; the version number is just an ordering scheme.
 
+## Stacked release entries before any tag push (added 2026-05-05)
+
+Doc bumps and tag pushes are independent. The v3.4.10 → v3.4.11 arc landed two CHANGELOG entries (`dbe611a` for v3.4.10 + `1d07343` for v3.4.11) in succession **without any `git tag` push between them**. Pattern is supported: each release entry documents a coherent wave of work; tags can be pushed back-to-back when the operator is ready (each tag fires its own `e2e-full.yml` release-validation against demo).
+
+Why this is fine:
+- Tag pushes have visible side-effects (e2e-full runs against demo, ~15-20 min, hits the demo's accumulated state). Operators may want to batch them by daily / sprint cadence rather than firing twice per session.
+- The CHANGELOG entries are immutable once published — stacking them doesn't break "the v3.4.10 entry should reflect v3.4.10 reality" since each entry's "Carry-over for vX.Y.Z+1" section names what it predicted, not what actually shipped (the next entry above shows what shipped).
+- README's "What's new" section is also accumulating — keep the most recent ~3 entries' What's-new sections; older ones can be dropped.
+
+What NOT to do:
+- Don't merge two release entries' work into ONE CHANGELOG entry just because the tag hasn't been pushed yet. Each coherent wave deserves its own entry; the tags catch up later. If you're unsure whether two waves should be one entry, ask: "would a future engineer reading this entry want to find these two unrelated changes together?" — usually no.
+- Don't backdate the second entry's date to match the first's. Each entry's date is when its docs landed (the commit's date).
+
 ## Gotchas
 
 - **Commit titles include the version** — readers grep for `vX.Y.Z` in `git log` to find release commits.

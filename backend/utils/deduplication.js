@@ -44,12 +44,29 @@ async function findDuplicateContact(email, phone) {
 }
 
 /**
- * Check if a marketplace lead with this provider+externalId already exists.
+ * Check if a marketplace lead with this provider+externalId already exists
+ * for the given tenant.
+ *
+ * Schema note (#414): the unique constraint is `[tenantId, provider,
+ * externalLeadId]` — cross-tenant duplicates are intentionally allowed. The
+ * Prisma compound-unique finder name is therefore `tenantId_provider_externalLeadId`,
+ * NOT the legacy `provider_externalLeadId`. Calling the legacy name throws
+ * a runtime "Argument `where` of type ...UniqueInput needs at least one
+ * argument" because the named alias no longer exists in the generated client
+ * — that surfaced as a 500 on every webhook ingest after the #414 schema
+ * change landed. Callers must pass tenantId; webhook routes hardcode 1, the
+ * cron sync passes the per-tenant config's tenantId.
  */
-async function findDuplicateMarketplaceLead(provider, externalLeadId) {
+async function findDuplicateMarketplaceLead(provider, externalLeadId, tenantId = 1) {
   if (!externalLeadId) return null;
   return prisma.marketplaceLead.findUnique({
-    where: { provider_externalLeadId: { provider, externalLeadId: String(externalLeadId) } },
+    where: {
+      tenantId_provider_externalLeadId: {
+        tenantId: Number(tenantId),
+        provider,
+        externalLeadId: String(externalLeadId),
+      },
+    },
   });
 }
 

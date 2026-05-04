@@ -97,32 +97,58 @@ test.describe('eventBus.renderTemplate() — mustache interpolation', () => {
     return rule;
   }
 
-  // Snapshot existing approval IDs so we can spot the one we just created.
-  async function listApprovalIds(request) {
-    const res = await request.get(`${API}/approvals?entity=Deal`, { headers: auth() });
-    expect(res.ok(), `approvals list: ${res.status()}`).toBeTruthy();
-    const rows = await res.json();
-    return new Set((rows || []).map((r) => r.id));
-  }
+  // Demo-state-divergence note: emitEvent fires EVERY active rule whose
+  // triggerType matches `deal.created`, not just our `:id/test` target. On
+  // demo (and on a re-used local stack) there are accumulated stale rules
+  // bound to `deal.created` from prior runs that didn't reach afterAll
+  // cleanup — each one writes its OWN ApprovalRequest with a different
+  // rendered reason. The pre-fix `fresh[0]` snapshot-diff lookup picked the
+  // newest fresh approval, which on demo turned out to be a STALE rule's
+  // output (e.g. "no id payload") instead of ours. Fix: parameterise the
+  // lookup on `expectedReason` and match on an exact equality against OUR
+  // rule's rendered output. For the empty-template path (reason persisted
+  // as null), do a snapshot-diff on the approvals list, scoped to the test's
+  // unique dealId, and pick the freshly-created null-reason row.
+  async function fireRuleAndFindApproval(request, ruleId, payload, { expectedReason } = {}) {
+    // Snapshot existing approval IDs before firing — only used by the
+    // null-reason path, but cheap to compute always.
+    const beforeRes = await request.get(`${API}/approvals?entity=Deal`, { headers: auth() });
+    expect(beforeRes.ok()).toBeTruthy();
+    const beforeRows = await beforeRes.json();
+    const beforeIds = new Set((beforeRows || []).map((r) => r.id));
 
-  async function fireRuleAndFindApproval(request, ruleId, payload) {
-    const before = await listApprovalIds(request);
     const fire = await request.post(`${API}/workflows/${ruleId}/test`, {
       headers: auth(),
       data: { payload },
     });
     expect(fire.ok(), `fire: ${fire.status()} ${await fire.text()}`).toBeTruthy();
 
-    // create_approval also re-emits "approval.created", so allow a moment.
+    // create_approval also re-emits "approval.created", so allow a moment for
+    // any chained rules (and the actual ApprovalRequest write) to settle.
     await new Promise((r) => setTimeout(r, 600));
 
     const res = await request.get(`${API}/approvals?entity=Deal`, { headers: auth() });
     expect(res.ok()).toBeTruthy();
     const rows = await res.json();
-    const fresh = (rows || []).filter((r) => !before.has(r.id));
-    expect(fresh.length, `expected exactly 1 fresh ApprovalRequest, got ${fresh.length}`).toBeGreaterThanOrEqual(1);
-    // Newest first per route ordering — pick the one matching our tagged rule.
-    const match = fresh[0];
+    let match;
+    if (expectedReason !== undefined) {
+      // Exact-equality match on the rendered reason (string OR null payloads
+      // that still produce a non-null reason via the {{...}} raw passthrough).
+      match = (rows || []).find((r) => r.reason === expectedReason);
+    } else {
+      // Empty-template path → pick the freshly-created null-reason row
+      // scoped to OUR dealId. `beforeIds` filters out stale null-reason rows
+      // that other tests / stale rules created earlier; the entityId match
+      // narrows to our specific fire's payload.
+      const dealId = payload.dealId;
+      match = (rows || []).find(
+        (r) => !beforeIds.has(r.id) && r.reason === null && r.entityId === dealId,
+      );
+    }
+    expect(
+      match,
+      `expected ApprovalRequest matching ${expectedReason !== undefined ? JSON.stringify(expectedReason) : `null reason for dealId=${payload.dealId}`} in ${rows?.length ?? 0} rows`,
+    ).toBeTruthy();
     createdApprovalIds.push(match.id);
     return match;
   }
@@ -133,12 +159,14 @@ test.describe('eventBus.renderTemplate() — mustache interpolation', () => {
       name: `tpl-toplevel-${TAG}`,
       reasonTemplate: `Lead {{name}} flagged ${TAG}`,
     });
-    const approval = await fireRuleAndFindApproval(request, rule.id, {
-      dealId: 1,
-      userId,
-      name: 'Aarav Patel',
-    });
-    expect(approval.reason).toBe(`Lead Aarav Patel flagged ${TAG}`);
+    const expected = `Lead Aarav Patel flagged ${TAG}`;
+    const approval = await fireRuleAndFindApproval(
+      request,
+      rule.id,
+      { dealId: 1, userId, name: 'Aarav Patel' },
+      { expectedReason: expected },
+    );
+    expect(approval.reason).toBe(expected);
   });
 
   // ── 2. Dot-path resolves nested field ─────────────────────────────
@@ -147,12 +175,14 @@ test.describe('eventBus.renderTemplate() — mustache interpolation', () => {
       name: `tpl-nested-${TAG}`,
       reasonTemplate: `Lead {{contact.name}} from {{contact.source}} ${TAG}`,
     });
-    const approval = await fireRuleAndFindApproval(request, rule.id, {
-      dealId: 2,
-      userId,
-      contact: { name: 'Aarav Patel', source: 'google_ads' },
-    });
-    expect(approval.reason).toBe(`Lead Aarav Patel from google_ads ${TAG}`);
+    const expected = `Lead Aarav Patel from google_ads ${TAG}`;
+    const approval = await fireRuleAndFindApproval(
+      request,
+      rule.id,
+      { dealId: 2, userId, contact: { name: 'Aarav Patel', source: 'google_ads' } },
+      { expectedReason: expected },
+    );
+    expect(approval.reason).toBe(expected);
   });
 
   // ── 3. Flat fallback ──────────────────────────────────────────────
@@ -162,12 +192,14 @@ test.describe('eventBus.renderTemplate() — mustache interpolation', () => {
       reasonTemplate: `Discount on {{deal.title}} ${TAG}`,
     });
     // Flat payload — emitEvent callers historically flatten the shape.
-    const approval = await fireRuleAndFindApproval(request, rule.id, {
-      dealId: 3,
-      userId,
-      title: 'Acme Renewal Q4',
-    });
-    expect(approval.reason).toBe(`Discount on Acme Renewal Q4 ${TAG}`);
+    const expected = `Discount on Acme Renewal Q4 ${TAG}`;
+    const approval = await fireRuleAndFindApproval(
+      request,
+      rule.id,
+      { dealId: 3, userId, title: 'Acme Renewal Q4' },
+      { expectedReason: expected },
+    );
+    expect(approval.reason).toBe(expected);
   });
 
   // ── 4. Multiple placeholders + extra plain text ───────────────────
@@ -176,14 +208,14 @@ test.describe('eventBus.renderTemplate() — mustache interpolation', () => {
       name: `tpl-multi-${TAG}`,
       reasonTemplate: `{{name}} requested {{amount}} for {{reason}} ${TAG}`,
     });
-    const approval = await fireRuleAndFindApproval(request, rule.id, {
-      dealId: 4,
-      userId,
-      name: 'Priya',
-      amount: '50000',
-      reason: 'renewal',
-    });
-    expect(approval.reason).toBe(`Priya requested 50000 for renewal ${TAG}`);
+    const expected = `Priya requested 50000 for renewal ${TAG}`;
+    const approval = await fireRuleAndFindApproval(
+      request,
+      rule.id,
+      { dealId: 4, userId, name: 'Priya', amount: '50000', reason: 'renewal' },
+      { expectedReason: expected },
+    );
+    expect(approval.reason).toBe(expected);
   });
 
   // ── 5. Unresolved placeholder is left RAW (intentional) ───────────
@@ -192,14 +224,16 @@ test.describe('eventBus.renderTemplate() — mustache interpolation', () => {
       name: `tpl-unresolved-${TAG}`,
       reasonTemplate: `User: {{name}}, missing: {{nonexistent.field}} ${TAG}`,
     });
-    const approval = await fireRuleAndFindApproval(request, rule.id, {
-      dealId: 5,
-      userId,
-      name: 'Aarav',
-    });
+    const expected = `User: Aarav, missing: {{nonexistent.field}} ${TAG}`;
+    const approval = await fireRuleAndFindApproval(
+      request,
+      rule.id,
+      { dealId: 5, userId, name: 'Aarav' },
+      { expectedReason: expected },
+    );
     // Raw `{{nonexistent.field}}` MUST be preserved verbatim — the JSDoc
     // contract is "the rule author sees the bug, not silent undefined".
-    expect(approval.reason).toBe(`User: Aarav, missing: {{nonexistent.field}} ${TAG}`);
+    expect(approval.reason).toBe(expected);
   });
 
   // ── 6. Whitespace inside {{ }} is trimmed ─────────────────────────
@@ -208,26 +242,31 @@ test.describe('eventBus.renderTemplate() — mustache interpolation', () => {
       name: `tpl-whitespace-${TAG}`,
       reasonTemplate: `Hi {{   name   }} ${TAG}`,
     });
-    const approval = await fireRuleAndFindApproval(request, rule.id, {
-      dealId: 6,
-      userId,
-      name: 'Rohan',
-    });
-    expect(approval.reason).toBe(`Hi Rohan ${TAG}`);
+    const expected = `Hi Rohan ${TAG}`;
+    const approval = await fireRuleAndFindApproval(
+      request,
+      rule.id,
+      { dealId: 6, userId, name: 'Rohan' },
+      { expectedReason: expected },
+    );
+    expect(approval.reason).toBe(expected);
   });
 
   // ── 7. Empty template ─────────────────────────────────────────────
   // create_approval treats empty reason as null (see eventBus.js line 307:
   // `renderTemplate(config.reasonTemplate || "", payload) || null`).
+  // Lookup uses the recent-cutoff null-reason path — see helper above.
   test('empty reasonTemplate yields a null reason on the ApprovalRequest', async ({ request }) => {
     const rule = await createApprovalRule(request, {
       name: `tpl-empty-${TAG}`,
       reasonTemplate: '',
     });
-    const approval = await fireRuleAndFindApproval(request, rule.id, {
-      dealId: 7,
-      userId,
-    });
+    const approval = await fireRuleAndFindApproval(
+      request,
+      rule.id,
+      { dealId: 7, userId },
+      // expectedReason: undefined + reasonContains: undefined → recent null branch.
+    );
     expect(approval.reason).toBeNull();
   });
 
@@ -240,11 +279,13 @@ test.describe('eventBus.renderTemplate() — mustache interpolation', () => {
       name: `tpl-null-${TAG}`,
       reasonTemplate: `Hi {{name}} ${TAG}`,
     });
-    const approval = await fireRuleAndFindApproval(request, rule.id, {
-      dealId: 8,
-      userId,
-      name: null,
-    });
-    expect(approval.reason).toBe(`Hi {{name}} ${TAG}`);
+    const expected = `Hi {{name}} ${TAG}`;
+    const approval = await fireRuleAndFindApproval(
+      request,
+      rule.id,
+      { dealId: 8, userId, name: null },
+      { expectedReason: expected },
+    );
+    expect(approval.reason).toBe(expected);
   });
 });

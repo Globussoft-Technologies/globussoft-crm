@@ -96,35 +96,60 @@ test.describe('eventBus.evaluateCondition() — operator matrix', () => {
     return rule;
   }
 
-  // Count audit rows for a rule. /api/audit returns the most recent 100
-  // rows for the tenant filtered by entity+action; we additionally narrow
-  // to entityId === ruleId.
-  async function auditCountForRule(request, ruleId) {
-    const res = await request.get(`${API}/audit?entity=AutomationRule&action=WORKFLOW`, {
-      headers: auth(),
-    });
-    expect(res.ok(), `audit list: ${res.status()}`).toBeTruthy();
-    const rows = await res.json();
-    return (rows || []).filter((r) => r.entityId === ruleId).length;
-  }
-
-  // Fire the rule by POSTing /workflows/:id/test with the supplied payload.
-  // Returns the audit-count delta so callers can assert fired/not-fired.
+  // Demo-state-divergence note: pre-fix this used a snapshot-diff on
+  // /api/audit's last-100-rows window AND filtered by `entityId === ruleId`.
+  // That looked airtight, but two things break it on demo (and on a re-used
+  // local stack):
+  //   a) emitEvent fires EVERY active rule with the matching triggerType for
+  //      the tenant. A stale rule with the SAME ruleId is impossible
+  //      (autoincrement), but stale rules with the SAME triggerType + a
+  //      condition that ALSO matches our payload will fire concurrently —
+  //      writing audit rows attributed to THEIR ruleIds. Those don't pollute
+  //      our entityId filter, but they DO race with other in-flight tests'
+  //      fires that happen to use our triggerType. If a sibling test fires
+  //      `deal.created` with `amount: 5000` while our `cond-gt` rule is
+  //      active, OUR rule fires from THEIR call too — adding an audit row
+  //      with our ruleId we didn't intend.
+  //   b) `take: 100` on the audit list (see backend/routes/audit.js) plus
+  //      heavy concurrent traffic on demo means our row can race in/out of
+  //      the window between before/after counts.
+  // Fix: stuff a per-fire unique marker into the payload. Audit rows include
+  // the JSON-stringified payload in `details` (see executeAction in
+  // backend/lib/eventBus.js around line 359). After firing, look at every
+  // audit row for our ruleId AND check whether `details` contains the marker.
+  // Only that exact row counts as "this fire fired our rule" — concurrent
+  // fires of our rule from OTHER tests' emits won't have our marker.
+  // Returns 1 if the rule fired on THIS payload, 0 if not — matches the
+  // pre-fix `fireAndCountDelta` shape so the test bodies didn't need to
+  // change beyond their existing 0/1 assertions.
   async function fireAndCountDelta(request, ruleId, payload) {
-    const before = await auditCountForRule(request, ruleId);
+    const marker = `eventbus_cond_marker_${TAG_SUFFIX}_${ruleId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const taggedPayload = { ...payload, _marker: marker };
     const res = await request.post(`${API}/workflows/${ruleId}/test`, {
       headers: auth(),
-      data: { payload },
+      data: { payload: taggedPayload },
     });
     expect(res.ok(), `fire failed: ${res.status()} ${await res.text()}`).toBeTruthy();
-    // Engine runs synchronously inside emitEvent(); audit row is written
-    // before the response returns. One short retry to absorb event-loop jitter.
-    let after = await auditCountForRule(request, ruleId);
-    if (after === before) {
-      await new Promise((r) => setTimeout(r, 750));
-      after = await auditCountForRule(request, ruleId);
+
+    async function findOurRow() {
+      const r = await request.get(`${API}/audit?entity=AutomationRule&action=WORKFLOW`, {
+        headers: auth(),
+      });
+      expect(r.ok(), `audit list: ${r.status()}`).toBeTruthy();
+      const rows = await r.json();
+      return (rows || []).find(
+        (row) => row.entityId === ruleId && typeof row.details === 'string' && row.details.includes(marker),
+      );
     }
-    return after - before;
+
+    let row = await findOurRow();
+    if (!row) {
+      // emitEvent runs sync inside :id/test but there's a small write-then-read
+      // gap on heavily-loaded boxes; one short retry absorbs the jitter.
+      await new Promise((r) => setTimeout(r, 750));
+      row = await findOurRow();
+    }
+    return row ? 1 : 0;
   }
 
   // ── operator: eq ───────────────────────────────────────────────────

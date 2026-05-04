@@ -97,13 +97,19 @@ test.describe('email-threading API smoke', () => {
     expect(typeof body.updated).toBe('number');
   });
 
-  test('POST /threads/:threadId/archive logs intent and 200s', async ({ request }) => {
-    const res = await request.post(`${API}/email-threading/threads/any_thread_id/archive`, {
-      headers: auth(),
-    });
-    expect(res.status()).toBe(200);
-    const body = await res.json();
-    expect(body.archived).toBe(true);
+  // Drift #1 fix (commit 097ef5a-era): archive now persists state by re-keying
+  // messages with the `__ARCHIVED__:` sentinel prefix and returns 404 when no
+  // messages exist for the thread in the caller's tenant. Pre-fix this was a
+  // logged-only stub that 200-ed for any string. The smoke must cover the new
+  // contract — a fresh, isolated 404 path that doesn't depend on accumulated
+  // demo state. The detail (real-thread → 200) path is exercised in
+  // tests/email-threading-api.spec.js:513 which bootstraps its own seed.
+  test('POST /threads/:threadId/archive 404s for unknown thread (drift #1 contract)', async ({ request }) => {
+    const res = await request.post(
+      `${API}/email-threading/threads/no_such_thread_xyz_${Date.now()}/archive`,
+      { headers: auth() },
+    );
+    expect(res.status()).toBe(404);
   });
 
   test('POST /reply rejects missing threadId+body with 400', async ({ request }) => {

@@ -11,16 +11,22 @@ vi.mock('../utils/api', () => ({
 import { fetchApi } from '../utils/api';
 import TelecallerQueue from '../pages/wellness/TelecallerQueue';
 
-// Build leads with deterministic ages (now − offsetMs)
+// Build leads with deterministic ages (now − offsetMs).
+// SLA buckets in TelecallerQueue.jsx:slaBadge():
+//   firstResponseAt set OR <30m   -> "SLA OK"     (#10b981)
+//   <4h                            -> "SLA warn"   (#f59e0b)
+//   <24h                           -> "SLA late"   (#f97316)
+//   >=24h                          -> "SLA breach" (#ef4444)
+// (Thresholds were rewritten 2026-Q2 from the original <5min/<30min model.)
 const NOW = Date.UTC(2026, 3, 22, 10, 0, 0); // 22 Apr 2026 10:00 UTC
 
 const buildLeads = () => [
-  // SLA OK — 1 minute old (< 5 min)
-  { id: 1, name: 'Aarav Sharma',  phone: '+919876500001', source: 'meta-ad',  createdAt: new Date(NOW - 1 * 60 * 1000).toISOString(), aiScore: 85 },
-  // SLA warn — 15 minutes old (5–30 min)
-  { id: 2, name: 'Diya Patel',    phone: '+919876500002', source: 'website',  createdAt: new Date(NOW - 15 * 60 * 1000).toISOString(), aiScore: 60 },
-  // SLA breach — 90 minutes old (> 30 min)
-  { id: 3, name: 'Rohan Iyer',    phone: '+919876500003', source: 'whatsapp', createdAt: new Date(NOW - 90 * 60 * 1000).toISOString(), aiScore: 30 },
+  // SLA OK — 5 minutes old (< 30 min)
+  { id: 1, name: 'Aarav Sharma',  phone: '+919876500001', source: 'meta-ad',  createdAt: new Date(NOW - 5 * 60 * 1000).toISOString(), aiScore: 85 },
+  // SLA warn — 90 minutes old (>= 30m, < 4h)
+  { id: 2, name: 'Diya Patel',    phone: '+919876500002', source: 'website',  createdAt: new Date(NOW - 90 * 60 * 1000).toISOString(), aiScore: 60 },
+  // SLA breach — 26 hours old (>= 24h)
+  { id: 3, name: 'Rohan Iyer',    phone: '+919876500003', source: 'whatsapp', createdAt: new Date(NOW - 26 * 60 * 60 * 1000).toISOString(), aiScore: 30 },
 ];
 
 describe('<TelecallerQueue />', () => {
@@ -46,9 +52,12 @@ describe('<TelecallerQueue />', () => {
     render(<MemoryRouter><TelecallerQueue /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
 
-    expect(screen.getByText(/SLA OK/i)).toBeInTheDocument();
-    expect(screen.getByText(/SLA warn/i)).toBeInTheDocument();
-    expect(screen.getByText(/SLA breach/i)).toBeInTheDocument();
+    // The page renders SLA badges in TWO places: the header summary (counters
+    // for each bucket) AND on each lead card. So each "SLA <state>" text
+    // appears at least twice. Assert ≥ 1 of each via getAllByText.
+    expect(screen.getAllByText(/SLA OK/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/SLA warn/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/SLA breach/i).length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders 6 disposition buttons per card', async () => {

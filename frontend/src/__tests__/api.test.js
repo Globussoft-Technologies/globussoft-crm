@@ -1,13 +1,28 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { fetchApi } from '../utils/api';
+import { fetchApi, setAuthToken, clearAuthToken } from '../utils/api';
 
 /**
- * fetchApi is a tiny wrapper over fetch that:
- *   - adds JSON Content-Type
- *   - adds Bearer token from localStorage (if present)
- *   - parses JSON response
- *   - on 401, clears token + redirects to /login
- *   - returns true for DELETE / 204 responses
+ * frontend/src/utils/api.js — fetchApi wrapper contract
+ *
+ * What's tested
+ *   - JSON Content-Type is always set
+ *   - Authorization: Bearer <token> is added when an in-memory token is present
+ *     (post-#343 hardening — token MUST come from setAuthToken / sessionStorage,
+ *     never localStorage)
+ *   - DELETE / 204 short-circuit return true
+ *   - 401 clears the token via clearAuthToken() + redirects to /login
+ *   - 5xx with a parseable error body surfaces server-supplied message
+ *   - 5xx with an unparseable body falls back to the generic "Server error" copy
+ *
+ * Why
+ *   Every page in the SPA goes through fetchApi — a regression here breaks
+ *   auth, error toasts, and the silent-401 redirect that keeps stale-session
+ *   tabs from rendering blank pages.
+ *
+ * Contract pinned
+ *   - getAuthToken() reads sessionStorage["token"] but NEVER localStorage["token"]
+ *   - 401 path: clearAuthToken() + window.location.href = '/login'
+ *   - 5xx with no parseable body → "Server error — please try again."
  */
 
 // jsdom doesn't allow writing to window.location.href cleanly — stub navigation
@@ -54,12 +69,16 @@ function mockFetch({ status = 200, body = {}, method = 'GET' } = {}) {
 describe('utils/api — fetchApi', () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
+    // Reset module-level _inMemoryToken between tests (no direct setter — clear).
+    clearAuthToken();
     stubLocation();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     restoreLocation();
+    clearAuthToken();
   });
 
   it('adds Content-Type: application/json header', async () => {
@@ -69,12 +88,34 @@ describe('utils/api — fetchApi', () => {
     expect(opts.headers['Content-Type']).toBe('application/json');
   });
 
-  it('adds Authorization: Bearer <token> when token is in localStorage', async () => {
-    localStorage.setItem('token', 'abc123');
+  it('adds Authorization: Bearer <token> when token is in memory (post-#343 hardening)', async () => {
+    // Pre-#343 the token came from localStorage. Post-fix it lives in a module-
+    // level holder mirrored to sessionStorage; setAuthToken() is the only way in.
+    setAuthToken('abc123');
     const spy = mockFetch({ body: { ok: true } });
     await fetchApi('/api/deals');
     const [, opts] = spy.mock.calls[0];
     expect(opts.headers.Authorization).toBe('Bearer abc123');
+  });
+
+  it('rehydrates Bearer from sessionStorage on cold start', async () => {
+    // Simulates a hard-refresh where the JS module re-evaluates with no
+    // in-memory token. getAuthToken() falls through to sessionStorage.
+    sessionStorage.setItem('token', 'rehydrated');
+    const spy = mockFetch({ body: { ok: true } });
+    await fetchApi('/api/deals');
+    const [, opts] = spy.mock.calls[0];
+    expect(opts.headers.Authorization).toBe('Bearer rehydrated');
+  });
+
+  it('IGNORES localStorage["token"] (regression guard for #343)', async () => {
+    // The old codepath read localStorage. The hardening MUST NOT regress —
+    // a tampered/stale localStorage entry should NEVER be sent as Bearer.
+    localStorage.setItem('token', 'should_not_be_used');
+    const spy = mockFetch({ body: { ok: true } });
+    await fetchApi('/api/deals');
+    const [, opts] = spy.mock.calls[0];
+    expect(opts.headers.Authorization).toBeUndefined();
   });
 
   it('omits Authorization header when no token', async () => {
@@ -115,20 +156,25 @@ describe('utils/api — fetchApi', () => {
     await expect(fetchApi('/api/crash')).rejects.toThrow('boom');
   });
 
-  it('throws default message when JSON parse fails', async () => {
+  it('throws status-bucketed default message when JSON parse fails (5xx path)', async () => {
+    // Pre-#275 the helper said "API Request Failed". Post-fix the default copy
+    // is bucketed by status: 5xx → "Server error — please try again.", 403 →
+    // permission, 404 → not-found, otherwise → "Request failed (<status>)."
     vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: false,
       status: 500,
       json: () => Promise.reject(new Error('parse fail')),
     });
-    await expect(fetchApi('/api/crash')).rejects.toThrow('API Request Failed');
+    await expect(fetchApi('/api/crash')).rejects.toThrow('Server error');
   });
 
-  it('on 401: clears token + redirects to /login', async () => {
-    localStorage.setItem('token', 'expired');
+  it('on 401: clears in-memory + sessionStorage token and redirects to /login', async () => {
+    setAuthToken('expired');
+    expect(sessionStorage.getItem('token')).toBe('expired');
     mockFetch({ status: 401, body: { message: 'nope' } });
     await expect(fetchApi('/api/private')).rejects.toThrow();
-    expect(localStorage.getItem('token')).toBeNull();
+    // clearAuthToken nukes both the in-memory holder and sessionStorage.
+    expect(sessionStorage.getItem('token')).toBeNull();
     expect(capturedLocation).toBe('/login');
   });
 });

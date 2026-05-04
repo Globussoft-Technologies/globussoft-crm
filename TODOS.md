@@ -40,7 +40,7 @@
 | **9× landing-page builder/UI issues** (#438/#446/#449/#450/#452/#454/#455/#456 + #451 unblocked by Nginx fix) | varies | ⬜ open — frontend coordinated pickup |
 | **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
 
-**P3 / minor UX (defer):** #252 #262 #307 #384 #407 #429 #433 #439 #440 #441
+**P3 / minor UX (defer):** #262 #307 #384 #407
 
 ### Stale-sweep tally update — 2026-05-05 late-AM + post-noon batches
 
@@ -67,6 +67,27 @@ This firing's autonomous batch-sweep + small-fix round closed 7 issues + triaged
 **Plus this firing also closed e2e-full category 2** (`e8cce09` — `migration-safety.spec.js` IS_LOCAL_STACK guard) and triggered fresh e2e-full validation run (`25340699062`).
 
 **Cumulative tally across the v3.4.8 → today's arc:** **14 issues closed via stale-sweep + 3 small fixes shipped** (#406 alias, #430 ellipsis, #115 form labels which was already-shipped) + 1 partial-drift triage (#437). ~30 minutes total batch-sweep time vs days of phantom-work.
+
+### Late-PM cluster — 6 fixes + 3 stale-sweep closures + 1 partial backend (4e116ad + 560ca62)
+
+User said "fix these issues" → autonomous fix-cluster on /issues backlog. Single-commit batch (`4e116ad`) for 5 fixes plus a follow-up (`560ca62`) for the debounce one:
+
+| Issue | Action | Commit |
+|---|---|---|
+| **#440** loyalty leaderboard ties | Backend ORDER BY tiebreaker (patientId asc) | `4e116ad` |
+| **#439** chart `negative-domain on positive scale` | Pin YAxis domain=[0, 'auto'] in OwnerDashboard | `4e116ad` |
+| **#441** /settings tenant slug copy affordance | Public Booking URL row + Copy button | `4e116ad` |
+| **#448** broken-image fallback in builder | onError swap + dashed-red border + alt-text styling | `4e116ad` |
+| **#452** generic delete confirm dialog | Name + status + submissions + permanence warning | `4e116ad` |
+| **#456** slug uniqueness on update (PARTIAL — backend only) | 409 on collision + PUBLISHED_SLUG_CHANGE_REQUIRES_CONFIRM gate | `4e116ad` |
+| **#433** /wellness/reports keystroke debounce | useEffect with 350ms debounce + cleanup | `560ca62` |
+| **#455** push-init on /p/:slug | Auto-closed via #445 Nginx fix | (no commit) |
+| **#252** Inbox empty-state on Emails tab | Pattern A drift (already shipped via #252 fix in earlier wave) | (close only) |
+| **#429** estimates header total mismatch | Pattern A drift (already shipped via #255/#288 sweep) | (close only) |
+
+**#456 frontend remainder still open:** validation feedback, "derive from title" helper button, wire the new \`?confirmSlugChange=true\` 409 flow. Posted detailed status comment on the issue. ~1h frontend session.
+
+**Cumulative cumulative across v3.4.8 → today's arc:** **20 issues closed** (14 stale-sweep + 6 real fixes) + **5 small fixes shipped** + **1 backend partial** + **1 partial-drift triage**. ~70 minutes total batch time vs days of phantom-work.
 
 ### Notes for the next session
 

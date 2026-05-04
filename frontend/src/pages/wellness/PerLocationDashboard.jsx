@@ -76,7 +76,7 @@ export default function PerLocationDashboard() {
   }, []);
 
   if (loading) {
-    return <div style={{ padding: '2rem' }}>Loading per-location comparison\u2026</div>;
+    return <div style={{ padding: '2rem' }}>Loading per-location comparison…</div>;
   }
 
   if (locations.length < 2) {

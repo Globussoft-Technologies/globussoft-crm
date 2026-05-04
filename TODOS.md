@@ -6,7 +6,51 @@
 
 ---
 
-## 🏁 NEXT-SESSION HANDOFF (2026-05-05 late-AM — post-tag e2e-full audit + new SSH-config skill + 3 standing rules)
+## 🚧 OPERATOR-BLOCKER TASKS — need a human (programmer / ops) to act
+
+These are NOT autonomous-fixable. They need a real person with credentials, infrastructure access, or a product-design call. Auto-loops should NOT try to close these.
+
+| # | Task | Who needs to do it | Why it's blocked |
+|---|---|---|---|
+| **B-01** | Set `TURNSTILE_SECRET_KEY` env-var on demo (and optionally CI) for real CAPTCHA enforcement on landing-page forms | Operator with SSH to `crm.globusdemos.com` | The #451 form-CAPTCHA fix landed in `9abbafe` is **stub-friendly**: when the key is unset, the route logs a warning and skips verification (so CI + dev don't 500 on missing config). Real spam protection needs a Cloudflare Turnstile sitekey + secret-key pair created at https://dash.cloudflare.com → Turnstile → Add a site (free tier). Then add `TURNSTILE_SECRET_KEY=<secret>` to `/home/empcloud-development/globussoft-crm/backend/.env` on demo and restart PM2. Optional: also add to `.github/workflows/deploy.yml`'s `api_tests` env block if you want CI to enforce verification (would need a test-mode key). The code that consumes it is in `backend/services/landingPageRenderer.js` (form renderer) + `backend/routes/landing_pages.js` (public submit handler). |
+
+When B-01 ships, move it to "## Recently shipped" and remove from this section. Add new operator-blockers above with B-NN ids.
+
+---
+
+## 🏁 NEXT-SESSION HANDOFF (2026-05-05 late-PM — wave-of-5-agents in flight, Agent A + Agent E done)
+
+**HEAD on origin/main:** `9abbafe` (Agent A — landing-page builder cluster #446 #449 #450 #451 closed). Agents B (e2e Category 1), C (#413 schema cascade leak), D (G-21 vitest+RTL setup) are still running in the background — each has uncommitted local edits (don't touch their files until they push or get cancelled).
+
+### Agent A wave landed (`9abbafe`)
+
+Closed via "Closes #N" trailers (all 4 auto-closed):
+- **#446** — Image upload from system: new `POST /api/landing-pages/upload` (multer, 5 MB hard limit, MIME allowlist of png/jpg/webp/gif — SVG explicitly blocked due to script-execution surface), Upload button next to URL field in builder, files stored under `backend/uploads/landing-page-images/<tenant-id>/`
+- **#449** — Builder layout: hides global app sidebar via `body.body--builder-fullscreen` class (toggled in mount/unmount), aligns top-bar, groups right-rail props into "Component" + "Page" sections
+- **#450** — Undo/redo: useReducer history (50-entry cap, debounced 500ms so single-field edits = 1 history entry not 30), Ctrl+Z + Ctrl+Y bindings, Undo + Redo buttons in toolbar
+- **#451 remainder** — Form properties: lead-routing-rule dropdown (uses existing `/api/lead-routing` rules), `enableCaptcha` checkbox + Cloudflare Turnstile widget (free tier; verification stub-friendly when key unset), `successRedirectUrl` override (validates http/https before honoring)
+
+Files changed: 7 (`backend/routes/landing_pages.js`, `backend/services/landingPageRenderer.js`, `frontend/src/pages/LandingPageBuilder.jsx`, `frontend/src/index.css`, `e2e/tests/landing-page-upload-api.spec.js` NEW, `.github/workflows/deploy.yml`, `coverage.yml`).
+
+Verification: `cd frontend && npm run build` green (LandingPageBuilder 7.52 kB gzipped); `node --check` on backend files green; eslint clean (one pre-existing `no-control-regex` warning unrelated).
+
+**→ Operator-blocker B-01 was created from this wave** (TURNSTILE_SECRET_KEY env-var; see top of this file).
+
+### Agent E (drift-sweep + triage) confirmed: **open backlog is exhausted of sweep candidates**
+
+Final report: only 6 open issues left, every one is either on an active agent's plate (#413 → C), awaiting fresh repro (#384, #431), an umbrella (#407, #457), or already-triaged (#437). **Agent E recommends closing #407 with a citation comment** — every one of the 39 sub-issues referenced in its body is already closed; the umbrella's body explicitly says "closing this is fine once the action items above land," and they've all landed. Will action that close as a follow-up.
+
+### Three things to do first next session
+
+1. **Wait for agents B / C / D to finish.** They have local-only edits in `e2e/tests/{eventbus-conditions,eventbus-template,lead-scoring,email-threading}.spec.js` (Agent B), `backend/prisma/schema.prisma` (Agent C), `frontend/src/__tests__/` + `frontend/package.json` + vitest config (Agent D). Each will push when done; consolidate the wave findings then.
+
+2. **Action B-01** (top of file) — set `TURNSTILE_SECRET_KEY` on demo whenever a real human with SSH is online.
+
+3. **Close #407** (Agent E's recommendation) — citation comment listing all 39 closed sub-issues.
+
+---
+
+## 🏁 NEXT-SESSION HANDOFF (2026-05-05 late-AM — post-tag e2e-full audit + new SSH-config skill + 3 standing rules) — superseded above
 
 **HEAD on origin/main:** `ffd6d75` (skill + standing rules + permission allowlist). **e2e-full is chronically RED** across the v3.4.9 → v3.4.11 tag arc — investigated this firing, shipped one targeted fix (`e72cd5c` — backup-engine-api disk-readback IS_LOCAL_STACK guard) for the headline hard-fail. Other shard-1+shard-2 failures are demo-state-divergence issues that need per-spec investigation (NOT autonomous-fixable).
 

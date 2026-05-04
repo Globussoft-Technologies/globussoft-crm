@@ -57,12 +57,26 @@
 | **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
 | **package.json version bump** (3.3.0 → 3.4.11) | <5 min | ⬜ tag-time follow-up |
 
-**P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #406 #407 #429 #430 #431 #433 #434 #437 #439 #440 #441 #402
+**P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #406 #407 #429 #430 #431 #433 #434 #437 #439 #440 #441
+
+### Stale-issue sweep (2026-05-05, parallel to v3.4.11 doc bump) — 4 closed verified-already-shipped
+
+Cron-driven `verifying-issue-before-pickup` grep run on the open backlog surfaced 4 issues whose implementations + regression specs had landed but the GitHub tracker was never updated. All 4 closed with detailed triage comments citing implementing-commit + spec path + CHANGELOG line:
+
+| Issue | Severity | Implementation | Regression spec | CHANGELOG |
+|---|---|---|---|---|
+| **#191** | SECURITY brute-force | `server.js:118-154` (5/15min IP + 10/hr email stacked limiters) | `auth-security-api.spec.js:96-127` | line 1110 |
+| **#167** | CRITICAL hard-DELETE no audit | `routes/{contacts,deals,estimates,tasks}.js` soft-delete + audit + /restore | 14-17 assertions in each route's `*-api.spec.js` | line 1081 |
+| **#182** | P2 SMS queue stuck | `POST /api/sms/drain` admin-gated + cron sweep + cf296dd reopen-close | per-push email/sms specs | lines 88 + 1086 |
+| **#402** | P2 sidebar 404 toast | `routes/email.js:40-64` GET / handler + `?unread=1` shape | `email-api.spec.js:74-101` + `demo-health.spec.js:112-130` | (specs only) |
+
+**Pattern:** all 4 are `verifying-issue-before-pickup` Pattern A (impl shipped, tracker stale). Combined v3.4.8 + v3.4.9 + v3.4.11 stale-sweep batch is now **8 issues closed** without any code change — all verified via grep + spec-existence + CHANGELOG cross-check. The v3.4.8/9 doc-drift rate was 50%; this 4-issue batch caught what wasn't yet swept.
 
 ### Notes for the next session
 
-- **Cron-driven autonomous arc validated** — the prompt's branching ("mid-coding" / "waiting on CI" / "wave finished") proved its value across this whole arc. Pre-verification work (audits, doc reads, spec drafting) consistently fit the "waiting on CI" branch; bundled fixes consistently fit the "wave finished" → "high-priority pickup" branch.
+- **Cron-driven autonomous arc validated** — the prompt's branching ("mid-coding" / "waiting on CI" / "wave finished") proved its value across this whole arc. Pre-verification work (audits, doc reads, spec drafting) consistently fit the "waiting on CI" branch; bundled fixes consistently fit the "wave finished" → "high-priority pickup" branch. The 2026-05-05 cron firing also produced the 4-issue stale-sweep above — proving the loop works for backlog-hygiene work, not just code.
 - **The `bumping-version-docs` skill was used twice in this arc** (v3.4.10 in `dbe611a`, v3.4.11 in this commit). Both used the canonical 5-file lockstep. No drift.
+- **The `verifying-issue-before-pickup` skill keeps paying off.** 8 stale closures across the v3.4.8 → v3.4.11 arc. Should remain mandatory pre-pickup step on any TODOS row > 1 release-bump old.
 - **Backend vitest count locally:** 42 files / 1184 passed (3 skipped). Per-push gate's `unit_tests` job sees the same 42.
 
 ---

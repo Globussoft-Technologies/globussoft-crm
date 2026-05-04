@@ -88,72 +88,142 @@ router.get("/inbox", async (req, res) => {
   }
 });
 
-// POST to send email via CRM (now with real Mailgun delivery)
+// #435: parse a comma-separated "to" string into a deduped list of
+// candidate recipients. Trims, drops empties, lowercase-dedupes (preserves
+// first-seen casing). Pure / no I/O so it's easy to unit-test if needed.
+function parseRecipients(toField) {
+  if (typeof toField !== "string") return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of toField.split(",")) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+// POST to send email via CRM (now with real Mailgun delivery + #435 multi-recipient).
+//
+// Response shape — envelope (#435 design (b)):
+//   {
+//     success: true,
+//     delivered: <bool — true iff every attempted send was accepted by Mailgun>,
+//     email: <first EmailMessage row, or null if zero sent>,    // back-compat
+//     messageId: <first Mailgun id, or undefined>,              // back-compat
+//     totalSent: N,                                             // delivered count
+//     totalFailed: M,                                           // attempted-but-failed
+//     results: [{ to, delivered, email, messageId, reason? }, ...],
+//     failures: [{ to, reason }, ...]    // pre-flight invalid recipients
+//   }
+//
+// Single-recipient calls keep the top-level `email` + `messageId` for back-compat.
+// Multi-recipient calls expose the full per-recipient breakdown via `results` /
+// `failures`. Mailgun is called once per valid recipient (no BCC fan-out — keeps
+// per-recipient tracking pixels distinct).
 router.post("/send-email", async (req, res) => {
   try {
     const { to, subject, body, contactId } = req.body;
     if (!to || !subject) return res.status(400).json({ error: "Recipient and subject required" });
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
 
-    // Always persist to DB first
-    const emailRecord = await prisma.emailMessage.create({
-      data: {
-        subject,
-        body,
-        from: FROM_EMAIL,
-        to,
-        direction: "OUTBOUND",
-        read: true,
-        contactId: contactId ? parseInt(contactId) : null,
-        userId: req.user.userId,
-        tenantId: req.user.tenantId,
-      }
-    });
+    const recipients = parseRecipients(to);
+    if (recipients.length === 0) {
+      return res.status(400).json({ error: "No valid recipient parsed from 'to'" });
+    }
 
-    // Create tracking pixel for open tracking
-    const trackingId = crypto.randomUUID();
-    await prisma.emailTracking.create({
-      data: { emailId: emailRecord.id, trackingId, type: "open", tenantId: req.user.tenantId }
-    });
+    // Pre-flight validation: split into deliverable + invalid before touching DB.
+    // Mailgun-side invalids would still get an EmailMessage row + tracking pixel
+    // for an address we know we can't deliver to — wasteful and confusing in the
+    // inbox.
+    const deliverable = [];
+    const failures = [];
+    for (const r of recipients) {
+      if (isValidEmail(r)) deliverable.push(r);
+      else failures.push({ to: r, reason: "invalid_recipient_email" });
+    }
+    if (deliverable.length === 0) {
+      return res.status(400).json({
+        error: "No valid recipient parsed from 'to'",
+        failures,
+      });
+    }
 
-    // Inject tracking pixel into email body for Mailgun
     const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
-    const trackedBody = `${body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
+    const results = [];
 
-    // Send via Mailgun with tracking pixel
-    const mailResult = await sendMailgun(to, subject, trackedBody);
-
-    // Create activity on the contact
-    if (contactId) {
-      await prisma.activity.create({
+    for (const recipient of deliverable) {
+      const emailRecord = await prisma.emailMessage.create({
         data: {
-          type: "Email",
-          description: `Sent email: "${subject}"`,
-          contactId: parseInt(contactId),
+          subject,
+          body,
+          from: FROM_EMAIL,
+          to: recipient,
+          direction: "OUTBOUND",
+          read: true,
+          contactId: contactId ? parseInt(contactId) : null,
           userId: req.user.userId,
           tenantId: req.user.tenantId,
         }
-      }).catch(() => {}); // non-critical
+      });
+
+      // Per-recipient tracking pixel so opens / clicks attribute correctly.
+      const trackingId = crypto.randomUUID();
+      await prisma.emailTracking.create({
+        data: { emailId: emailRecord.id, trackingId, type: "open", tenantId: req.user.tenantId }
+      });
+      const trackedBody = `${body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
+
+      const mailResult = await sendMailgun(recipient, subject, trackedBody);
+
+      // Per-recipient Activity on the linked contact (if any). Same pattern as
+      // single-recipient: best-effort, non-critical.
+      if (contactId) {
+        await prisma.activity.create({
+          data: {
+            type: "Email",
+            description: `Sent email: "${subject}"`,
+            contactId: parseInt(contactId),
+            userId: req.user.userId,
+            tenantId: req.user.tenantId,
+          }
+        }).catch(() => {});
+      }
+
+      if (req.io) req.io.emit('email_sent', emailRecord);
+
+      results.push({
+        to: recipient,
+        delivered: mailResult.sent,
+        email: emailRecord,
+        messageId: mailResult.id,
+        ...(mailResult.sent ? {} : { reason: mailResult.reason }),
+      });
     }
 
-    if (req.io) req.io.emit('email_sent', emailRecord);
+    const totalSent = results.filter(r => r.delivered).length;
+    const totalFailed = results.length - totalSent + failures.length;
 
-    // Always 200 with {success:true, delivered, email}. The delivered flag
-    // distinguishes "Mailgun accepted" from "no key / send failed". The
-    // EmailMessage row is persisted regardless so the inbox + tracking
-    // pipeline still works in dev/CI without a Mailgun key. Returning 400
-    // here (PR #444's original behaviour) breaks every downstream test that
-    // depends on the {success, email, trackingId} envelope — the tracking
-    // pixel + click-redirect specs all chain off the response body. Keep
-    // the validation hardening (isValidEmail, escapeHtml, missing-body
-    // pre-flight) in sendMailgun, but the route's response contract is
-    // success-with-delivery-flag, not 400-on-no-mailgun.
+    // Always 200 with the envelope. The single-recipient case keeps the top-level
+    // `email` + `messageId` keys (back-compat with the pre-#435 response shape
+    // that the Inbox / DocumentTemplates / 50+ specs rely on); multi-recipient
+    // adds the per-recipient `results` + `failures` arrays. The `delivered` flag
+    // is true iff every attempted Mailgun call was accepted (single-recipient
+    // semantics preserved); `success` is true when at least one row landed in
+    // the DB.
     res.status(200).json({
       success: true,
-      delivered: mailResult.sent,
-      email: emailRecord,
-      messageId: mailResult.id,
-      ...(mailResult.sent ? {} : { reason: mailResult.reason }),
+      delivered: results.length > 0 && results.every(r => r.delivered),
+      email: results[0]?.email ?? null,
+      messageId: results[0]?.messageId,
+      ...(results[0] && !results[0].delivered ? { reason: results[0].reason } : {}),
+      totalSent,
+      totalFailed,
+      results,
+      failures,
     });
   } catch (err) {
     console.error("[Email] Dispatch error:", err);

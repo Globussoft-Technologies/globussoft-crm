@@ -69,7 +69,12 @@ async function loginAs(request, email, password) {
   });
   if (!r.ok()) return { token: null, tenantId: null };
   const j = await r.json();
-  return { token: j.token, tenantId: j.user?.tenantId || null };
+  // Login response shape: { token, user: { id, email, ... }, tenant: { id, name, ... } }.
+  // The tenantId lives on `j.tenant.id`, NOT `j.user.tenantId` (the JWT carries
+  // tenantId but the response body's `user` object does not surface it).
+  // Pre-fix this evaluated to null, so `tenant-${genericTenantId}/` ↦
+  // `tenant-null/` and the api_tests gate failed on every push since 9abbafe.
+  return { token: j.token, tenantId: j.tenant?.id || null };
 }
 
 test.beforeAll(async ({ request }) => {

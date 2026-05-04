@@ -12,6 +12,15 @@ if (process.env.NODE_ENV === "production") {
   }
 }
 
+// #447-follow-up + 940b4f0-wave learning: surface the canonical app version
+// in /api/health + the / root response. Reading from package.json means the
+// version field tracks bumps automatically — no more hardcoded literals
+// drifting from reality (the previous "3.2.0" string sat in source for 5+
+// release tags, misleading the deploy-divergence diagnosis in the
+// triaging-stuck-deploy-gate skill). Required at top so the read happens
+// once at boot, not per request.
+const APP_VERSION = require("./package.json").version;
+
 const { initSentry } = require("./lib/sentry");
 
 const express = require("express");
@@ -432,7 +441,7 @@ app.get("/api/health", async (req, res) => {
 
   res.json({
     status: dbStatus === "connected" ? "healthy" : "degraded",
-    version: "3.2.0",
+    version: APP_VERSION,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     database: dbStatus,
@@ -440,7 +449,7 @@ app.get("/api/health", async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.json({ message: "Enterprise CRM API Core Online", version: "3.2.0" });
+  res.json({ message: "Enterprise CRM API Core Online", version: APP_VERSION });
 });
 
 // Global JSON error handler — must come AFTER all routes.

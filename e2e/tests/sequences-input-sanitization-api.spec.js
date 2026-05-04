@@ -26,7 +26,7 @@
  * added to the model later, this spec is the canary that needs the new
  * assertions wired in.
  *
- * Tests pinned (8 total):
+ * Tests pinned (12 total — 8 original + 4 v3.4.9 carry-over #1):
  *   1. POST: `<script>` in name → 200, response.name has script-tag stripped
  *   2. POST: `<img onerror=...>` payload in name → sanitized, row persists
  *   3. POST: `<a href="javascript:...">` inside a node label is sanitized
@@ -38,6 +38,14 @@
  *   7. Auth gate: POST with no Authorization → 401/403
  *   8. Idempotent re-POST with the same sanitized name → still creates
  *      (no spurious dup-name 409 — sanitization is not a uniqueness sink)
+ *   9. POST /:id/steps: <script> in smsBody → 200, tag stripped on both
+ *      response and round-trip GET
+ *  10. POST /:id/steps: <img onerror> inside conditionJson string value
+ *      → 200, JSON walked + string sanitized, sibling keys preserved
+ *  11. PUT /steps/:id: smsBody with `{{firstName}}` merge tag survives
+ *      sanitization (merge-tag preservation invariant)
+ *  12. PUT /steps/:id: <a href="javascript:..."> in smsBody → 200,
+ *      anchor + scheme stripped, visible text retained
  *
  * Pattern: cloned from e2e/tests/audit-api.spec.js (cached-token helpers
  * + dual-tenant pattern + RUN_TAG-prefixed cleanup). Tag is
@@ -299,5 +307,125 @@ test.describe('Sequences sanitization — idempotent re-POST', () => {
     expect(aBody.name).toBe(bBody.name);
     expect(aBody.name).not.toMatch(/<b>/i);
     expect(aBody.name).toContain(RUN_TAG);
+  });
+});
+
+// ── Step body sanitization (v3.4.9 carry-over #1) ────────────────────
+// The parent #398 fix only sanitized Sequence.name + ReactFlow node
+// labels. STEP-level fields — smsBody (free text, may contain merge
+// tags) and conditionJson (a JSON object whose string values render in
+// admin diff views) — were assigned verbatim on POST /:id/steps and
+// PUT /steps/:id. Same XSS class, lower exposure (admin-only surface),
+// closed in v3.4.9 by routing both through the route-local sanitizers
+// (`sanitizeText` for smsBody, `sanitizeJson` for conditionJson). These
+// tests pin the contract: malicious markup is stripped, merge tags
+// `{{firstName}}` survive. Reuses the same RUN_TAG / createSequence
+// helper / createdByTenant cleanup as the existing block.
+test.describe('Sequences sanitization — step body (v3.4.9 carry-over #1)', () => {
+  test('POST /:id/steps with <script> in smsBody → 200, script stripped', async ({ request }) => {
+    const { res: createRes, token } = await createSequence(request, 'generic', `${RUN_TAG} step-sms-script`);
+    expect(createRes.status()).toBe(201);
+    const seq = await createRes.json();
+    createdByTenant.generic.push(seq.id);
+
+    const stepRes = await post(request, token, `/api/sequences/${seq.id}/steps`, {
+      kind: 'sms',
+      smsBody: '<script>alert(1)</script>Hello',
+    });
+    expect(stepRes.status(), `add step: ${await stepRes.text()}`).toBe(201);
+    const created = await stepRes.json();
+    expect(created.smsBody).not.toMatch(/<script/i);
+    expect(created.smsBody).not.toMatch(/<\/script>/i);
+    expect(created.smsBody).toContain('Hello');
+
+    // Round-trip: GET the steps list and confirm what we read back is
+    // also sanitized (defence against a write-only sanitization bug).
+    const listRes = await get(request, token, `/api/sequences/${seq.id}/steps`);
+    expect(listRes.status()).toBe(200);
+    const list = await listRes.json();
+    const fetched = list.find((s) => s.id === created.id);
+    expect(fetched, 'created step round-trip').toBeTruthy();
+    expect(fetched.smsBody).not.toMatch(/<script/i);
+    expect(fetched.smsBody).toContain('Hello');
+  });
+
+  test('POST /:id/steps with HTML inside conditionJson value → string fields stripped', async ({ request }) => {
+    const { res: createRes, token } = await createSequence(request, 'generic', `${RUN_TAG} step-cond-img`);
+    expect(createRes.status()).toBe(201);
+    const seq = await createRes.json();
+    createdByTenant.generic.push(seq.id);
+
+    const stepRes = await post(request, token, `/api/sequences/${seq.id}/steps`, {
+      kind: 'condition',
+      conditionJson: { match: '<img src=x onerror=alert(1)>', op: 'eq' },
+    });
+    expect(stepRes.status(), `add cond step: ${await stepRes.text()}`).toBe(201);
+    const created = await stepRes.json();
+
+    // conditionJson may come back as an object or as a JSON string blob
+    // depending on how Prisma serialises Json columns through the route
+    // — accept both shapes.
+    const cond = typeof created.conditionJson === 'string'
+      ? JSON.parse(created.conditionJson)
+      : created.conditionJson;
+    expect(cond, 'conditionJson present').toBeTruthy();
+    expect(cond.match).not.toMatch(/<img/i);
+    expect(cond.match).not.toMatch(/onerror/i);
+    // Non-string sibling key untouched.
+    expect(cond.op).toBe('eq');
+  });
+
+  test('PUT /steps/:id rename smsBody preserves {{merge_tags}}', async ({ request }) => {
+    const { res: createRes, token } = await createSequence(request, 'generic', `${RUN_TAG} step-merge-tag`);
+    expect(createRes.status()).toBe(201);
+    const seq = await createRes.json();
+    createdByTenant.generic.push(seq.id);
+
+    // Seed an SMS step.
+    const stepRes = await post(request, token, `/api/sequences/${seq.id}/steps`, {
+      kind: 'sms',
+      smsBody: 'placeholder',
+    });
+    expect(stepRes.status()).toBe(201);
+    const step = await stepRes.json();
+
+    // PUT with a merge-tag body.
+    const r = await request.put(`${BASE_URL}/api/sequences/steps/${step.id}`, {
+      headers: headers(token),
+      data: { smsBody: 'normal {{firstName}} text' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status(), `put step: ${await r.text()}`).toBe(200);
+    const updated = await r.json();
+    expect(updated.smsBody).toContain('{{firstName}}');
+    expect(updated.smsBody).toContain('normal');
+    expect(updated.smsBody).toContain('text');
+  });
+
+  test('PUT /steps/:id with javascript: anchor in smsBody → href + tag stripped', async ({ request }) => {
+    const { res: createRes, token } = await createSequence(request, 'generic', `${RUN_TAG} step-js-href`);
+    expect(createRes.status()).toBe(201);
+    const seq = await createRes.json();
+    createdByTenant.generic.push(seq.id);
+
+    const stepRes = await post(request, token, `/api/sequences/${seq.id}/steps`, {
+      kind: 'sms',
+      smsBody: 'placeholder',
+    });
+    expect(stepRes.status()).toBe(201);
+    const step = await stepRes.json();
+
+    const r = await request.put(`${BASE_URL}/api/sequences/steps/${step.id}`, {
+      headers: headers(token),
+      data: { smsBody: '<a href="javascript:alert(1)">click</a>' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status(), `put step: ${await r.text()}`).toBe(200);
+    const updated = await r.json();
+    // sanitize-html with allowedTags:[] strips the <a> wholesale, leaving
+    // the visible text "click". The dangerous href + scheme MUST be gone.
+    expect(updated.smsBody).not.toMatch(/<a\b/i);
+    expect(updated.smsBody).not.toMatch(/javascript:/i);
+    expect(updated.smsBody).toContain('click');
   });
 });

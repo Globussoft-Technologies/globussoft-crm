@@ -43,6 +43,50 @@ const sanitizeNodes = (nodes) => {
   });
 };
 
+// v3.4.9 carry-over #1: STEP-level fields (smsBody + conditionJson) on
+// POST /:id/steps + PUT /steps/:id were assigned without sanitization.
+// Same XSS class as #398 (which closed the parent Sequence.name path);
+// step bodies surface in admin diff views and could exfiltrate via a
+// crafted href / event handler that an admin clicks while editing.
+//
+// `conditionJson` is a JSON object (express body-parser already parsed
+// it for us) but may also arrive as a JSON-encoded string blob from
+// older clients. Public entry handles both: it parses-then-walks if the
+// input is a JSON string, then re-serialises so the caller's storage
+// shape is preserved. Strings inside the structure are passed straight
+// through `sanitizeText` (NOT re-parsed as JSON). Merge tags like
+// `{{firstName}}` are NOT HTML and pass through untouched
+// (`allowedTags: []` only strips `<…>`-shaped tokens).
+const _walkSanitize = (value) => {
+  if (value == null) return value;
+  if (typeof value === "string") return sanitizeText(value);
+  if (Array.isArray(value)) return value.map(_walkSanitize);
+  if (typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = _walkSanitize(v);
+    }
+    return out;
+  }
+  return value;
+};
+const sanitizeJson = (input) => {
+  if (input == null) return input;
+  if (typeof input === "string") {
+    // Treat as a JSON-encoded blob if it parses; otherwise sanitize as
+    // plain text so a hand-rolled curl payload of "<script>" doesn't
+    // bypass the helper just because it isn't valid JSON.
+    let parsed;
+    try {
+      parsed = JSON.parse(input);
+    } catch (_e) {
+      return sanitizeText(input);
+    }
+    return JSON.stringify(_walkSanitize(parsed));
+  }
+  return _walkSanitize(input);
+};
+
 // Fetch all drip sequences
 router.get("/", verifyToken, async (req, res) => {
   try {
@@ -377,15 +421,22 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
       }
     }
 
+    // v3.4.9 carry-over #1: scrub HTML out of free-text step fields
+    // before persisting. smsBody is plain text (merge-tags pass through);
+    // conditionJson may be an object or string blob — sanitizeJson walks
+    // every string value recursively.
+    const cleanSmsBody = smsBody != null ? sanitizeText(smsBody) : null;
+    const cleanConditionJson = conditionJson != null ? sanitizeJson(conditionJson) : null;
+
     const created = await prisma.sequenceStep.create({
       data: {
         sequenceId: seq.id,
         position: target,
         kind,
         emailTemplateId: emailTemplateId != null ? parseInt(emailTemplateId, 10) : null,
-        smsBody: smsBody || null,
+        smsBody: cleanSmsBody || null,
         delayMinutes: delayMinutes != null ? parseInt(delayMinutes, 10) : null,
-        conditionJson: conditionJson || null,
+        conditionJson: cleanConditionJson || null,
         trueNextPosition: trueNextPosition != null ? parseInt(trueNextPosition, 10) : null,
         falseNextPosition: falseNextPosition != null ? parseInt(falseNextPosition, 10) : null,
         pauseOnReply: pauseOnReply == null ? true : !!pauseOnReply,
@@ -429,6 +480,7 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
       }
     }
 
+    // v3.4.9 carry-over #1: same step-level sanitization on update.
     const updated = await prisma.sequenceStep.update({
       where: { id: existing.id },
       data: {
@@ -436,11 +488,11 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
         ...(emailTemplateId !== undefined && {
           emailTemplateId: emailTemplateId == null ? null : parseInt(emailTemplateId, 10),
         }),
-        ...(smsBody !== undefined && { smsBody }),
+        ...(smsBody !== undefined && { smsBody: smsBody == null ? null : sanitizeText(smsBody) }),
         ...(delayMinutes !== undefined && {
           delayMinutes: delayMinutes == null ? null : parseInt(delayMinutes, 10),
         }),
-        ...(conditionJson !== undefined && { conditionJson }),
+        ...(conditionJson !== undefined && { conditionJson: conditionJson == null ? null : sanitizeJson(conditionJson) }),
         ...(trueNextPosition !== undefined && {
           trueNextPosition: trueNextPosition == null ? null : parseInt(trueNextPosition, 10),
         }),
@@ -503,4 +555,11 @@ router.post("/debug/tick", verifyToken, verifyRole(["ADMIN"]), async (req, res) 
   }
 });
 
+// v3.4.9 carry-over #1: expose the sanitization helpers for unit tests
+// (backend/test/utils/sanitize-json.test.js). Express routers ignore
+// extra properties on the exported function, so this is a no-op for the
+// runtime app.mount() path.
 module.exports = router;
+module.exports.sanitizeText = sanitizeText;
+module.exports.sanitizeJson = sanitizeJson;
+module.exports.sanitizeNodes = sanitizeNodes;

@@ -68,7 +68,7 @@ export default function LandingPageBuilder() {
       .replace(/-+/g, '-')
       .slice(0, 50);
 
-  const handleSave = async () => {
+  const handleSave = async (confirmSlugChange = false) => {
     // #378: defensive client-side validation before PUT.
     if (page.slug !== undefined && page.slug !== '' && !/^[a-z0-9-]+$/.test(page.slug)) {
       notify.error('Slug must contain only lowercase letters, numbers, and hyphens.');
@@ -78,15 +78,65 @@ export default function LandingPageBuilder() {
     try {
       const payload = { title: page.title, content: JSON.stringify(components) };
       if (page.slug) payload.slug = page.slug;
-      await fetchApi(`/api/landing-pages/${id}`, {
+      // #456: silent first attempt so we can intercept the 409
+      // PUBLISHED_SLUG_CHANGE_REQUIRES_CONFIRM and ask the user before
+      // surfacing it as a generic error toast. Retry with ?confirmSlugChange=true
+      // on confirm.
+      const url = `/api/landing-pages/${id}${confirmSlugChange ? '?confirmSlugChange=true' : ''}`;
+      await fetchApi(url, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        silent: !confirmSlugChange,
       });
       // #454: clear dirty after successful save so the beforeunload
       // guard goes silent on the next navigation.
       setIsDirty(false);
-    } catch { notify.error('Save failed'); }
+      if (confirmSlugChange) notify.success('Saved with new slug — old links to /p/<old-slug> will 404.');
+    } catch (err) {
+      // #456: surface the published-slug-change confirm prompt. The
+      // backend returns 409 with code PUBLISHED_SLUG_CHANGE_REQUIRES_CONFIRM
+      // + currentSlug + requestedSlug fields.
+      if (err.status === 409 && err.code === 'PUBLISHED_SLUG_CHANGE_REQUIRES_CONFIRM') {
+        const cur = err.data?.currentSlug || page.slug;
+        const next = err.data?.requestedSlug || page.slug;
+        const ok = await notify.confirm(
+          `This page is PUBLISHED. Changing the slug from "${cur}" to "${next}" will break every inbound link to /p/${cur} (ad campaigns, email links, QR codes, customer bookmarks).\n\nProceed anyway?`
+        );
+        if (ok) {
+          setSaving(false);
+          await handleSave(true); // retry with confirm flag
+          return;
+        }
+      } else if (err.status === 409 && err.existingId) {
+        // #456: slug-collision case — surface the colliding page so the
+        // user can pick a different slug, OR navigate to the existing page.
+        notify.error(err.message || 'Slug already in use by another page.');
+      } else {
+        notify.error('Save failed');
+      }
+    }
     setSaving(false);
+  };
+
+  // #456: client-side slug-validity check (mirrors backend isValidSlug).
+  // Used to red-border the input when invalid + disable Save.
+  const slugIsValid = !page?.slug || /^[a-z0-9-]+$/.test(page.slug);
+
+  // #456: derive a slug from the current title using the same regex the
+  // backend uses on auto-create. One-click escape from `untitled-page-<random>`
+  // to a meaningful slug after the user renames the page.
+  const deriveSlugFromTitle = () => {
+    const baseSlug = (page.title || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+    if (!baseSlug) {
+      notify.error('Set a title first — slug needs at least one alphanumeric character to derive from.');
+      return;
+    }
+    setPage({ ...page, slug: baseSlug.slice(0, 50) });
+    setIsDirty(true);
   };
 
   const addComponent = (type) => {
@@ -124,17 +174,41 @@ export default function LandingPageBuilder() {
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.75rem 1.5rem', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
         <Link to="/landing-pages" style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>
         <input className="input-field" value={page.title} onChange={e => { setPage({ ...page, title: e.target.value }); setIsDirty(true); }} style={{ fontWeight: '600', fontSize: '1rem', padding: '0.375rem 0.75rem', width: '250px' }} />
-        {/* #378: slug input with HTML pattern + onChange normalization */}
-        <input
-          className="input-field"
-          value={page.slug || ''}
-          onChange={e => { setPage({ ...page, slug: normalizeSlug(e.target.value) }); setIsDirty(true); }}
-          placeholder="slug"
-          title="Lowercase letters, numbers, and hyphens only (max 50 chars)"
-          pattern="[a-z0-9-]+"
-          maxLength={50}
-          style={{ fontSize: '0.85rem', padding: '0.375rem 0.75rem', width: '180px', color: 'var(--text-secondary)' }}
-        />
+        {/* #378: slug input with HTML pattern + onChange normalization.
+            #456: visible validity hint + derive-from-title button. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+          <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+            <input
+              className="input-field"
+              value={page.slug || ''}
+              onChange={e => { setPage({ ...page, slug: normalizeSlug(e.target.value) }); setIsDirty(true); }}
+              placeholder="slug"
+              title="Lowercase letters, numbers, and hyphens only (max 50 chars)"
+              pattern="[a-z0-9-]+"
+              maxLength={50}
+              style={{
+                fontSize: '0.85rem',
+                padding: '0.375rem 0.75rem',
+                width: '180px',
+                color: 'var(--text-secondary)',
+                borderColor: slugIsValid ? undefined : '#ef4444',
+              }}
+            />
+            <button
+              type="button"
+              onClick={deriveSlugFromTitle}
+              title="Derive slug from current page title"
+              style={{ fontSize: '0.7rem', padding: '0.3rem 0.55rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
+            >
+              ↻ from title
+            </button>
+          </div>
+          <span style={{ fontSize: '0.65rem', color: slugIsValid ? 'var(--text-secondary)' : '#ef4444', opacity: 0.85 }}>
+            {slugIsValid
+              ? `${(page.slug || '').length}/50 — lowercase, digits, hyphens`
+              : 'Invalid: lowercase / digits / hyphens only'}
+          </span>
+        </div>
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--subtle-bg)', borderRadius: '6px', padding: '0.2rem' }}>
           <button onClick={() => setPreviewMode('desktop')} style={{ padding: '0.3rem 0.6rem', borderRadius: '4px', border: 'none', cursor: 'pointer', background: previewMode === 'desktop' ? 'var(--accent-color)' : 'transparent', color: previewMode === 'desktop' ? '#fff' : 'var(--text-secondary)' }}><Monitor size={14} /></button>
@@ -145,8 +219,8 @@ export default function LandingPageBuilder() {
             <Eye size={14} /> Preview
           </a>
         )}
-        <button className="btn-primary" onClick={handleSave} disabled={saving} style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', padding: '0.4rem 1rem', fontSize: '0.85rem' }}>
-          <Save size={14} /> {saving ? 'Saving...' : 'Save'}
+        <button className="btn-primary" onClick={() => handleSave(false)} disabled={saving || !slugIsValid} style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', padding: '0.4rem 1rem', fontSize: '0.85rem' }}>
+          <Save size={14} /> {saving ? 'Saving...' : 'Save'}{isDirty && !saving && <span style={{ marginLeft: '0.3rem', opacity: 0.85 }}>•</span>}
         </button>
       </div>
 

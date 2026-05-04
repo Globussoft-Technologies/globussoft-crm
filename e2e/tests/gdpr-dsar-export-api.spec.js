@@ -410,12 +410,25 @@ test.describe('GDPR DSAR Export — /export/contact/:id', () => {
 
 // ── RBAC sanity ────────────────────────────────────────────────────
 //
-// /api/gdpr/* is gated only by verifyToken (no verifyRole), so MANAGER /
-// USER tokens CAN call /export/me — they are exporting THEIR OWN data,
-// which is exactly what GDPR Article 15 grants every data subject. The
-// only RBAC concern is /export/contact/:id which a non-admin shouldn't
-// generally use. The route does NOT currently gate it; pin this as the
-// CURRENT behavior so a future role-tightening is a deliberate change.
+// /api/gdpr/* router-level guard is verifyToken (any authenticated staff
+// token). On TOP of that, two policy splits apply:
+//
+//   /export/me              — no role gate. Every authenticated user is
+//                             exporting THEIR OWN data, which is exactly
+//                             what GDPR Article 15 grants every data
+//                             subject. MANAGER + USER must succeed.
+//
+//   /export/contact/:id     — verifyRole(['ADMIN','MANAGER']). v3.4.9
+//                             carry-over #3 closed the v3.4.8 finding
+//                             where any USER could export any tenant
+//                             contact's full PII bundle. Compliance work
+//                             defaults to least-privilege; only org-
+//                             oversight roles (ADMIN, MANAGER) can
+//                             trigger a contact-scoped DSAR. USER → 403.
+//
+// The pre-v3.4.9 spec deliberately pinned the LOOSE behavior ("pin what
+// is, then tighten in a follow-up"). That pin is now obsolete and has
+// been removed; the assertions below flip to the post-tightening shape.
 
 test.describe('GDPR DSAR Export — RBAC sanity', () => {
   test('MANAGER can self-export via /export/me (Art. 15 self-access right)', async ({ request }) => {
@@ -434,5 +447,35 @@ test.describe('GDPR DSAR Export — RBAC sanity', () => {
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('user');
+  });
+
+  test('MANAGER can export a tenant contact via /export/contact/:id (compliance-officer role)', async ({ request }) => {
+    const { token } = await getGenericManager(request);
+    if (!token) test.skip(true, 'manager seed missing on this env');
+    const contact = await seedContact(request, 'generic', 'rbac-mgr');
+    const res = await post(request, token, `/api/gdpr/export/contact/${contact.id}`);
+    expect(res.status(), await res.text()).toBe(200);
+    const body = await res.json();
+    expect(body.contact && body.contact.id).toBe(contact.id);
+  });
+
+  test('USER cannot export a tenant contact via /export/contact/:id → 403 (v3.4.9 carry-over #3)', async ({ request }) => {
+    const { token } = await getGenericUser(request);
+    if (!token) test.skip(true, 'user seed missing on this env');
+    // Seed via admin so the contact actually exists — the gate must fire
+    // BEFORE the findFirst, so a 404-vs-403 split here would itself be a
+    // (smaller) leak of role-vs-existence information. We assert 403
+    // regardless of whether the row exists.
+    const contact = await seedContact(request, 'generic', 'rbac-user-deny');
+    const res = await post(request, token, `/api/gdpr/export/contact/${contact.id}`);
+    expect(
+      res.status(),
+      `USER must be 403 on /export/contact/:id (was ${res.status()})`
+    ).toBe(403);
+    // verifyRole emits { error: 'Insufficient Role Permissions...' } —
+    // assert the canonical 403 body shape so a future middleware swap
+    // (e.g. to a code-based RBAC error) gets caught here.
+    const body = await res.json().catch(() => ({}));
+    expect(typeof body.error === 'string' && body.error.length > 0).toBe(true);
   });
 });

@@ -23,7 +23,7 @@ const RETENTION_ENTITY_MAP = {
 // ──────────────────────────────────────────────────────────────────
 // POST /api/gdpr/export/contact/:id — full data export for a contact
 // ──────────────────────────────────────────────────────────────────
-router.post('/export/contact/:id', async (req, res) => {
+router.post('/export/contact/:id', verifyRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid contact ID' });

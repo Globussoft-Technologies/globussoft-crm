@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## v3.4.8 — 2026-05-04 — v3.4.7 follow-up arc: T2.2 + #180 + #398 + #413 + #436 + #443 closed (6 issues + scrub gap)
+
+A focused-followup release covering the v3.4.7 carry-over plus a 4-agent parallel wave. **No new product features**; this release closes six issues across two days of work, eliminates the schema-relation drift counter (49 → 0 across batches 1-4), and adds 4 new per-push gate specs + extends 1 existing spec.
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.7 | v3.4.8 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | ~71 specs / ~2,460 tests | **~75 specs** / ~2,500 tests | +4 specs / +40 tests |
+| Per-push unit tests | vitest | 39 files / 1,093 tests | 39 files / 1,101 tests | +8 tests (in existing file) |
+| **Total per-push** |  | ~3,553 | **~3,601** | **+48 tests** |
+
+### Fixed — 6 GitHub issues closed
+
+- **T2.2 PHI read-audit** (commit `b44291b`) — 6 staff GET handlers in `routes/wellness.js` gained `writeAudit` calls: `VISIT_LIST_READ`, `VISIT_CONSUMPTIONS_READ`, `PRESCRIPTION_LIST_READ`, `CONSENT_LIST_READ`, `TREATMENT_PLAN_LIST_READ`, `TREATMENT_PLAN_READ`. Patient detail / portal / Visit detail / PDF download paths were already audited (v3.2.1 + v3.2.5). **The 4-5 day TODOS estimate compressed to 1 session** because the existing `backend/lib/audit.js` infrastructure (with `actorType` / `patientId` opts for portal self-access) was already mature — only the calls were missing. New `e2e/tests/wellness-read-audit-api.spec.js` (8 tests) pins the contract: each call writes one row per request with the staff actor's `userId` (no `_actorType=patient` markers), tenantId scoped, details=count+filters (lists) or ids (details), never row contents.
+- **#180 JWT revocation / logout** (commit `35f9fc8`) — implementation already shipped in v3.2.1 (RevokedToken model + jti claim + verifyToken lookup + POST /auth/logout + GET /auth/sessions + DELETE /auth/sessions/:jti). Pre-this-arc the per-push gate had ZERO coverage of any of these endpoints — `backend/test/middleware/auth.test.js` exercised the verifyToken revocation path in isolation, but no e2e spec asserted the route contract. New `e2e/tests/auth-revocation-api.spec.js` (10 tests) closes the regression gap: happy logout 401-on-reuse, idempotent upsert, /sessions shape (no userId leak in revokedSessions[]), history reflection, malformed-jti 400 (too short / too long), tenant isolation. **Doc-vs-reality reconciliation**: TODOS.md said "open"; CLAUDE.md said "shipped in v3.2.1"; reality matched CLAUDE.md.
+- **#398 Drip Sequences HTML in name** (commit `b5d1758`) — same doc-vs-reality pattern: route was already sanitizing via `sanitizeText()` (sanitize-html, allowedTags:[]) on POST + PATCH; the spec was the missing artifact. New `e2e/tests/sequences-input-sanitization-api.spec.js` (8 tests) pins: `<script>` strip, `<img onerror>` strip, `javascript:` href strip in ReactFlow node labels, only-HTML-name returns 400 `INVALID_SEQUENCE`, PATCH rename sanitize, cross-tenant isolation, auth gate, idempotent re-POST.
+- **#413 schema-relation hygiene COMPLETE** (commit `acad74b`) — 18 more `@relation` declarations on the chat/live + dashboards + scheduled-email/booking + survey/template/document + social + voice + marketing/attribution clusters. Drift counter dropped **18 → 0**. Every multi-tenant model now has a formal `tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)` plus a matching back-relation `<X>[]` on Tenant. **G-24's invariant test will warn at 0 from now on.** Issue #413 fully closed (all 4 batches: 49 → 39 → 29 → 19 → 0). The handoff predicted 19 remaining; enumeration found 18 (one was incidentally cleaned up between v3.4.7 release notes and this batch).
+- **#436 Tasks queue empty for Owner** (commit `8f5ff63`) — two interlocking bugs found via live curl against demo as Rishu (userId=9, tenant 2):
+  1. Global `stripDangerous` middleware (server.js:299) deletes `userId` from every `req.body`. On `Task` that field is the **assignee**, not a tenant pivot — every task POSTed via the API landed with `userId=null`. Any per-user "my tasks" filter returned empty.
+  2. Sidebar badge query is hard-coded `?status=PENDING` (uppercase) while schema enum is Title-case `Pending`. Exact-match returned 0 → Owner's "Task Queue" badge sat at 0 even with orchestrator-created tasks.
+  Fix: POST reads `targetUserId` (back-compat fallback to `req.strippedFields.userId`); GET adds `normalizeStatusFilter()` (PENDING/OPEN→Pending, COMPLETED/DONE→Completed); new `?mine=true` filter (ADMIN/MANAGER see assigned + unassigned for org oversight). Extended `e2e/tests/tasks-api.spec.js` with 3 owner-persona regression tests.
+- **#443 GDPR DSAR audit-trail gap** (commit `41bb379`) — TODOS framed as "501 stub" but the file had no 501 anywhere. The actual gap was audit-trail wiring: `POST /export/me` wrote a `DataExportRequest` row but NO `AuditLog` row (SOC-2 / DPDP §11 trail incomplete); `POST /export/contact/:id` wrote `action='EXPORT'` (legacy label) instead of canonical `'GDPR_EXPORT'`. Both handlers now route through `writeAudit('User'|'Contact', 'GDPR_EXPORT', ...)` with shape-only details (counts, never row contents). Response shape unchanged. New `e2e/tests/gdpr-dsar-export-api.spec.js` (11 tests) covers both endpoints + auth gate + cross-tenant 404 (id-enumeration prevention) + tenant isolation + audit-row contract.
+
+### Fixed — Service-scrub gap (v3.4.7 follow-up)
+
+- **#405 follow-up scrub iteration gap** (commit `f43e27c`) — v3.4.7's release-validation surfaced 3 surviving `_teardown_iso_*` services on demo (ids 301/319/328). Root cause: same #405 class — the rename pattern was added to `e2e/test-data-patterns.js` but the scrub iteration list wasn't extended. Two real bugs fixed in one commit:
+  1. `e2e/global-teardown.js:127` used hardcoded `'^E2E '` regex on Service — replaced with shared `PAT_REGEX`.
+  2. `backend/scripts/scrub-test-data-pollution.js` had no `scrubServices()` function — added with the same shape as `scrubLocations()` (Visit.serviceId is SetNull on Service delete per schema, so safe).
+
+  New 8-test scrub-coverage invariant in `backend/test/scripts/test-data-patterns.test.js` statically grep-asserts both teardown scripts iterate Patient / Contact / Service / Task / Location. Service-specific assertion pins that the hardcoded `'^E2E '` regex stays gone and `scrubServices` is wired into `main()`.
+
+### Carry-over for v3.4.9
+
+**Drift findings filed for follow-up** (each ~1-3h, none P0):
+- **Sequences step body sanitization** (Agent A) — the parent sequence's `name` is sanitized but step-level `smsBody` and `conditionJson` on `POST /:id/steps` and `PUT /steps/:id` are NOT. Same XSS risk class, lower exposure (step bodies aren't rendered as HTML in the standard flow but show in admin diff views).
+- **Patient self-DSAR endpoint missing** (Agent C) — `/api/gdpr/*` rejects portal tokens at `middleware/auth.js` (`patientId || !userId → 401`). A patient self-export covering `Patient/Visit/Prescription/ConsentForm/TreatmentPlan` does not exist. Real DPDP Article 15 / Right-of-Access gap for the wellness vertical's portal users. Estimated 1-2 days for a `/api/wellness/portal/export` endpoint mirroring `/export/me` semantics with the patient FK chain.
+- **`/export/contact/:id` has no role guard** (Agent C) — any USER can export any contact in their tenant. Pinned the current behavior in the new spec's RBAC describe block. A future tightening (e.g. owner-of-contact OR ADMIN/MANAGER) should be deliberate, not silent. ~30 min if the policy decision is clear.
+- **`stripDangerous` middleware vs `Task.userId` collision (broader pattern)** (Agent D) — Task.userId is the canonical assignee column, but the deny-list strips `userId` from every body. Other write paths that rely on body-`userId` may have similar latent bugs (Notification, AuditLog, etc.). Audit recommended; ~2-3h.
+- **Orchestrator writes non-canonical Task status/priority** (Agent D) — `cron/orchestratorEngine.js:154` writes `status:"OPEN", priority:"HIGH"` (uppercase) while schema enum is Title-case. The new `normalizeStatusFilter` accommodates reads but the data is still non-canonical. ~30 min cleanup or a forward-compatible writer.
+
+### Process notes
+
+- **4-agent parallel wave was clean** — no merge collisions, no rebase-on-collision retries, no bundled-commit incidents. Agents B and D pushed first, A pushed cleanly behind them, C pushed last on top of the chain. Disjoint-files invariant held: A=routes/sequences.js, B=schema.prisma, C=routes/gdpr.js, D=routes/tasks.js. Workflow-file collisions only on coverage.yml + deploy.yml — wire-in.sh idempotency made each follow-up landing safe.
+- **3 of 4 agents found doc-vs-reality drift** — #180, #398, and #443 all had stale "open" framings in TODOS.md while the implementation was already done. The actual gap was test-coverage in 2 of 3 cases. Lesson: when picking from TODOS.md, **grep the implementation before estimating**. The dispatching prompt now specifically asks agents to do code-grep verification before assuming the issue's framing.
+
+### Carried over from v3.4.7 (still relevant)
+
+- **3 surviving `_teardown_iso_*` services on demo** (ids 301/319/328) — fix shipped at `f43e27c` but the v3.4.7 tag points at the pre-fix doc-bump commit `b5e8994`, so v3.4.7's tag-fired e2e-full used the buggy script. v3.4.8's tag will fire e2e-full with the fixed scrub script — those rows should clear automatically. Verify in next release-validation cycle.
+
+---
+
 ## v3.4.7 — 2026-05-04 — QA P0/P1 closure + #405 demo-pollution root-cause + PR #444 visitors dashboard + #413 batch 3 (drift 29 → 19)
 
 A QA-triage continuation of v3.4.6. **One new product feature** (visitors dashboard via PR #444) plus three real security/compliance fixes (#426 P0, #343 P1, #405 P1), the demo-pollution root cause that's been generating cluster issues for two weeks (#403/#405), the third batch of #413 schema-relation hygiene (drift 29 → 19), plus 4 new regression-guard test files preventing the same bug classes from reappearing.

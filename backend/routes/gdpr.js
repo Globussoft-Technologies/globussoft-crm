@@ -1,5 +1,6 @@
 const express = require('express');
 const { verifyToken, verifyRole } = require('../middleware/auth');
+const { writeAudit } = require('../lib/audit');
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -67,17 +68,33 @@ router.post('/export/contact/:id', async (req, res) => {
       },
     });
 
-    // Audit
-    await prisma.auditLog.create({
-      data: {
-        action: 'EXPORT',
-        entity: 'Contact',
-        entityId: id,
-        details: JSON.stringify({ reason: 'GDPR data export request' }),
-        userId: req.user?.userId || null,
-        tenantId,
-      },
-    }).catch(() => {});
+    // Audit — issue #443. Use the shared writeAudit helper with the canonical
+    // action label `GDPR_EXPORT` (was `EXPORT`). Details payload captures only
+    // counts/shape — never row contents — so the audit trail survives PII
+    // scrubbing without leaking the very data the export was meant to surface.
+    await writeAudit(
+      'Contact',
+      'GDPR_EXPORT',
+      id,
+      req.user?.userId || null,
+      tenantId,
+      {
+        reason: 'GDPR/DPDP data subject access request',
+        counts: {
+          activities: activities.length,
+          deals: deals.length,
+          emails: emails.length,
+          callLogs: callLogs.length,
+          tasks: tasks.length,
+          invoices: invoices.length,
+          contracts: contracts.length,
+          estimates: estimates.length,
+          smsMessages: smsMessages.length,
+          whatsappMessages: whatsappMessages.length,
+          consentRecords: consentRecords.length,
+        },
+      }
+    );
 
     res.set('Content-Disposition', `attachment; filename=contact-${id}-export.json`);
     res.json({
@@ -130,6 +147,33 @@ router.post('/export/me', async (req, res) => {
     await prisma.dataExportRequest.create({
       data: { userId, status: 'COMPLETE', completedAt: new Date(), tenantId },
     });
+
+    // Audit — issue #443. The previous handler recorded a DataExportRequest
+    // row but never wrote an AuditLog row, so the GDPR Art. 30 / DPDP audit
+    // trail was missing the WHO/WHEN of every self-export. Use writeAudit
+    // with the canonical 'GDPR_EXPORT' action; details payload is shape +
+    // counts only (never row contents — see lib/audit.js header comment).
+    await writeAudit(
+      'User',
+      'GDPR_EXPORT',
+      userId,
+      userId,
+      tenantId,
+      {
+        reason: 'GDPR/DPDP self-export (Article 15)',
+        counts: {
+          deals: deals.length,
+          tasks: tasks.length,
+          expenses: expenses.length,
+          activities: activities.length,
+          emails: emails.length,
+          callLogs: callLogs.length,
+          smsMessages: smsMessages.length,
+          whatsappMessages: whatsappMessages.length,
+          auditLogs: auditLogs.length,
+        },
+      }
+    );
 
     res.set('Content-Disposition', `attachment; filename=user-${userId}-export.json`);
     res.json({

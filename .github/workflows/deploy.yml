@@ -339,6 +339,7 @@ jobs:
             tests/wellness-read-audit-api.spec.js \
             tests/auth-revocation-api.spec.js \
             tests/sequences-input-sanitization-api.spec.js \
+            tests/gdpr-dsar-export-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

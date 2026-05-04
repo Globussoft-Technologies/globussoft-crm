@@ -19,6 +19,7 @@ const {
   getAllTreatmentPlans,
   updateTreatmentPlan,
 } = require("../controllers/treatmentPlanController")
+const { getPatientsSummary, getPatientDetails } = require("../controllers/visitController")
 const {
   renderPrescriptionPdf,
   renderConsentPdf,
@@ -207,6 +208,10 @@ router.get(
   getAllTreatmentPlans
 );
 router.put("/treatment-plans/:id", requireClinicalRole, updateTreatmentPlan);
+
+// visited patitents
+router.get("/reports/visit", getPatientsSummary)
+router.get("/reports/visit/:id", getPatientDetails)
 
 
 // ── Patients ───────────────────────────────────────────────────────
@@ -2064,6 +2069,7 @@ async function computePnlByService(req) {
   const bucketedRevenue = rows.reduce((s, r) => s + r.revenue, 0);
   const bucketedProductCost = rows.reduce((s, r) => s + r.productCost, 0);
   const bucketedContribution = rows.reduce((s, r) => s + r.contribution, 0);
+  const servicesSummary = rows.map((r) => ({ id: r.id, name: r.name, category: r.category, ticketTier: r.ticketTier, count: r.count }));
   return {
     window: { from, to, locationId: locationId || null },
     totals: {
@@ -2077,6 +2083,7 @@ async function computePnlByService(req) {
       visits: canonical.visits,
       revenue: canonical.revenue,
     },
+    servicesSummary,
     rows,
   };
 }

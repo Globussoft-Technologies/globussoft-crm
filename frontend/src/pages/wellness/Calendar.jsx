@@ -46,7 +46,7 @@ export default function CalendarGrid() {
   const [services, setServices] = useState([]);
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showAll, setShowAll] = useState(false);
+  const [showAll, setShowAll] = useState(true);
   // #270: empty-slot click opens a "New visit" modal seeded with the chosen
   // (doctorId, hour). Booked visits are status='booked' which doesn't require
   // serviceId or doctorId per visitPOST validators (#109), but we collect
@@ -192,7 +192,7 @@ export default function CalendarGrid() {
 
       {!loading && columns.length > 0 && (
         <div className="glass" style={{ padding: '1rem', overflow: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(180px, 1fr))`, gap: '4px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(120px, 1fr))`, gap: '4px' }}>
             <div style={{ ...colHead, background: 'transparent' }}></div>
             {columns.map((c) => (
               <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1 }}>

@@ -732,7 +732,7 @@ function TreatmentCard({ treatment, onChanged, onSelect }) {
 
   return (
     <div className="glass" style={{ padding: '1.25rem', position: 'relative', cursor: 'pointer', transition: 'all 0.3s ease' }} onClick={() => onSelect(treatment)}>
-      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem' }}>
+      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem', zIndex: 10 }}>
         <button onClick={() => updateStatus(treatment.status === 'active' ? 'paused' : 'active')} title={treatment.status === 'active' ? 'Pause' : 'Resume'} style={iconBtn}>
           <Clock size={12} />
         </button>
@@ -740,16 +740,18 @@ function TreatmentCard({ treatment, onChanged, onSelect }) {
           <Trash2 size={12} />
         </button>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', paddingRight: '3rem' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.5rem' }}>
         <div>
           <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             {treatment.patient?.name}
           </div>
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '0.15rem' }}>{treatment.name}</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '0.15rem', flex: 1 }}>{treatment.name}</h3>
+            <span style={{ background: statusColor[treatment.status] || statusColor.active, color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', textTransform: 'uppercase', fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' }}>
+              {statusLabel}
+            </span>
+          </div>
         </div>
-        <span style={{ background: statusColor[treatment.status] || statusColor.active, color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', textTransform: 'uppercase', fontWeight: 600 }}>
-          {statusLabel}
-        </span>
       </div>
       <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
         <span><IndianRupee size={12} style={{ verticalAlign: 'middle' }} /> {treatment.totalPrice?.toLocaleString('en-IN') || '0'}</span>

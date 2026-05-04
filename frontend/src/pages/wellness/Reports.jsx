@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { BarChart3, TrendingUp, Stethoscope, MapPin, IndianRupee, Download, Loader2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
@@ -30,6 +31,7 @@ const EXPORT_BASENAMES = {
 const isoDay = (d) => d.toISOString().slice(0, 10);
 
 export default function Reports() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState('pnl');
   const [from, setFrom] = useState(isoDay(new Date(Date.now() - 30 * 86400000)));
   const [to, setTo] = useState(isoDay(new Date()));
@@ -152,7 +154,7 @@ export default function Reports() {
       </div>
 
       {loading && <div>Loading…</div>}
-      {!loading && data && tab === 'pnl' && <PnlTable data={data} />}
+      {!loading && data && tab === 'pnl' && <PnlTable data={data} onNavigate={navigate} />}
       {!loading && data && tab === 'pro' && <ProTable data={data} />}
       {!loading && data && tab === 'loc' && <LocTable data={data} />}
       {!loading && data && tab === 'att' && <AttTable data={data} />}
@@ -162,11 +164,11 @@ export default function Reports() {
   );
 }
 
-function Totals({ items }) {
+function Totals({ items, onVisitsClick }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: `repeat(${items.length}, 1fr)`, gap: '0.75rem', marginBottom: '1rem' }}>
       {items.map((it) => (
-        <div key={it.label} className="glass" style={{ padding: '1rem' }}>
+        <div key={it.label} className="glass" style={{ padding: '1rem', cursor: it.label === 'Visits' && onVisitsClick ? 'pointer' : 'default', transition: 'background 0.2s' }} onClick={() => it.label === 'Visits' && onVisitsClick && onVisitsClick()}>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{it.label}</div>
           <div style={{ fontSize: '1.5rem', fontWeight: 600, marginTop: '0.25rem' }}>{it.value}</div>
         </div>
@@ -175,11 +177,13 @@ function Totals({ items }) {
   );
 }
 
-function PnlTable({ data }) {
+function PnlTable({ data, onNavigate }) {
   const colWidths = ['25%', '18%', '10%', '10%', '12%', '12%', '13%'];
   const headers = ['Service', 'Category', 'Tier', 'Visits', 'Revenue', 'Product cost', 'Contribution'];
   const totals = data?.totals || { visits: 0, revenue: 0, productCost: 0, contribution: 0 };
   const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const servicesSummary = Array.isArray(data?.servicesSummary) ? data.servicesSummary : [];
+  const servicesCount = servicesSummary.length;
 
   return (
     <>
@@ -188,7 +192,8 @@ function PnlTable({ data }) {
         { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
         { label: 'Product cost', value: formatMoney(totals.productCost || 0) },
         { label: 'Contribution', value: formatMoney(totals.contribution || 0) },
-      ]} />
+        { label: 'Services', value: (servicesCount || 0).toLocaleString('en-IN') },
+      ]} onVisitsClick={() => onNavigate && onNavigate('/wellness/visits')} />
       <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
         <table style={tableStyle}>
           <colgroup>

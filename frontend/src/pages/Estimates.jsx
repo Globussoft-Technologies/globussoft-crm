@@ -375,14 +375,14 @@ export default function Estimates() {
             {/* Line Items */}
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.75rem', color: 'var(--text-secondary)' }}>Line Items</label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                 {lineItems.map((item, index) => (
                   <div key={index} style={{
-                    display: 'flex', gap: '0.5rem', alignItems: 'flex-end',
-                    padding: '0.75rem', borderRadius: '8px',
+                    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem',
+                    padding: '1rem', borderRadius: '8px',
                     background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)',
                   }}>
-                    <div style={{ flex: 2 }}>
+                    <div style={{ gridColumn: '1 / -1' }}>
                       <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Description</label>
                       <input
                         type="text"
@@ -393,11 +393,8 @@ export default function Estimates() {
                         aria-label={`Line item ${index + 1} description`}
                       />
                     </div>
-                    <div style={{ flex: 0.5 }}>
+                    <div>
                       <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Qty</label>
-                      {/* #333: integer 1..9999. step=1 + min/max tells the
-                          browser to validate, and the submit handler also
-                          re-checks since min/max are bypassable via paste. */}
                       <input
                         type="number"
                         min={QTY_MIN}
@@ -406,13 +403,12 @@ export default function Estimates() {
                         className="input-field"
                         value={item.quantity}
                         onChange={e => handleLineItemChange(index, 'quantity', e.target.value)}
+                        style={{ color: '#000 !important', colorScheme: 'light', textAlign: 'center' }}
                         aria-label={`Line item ${index + 1} quantity`}
                       />
                     </div>
-                    <div style={{ flex: 0.75 }}>
+                    <div>
                       <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Unit Price</label>
-                      {/* #333: 0..9,999,999.99 (1 crore cap). Anything bigger
-                          is a paste-typo, not a real estimate line item. */}
                       <input
                         type="number"
                         step="0.01"
@@ -421,13 +417,12 @@ export default function Estimates() {
                         className="input-field"
                         value={item.unitPrice}
                         onChange={e => handleLineItemChange(index, 'unitPrice', e.target.value)}
+                        style={{ color: '#000 !important', colorScheme: 'light', textAlign: 'right' }}
                         aria-label={`Line item ${index + 1} unit price`}
                       />
                     </div>
-                    <div style={{ flex: 0.5 }}>
+                    <div>
                       <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Disc %</label>
-                      {/* #333: percent discount 0..100. Anything else flips
-                          the line total negative and breaks the ledger. */}
                       <input
                         type="number"
                         min={DISCOUNT_MIN}
@@ -436,40 +431,43 @@ export default function Estimates() {
                         className="input-field"
                         value={item.discount ?? 0}
                         onChange={e => handleLineItemChange(index, 'discount', e.target.value)}
+                        style={{ color: '#000 !important', colorScheme: 'light', textAlign: 'center' }}
                         aria-label={`Line item ${index + 1} discount percent`}
                       />
                     </div>
-                    <div style={{ flex: 0.5, textAlign: 'right' }}>
-                      <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Total</label>
-                      {(() => {
-                        const q = Number(item.quantity);
-                        const p = Number(item.unitPrice);
-                        const d = Number(item.discount ?? 0);
-                        const lineInvalid =
-                          !Number.isFinite(q) || q < QTY_MIN || q > QTY_MAX ||
-                          !Number.isFinite(p) || p < UNIT_PRICE_MIN || p > UNIT_PRICE_MAX ||
-                          !Number.isFinite(d) || d < DISCOUNT_MIN || d > DISCOUNT_MAX;
-                        const lineTotal = lineInvalid
-                          ? 0
-                          : q * p * (1 - d / 100);
-                        return (
-                          <span style={{ fontSize: '0.85rem', fontWeight: '600', color: lineInvalid ? '#ef4444' : '#10b981' }}>
-                            {formatCurrency(lineTotal)}
-                          </span>
-                        );
-                      })()}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gridColumn: '1 / -1' }}>
+                      <div style={{ textAlign: 'right', flex: 1 }}>
+                        <label style={{ display: 'block', fontSize: '0.7rem', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>Total</label>
+                        {(() => {
+                          const q = Number(item.quantity);
+                          const p = Number(item.unitPrice);
+                          const d = Number(item.discount ?? 0);
+                          const lineInvalid =
+                            !Number.isFinite(q) || q < QTY_MIN || q > QTY_MAX ||
+                            !Number.isFinite(p) || p < UNIT_PRICE_MIN || p > UNIT_PRICE_MAX ||
+                            !Number.isFinite(d) || d < DISCOUNT_MIN || d > DISCOUNT_MAX;
+                          const lineTotal = lineInvalid
+                            ? 0
+                            : q * p * (1 - d / 100);
+                          return (
+                            <span style={{ fontSize: '0.95rem', fontWeight: '600', color: lineInvalid ? '#ef4444' : '#10b981' }}>
+                              {formatCurrency(lineTotal)}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeLineItem(index)}
+                        style={{
+                          background: 'transparent', border: 'none', cursor: 'pointer',
+                          color: 'var(--text-secondary)', padding: '0.5rem', marginLeft: '1rem',
+                        }}
+                        aria-label={`Remove line item ${index + 1}`}
+                      >
+                        <X size={18} />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => removeLineItem(index)}
-                      style={{
-                        background: 'transparent', border: 'none', cursor: 'pointer',
-                        color: 'var(--text-secondary)', padding: '0.3rem',
-                      }}
-                      aria-label={`Remove line item ${index + 1}`}
-                    >
-                      <X size={16} />
-                    </button>
                   </div>
                 ))}
               </div>

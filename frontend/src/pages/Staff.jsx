@@ -223,7 +223,7 @@ export default function Staff() {
                       {new Date(member.createdAt).toLocaleDateString()}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem' }}>
-                      {canManageStaff ? (
+                      {canManageStaff && member.role !== 'ADMIN' ? (
                         <button
                           onClick={() => deleteUser(member.id, member.name || member.email)}
                           title="Delete user"

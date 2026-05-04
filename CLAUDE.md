@@ -360,7 +360,7 @@ The 15-min recurring cron appends short observations here at the end of every wa
 
 **Format:** one bullet per learning, prefixed with `<YYYY-MM-DD HH:MM> — <commit-sha or "no-commit">` + a short topic + a one-paragraph observation. Keep it tight; if it doesn't fit in a paragraph, the learning is too big and should go straight into a TODOS.md user-attention item instead.
 
-**Why this lives in CLAUDE.md (not a separate file):** the autonomous loop needs to find this section by name to append into, and the manual review needs the section visible in every session's context. CLAUDE.md is loaded by default, so both reads are reliable. After review, accepted entries move to their permanent home (skill / standing rule) and the bullet is removed; archived ones go to `docs/cron-learnings-archive.md`. The section should not accumulate indefinitely — if it's >10 entries deep, surface that to the user as "ready for review."
+**Why this lives in CLAUDE.md (not a separate file):** the autonomous loop needs to find this section by name to append into, and the manual review needs the section visible in every session's context. CLAUDE.md is loaded by default, so both reads are reliable. After review, accepted entries move to their permanent home (skill / standing rule) and the bullet is removed; archived ones go to `docs/cron-learnings-archive.md`.
 
 **Don't manually add to this section unless you're the cron** — use TODOS.md handoff blocks for everything else.
 

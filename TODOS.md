@@ -124,7 +124,7 @@ This firing's autonomous fix:
 
 ### 🔔 Cron-learnings section ready for review (9 entries)
 
-`CLAUDE.md` "🤖 Cron learnings" is at 9 entries, one shy of the ~10-entry review threshold. Trigger phrasing: "review the cron learnings" or "let's go through the cron-logged stuff." I'll walk each entry → propose skill / standing-rule / archive / drop → wait for `yes` per entry.
+`CLAUDE.md` "🤖 Cron learnings" is at 9 entries. Trigger phrasing: "review the cron learnings" or "let's go through the cron-logged stuff." I'll walk each entry → propose skill / standing-rule / archive / drop → wait for `yes` per entry. Review cadence is whatever the user decides — no threshold.
 
 ### Notes for the next session
 

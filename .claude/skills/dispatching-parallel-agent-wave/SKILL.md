@@ -149,6 +149,27 @@ When all agents in a wave return:
 - **Don't bundle the wire-in commits with the spec commits if you're worried about collisions.** Sometimes a separate wire-in commit AFTER all spec commits land is cleaner.
 - **Don't forget to update TODOS.md** after a wave. The next session's pickup depends on it.
 
+## When to bundle multiple fixes into ONE commit (added 2026-05-05)
+
+A single closer agent often lands N fixes in M files. Two valid commit shapes:
+
+**1 commit covering all N fixes** — right when:
+- The fixes touch DIFFERENT files with no shared touchpoint
+- They're being dispatched together as a coherent "fix this cluster" ask from the user
+- You want one closing-comment SHA to point all N closed issues at
+- The commit body can structure each fix into a per-issue section with "Closes #N" trailers
+
+The 2026-05-05 #439/#440/#441/#448/#452/#456-partial cluster (`4e116ad`) hit this shape — 6 issues in 6 files, no overlap, single commit, GitHub auto-closed each via the trailers.
+
+**N separate commits (one per fix)** — right when:
+- The fixes touch the SAME file and you want clean `git bisect`
+- One fix is significantly more invasive than the others and the others can ship without it
+- You want each issue's closing-comment SHA to point at its own targeted commit
+
+**Rule of thumb:** N fixes in M files with no shared touchpoint → 1 commit. N fixes you want to bisect-isolate → N commits.
+
+The autonomous bug-fix-cluster pattern (when the user says "fix these issues" with a list of 5+) is **shape 1 by default**: pre-grep each candidate first (catches Pattern A drift in 30s/issue, often more than half qualify per the v3.4.8 → v3.4.11 arc), cluster the genuine fixes by file-locality, ship as a structured single commit. This is faster and easier for closing-comment hygiene than N sequential commits.
+
 ## Templates
 
 See `AGENT_PROMPT_TEMPLATE.md` for the full per-agent prompt skeleton with placeholder slots.

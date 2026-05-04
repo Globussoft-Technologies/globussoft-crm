@@ -122,9 +122,9 @@ This firing's autonomous fix:
 
 **Cumulative across v3.4.8 → today (post-batch-5):** **24 issues closed** (16 stale-sweep + 8 real fixes) + **6 small fixes shipped** + **1 backend partial** (#451 still partial) + **2 partial/no-repro triages**. The #456 backend partial is now full-closed; #451 form properties is the only remaining backend partial.
 
-### 🔔 Cron-learnings section ready for review (9 entries)
+### Cron-learnings reviewed 2026-05-05 — section is currently empty
 
-`CLAUDE.md` "🤖 Cron learnings" is at 9 entries. Trigger phrasing: "review the cron learnings" or "let's go through the cron-logged stuff." I'll walk each entry → propose skill / standing-rule / archive / drop → wait for `yes` per entry. Review cadence is whatever the user decides — no threshold.
+All 9 entries from the initial review batch dispositioned: 3 standing-rule promotions (JSX-escape, Bash permission-allowlist scope, cron `durable:true` ignored) added to `CLAUDE.md`; 1 skill extension (`dispatching-parallel-agent-wave` got a "When to bundle multiple fixes into ONE commit" section); 5 archived to [docs/cron-learnings-archive.md](docs/cron-learnings-archive.md) with disposition rationale; 0 dropped silently (the 2 "drops" went to the archive too with explicit "dropped — narrow concern" notes). Trigger phrasing for the next review: "review the cron learnings" — no threshold, runs whenever the user wants.
 
 ### Notes for the next session
 

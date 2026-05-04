@@ -1,5 +1,73 @@
 # CHANGELOG
 
+## v3.4.7 — 2026-05-04 — QA P0/P1 closure + #405 demo-pollution root-cause + PR #444 visitors dashboard + #413 batch 3 (drift 29 → 19)
+
+A QA-triage continuation of v3.4.6. **One new product feature** (visitors dashboard via PR #444) plus three real security/compliance fixes (#426 P0, #343 P1, #405 P1), the demo-pollution root cause that's been generating cluster issues for two weeks (#403/#405), the third batch of #413 schema-relation hygiene (drift 29 → 19), plus 4 new regression-guard test files preventing the same bug classes from reappearing.
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.6 | v3.4.7 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | ~69 specs / ~2,442 tests | **~71 specs** / ~2,460 tests | +2 specs / +18 tests |
+| Per-push unit tests | vitest | 37 files / 995 tests | **39 files** / 1,093 tests | +2 files / +98 tests |
+| **Total per-push** |  | ~3,437 | **~3,553** | **+108 tests / +3%** |
+
+### Fixed — 3 real security/compliance issues closed
+
+- **#426 P0 portalPasswordHash leak** (commit `52da8da`) — patient-portal hashed password column leaked on `/api/contacts` list/detail, billing `include: { contact: true }`, and audienceController. **Fix**: new global `scrubResponse` middleware (`backend/middleware/scrubResponse.js`) wraps `res.json` and recursively strips `portalPasswordHash` from any payload. 17 vitest tests covering nested includes + 6 Playwright tests pinning the contract across the leak surfaces. Bonus #425 hardening: 5 detector tests now use `--no-commit-blessings` so commit-message blessings can't accidentally suppress security regressions.
+- **#343 P1 token-in-localStorage SSO leftover** (commit `b1fef79`) — `App.jsx:357` had a leftover write of `localStorage.setItem('token', …)` from before the v3.2.5 sessionStorage migration. **Fix**: deleted the bare write. **Defense-in-depth bundled**: extended `stripDangerous` deny-list with `isAdmin` / `passwordHash` / `portalPasswordHash` (#427) so future code paths can't echo them back via request body; new `e2e/tests/tenant-header-ignored-api.spec.js` (5 tests) pins that no route honors `X-Tenant-Id` over the JWT (#428); new `frontend/src/__tests__/security-token-storage.test.js` (4 tests) bans any future write of `localStorage.setItem(<token>)` in production code via static checks.
+- **#405 P1 demo-pollution root cause** (commit `e423f28`) — the `_teardown_*` rename pattern (introduced in `04e5b56`, 2 weeks old) shipped without updating the demo-scrub script's pattern list, so renamed rows piled up forever and seeded #403/#405 plus 4 sibling issues. **Fix**: added `/^_teardown_/` to `e2e/test-data-patterns.js`. New `backend/test/scripts/test-data-patterns.test.js` (76 tests) locks down the entire scrub pattern list — the next test-data convention shipping a new prefix marker without adding it to the patterns will fail this test, not pile up on demo for two weeks. 342 rows scrubbed via manual e2e-full trigger.
+
+### Issues closed this session (13 total)
+
+- ✅ **Real fixes** (3): #426 P0, #343 P1, #405 P1 (commits above)
+- ✅ **Already-fixed-but-unclosed** (1): #411 retentionEngine missing AuditLog (fixed in v3.4.3, just needed close)
+- ✅ **Pollution-cluster siblings of #405** (4) — auto-cleared by the scrub pattern fix: #403 Tenant B scoped E2E_FLOW_* tasks, #319 Lifecycle X owner dashboard recommendations, #310 alert('XSS') / Valid Name invoice contacts, #328 Test Article 001 KB articles
+- ✅ **False positives verified via code grep + live demo curl** (6 + 1): #295 OTP rate limit (limiters wired at `wellness.js:3979`), #342 Security headers (all 6 present, CSP intentionally off), #404 Public-booking locations (returns 4 not empty), #427 Mass-assignment role/isAdmin (Prisma rejects unknown fields; defense-in-depth shipped anyway), #428 X-Tenant-Id IDOR (zero header reads in code; regression-guard shipped anyway), #432 Public booking 501 (returns 400 on missing fields), #442 Service radius null-as-0 booking-blocker (false on booking; narrower orchestrator-ranking issue documented)
+
+### Added — PR #444 visitors dashboard (`ba3afa0`)
+
+Web visitor tracking dashboard, +743 / −89 across 14 files. Shipped via standalone PR rather than the parallel-wave path. Required two follow-up commits to unblock main:
+- `e423f28` — lint fix (`req.user.id` violation in `routes/communications.js:108+133` introduced by the PR; also bundled the #405 root-cause fix in the same commit)
+- `d684b1a` — `/send-email` contract revert (PR changed it from 200-always to 400-on-mailgun-fail; broke 22 communications-api spec tests). Validation hardening preserved inside `sendMailgun`.
+
+### Added — #413 batch 3 (10 more `@relation` declarations, drift 29 → 19)
+
+Closes 10 more multi-tenant models that lack a formal `tenant Tenant @relation`. Calendar + sales-config + KB + SLA cluster (commit `48a924f`):
+- **Calendar/Scheduling (4)**: CalendarIntegration, CalendarEvent, ScheduledEmail, Booking
+- **Sales config (3)**: Pipeline (skipped — already done in batch 2; substituted), Quota (skipped — done in batch 1; substituted), Pipeline progress (PlaybookProgress) **handled separately**
+- **KB / SLA (3)**: KbCategory, KbArticle, SlaPolicy
+
+**PlaybookProgress audit shipped same wave** (commits `1811dda` + `f3be1ff`) — has `@@unique([dealId, playbookId])` whose docstring previously said "tenantId is implicit via dealId". Audit decision: defensive `@relation` + tenantId added to the unique key. Migration blessed with `[allow-unique]` per #425. Drift counter dropped **29 → 19**.
+
+### Added — 4 new regression-guard test files (~108 tests)
+
+| File | Tests | Guards against |
+|---|---|---|
+| `frontend/src/__tests__/security-token-storage.test.js` | 4 | Any future write of `localStorage.setItem(<token>)` in production code; setAuthToken/getAuthToken sessionStorage-only contract (#343) |
+| `backend/test/middleware/scrubResponse.test.js` | 17 | portalPasswordHash leaking through any `res.json` including nested `include: { contact: true }` (#426) |
+| `backend/test/middleware/validateInput.test.js` (extended) | +5 | Future addition of role/password to deny-list breaking login; mass-assignment of isAdmin/passwordHash (#427) |
+| `e2e/tests/sensitive-field-leak-api.spec.js` | 6 | API-side regression of #426 across `/api/contacts` list/detail/create + billing include + audienceController |
+| `e2e/tests/tenant-header-ignored-api.spec.js` | 5 | Any future route honoring `X-Tenant-Id` header over the JWT (#428) |
+| `backend/test/scripts/test-data-patterns.test.js` | 76 | The next test-data convention shipping a new prefix marker without adding it to the scrub patterns (#405-class drift) |
+
+### Process notes — code-grep verification beat re-derivation
+
+**6 of 9 P0/P1 issues turned out to be false positives.** Of the 9 QA-filed P0/P1s reviewed this session, only 3 (#426, #343, #405) needed real code changes; the other 6 either described code paths that don't exist (#428 X-Tenant-Id), behaviour that's already protected (#295 OTP limiters, #342 helmet headers), endpoints returning the right thing (#404, #432), or schema constraints already enforced by Prisma (#427 mass-assignment). **Lesson**: cheap code-grep verification (`grep -rn 'X-Tenant-Id' backend/`) beats re-deriving each ticket as a fix-from-scratch. The defense-in-depth regression-guards shipped anyway because the test cost is low and they pin the contract for any future drift.
+
+### Carry-over for v3.4.8
+
+- **3 surviving `_teardown_iso_*` rows on demo** (IDs 301/319/328) were still visible right after this session's manual e2e-full scrub trigger. Likely created by matrix shards AFTER scrub started (concurrent shard activity). Verify next scheduled e2e-full or fresh manual trigger catches them. If they persist after 2 cycles, investigate whether some other workflow writes fixtures to demo outside the e2e-full lifecycle.
+- **#180** No JWT revocation / logout endpoint — 4-6h, build session-revocation table.
+- **#436** Tasks queue empty for Owner persona — 2-4h investigation, likely a where-clause bug.
+- **#398** Drip Sequences accept HTML/JS in name — 1h, wire `sanitizeBody` middleware on the route.
+- **#443** GDPR DSAR export 501 stub — 1-2 days for real implementation.
+- **#413** schema cleanup remaining 19 models — 2 batches × 1h; chat/live + dashboards clusters next (batch 4).
+- **G-21** Frontend vitest + RTL coverage expansion (16 component test files exist; need ~50+ more) — 3-5 days.
+- **T2.2** Audit-log middleware build-out (Patient/Visit/Rx/Consent) — 4-5 days.
+
+---
+
 ## v3.4.6 — 2026-05-04 — wellness.js split complete (G-17 + G-18 + G-19 all ✅) + #425 G-23 allowlist + #413 batch 2 (drift 39 → 29)
 
 A wave-18 continuation. **No new product features**; this release closes the three-way wellness.js split (G-17 dashboard + G-18 reports + G-19 telecaller from earlier today, all ✅), adds the G-23 commit-message allowlist (#425) so legitimate-but-flagged schema changes can be blessed, and ships #413 batch 2 (10 more `@relation` declarations on auth/security/integration models, dropping invariant drift 39 → 29).

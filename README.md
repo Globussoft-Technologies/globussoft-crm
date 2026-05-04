@@ -1,10 +1,25 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with **5 mandatory deploy gates** (build / lint / api_tests / unit_tests / migration_check) + commit-message blessings (`[allow-unique]` etc.) for legitimate-but-flagged schema changes + auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **~3,437 tests on every push** (~2,442 Playwright + 995 vitest); release-validation full chromium suite on every tag. **8 reusable Claude Skills** + **live agent-activity widget** at /developer for parallel-wave visibility. `docs/gaps/archive/` convention for fully-closed gap-files.
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with **5 mandatory deploy gates** (build / lint / api_tests / unit_tests / migration_check) + commit-message blessings (`[allow-unique]` etc.) for legitimate-but-flagged schema changes + auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **~3,553 tests on every push** (~2,460 Playwright + 1,093 vitest); release-validation full chromium suite on every tag. **8 reusable Claude Skills** + **live agent-activity widget** at /developer for parallel-wave visibility. `docs/gaps/archive/` convention for fully-closed gap-files.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.6
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.7
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.4.7 (May 4 2026 — QA P0/P1 closure + #405 demo-pollution root-cause + PR #444 visitors dashboard + #413 batch 3)
+
+A QA-triage continuation of v3.4.6. **One new product feature** (visitors dashboard via PR #444) plus three real security/compliance fixes plus the demo-pollution root cause that's been generating cluster issues for two weeks.
+
+- **#426 P0 portalPasswordHash leak closed**: new global `scrubResponse` middleware strips `portalPasswordHash` from every `res.json` payload (including nested `include: { contact: true }`). 17 vitest + 6 Playwright tests pin the contract; #425 hardening (5 detector tests now use `--no-commit-blessings`) prevents future commit-blessings from suppressing security regressions.
+- **#343 P1 token-in-localStorage SSO leftover deleted** + 3-test defense-in-depth bundle: extended `stripDangerous` deny-list with `isAdmin`/`passwordHash`/`portalPasswordHash` (#427); `tenant-header-ignored-api.spec.js` (5 tests) pins that no route honors `X-Tenant-Id` over the JWT (#428); frontend `security-token-storage.test.js` (4 tests) bans any future `localStorage.setItem(<token>)` write.
+- **#405 P1 demo-pollution root cause closed**: the 2-week-old `_teardown_*` rename pattern shipped without updating the demo-scrub script's pattern list. Fix added `/^_teardown_/` to `e2e/test-data-patterns.js` + 76-test regression guard locking down the entire scrub pattern list. Auto-cleared 4 sibling cluster issues (#403/#319/#310/#328); 342 rows scrubbed.
+- **PR #444 visitors dashboard merged** (+743 / −89, 14 files) — web visitor tracking UI; required 2 follow-up commits to unblock main (lint fix + `/send-email` 200-always contract revert).
+- **#413 batch 3 + PlaybookProgress audit** — 10 more `@relation` declarations on calendar / scheduled-email / KB / SLA cluster + tenantId-keyed `@@unique` audit on `PlaybookProgress`. Schema-invariants drift counter dropped **29 → 19**.
+- **13 issues closed in one pass** — 3 real fixes + 1 already-fixed-but-unclosed (#411) + 4 pollution-cluster siblings auto-cleared by #405 + 6 false positives verified via code grep.
+
+Per-push gate is now **~71 specs / ~2,460 tests + 39 vitest files / 1,093 unit tests = ~3,553 tests on every push** (+108 vs v3.4.6).
+
+See [CHANGELOG.md](CHANGELOG.md#v347--2026-05-04--qa-p0p1-closure--405-demo-pollution-root-cause--pr-444-visitors-dashboard--413-batch-3-drift-29--19) for the full v3.4.7 entry.
 
 ## What's new in v3.4.6 (May 4 2026 — wellness.js split complete + #425 allowlist + #413 batch 2)
 

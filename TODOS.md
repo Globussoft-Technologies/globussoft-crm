@@ -6,9 +6,9 @@
 
 ---
 
-## 🏁 NEXT-SESSION HANDOFF (2026-05-04 afternoon — QA P0/P1 triage + #403/#405 root-cause + PR #444 unblock)
+## 🏁 NEXT-SESSION HANDOFF (2026-05-04 afternoon — v3.4.7 tagged: QA P0/P1 closure + #403/#405 root-cause + PR #444)
 
-**HEAD on origin/main:** `d684b1a`. Per-push gate ✅ GREEN. Live on demo. **9 commits since v3.4.6** (`5249487`); ~3,553 tests on every push (+108 from this session); 5 mandatory deploy gates.
+**HEAD on origin/main:** `d684b1a` (last code commit; doc-bump for v3.4.7 follows). **Tag `v3.4.7` pushed** → e2e-full release-validation now firing against demo. Per-push gate ✅ GREEN. **9 commits since v3.4.6** (`5249487`); ~3,553 tests on every push (+108 from this session); 5 mandatory deploy gates.
 
 ### Why this session
 
@@ -66,11 +66,11 @@ User asked to triage the QA-filed P0/P1 issues, fix the real ones, and add regre
 
 **Per-push gate state**: ~71 specs / ~2,460 API tests + 39 vitest files / 1,093 unit tests = **~3,553 tests on every push** (+108 vs v3.4.6). All 5 mandatory deploy gates green at HEAD `d684b1a`.
 
-### Three things to do first when picking this up at office
+### Three things to do first next session
 
-1. **Tag v3.4.7** — `git tag -a v3.4.7 -m "..." && git push origin v3.4.7`. 9 commits since v3.4.6 including 3 real security fixes + 1 P1 demo-blocker root-cause + PR #444 visitors dashboard. Fires e2e-full release-validation. **Doc bump** (CHANGELOG / README / CLAUDE.md / E2E_GAPS.md) needs to happen as part of the tag prep — use the `bumping-version-docs` skill.
+1. **Watch the v3.4.7 e2e-full release-validation run** — fires automatically on `v3.4.7` tag push. Should land in [GitHub Actions e2e-full.yml](https://github.com/Globussoft-Technologies/globussoft-crm/actions/workflows/e2e-full.yml) within ~30 min. If it stays green, the release stands. If a spec turns red, fix on main + retag (`git tag -fa v3.4.7 + git push -f origin v3.4.7`) — but only if the failure is a genuine product regression, not a flaky-suite issue.
 
-2. **Verify the 3 surviving `_teardown_iso_*` locations on demo are scrubbed by the next e2e-full cycle.** Right after the manual trigger today, IDs 301/319/328 were still visible — these are likely created by the matrix shards AFTER the scrub started (concurrent shard activity). Next scheduled e2e-full or a fresh manual trigger will catch them. If they persist after 2 cycles, investigate whether some other workflow is writing fixtures to demo outside the e2e-full lifecycle.
+2. **Verify the 3 surviving `_teardown_iso_*` locations on demo are scrubbed by the next e2e-full cycle.** Right after the manual trigger this session, IDs 301/319/328 were still visible — these are likely created by the matrix shards AFTER the scrub started (concurrent shard activity). Next scheduled e2e-full or a fresh manual trigger will catch them. If they persist after 2 cycles, investigate whether some other workflow is writing fixtures to demo outside the e2e-full lifecycle.
 
 3. **Pick the next P1/P2 from the open-issue list** (most are quick wins now that the false positives are out of the way):
    - **#180** No JWT revocation / logout endpoint (4-6h, build session-revocation table)

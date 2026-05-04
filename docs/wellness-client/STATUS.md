@@ -1,10 +1,10 @@
 # Enhanced Wellness — Build Status
 
 **Companion to:** [PRD.md](PRD.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [EXTERNAL_API.md](EXTERNAL_API.md), [SANDBOX.md](SANDBOX.md)
-**Last updated:** 2026-05-02 (v3.3.0 tagged 2026-05-01 — test-infrastructure release with no wellness feature changes; the wellness vertical itself remains at v3.2.5 feature parity. Subsequent post-release commits added regression-coverage specs + bug fixes — see [TODOS.md](../../TODOS.md) for the architect-priority sequencing.)
+**Last updated:** 2026-05-04 (v3.4.9 tagged — multi-session test-infra + compliance arc since v3.3.0; the wellness vertical's product surface still aligns with v3.2.5 feature parity. The v3.4.x arc shipped wellness-relevant compliance + observability gains: T2.2 PHI read-audit on 6 staff GET handlers (v3.4.8), patient self-DSAR `/api/wellness/portal/export` for DPDP §15 / GDPR Art. 15 (v3.4.9), schema-relation hygiene complete with `tenant Tenant @relation` on 100% of multi-tenant models (#413, drift counter 49 → 0 across 4 batches), wellness.js split into 3 dedicated specs (G-17/G-18/G-19, ~146 tests). Per-push gate is now ~3,629 tests on every push. See [TODOS.md](../../TODOS.md) for the architect-priority sequencing + the long-tail open items.)
 **Live at:** https://crm.globusdemos.com
 **Tenant:** `enhanced-wellness` (id 2, vertical `wellness`)
-**Production HEAD:** continually advances on every push to `main` — check [GitHub Actions deploy runs](https://github.com/Globussoft-Technologies/globussoft-crm/actions/workflows/deploy.yml) for the latest deployed commit. Last release tag: `v3.3.0` (2026-05-01).
+**Production HEAD:** continually advances on every push to `main` — check [GitHub Actions deploy runs](https://github.com/Globussoft-Technologies/globussoft-crm/actions/workflows/deploy.yml) for the latest deployed commit. Last release tag: `v3.4.9` (2026-05-04).
 
 ---
 

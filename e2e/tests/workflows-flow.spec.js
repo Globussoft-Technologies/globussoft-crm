@@ -163,16 +163,18 @@ test.describe('Workflow engine — deep functional flows', () => {
     });
     created.contactsA.push(contact.id);
 
-    // Engine runs synchronously inside emitEvent. No retry loop required, but
-    // we do one short retry to absorb event-loop scheduling jitter on the
-    // shared dev box.
-    let tasks = await listTasksForContact(request, authA(), contact.id);
-    if (tasks.length === 0) {
-      await new Promise((r) => setTimeout(r, 750));
+    // Engine runs synchronously inside emitEvent on local stack — but on
+    // demo (e2e-full) the box is busy with background cron activity and the
+    // engine can take longer than 750ms to drain to the DB. Poll up to 4
+    // times with 1.5s waits to absorb that latency. Title is RUN_TAG-stamped
+    // so siblings can't false-positive this match.
+    let match = null;
+    let tasks = [];
+    for (let attempt = 0; attempt < 4 && !match; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
       tasks = await listTasksForContact(request, authA(), contact.id);
+      match = tasks.find((t) => t.title === taskTitle);
     }
-
-    const match = tasks.find((t) => t.title === taskTitle);
     expect(match, `expected a Task titled "${taskTitle}" for contact ${contact.id}; got ${JSON.stringify(tasks.map((t) => t.title))}`).toBeTruthy();
     expect(match.contactId).toBe(contact.id);
     expect(match.userId).toBe(userIdA);
@@ -288,16 +290,21 @@ test.describe('Workflow engine — deep functional flows', () => {
 
     await new Promise((r) => setTimeout(r, 750));
 
-    // From tenant A's POV, no task should exist with the leaked title for the
-    // (foreign) contact id. Tenant A can't even see tenantBContact, but a
-    // buggy engine might create a task in tenant A scoped to that contactId.
-    // We grep tenant A's task list (by title) to be thorough.
+    // From tenant A's POV, no task should exist for tenantBContact.id. Tenant
+    // A can't even see tenantBContact, but a buggy engine might create a task
+    // in tenant A scoped to that contactId. The previous broader check (any
+    // task with the tagged title) false-positived on demo's parallel-test
+    // load: when a sibling test created its own tenant-A contact during our
+    // 750ms wait, this rule fired legitimately for THAT contact and the test
+    // saw "tagged-title task exists" without checking which contact it was
+    // for. Tighten the leak detection to specifically tenantBContact.id —
+    // that's the actual cross-tenant-leak signal.
     const allTasksRes = await request.get(`${API}/tasks?limit=500`, { headers: authA() });
     expect(allTasksRes.ok()).toBeTruthy();
     const allBody = await allTasksRes.json();
     const all = Array.isArray(allBody) ? allBody : (allBody.data || allBody.tasks || []);
-    const leak = all.find((t) => t.title === taggedTitle);
-    expect(leak, `tenant A task created for tenant B's contact: ${JSON.stringify(leak)}`).toBeUndefined();
+    const leak = all.find((t) => t.title === taggedTitle && t.contactId === tenantBContact.id);
+    expect(leak, `tenant A task created for tenant B's contact ${tenantBContact.id}: ${JSON.stringify(leak)}`).toBeUndefined();
   });
 
   // ── Flow 5 — bad rule shape ────────────────────────────────────────

@@ -1,10 +1,25 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with **5 mandatory deploy gates** (build / lint / api_tests / unit_tests / migration_check) + auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **~3,305 tests on every push** (~2,326 Playwright + 979 vitest); release-validation full chromium suite on every tag. **8 reusable Claude Skills** + **live agent-activity widget** at /developer for parallel-wave visibility. New `docs/gaps/archive/` convention for fully-closed gap-files.
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with **5 mandatory deploy gates** (build / lint / api_tests / unit_tests / migration_check) + commit-message blessings (`[allow-unique]` etc.) for legitimate-but-flagged schema changes + auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **~3,437 tests on every push** (~2,442 Playwright + 995 vitest); release-validation full chromium suite on every tag. **8 reusable Claude Skills** + **live agent-activity widget** at /developer for parallel-wave visibility. `docs/gaps/archive/` convention for fully-closed gap-files.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.5
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.6
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.4.6 (May 4 2026 — wellness.js split complete + #425 allowlist + #413 batch 2)
+
+A wave-18 continuation. **No new product features**; this release closes the three-way wellness.js split (G-17 + G-18 + G-19 all ✅ — the 4,050-line / 41% coverage file is now exercised by 146 dedicated tests across 3 specs), adds the G-23 commit-message allowlist (#425), and ships the second batch of #413 schema-relation hygiene.
+
+- **G-17 wellness-dashboard-api**: 40 tests / 14.4s. 5 endpoints; full-shape pinning of dashboard payload (today/yesterday/pendingApprovals/30d revenueTrend/totals/activeTreatmentPlans); state-machine assertions on recommendations approve/reject (idempotency + cross-state 422 INVALID_RECOMMENDATION_TRANSITION); RBAC + tenant-vertical gates.
+- **G-18 wellness-reports-api**: 76 tests / 20.3s. 12 endpoints (4 JSON tabs + 8 export siblings); CSV pins UTF-8 BOM + CRLF + attachment disposition; PDF pins `%PDF-` magic + Content-Length match; #233 zero-leads-zero-revenue attribution invariant locked. Route uses `.csv`/`.pdf` path suffixes (not `?format=`).
+- **#425 G-23 allowlist**: commit-message markers (`[allow-unique]` / `[allow-drop]` / `[allow-not-null]` / `[allow-narrow]`) skip the corresponding migration-safety detector for THIS commit only. Cross-class isolated — `[allow-unique]` does NOT bless other classes. 16 vitest + 4 playwright tests covering the un-blessing path + isolation invariants.
+- **#413 batch 2** (10 more `@relation` declarations, drift 39 → 29): Security/Auth (RevokedToken, ScimToken, SsoConfig); Integration/Sales (Pipeline, Playbook, BookingPage); RBAC/Compliance/Sandbox (FieldPermission, RetentionPolicy, ApprovalRequest, SandboxSnapshot). All use `onDelete: Cascade` explicitly. Issue stays open for batch 3 (calendar + scheduled-email cluster).
+
+**Zero healing commits this wave** — wave 16 had 3, wave 17 had 0, wave 18 had 0. Discipline improvements that helped: discovery-first spec authoring (against actual route source, not prompt assumptions), pinning `code:` fields rather than regex on prose error messages, stash/pop concurrency etiquette across agents.
+
+Per-push gate is now **~69 specs / ~2,442 tests + 37 vitest files / 995 unit tests = ~3,437 tests on every push** (+4% vs v3.4.5).
+
+See [CHANGELOG.md](CHANGELOG.md#v346--2026-05-04--wellnessjs-split-complete-g-17--g-18--g-19-all---425-g-23-allowlist--413-batch-2-drift-39--29) for the full v3.4.6 entry.
 
 ## What's new in v3.4.5 (May 4 2026 — autonomous-orchestrator continuation: 4 issues closed, 4 E2E_GAPS rows shipped, schema invariant drift 49 → 39)
 

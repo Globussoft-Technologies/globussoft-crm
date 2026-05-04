@@ -1,10 +1,59 @@
 # CHANGELOG
 
+## v3.4.6 — 2026-05-04 — wellness.js split complete (G-17 + G-18 + G-19 all ✅) + #425 G-23 allowlist + #413 batch 2 (drift 39 → 29)
+
+A wave-18 continuation. **No new product features**; this release closes the three-way wellness.js split (G-17 dashboard + G-18 reports + G-19 telecaller from earlier today, all ✅), adds the G-23 commit-message allowlist (#425) so legitimate-but-flagged schema changes can be blessed, and ships #413 batch 2 (10 more `@relation` declarations on auth/security/integration models, dropping invariant drift 39 → 29).
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.5 | v3.4.6 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | ~67 specs / ~2,326 tests | **~69 specs** / ~2,442 tests | +2 specs / +116 tests |
+| Per-push unit tests | vitest | 36 files / 979 tests | **37 files** / 995 tests | +1 file / +16 tests |
+| **Total per-push** |  | ~3,305 | **~3,437** | **+4%** |
+
+### Added — 2 more E2E_GAPS rows shipped (wellness.js split complete)
+
+- **G-17** wellness-dashboard-api spec (`54b1ff1` + `4ec8873`) — **40 tests / 14.4s**. 5 endpoints: `GET /wellness/dashboard` (full-shape pin: today.{visits, completed, expectedRevenue, occupancyPct, newLeads, noShowRisk}, yesterday, pendingApprovals === pendingRecommendations.length capped 5, `revenueTrend` exactly 30 entries ascending, totals, activeTreatmentPlans), `GET /wellness/recommendations` with `?status` filter + #308 response-level dedup contract (no duplicate `(type, lcase title)` group keys, cap 50), `PUT /:id` with 422 AMEND_TERMINAL on approved/rejected rows, `POST /:id/approve` race-safe pending → approved + same-state idempotency + cross-state 422 `INVALID_RECOMMENDATION_TRANSITION`, `POST /:id/reject` mirroring approve. RBAC: #207/#216 wellnessRole gate (doctor/professional/helper/telecaller → 403 `WELLNESS_ROLE_FORBIDDEN`); #325 tenant-vertical gate (generic admin → 403 `WELLNESS_TENANT_REQUIRED`). No contract drift findings.
+- **G-18** wellness-reports-api spec (`561ab6b` + `5a18291`) — **76 tests / 20.3s**. 12 endpoints: 4 JSON tabs (`/reports/pnl-by-service`, `/per-professional`, `/per-location`, `/attribution`) + 8 export siblings (`.csv` + `.pdf` for each tab). CSV pins `text/csv; charset=utf-8` + UTF-8 BOM (0xEF 0xBB 0xBF) + CRLF + attachment disposition with date-stamped filename + PII-leak negative regex; PDF pins `application/pdf` + `%PDF-` magic + Content-Length match. JSON shape pins window/totals/rows envelope, P&L `canonical` block (#281), revenue-desc row sort, integer counts, rates ∈ [0,100], #233 zero-leads-zero-revenue attribution invariant, exact roll-up of row counts into totals. **Important correction from prompt**: route uses `.csv`/`.pdf` path suffixes, not `?format=` query param — agent wrote against actual code. No contract drift findings.
+
+The wellness.js 4,050-line / 41% coverage file is now split across **three** dedicated specs (G-17 + G-18 + G-19) totaling **~146 tests** with full RBAC + tenant isolation + state-machine coverage. The original gap card called this 1-2 days each = 3-6 days of work; landed in 3 sequential parallel waves.
+
+### Fixed — #425 G-23 migration-safety allowlist (`1a51fe6`)
+
+Wave-17 commit `cfed31b` (CalendarEvent unique-addition) tripped the `UNIQUE_ADDITION` detector even though the new constraint was strictly more permissive than the old. The detector can't reason at the semantic level. **Fix**: opt-in commit-message blessings.
+
+Four markers (case-insensitive, all 4 cross-class isolated):
+- `[allow-unique]` — bless `UNIQUE_ADDITION` for THIS commit only
+- `[allow-drop]` — bless `COLUMN_DROP`
+- `[allow-not-null]` — bless `NOT_NULL_WITHOUT_DEFAULT`
+- `[allow-narrow]` — bless `TYPE_NARROWING`
+
+Plus `--no-commit-blessings` flag for testing the un-blessed path. Plus `MIGRATION_SAFETY_COMMIT_MSG` env override (also for testing). Plus a `[BLESSED] N risk(s) suppressed by commit-message blessings` summary line. Plus structured `suppressedBy: 'flag' | 'commit-blessing'` in the `--json` output.
+
+**Test coverage**: 16 new vitest unit tests (`backend/test/scripts/check-migration-safety.test.js`) + 4 new playwright tests appended to `e2e/tests/migration-safety.spec.js`. All cover the cross-class isolation invariant — `[allow-unique]` does NOT bless `NOT_NULL_WITHOUT_DEFAULT`, etc. Important: prevents over-blessing where a single marker accidentally suppresses a different risk class.
+
+### Added — #413 batch 2 (10 more `@relation` declarations, drift 39 → 29)
+
+Closes 10 more multi-tenant models that lack a formal `tenant Tenant @relation`. **All declarations use `onDelete: Cascade` explicitly** so the migration-safety `FK_WITHOUT_ON_DELETE` detector stays green.
+
+- **Security/Auth (3)**: RevokedToken, ScimToken, SsoConfig
+- **Integration/Sales (3)**: Pipeline, Playbook, BookingPage
+- **RBAC/Compliance/Sandbox (4)**: FieldPermission, RetentionPolicy, ApprovalRequest, SandboxSnapshot
+
+Schema-invariants drift counter pinned by `backend/test/schema/schema-invariants.test.js` dropped **39 → 29**. Issue #413 stays OPEN with batch-3 priorities commented (calendar + scheduled-email cluster: CalendarIntegration, CalendarEvent, ScheduledEmail, Booking).
+
+**11th model considered, deferred**: `PlaybookProgress`. Has `@@unique([dealId, playbookId])` whose docstring explicitly says "tenantId is implicit via dealId" — that's an unusual schema-shape decision warranting a dedicated audit before adding `@relation` (cascade behaviour on Tenant delete vs. dealId-derived scoping needs analysis). Flagged as worth a separate review.
+
+### Process notes
+
+- **Wave-18 dispatch was 4 disjoint-file agents (I/J/K/L)**. All commit-pushed cleanly to main in sequence over ~10 minutes wall time. wire-in.sh idempotency held — K + L both edited deploy.yml + coverage.yml; both wire-ins landed.
+- **stash/pop discipline preserved cross-agent WIP** — Agent L noted "Other agents' WIP (G-17 wellness-dashboard-api.spec.js + migration-safety files) preserved untouched in working tree via stash/pop." This is the cleanest concurrent-write pattern observed across our parallel waves so far.
+- **No healing commits needed this wave**. Wave 16 + wave 17 had cumulative 6 healing commits for cascading regressions; wave 18 had zero. Improvements that helped: agents reading actual schema/route source instead of trusting issue-body lists (Agent J + Agent F's stale-list discovery); spec assertions pinning `code` fields rather than prose error regex (post-#423 spec hygiene); discovery-first writing pattern (Agent L caught `?format=` was wrong before assuming).
+
+---
+
 ## v3.4.5 — 2026-05-04 — autonomous-orchestrator continuation: 4 issues closed, 4 E2E_GAPS rows shipped, schema invariant drift 49 → 39
-
-  - G-17 shipped (54b1ff1) — 40 tests; 5 endpoints (GET /dashboard + GET/PUT /recommendations + approve/reject); race-safe state machine + #325 vertical gate + #207/#216 wellnessRole gate + 30d revenueTrend shape; surfaced no contract drift in code
-
-  - G-18 shipped (561ab6b) — 76 tests; 12 endpoints (4 JSON + 8 export); CSV BOM + PDF magic-bytes pinned; #233 attribution leak invariant locked
 
 A direct continuation of v3.4.4's autonomous-orchestrator session. **No new product features**; this release lands four medium-effort gap closures (G-19 wellness-telecaller, G-22 Stripe integration tier, G-23 migration safety, plus the off-backlog #423 numeric-id sweep) plus four bug fixes (#421/#422/#423/#424) plus the first batch of #413 schema-relation hygiene plus the `docs/gaps/archive/` convention for fully-closed gap-files plus six healing commits that resolved cascading test-shape regressions across spec files.
 

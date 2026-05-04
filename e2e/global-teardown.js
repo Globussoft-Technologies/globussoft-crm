@@ -123,9 +123,17 @@ module.exports = async function globalTeardown() {
     );
     results.contacts = c.affectedRows || 0;
 
+    // Use PAT_REGEX (the shared pattern set) instead of the hardcoded
+    // '^E2E ' that previously slipped past `_teardown_iso_*` /
+    // `_teardown_g6_*` / `_teardown_wc_loc_*` services from the G-20
+    // tenant-isolation spec + wellness FK-chain specs. The hardcoded
+    // regex was a remnant of pre-#405 single-pattern teardown; #405 fixed
+    // the pattern source but missed propagating it here. Caught when
+    // v3.4.7 e2e-full's scrub-demo left services 301/319/328 visible on
+    // demo's public services endpoint.
     const [s] = await conn.query(
-      `DELETE FROM Service WHERE name REGEXP '^E2E ' OR description LIKE ?`,
-      [SVC_DESC_LIKE]
+      `DELETE FROM Service WHERE name REGEXP ? OR description LIKE ?`,
+      [PAT_REGEX, SVC_DESC_LIKE]
     );
     results.services = s.affectedRows || 0;
 

@@ -19,7 +19,8 @@
  *   - valid-17……@example.com
  *   - @e2e.test
  *
- * Models swept: Location, Contact, Patient, Estimate, EmailMessage, CallLog.
+ * Models swept: Location, Service, Contact, Patient, Estimate, EmailMessage,
+ * CallLog, Task, AgentRecommendation.
  *
  * Defaults to DRY-RUN; pass --apply to mutate. Safe to re-run. Cross-tenant by
  * design (test pollution exists on both generic + wellness tenants).
@@ -62,6 +63,37 @@ async function scrubLocations() {
     if (APPLY) {
       const r = await prisma.location.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
       console.log(`     → DELETED ${r.count} locations (Patient.locationId / Visit.locationId set to NULL by FK)`);
+    }
+  }
+  return bad.length;
+}
+
+async function scrubServices() {
+  // v3.4.7 follow-up: demo's public /api/wellness/public/tenant/:slug
+  // endpoint surfaced 3 surviving `_teardown_iso_*` services (ids
+  // 301/319/328) right after v3.4.7's scrub-demo. The G-20
+  // tenant-isolation spec creates services and renames them
+  // `_teardown_iso_<id>` instead of hard-deleting (per the rename-on-
+  // cleanup pattern at e2e/tests/tenant-isolation-api.spec.js). The
+  // pattern was added to e2e/test-data-patterns.js but this script
+  // never had a scrubServices() function — only Locations / Contacts /
+  // Patients / Estimates / Emails / CallLogs / Tasks / AgentRecs.
+  // Same #405 root-cause class: the pattern source was extended but
+  // the iteration list wasn't. Visit.serviceId is SetNull on Service
+  // delete per the schema, so killing test-tagged services nulls out
+  // historical Visit.serviceId pointers on test-tagged visits (which
+  // are scrubbed via Patient cascade above). Safe.
+  const all = await prisma.service.findMany({ select: { id: true, name: true, tenantId: true, description: true } });
+  const bad = all.filter((r) =>
+    isTestName(r.name) ||
+    (r.description && /wellness-real-user-journeys/i.test(r.description))
+  );
+  console.log(`Services: ${bad.length} of ${all.length} are test rows`);
+  if (bad.length) {
+    previewRows(bad, (r) => `svc ${r.id} (tenant ${r.tenantId}): "${r.name}"`);
+    if (APPLY) {
+      const r = await prisma.service.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
+      console.log(`     → DELETED ${r.count} services (Visit.serviceId set to NULL by FK)`);
     }
   }
   return bad.length;
@@ -206,6 +238,7 @@ async function main() {
 
   const counts = {
     locations: await scrubLocations(),
+    services: await scrubServices(),
     contacts: await scrubContacts(),
     patients: await scrubPatients(),
     estimates: await scrubEstimates(),

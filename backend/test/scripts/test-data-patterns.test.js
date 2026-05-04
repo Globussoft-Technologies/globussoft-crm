@@ -173,3 +173,66 @@ describe('TEST_EMAIL_PATTERNS', () => {
     expect(isTestEmail(email), `"${email}" must NOT be flagged`).toBe(false);
   });
 });
+
+describe('Scrub-coverage invariant — both teardown scripts iterate every expected model', () => {
+  // v3.4.7 follow-up: shipping a `_teardown_<area>_<id>` rename pattern
+  // is necessary but not sufficient — the scrub iteration list ALSO has
+  // to include the model. The 3 surviving `_teardown_iso_*` services on
+  // demo (ids 301/319/328) right after v3.4.7's scrub-demo proved that
+  // backend/scripts/scrub-test-data-pollution.js had no scrubServices()
+  // function at all, and e2e/global-teardown.js was using a hardcoded
+  // `^E2E ` regex on Service that missed the wider pattern set.
+  //
+  // This test pins the model coverage of both scripts statically. When
+  // a new G-XX spec adds a new resource to the scrub patterns (Service,
+  // ConsentForm, Workflow, …), updating BOTH scripts is now a CI-gated
+  // requirement — the test fails until the model name appears in each
+  // file's iteration list.
+  //
+  // Format: each entry is { model, ciSubstr[], demoSubstr[] }.
+  //   - `model`             = canonical Prisma model name (used in the failure message)
+  //   - `ciSubstr`          = strings that MUST appear in e2e/global-teardown.js
+  //   - `demoSubstr`        = strings that MUST appear in backend/scripts/scrub-test-data-pollution.js
+  // (Substrings rather than regex so the test text-greps without parsing.)
+  //
+  // Adding a model: list it here + wire it into both scripts. Removing
+  // a model: drop it from both scripts AND this test in the same commit.
+  const fs = require('fs');
+  const path = require('path');
+
+  const ciTeardownPath = path.resolve(__dirname, '../../../e2e/global-teardown.js');
+  const demoScrubPath = path.resolve(__dirname, '../../scripts/scrub-test-data-pollution.js');
+  const ciSrc = fs.readFileSync(ciTeardownPath, 'utf8');
+  const demoSrc = fs.readFileSync(demoScrubPath, 'utf8');
+
+  const COVERAGE = [
+    { model: 'Patient',  ciSubstr: ['DELETE FROM Patient'],  demoSubstr: ['scrubPatients',  'prisma.patient'] },
+    { model: 'Contact',  ciSubstr: ['DELETE FROM Contact'],  demoSubstr: ['scrubContacts',  'prisma.contact'] },
+    { model: 'Service',  ciSubstr: ['DELETE FROM Service'],  demoSubstr: ['scrubServices',  'prisma.service'] },
+    { model: 'Task',     ciSubstr: ['DELETE FROM Task'],     demoSubstr: ['scrubTasks',     'prisma.task'] },
+    { model: 'Location', ciSubstr: ['DELETE FROM Location'], demoSubstr: ['scrubLocations', 'prisma.location'] },
+  ];
+
+  test.each(COVERAGE)('e2e/global-teardown.js iterates $model', ({ model, ciSubstr }) => {
+    for (const needle of ciSubstr) {
+      expect(ciSrc, `e2e/global-teardown.js must contain "${needle}" so ${model} is scrubbed in CI`).toContain(needle);
+    }
+  });
+
+  test.each(COVERAGE)('backend/scripts/scrub-test-data-pollution.js iterates $model', ({ model, demoSubstr }) => {
+    for (const needle of demoSubstr) {
+      expect(demoSrc, `scrub-test-data-pollution.js must contain "${needle}" so ${model} is scrubbed on demo`).toContain(needle);
+    }
+  });
+
+  test('Service-specific gap that broke v3.4.7 scrub-demo cannot reopen', () => {
+    // Concrete rendering of the original bug. The hardcoded regex on
+    // Service in e2e/global-teardown.js was '^E2E ' and the demo scrub
+    // had no scrubServices function. Both must now use the shared
+    // pattern set + iterate Service explicitly.
+    expect(ciSrc).toMatch(/DELETE FROM Service WHERE name REGEXP \?/);
+    expect(ciSrc).not.toMatch(/DELETE FROM Service WHERE name REGEXP '\^E2E '/);
+    expect(demoSrc).toContain('async function scrubServices(');
+    expect(demoSrc).toMatch(/services:\s*await scrubServices\(\)/);
+  });
+});

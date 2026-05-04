@@ -353,8 +353,14 @@ export default function App() {
   }
 
   const loginWithToken = async (token, tenant) => {
+    // #343 [SECURITY] follow-up: setToken routes the token through
+    // setAuthToken (utils/api.js) which puts it in the in-memory holder +
+    // sessionStorage. A previous explicit localStorage write of the token key
+    // sat here from before the #343 migration and silently re-introduced the
+    // XSS-readable credential the migration removed. Deleted; the
+    // sessionStorage write inside setToken is the only canonical storage now.
+    // Regression-guarded by frontend/src/__tests__/security-token-storage.test.js.
     setToken(token);
-    localStorage.setItem("token", token);
     if (tenant) {
       setTenant(tenant);
       localStorage.setItem("tenant", JSON.stringify(tenant));

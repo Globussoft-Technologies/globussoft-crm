@@ -81,6 +81,68 @@ describe('stripDangerous', () => {
     stripDangerous(req, res, next);
     expect(next).toHaveBeenCalledTimes(1);
   });
+
+  // #427 defense-in-depth — added 2026-05-04. The QA mass-assignment audit
+  // confirmed the headline claim (POST /api/contacts persists role:'ADMIN')
+  // was a false positive — Prisma rejects unknown fields on Contact, so the
+  // payload returns 400. But the User model HAS role, and a future write
+  // path that spread req.body straight into prisma.user.update would silently
+  // grant escalation. These three additions are zero-downside (no legit
+  // route reads them from req.body) and close that whole class.
+  test('strips isAdmin (defense-in-depth — no model declares it today, but no future model should be reachable)', () => {
+    const { req, res, next } = makeReqResNext({
+      body: { name: 'Acme', isAdmin: true, email: 'x@y.co' },
+    });
+    stripDangerous(req, res, next);
+    expect(req.body).toEqual({ name: 'Acme', email: 'x@y.co' });
+    expect(req.strippedFields.isAdmin).toBe(true);
+  });
+
+  test('strips passwordHash (server-internal credential storage, never client-supplied)', () => {
+    const { req, res, next } = makeReqResNext({
+      body: {
+        email: 'x@y.co',
+        passwordHash: '$2b$10$bcrypt.evil.payload',
+      },
+    });
+    stripDangerous(req, res, next);
+    expect(req.body).toEqual({ email: 'x@y.co' });
+    expect(req.strippedFields.passwordHash).toBe('$2b$10$bcrypt.evil.payload');
+  });
+
+  test('strips portalPasswordHash (paired with #426 response scrubber)', () => {
+    const { req, res, next } = makeReqResNext({
+      body: { phone: '+919876543210', portalPasswordHash: 'leaked-from-elsewhere' },
+    });
+    stripDangerous(req, res, next);
+    expect(req.body).toEqual({ phone: '+919876543210' });
+    expect(req.strippedFields.portalPasswordHash).toBe('leaked-from-elsewhere');
+  });
+
+  test('does NOT strip password (legit on /auth/login, /auth/signup, /portal/login)', () => {
+    // The deny-list intentionally excludes `password` because four production
+    // endpoints destructure it from req.body. Stripping would break login
+    // entirely. Coverage is via the per-route handlers (bcrypt.hash before
+    // any DB write) plus Prisma rejecting `password` on models that don't
+    // declare it. If you change this assertion you MUST update every login
+    // / signup / password-reset route to read from a renamed field.
+    const { req, res, next } = makeReqResNext({
+      body: { email: 'x@y.co', password: 'still-here' },
+    });
+    stripDangerous(req, res, next);
+    expect(req.body.password).toBe('still-here');
+  });
+
+  test('does NOT strip role (legit on PUT /auth/users/:id/role, ADMIN-gated)', () => {
+    // Same reasoning as password — the role-change endpoint reads
+    // `req.body.role` directly. The endpoint is ADMIN-gated and intentional;
+    // stripping would silently no-op every role change.
+    const { req, res, next } = makeReqResNext({
+      body: { role: 'MANAGER' },
+    });
+    stripDangerous(req, res, next);
+    expect(req.body.role).toBe('MANAGER');
+  });
 });
 
 describe('whitelist', () => {

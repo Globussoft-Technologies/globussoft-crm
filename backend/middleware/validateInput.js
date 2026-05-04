@@ -32,7 +32,46 @@ function whitelist(entity) {
 // want to fail-loud (e.g. reject an attempted cross-tenant write with 400
 // instead of silently no-op'ing it) can introspect what came in. Routes that
 // don't care continue to work unchanged.
-const DANGEROUS_FIELDS = ['id', 'createdAt', 'updatedAt', 'tenantId', 'userId'];
+//
+// #427 defense-in-depth (added 2026-05-04 after the QA mass-assignment audit):
+//   - `isAdmin`           — does not exist on any current model, but a future
+//                           User schema bump that adds it should not be
+//                           reachable from arbitrary write routes.
+//   - `passwordHash` /
+//     `portalPasswordHash` — server-internal credential storage. No route
+//                           should accept these from a client; bcrypt.hash
+//                           runs server-side and the result is set on a
+//                           curated data object. Stripping closes the
+//                           confused-deputy variant where a future route
+//                           accidentally spreads `req.body` into Prisma and
+//                           lets a caller seed a password hash.
+//
+// Intentionally NOT in the deny-list (because legit routes read them):
+//   - `password` — POST /auth/login, /auth/signup, /auth/register,
+//                  /portal/login all destructure `req.body.password`.
+//   - `role`     — PUT /auth/users/:id/role legitimately reads
+//                  `req.body.role` (ADMIN-gated, intentional role-change).
+//   These remain safe today because:
+//     (a) the relevant write paths use curated data objects, never spread
+//         `req.body` into Prisma, and
+//     (b) Prisma rejects unknown fields on models that don't declare them
+//         (Contact / Service / Sequence / Lead 400 the QA mass-assignment
+//         payload), so client-supplied `role`/`password` cannot escape into
+//         a model that lacks the column.
+//   If a future route spreads `req.body` into a User write, EITHER curate
+//   it explicitly OR rename the API surface to `targetRole` /
+//   `currentPassword` so this middleware can guard it.
+const DANGEROUS_FIELDS = [
+  'id',
+  'createdAt',
+  'updatedAt',
+  'tenantId',
+  'userId',
+  // #427 additions:
+  'isAdmin',
+  'passwordHash',
+  'portalPasswordHash',
+];
 
 function stripDangerous(req, res, next) {
   req.strippedFields = req.strippedFields || {};

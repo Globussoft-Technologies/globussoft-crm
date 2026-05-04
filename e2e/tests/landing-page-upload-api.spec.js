@@ -213,18 +213,28 @@ test.describe('POST /api/landing-pages/upload — validation', () => {
     expect(res.status()).toBe(400);
   });
 
-  test('400 rejects file over 5 MB', async ({ request }) => {
-    // Multer LIMIT_FILE_SIZE → 400 "Image too large (max 5 MB)". Build a
-    // 5.5 MB buffer of zeros — content doesn't matter for the size limit.
+  test('rejects file over 5 MB (multer 400 OR Nginx 413)', async ({ request }) => {
+    // Two valid rejection codes:
+    //   - 400 from multer's LIMIT_FILE_SIZE handler ("Image too large (max 5 MB)").
+    //     Fires on local stack + CI api_tests where the request reaches Express.
+    //   - 413 from Nginx (client_max_body_size). Fires on demo where Nginx
+    //     rejects the >5MB body before it reaches the backend. The demo's
+    //     /etc/nginx/sites-available/crm.globusdemos.com config caps at the
+    //     Nginx default ~1MB; either way the user is correctly blocked from
+    //     uploading. Both responses prove the bound is enforced.
     const tooBig = Buffer.alloc(5.5 * 1024 * 1024, 0);
     const res = await postUpload(request, genericToken, {
       name: 'big.png',
       mimeType: 'image/png',
       buffer: tooBig,
     });
-    expect(res.status()).toBe(400);
-    const body = await res.json();
-    expect(body.error).toMatch(/too large|5 MB/i);
+    expect([400, 413]).toContain(res.status());
+    if (res.status() === 400) {
+      // multer-side rejection has a JSON body with the friendly message
+      const body = await res.json().catch(() => ({}));
+      expect(body.error || '').toMatch(/too large|5 MB/i);
+    }
+    // 413 from Nginx is HTML; no JSON body to assert on.
   });
 });
 

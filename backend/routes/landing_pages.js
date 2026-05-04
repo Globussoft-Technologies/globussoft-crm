@@ -460,8 +460,18 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
     const contactName = name || full_name || "Landing Page Lead";
 
+    // Contact has @@unique([email, tenantId]) (schema.prisma:343) — Prisma's
+    // upsert requires the where clause to match a unique constraint exactly,
+    // so we use the composite `email_tenantId` selector that Prisma generates
+    // from the @@unique declaration. Pre-fix this used `where: { email }`
+    // which compiles but throws a Prisma validation error at runtime
+    // ("Argument where: Got invalid value... Argument email_tenantId is
+    // missing"), surfacing as the route's catch-all 500. The bug only fires
+    // in production when an unauth visitor POSTs /p/<slug>/submit; the
+    // path was previously gated behind the #445 Nginx-proxy fix so the bug
+    // never reached real traffic until that landed.
     const contact = await prisma.contact.upsert({
-      where: { email: contactEmail },
+      where: { email_tenantId: { email: contactEmail, tenantId } },
       update: { source: `Landing Page: ${page.title}` },
       create: {
         name: contactName,

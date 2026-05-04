@@ -101,6 +101,21 @@ This firing's autonomous batch-sweep:
 
 **Cumulative across v3.4.8 → today (post-batch-3):** **22 issues closed** (16 stale-sweep + 6 real fixes) + **5 small fixes shipped** + **1 backend partial** + **2 partial/no-repro triages**. ~75 min total batch time.
 
+### Late-PM batch round 4 — landing-page builder UX fixes
+
+This firing's autonomous batch tackled two of the parked landing-page builder issues:
+
+| Issue | Action | Outcome |
+|---|---|---|
+| **#451** form properties (multiple gaps) | 3 of 6 gaps closed | `d763a1d` — per-field type dropdown (text/email/tel/number/url) + required toggle in builder. Public renderer at `landingPageRenderer.js:132-135` already respected `f.type` + `f.required`; gap was UI-only. Status comment posted listing remaining 3 gaps (destination/lead-routing, CAPTCHA, success redirect URL) as separate-ticket-worthy enhancements |
+| **#454** builder discards unsaved changes | Real fix shipped | `9e557e6` — `isDirty` state tracking + `window.beforeunload` listener on dirty. Browser shows native "Changes may not be saved" dialog on navigation/refresh. Full sessionStorage autosave deferred to optional follow-up |
+
+**Cumulative across v3.4.8 → today (post-batch-4):** **23 issues closed** (16 stale-sweep + 7 real fixes) + **6 small fixes shipped** (added #454 beforeunload) + **2 backend partials** (added #451 form-properties UI) + **2 partial/no-repro triages**. ~90 min total batch time.
+
+### 🔔 Cron-learnings section ready for review (9 entries)
+
+`CLAUDE.md` "🤖 Cron learnings" is at 9 entries, one shy of the ~10-entry review threshold. Trigger phrasing: "review the cron learnings" or "let's go through the cron-logged stuff." I'll walk each entry → propose skill / standing-rule / archive / drop → wait for `yes` per entry.
+
 ### Notes for the next session
 
 - **The cron firing's "park user-input tasks in TODO.md" branch worked** — the e2e-full broader cleanup is parked here rather than spawning a multi-hour investigation autonomously. The single backup-spec fix was mechanical enough to ship inline.

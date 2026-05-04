@@ -39,6 +39,15 @@ Improved from 2/4 to 3/4 shards (vs pre-Agent-B). Shard 2 still has 3 failing sp
 
 **UPDATE:** `6f140bc` deploy ✅ SUCCESS (demo restarted 21:50 UTC). Re-triggered e2e-full at run `25345786449` on `c2e733a`. Will report shard 2 result when run finishes (~15-20 min).
 
+**UPDATE 2 (e2e-full run 25345786449 finished — 3 of 4 shards green):**
+- ✅ Shard 1, 3 — green
+- ❌ Shard 4 — `workflows-api.spec.js:279` (tenant-history leak check). **False positive** — assertion was count-based; background cron engines on demo wrote +6 generic-tenant audit rows in the test window. Fixed in `47e7a1d` to assert leak-specific (search for the wellness rule's id in generic's history) instead of count-equality.
+- ❌ Shard 2 — 2 failures:
+  - `landing-page-renderer.spec.js:147` POST /p/:slug/submit returned 500. **Real backend bug** — Contact upsert used `where: { email }` against a `@@unique([email, tenantId])` model; latent since the original landing-page module shipped, never hit production until #445 Nginx fix unblocked the route. Fixed in `36e554d` (composite-unique selector).
+  - `landing-page-upload-api.spec.js:216` (5MB upload). Demo's Nginx returns 413 before the request reaches multer's 400. Both are valid rejection codes. Spec now accepts either. Fixed in `36e554d`.
+
+**Re-trigger e2e-full after `36e554d` deploys — should be GREEN for the first time since v3.4.9** if these 3 fixes hold.
+
 ---
 
 ## 🏁 NEXT-SESSION HANDOFF (2026-05-05 evening — 5-agent parallel wave fully landed) — superseded above

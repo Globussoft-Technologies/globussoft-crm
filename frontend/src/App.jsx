@@ -116,6 +116,7 @@ const WellnessServices = lazy(() => import("./pages/wellness/Services"));
 const WellnessLocations = lazy(() => import("./pages/wellness/Locations"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
+const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
 const WellnessPublicBooking = lazy(
   () => import("./pages/wellness/PublicBooking"),
 );

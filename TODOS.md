@@ -48,6 +48,8 @@ Improved from 2/4 to 3/4 shards (vs pre-Agent-B). Shard 2 still has 3 failing sp
 
 **Re-trigger e2e-full after `36e554d` deploys — should be GREEN for the first time since v3.4.9** if these 3 fixes hold.
 
+**UPDATE 3:** `36e554d` deploy ✅ SUCCESS (demo restarted 22:26 UTC). Re-triggered e2e-full at run `25347017296` on `3d9edfd`. ~15-20 min to result.
+
 ---
 
 ## 🏁 NEXT-SESSION HANDOFF (2026-05-05 evening — 5-agent parallel wave fully landed) — superseded above

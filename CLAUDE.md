@@ -351,3 +351,20 @@ cd backend && node prisma/seed.js
 # Run E2E tests
 cd e2e && npm install && npx playwright test --project=chromium
 ```
+
+## 🤖 Cron learnings (auto-logged — pending 24h review)
+
+The 15-min recurring cron (`a132b772`) appends short observations here at the end of every wave: patterns, drift findings, non-obvious-things-learned that **aren't yet codified into a skill or standing rule**. The 24-hour review cron (separate) reads from this section, proposes which entries should become new skills / extend existing skills / become standing rules / get archived / get dropped — and requires the user's `yes` before making any of those changes.
+
+**Format:** one bullet per learning, prefixed with `<YYYY-MM-DD HH:MM> — <commit-sha or "no-commit">` + a short topic + a one-paragraph observation. Keep it tight; if it doesn't fit in a paragraph, the learning is too big and should go straight into a TODOS.md user-attention item instead.
+
+**Why this lives in CLAUDE.md (not a separate file):** the autonomous loop needs to find this section by name to append into. CLAUDE.md is loaded into every session's context anyway, so the lookup is reliable. After 24h review, accepted learnings move into their permanent home (skill / standing rule) and the entry is removed; archived ones go to `docs/cron-learnings-archive.md`. The section should not accumulate beyond ~24h of entries.
+
+**Don't manually add to this section unless you're the cron** — use TODOS.md handoff blocks for everything else.
+
+### 2026-05-05 — initial entries from the SSH-config + e2e-full audit wave
+
+- **2026-05-05 ~01:00 — `e72cd5c` — IS_LOCAL_STACK pattern is generalizable.** Specs that share a filesystem with the backend (disk readback, child-process invocation of an engine, filesystem fixture loading) work fine on the per-push gate (BASE_URL=127.0.0.1) but cascade-fail on `e2e-full.yml` against demo (BASE_URL=https://crm.globusdemos.com). The `backup-engine-api.spec.js` was the canonical case; `migration-safety.spec.js`, `eventbus-conditions.spec.js`, `eventbus-template.spec.js`, possibly `lead-scoring.spec.js` may all need the same `IS_LOCAL_STACK` guard. **Could become a CLAUDE.md standing rule with a checklist for "does this spec need IS_LOCAL_STACK?" or a one-liner skill.** Sample `IS_LOCAL_STACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(BASE_URL)` already in [e2e/tests/backup-engine-api.spec.js](e2e/tests/backup-engine-api.spec.js#L116).
+- **2026-05-05 ~01:30 — `b892174` — additive-envelope is the right shape for API-contract changes.** When `POST /api/communications/send-email` needed multi-recipient support (#435), the response shape changed from `{success, delivered, email, ...}` to `{success, delivered, email, ..., totalSent, totalFailed, results, failures}`. Top-level back-compat fields preserved → 50+ existing specs and the Inbox + DocumentTemplates frontends kept working unchanged; envelope additions surfaced the new info. Already a CLAUDE.md standing rule (line ~262). **No new skill needed but the rule's framing is reusable for any future API-contract change.**
+- **2026-05-05 ~02:00 — `ffd6d75` — Bash permission-allowlist patterns matter.** `Bash(.claude/skills/*)` matches commands STARTING with `.claude/skills/` (e.g. `bash .claude/skills/wire-in.sh`), NOT commands like `mkdir`/`ls`/`rm` whose first token is the binary. Each common operation needs its own explicit `Bash(<binary> .claude/skills/*)` entry. Could become a small wiki note for `update-config` skill or the `fewer-permission-prompts` skill. **The Write tool auto-creates parent directories — agents shouldn't run `mkdir` before `Write` anyway.**
+- **2026-05-05 ~02:00 — `n/a` — `durable: true` flag on CronCreate is silently ignored.** Both `316ff9fb` (initial) and `0818d5ae` (replacement) and `a132b772` (current) showed `[session-only]` in `CronList` despite passing `durable: true`. Tool description claims durable jobs persist to `.claude/scheduled_tasks.json`. Either the flag is broken or the description is wrong. **User is aware; not actionable autonomously, but logged for future Claude restarts to know the cron will need re-creation.**

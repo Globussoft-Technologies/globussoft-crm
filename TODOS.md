@@ -37,6 +37,8 @@ Improved from 2/4 to 3/4 shards (vs pre-Agent-B). Shard 2 still has 3 failing sp
 
 **Next session: re-trigger e2e-full after `6f140bc` deploys.** If only landing-page-renderer + marketplace-leads remain failing post-deploy, those are real bugs to investigate. Both are in shard 2.
 
+**UPDATE:** `6f140bc` deploy ✅ SUCCESS (demo restarted 21:50 UTC). Re-triggered e2e-full at run `25345786449` on `c2e733a`. Will report shard 2 result when run finishes (~15-20 min).
+
 ---
 
 ## 🏁 NEXT-SESSION HANDOFF (2026-05-05 evening — 5-agent parallel wave fully landed) — superseded above

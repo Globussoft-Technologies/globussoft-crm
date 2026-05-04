@@ -57,9 +57,9 @@
 | **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
 | **package.json version bump** (3.3.0 → 3.4.11) | <5 min | ⬜ tag-time follow-up |
 
-**P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #406 #407 #429 #430 #431 #433 #434 #437 #439 #440 #441
+**P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #407 #429 #430 #431 #433 #434 #437 #439 #440 #441
 
-### Stale-issue sweep (2026-05-05, parallel to v3.4.11 doc bump) — 4 closed verified-already-shipped
+### Stale-issue sweep (2026-05-05, parallel to v3.4.11 doc bump) — 4 closed verified-already-shipped + 1 quick fix
 
 Cron-driven `verifying-issue-before-pickup` grep run on the open backlog surfaced 4 issues whose implementations + regression specs had landed but the GitHub tracker was never updated. All 4 closed with detailed triage comments citing implementing-commit + spec path + CHANGELOG line:
 
@@ -71,6 +71,8 @@ Cron-driven `verifying-issue-before-pickup` grep run on the open backlog surface
 | **#402** | P2 sidebar 404 toast | `routes/email.js:40-64` GET / handler + `?unread=1` shape | `email-api.spec.js:74-101` + `demo-health.spec.js:112-130` | (specs only) |
 
 **Pattern:** all 4 are `verifying-issue-before-pickup` Pattern A (impl shipped, tracker stale). Combined v3.4.8 + v3.4.9 + v3.4.11 stale-sweep batch is now **8 issues closed** without any code change — all verified via grep + spec-existence + CHANGELOG cross-check. The v3.4.8/9 doc-drift rate was 50%; this 4-issue batch caught what wasn't yet swept.
+
+**Plus 1 small fix:** **#406** (P3 stale-URL 404) closed in `c9d685a` — added two `<Navigate>` aliases for `/wellness/service-catalog` → `/wellness/services` and `/wellness/telecaller-queue` → `/wellness/telecaller`, mirroring the existing #183 alias pattern in `frontend/src/App.jsx`. Pure mechanical change; no test added (the existing #183 alias has none either, by precedent).
 
 ### Notes for the next session
 

@@ -421,3 +421,182 @@ describe('component: unknown type', () => {
     expect(html).not.toContain('mystery-widget');
   });
 });
+
+// ── #447 — URL scheme allowlist ───────────────────────────────────────
+//
+// QA pass on 2026-05-04 found that Image / Button / Video components
+// accepted javascript: + data:text/html + vbscript: schemes verbatim.
+// The renderer's only defence was escapeHtml on the attribute VALUE,
+// which prevents `"` injection but leaves the scheme untouched. In
+// particular the button component renders `<a href="...">` — and a
+// `<a href="javascript:alert(1)">` link DOES execute when clicked.
+//
+// The fix added `safeUrl(input, kind)` to the renderer with three
+// kinds: 'image-src' (most permissive, allows data:image/*),
+// 'link-href' (allows mailto:/tel:/sms: in addition to http(s):), and
+// 'iframe-src' (most restrictive — http(s): only). Tests below pin
+// the contract.
+
+const { safeUrl, renderComponent } = landing;
+
+describe('safeUrl — image-src allowlist (#447)', () => {
+  test.each([
+    ['https://example.com/photo.png'],
+    ['http://example.com/photo.jpg'],
+    ['/uploads/local-photo.png'],
+    ['//cdn.example.com/x.webp'],
+    ['data:image/png;base64,iVBORw0KG'],
+    ['data:image/svg+xml;utf8,<svg/>'],
+    ['relative-path-no-scheme.png'],
+    ['#anchor'],
+  ])('allows %s', (input) => {
+    expect(safeUrl(input, 'image-src')).toBe(input);
+  });
+
+  test.each([
+    'javascript:alert(1)',
+    'JaVaScRiPt:alert(1)',
+    '  javascript:void(0)',
+    '\tjavascript:void(0)',
+    'vbscript:msgbox(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'data:application/x-msdownload,xyz',
+    'file:///etc/passwd',
+    'about:blank',
+    'jar:http://x/!/',
+  ])('rejects dangerous %s → falls back to ""', (input) => {
+    expect(safeUrl(input, 'image-src')).toBe('');
+  });
+
+  test('null / undefined / empty fall back to ""', () => {
+    expect(safeUrl(null, 'image-src')).toBe('');
+    expect(safeUrl(undefined, 'image-src')).toBe('');
+    expect(safeUrl('', 'image-src')).toBe('');
+  });
+});
+
+describe('safeUrl — link-href allowlist (#447 — the bigger XSS surface)', () => {
+  test.each([
+    'https://example.com',
+    'http://example.com',
+    'mailto:a@b.co',
+    'tel:+919876500001',
+    'sms:+919876500001',
+    '/contact',
+    '#section',
+    '//cdn.example.com',
+    'page.html',
+  ])('allows %s', (input) => {
+    expect(safeUrl(input, 'link-href')).toBe(input);
+  });
+
+  test.each([
+    'javascript:alert(1)',
+    'JaVaScRiPt:alert(1)',
+    '  javascript:void(0)',
+    'vbscript:msgbox(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'data:image/png;base64,xyz',
+    'file:///etc/passwd',
+    'jar:http://x/!/',
+  ])('rejects dangerous %s → falls back to "#"', (input) => {
+    expect(safeUrl(input, 'link-href')).toBe('#');
+  });
+
+  test('null / undefined / empty fall back to "#"', () => {
+    expect(safeUrl(null, 'link-href')).toBe('#');
+    expect(safeUrl(undefined, 'link-href')).toBe('#');
+    expect(safeUrl('', 'link-href')).toBe('#');
+  });
+});
+
+describe('safeUrl — iframe-src allowlist (most restrictive)', () => {
+  test.each([
+    'https://www.youtube.com/embed/abc',
+    'http://example.com/video',
+    '/local/video',
+    '//cdn.example.com/v',
+  ])('allows %s', (input) => {
+    expect(safeUrl(input, 'iframe-src')).toBe(input);
+  });
+
+  test.each([
+    'javascript:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'data:image/svg+xml,<svg onload=alert(1)>',
+    'mailto:a@b.co',
+    'file:///etc/passwd',
+  ])('rejects %s → falls back to "about:blank"', (input) => {
+    expect(safeUrl(input, 'iframe-src')).toBe('about:blank');
+  });
+});
+
+describe('renderComponent — image with malicious src (#447)', () => {
+  test('javascript: src is stripped before reaching the rendered HTML', () => {
+    const html = renderComponent({ type: 'image', props: { src: 'javascript:alert(1)', alt: 'x' } }, 'slug-1');
+    expect(html).not.toMatch(/javascript:/i);
+    expect(html).toContain('src=""');
+  });
+
+  test('data:text/html src is stripped before reaching the rendered HTML', () => {
+    const html = renderComponent({ type: 'image', props: { src: 'data:text/html,<script>alert(1)</script>' } }, 'slug-1');
+    expect(html).not.toMatch(/<script/i);
+    expect(html).not.toMatch(/text\/html/i);
+    expect(html).toContain('src=""');
+  });
+
+  test('data:image/png src IS allowed (legitimate inline image)', () => {
+    const html = renderComponent({ type: 'image', props: { src: 'data:image/png;base64,iVBORw0KG' } }, 'slug-1');
+    expect(html).toContain('data:image/png');
+  });
+});
+
+describe('renderComponent — button with malicious href (#447 — confirms the actually-executable XSS)', () => {
+  test('javascript: href is stripped to "#"', () => {
+    const html = renderComponent({ type: 'button', props: { url: 'javascript:alert(1)', text: 'click' } }, 'slug-1');
+    expect(html).not.toMatch(/javascript:/i);
+    expect(html).toContain('href="#"');
+  });
+
+  test('vbscript: href is stripped to "#"', () => {
+    const html = renderComponent({ type: 'button', props: { url: 'vbscript:msgbox(1)', text: 'x' } }, 'slug-1');
+    expect(html).not.toMatch(/vbscript:/i);
+    expect(html).toContain('href="#"');
+  });
+
+  test('mailto: href renders as-is (legitimate)', () => {
+    const html = renderComponent({ type: 'button', props: { url: 'mailto:hi@example.com', text: 'mail' } }, 'slug-1');
+    expect(html).toContain('href="mailto:hi@example.com"');
+  });
+});
+
+describe('renderComponent — video iframe with malicious src (#447)', () => {
+  test('javascript: iframe src falls back to about:blank', () => {
+    const html = renderComponent({ type: 'video', props: { url: 'javascript:alert(1)' } }, 'slug-1');
+    expect(html).not.toMatch(/javascript:/i);
+    expect(html).toContain('src="about:blank"');
+  });
+
+  test('data:text/html iframe src falls back to about:blank', () => {
+    const html = renderComponent({ type: 'video', props: { url: 'data:text/html,<script>alert(1)</script>' } }, 'slug-1');
+    expect(html).not.toMatch(/<script/i);
+    expect(html).toContain('src="about:blank"');
+  });
+});
+
+describe('renderPage — full integration (#447 surfaces never appear in final HTML)', () => {
+  test('image + button + video components with all-malicious URLs emit zero javascript:/script', () => {
+    const lp = {
+      title: 'Test Page',
+      slug: 'test-slug',
+      content: JSON.stringify([
+        { type: 'image', props: { src: 'javascript:alert(1)' } },
+        { type: 'button', props: { url: 'javascript:alert(2)', text: 'click' } },
+        { type: 'video', props: { url: 'javascript:alert(3)' } },
+      ]),
+    };
+    const html = renderPage(lp);
+    expect(html).not.toMatch(/javascript:/i);
+    expect(html).not.toMatch(/<script>alert/i);
+  });
+});

@@ -40,7 +40,23 @@
 | **9× landing-page builder/UI issues** (#438/#446/#449/#450/#452/#454/#455/#456 + #451 unblocked by Nginx fix) | varies | ⬜ open — frontend coordinated pickup |
 | **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
 
-**P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #407 #429 #430 #433 #434 #437 #439 #440 #441
+**P3 / minor UX (defer):** #226 #252 #262 #307 #344 #384 #407 #429 #433 #439 #440 #441
+
+### Stale-sweep tally update — 2026-05-05 late-AM batch
+
+This firing's autonomous batch-sweep + small-fix round closed 4 issues + triaged 1:
+
+| Issue | Action | Outcome |
+|---|---|---|
+| **#434** wellness inverted date range | Pattern A drift | Closed — `wellness.js:2048` returns 400 INVERTED_DATE_RANGE; spec at `wellness-reports-api.spec.js:591` |
+| **#115** service catalog form labels | Pattern A drift | Closed — `Services.jsx:179` "#115: visible labels for every field" + price>0 validation |
+| **#245** Lead Routing raw DSL chip | Pattern A drift | Closed — `LeadRouting.jsx:75` "#245: render the operator as a human-readable phrase"; OP_LABELS dict |
+| **#437** marketplace integration visibility | Partial drift | Triage comment — status dot + lastSyncAt already render; only "did last sync succeed?" + better empty-state copy still missing. Needs fresh demo screenshot from user. |
+| **#430** literal `…` rendered | Small fix shipped | `6d2a435` — replace JS escape with U+2026 char in `PerLocationDashboard.jsx:79` |
+
+**Plus this firing also closed e2e-full category 2** (`e8cce09` — `migration-safety.spec.js` IS_LOCAL_STACK guard) and triggered fresh e2e-full validation run (`25340699062`).
+
+**Cumulative tally across the v3.4.8 → today's arc:** **11 issues closed via stale-sweep + 3 small fixes shipped** (#406 alias, #430 ellipsis, #115 form labels which was already-shipped) + 1 partial-drift triage. ~25 minutes total batch-sweep time vs days of phantom-work.
 
 ### Notes for the next session
 

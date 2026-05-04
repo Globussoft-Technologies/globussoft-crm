@@ -497,6 +497,17 @@ function detectUniqueAddition(stmt) {
 
 function detectForeignKeyWithoutOnDelete(stmt) {
   const risks = [];
+  // Bug fix: when a FK rule changes (e.g. Cascade -> Restrict), Prisma emits
+  // a DROP FOREIGN KEY paired with an ADD CONSTRAINT. The DROP half cannot
+  // syntactically declare ON DELETE — it's just removing the existing FK.
+  // Pre-fix the detector matched DROP statements via the bare FOREIGN KEY
+  // regex below and falsely flagged them as "missing ON DELETE." This produced
+  // 6 false positives during the #413 Cascade→Restrict policy upgrade
+  // (Invoice/Payment/AuditLog/Patient/Visit/Prescription) since the script's
+  // own gate is the same one that would trip migration-check.yml on push.
+  // Skip DROP FOREIGN KEY explicitly; the paired ADD CONSTRAINT below it is
+  // the real candidate.
+  if (/DROP\s+FOREIGN\s+KEY/i.test(stmt)) return risks;
   // ALTER TABLE `t` ADD CONSTRAINT `fk_xxx` FOREIGN KEY (`col`) REFERENCES `parent` (`id`) ON DELETE ... ON UPDATE ...
   if (!/FOREIGN\s+KEY/i.test(stmt)) return risks;
   const tbl = tableOf(stmt);

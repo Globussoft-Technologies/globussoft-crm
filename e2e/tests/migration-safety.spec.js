@@ -133,6 +133,14 @@ test.describe('Migration safety gate (G-23) — detector regression suite', () =
     const { exitCode, stdout, stderr } = runScript([
       '--schema', fx('dangerous-not-null.prisma'),
       '--against', fx('baseline.prisma'),
+      // #425 follow-up: detector-fires tests must not inherit the host repo's
+      // commit message, otherwise a real `[allow-not-null]` bless on HEAD
+      // (used to ship a real schema change) would silently suppress this
+      // fixture's risk and the regression suite would go green incorrectly.
+      // The line-270 "regression-guard" test was supposed to catch this but
+      // only covered the UNIQUE case — patched defensively across all four
+      // detector-fires tests + the --json shape test.
+      '--no-commit-blessings',
     ]);
     expect(exitCode, 'dangerous-not-null must FAIL the gate').toBe(1);
     // Both NOT-NULL risks should fire — one for FixtureUser.name
@@ -147,6 +155,7 @@ test.describe('Migration safety gate (G-23) — detector regression suite', () =
     const { exitCode, stdout, stderr } = runScript([
       '--schema', fx('dangerous-drop.prisma'),
       '--against', fx('baseline.prisma'),
+      '--no-commit-blessings', // see NOT_NULL test for rationale
     ]);
     expect(exitCode, 'dangerous-drop must FAIL the gate').toBe(1);
     const combined = stdout + stderr;
@@ -168,6 +177,7 @@ test.describe('Migration safety gate (G-23) — detector regression suite', () =
     const { exitCode, stdout, stderr } = runScript([
       '--schema', fx('dangerous-narrowing.prisma'),
       '--against', fx('baseline.prisma'),
+      '--no-commit-blessings', // see NOT_NULL test for rationale
     ]);
     expect(exitCode, 'dangerous-narrowing must FAIL the gate').toBe(1);
     const combined = stdout + stderr;
@@ -179,6 +189,7 @@ test.describe('Migration safety gate (G-23) — detector regression suite', () =
     const { exitCode, stdout, stderr } = runScript([
       '--schema', fx('dangerous-unique.prisma'),
       '--against', fx('baseline.prisma'),
+      '--no-commit-blessings', // see NOT_NULL test for rationale
     ]);
     expect(exitCode, 'dangerous-unique must FAIL the gate').toBe(1);
     const combined = stdout + stderr;
@@ -201,6 +212,7 @@ test.describe('Migration safety gate (G-23) — detector regression suite', () =
       '--schema', fx('dangerous-not-null.prisma'),
       '--against', fx('baseline.prisma'),
       '--json',
+      '--no-commit-blessings', // see NOT_NULL test for rationale
     ]);
     expect(exitCode).toBe(1);
     const report = JSON.parse(stdout);

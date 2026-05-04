@@ -298,6 +298,13 @@ app.use("/api", (req, res, next) => {
 const { stripDangerous } = require('./middleware/validateInput');
 app.use(stripDangerous);
 
+// #426: scrub credential-shaped fields (currently: portalPasswordHash) from
+// every API response payload — wraps res.json globally so direct queries AND
+// nested `include: { contact: true }` are both covered. See middleware
+// header for the full deny-list and extension protocol.
+const { scrubResponse } = require('./middleware/scrubResponse');
+app.use(scrubResponse);
+
 // Apply the #423 numeric-id validator to the app itself too — covers any
 // future `app.get('/foo/:id', …)` registered directly on the app rather
 // than on a sub-router. The Router factory was already patched up top so

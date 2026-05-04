@@ -60,29 +60,32 @@ User picked up at home with the deploy gate stuck red 11+ pushes. Set up an hour
 | **#435** Inbox compose comma emails | 2-3h backend | ⬜ open |
 | **9× landing-page builder/UI issues** (#438/#446/#449/#450/#452/#454/#455/#456 + #451 blocked by #445) | varies | ⬜ open — frontend coordinated pickup |
 | **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
-| **`sanitizeJson()` helper sweep** | **2-3h** (audit done; refactor + apply pending) | ⬜ open — see audit findings below |
+| **`sanitizeJson()` helper sweep** | ✅ **shipped this session** (097ef5a + 6a9e450 + a916f59) — helper promoted to backend/lib/sanitizeJson.js + adopted at lead_routing.js + ab_tests.js + marketing.js + report_schedules.js with ~12 regression tests across 3 spec extensions | partial — report_schedules e2e regression spec wire-in is the only follow-up (30 min via writing-api-gate-spec + wiring-spec-into-gate) |
 
 **P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #406 #407 #429 #430 #431 #433 #434 #437 #439 #440 #441 #402
 
-### sanitizeJson helper sweep — audit findings (2026-05-04 night, post-v3.4.10 doc bump)
+### sanitizeJson helper sweep — ✅ COMPLETE (2026-05-05 early-AM, post-v3.4.10 doc bump)
 
-15-min audit surfaced 4 routes with the same JSON-blob-without-sanitization pattern as the original #398 / #447 class. Helper currently lives in `routes/sequences.js` exported as a local module function — the clean refactor moves it to `backend/lib/sanitizeJson.js` so all routes can reuse:
+The 4-route audit landed in 3 commits, fully green on CI:
 
-| Route | Column | Risk class | Effort |
-|---|---|---|---|
-| `routes/lead_routing.js` POST + PUT (lines 158, 201) | `LeadRoutingRule.conditions` (JSON) | **Admin UI XSS** — conditions JSON is rendered in /lead-routing per #245 | 30 min + spec |
-| `routes/ab_tests.js` POST (lines 79, 82-91) | `AbTest.variantA` / `variantB` (JSON) | Email-preview XSS if previews are client-rendered | 30 min + spec |
-| `routes/marketing.js` Campaign POST | `Campaign.scheduleFilters` (JSON) | Need deeper trace — likely admin-rendered | 30 min + spec |
-| `routes/report_schedules.js` POST | `ReportSchedule.metrics` / `recipients` (JSON) | System-set mostly; verify | 15 min audit + spec |
+| Commit | Routes touched | Coverage |
+|---|---|---|
+| `097ef5a` | refactor (helper → `backend/lib/sanitizeJson.js`) + `routes/lead_routing.js` POST + PUT | 4 sanitization tests in `lead-routing-api.spec.js` |
+| `6a9e450` | `routes/ab_tests.js` POST + PUT | 4 sanitization tests in `ab-tests-api.spec.js` |
+| `a916f59` | `routes/marketing.js` Campaign POST + PUT + schedule + `routes/report_schedules.js` POST + PUT | 4 sanitization tests in `marketing-api.spec.js` |
 
-**Recommended sequence:**
-1. Move `sanitizeJson` + `sanitizeJsonForStringColumn` from `routes/sequences.js` to a new `backend/lib/sanitizeJson.js`. Export both. Update `routes/sequences.js` to import. Update `backend/test/utils/sanitize-json.test.js` to import from the new path.
-2. Apply at the 4 audit sites above, each behind its own commit (per writing-api-gate-spec skill, plus regression-spec for each).
-3. Total: ~2-3h focused work. Each route's spec extends the existing `*-api.spec.js` rather than creating a new file.
+Net surface adoption (5 routes total now using the lib helper):
+- `routes/sequences.js` — original site (since v3.4.7 #398)
+- `routes/lead_routing.js` — name + conditions
+- `routes/ab_tests.js` — name + variantA + variantB
+- `routes/marketing.js` — Campaign.name + scheduleFilters
+- `routes/report_schedules.js` — name + metrics + recipients
 
-Routes that already sanitize properly (no work needed):
-- `routes/sequences.js` — full coverage post-#447
-- `routes/custom_objects.js` — sanitizeText on name/description/field-names
+Routes that DON'T need work (already sanitize properly):
+- `routes/custom_objects.js` — sanitizeText on name/description/field-names (own local copy)
+
+**Carry-over for v3.4.12** (1 small follow-up):
+- `e2e/tests/report_schedules.spec.js` doesn't match the project's `<area>-api.spec.js` gate-naming convention and isn't wired into deploy.yml/coverage.yml. Either rename to `report-schedules-api.spec.js` and wire in via `wiring-spec-into-gate` skill, OR add the regression cases directly to `reports-api.spec.js` (which IS gate-wired). 30 min either way. The route fix in `a916f59` is the load-bearing security improvement; this is hygiene/test-coverage parity with the other 3 routes.
 
 ### Notes for the next session
 

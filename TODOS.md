@@ -112,6 +112,16 @@ This firing's autonomous batch tackled two of the parked landing-page builder is
 
 **Cumulative across v3.4.8 → today (post-batch-4):** **23 issues closed** (16 stale-sweep + 7 real fixes) + **6 small fixes shipped** (added #454 beforeunload) + **2 backend partials** (added #451 form-properties UI) + **2 partial/no-repro triages**. ~90 min total batch time.
 
+### Late-PM batch round 5 — #456 frontend remainder closes the backend partial
+
+This firing's autonomous fix:
+
+| Issue | Action | Outcome |
+|---|---|---|
+| **#456** slug builder UX (frontend remainder) | Real fix shipped | `b180c4b` — visible validity hint (`N/50 — lowercase, digits, hyphens`) + red-border on invalid + Save disabled when invalid + "↻ from title" derive button + 409 PUBLISHED_SLUG_CHANGE_REQUIRES_CONFIRM flow wired (intercepts the silent first-attempt error, shows breaking-change confirm, retries with `?confirmSlugChange=true`). Backend pieces (4e116ad) + frontend (b180c4b) together close the issue end-to-end |
+
+**Cumulative across v3.4.8 → today (post-batch-5):** **24 issues closed** (16 stale-sweep + 8 real fixes) + **6 small fixes shipped** + **1 backend partial** (#451 still partial) + **2 partial/no-repro triages**. The #456 backend partial is now full-closed; #451 form properties is the only remaining backend partial.
+
 ### 🔔 Cron-learnings section ready for review (9 entries)
 
 `CLAUDE.md` "🤖 Cron learnings" is at 9 entries, one shy of the ~10-entry review threshold. Trigger phrasing: "review the cron learnings" or "let's go through the cron-logged stuff." I'll walk each entry → propose skill / standing-rule / archive / drop → wait for `yes` per entry.

@@ -60,9 +60,29 @@ User picked up at home with the deploy gate stuck red 11+ pushes. Set up an hour
 | **#435** Inbox compose comma emails | 2-3h backend | ⬜ open |
 | **9× landing-page builder/UI issues** (#438/#446/#449/#450/#452/#454/#455/#456 + #451 blocked by #445) | varies | ⬜ open — frontend coordinated pickup |
 | **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
-| **`sanitizeJson()` helper sweep** | 1-2h | ⬜ open — battle-tested; audit other JSON-blob routes |
+| **`sanitizeJson()` helper sweep** | **2-3h** (audit done; refactor + apply pending) | ⬜ open — see audit findings below |
 
 **P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #406 #407 #429 #430 #431 #433 #434 #437 #439 #440 #441 #402
+
+### sanitizeJson helper sweep — audit findings (2026-05-04 night, post-v3.4.10 doc bump)
+
+15-min audit surfaced 4 routes with the same JSON-blob-without-sanitization pattern as the original #398 / #447 class. Helper currently lives in `routes/sequences.js` exported as a local module function — the clean refactor moves it to `backend/lib/sanitizeJson.js` so all routes can reuse:
+
+| Route | Column | Risk class | Effort |
+|---|---|---|---|
+| `routes/lead_routing.js` POST + PUT (lines 158, 201) | `LeadRoutingRule.conditions` (JSON) | **Admin UI XSS** — conditions JSON is rendered in /lead-routing per #245 | 30 min + spec |
+| `routes/ab_tests.js` POST (lines 79, 82-91) | `AbTest.variantA` / `variantB` (JSON) | Email-preview XSS if previews are client-rendered | 30 min + spec |
+| `routes/marketing.js` Campaign POST | `Campaign.scheduleFilters` (JSON) | Need deeper trace — likely admin-rendered | 30 min + spec |
+| `routes/report_schedules.js` POST | `ReportSchedule.metrics` / `recipients` (JSON) | System-set mostly; verify | 15 min audit + spec |
+
+**Recommended sequence:**
+1. Move `sanitizeJson` + `sanitizeJsonForStringColumn` from `routes/sequences.js` to a new `backend/lib/sanitizeJson.js`. Export both. Update `routes/sequences.js` to import. Update `backend/test/utils/sanitize-json.test.js` to import from the new path.
+2. Apply at the 4 audit sites above, each behind its own commit (per writing-api-gate-spec skill, plus regression-spec for each).
+3. Total: ~2-3h focused work. Each route's spec extends the existing `*-api.spec.js` rather than creating a new file.
+
+Routes that already sanitize properly (no work needed):
+- `routes/sequences.js` — full coverage post-#447
+- `routes/custom_objects.js` — sanitizeText on name/description/field-names
 
 ### Notes for the next session
 

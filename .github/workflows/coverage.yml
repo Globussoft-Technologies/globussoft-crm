@@ -212,6 +212,7 @@ jobs:
             tests/wellness-dashboard-api.spec.js \
             tests/sensitive-field-leak-api.spec.js \
             tests/tenant-header-ignored-api.spec.js \
+            tests/wellness-read-audit-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

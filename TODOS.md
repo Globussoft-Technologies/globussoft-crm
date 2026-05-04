@@ -89,12 +89,12 @@ User asked to triage the QA-filed P0/P1 issues, fix the real ones, and add regre
 | **#435** Inbox compose comma emails | 2-3h backend, days for proper UI | ⬜ open |
 | **#398** Sequences input sanitization | 1h | ⬜ open |
 | **#443** DSAR export real implementation | 1-2d | ⬜ open — GDPR Art. 15 compliance |
-| **#167** Hard DELETE without audit (Contacts/Deals/Estimates/Tasks) | 4-5d | ⬜ open — same class as T2.2 |
+| **#167** Hard DELETE without audit (Contacts/Deals/Estimates/Tasks) | 4-5d | ⬜ open — same class as T2.2 (now closed) |
 | **#195** Recommendation lifecycle: re-reject + re-approve allowed | 2h | ⬜ open |
 | **#213** /api/wellness/patients accepts non-`<script>` HTML | 1-2h | ⬜ open |
 | **#182** SMS queue stuck (partially fixed by T1.2 Fast2SMS — verify cron drains) | 1h verify | ⬜ open |
 | **G-21** Frontend vitest+RTL coverage expansion (16 component test files exist; need ~50+ more for full coverage) | 3-5 days | ⬜ open |
-| **T2.2** Audit-log middleware build-out (Patient/Visit/Rx/Consent) | 4-5 days | ⬜ open |
+| **T2.2** Audit-log middleware build-out (Patient/Visit/Rx/Consent) | 4-5 days | ✅ shipped (v3.4.7 follow-up) — write-side already audited per #179; read-side gap closed by adding writeAudit to 6 staff GET handlers (VISIT_LIST_READ, VISIT_CONSUMPTIONS_READ, PRESCRIPTION_LIST_READ, CONSENT_LIST_READ, TREATMENT_PLAN_LIST_READ, TREATMENT_PLAN_READ); contract pinned by 8-test `e2e/tests/wellness-read-audit-api.spec.js` in per-push gate. PRD §11 invariant locked. |
 | **T2.3** Ship P1 of regression backlog | varies | ⬜ open |
 
 **P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #406 #407 #429 #430 #431 #433 #434 #437 #438 #439 #440 #441 #402

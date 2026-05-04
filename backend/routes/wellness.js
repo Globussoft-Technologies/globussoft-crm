@@ -781,6 +781,23 @@ router.get("/visits", async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
+    // PRD §11 / T2.2: staff-side cross-patient visit list is a PHI read
+    // (response includes patient name + phone). One audit row per request,
+    // with the filter params and result count — never the row contents.
+    try {
+      await writeAudit('Visit', 'VISIT_LIST_READ', null, req.user.userId, req.user.tenantId, {
+        count: visits.length,
+        filters: {
+          patientId: patientId ? parseInt(patientId) : null,
+          doctorId: doctorId ? parseInt(doctorId) : null,
+          status: status || null,
+          from: from || null,
+          to: to || null,
+        },
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /visits list failed:", auditErr.message);
+    }
     res.json(visits);
   } catch (e) {
     console.error("[wellness] list visits error:", e.message);
@@ -1032,6 +1049,16 @@ router.get("/visits/:id/consumptions", async (req, res) => {
       where: tenantWhere(req, { visitId: id }),
       orderBy: { createdAt: "desc" },
     });
+    // PRD §11 / T2.2: consumption items reveal what was administered during a
+    // visit — clinical context tied to the patient. Audit per request.
+    try {
+      await writeAudit('Visit', 'VISIT_CONSUMPTIONS_READ', id, req.user.userId, req.user.tenantId, {
+        visitId: id,
+        count: items.length,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /visits/:id/consumptions failed:", auditErr.message);
+    }
     res.json(items);
   } catch (_e) {
     res.status(500).json({ error: "Failed to list consumption items" });
@@ -1118,6 +1145,16 @@ router.get("/prescriptions", async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
+    // PRD §11 / T2.2: staff-side prescription list is a PHI read
+    // (response embeds patient name + drugs JSON). Medico-legal trail.
+    try {
+      await writeAudit('Prescription', 'PRESCRIPTION_LIST_READ', null, req.user.userId, req.user.tenantId, {
+        count: items.length,
+        filters: { patientId: patientId ? parseInt(patientId) : null },
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /prescriptions list failed:", auditErr.message);
+    }
     res.json(items);
   } catch (e) {
     console.error("[wellness] list prescriptions error:", e.message);
@@ -1234,6 +1271,16 @@ router.get("/consents", async (req, res) => {
         service: { select: { id: true, name: true } },
       },
     });
+    // PRD §11 / T2.2: staff-side consent list is a PHI read
+    // (response embeds patient name + signed template type).
+    try {
+      await writeAudit('ConsentForm', 'CONSENT_LIST_READ', null, req.user.userId, req.user.tenantId, {
+        count: items.length,
+        filters: { patientId: patientId ? parseInt(patientId) : null },
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /consents list failed:", auditErr.message);
+    }
     res.json(items);
   } catch (e) {
     console.error("[wellness] list consents error:", e.message);
@@ -1348,6 +1395,18 @@ router.get("/treatment-plans", async (req, res) => {
       },
       orderBy: { startedAt: "desc" },
     });
+    // PRD §11 / T2.2: treatment plans embed patient name + phone + service.
+    try {
+      await writeAudit('TreatmentPlan', 'TREATMENT_PLAN_LIST_READ', null, req.user.userId, req.user.tenantId, {
+        count: plans.length,
+        filters: {
+          patientId: patientId ? parseInt(patientId) : null,
+          status: status || null,
+        },
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /treatment-plans list failed:", auditErr.message);
+    }
     res.json(plans);
   } catch (e) {
     console.error("[wellness] list treatment-plans error:", e.message);
@@ -1367,6 +1426,17 @@ router.get("/treatment-plans/:id", async (req, res) => {
       },
     });
     if (!plan) return res.status(404).json({ error: "Treatment plan not found" });
+    // PRD §11 / T2.2: treatment plan detail reveals patient + service +
+    // session progress. Audit per request.
+    try {
+      await writeAudit('TreatmentPlan', 'TREATMENT_PLAN_READ', plan.id, req.user.userId, req.user.tenantId, {
+        treatmentPlanId: plan.id,
+        patientId: plan.patientId,
+        serviceId: plan.serviceId,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /treatment-plans/:id failed:", auditErr.message);
+    }
     res.json(plan);
   } catch (e) {
     console.error("[wellness] read treatment-plan error:", e.message);

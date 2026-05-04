@@ -208,6 +208,39 @@ async function scrubAgentRecommendations() {
   return bad.length;
 }
 
+async function scrubSmsMessages() {
+  // #182 (2026-05-04 reopen): the wellness-sms.spec.js smoke test creates
+  // SmsMessage rows via POST /api/sms with `to: '0000000000'` and body
+  // `'E2E smoke test — ignore'`. After the persistence path normalises a
+  // bare 10-digit number into +91-prefixed E.164, those rows surface in
+  // the customer-visible Inbox as `to=910000000000` / `to=+910000000000`.
+  // Tester nilimeshnayak-max counted 5+ leaked rows on demo. Sweep them.
+  //
+  // Patterns: `to` matches all-zero phone variants OR body matches the
+  // smoke-test sentinel OR body matches isTestName (catches Coverage/E2E
+  // template messages).
+  const all = await prisma.smsMessage.findMany({
+    select: { id: true, to: true, body: true, tenantId: true },
+    take: 5000,
+  });
+  const ZERO_PHONE_RE = /^\+?9?1?0{10,12}$/;
+  const SMOKE_BODY_RE = /E2E smoke test|Playwright smoke|smoke test — ignore/i;
+  const bad = all.filter((r) =>
+    (r.to && ZERO_PHONE_RE.test(r.to)) ||
+    (r.body && SMOKE_BODY_RE.test(r.body)) ||
+    (r.body && isTestName(r.body)),
+  );
+  console.log(`SmsMessages (first 5000): ${bad.length} are test rows`);
+  if (bad.length) {
+    previewRows(bad, (r) => `sms ${r.id} (tenant ${r.tenantId}): to=${r.to} body="${(r.body || "").slice(0, 50)}"`);
+    if (APPLY) {
+      const r = await prisma.smsMessage.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
+      console.log(`     → DELETED ${r.count} sms messages`);
+    }
+  }
+  return bad.length;
+}
+
 async function scrubCallLogs() {
   // CallLog has no `summary` field — notes is the closest free-text. Transcript
   // URL is stored under recordingUrl (the schema doesn't have transcriptUrl).
@@ -243,6 +276,7 @@ async function main() {
     patients: await scrubPatients(),
     estimates: await scrubEstimates(),
     emails: await scrubEmails(),
+    smsMessages: await scrubSmsMessages(),
     callLogs: await scrubCallLogs(),
     tasks: await scrubTasks(),
     agentRecs: await scrubAgentRecommendations(),

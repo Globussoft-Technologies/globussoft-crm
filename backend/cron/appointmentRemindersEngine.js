@@ -7,18 +7,28 @@
  * SMS reminder for each by creating an SmsMessage row with status='QUEUED'.
  *
  * Deduplication: checks the last 48h of SmsMessage rows for the same
- * contactId/phone containing a '24h' or '1h' marker in the body. The marker is
- * a hidden trailer appended to the message (after the opt-out line).
+ * contactId/phone whose body contains a kind-specific phrase that is unique
+ * to this engine's output ("tomorrow at" for 24h, "in 1 hour" for 1h).
  *
  * The actual SMS dispatch is handled by the existing SMS provider worker —
  * queueing is sufficient for this iteration.
+ *
+ * #182 regression-class fixes (2026-05-04 reopen):
+ *   1. composeBody no longer renders "appointment appointment" when serviceName
+ *      is null — falls back to a single bare "appointment" phrase.
+ *   2. The [reminder:24h] / [reminder:1h] debug markers were customer-visible
+ *      in the persisted SmsMessage body and went out as part of the SMS.
+ *      Dedup now anchors on the unique customer-friendly phrases
+ *      ("tomorrow at" / "in 1 hour") that already appear in the body, so we
+ *      can drop the visible markers entirely.
  */
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 
-const MARKER_24H = "[reminder:24h]";
-const MARKER_1H = "[reminder:1h]";
+// Phrases unique to this engine's body templates. Used as dedup signal.
+const DEDUP_PHRASE_24H = "tomorrow at";
+const DEDUP_PHRASE_1H = "in 1 hour";
 
 function formatTime(date) {
   try {
@@ -35,16 +45,18 @@ function formatTime(date) {
 
 function composeBody({ kind, patientName, serviceName, visitDate, clinicName }) {
   const time = formatTime(visitDate);
-  const svc = serviceName || "appointment";
+  // #182: avoid "appointment appointment" double-word when no serviceName.
+  // With serviceName present → "your <Service> appointment".
+  // Without              → "your appointment".
+  const svcPhrase = serviceName ? `${serviceName} appointment` : "appointment";
   const clinic = clinicName || "Enhanced Wellness";
   const when = kind === "24h" ? `tomorrow at ${time}` : "in 1 hour";
-  const marker = kind === "24h" ? MARKER_24H : MARKER_1H;
-  return `Hi ${patientName}, this is a reminder — your ${svc} appointment at ${clinic} is ${when}. Reply STOP to opt out. ${marker}`;
+  return `Hi ${patientName}, this is a reminder — your ${svcPhrase} at ${clinic} is ${when}. Reply STOP to opt out.`;
 }
 
 async function alreadySent({ kind, contactId, phone }) {
   const since = new Date(Date.now() - 48 * 3600 * 1000);
-  const marker = kind === "24h" ? "%24h%" : "%1h%";
+  const phrase = kind === "24h" ? DEDUP_PHRASE_24H : DEDUP_PHRASE_1H;
   const or = [];
   if (contactId) or.push({ contactId });
   if (phone) or.push({ to: phone });
@@ -52,22 +64,12 @@ async function alreadySent({ kind, contactId, phone }) {
   const found = await prisma.smsMessage.findFirst({
     where: {
       createdAt: { gte: since },
-      body: { contains: kind === "24h" ? "24h" : "1h" },
+      body: { contains: phrase },
       OR: or,
     },
     select: { id: true },
   });
-  // Additional guard: also check explicit marker
-  if (found) return true;
-  const markerFound = await prisma.smsMessage.findFirst({
-    where: {
-      createdAt: { gte: since },
-      body: { contains: marker.replace(/%/g, "") },
-      OR: or,
-    },
-    select: { id: true },
-  });
-  return Boolean(markerFound);
+  return Boolean(found);
 }
 
 async function findDueVisits(tenantId, windowStart, windowEnd) {

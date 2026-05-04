@@ -221,7 +221,23 @@ module.exports = async function globalTeardown() {
     );
     results.forecasts = f.affectedRows || 0;
 
-    const total = results.patients + results.contacts + results.services + results.tasks + results.locations + results.products + results.notifications + results.dealInsights + results.deals + results.forecasts;
+    // #182 (2026-05-04 reopen): wellness-sms.spec.js POSTs to /api/sms/send
+    // with `to: '0000000000'` and body `'E2E smoke test — ignore'`. The
+    // persistence path normalises bare 10-digit numbers to E.164 +91-prefix,
+    // landing rows in the customer-visible Inbox as `to=910000000000` /
+    // `to=+910000000000`. /api/sms exposes no DELETE route, so route-level
+    // afterAll() can't clean them — sweep at the SQL layer alongside the
+    // existing teardown patterns. Match either the all-zero phone variants
+    // OR the smoke-test body sentinel OR a body matching PAT_REGEX (catches
+    // E2E_FLOW_/Coverage template messages the SMS engine could enqueue
+    // for test-tagged contacts).
+    const [sms] = await conn.query(
+      `DELETE FROM SmsMessage WHERE \`to\` REGEXP '^[+]?9?1?0{10,12}$' OR body LIKE '%E2E smoke test%' OR body LIKE '%smoke test — ignore%' OR body REGEXP ?`,
+      [PAT_REGEX]
+    );
+    results.smsMessages = sms.affectedRows || 0;
+
+    const total = results.patients + results.contacts + results.services + results.tasks + results.locations + results.products + results.notifications + results.dealInsights + results.deals + results.forecasts + results.smsMessages;
     if (total > 0) {
       console.log(
         `[teardown] scrubbed E2E rows: ${results.patients} patient(s), ` +
@@ -229,7 +245,7 @@ module.exports = async function globalTeardown() {
           `${results.tasks} task(s), ${results.locations} location(s), ` +
           `${results.products} product(s), ${results.notifications} notification(s), ` +
           `${results.dealInsights} dealInsight(s), ${results.deals} deal(s), ` +
-          `${results.forecasts} forecast(s) ` +
+          `${results.forecasts} forecast(s), ${results.smsMessages} smsMessage(s) ` +
           `(cascades auto-remove visits/Rx/consents/plans/waitlist/loyalty/referrals)`
       );
     } else {

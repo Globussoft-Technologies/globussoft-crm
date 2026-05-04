@@ -7,13 +7,17 @@
  *   - For tenants where `vertical='wellness' AND isActive=true`,
  *     finds Visit rows with `status='booked'` whose `visitDate` is in
  *     either of two windows:
- *       T-24h:  [now+23h, now+25h]   → marker `[reminder:24h]`
- *       T-1h :  [now+50min, now+70min] → marker `[reminder:1h]`
+ *       T-24h:  [now+23h, now+25h]   → body contains "tomorrow at"
+ *       T-1h :  [now+50min, now+70min] → body contains "in 1 hour"
  *   - For each due visit, creates an SmsMessage row (direction=OUTBOUND,
- *     status=QUEUED) with a body containing the marker.
+ *     status=QUEUED) with a customer-friendly body.
  *   - Dedup via `alreadySent`: any SmsMessage in the last 48h whose
- *     `body LIKE '%24h%'` (or '1h') AND matches the contactId/phone is
- *     treated as already-sent → skipped.
+ *     `body LIKE '%tomorrow at%'` (or '%in 1 hour%') AND matches the
+ *     contactId/phone is treated as already-sent → skipped.
+ *   - #182 (2026-05-04): the engine previously appended `[reminder:24h]` /
+ *     `[reminder:1h]` debug markers to the customer-visible body. Tester
+ *     reopened with proof those leaked into customer SMS. Markers removed;
+ *     dedup now anchors on the unique customer-friendly phrases.
  *
  * Trigger endpoint: POST /api/wellness/reminders/run
  *   - Defined at backend/routes/wellness.js:1700
@@ -22,8 +26,8 @@
  *   - Returns: { tenant, queued24, queued1, skipped }
  *
  * Acceptance criteria covered (G-6 from docs/E2E_GAPS.md):
- *   1. T-24h window  → SMS queued (body contains `[reminder:24h]`)
- *   2. T-1h window   → SMS queued (body contains `[reminder:1h]`)
+ *   1. T-24h window  → SMS queued (body contains "tomorrow at <time>")
+ *   2. T-1h window   → SMS queued (body contains "in 1 hour")
  *   3. Outside windows (48h / 30min) → no SMS
  *   4. Idempotency — second run does NOT double-queue
  *   5. Cancelled visits exempt (engine query is `status:'booked'`)
@@ -168,7 +172,7 @@ async function runReminders(request, token) {
 // Pull all OUTBOUND SMS rows for the tenant, then narrow by `to=phone`.
 // /api/sms/messages returns { messages, pagination } and OTP messages are
 // filtered out at that endpoint — our reminder bodies are not OTP-shaped
-// (they include the marker `[reminder:24h]` / `[reminder:1h]`).
+// (they say "this is a reminder — your <service> appointment at <clinic>...").
 async function fetchSmsForPhone(request, token, phone) {
   // Explicitly request OUTBOUND so we don't pick up any seeded inbound noise.
   const res = await authGet(request, token, `/sms/messages?direction=OUTBOUND&limit=200`);
@@ -280,7 +284,7 @@ test.describe('POST /api/wellness/reminders/run — RBAC gate', () => {
 // ─── Engine windowing — happy paths ──────────────────────────────────────
 
 test.describe('Appointment Reminders Engine — windowing', () => {
-  test('T-24h visit → SMS queued with [reminder:24h] marker', async ({ request }) => {
+  test('T-24h visit → SMS queued with "tomorrow at" phrase, NO debug markers', async ({ request }) => {
     test.skip(!tokens.wellnessAdmin, 'wellness admin fixture not seeded');
 
     const patient = await createPatient(request, 'T24h-happy');
@@ -301,14 +305,20 @@ test.describe('Appointment Reminders Engine — windowing', () => {
 
     const sms = await fetchSmsForPhone(request, tokens.wellnessAdmin, patient.phone);
     expect(sms.length, 'one OUTBOUND SMS for the booked patient').toBeGreaterThanOrEqual(1);
-    const ours = sms.find((m) => m.body && m.body.includes('[reminder:24h]'));
-    expect(ours, `expected a 24h-marker SMS; got bodies=${JSON.stringify(sms.map((s) => s.body))}`).toBeTruthy();
+    // Match by patient name (RUN_TAG-prefixed → unique to this test) plus
+    // the 24h-specific phrase.
+    const ours = sms.find((m) => m.body && m.body.includes(patient.name) && m.body.includes('tomorrow at'));
+    expect(ours, `expected a 24h reminder SMS; got bodies=${JSON.stringify(sms.map((s) => s.body))}`).toBeTruthy();
     expect(ours.direction).toBe('OUTBOUND');
     expect(ours.status).toBe('QUEUED');
     expect(ours.body).toContain(patient.name);
+    // #182 regression guards: no debug markers, no double-word "appointment appointment"
+    expect(ours.body).not.toMatch(/\[reminder:24h\]/);
+    expect(ours.body).not.toMatch(/\[reminder:1h\]/);
+    expect(ours.body).not.toMatch(/appointment appointment/);
   });
 
-  test('T-1h visit → SMS queued with [reminder:1h] marker', async ({ request }) => {
+  test('T-1h visit → SMS queued with "in 1 hour" phrase, NO debug markers', async ({ request }) => {
     test.skip(!tokens.wellnessAdmin, 'wellness admin fixture not seeded');
 
     const patient = await createPatient(request, 'T1h-happy');
@@ -324,9 +334,13 @@ test.describe('Appointment Reminders Engine — windowing', () => {
     expect(result.queued1).toBeGreaterThanOrEqual(1);
 
     const sms = await fetchSmsForPhone(request, tokens.wellnessAdmin, patient.phone);
-    const ours = sms.find((m) => m.body && m.body.includes('[reminder:1h]'));
-    expect(ours, `expected a 1h-marker SMS; got bodies=${JSON.stringify(sms.map((s) => s.body))}`).toBeTruthy();
+    const ours = sms.find((m) => m.body && m.body.includes(patient.name) && m.body.includes('in 1 hour'));
+    expect(ours, `expected a 1h reminder SMS; got bodies=${JSON.stringify(sms.map((s) => s.body))}`).toBeTruthy();
     expect(ours.body).toContain('in 1 hour');
+    // #182 regression guards
+    expect(ours.body).not.toMatch(/\[reminder:24h\]/);
+    expect(ours.body).not.toMatch(/\[reminder:1h\]/);
+    expect(ours.body).not.toMatch(/appointment appointment/);
   });
 
   test('visit 48h ahead (outside both windows) → no SMS', async ({ request }) => {
@@ -380,16 +394,16 @@ test.describe('Appointment Reminders Engine — idempotency', () => {
     // any other test's reminder.)
     await runReminders(request, tokens.wellnessAdmin);
     const after1 = await fetchSmsForPhone(request, tokens.wellnessAdmin, patient.phone);
-    const matchers24 = (after1 || []).filter((m) => m.body && m.body.includes('[reminder:24h]'));
+    const matchers24 = (after1 || []).filter((m) => m.body && m.body.includes('tomorrow at'));
     expect(matchers24.length, 'first tick must queue at least one 24h SMS for our patient').toBeGreaterThanOrEqual(1);
     const countAfterFirst = matchers24.length;
 
     // Second tick — alreadySent() should match by `to=phone` AND
-    // body contains '24h', returning true → engine skips this visit.
+    // body contains 'tomorrow at', returning true → engine skips this visit.
     // The count for OUR phone must NOT grow.
     await runReminders(request, tokens.wellnessAdmin);
     const after2 = await fetchSmsForPhone(request, tokens.wellnessAdmin, patient.phone);
-    const matchers24After = (after2 || []).filter((m) => m.body && m.body.includes('[reminder:24h]'));
+    const matchers24After = (after2 || []).filter((m) => m.body && m.body.includes('tomorrow at'));
     expect(matchers24After.length, 'second tick must NOT add new 24h SMS for the same phone').toBe(countAfterFirst);
   });
 
@@ -404,13 +418,13 @@ test.describe('Appointment Reminders Engine — idempotency', () => {
 
     await runReminders(request, tokens.wellnessAdmin);
     const after1 = await fetchSmsForPhone(request, tokens.wellnessAdmin, patient.phone);
-    const matchers1 = (after1 || []).filter((m) => m.body && m.body.includes('[reminder:1h]'));
+    const matchers1 = (after1 || []).filter((m) => m.body && m.body.includes('in 1 hour'));
     expect(matchers1.length, 'first tick queues at least one 1h SMS for our patient').toBeGreaterThanOrEqual(1);
     const countAfterFirst = matchers1.length;
 
     await runReminders(request, tokens.wellnessAdmin);
     const after2 = await fetchSmsForPhone(request, tokens.wellnessAdmin, patient.phone);
-    const matchers1After = (after2 || []).filter((m) => m.body && m.body.includes('[reminder:1h]'));
+    const matchers1After = (after2 || []).filter((m) => m.body && m.body.includes('in 1 hour'));
     expect(matchers1After.length, 'second tick must NOT add new 1h SMS for same phone').toBe(countAfterFirst);
   });
 });

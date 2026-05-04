@@ -18,7 +18,7 @@ Skip when:
 - The issue body is for genuinely greenfield work (no implementation could exist yet — e.g. "build a new /api/foo endpoint that doesn't exist")
 - You authored the implementation in this same session and remember it precisely
 
-## Why this matters — v3.4.8 wave incident
+## Why this matters — v3.4.8 + v3.4.9 wave incidents
 
 The v3.4.8 wave dispatched 4 parallel agents on what TODOS.md framed as 4 distinct open issues. **3 of the 4** found the implementation was already shipped:
 
@@ -29,6 +29,10 @@ The v3.4.8 wave dispatched 4 parallel agents on what TODOS.md framed as 4 distin
 | #443 | "GDPR DSAR export 501 stub (1-2 days)" | The file had no `501` anywhere — the actual gap was missing AuditLog rows on already-working endpoints + a legacy `action='EXPORT'` label vs canonical `'GDPR_EXPORT'` |
 
 Each agent recovered by code-grepping the route file before writing code, but ~10 minutes per agent went to "diagnose what's actually wrong" instead of going straight to the real fix. **A 5-minute pre-dispatch verification by the parent agent would have narrowed each prompt accordingly** ("the route is already sanitized; just write the contract spec") and saved 30+ minutes of agent re-derivation.
+
+**v3.4.9 reinforced the pattern with #167** — TODOS.md framed it as "Hard DELETE without audit (Contacts/Deals/Estimates/Tasks) — 4-5 days, ⬜ open, same audit-trail class as T2.2." Pre-dispatch grep revealed: every one of the 4 routes already implements soft-delete + AuditLog + a `/restore` companion endpoint. Each existing `*-api.spec.js` already has 14-17 `SOFT_DELETE`/`softDeleted`/`deletedAt`/`/restore` assertions. **#167 was fully closed**, including specs. The 4-5 day estimate would have been pure phantom-work; the parent agent caught this in 60 seconds via `grep -nE "router\.delete|writeAudit.*DELETE" backend/routes/{contacts,deals,estimates,tasks}.js`. **Saved a 4-agent dispatch.**
+
+Combined v3.4.8 + v3.4.9 record: **4 of 8 issues** picked from TODOS.md were already done. That's a 50% doc-drift rate — high enough that pre-pickup verification should be the default for any TODOS row older than the most recent 1-2 release-bumps.
 
 ## The grep checklist (2-5 minutes)
 

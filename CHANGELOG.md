@@ -1,5 +1,61 @@
 # CHANGELOG
 
+## v3.4.9 — 2026-05-04 — v3.4.8 carry-over wave: 4 drift findings closed + #167 verified-already-shipped + verifying-issue skill landed
+
+A focused-followup release covering the v3.4.8 carry-over backlog. **One new product feature** (patient self-DSAR endpoint at `POST /api/wellness/portal/export` for DPDP §15 / GDPR Art. 15 compliance) plus three refinements (sequence step body sanitization, GDPR contact-export role guard tightening, orchestrator canonical Task case). Plus a new `verifying-issue-before-pickup` skill encoding the v3.4.8 wave's headline learning, plus a doc-only correction marking #167 as already-shipped.
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.8 | v3.4.9 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | ~75 specs / ~2,500 tests | **~76 specs** / ~2,514 tests | +1 spec / +14 tests |
+| Per-push unit tests | vitest | 39 files / 1,101 tests | **40 files** / 1,115 tests | +1 file / +14 tests |
+| **Total per-push** |  | ~3,601 | **~3,629** | **+28 tests** |
+
+### Added — patient self-DSAR endpoint (DPDP §15 / GDPR Art. 15)
+
+- **POST /api/wellness/portal/export** (commit `2d5b611`) — patients can self-export their data via the wellness portal token. Walks the FK chain `Patient → Visit / Prescription / ConsentForm / TreatmentPlan / LoyaltyTransaction / Referral` (every query filters on `patientId: req.patient.id`, NEVER tenantId-only). Field-level decryption is transparent via the Prisma `$extends` WELLNESS_FIELD_KEY layer. Response shape: `{ exportedAt, patient, visits, prescriptions, consents, treatmentPlans, loyaltyTransactions, referrals, counts:{...}, audited }` with `Content-Disposition: attachment` for browser-download UX. Audit row written via `writeAudit('Patient', 'GDPR_EXPORT_SELF', ...)` with `actorType='patient'` + `patientId=<requester>` (mirrors staff-side `'GDPR_EXPORT'` with `_SELF` suffix so reviewers can filter by action alone). New `e2e/tests/wellness-portal-dsar-api.spec.js` (9 tests): happy path, cross-patient isolation, count fidelity, 4 auth-gate variants, audited:true, idempotency. RUN_TAG `E2E_WC_PORTAL_DSAR_<ts>`.
+
+### Fixed — 3 v3.4.8 carry-over drift findings
+
+- **Carry-over #1 — Sequence step body sanitization** (commit `bb116b0`) — v3.4.8's #398 fix sanitized the parent `Sequence.name` and ReactFlow node labels but missed step-level `smsBody` and `conditionJson` on POST `/:id/steps` and PUT `/steps/:id`. Same XSS class, lower exposure (step bodies aren't rendered as HTML in the standard send path but appear in admin diff views). Fix: `smsBody` now passes through existing `sanitizeText()`; new exported `sanitizeJson()` helper recursively walks JSON blobs (handles strings, arrays, mixed types, null-safe). New `backend/test/utils/sanitize-json.test.js` (10 vitest cases across 6 describe blocks: null/undefined/primitive passthrough, empty containers, nested sanitization, mixed types, merge-tag preservation `{{firstName}}` survives strip, JSON-blob handling). Extended `e2e/tests/sequences-input-sanitization-api.spec.js` with 4 new e2e cases (POST script in smsBody, POST img in conditionJson, PUT merge-tag preservation, PUT javascript:href anchor).
+- **Carry-over #3 — `/export/contact/:id` role guard** (commit `3f06a6d`) — v3.4.8's #443 fix added audit-trail to `/export/me` and `/export/contact/:id` but **deliberately deferred** the role-guard tightening on the contact-export path (the v3.4.8 spec pinned the loose "any USER can export" behavior). v3.4.9 tightens to `verifyRole(['ADMIN', 'MANAGER'])` matching sibling `/retention/run`'s least-privilege default. The existing spec's RBAC describe block was flipped: USER-can-export test deleted, USER-cannot-export-403 test added, MANAGER-can-export-200 test added (locks the new MANAGER lane). Self-export `/export/me` is unchanged — Art. 15 right of access is preserved.
+- **Carry-over #5 — Orchestrator non-canonical Task case** (commit `e86ac62`) — `cron/orchestratorEngine.js` wrote `status:"OPEN"` and `priority:"HIGH"` (uppercase) on every `prisma.task.create()` (3 arms: campaign_boost, occupancy_alert, schedule_gap) while schema canonical is Title-case `Pending` / `High`. v3.4.8 #436 shipped a `normalizeStatusFilter()` reader that accepts both forms but writes still drifted, leaving non-canonical data the badge/filter/report consumers had to special-case. Fix: writes use canonical case; cleanup keeper at line 569 prefers `"Pending"` first while retaining a `"OPEN"` legacy-row check. **Sweep across all 17 `cron/*.js` engines** verified: `scheduledEmailEngine.js` correctly uses `"PENDING"` (canonical for ScheduledEmail.status per schema); `campaignEngine.js` is internally consistent; 15 others have no Task-shaped drift. Schema priority is `Low/Medium/High/Critical` (NOT `Urgent` per the brief's speculation). 4 new vitest assertions in `backend/test/cron/orchestratorEngine.test.js` pin canonical case via `/^Pending$/` + `/^High$/` regex (case-sensitive) on all 3 task-creating arms + a negative regression `not.toBe('OPEN')`.
+
+### Doc-only — #167 verified already-shipped (no code change)
+
+The pre-pickup grep on #167 (Hard DELETE without audit) found that all 4 routes (`contacts.js`, `deals.js`, `estimates.js`, `tasks.js`) already implement soft-delete + AuditLog + a `/restore` companion endpoint. Each existing `*-api.spec.js` already has 14-17 `SOFT_DELETE` / `softDeleted` / `deletedAt` / `/restore` assertions. The 4-5 day TODOS estimate was pure phantom-work — caught in 60 seconds by the parent agent before dispatching what would have been a 4-agent wave on already-shipped work. **TODOS.md updated to mark #167 as ✅ shipped** with the verification commit hashes for posterity.
+
+### Added — `verifying-issue-before-pickup` skill (commit `3d9425c`)
+
+Captures the v3.4.8 wave's headline learning: **3 of 4 agents found doc-vs-reality drift** (#180, #398, #443 — implementation was already shipped, only the test contract was missing). v3.4.9 reinforced the pattern (#167 was the 4th of 8 picked-from-TODOS issues to be already-done). Skill body covers:
+- The 4-step grep checklist (named claim / test surface / CHANGELOG / CLAUDE-vs-TODOS)
+- The four common drift patterns (impl-shipped-spec-missing, impl-shipped-audit-missing, partial-fix-second-bug, framing-wrong)
+- What to do when drift is found (note + narrow agent prompt + don't fix doc instead of code)
+- Integration with `dispatching-parallel-agent-wave` + `capturing-wave-findings` + `bumping-version-docs`
+
+Plus a "Verify each issue before dispatch" cross-reference added to `dispatching-parallel-agent-wave/SKILL.md`. Future parallel waves now run verification on every issue in the planned batch before writing prompts. **Combined v3.4.8 + v3.4.9 record: 4 of 8 picked-from-TODOS issues were already done — 50% doc-drift rate.** High enough that pre-pickup verification is the default going forward.
+
+Project skill count: 8 → 9 (lives at `.claude/skills/verifying-issue-before-pickup/`).
+
+### Process notes
+
+- **4-agent parallel wave was clean again** — all 4 commits pushed fast-forward in sequence (3f06a6d → e86ac62 → bb116b0 → 2d5b611). No rebase-on-collision retries. Disjoint-files invariant held: A=routes/sequences.js, B=routes/gdpr.js, C=cron/orchestratorEngine.js, D=routes/wellness.js. Workflow-file edits only on the new spec from D + the gate wire-in via `wire-in.sh` — sibling extensions of existing specs (A and B) needed no wire-in.
+- **Doc-vs-reality drift caught pre-dispatch this time** — pre-pickup grep on #167 prevented a 4-agent phantom-work wave before it started. The new `verifying-issue-before-pickup` skill paid for itself within 1 session of authorship.
+- **Schema priority enum confirmed** as `Low/Medium/High/Critical` (NOT `Low/Medium/High/Urgent` per the agent brief's speculation). Future writers should reference `backend/prisma/schema.prisma` line 773-774 for canonical Task enum values.
+
+### Carry-over for v3.4.10
+
+- **Carry-over #4 from v3.4.8** (still open) — `stripDangerous` middleware vs body-`userId` collision broader pattern audit. Other write paths that rely on body-`userId` may have the same latent bug #436 surfaced for Task: Notification, AuditLog, others. Investigation work, ~2-3h. NOT picked up this wave because it's investigation-shaped (multi-file read, then small fixes) rather than file-disjoint closer work — better suited for a single dedicated agent than a parallel slot.
+- **#195** Recommendation lifecycle: re-reject + re-approve allowed — 2h.
+- **#213** /api/wellness/patients accepts non-`<script>` HTML — 1-2h.
+- **#182** SMS queue stuck (verify Fast2SMS cron drains) — 1h verify.
+- **#435** Inbox compose comma emails — 2-3h backend, days for chip UI.
+- **G-21** Frontend vitest + RTL setup + first 5 component tests — 3-5 days; multi-day project, NOT parallel-agent dispatchable.
+- **`sanitizeJson()` helper now exported** from `backend/routes/sequences.js` — could be reused for any other route that takes JSON blobs as input. Worth a quick sweep next session: who else accepts arbitrary JSON via `req.body` without a sanitization pass?
+
+---
+
 ## v3.4.8 — 2026-05-04 — v3.4.7 follow-up arc: T2.2 + #180 + #398 + #413 + #436 + #443 closed (6 issues + scrub gap)
 
 A focused-followup release covering the v3.4.7 carry-over plus a 4-agent parallel wave. **No new product features**; this release closes six issues across two days of work, eliminates the schema-relation drift counter (49 → 0 across batches 1-4), and adds 4 new per-push gate specs + extends 1 existing spec.

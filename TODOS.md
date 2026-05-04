@@ -40,11 +40,13 @@
 | **9× landing-page builder/UI issues** (#438/#446/#449/#450/#452/#454/#455/#456 + #451 unblocked by Nginx fix) | varies | ⬜ open — frontend coordinated pickup |
 | **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
 
-**P3 / minor UX (defer):** #226 #252 #262 #307 #344 #384 #407 #429 #433 #439 #440 #441
+**P3 / minor UX (defer):** #252 #262 #307 #384 #407 #429 #433 #439 #440 #441
 
-### Stale-sweep tally update — 2026-05-05 late-AM batch
+### Stale-sweep tally update — 2026-05-05 late-AM + post-noon batches
 
-This firing's autonomous batch-sweep + small-fix round closed 4 issues + triaged 1:
+This firing's autonomous batch-sweep + small-fix round closed 7 issues + triaged 1:
+
+**Late-AM batch (#1):**
 
 | Issue | Action | Outcome |
 |---|---|---|
@@ -54,9 +56,17 @@ This firing's autonomous batch-sweep + small-fix round closed 4 issues + triaged
 | **#437** marketplace integration visibility | Partial drift | Triage comment — status dot + lastSyncAt already render; only "did last sync succeed?" + better empty-state copy still missing. Needs fresh demo screenshot from user. |
 | **#430** literal `…` rendered | Small fix shipped | `6d2a435` — replace JS escape with U+2026 char in `PerLocationDashboard.jsx:79` |
 
+**Post-noon batch (#2):**
+
+| Issue | Action | Outcome |
+|---|---|---|
+| **#226** wellness form refresh loses input | Pattern A drift | Closed — `PatientDetail.jsx:1091` ships `RestoredBanner` + autosave-rehydrate |
+| **#344** sessionStorage XSS path retention | Pattern A drift (SECURITY) | Closed — `PatientDetail.jsx:20-30` numeric-id check + encodeURIComponent prevents key pollution |
+| **#438** landing-page thumbnail 404 | Feature redesigned | Closed — current card layout doesn't render thumbnails at all (no `<img>`, no preview asset). The reported broken-image was against an older bundle |
+
 **Plus this firing also closed e2e-full category 2** (`e8cce09` — `migration-safety.spec.js` IS_LOCAL_STACK guard) and triggered fresh e2e-full validation run (`25340699062`).
 
-**Cumulative tally across the v3.4.8 → today's arc:** **11 issues closed via stale-sweep + 3 small fixes shipped** (#406 alias, #430 ellipsis, #115 form labels which was already-shipped) + 1 partial-drift triage. ~25 minutes total batch-sweep time vs days of phantom-work.
+**Cumulative tally across the v3.4.8 → today's arc:** **14 issues closed via stale-sweep + 3 small fixes shipped** (#406 alias, #430 ellipsis, #115 form labels which was already-shipped) + 1 partial-drift triage (#437). ~30 minutes total batch-sweep time vs days of phantom-work.
 
 ### Notes for the next session
 

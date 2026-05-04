@@ -75,7 +75,11 @@ const FIXTURES = path.join(REPO_ROOT, 'backend', 'scripts', 'fixtures', 'migrati
 // Run the script as a child node process. Returns the exit code +
 // captured stdout / stderr. Doesn't throw on non-zero exit (we want
 // to assert on it).
-function runScript(args = []) {
+//
+// The optional `env` arg lets a caller layer extra env vars on top of
+// process.env. The blessing-path tests use this to feed
+// MIGRATION_SAFETY_COMMIT_MSG without fabricating real commits.
+function runScript(args = [], env = {}) {
   let stdout = '';
   let stderr = '';
   let exitCode = 0;
@@ -85,6 +89,7 @@ function runScript(args = []) {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 8 * 1024 * 1024,
+      env: { ...process.env, ...env },
     });
   } catch (e) {
     exitCode = e.status || 1;
@@ -243,5 +248,90 @@ test.describe('Migration safety gate (G-23) — detector regression suite', () =
     ]);
     expect(exitCode, 'missing schema must produce engine-error exit code 2').toBe(2);
     expect(stderr).toMatch(/schema not found/);
+  });
+
+  // ── Commit-message blessings (issue #425) ─────────────────────────
+  //
+  // The wave-17 commit cfed31b — closing #424 — tightened
+  // CalendarEvent's @@unique from [provider, externalId] to
+  // [tenantId, provider, externalId]. That's strictly more permissive
+  // (every row that satisfied the old key trivially satisfies the new
+  // one), but the UNIQUE_ADDITION detector can't reason at the
+  // semantic level and tripped the gate. The blessing markers below
+  // are the documented opt-in: author types `[allow-unique]` in the
+  // commit message → that detector class gets downgraded to BLESSED
+  // for THIS commit only.
+  //
+  // We feed the commit message via MIGRATION_SAFETY_COMMIT_MSG instead
+  // of fabricating a real commit (which would require a separate git
+  // worktree on every test run). The script reads that env var first,
+  // falling back to `git log -1 --format=%B` only when it's unset.
+
+  test('blessing path: --no-commit-blessings preserves the unblessed exit 1 (regression-guard)', () => {
+    // Even with a blessing in the env, --no-commit-blessings must
+    // suppress the scan so the unblessed behaviour is preserved.
+    // This is the safety hatch the test suite uses to assert the
+    // detector still fires when it should.
+    const { exitCode, stderr } = runScript([
+      '--schema', fx('dangerous-unique.prisma'),
+      '--against', fx('baseline.prisma'),
+      '--no-commit-blessings',
+    ], {
+      MIGRATION_SAFETY_COMMIT_MSG: 'feat: should be ignored [allow-unique]',
+    });
+    expect(exitCode, '--no-commit-blessings must keep the gate failing').toBe(1);
+    expect(stderr).toMatch(/\[RISK\] UNIQUE_ADDITION/);
+  });
+
+  test('blessing path: [allow-unique] in commit message clears UNIQUE_ADDITION risk', () => {
+    const { exitCode, stdout } = runScript([
+      '--schema', fx('dangerous-unique.prisma'),
+      '--against', fx('baseline.prisma'),
+    ], {
+      MIGRATION_SAFETY_COMMIT_MSG:
+        'feat(schema): close #424 — tighten CalendarEvent unique key\n\n' +
+        'New constraint [tenantId, provider, externalId] is strictly more\n' +
+        'permissive than [provider, externalId]. [allow-unique]',
+    });
+    expect(exitCode, '[allow-unique] must clear the UNIQUE_ADDITION gate').toBe(0);
+    expect(stdout).toMatch(/\[BLESSED\] UNIQUE_ADDITION/);
+    expect(stdout).toMatch(/1 risk\(s\) suppressed by commit-message blessings/);
+  });
+
+  test('blessing path: [allow-unique] does NOT bless an unrelated NOT_NULL_WITHOUT_DEFAULT risk', () => {
+    // Cross-class isolation. Saying "I verified the unique" must not
+    // accidentally wave through a backfill bomb on a different column.
+    const { exitCode, stderr } = runScript([
+      '--schema', fx('dangerous-not-null.prisma'),
+      '--against', fx('baseline.prisma'),
+    ], {
+      MIGRATION_SAFETY_COMMIT_MSG: 'feat: tighten name + add field [allow-unique]',
+    });
+    expect(exitCode, '[allow-unique] must NOT bless NOT_NULL risks').toBe(1);
+    expect(stderr).toMatch(/\[RISK\] NOT_NULL_WITHOUT_DEFAULT: FixtureUser\.name/);
+    expect(stderr).toMatch(/\[RISK\] NOT_NULL_WITHOUT_DEFAULT: FixturePost\.requiredField/);
+  });
+
+  test('blessing path: --json output includes blessings + blessedCount fields', () => {
+    const { exitCode, stdout } = runScript([
+      '--schema', fx('dangerous-drop.prisma'),
+      '--against', fx('baseline.prisma'),
+      '--json',
+    ], {
+      MIGRATION_SAFETY_COMMIT_MSG: 'chore(schema): prune [allow-drop]',
+    });
+    expect(exitCode, '[allow-drop] in JSON mode must still clear the gate').toBe(0);
+    const report = JSON.parse(stdout);
+    expect(report).toMatchObject({
+      riskCount: 0,
+      suppressedCount: 1,
+      blessedCount: 1,
+      blessings: { allowDrop: true, allowUnique: false },
+    });
+    expect(report.risks[0]).toMatchObject({
+      class: 'COLUMN_DROP',
+      suppressed: true,
+      suppressedBy: 'commit-blessing',
+    });
   });
 });

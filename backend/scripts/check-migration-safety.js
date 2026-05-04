@@ -13,6 +13,25 @@
  *   below. CI invokes it on PR / push BEFORE the deploy job runs the
  *   real db push.
  *
+ * Commit-message blessings (G-23 follow-up, issue #425):
+ *   When the detector can't reason at the semantic level — e.g. tightening
+ *   a `@@unique([provider, externalId])` to `@@unique([tenantId, provider,
+ *   externalId])` is strictly MORE permissive but trips UNIQUE_ADDITION —
+ *   the author can opt-in to skip the matching detector for THIS commit
+ *   only by adding one of these markers anywhere in the latest commit
+ *   message:
+ *     [allow-unique]    — bless UNIQUE_ADDITION risks
+ *     [allow-drop]      — bless COLUMN_DROP risks
+ *     [allow-not-null]  — bless NOT_NULL_WITHOUT_DEFAULT risks
+ *     [allow-narrow]    — bless TYPE_NARROWING risks
+ *   Blessings are case-insensitive and read once per run from `git log -1
+ *   --format=%B`. Pass `--no-commit-blessings` to disable (used by the
+ *   spec to verify the unblessed exit code is preserved). Blessed risks
+ *   are still recorded in the JSON report under `suppressed: true`, so
+ *   the CI summary shows what was waived. There is intentionally NO
+ *   `[allow-fk-without-on-delete]` — that one is too easy to default
+ *   into; the author should declare onDelete explicitly in schema.prisma.
+ *
  * Risk classes detected:
  *   1. NOT-NULL added to existing column without DEFAULT
  *      Pattern: `ALTER TABLE ... MODIFY|ALTER COLUMN ... NOT NULL`
@@ -56,7 +75,7 @@
  *   node check-migration-safety.js \
  *     --schema fixtures/safe.prisma \
  *     --against fixtures/baseline.prisma \
- *     [--allow-drop] [--allow-unique] [--json] [--verbose]
+ *     [--allow-drop] [--allow-unique] [--no-commit-blessings] [--json] [--verbose]
  *
  *   --schema      "to" datamodel — the proposed change (what we're
  *                  diffing TO). Defaults to backend/prisma/schema.prisma.
@@ -65,16 +84,71 @@
  *                  schema snapshot.
  *   --allow-drop  Bless column drops for this run.
  *   --allow-unique Bless UNIQUE additions for this run.
+ *   --no-commit-blessings
+ *                 Disable scanning the latest commit message for
+ *                 [allow-unique]/[allow-drop]/[allow-not-null]/[allow-narrow]
+ *                 markers. Used by the test suite to verify the
+ *                 unblessed exit code is preserved.
  *   --json        Emit a single JSON report to stdout instead of the
  *                  human-readable lines (still exits non-zero on risk).
  *   --verbose     Echo the raw migrate-diff SQL too.
+ *
+ * Env override (testing only):
+ *   MIGRATION_SAFETY_COMMIT_MSG — when set, the blessing scanner uses
+ *   this string instead of shelling out to `git log`. Lets the spec
+ *   feed synthetic commit messages without fabricating real commits.
  */
 
 'use strict';
 
-const { execFileSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+
+// ── Commit-message blessings (issue #425) ───────────────────────────
+//
+// The migration-safety detectors are deliberately conservative — they
+// flag every UNIQUE addition / column drop / NOT NULL transition / type
+// narrowing because they can't reason about the semantic shape of the
+// change. Sometimes the author KNOWS the risk is mathematically zero
+// (e.g. UNIQUE([tenantId, provider, externalId]) is strictly more
+// permissive than UNIQUE([provider, externalId])). For those cases the
+// author opts in via a marker in the commit message:
+//
+//   [allow-unique]    — bless UNIQUE_ADDITION
+//   [allow-drop]      — bless COLUMN_DROP
+//   [allow-not-null]  — bless NOT_NULL_WITHOUT_DEFAULT
+//   [allow-narrow]    — bless TYPE_NARROWING
+//
+// We read the latest commit message via `git log -1 --format=%B`. If
+// git fails (detached HEAD on a freshly-cloned CI runner before the
+// first commit, or git binary missing), every marker stays false and
+// the script behaves exactly as it did before this feature existed.
+function readBlessingsFromCommitMessage() {
+  let msg = '';
+  // Test-only override: lets the spec feed synthetic commit messages
+  // without fabricating real commits.
+  if (typeof process.env.MIGRATION_SAFETY_COMMIT_MSG === 'string') {
+    msg = process.env.MIGRATION_SAFETY_COMMIT_MSG;
+  } else {
+    try {
+      msg = execSync('git log -1 --format=%B', {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+      });
+    } catch {
+      msg = '';
+    }
+  }
+  return {
+    allowUnique: /\[allow-unique\]/i.test(msg),
+    allowDrop: /\[allow-drop\]/i.test(msg),
+    allowNotNull: /\[allow-not-null\]/i.test(msg),
+    allowNarrow: /\[allow-narrow\]/i.test(msg),
+    raw: msg,
+  };
+}
 
 // ── Argv parsing ────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -83,6 +157,7 @@ function parseArgs(argv) {
     against: null,
     allowDrop: false,
     allowUnique: false,
+    noCommitBlessings: false,
     json: false,
     verbose: false,
   };
@@ -93,6 +168,7 @@ function parseArgs(argv) {
       case '--against': args.against = argv[++i]; break;
       case '--allow-drop': args.allowDrop = true; break;
       case '--allow-unique': args.allowUnique = true; break;
+      case '--no-commit-blessings': args.noCommitBlessings = true; break;
       case '--json': args.json = true; break;
       case '--verbose': args.verbose = true; break;
       case '-h':
@@ -456,18 +532,41 @@ function analyse(sql, opts) {
     allRisks.push(...detectForeignKeyWithoutOnDelete(stmt));
   }
 
-  // Apply allow-list flags. We don't drop the risk silently — we keep
-  // it in the report under `suppressed: true` so CI summaries can
-  // show what was waived.
+  // Apply allow-list flags + commit-message blessings. We don't drop
+  // the risk silently — we keep it in the report under
+  // `suppressed: true` so CI summaries can show what was waived.
+  // `suppressedBy` records the source ('flag' | 'commit-blessing') so
+  // the summary line can distinguish the two paths.
+  const blessings = (opts && opts.blessings) || {
+    allowUnique: false, allowDrop: false, allowNotNull: false, allowNarrow: false,
+  };
   for (const r of allRisks) {
-    if (r.class === 'COLUMN_DROP' && opts.allowDrop) r.suppressed = true;
-    if (r.class === 'UNIQUE_ADDITION' && opts.allowUnique) r.suppressed = true;
+    if (r.class === 'COLUMN_DROP' && opts.allowDrop) {
+      r.suppressed = true;
+      r.suppressedBy = 'flag';
+    } else if (r.class === 'COLUMN_DROP' && blessings.allowDrop) {
+      r.suppressed = true;
+      r.suppressedBy = 'commit-blessing';
+    } else if (r.class === 'UNIQUE_ADDITION' && opts.allowUnique) {
+      r.suppressed = true;
+      r.suppressedBy = 'flag';
+    } else if (r.class === 'UNIQUE_ADDITION' && blessings.allowUnique) {
+      r.suppressed = true;
+      r.suppressedBy = 'commit-blessing';
+    } else if (r.class === 'NOT_NULL_WITHOUT_DEFAULT' && blessings.allowNotNull) {
+      r.suppressed = true;
+      r.suppressedBy = 'commit-blessing';
+    } else if (r.class === 'TYPE_NARROWING' && blessings.allowNarrow) {
+      r.suppressed = true;
+      r.suppressedBy = 'commit-blessing';
+    }
   }
 
   return {
     statementCount: stmts.length,
     risks: allRisks,
     failing: allRisks.filter(r => !r.suppressed),
+    blessedCount: allRisks.filter(r => r.suppressedBy === 'commit-blessing').length,
   };
 }
 
@@ -483,6 +582,13 @@ function main() {
     process.stderr.write(`[migration-safety] against schema not found: ${opts.against}\n`);
     process.exit(2);
   }
+
+  // Read commit-message blessings unless explicitly disabled. The
+  // [--no-commit-blessings] flag preserves the pre-#425 behaviour for
+  // tests that need to assert the unblessed exit code.
+  opts.blessings = opts.noCommitBlessings
+    ? { allowUnique: false, allowDrop: false, allowNotNull: false, allowNarrow: false }
+    : readBlessingsFromCommitMessage();
 
   const sql = runMigrateDiff(opts);
   if (opts.verbose) {
@@ -500,20 +606,41 @@ function main() {
       statementCount: report.statementCount,
       riskCount: report.failing.length,
       suppressedCount: report.risks.length - report.failing.length,
+      blessedCount: report.blessedCount,
+      blessings: {
+        allowUnique: !!opts.blessings.allowUnique,
+        allowDrop: !!opts.blessings.allowDrop,
+        allowNotNull: !!opts.blessings.allowNotNull,
+        allowNarrow: !!opts.blessings.allowNarrow,
+      },
       risks: report.risks,
     }, null, 2) + '\n');
   } else {
+    // Surface blessed-but-not-failing risks before the gate verdict
+    // so reviewers can tell at a glance what the author waived.
+    for (const r of report.risks) {
+      if (r.suppressedBy === 'commit-blessing') {
+        process.stdout.write(`[BLESSED] ${r.class}: ${r.message}\n`);
+      }
+    }
     if (report.failing.length === 0) {
       process.stdout.write(`[OK] No migration risks detected (${report.statementCount} statements analyzed)\n`);
-      if (report.risks.length > 0) {
-        process.stdout.write(`     (${report.risks.length} risks suppressed via --allow-* flags)\n`);
+      const flagSuppressed = report.risks.filter(r => r.suppressedBy === 'flag').length;
+      if (flagSuppressed > 0) {
+        process.stdout.write(`     (${flagSuppressed} risks suppressed via --allow-* flags)\n`);
+      }
+      if (report.blessedCount > 0) {
+        process.stdout.write(`[BLESSED] ${report.blessedCount} risk(s) suppressed by commit-message blessings\n`);
       }
     } else {
       process.stderr.write(`[migration-safety] ${report.failing.length} risk(s) detected across ${report.statementCount} DDL statement(s):\n\n`);
       for (const r of report.failing) {
         process.stderr.write(`[RISK] ${r.class}: ${r.message}\n`);
       }
-      process.stderr.write(`\nReview the SQL with --verbose; bless intentional drops/uniques with --allow-drop or --allow-unique.\n`);
+      if (report.blessedCount > 0) {
+        process.stderr.write(`\n[BLESSED] ${report.blessedCount} risk(s) suppressed by commit-message blessings\n`);
+      }
+      process.stderr.write(`\nReview the SQL with --verbose; bless intentional drops/uniques with --allow-drop / --allow-unique flags or [allow-drop] / [allow-unique] / [allow-not-null] / [allow-narrow] in the commit message.\n`);
     }
   }
 
@@ -528,6 +655,7 @@ module.exports = {
   splitStatements,
   parseFromSchema,
   analyse,
+  readBlessingsFromCommitMessage,
   detectNotNullWithoutDefault,
   detectColumnDrop,
   detectTypeNarrowing,

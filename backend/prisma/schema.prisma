@@ -1951,6 +1951,7 @@ model PlaybookProgress {
   updatedAt      DateTime @updatedAt
 
   /// One progress row per (tenant, deal, playbook). A deal can run multiple playbooks in parallel, but a given playbook against a given deal has exactly one progress record (resuming updates the row). tenantId is keyed defensively even though Deal is tenant-scoped and dealId is globally unique under autoincrement — guards against future id-allocation changes (UUIDs, per-tenant sharding) where dealId might collide across tenants. The application code in routes/playbooks.js already passes tenantId in every where-clause, so this is also a structural alignment between schema + queries. Audit decision after the v3.4.6 #413 batch 2 deferral; the original "tenantId implicit via dealId" claim was load-bearing only on the autoincrement assumption.
+  /// Migration safety: replacing `@@unique([dealId, playbookId])` with the new key is strictly more permissive (every prior unique pair is still unique under the new constraint), so backfill is unnecessary and no duplicate-row check is needed before the migration runs. Blessed via [allow-unique] in the introducing commit message.
   @@unique([tenantId, dealId, playbookId])
 }
 

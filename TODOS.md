@@ -17,22 +17,19 @@
 | `e72cd5c` | `backup-engine-api.spec.js` — IS_LOCAL_STACK guard. Skips disk-readback assertions when BASE_URL is remote (the chronic e2e-full hard-fail across 5 consecutive runs). Per-push gate behavior unchanged. |
 | `ffd6d75` | New skill: `applying-demo-ssh-config` (paramiko + SFTP + sudo + validate + auto-rollback pattern from #445). 3 new CLAUDE.md standing rules: "Local-stack-only specs must guard on BASE_URL", "Demo SSH ops" (pointer to new skill), "API response shape change" (additive envelope from #435). Permission allowlist expanded — `Bash(mkdir/ls/rm/mv/cp .claude/skills/*)` so skill-authoring doesn't prompt. |
 
-### ⚠️ NEEDS USER ATTENTION — e2e-full broader demo-state cleanup
+### ⚠️ NEEDS USER ATTENTION — e2e-full broader demo-state cleanup (CATEGORY 1 ONLY)
 
-`e2e-full.yml` has been red for the entire v3.4.9 → v3.4.11 arc (5+ consecutive runs). After the `e72cd5c` backup-spec fix, the remaining failures cluster into ~3 categories:
+`e2e-full.yml` has been red for the entire v3.4.9 → v3.4.11 arc (5+ consecutive runs). Categories 2 and 3 are now ✅ closed; **only category 1 (demo-state-divergence) remains open** and needs user-priority confirmation before investigation.
 
-1. **Demo-state-divergence specs** (shard 2): `eventbus-conditions.spec.js`, `eventbus-template.spec.js`, `lead-scoring.spec.js` — these create rules / fire events / find a "fresh" approval row matching a TAG. Demo has stale rows from 100+ prior runs that match the same patterns; the lookup either returns the wrong row or returns nothing. **Fix per spec: tighten the lookup filter (createdAt > beforeAll-stamp), or add a teardown that scrubs prior-run rows.** Each spec needs ~30 min of focused investigation.
-
-2. **Local-stack-only specs without IS_LOCAL_STACK guard** (similar to backup-engine-api): `migration-safety.spec.js`, possibly others that spawn child Node processes with `execFileSync(process.execPath, ...)` and need backend's node_modules. **Fix: apply IS_LOCAL_STACK pattern from `e72cd5c` — skip when remote.**
-
-3. **Form-submission specs** (`landing-page-renderer.spec.js:128/147`, possibly others) — were failing pre-Nginx-fix because `/p/<slug>` 404'd before reaching backend. **The Nginx config landed in this session unblocked these.** Should pass on next e2e-full run.
+| Category | Status | Detail |
+|---|---|---|
+| **(2)** Local-stack-only specs without remote-skip guard | ✅ **closed `e72cd5c` + `e8cce09`** | `backup-engine-api` got `IS_LOCAL_STACK` guard; `migration-safety` got the same pattern. Surveyed 4 sibling specs (recurring-invoice-api, retention-api, scheduled-email-api, wellness-ops-api) — they each have their own `probePrismaClient()` / `dbAvailable()` self-skip and don't appear in shard 2 failures. No further work in category 2. |
+| **(3)** Form-submission specs unblocked by Nginx fix | ✅ **closed `ffd6d75`** (Nginx config landed) | `landing-page-renderer.spec.js:128/147` were failing pre-Nginx because `/p/<slug>` 404'd before reaching backend. Should pass on the next e2e-full run. |
+| **(1)** Demo-state-divergence specs | ⬜ **open — needs priority call** | `eventbus-conditions.spec.js`, `eventbus-template.spec.js`, `lead-scoring.spec.js`, `email-threading.spec.js:100`, `marketplace-leads.spec.js:115` — these create rules / fire events / find a "fresh" approval row matching a TAG. Demo has stale rows from 100+ prior runs that match the same patterns; lookups return the wrong row or none. Fix per spec: tighten lookup filter (createdAt > beforeAll-stamp), or add a teardown that scrubs prior-run rows. ~30 min/spec; ~3-5 specs total. |
 
 **Recommended next-session approach:**
-- Trigger a fresh `e2e-full.yml` run (manual workflow_dispatch) on `ffd6d75` HEAD to baseline the post-fix state. Categories (3) should be already-green; (1) and (2) will still fail.
-- For category (2), apply IS_LOCAL_STACK in batch — likely 4-6 specs all needing the same one-line guard.
-- For category (1), each spec needs a tightened lookup filter. Multi-hour task.
-
-This is multi-day cleanup work. **Confirm priority** — is e2e-full going green a P1 (release-validation gate is the source of truth) or P3 (per-push gate is the operational gate)? Per-push has been ✅ GREEN throughout; demo deploys are all healthy.
+- Trigger a fresh `e2e-full.yml` run (manual workflow_dispatch) on the current HEAD to baseline the post-fix state. Categories (2) and (3) should now be green.
+- **For category (1) — confirm priority before investigating.** Is e2e-full going green a P1 (release-validation gate is the source of truth) or P3 (per-push gate is the operational gate)? Per-push has been ✅ GREEN throughout; demo deploys are all healthy. If P3, the work is real but deferrable.
 
 ### Long tail still open
 

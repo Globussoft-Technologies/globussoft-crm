@@ -624,6 +624,7 @@ export default function App() {
               <Route path="wellness/patients" element={<WellnessOnly><WellnessPatients /></WellnessOnly>} />
               <Route path="wellness/patients/:id" element={<WellnessOnly><WellnessPatientDetail /></WellnessOnly>} />
               <Route path="wellness/services" element={<WellnessOnly><WellnessServices /></WellnessOnly>} />
+              <Route path="wellness/visits" element={<WellnessOnly><WellnessVisits /></WellnessOnly>} />
               <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
               <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />

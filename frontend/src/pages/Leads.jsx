@@ -283,6 +283,8 @@ const Leads = () => {
                       fontSize: '0.75rem',
                       backgroundColor: 'rgba(139, 92, 246, 0.1)',
                       color: '#8b5cf6',
+                      whiteSpace: 'nowrap',
+                      display: 'inline-block',
                     }}>
                       {lead.source || 'Organic'}
                     </span>

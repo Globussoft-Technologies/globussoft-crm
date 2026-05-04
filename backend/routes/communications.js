@@ -12,10 +12,29 @@ const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
 const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || "crm.globusdemos.com";
 const FROM_EMAIL = `Globussoft CRM <noreply@${MAILGUN_DOMAIN}>`;
 
+function isValidEmail(email) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+function escapeHtml(text) {
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+  return text.replace(/[&<>"']/g, m => map[m]);
+}
+
 async function sendMailgun(to, subject, body) {
   if (!MAILGUN_API_KEY) {
     console.log(`[Email] Mailgun not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
+  }
+
+  if (!isValidEmail(to)) {
+    console.error(`[Email] Invalid email address: ${to}`);
+    return { sent: false, reason: "invalid_recipient_email" };
+  }
+
+  if (!subject || !body) {
+    return { sent: false, reason: "missing_subject_or_body" };
   }
 
   const formData = new URLSearchParams();
@@ -23,7 +42,8 @@ async function sendMailgun(to, subject, body) {
   formData.append("to", to);
   formData.append("subject", subject);
   formData.append("text", body);
-  formData.append("html", body.replace(/\n/g, "<br>"));
+  const htmlBody = escapeHtml(body).replace(/\n/g, "<br>");
+  formData.append("html", htmlBody);
 
   try {
     const response = await fetch(`https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`, {
@@ -39,11 +59,11 @@ async function sendMailgun(to, subject, body) {
     } else {
       const err = await response.text();
       console.error(`[Email] Mailgun error (${response.status}):`, err);
-      return { sent: false, reason: err };
+      return { sent: false, reason: `mailgun_error_${response.status}`, details: err };
     }
   } catch (err) {
     console.error("[Email] Send error:", err.message);
-    return { sent: false, reason: err.message };
+    return { sent: false, reason: "send_error", details: err.message };
   }
 }
 
@@ -73,6 +93,7 @@ router.post("/send-email", async (req, res) => {
   try {
     const { to, subject, body, contactId } = req.body;
     if (!to || !subject) return res.status(400).json({ error: "Recipient and subject required" });
+    if (!req.user) return res.status(401).json({ error: "Authentication required" });
 
     // Always persist to DB first
     const emailRecord = await prisma.emailMessage.create({
@@ -84,7 +105,7 @@ router.post("/send-email", async (req, res) => {
         direction: "OUTBOUND",
         read: true,
         contactId: contactId ? parseInt(contactId) : null,
-        userId: req.user ? req.user.userId : null,
+        userId: req.user.id || req.user.userId,
         tenantId: req.user.tenantId,
       }
     });
@@ -109,17 +130,28 @@ router.post("/send-email", async (req, res) => {
           type: "Email",
           description: `Sent email: "${subject}"`,
           contactId: parseInt(contactId),
-          userId: req.user ? req.user.userId : null,
+          userId: req.user.id || req.user.userId,
           tenantId: req.user.tenantId,
         }
       }).catch(() => {}); // non-critical
     }
 
     if (req.io) req.io.emit('email_sent', emailRecord);
-    res.status(200).json({ success: true, delivered: mailResult.sent, email: emailRecord });
+
+    if (!mailResult.sent) {
+      return res.status(400).json({
+        success: false,
+        delivered: false,
+        email: emailRecord,
+        error: `Failed to send email: ${mailResult.reason}`,
+        details: mailResult.details
+      });
+    }
+
+    res.status(200).json({ success: true, delivered: mailResult.sent, email: emailRecord, messageId: mailResult.id });
   } catch (err) {
     console.error("[Email] Dispatch error:", err);
-    res.status(500).json({ error: "Email dispatch failed" });
+    res.status(500).json({ error: "Email dispatch failed", details: err.message });
   }
 });
 

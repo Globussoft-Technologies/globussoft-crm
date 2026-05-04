@@ -335,6 +335,7 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, 
       <Link to="/wellness/calendar" icon={Calendar} label="Calendar" />
       <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" />
       <Link to="/wellness/services" icon={Stethoscope} label="Service Catalog" managerOnly />
+      <Link to="/wellness/visits" icon={HeartPulse} label="Visits" managerOnly />
 
       {/* Lead-to-revenue */}
       <div style={labelStyle}>Leads & Revenue</div>

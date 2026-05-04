@@ -60,7 +60,7 @@ User picked up at home with the deploy gate stuck red 11+ pushes. Set up an hour
 | **#435** Inbox compose comma emails | 2-3h backend | ⬜ open |
 | **9× landing-page builder/UI issues** (#438/#446/#449/#450/#452/#454/#455/#456 + #451 blocked by #445) | varies | ⬜ open — frontend coordinated pickup |
 | **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
-| **`sanitizeJson()` helper sweep** | ✅ **shipped this session** (097ef5a + 6a9e450 + a916f59) — helper promoted to backend/lib/sanitizeJson.js + adopted at lead_routing.js + ab_tests.js + marketing.js + report_schedules.js with ~12 regression tests across 3 spec extensions | partial — report_schedules e2e regression spec wire-in is the only follow-up (30 min via writing-api-gate-spec + wiring-spec-into-gate) |
+| **`sanitizeJson()` helper sweep** | ✅ **fully shipped this session** (097ef5a + 6a9e450 + a916f59 + **dd56df3**) — helper promoted to backend/lib/sanitizeJson.js + adopted at all 4 audit-identified routes + matched regression-spec coverage in each route's `*-api.spec.js` (4 routes × ~4 tests = ~16 sanitization tests) + dedicated `report-schedules-api.spec.js` wired into the per-push gate | ✅ done |
 
 **P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #406 #407 #429 #430 #431 #433 #434 #437 #439 #440 #441 #402
 
@@ -84,8 +84,7 @@ Net surface adoption (5 routes total now using the lib helper):
 Routes that DON'T need work (already sanitize properly):
 - `routes/custom_objects.js` — sanitizeText on name/description/field-names (own local copy)
 
-**Carry-over for v3.4.12** (1 small follow-up):
-- `e2e/tests/report_schedules.spec.js` doesn't match the project's `<area>-api.spec.js` gate-naming convention and isn't wired into deploy.yml/coverage.yml. Either rename to `report-schedules-api.spec.js` and wire in via `wiring-spec-into-gate` skill, OR add the regression cases directly to `reports-api.spec.js` (which IS gate-wired). 30 min either way. The route fix in `a916f59` is the load-bearing security improvement; this is hygiene/test-coverage parity with the other 3 routes.
+**Carry-over for v3.4.12** — sanitizeJson sweep follow-up: ✅ **closed in `dd56df3`**. New `e2e/tests/report-schedules-api.spec.js` (8 tests: 6 sanitization + 2 auth-gate) authored via `writing-api-gate-spec` skill + wired into deploy.yml + coverage.yml via `wiring-spec-into-gate` skill (the canonical `wire-in.sh` placed it before `teardown-completeness.spec.js` with the trailing backslash). Existing `report_schedules.spec.js` (UI-shaped, snake_case) stays as-is per project convention of separate `<area>.spec.js` (UI) vs `<area>-api.spec.js` (gate). All 4 audit-identified routes now have matched regression coverage.
 
 ### Notes for the next session
 

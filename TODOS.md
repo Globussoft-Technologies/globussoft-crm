@@ -18,7 +18,28 @@ When B-01 ships, move it to "## Recently shipped" and remove from this section. 
 
 ---
 
-## 🏁 NEXT-SESSION HANDOFF (2026-05-05 evening — 5-agent parallel wave fully landed)
+## 🏁 NEXT-SESSION HANDOFF (2026-05-05 night — post-wave: deploy-gate unblock + 3 e2e-full failures pending re-test)
+
+**HEAD on origin/main:** `6f140bc` (spec-fixture fix that unblocks the deploy gate). Demo will catch up to `9abbafe`+ once the next deploy completes.
+
+### Stuck-deploy-gate cleared (`6f140bc`)
+
+After the 5-agent wave landed, the deploy gate went RED on every push for 4 consecutive commits (9abbafe → 51e8891 → 1ef4ba5 → cc1a0ca). Demo stuck at b180c4b for ~50 min. Root cause: Agent A's new `landing-page-upload-api.spec.js` had a wrong-field tenant-id capture (read `j.user.tenantId` instead of `j.tenant.id` — the response shape puts tenantId on `tenant.id`, not nested under `user`). Spec assertion `tenant-${genericTenantId}/` evaluated to `tenant-null/` against actual `tenant-1/`. Fixed in `6f140bc`.
+
+**Triaged via `triaging-stuck-deploy-gate` skill — classification: spec-bad-fixture** (same bucket as the 940b4f0 wave's wellness-read-audit fix).
+
+### e2e-full run `25344242416` final result: 3 of 4 shards green
+
+Improved from 2/4 to 3/4 shards (vs pre-Agent-B). Shard 2 still has 3 failing specs:
+- `landing-page-upload-api.spec.js:99` — same spec-fixture bug as above; closes with `6f140bc` once demo redeploys
+- `landing-page-renderer.spec.js:147` — POST /p/:slug/submit. Was supposed to work post-Nginx-fix. May need investigation; could be CAPTCHA-related (Agent A's #451 work added optional Turnstile)
+- `marketplace-leads.spec.js:115` — Agent B's bonus deduplication fix should have addressed this; may be a different code path or demo-state
+
+**Next session: re-trigger e2e-full after `6f140bc` deploys.** If only landing-page-renderer + marketplace-leads remain failing post-deploy, those are real bugs to investigate. Both are in shard 2.
+
+---
+
+## 🏁 NEXT-SESSION HANDOFF (2026-05-05 evening — 5-agent parallel wave fully landed) — superseded above
 
 **HEAD on origin/main:** `cc1a0ca`. All 5 dispatched agents finished and pushed cleanly. Per-push gate currently green; e2e-full release-validation triggered at run `25344242416` (~15-20 min, will report when done).
 

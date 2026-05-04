@@ -332,6 +332,7 @@ jobs:
             tests/numeric-id-sweep.spec.js \
             tests/migration-safety.spec.js \
             tests/wellness-telecaller-api.spec.js \
+            tests/wellness-reports-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

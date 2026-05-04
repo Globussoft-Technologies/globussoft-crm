@@ -6,9 +6,9 @@
 
 ---
 
-## 🏁 NEXT-SESSION HANDOFF (2026-05-04 night — full session: deploy-gate unblock + #447 P1 XSS + /api/health follow-up; 4 commits all green)
+## 🏁 NEXT-SESSION HANDOFF (2026-05-04 night — v3.4.10 doc bump landed; tag pending)
 
-**HEAD on origin/main:** `44747b4` (+ this doc bump). Per-push gate ✅ GREEN on every push since 940b4f0. Demo `/api/health` now reports `version: "3.3.0"` (real, from package.json) — the 5-tag drift mirage is fixed. All 4 commits this session deployed cleanly.
+**HEAD on origin/main:** post-this-doc-bump. **v3.4.10 docs landed** (CHANGELOG / README / CLAUDE.md / TODOS / E2E_GAPS in lockstep per `bumping-version-docs` skill). **v3.4.10 git tag NOT yet pushed** — next session's first step is `git tag -a v3.4.10 -m "..." && git push origin v3.4.10` to fire `e2e-full.yml` release-validation against demo. Per-push gate ✅ GREEN on every push since 940b4f0. Demo `/api/health` now reports `version: "3.3.0"` (real, from package.json) — the 5-tag drift mirage is fixed. All code commits since v3.4.9 deployed cleanly.
 
 ### Why this session
 
@@ -40,7 +40,7 @@ User picked up at home with the deploy gate stuck red 11+ pushes. Set up an hour
 
 ### Three things to do first next session
 
-1. **Tag v3.4.10** — 4 code commits since v3.4.9 (940b4f0 + 0618882 + 44747b4 + the doc commits) is enough for a release bump. Use `bumping-version-docs` skill — touches CHANGELOG + README + CLAUDE.md + TODOS + E2E_GAPS in lockstep. Will fire e2e-full release-validation against the freshly-deployed demo. Bonus: bumping package.json from 3.3.0 → 3.4.10 will make /api/health surface the new version (now that the literal is gone).
+1. **Push v3.4.10 git tag** — docs are bumped (this commit). The actual `git tag -a v3.4.10 -m "..." && git push origin v3.4.10` step is still pending; pushing it fires `e2e-full.yml` release-validation against the freshly-deployed demo. Optional but recommended: bump `backend/package.json` from `3.3.0` → `3.4.10` in the same cycle so `/api/health` surfaces the tag-matching version (the literal is gone but package.json hasn't been bumped since v3.3.0).
 
 2. **Post #445 to the demo operator** — paste the Nginx config block from the issue comment to whoever has SSH access. ~5 min ops fix; once it lands, public landing-page URLs work for real visitors AND the #447 XSS hardening is exercised in production.
 

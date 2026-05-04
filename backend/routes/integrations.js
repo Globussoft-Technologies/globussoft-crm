@@ -93,7 +93,7 @@ router.get("/callified/auth-url", verifyToken, async (req, res) => {
     // Get the Callified SSO secret from environment — must match Callified's SSO_SHARED_SECRET
     const callifiedSecret = process.env.CALLIFIED_SSO_SECRET;
     if (!callifiedSecret) {
-      return res.status(500).json({ error: "Callified SSO not configured on CRM. Set CALLIFIED_SSO_SECRET in .env" });
+      return res.status(503).json({ error: "Callified integration is not yet available. Please contact your administrator to configure it." });
     }
 
     // 1. Load Callified integration config for this tenant (optional — dashboardUrl comes from here)
@@ -150,7 +150,7 @@ router.get("/callified/sso", verifyToken, async (req, res) => {
 
     const callifiedSecret = process.env.CALLIFIED_SSO_SECRET;
     if (!callifiedSecret) {
-      return res.status(500).send("Callified SSO not configured. Set CALLIFIED_SSO_SECRET in .env");
+      return res.status(503).send("Callified integration is not yet available. Please contact your administrator to configure it.");
     }
 
     const integration = await prisma.integration.findFirst({

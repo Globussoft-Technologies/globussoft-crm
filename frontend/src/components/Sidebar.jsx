@@ -1,19 +1,74 @@
-import { useContext, useState, useRef, useLayoutEffect, useEffect, useCallback } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
-import { io } from 'socket.io-client';
 import {
-  Users, LayoutDashboard, Briefcase, Settings, LifeBuoy, Send, Inbox as InboxIcon, BarChart3,
-  Code, FileDigit, Database, Network, Target, CheckSquare, UserPlus, Building2, Receipt, Ticket,
-  UsersRound, FileText, FileSpreadsheet, FolderKanban, DollarSign, Trophy, ShoppingBag, Radio,
-  PanelTop, Calendar, Shield, ScrollText, GitBranch, TrendingUp, BookOpen, PenTool, ClipboardList,
-  MessageSquare, Eye, BadgePercent, Bot, FileSignature, Award, CreditCard, Sparkles, ExternalLink,
-  PhoneCall, Stethoscope, HeartPulse, Bell, Clock, Loader2,
-} from 'lucide-react';
-import { AuthContext } from '../App';
-import { fetchApi } from '../utils/api';
-import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
-import { launchCallifiedSSO } from '../utils/callified';
-import { useNotify } from '../utils/notify';
+  useContext,
+  useState,
+  useRef,
+  useLayoutEffect,
+  useEffect,
+  useCallback,
+} from "react";
+import { NavLink, useLocation } from "react-router-dom";
+import { io } from "socket.io-client";
+import {
+  Users,
+  LayoutDashboard,
+  Briefcase,
+  Settings,
+  LifeBuoy,
+  Send,
+  Inbox as InboxIcon,
+  BarChart3,
+  Code,
+  FileDigit,
+  Database,
+  Network,
+  Target,
+  CheckSquare,
+  UserPlus,
+  Building2,
+  Receipt,
+  Ticket,
+  UsersRound,
+  FileText,
+  FileSpreadsheet,
+  FolderKanban,
+  DollarSign,
+  Trophy,
+  ShoppingBag,
+  Radio,
+  PanelTop,
+  Calendar,
+  Shield,
+  ScrollText,
+  GitBranch,
+  TrendingUp,
+  BookOpen,
+  PenTool,
+  ClipboardList,
+  MessageSquare,
+  Eye,
+  BadgePercent,
+  Bot,
+  FileSignature,
+  Award,
+  CreditCard,
+  Sparkles,
+  ExternalLink,
+  PhoneCall,
+  Stethoscope,
+  HeartPulse,
+  Bell,
+  Clock,
+  Loader2,
+} from "lucide-react";
+import { AuthContext } from "../App";
+import { fetchApi } from "../utils/api";
+import {
+  launchAdsGptAs,
+  ADSGPT_DASHBOARD,
+  ADSGPT_DEMO_LOGIN,
+} from "../utils/adsgpt";
+import { launchCallifiedSSO } from "../utils/callified";
+import { useNotify } from "../utils/notify";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -22,13 +77,17 @@ import { useNotify } from '../utils/notify';
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewport = false }) => {
+const Sidebar = ({
+  mobileOpen = false,
+  onMobileClose = () => {},
+  isMobileViewport = false,
+}) => {
   const { user, tenant } = useContext(AuthContext);
   const notify = useNotify();
-  const role = user?.role || 'USER';
-  const isAdmin = role === 'ADMIN';
-  const isManager = role === 'ADMIN' || role === 'MANAGER';
-  const isWellness = tenant?.vertical === 'wellness';
+  const role = user?.role || "USER";
+  const isAdmin = role === "ADMIN";
+  const isManager = role === "ADMIN" || role === "MANAGER";
+  const isWellness = tenant?.vertical === "wellness";
   const location = useLocation();
 
   // T2.1: ref to the <aside> so the focus-trap effect below can locate
@@ -41,9 +100,11 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
   // over the destination page.
   useEffect(() => {
     if (!mobileOpen) return;
-    const onKey = (e) => { if (e.key === 'Escape') onMobileClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    const onKey = (e) => {
+      if (e.key === "Escape") onMobileClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, [mobileOpen, onMobileClose]);
 
   useEffect(() => {
@@ -63,14 +124,15 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
 
     // Initial focus — defer one frame so the slide-in transition has started
     // and the element is actually visible / scrollable into view.
-    const focusables = () => Array.from(aside.querySelectorAll(FOCUSABLE_SELECTOR));
+    const focusables = () =>
+      Array.from(aside.querySelectorAll(FOCUSABLE_SELECTOR));
     const initialFocusFrame = requestAnimationFrame(() => {
       const first = focusables()[0];
       first?.focus();
     });
 
     const onTabKey = (e) => {
-      if (e.key !== 'Tab') return;
+      if (e.key !== "Tab") return;
       const list = focusables();
       if (list.length === 0) return;
       const first = list[0];
@@ -87,10 +149,10 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
         first.focus();
       }
     };
-    document.addEventListener('keydown', onTabKey);
+    document.addEventListener("keydown", onTabKey);
     return () => {
       cancelAnimationFrame(initialFocusFrame);
-      document.removeEventListener('keydown', onTabKey);
+      document.removeEventListener("keydown", onTabKey);
     };
   }, [mobileOpen, isMobileViewport]);
 
@@ -102,15 +164,23 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
   //      booking_created) and bump the relevant counters locally.
   //   3. Re-fetch every 60s as a fallback in case a socket event is
   //      missed (nginx not proxying socket.io, brief disconnects).
-  const [counts, setCounts] = useState({ leads: 0, tasks: 0, tickets: 0, inbox: 0 });
+  const [counts, setCounts] = useState({
+    leads: 0,
+    tasks: 0,
+    tickets: 0,
+    inbox: 0,
+  });
   const refreshCounts = useCallback(async () => {
     if (!user) return;
-    const safeLen = (p) => p.then((r) => Array.isArray(r) ? r.length : (r?.total ?? 0)).catch(() => null);
+    const safeLen = (p) =>
+      p
+        .then((r) => (Array.isArray(r) ? r.length : (r?.total ?? 0)))
+        .catch(() => null);
     const [leads, tasks, tickets, inbox] = await Promise.all([
-      safeLen(fetchApi('/api/contacts?status=Lead')),
-      safeLen(fetchApi('/api/tasks?status=PENDING')),
-      safeLen(fetchApi('/api/tickets?status=OPEN')),
-      safeLen(fetchApi('/api/email?unread=1')),
+      safeLen(fetchApi("/api/contacts?status=Lead")),
+      safeLen(fetchApi("/api/tasks?status=PENDING")),
+      safeLen(fetchApi("/api/tickets?status=OPEN")),
+      safeLen(fetchApi("/api/email?unread=1")),
     ]);
     setCounts((prev) => ({
       leads: leads ?? prev.leads,
@@ -130,17 +200,29 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
     // Live socket bumps — using the same single-namespace io('/') pattern as
     // NotificationBell. Failures are silent so the polling fallback owns
     // correctness.
-    const socket = io('/', { reconnection: false, timeout: 5000 });
-    socket.on('connect_error', () => {});
-    socket.on('error', () => {});
-    socket.on('marketplace_lead_imported', () => setCounts((c) => ({ ...c, leads: c.leads + 1 })));
-    socket.on('marketplace_lead_new', (p) => setCounts((c) => ({ ...c, leads: c.leads + (p?.count || 1) })));
-    socket.on('email_received', () => setCounts((c) => ({ ...c, inbox: c.inbox + 1 })));
-    socket.on('lead_created', () => setCounts((c) => ({ ...c, leads: c.leads + 1 })));
-    socket.on('task_created', () => setCounts((c) => ({ ...c, tasks: c.tasks + 1 })));
-    socket.on('ticket_created', () => setCounts((c) => ({ ...c, tickets: c.tickets + 1 })));
+    const socket = io("/", { reconnection: false, timeout: 5000 });
+    socket.on("connect_error", () => {});
+    socket.on("error", () => {});
+    socket.on("marketplace_lead_imported", () =>
+      setCounts((c) => ({ ...c, leads: c.leads + 1 })),
+    );
+    socket.on("marketplace_lead_new", (p) =>
+      setCounts((c) => ({ ...c, leads: c.leads + (p?.count || 1) })),
+    );
+    socket.on("email_received", () =>
+      setCounts((c) => ({ ...c, inbox: c.inbox + 1 })),
+    );
+    socket.on("lead_created", () =>
+      setCounts((c) => ({ ...c, leads: c.leads + 1 })),
+    );
+    socket.on("task_created", () =>
+      setCounts((c) => ({ ...c, tasks: c.tasks + 1 })),
+    );
+    socket.on("ticket_created", () =>
+      setCounts((c) => ({ ...c, tickets: c.tickets + 1 })),
+    );
     // Generic invalidation event — any module can emit and we re-fetch.
-    socket.on('sidebar_counts_changed', () => refreshCounts());
+    socket.on("sidebar_counts_changed", () => refreshCounts());
 
     return () => {
       clearInterval(intervalId);
@@ -160,7 +242,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
       navRef.current.scrollTop = scrollRef.current;
     }
   });
-  const brand = tenant?.name || 'Globussoft';
+  const brand = tenant?.name || "Globussoft";
   const logoUrl = tenant?.logoUrl || null;
   const brandColor = tenant?.brandColor || null;
   // Inline style applied to wellness section labels — overrides the gold
@@ -173,17 +255,29 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
     return (
-      <NavLink to={to} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} style={navStyle}>
+      <NavLink
+        to={to}
+        className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+        style={navStyle}
+      >
         <Icon size={20} /> <span style={{ flex: 1 }}>{label}</span>
         {Number.isFinite(count) && count > 0 && (
-          <span style={badgeStyle} aria-label={`${count} items`}>{count > 99 ? '99+' : count}</span>
+          <span style={badgeStyle} aria-label={`${count} items`}>
+            {count > 99 ? "99+" : count}
+          </span>
         )}
       </NavLink>
     );
   };
 
   const ExtLink = ({ href, icon: Icon, label }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="nav-link" style={navStyle}>
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="nav-link"
+      style={navStyle}
+    >
       <Icon size={20} /> <span style={{ flex: 1 }}>{label}</span>
       <ExternalLink size={14} style={{ opacity: 0.6 }} />
     </a>
@@ -194,7 +288,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
   // (network / provider down), degrade to opening the plain dashboard URL
   // so the link is never dead.
   const [adsLoading, setAdsLoading] = useState(false);
-  const AdsGptLink = ({ icon: Icon = Sparkles, label = 'AdsGPT' }) => {
+  const AdsGptLink = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
     const handleClick = async (e) => {
       e.preventDefault();
       if (adsLoading) return;
@@ -202,7 +296,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
       try {
         await launchAdsGptAs(ADSGPT_DEMO_LOGIN);
       } catch (err) {
-        console.error('[Sidebar] AdsGPT SSO error:', err.message);
+        console.error("[Sidebar] AdsGPT SSO error:", err.message);
       } finally {
         setAdsLoading(false);
       }
@@ -214,9 +308,22 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
         disabled={adsLoading}
         className="nav-link"
         aria-label={`Open AdsGPT as ${ADSGPT_DEMO_LOGIN}`}
-        style={{ ...navStyle, background: 'transparent', border: 'none', width: '100%', textAlign: 'left', cursor: adsLoading ? 'wait' : 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}
+        style={{
+          ...navStyle,
+          background: "transparent",
+          border: "none",
+          width: "100%",
+          textAlign: "left",
+          cursor: adsLoading ? "wait" : "pointer",
+          fontFamily: "inherit",
+          fontSize: "inherit",
+        }}
       >
-        {adsLoading ? <Loader2 size={20} className="spin" /> : <Icon size={20} />}
+        {adsLoading ? (
+          <Loader2 size={20} className="spin" />
+        ) : (
+          <Icon size={20} />
+        )}
         <span style={{ flex: 1 }}>{label}</span>
         <ExternalLink size={14} style={{ opacity: 0.6 }} />
       </button>
@@ -226,7 +333,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
   // SSO-authenticated Callified launcher — generates a signed JWT and opens
   // the Callified dashboard. If SSO fails, shows an error notification.
   const [callifiedLoading, setCallifiedLoading] = useState(false);
-  const CallifiedLink = ({ icon: Icon = PhoneCall, label = 'Callified' }) => {
+  const CallifiedLink = ({ icon: Icon = PhoneCall, label = "Callified" }) => {
     const handleClick = async (e) => {
       e.preventDefault();
       if (callifiedLoading) return;
@@ -234,8 +341,11 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
       try {
         await launchCallifiedSSO();
       } catch (err) {
-        console.error('[Sidebar] Callified SSO error:', err.message);
-        notify.error(`Failed to open Callified: ${err.message}`);
+        console.error("[Sidebar] Callified SSO error:", err.message);
+        const message = err.message?.includes("not yet available")
+          ? "Callified integration will be available soon. Please check back later."
+          : "Unable to open Callified. Please try again.";
+        alert(message);
       } finally {
         setCallifiedLoading(false);
       }
@@ -247,9 +357,22 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
         disabled={callifiedLoading}
         className="nav-link"
         aria-label="Open Callified dashboard"
-        style={{ ...navStyle, background: 'transparent', border: 'none', width: '100%', textAlign: 'left', cursor: callifiedLoading ? 'wait' : 'pointer', fontFamily: 'inherit', fontSize: 'inherit' }}
+        style={{
+          ...navStyle,
+          background: "transparent",
+          border: "none",
+          width: "100%",
+          textAlign: "left",
+          cursor: callifiedLoading ? "wait" : "pointer",
+          fontFamily: "inherit",
+          fontSize: "inherit",
+        }}
       >
-        {callifiedLoading ? <Loader2 size={20} className="spin" /> : <Icon size={20} />}
+        {callifiedLoading ? (
+          <Loader2 size={20} className="spin" />
+        ) : (
+          <Icon size={20} />
+        )}
         <span style={{ flex: 1 }}>{label}</span>
         <ExternalLink size={14} style={{ opacity: 0.6 }} />
       </button>
@@ -262,7 +385,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
   // so screen readers announce it correctly. On desktop (or when closed),
   // it's plain navigation.
   const isDrawerOpen = mobileOpen && isMobileViewport;
-  const asideRole = isDrawerOpen ? 'dialog' : 'navigation';
+  const asideRole = isDrawerOpen ? "dialog" : "navigation";
   const asideAriaModal = isDrawerOpen ? true : undefined;
 
   return (
@@ -270,7 +393,7 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
       {/* T2.1 (extends #228): backdrop is only visible at <900px (responsive.css)
           and only when the drawer is open. Tap dismisses. */}
       <div
-        className={`sidebar-backdrop ${mobileOpen ? 'is-open' : ''}`}
+        className={`sidebar-backdrop ${mobileOpen ? "is-open" : ""}`}
         onClick={onMobileClose}
         aria-hidden="true"
       />
@@ -280,31 +403,103 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
         role={asideRole}
         aria-modal={asideAriaModal}
         aria-label="Main navigation"
-        className={`glass app-sidebar ${mobileOpen ? 'is-open' : ''}`}
-        style={{ width: '250px', height: '100vh', padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', borderRadius: '0', borderLeft: 'none', borderTop: 'none', borderBottom: 'none' }}
+        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}`}
+        style={{
+          width: "250px",
+          height: "100vh",
+          padding: "1rem 1.25rem",
+          display: "flex",
+          flexDirection: "column",
+          borderRadius: "0",
+          borderLeft: "none",
+          borderTop: "none",
+          borderBottom: "none",
+        }}
       >
-      <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
-        {logoUrl ? (
-          <img
-            src={logoUrl}
-            alt={brand}
-            style={{ width: 32, height: 32, borderRadius: 6, objectFit: 'cover' }}
-          />
-        ) : (
-          <div style={{ width: '32px', height: '32px', backgroundColor: brandColor || 'var(--accent-color)', borderRadius: '8px', boxShadow: '0 0 15px var(--accent-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
-            {isWellness ? <HeartPulse size={18} /> : null}
-          </div>
-        )}
-        <h1 style={{ fontSize: '1.1rem', fontWeight: 'bold', fontFamily: 'var(--font-family)', lineHeight: 1.1 }}>{brand}</h1>
-      </div>
+        <div
+          style={{
+            marginBottom: "1rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            flexShrink: 0,
+          }}
+        >
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt={brand}
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 6,
+                objectFit: "cover",
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                width: "32px",
+                height: "32px",
+                backgroundColor: brandColor || "var(--accent-color)",
+                borderRadius: "8px",
+                boxShadow: "0 0 15px var(--accent-glow)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#fff",
+              }}
+            >
+              {isWellness ? <HeartPulse size={18} /> : null}
+            </div>
+          )}
+          <h1
+            style={{
+              fontSize: "1.1rem",
+              fontWeight: "bold",
+              fontFamily: "var(--font-family)",
+              lineHeight: 1.1,
+            }}
+          >
+            {brand}
+          </h1>
+        </div>
 
-      <nav
-        ref={navRef}
-        onScroll={(e) => { scrollRef.current = e.currentTarget.scrollTop; }}
-        style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1, overflowY: 'auto', minHeight: 0 }}
-      >
-        {isWellness ? renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, sectionLabelStyle, counts }) : renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, counts })}
-      </nav>
+        <nav
+          ref={navRef}
+          onScroll={(e) => {
+            scrollRef.current = e.currentTarget.scrollTop;
+          }}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.25rem",
+            flex: 1,
+            overflowY: "auto",
+            minHeight: 0,
+          }}
+        >
+          {isWellness
+            ? renderWellnessNav({
+                Link,
+                ExtLink,
+                AdsGptLink,
+                CallifiedLink,
+                isAdmin,
+                isManager,
+                sectionLabelStyle,
+                counts,
+              })
+            : renderGenericNav({
+                Link,
+                ExtLink,
+                AdsGptLink,
+                CallifiedLink,
+                isAdmin,
+                isManager,
+                counts,
+              })}
+        </nav>
       </aside>
     </>
   );
@@ -312,7 +507,16 @@ const Sidebar = ({ mobileOpen = false, onMobileClose = () => {}, isMobileViewpor
 
 // ── Wellness sidebar — slim, clinic-focused ───────────────────────
 
-function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, sectionLabelStyle, counts = {} }) {
+function renderWellnessNav({
+  Link,
+  ExtLink,
+  AdsGptLink,
+  CallifiedLink,
+  isAdmin,
+  isManager,
+  sectionLabelStyle,
+  counts = {},
+}) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   return (
     <>
@@ -321,8 +525,18 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, 
           Clinical staff (doctor/professional/telecaller/helper) should not see
           them in the nav. AdsGPT and Callified are external tools the whole
           team uses, so they stay visible for everyone. */}
-      <Link to="/wellness" icon={LayoutDashboard} label="Owner Dashboard" managerOnly />
-      <Link to="/wellness/recommendations" icon={Sparkles} label="Recommendations" managerOnly />
+      <Link
+        to="/wellness"
+        icon={LayoutDashboard}
+        label="Owner Dashboard"
+        managerOnly
+      />
+      <Link
+        to="/wellness/recommendations"
+        icon={Sparkles}
+        label="Recommendations"
+        managerOnly
+      />
       <AdsGptLink icon={Sparkles} label="AdsGPT" />
       <CallifiedLink icon={PhoneCall} label="Callified" />
 
@@ -334,17 +548,52 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, 
       <Link to="/wellness/patients" icon={HeartPulse} label="Patients" />
       <Link to="/wellness/calendar" icon={Calendar} label="Calendar" />
       <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" />
-      <Link to="/wellness/services" icon={Stethoscope} label="Service Catalog" managerOnly />
-      <Link to="/wellness/visits" icon={HeartPulse} label="Visits" managerOnly />
+      <Link
+        to="/wellness/services"
+        icon={Stethoscope}
+        label="Service Catalog"
+        managerOnly
+      />
+      <Link
+        to="/wellness/visits"
+        icon={HeartPulse}
+        label="Visits"
+        managerOnly
+      />
 
       {/* Lead-to-revenue */}
       <div style={labelStyle}>Leads & Revenue</div>
-      <Link to="/inbox" icon={InboxIcon} label="Unified Inbox" count={counts.inbox} />
-      <Link to="/wellness/telecaller" icon={PhoneCall} label="Telecaller Queue" />
-      <Link to="/leads" icon={UserPlus} label="All Leads" managerOnly count={counts.leads} />
-      <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" managerOnly />
+      <Link
+        to="/inbox"
+        icon={InboxIcon}
+        label="Unified Inbox"
+        count={counts.inbox}
+      />
+      <Link
+        to="/wellness/telecaller"
+        icon={PhoneCall}
+        label="Telecaller Queue"
+      />
+      <Link
+        to="/leads"
+        icon={UserPlus}
+        label="All Leads"
+        managerOnly
+        count={counts.leads}
+      />
+      <Link
+        to="/converted-leads"
+        icon={UserPlus}
+        label="Converted Leads"
+        managerOnly
+      />
       <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} />
-      <Link to="/marketplace-leads" icon={ShoppingBag} label="Marketplace Leads" managerOnly />
+      <Link
+        to="/marketplace-leads"
+        icon={ShoppingBag}
+        label="Marketplace Leads"
+        managerOnly
+      />
       <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
 
       {/* Money — clinic-side, in INR for Indian wellness tenants */}
@@ -359,9 +608,24 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, 
       {isManager && (
         <>
           <div style={labelStyle}>Marketing</div>
-          <Link to="/marketing" icon={Send} label="SMS / Email Blasts" managerOnly />
-          <Link to="/sequences" icon={Network} label="Drip Sequences" managerOnly />
-          <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" managerOnly />
+          <Link
+            to="/marketing"
+            icon={Send}
+            label="SMS / Email Blasts"
+            managerOnly
+          />
+          <Link
+            to="/sequences"
+            icon={Network}
+            label="Drip Sequences"
+            managerOnly
+          />
+          <Link
+            to="/landing-pages"
+            icon={PanelTop}
+            label="Landing Pages"
+            managerOnly
+          />
         </>
       )}
 
@@ -370,11 +634,36 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, 
       {isManager && (
         <>
           <div style={labelStyle}>Reports</div>
-          <Link to="/wellness/reports" icon={BarChart3} label="P&L + Attribution" managerOnly />
-          <Link to="/wellness/per-location" icon={Building2} label="Per-Location" managerOnly />
-          <Link to="/wellness/loyalty" icon={Award} label="Loyalty + Referrals" managerOnly />
-          <Link to="/surveys" icon={ClipboardList} label="Patient Surveys" managerOnly />
-          <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
+          <Link
+            to="/wellness/reports"
+            icon={BarChart3}
+            label="P&L + Attribution"
+            managerOnly
+          />
+          <Link
+            to="/wellness/per-location"
+            icon={Building2}
+            label="Per-Location"
+            managerOnly
+          />
+          <Link
+            to="/wellness/loyalty"
+            icon={Award}
+            label="Loyalty + Referrals"
+            managerOnly
+          />
+          <Link
+            to="/surveys"
+            icon={ClipboardList}
+            label="Patient Surveys"
+            managerOnly
+          />
+          <Link
+            to="/knowledge-base"
+            icon={BookOpen}
+            label="Knowledge Base"
+            managerOnly
+          />
         </>
       )}
 
@@ -382,7 +671,12 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, 
       {isAdmin && (
         <>
           <div style={labelStyle}>Admin</div>
-          <Link to="/wellness/locations" icon={Building2} label="Locations" adminOnly />
+          <Link
+            to="/wellness/locations"
+            icon={Building2}
+            label="Locations"
+            adminOnly
+          />
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
@@ -402,7 +696,15 @@ function renderWellnessNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, 
 
 // ── Generic sidebar (preserved unchanged) ─────────────────────────
 
-function renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, isManager, counts = {} }) {
+function renderGenericNav({
+  Link,
+  ExtLink,
+  AdsGptLink,
+  CallifiedLink,
+  isAdmin,
+  isManager,
+  counts = {},
+}) {
   return (
     <>
       {/* Core — visible to ALL roles */}
@@ -415,8 +717,18 @@ function renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, i
       <Link to="/leads" icon={UserPlus} label="Leads" count={counts.leads} />
       <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" />
       <Link to="/clients" icon={Building2} label="Clients" />
-      <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} />
-      <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} />
+      <Link
+        to="/tasks"
+        icon={CheckSquare}
+        label="Task Queue"
+        count={counts.tasks}
+      />
+      <Link
+        to="/tickets"
+        icon={Ticket}
+        label="Tickets"
+        count={counts.tickets}
+      />
       <Link to="/calendar-sync" icon={Calendar} label="Calendar" />
       <Link to="/live-chat" icon={MessageSquare} label="Live Chat" />
 
@@ -434,14 +746,34 @@ function renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, i
       <Link to="/projects" icon={FolderKanban} label="Projects" />
 
       <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly />
-      <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
+      <Link
+        to="/forecasting"
+        icon={TrendingUp}
+        label="Forecasting"
+        managerOnly
+      />
       <Link to="/quotas" icon={Award} label="Quotas" managerOnly />
       <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly />
       <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly />
       <Link to="/reports" icon={BarChart3} label="Reports" managerOnly />
-      <Link to="/agent-reports" icon={Trophy} label="Agent Reports" managerOnly />
-      <Link to="/dashboards" icon={LayoutDashboard} label="Dashboards" managerOnly />
-      <Link to="/custom-reports" icon={BarChart3} label="Custom Reports" managerOnly />
+      <Link
+        to="/agent-reports"
+        icon={Trophy}
+        label="Agent Reports"
+        managerOnly
+      />
+      <Link
+        to="/dashboards"
+        icon={LayoutDashboard}
+        label="Dashboards"
+        managerOnly
+      />
+      <Link
+        to="/custom-reports"
+        icon={BarChart3}
+        label="Custom Reports"
+        managerOnly
+      />
       <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly />
       <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly />
       <Link to="/territories" icon={Network} label="Territories" managerOnly />
@@ -452,11 +784,26 @@ function renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, i
       <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly />
       <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly />
       <Link to="/social" icon={Send} label="Social Media" managerOnly />
-      <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" managerOnly />
-      <Link to="/marketplace-leads" icon={ShoppingBag} label="Marketplace Leads" managerOnly />
+      <Link
+        to="/landing-pages"
+        icon={PanelTop}
+        label="Landing Pages"
+        managerOnly
+      />
+      <Link
+        to="/marketplace-leads"
+        icon={ShoppingBag}
+        label="Marketplace Leads"
+        managerOnly
+      />
 
       <Link to="/support" icon={LifeBuoy} label="Support" managerOnly />
-      <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
+      <Link
+        to="/knowledge-base"
+        icon={BookOpen}
+        label="Knowledge Base"
+        managerOnly
+      />
       <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly />
       <Link to="/sla" icon={Target} label="SLA Policies" managerOnly />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
@@ -464,16 +811,40 @@ function renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, i
       <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly />
 
       {isAdmin && (
-        <div style={{ paddingTop: '0.75rem', marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+        <div
+          style={{
+            paddingTop: "0.75rem",
+            marginTop: "0.5rem",
+            borderTop: "1px solid var(--border-color)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.25rem",
+          }}
+        >
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
-          <Link to="/field-permissions" icon={Shield} label="Field Permissions" adminOnly />
+          <Link
+            to="/field-permissions"
+            icon={Shield}
+            label="Field Permissions"
+            adminOnly
+          />
           <Link to="/channels" icon={Radio} label="Channels" adminOnly />
-          <Link to="/industry-templates" icon={Building2} label="Industry Templates" adminOnly />
+          <Link
+            to="/industry-templates"
+            icon={Building2}
+            label="Industry Templates"
+            adminOnly
+          />
           <Link to="/sandbox" icon={Database} label="Sandbox" adminOnly />
           <Link to="/objects" icon={Database} label="App Builder" adminOnly />
-          <Link to="/currencies" icon={DollarSign} label="Currencies" adminOnly />
+          <Link
+            to="/currencies"
+            icon={DollarSign}
+            label="Currencies"
+            adminOnly
+          />
           <Link to="/zapier" icon={Code} label="Zapier" adminOnly />
           <Link to="/developer" icon={Code} label="Developers" adminOnly />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
@@ -481,7 +852,16 @@ function renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, i
       )}
 
       {!isAdmin && isManager && (
-        <div style={{ paddingTop: '0.75rem', marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+        <div
+          style={{
+            paddingTop: "0.75rem",
+            marginTop: "0.5rem",
+            borderTop: "1px solid var(--border-color)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.25rem",
+          }}
+        >
           <Link to="/settings" icon={Settings} label="Settings" />
         </div>
       )}
@@ -490,34 +870,37 @@ function renderGenericNav({ Link, ExtLink, AdsGptLink, CallifiedLink, isAdmin, i
 }
 
 const sectionLabel = {
-  fontSize: '0.65rem', fontWeight: 600, color: 'var(--text-secondary)',
-  textTransform: 'uppercase', letterSpacing: '0.08em',
-  padding: '0.75rem 0.5rem 0.25rem',
+  fontSize: "0.65rem",
+  fontWeight: 600,
+  color: "var(--text-secondary)",
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  padding: "0.75rem 0.5rem 0.25rem",
 };
 
 const navStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  padding: '0.5rem 0.875rem',
-  gap: '0.625rem',
-  borderRadius: '8px',
-  color: 'var(--text-primary)',
-  transition: 'all 0.2s ease',
-  textDecoration: 'none',
-  fontSize: '0.9rem',
+  display: "flex",
+  alignItems: "center",
+  padding: "0.5rem 0.875rem",
+  gap: "0.625rem",
+  borderRadius: "8px",
+  color: "var(--text-primary)",
+  transition: "all 0.2s ease",
+  textDecoration: "none",
+  fontSize: "0.9rem",
   flexShrink: 0,
 };
 
 // #392: live counter badge — shown on /leads, /tasks, /tickets, /inbox.
 const badgeStyle = {
-  fontSize: '0.7rem',
+  fontSize: "0.7rem",
   fontWeight: 700,
-  padding: '0.05rem 0.45rem',
-  borderRadius: '999px',
-  background: 'var(--accent-color, #6366f1)',
-  color: '#fff',
-  minWidth: '20px',
-  textAlign: 'center',
+  padding: "0.05rem 0.45rem",
+  borderRadius: "999px",
+  background: "var(--accent-color, #6366f1)",
+  color: "#fff",
+  minWidth: "20px",
+  textAlign: "center",
   lineHeight: 1.4,
 };
 

@@ -333,6 +333,27 @@ router.post("/articles/:id/publish", async (req, res) => {
   }
 });
 
+// POST /api/knowledge-base/articles/:id/unpublish
+router.post("/articles/:id/unpublish", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
+    const existing = await prisma.kbArticle.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Article not found" });
+
+    const article = await prisma.kbArticle.update({
+      where: { id },
+      data: { isPublished: false },
+    });
+    res.json(article);
+  } catch (err) {
+    console.error("[KB][unpublish]", err);
+    res.status(500).json({ error: "Failed to unpublish article" });
+  }
+});
+
 // POST /api/knowledge-base/articles/:id/view
 router.post("/articles/:id/view", async (req, res) => {
   try {

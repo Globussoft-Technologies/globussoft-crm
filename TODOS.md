@@ -62,6 +62,8 @@ All 3 are **demo-state-sensitivity bugs in spec assertions**, not real backend b
 
 **Re-trigger e2e-full after `d84b0d9` deploys.** If it goes green, that's the goal — first all-green release-validation since v3.4.9.
 
+**UPDATE 5:** `d84b0d9` deploy ✅ SUCCESS. Re-triggered e2e-full at run `25348132618` on `c8bab33`. ~15-20 min to result. (3rd e2e-full re-trigger this session — prior runs progressively cleared categories of failure: backup-engine + migration-safety + workflows-api + landing-page upload/submit + email_scheduling/workflows-flow polling. If this one's green, we're done.)
+
 ---
 
 ## 🏁 NEXT-SESSION HANDOFF (2026-05-05 evening — 5-agent parallel wave fully landed) — superseded above

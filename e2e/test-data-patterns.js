@@ -69,6 +69,20 @@ const TEST_NAME_PATTERNS = [
   /^smoke-test$/,
   /^smoke-test_/,
 
+  // #403/#405 follow-up — rename-on-cleanup marker.
+  // The G-20 tenant-isolation spec (commit 04e5b56) and several wellness specs
+  // rename created rows to `_teardown_<area>_<id>` instead of hard-deleting,
+  // because the rows have FK chains (Patient → Visit → Rx → Consent) that a
+  // hard delete would orphan. The marker prefix is what teardown-completeness
+  // and demo-hygiene assert on. Demo-monitor sees the prefix and ignores the
+  // rows — but the scrub script (run by e2e-full's scrub-demo job) needs to
+  // actually DELETE them, otherwise they pile up forever and surface as
+  // demo pollution (the QA-reported `_teardown_iso_*`, `_teardown_g6_*`,
+  // `_teardown_wc_loc_*` rows on /wellness/patients + /wellness/locations on
+  // 2026-05-04). The Patient cascade is safe because every related row is
+  // also test data created in the same spec.
+  /^_teardown_/,
+
   // Orchestrator/recommendation spam — task title fan-out from
   // duplicate AgentRecommendation rows. Orchestrator emits ONE row but
   // the cron loop has historically fanned out to 9. Anchor on the exact

@@ -105,7 +105,7 @@ router.post("/send-email", async (req, res) => {
         direction: "OUTBOUND",
         read: true,
         contactId: contactId ? parseInt(contactId) : null,
-        userId: req.user.id || req.user.userId,
+        userId: req.user.userId,
         tenantId: req.user.tenantId,
       }
     });
@@ -130,7 +130,7 @@ router.post("/send-email", async (req, res) => {
           type: "Email",
           description: `Sent email: "${subject}"`,
           contactId: parseInt(contactId),
-          userId: req.user.id || req.user.userId,
+          userId: req.user.userId,
           tenantId: req.user.tenantId,
         }
       }).catch(() => {}); // non-critical

@@ -146,6 +146,23 @@ model Tenant {
   playbooks            Playbook[]
   sandboxSnapshots     SandboxSnapshot[]
   revokedTokens        RevokedToken[]
+
+  // #413 batch 3 (wave 18): calendar + scheduled-email + sales-config + KB + SLA
+  // back-relations. Calendar cluster (CalendarIntegration / CalendarEvent /
+  // ScheduledEmail / Booking) plus sales config (WinLossReason / LeadRoutingRule
+  // / Territory) plus support (KbCategory / KbArticle / SlaPolicy).
+  // PlaybookProgress is intentionally excluded — its tenancy is implicit
+  // through dealId; tracked as a separate audit task.
+  calendarIntegrations CalendarIntegration[]
+  calendarEvents       CalendarEvent[]
+  scheduledEmails      ScheduledEmail[]
+  bookings             Booking[]
+  winLossReasons       WinLossReason[]
+  leadRoutingRules     LeadRoutingRule[]
+  territories          Territory[]
+  kbCategories         KbCategory[]
+  kbArticles           KbArticle[]
+  slaPolicies          SlaPolicy[]
 }
 
 model User {
@@ -1300,7 +1317,8 @@ model CalendarIntegration {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  tenantId Int @default(1)
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// One calendar connection per (user, provider). A user connects their Google calendar once; reconnecting refreshes tokens in place. Note: scoped on userId (already globally unique across tenants), so tenantId is redundant in this key.
   @@unique([userId, provider])
@@ -1321,6 +1339,7 @@ model CalendarEvent {
   contactId   Int?
   dealId      Int?
   tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1425,6 +1444,7 @@ model WinLossReason {
   reason    String
   count     Int      @default(0)
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 }
 
@@ -1456,6 +1476,7 @@ model LeadRoutingRule {
   priority   Int      @default(100)
   isActive   Boolean  @default(true)
   tenantId   Int      @default(1)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }
@@ -1468,6 +1489,7 @@ model Territory {
   regions         String?  @db.Text // JSON array
   assignedUserIds String?  @db.Text // JSON array
   tenantId        Int      @default(1)
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
@@ -1575,6 +1597,7 @@ model KbCategory {
   slug      String
   parentId  Int?
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 
   /// KB category slug uniqueness is tenant-scoped; "/billing" can exist as a category in tenant A's knowledge base AND tenant B's independently. Slugs are user-facing URL segments, so collisions only matter within one tenant's KB tree.
@@ -1590,6 +1613,7 @@ model KbArticle {
   isPublished Boolean  @default(false)
   views       Int      @default(0)
   tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1607,6 +1631,7 @@ model SlaPolicy {
   resolveMinutes  Int // resolution target
   isActive        Boolean  @default(true)
   tenantId        Int      @default(1)
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now())
 }
 
@@ -1707,6 +1732,7 @@ model Booking {
   status        String   @default("CONFIRMED") // CONFIRMED, CANCELED, COMPLETED
   contactId     Int?
   tenantId      Int      @default(1)
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt     DateTime @default(now())
 
   @@index([tenantId, scheduledAt])
@@ -1726,6 +1752,7 @@ model ScheduledEmail {
   contactId    Int?
   userId       Int?
   tenantId     Int       @default(1)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())
 
   @@index([tenantId, status, scheduledFor])

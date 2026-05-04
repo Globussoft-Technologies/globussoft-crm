@@ -151,8 +151,6 @@ model Tenant {
   // back-relations. Calendar cluster (CalendarIntegration / CalendarEvent /
   // ScheduledEmail / Booking) plus sales config (WinLossReason / LeadRoutingRule
   // / Territory) plus support (KbCategory / KbArticle / SlaPolicy).
-  // PlaybookProgress is intentionally excluded — its tenancy is implicit
-  // through dealId; tracked as a separate audit task.
   calendarIntegrations CalendarIntegration[]
   calendarEvents       CalendarEvent[]
   scheduledEmails      ScheduledEmail[]
@@ -163,6 +161,13 @@ model Tenant {
   kbCategories         KbCategory[]
   kbArticles           KbArticle[]
   slaPolicies          SlaPolicy[]
+
+  // #413 PlaybookProgress audit (wave 18): added defensively after the batch-2
+  // deferral. The model's tenancy was implicit via dealId; routes already
+  // passed tenantId in every where-clause. Now the schema matches the queries
+  // and the @@unique includes tenantId to guard against future id-allocation
+  // changes. See PlaybookProgress model docstring for the full rationale.
+  playbookProgress     PlaybookProgress[]
 }
 
 model User {
@@ -1941,11 +1946,12 @@ model PlaybookProgress {
   playbookId     Int
   completedSteps String?  @db.Text // JSON array of step indices
   tenantId       Int      @default(1)
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  /// One progress row per (deal, playbook). A deal can run multiple playbooks in parallel, but a given playbook against a given deal has exactly one progress record (resuming updates the row). tenantId is implicit via dealId — Deals are tenant-scoped and dealIds don't collide across tenants in our id-allocation scheme.
-  @@unique([dealId, playbookId])
+  /// One progress row per (tenant, deal, playbook). A deal can run multiple playbooks in parallel, but a given playbook against a given deal has exactly one progress record (resuming updates the row). tenantId is keyed defensively even though Deal is tenant-scoped and dealId is globally unique under autoincrement — guards against future id-allocation changes (UUIDs, per-tenant sharding) where dealId might collide across tenants. The application code in routes/playbooks.js already passes tenantId in every where-clause, so this is also a structural alignment between schema + queries. Audit decision after the v3.4.6 #413 batch 2 deferral; the original "tenantId implicit via dealId" claim was load-bearing only on the autoincrement assumption.
+  @@unique([tenantId, dealId, playbookId])
 }
 
 // ── Document View Tracking ───────────────────────────────────────

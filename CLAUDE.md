@@ -352,13 +352,15 @@ cd backend && node prisma/seed.js
 cd e2e && npm install && npx playwright test --project=chromium
 ```
 
-## 🤖 Cron learnings (auto-logged — pending 24h review)
+## 🤖 Cron learnings (auto-logged — pending manual review)
 
-The 15-min recurring cron (`a132b772`) appends short observations here at the end of every wave: patterns, drift findings, non-obvious-things-learned that **aren't yet codified into a skill or standing rule**. The 24-hour review cron (separate) reads from this section, proposes which entries should become new skills / extend existing skills / become standing rules / get archived / get dropped — and requires the user's `yes` before making any of those changes.
+The 15-min recurring cron appends short observations here at the end of every wave: patterns, drift findings, non-obvious-things-learned that **aren't yet codified into a skill or standing rule**. The cron does NOT create skills itself — that's high-judgment work and belongs to a human-in-the-loop.
+
+**The user triggers the review manually whenever they want** (could be daily, every couple of days, weekly — whatever cadence fits). Typical phrasing: "review the cron learnings" or "let's go through the cron-logged stuff." When invoked, walk through each entry and propose: (a) **skill-worthy** → new skill or extension to existing; (b) **standing-rule worthy** → one-liner in "Standing rules for new code"; (c) **already covered** → archive to `docs/cron-learnings-archive.md` and remove from this section; (d) **not actionable** → drop with rationale. **Wait for the user's `yes` per entry before making any changes** — over-creating skills bloats the surface.
 
 **Format:** one bullet per learning, prefixed with `<YYYY-MM-DD HH:MM> — <commit-sha or "no-commit">` + a short topic + a one-paragraph observation. Keep it tight; if it doesn't fit in a paragraph, the learning is too big and should go straight into a TODOS.md user-attention item instead.
 
-**Why this lives in CLAUDE.md (not a separate file):** the autonomous loop needs to find this section by name to append into. CLAUDE.md is loaded into every session's context anyway, so the lookup is reliable. After 24h review, accepted learnings move into their permanent home (skill / standing rule) and the entry is removed; archived ones go to `docs/cron-learnings-archive.md`. The section should not accumulate beyond ~24h of entries.
+**Why this lives in CLAUDE.md (not a separate file):** the autonomous loop needs to find this section by name to append into, and the manual review needs the section visible in every session's context. CLAUDE.md is loaded by default, so both reads are reliable. After review, accepted entries move to their permanent home (skill / standing rule) and the bullet is removed; archived ones go to `docs/cron-learnings-archive.md`. The section should not accumulate indefinitely — if it's >10 entries deep, surface that to the user as "ready for review."
 
 **Don't manually add to this section unless you're the cron** — use TODOS.md handoff blocks for everything else.
 

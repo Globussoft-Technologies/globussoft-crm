@@ -553,6 +553,86 @@ test.describe('AB Tests API — tenant isolation', () => {
   });
 });
 
+// ── v3.4.11 sanitization regression suite (#398/#447 class) ───────────
+//
+// Closes the v3.4.10 audit's ab_tests.js finding. Both the test name and
+// variantA/B JSON are rendered in the AB-test detail page; variant
+// content can also flow into email previews. HTML payloads in any of
+// these fields would land as stored XSS the next time an admin opens
+// the test or recipients receive a preview email. routes/ab_tests.js
+// now runs sanitizeText on name + sanitizeJsonForStringColumn on
+// variantA/B (both imported from backend/lib/sanitizeJson.js — the
+// v3.4.11 097ef5a promotion of the helpers).
+
+test.describe('AB Tests API — sanitization (#398/#447 class, v3.4.10 audit)', () => {
+  test('POST strips HTML from test name', async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    const res = await post(request, token, '/api/ab-tests', {
+      name: `${RUN_TAG} <img src=x onerror=alert(1)>safe-name`,
+      variantA: { subject: 'A', body: 'a' },
+      variantB: { subject: 'B', body: 'b' },
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    createdGenericIds.add(body.id);
+    expect(body.name).not.toMatch(/<img/i);
+    expect(body.name).not.toMatch(/onerror/i);
+    expect(body.name).toContain('safe-name');
+  });
+
+  test('POST sanitizes HTML inside variantA / variantB body fields', async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    const res = await post(request, token, '/api/ab-tests', {
+      name: `${RUN_TAG} variant-xss`,
+      variantA: { subject: 'A subject', body: '<script>alert(1)</script>Welcome to A!' },
+      variantB: { subject: 'B', body: '<a href="javascript:alert(2)">click</a>' },
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    createdGenericIds.add(body.id);
+    // Serializer parses variantA/B back into objects on response.
+    const aBody = JSON.stringify(body.variantA || {});
+    const bBody = JSON.stringify(body.variantB || {});
+    expect(aBody).not.toMatch(/<script/i);
+    expect(aBody).toContain('Welcome to A!');
+    expect(bBody).not.toMatch(/<a /i);
+    expect(bBody).not.toMatch(/javascript:/i);
+    expect(bBody).toContain('click');
+  });
+
+  test('PUT strips HTML from name + variant on partial update', async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    const created = await createTest(request, token, { name: `${RUN_TAG} put-target` });
+    const res = await put(request, token, `/api/ab-tests/${created.id}`, {
+      name: `<img onerror=alert(1)>Updated name`,
+      variantA: { subject: '<style>x{}</style>Updated subject', body: 'plain' },
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.name).not.toMatch(/<img/i);
+    expect(body.name).toContain('Updated name');
+    const aBody = JSON.stringify(body.variantA || {});
+    expect(aBody).not.toMatch(/<style/i);
+    expect(aBody).toContain('Updated subject');
+  });
+
+  test('merge tags ({{firstName}}) survive sanitization in variant body', async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    const res = await post(request, token, '/api/ab-tests', {
+      name: `${RUN_TAG} merge-tag-variant`,
+      variantA: { subject: 'Hi {{firstName}}', body: 'Welcome {{firstName}} from {{company}}' },
+      variantB: { subject: 'Hello {{firstName}}', body: 'Plain B' },
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    createdGenericIds.add(body.id);
+    const aStr = JSON.stringify(body.variantA);
+    expect(aStr).toContain('{{firstName}}');
+    expect(aStr).toContain('{{company}}');
+    expect(JSON.stringify(body.variantB)).toContain('{{firstName}}');
+  });
+});
+
 // ── Auth gate ──────────────────────────────────────────────────────
 
 test.describe('AB Tests API — auth gate', () => {

@@ -131,6 +131,21 @@ model Tenant {
   consentRecords       ConsentRecord[]
   dataExportRequests   DataExportRequest[]
   signatureRequests    SignatureRequest[]
+
+  // #413 batch 2 (wave 18): security / auth / integration back-relations.
+  // RevokedToken + ScimToken + SsoConfig are the high-leverage auth ones; the
+  // rest are integration / RBAC / sandbox cleanup. Same one-sided-relation
+  // rule applies.
+  ssoConfigs           SsoConfig[]
+  retentionPolicies    RetentionPolicy[]
+  pipelines            Pipeline[]
+  approvalRequests     ApprovalRequest[]
+  bookingPages         BookingPage[]
+  fieldPermissions     FieldPermission[]
+  scimTokens           ScimToken[]
+  playbooks            Playbook[]
+  sandboxSnapshots     SandboxSnapshot[]
+  revokedTokens        RevokedToken[]
 }
 
 model User {
@@ -1262,6 +1277,7 @@ model SsoConfig {
   redirectUri  String?
   isActive     Boolean  @default(false)
   tenantId     Int      @default(1)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1349,7 +1365,8 @@ model RetentionPolicy {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  tenantId Int @default(1)
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// One GDPR retention policy row per (tenant, entity-type). A tenant declares "delete EmailMessage older than 90 days" exactly once; policies are tenant-specific because retention is a tenant compliance choice (e.g. EU vs APAC tenants set different windows).
   @@unique([tenantId, entity])
@@ -1381,6 +1398,7 @@ model Pipeline {
   isDefault   Boolean  @default(false)
   description String?
   tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
@@ -1468,6 +1486,7 @@ model ApprovalRequest {
   requestedAt DateTime  @default(now())
   approvedAt  DateTime?
   tenantId    Int       @default(1)
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 // ── A/B Testing ──────────────────────────────────────────────────
@@ -1670,6 +1689,7 @@ model BookingPage {
   availability String   @db.Text // JSON: weekly schedule
   isActive     Boolean  @default(true)
   tenantId     Int      @default(1)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
@@ -1765,6 +1785,7 @@ model FieldPermission {
   canRead   Boolean  @default(true)
   canWrite  Boolean  @default(true)
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 
   /// One field-permission row per (role, entity, field, tenant). Tenants configure their own RBAC rules — tenant A can hide "Deal.amount" from MANAGER while tenant B exposes it. The compound key prevents duplicate rules within one tenant while keeping permissions per-tenant configurable.
@@ -1842,6 +1863,7 @@ model ScimToken {
   name      String
   lastUsed  DateTime?
   tenantId  Int       @default(1)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime  @default(now())
 }
 
@@ -1881,6 +1903,7 @@ model Playbook {
   steps     String   @db.Text // JSON array of {title, description, order}
   isActive  Boolean  @default(true)
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -1961,6 +1984,7 @@ model SandboxSnapshot {
   description String?
   data        String   @db.LongText // JSON dump of major entities
   tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId      Int?
   createdAt   DateTime @default(now())
 }
@@ -2347,6 +2371,7 @@ model RevokedToken {
   jti       String   @unique
   userId    Int
   tenantId  Int
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   revokedAt DateTime @default(now())
   expiresAt DateTime
   reason    String?

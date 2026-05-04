@@ -115,6 +115,38 @@ router.put("/:id", verifyToken, async (req, res) => {
           error: "Invalid slug. Use lowercase letters, numbers, and hyphens only (max 50 chars).",
         });
       }
+      // #456: tenant-scoped uniqueness check before update. Pre-fix the
+      // user could change a slug to one that another draft was already
+      // using; the second page silently shadowed the first at /p/<slug>
+      // (whichever resolved first won, the other became unreachable).
+      // Pre-check + return 409 instead of relying on a DB-level unique
+      // constraint to throw a P2002 (which surfaces as 500).
+      if (slug !== existing.slug) {
+        const collision = await prisma.landingPage.findFirst({
+          where: { tenantId: req.user.tenantId, slug, NOT: { id: existing.id } },
+          select: { id: true, title: true, status: true },
+        });
+        if (collision) {
+          return res.status(409).json({
+            error: `Slug '${slug}' is already used by '${collision.title}' (${collision.status.toLowerCase()}, id ${collision.id}). Pick a different slug.`,
+            existingId: collision.id,
+          });
+        }
+        // #456: slug change on a PUBLISHED page breaks every inbound link
+        // (ad campaigns, email links, QR codes). Don't block — the owner
+        // may legitimately need to rename — but require an explicit
+        // ?confirmSlugChange=true query so an accidental autosave can't
+        // strand customers. The frontend builder should pop a "this will
+        // break /p/<old-slug>" dialog before sending the confirmation.
+        if (existing.status === "PUBLISHED" && req.query.confirmSlugChange !== "true") {
+          return res.status(409).json({
+            error: `Page is PUBLISHED. Changing the slug breaks every inbound link to /p/${existing.slug}. Re-submit with ?confirmSlugChange=true to proceed.`,
+            code: "PUBLISHED_SLUG_CHANGE_REQUIRES_CONFIRM",
+            currentSlug: existing.slug,
+            requestedSlug: slug,
+          });
+        }
+      }
       data.slug = slug;
     }
 

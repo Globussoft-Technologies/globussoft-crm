@@ -306,7 +306,12 @@ export default function OwnerDashboard() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
               <XAxis dataKey="date" stroke="var(--text-secondary)" tick={{ fontSize: 10 }} interval={6} />
-              <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 10 }} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
+              {/* #439: pin y-floor at 0. Recharts auto-domain on all-zero data
+                  picks a tiny negative lower bound, which trips the
+                  "[chart] negative-domain on positive scale" console warning.
+                  Revenue is non-negative by definition; explicit floor=0
+                  silences the warning + matches the semantic. */}
+              <YAxis stroke="var(--text-secondary)" tick={{ fontSize: 10 }} domain={[0, 'auto']} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
               <Tooltip
                 contentStyle={{ background: 'rgba(20, 20, 25, 0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}
                 labelStyle={{ color: 'var(--text-secondary)' }}

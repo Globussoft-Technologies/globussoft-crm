@@ -179,7 +179,40 @@ function ComponentPreview({ comp }) {
   switch (comp.type) {
     case 'heading': { const Tag = p.level || 'h2'; return <Tag style={{ textAlign: p.align, color: p.color, margin: '0.5rem 0' }}>{p.text}</Tag>; }
     case 'text': return <p style={{ textAlign: p.align, color: p.color, fontSize: p.fontSize, margin: '0.5rem 0', lineHeight: 1.6 }}>{p.text}</p>;
-    case 'image': return <div style={{ textAlign: 'center' }}><img src={p.src} alt={p.alt} style={{ maxWidth: p.maxWidth || '100%', borderRadius: '6px', height: 'auto' }} /></div>;
+    case 'image': return (
+      <div style={{ textAlign: 'center' }}>
+        {/* #448: broken-image fallback. Pre-fix, a 404 / blocked / bad-MIME
+            src left the <img> with naturalWidth/Height=0, collapsing the
+            row to a 30px strip and silently breaking the page layout.
+            onError swaps the src to a transparent 1x1 SVG that holds the
+            box's intended dimensions, and the alt text reads as a visible
+            caption (CSS `font-style: italic` + dashed border) so the
+            owner notices the problem instead of shipping a broken page.
+            Builder-mode visibility is the priority — this exact pattern
+            also lives in services/landingPageRenderer.js for the public
+            /p/<slug> render path. */}
+        <img
+          src={p.src}
+          alt={p.alt || 'Image failed to load'}
+          style={{ maxWidth: p.maxWidth || '100%', borderRadius: '6px', height: 'auto', minHeight: 80 }}
+          onError={(e) => {
+            // Avoid infinite onError loops if the fallback also fails.
+            if (e.target.dataset.fallback === '1') return;
+            e.target.dataset.fallback = '1';
+            e.target.alt = p.alt ? `Image failed to load: ${p.alt}` : 'Image failed to load — check the URL';
+            e.target.style.minHeight = '120px';
+            e.target.style.padding = '2rem';
+            e.target.style.border = '2px dashed #ef4444';
+            e.target.style.fontStyle = 'italic';
+            e.target.style.color = '#ef4444';
+            e.target.style.background = 'rgba(239,68,68,0.05)';
+            // Transparent 1x1 SVG: holds the alt-text rendering, no
+            // network round-trip, no CSP risk.
+            e.target.src = 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221%22%20height%3D%221%22%2F%3E';
+          }}
+        />
+      </div>
+    );
     case 'button': return <div style={{ textAlign: p.align }}><button style={{ padding: p.size === 'large' ? '1rem 2.5rem' : '0.75rem 1.5rem', background: p.bgColor, color: p.color, border: 'none', borderRadius: '6px', fontWeight: '600', fontSize: p.size === 'large' ? '1.1rem' : '1rem', cursor: 'pointer' }}>{p.text}</button></div>;
     case 'form': return (
       <div style={{ maxWidth: '400px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>

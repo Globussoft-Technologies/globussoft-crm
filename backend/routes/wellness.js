@@ -3923,7 +3923,15 @@ router.get("/loyalty/leaderboard/month", requireManagerPlus, async (req, res) =>
         createdAt: { gte: monthStart },
       },
       _sum: { points: true },
-      orderBy: { _sum: { points: "desc" } },
+      // #440: ties on _sum points used to leak the underlying row order, which
+      // varied between query runs (no stable secondary sort). Anchor ties on
+      // patientId asc so the leaderboard is deterministic across refreshes —
+      // customers complained about jumping from rank 4 to rank 6 with zero
+      // points change. Lower id = earlier-registered patient = stable surrogate.
+      orderBy: [
+        { _sum: { points: "desc" } },
+        { patientId: "asc" },
+      ],
       take: 10,
     });
     const ids = grouped.map((g) => g.patientId);

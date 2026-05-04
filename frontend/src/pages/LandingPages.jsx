@@ -56,7 +56,21 @@ export default function LandingPages() {
   };
 
   const handleDelete = async (id) => {
-    if (!await notify.confirm('Delete this landing page?')) return;
+    // #452: name + status-aware confirm dialog so the user can tell
+    // *which* draft they're deleting from a list of similar names, and
+    // sees a stronger warning when deleting a published page (public URL
+    // goes down + analytics/submissions are no longer reachable).
+    const page = pages.find(p => p.id === id) || {};
+    const name = page.title || `page ${id}`;
+    const isPublished = page.status === 'PUBLISHED';
+    const submissionsLine = page.submissions > 0
+      ? `\n\nThis page has ${page.submissions} submission${page.submissions === 1 ? '' : 's'} (kept in the contacts/deals tables; only the page record is removed).`
+      : '';
+    const publishedLine = isPublished
+      ? `\n\n⚠ This page is currently PUBLISHED. Deleting takes the public URL /p/${page.slug} offline.`
+      : '';
+    const msg = `Delete "${name}"?${publishedLine}${submissionsLine}\n\nThis cannot be undone.`;
+    if (!await notify.confirm(msg)) return;
     await fetchApi(`/api/landing-pages/${id}`, { method: 'DELETE' });
     loadPages();
   };

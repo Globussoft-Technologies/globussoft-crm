@@ -64,6 +64,27 @@ All 3 are **demo-state-sensitivity bugs in spec assertions**, not real backend b
 
 **UPDATE 5:** `d84b0d9` deploy ✅ SUCCESS. Re-triggered e2e-full at run `25348132618` on `c8bab33`. ~15-20 min to result. (3rd e2e-full re-trigger this session — prior runs progressively cleared categories of failure: backup-engine + migration-safety + workflows-api + landing-page upload/submit + email_scheduling/workflows-flow polling. If this one's green, we're done.)
 
+**🎉 UPDATE 6 (e2e-full run 25348132618 — ALL 4 SHARDS GREEN):**
+- ✅ Shard 1 — green
+- ✅ Shard 2 — green
+- ✅ Shard 3 — green
+- ✅ Shard 4 — green
+- ✅ scrub-demo + merge-reports — green
+
+**First all-green e2e-full release-validation since v3.4.9.** The chronic-red arc that had been blocking the release-validation gate for the entire v3.4.10 → v3.4.11 doc-bump arc is now closed.
+
+Total session arc to clear it (chronological):
+1. `e72cd5c` — backup-engine-api `IS_LOCAL_STACK` guard
+2. `e8cce09` — migration-safety `IS_LOCAL_STACK` guard
+3. `9abbafe` (Agent A) — landing-page builder cluster (closed #446 #449 #450 #451; broke api_tests with new spec's tenant-id bug)
+4. `cc1a0ca` (Agent B) — e2e Category 1 cleanup (eventbus, lead-scoring, email-threading, marketplace-leads)
+5. `6f140bc` — landing-page-upload spec tenant-id fix (unblocked stuck deploy gate that had been red for 4 commits)
+6. `47e7a1d` — workflows-api leak-specific assertion (was count-based, broke on demo background activity)
+7. `36e554d` — Contact upsert composite-unique selector (real backend bug latent since landing-page module shipped, exposed by #445 Nginx fix) + 5MB upload status tolerance
+8. `d84b0d9` — workflows-flow polling latency tolerance + Flow 4 contactId-specific leak detection + email_scheduling 502 HTML-body tolerance
+
+8 commits across ~3 hours. The autonomous-fixable backlog is now genuinely empty.
+
 ---
 
 ## 🏁 NEXT-SESSION HANDOFF (2026-05-05 evening — 5-agent parallel wave fully landed) — superseded above

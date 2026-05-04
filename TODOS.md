@@ -6,7 +6,76 @@
 
 ---
 
-## 🏁 NEXT-SESSION HANDOFF (2026-05-03 overnight — autonomous-orchestrator session, v3.4.4 release candidate)
+## 🏁 NEXT-SESSION HANDOFF (2026-05-04 — autonomous-orchestrator continuation, v3.4.5 release candidate)
+
+**HEAD on origin/main:** `96e1111`. Per-push gate ✅ GREEN. Live on demo. **17 commits since v3.4.4** (`6446c20`); ~3,305 tests on every push; 5 mandatory deploy gates.
+
+### Why this session
+
+User asked: "spin multiple agents and fix the gaps. I want the to-do file to be empty." Two parallel waves landed (16 + 17), 8 agents total, with 6 healing commits in between to recover from cascading test-shape regressions. The to-do file is **substantially trimmer but not empty** — multi-day items remain.
+
+### What shipped this session (17 commits, all CI-green at HEAD)
+
+**Wave 16 (5 agents)** — closed #414 / #415 / #421 / #422 / #423 / #420 / #418 / #417 / #416 / #412:
+- `3a30d71` #421 leadScoringEngine architectural gaps (per-tenant iteration + recompute window + `Promise.allSettled`)
+- `0bbfaf5` #422 email_threading 3 contract drifts (archive-persistence + pagination + tenantId-rejection)
+- `abb0d1c` + `ff5505a` #423 non-numeric `:id` middleware sweep (`backend/middleware/validateNumericId.js` + new spec, 17 tests, 9 routers)
+- `ec790cd` #414 + #415 schema (MarketplaceLead unique gains tenantId; 22 `@@unique` constraints documented)
+- `d63955a` + `06b9e8a` G-23 migration safety check (5 detectors + new 5th deploy gate)
+
+**Mid-wave heals** — recovered cascading regressions:
+- `35c0900` #421 followup (real `aiScoreLastComputedAt` column — phantom `updatedAt` slipped past mocked vitest)
+- `fd17e69` #423 followup (friendlier middleware error msg + accounting regex relax)
+- `6aad4a0` #423 followup-2 (4 more specs migrated to `code: 'INVALID_ID'`: contracts/expenses/projects/surveys)
+
+**Wave 17 (3 agents)** — closed #424:
+- `cfed31b` #424 CalendarEvent unique + #413 batch 1 (10 of 49 @relation declarations — financial/PHI critical models)
+- `09d7328` + `da29db4` G-19 wellness-telecaller-api (30 tests; final wellness.js split done — G-17 + G-18 still open)
+- `953cca5` + `96e1111` G-22 Stripe webhook integration tier (11 tests, msw + supertest first introduced as dev deps)
+
+**Infra & convention** (earlier in session):
+- `ea1147a` `docs/gaps/archive/` convention for fully-closed gap-files (none qualify yet — set up for future)
+- `6446c20` `capturing-wave-findings` skill (8th in the .claude/skills/ library)
+- `1b00dd8` (still v3.4.4) live agent-activity widget at `/developer`
+
+### Issues closed this session
+✅ #421 leadScoringEngine 3 architectural gaps (commit `3a30d71` + heal `35c0900`)
+✅ #422 email_threading 3 contract drifts (commit `0bbfaf5`)
+✅ #423 non-numeric :id 500 sweep (commit `abb0d1c` + heals `fd17e69` + `6aad4a0`)
+✅ #424 CalendarEvent.@@unique missing tenantId (commit `cfed31b`)
+
+### Issues filed this session (still open)
+- **#425** G-23 migration safety check needs an allowlist mechanism for blessed UNIQUE/DROP changes. Surfaced when `cfed31b` (CalendarEvent unique-addition) tripped the `UNIQUE_ADDITION` detector despite the new constraint being strictly more permissive than the old. Recommend `[allow-unique]` commit-message marker. **~1h fix; pickable next session.**
+
+### Per-push gate state (post this session)
+
+**~67 specs / ~2,326 tests + 36 vitest files / 979 unit tests = ~3,305 tests on every push** (+13% vs v3.4.4). **5 mandatory deploy gates**: build / lint / api_tests / unit_tests / migration_check. All green at HEAD `96e1111`.
+
+### Three things to do first next session
+
+1. **Tag v3.4.5** — `git tag -a v3.4.5 -m "..."` + push tag. Fires e2e-full release-validation against demo. Doc bump (CHANGELOG / README / CLAUDE.md / this handoff / E2E_GAPS.md) shipped in this commit.
+
+2. **#425 allowlist mechanism** — ~1h pickup. Edit `backend/scripts/check-migration-safety.js` to read `git log -1 --format=%B`, match `/\[allow-(unique|drop)\]/`, skip the detector when matched. Add a vitest case proving the bless works.
+
+3. **#413 batch 2** — 10 more models from the remaining 39 drift list. Security-critical priority per Agent F's batch-1 comment: RevokedToken, ScimToken, SsoConfig, Pipeline, Playbook, Integration. Mechanical edit, ~1h. Schema-invariant drift would drop 39 → 29.
+
+### Long tail still open
+
+| Item | Effort | Status |
+|---|---|---|
+| **G-17** wellness-dashboard-api spec (split from wellness.js) | 1-2 days | ⬜ open — sequential with G-18 (same file) |
+| **G-18** wellness-reports-api spec (split from wellness.js) | 1 day | ⬜ open — pair with G-17 |
+| **G-21** Frontend vitest + RTL setup + first 5 component tests | 3-5 days | ⬜ open — multi-day project; needs planning pass |
+| **#413** remaining 39 models without `tenant Tenant @relation` | 4 batches × 1h | partial — batch 1 done; batch 2 next |
+| **#425** G-23 allowlist mechanism | ~1h | next-session pickable |
+| **T2.2** Audit-log middleware build-out (Patient/Visit/Rx/Consent) | 4-5 days | ⬜ open — wellness compliance |
+| **T2.3** Ship P1 of regression backlog | varies | ⬜ open |
+
+**Estimate to empty TODOS**: ~10-14 calendar days of focused work assuming wellness-route splits run sequential and G-21 frontend tier is ~1 week. Not single-wave achievable.
+
+---
+
+## 🏁 NEXT-SESSION HANDOFF (2026-05-03 overnight — autonomous-orchestrator session, v3.4.4 release candidate) — superseded above
 
 **HEAD on origin/main:** `f4b4ebe`. Per-push gate ✅ GREEN. Live on demo. 43 commits since v3.4.3 (`461a228`).
 

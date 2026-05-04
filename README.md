@@ -1,10 +1,25 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **~2,914 tests on every push** (~2,237 Playwright + 677 vitest); release-validation full chromium suite on every tag. **7 reusable Claude Skills** + **live agent-activity widget** at /developer for parallel-wave visibility.
+> A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with **5 mandatory deploy gates** (build / lint / api_tests / unit_tests / migration_check) + auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **~3,305 tests on every push** (~2,326 Playwright + 979 vitest); release-validation full chromium suite on every tag. **8 reusable Claude Skills** + **live agent-activity widget** at /developer for parallel-wave visibility. New `docs/gaps/archive/` convention for fully-closed gap-files.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.4
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.5
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.4.5 (May 4 2026 — autonomous-orchestrator continuation: 4 issues closed, 4 E2E_GAPS rows shipped, schema invariant drift 49 → 39)
+
+A direct continuation of v3.4.4. **No new product features**; this release lands four medium-effort gap closures plus four bug fixes plus the first batch of #413 schema-relation hygiene plus the `docs/gaps/archive/` convention.
+
+- **4 E2E_GAPS rows shipped ✅**: G-19 wellness-telecaller-api (30 tests), G-22 Stripe webhook integration tier (11 tests, first **msw + supertest** test tier), G-23 migration safety check (10 tests + 5 detectors + new 5th deploy gate), plus the off-backlog non-numeric `:id` sweep spec (17 tests, 9 routers).
+- **4 GitHub issues closed**: #421 leadScoringEngine (per-tenant iteration + recompute window via new `Contact.aiScoreLastComputedAt` column + `Promise.allSettled`), #422 email_threading (archive persistence + pagination + tenantId rejection), #423 non-numeric `:id` 500 sweep (`backend/middleware/validateNumericId.js` mounted via `Router` factory monkey-patch), #424 CalendarEvent.@@unique missing tenantId.
+- **#413 batch 1 (10 of 49)**: Payment, AccountingSync, Forecast, Quota, Currency, DealInsight, PatientOtp, ConsentRecord, DataExportRequest, SignatureRequest gain `tenant Tenant @relation`. G-24 schema-invariant drift counter dropped 49 → 39.
+- **`docs/gaps/archive/` convention** introduced for fully-closed gap-files; pointers in CLAUDE.md + TODOS.md so future sessions discover it.
+- **6 healing commits resolved cascading test-shape regressions**: vitest's mock-Prisma masked a phantom-column bug in #421 (caught only when real Prisma in CI rejected `Contact.updatedAt`); 6 pre-existing specs had route-specific regex like `/invalid invoice id/i` that the generic middleware error didn't match — all migrated to pin `code: 'INVALID_ID'`.
+- **#425 filed for follow-up**: G-23 migration safety check needs an allowlist mechanism for blessed UNIQUE/DROP additions. Surfaced when #424's strictly-more-permissive unique-addition tripped the `UNIQUE_ADDITION` detector. Recommend `[allow-unique]` commit-message marker (~1h fix).
+
+Per-push gate is now **~67 specs / ~2,326 tests + 36 vitest files / 979 unit tests = ~3,305 tests on every push** (+13% vs v3.4.4) with **5 mandatory deploy gates** (added `migration_check` to the existing build/lint/api_tests/unit_tests four).
+
+See [CHANGELOG.md](CHANGELOG.md#v345--2026-05-04--autonomous-orchestrator-continuation-4-issues-closed-4-e2e_gaps-rows-shipped-schema-invariant-drift-49--39) for the full v3.4.5 entry.
 
 ## What's new in v3.4.4 (May 3 2026 — autonomous-orchestrator session: G-20 tenant-isolation flagship + 7 reusable Skills + live agent-activity widget)
 

@@ -1,14 +1,62 @@
 # CHANGELOG
 
+## v3.4.5 — 2026-05-04 — autonomous-orchestrator continuation: 4 issues closed, 4 E2E_GAPS rows shipped, schema invariant drift 49 → 39
+
+A direct continuation of v3.4.4's autonomous-orchestrator session. **No new product features**; this release lands four medium-effort gap closures (G-19 wellness-telecaller, G-22 Stripe integration tier, G-23 migration safety, plus the off-backlog #423 numeric-id sweep) plus four bug fixes (#421/#422/#423/#424) plus the first batch of #413 schema-relation hygiene plus the `docs/gaps/archive/` convention for fully-closed gap-files plus six healing commits that resolved cascading test-shape regressions across spec files.
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.4 | v3.4.5 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | 55 specs / ~1,950 tests | **~67 specs** / ~2,326 tests | +12 specs / +376 tests |
+| Per-push unit tests | vitest | 35 files / 964 tests | **36 files** / 979 tests | +1 file / +15 tests |
+| **Total per-push** |  | ~2,914 | **~3,305** | **+13%** |
+| **Deploy gates** |  | 4 (build/lint/api/unit) | **5** (+ migration_check) | +1 |
+
+### Added — 4 E2E_GAPS rows shipped (✅)
+
+- **G-19** wellness-telecaller-api spec (`09d7328`) — 30 tests, 18.6s. Queue + 6-disposition matrix (`interested → Lead`, `not interested → Churned`, `callback → Lead`, `booked → Prospect`, `wrong number / junk → Junk`), Activity rows on dispose, tenant-vertical gate, own-`assignedToId` scoping, RBAC. Final of three wellness.js splits; closes the third 4,050-line surface (G-17 + G-18 still open). Documented prompt-vs-reality drift (only 2 endpoints exist, no SLA timer field, dispositions are space-separated not snake_case).
+- **G-22** Stripe webhook integration tier (`953cca5`) — 11 tests across 7 attack scenarios (valid sig + 200 + idempotency, tampered body, 1h-old replay, missing sig, malformed sig, wrong secret, unknown event type forward-compat) + bonus fail-closed when `STRIPE_WEBHOOK_SECRET` env missing (503 not silent accept). New integration test tier under `backend/test/integration/` using **msw v2 + supertest** (first introduction of either dev dep). Pattern notes captured in test header: vi.mock unreliable for `require('../lib/prisma')` in route files (use singleton-monkey-patch); supertest+superagent re-serializes JSON Buffer bodies (always `.send(string)` for raw-body routes); msw must bypass loopback for supertest.
+- **G-23** migration safety check (`d63955a` + `06b9e8a`) — 10 tests + 5 detectors (`NOT_NULL_WITHOUT_DEFAULT` / `COLUMN_DROP` / `TYPE_NARROWING` / `UNIQUE_ADDITION` / `FK_WITHOUT_ON_DELETE`) + 6 paired fixture schemas. New `.github/workflows/migration-check.yml` standalone workflow with sticky PR comment + per-commit dry-run on push. **5th mandatory deploy gate** added to `deploy.yml` `needs:` chain. Caught a real false-positive in this same release (#424 CalendarEvent unique-addition) — see #425 for the allowlist follow-up.
+- **off-backlog** non-numeric `:id` sweep spec (`abb0d1c`) — 17 tests, 9 routers. Closes the contract drift surfaced by R-4 specs in v3.4.4.
+
+### Fixed — 4 GitHub issues closed
+
+- **#421** leadScoringEngine architectural gaps (`3a30d71` → followup `35c0900`). Three real fixes: (1) per-tenant iteration replaces global findMany sweep; (2) recompute-window via new `Contact.aiScoreLastComputedAt DateTime?` column (initial commit used phantom `updatedAt` field that mocked vitest didn't catch — real Prisma rejected it in CI; followup added the proper column); (3) `Promise.allSettled` replaces `Promise.all` so one bad row doesn't drop the whole tick. Vitest grew 49 → 53 tests.
+- **#422** email_threading contract drifts (`0bbfaf5`). Three real fixes: (1) `POST /archive` actually persists state via `__ARCHIVED__:` threadId sentinel prefix (no schema change required); (2) `?limit` (1-200) + `?offset` (≥0) pagination on `GET /threads/:threadId` with envelope `{data, total, limit, offset}`; (3) `POST /reply` rejects body `tenantId` with `400 IMMUTABLE_FIELD` (`stripDangerous` no longer silently no-ops cross-tenant write attempts). Spec grew 33 → 40 tests.
+- **#423** non-numeric `:id` 500 sweep (`abb0d1c` + `ff5505a` → 6-spec heal pass at `fd17e69` + `6aad4a0`). New `backend/middleware/validateNumericId.js` mounted via `app.param('id', …)` AND a `Router` factory monkey-patch (param callbacks don't propagate to mounted sub-routers; the factory monkey-patch fixed that elegantly). New `e2e/tests/numeric-id-sweep.spec.js` (17 tests, 9 routers). Wave-16 cascade: 6 pre-existing specs (accounting/canned-responses/contracts/expenses/projects/surveys) had route-specific regex like `/invalid invoice id/i` that the generic middleware error doesn't match — all migrated to pin `code: 'INVALID_ID'` instead, plus middleware error message simplified to `Invalid id: ...` to match `/invalid id/i`.
+- **#424** CalendarEvent.@@unique missing tenantId (`cfed31b`). Surfaced by Agent E in wave 16 as a follow-up to #414 + #415; closed in wave 17 by the same single-line fix (`@@unique([tenantId, provider, externalId])`). Was the only multi-tenant model whose unique key didn't include tenantId.
+
+### Added — schema hygiene partial (#413 batch 1, 10 of 49)
+
+Closes the first 10 of 49 multi-tenant models that lack a formal `tenant Tenant @relation` declaration (G-24 schema-invariants vitest had pinned the count). **Important course-correction**: the issue body's "suggested 10" list (AuditLog/Contact/Deal/...) was stale — 9 of those already had `@relation`. Agent F substituted the actual drifters, biased to financial/PHI:
+- **Financial**: Payment, AccountingSync, Forecast, Quota, Currency, DealInsight
+- **PHI / GDPR**: PatientOtp, ConsentRecord, DataExportRequest, SignatureRequest
+
+Drift counter pinned by `backend/test/schema/schema-invariants.test.js` dropped **49 → 39**. Issue #413 stays OPEN with batch-2 priorities commented (security-critical: RevokedToken, ScimToken, SsoConfig).
+
+### Added — `docs/gaps/archive/` convention (`ea1147a`)
+
+When a gap / backlog / regression-tracking file is fully closed (every entry shipped, zero `⬜` / `☐` / `TODO` / `open` markers remaining), it moves under `docs/gaps/archive/` rather than getting deleted — see `docs/gaps/archive/README.md` for the rule + closure-note template. Pointer added to both CLAUDE.md and TODOS.md so future sessions discover it on the read-at-session-start path. Audit at commit time: 0 files currently qualified for archiving (all active backlogs have ≥1 open item); convention is set up for future use.
+
+### Added — `capturing-wave-findings` skill (`6446c20`, late v3.4.4 → first usage in v3.4.5)
+
+Routes agent-discovered findings (bug, contract drift, missing route surface, spec shipped, standing-rule pattern, new backlog item) into the right doc — TODOS.md, docs/E2E_GAPS.md, CHANGELOG.md — or a fresh GitHub issue, so nothing surfaced mid-wave is lost between waves. Bundled `capture.sh` helper with 4 modes (`issue` / `backlog-row` / `spec-shipped` / `rule-proposal`). Each wave-17 agent ran `capture.sh spec-shipped` at finish; this changelog's bullets were originally the scattered append-to-CHANGELOG output of those calls, consolidated here at release-bump time.
+
+### Filed for follow-up (this session)
+
+- **#424** — closed same session (see "Fixed" above)
+- **#425** — G-23 migration safety check needs an allowlist mechanism for blessed UNIQUE/DROP changes. Surfaced when `cfed31b` (CalendarEvent unique-addition) tripped the `UNIQUE_ADDITION` detector despite the new constraint being strictly more permissive than the old. Recommendation: recognise `[allow-unique]` / `[allow-drop]` markers in the latest commit message and skip the corresponding detector. ~1h fix.
+
+### Process notes — what didn't go to plan
+
+- **Cascade healing across 6 spec files** — wave-16 agent B (`#421`) used a phantom `Contact.updatedAt` field that mocked vitest passed but real Prisma rejected; agent D (`#423`) introduced a generic middleware error message that didn't match 6 pre-existing route-specific regex patterns. Three healing commits (`35c0900`, `fd17e69`, `6aad4a0`) resolved both. **Lesson**: vitest mocks of Prisma are insufficient — always run `prisma db push` against the real schema before declaring victory; spec assertions on prose error messages are fragile vs. structured `code` fields.
+- **Migration check false positive** — G-23 was the very thing that flagged #424's CalendarEvent unique-addition as risky, blocking that one commit's deploy. Recovery: subsequent commit's HEAD~1 baseline included the new constraint → diff was empty → unblocked. Net deploy was delayed by one commit slot but no schema change was lost. **Filed as #425.**
+- **Stale issue lists** — Agent F discovered the #413 issue body's "suggested 10" model list was outdated (9 of 10 already had `@relation`). Mitigated by reading the actual G-24 invariant test output to derive the real drift list. **Lesson**: always re-derive from authoritative source, never trust frozen lists.
+
+---
+
 ## v3.4.4 — 2026-05-03/04 — multi-session arc: G-20 tenant-isolation flagship + skills library + 5 audit follow-up fixes + agent-progress infra
-
-  - G-22 shipped (953cca5) — 11 tests; first integration tier file: msw + supertest; 7 webhook scenarios + 1 fail-closed bonus; singleton-patch pattern documented for future routes/ tests
-
-  - G-19 shipped (09d7328) — 30 tests; queue + 6-disposition matrix; surfaced no contract drift in code; documented prompt drift (no SLA timer field, dispose route is /dispose with body contactId not /:id/dispose)
-
-  - off-backlog shipped (abb0d1c) — 17 tests; non-numeric :id sweep — middleware-level fix
-
-  - G-23 shipped (d63955a) — 10 tests; 5 detectors (NOT_NULL_WITHOUT_DEFAULT/COLUMN_DROP/TYPE_NARROWING/UNIQUE_ADDITION/FK_WITHOUT_ON_DELETE) + 6 fixture pairs + new migration-check.yml workflow with sticky PR comment + 5th deploy gate in deploy.yml
 
 A multi-session continuation of v3.4.3. **No new product features outside T2.1 (mobile sidebar drawer at <900px)**; this release lands the highest-severity multi-day item from the gap card (G-20 tenant-isolation, 3 waves), closes 5 audit-follow-up bugs the previous waves' agents surfaced, builds a 7-skill reusable library for parallel-agent dispatch, ships agent-progress visibility infra, and adds 4 R-4 medium-route specs + 5 R-5 batch 2 cron-engine vitests.
 

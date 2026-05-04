@@ -261,9 +261,52 @@ function PropertyEditor({ comp, updateProp }) {
       <>
         <p style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Form Fields:</p>
         {(p.fields || []).map((f, i) => (
-          <div key={i} style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.375rem', alignItems: 'center' }}>
-            <input className="input-field" value={f.label} onChange={e => { const flds = [...p.fields]; flds[i] = { ...flds[i], label: e.target.value }; updateProp('fields', flds); }} style={{ flex: 1, padding: '0.3rem', fontSize: '0.8rem' }} />
-            <button onClick={() => { const flds = p.fields.filter((_, j) => j !== i); updateProp('fields', flds); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={12} /></button>
+          // #451: per-field type + required toggle. Pre-fix the only field
+          // editable property was the label — type defaulted to 'text' and
+          // required was hard-coded false at add-time, with no way to flip
+          // either after creation. The public renderer at
+          // services/landingPageRenderer.js:132-135 already respects f.type
+          // and f.required when rendering <input> tags; the gap was UI only.
+          // HTML5 input types kept (text/email/tel/number/url) — textarea
+          // and select would need a different render path in the renderer,
+          // deferred.
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '0.5rem', padding: '0.4rem', background: 'rgba(255,255,255,0.04)', borderRadius: 6 }}>
+            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+              <input
+                className="input-field"
+                placeholder="Field label"
+                value={f.label || ''}
+                onChange={e => { const flds = [...p.fields]; flds[i] = { ...flds[i], label: e.target.value }; updateProp('fields', flds); }}
+                style={{ flex: 1, padding: '0.3rem', fontSize: '0.8rem' }}
+              />
+              <button
+                onClick={() => { const flds = p.fields.filter((_, j) => j !== i); updateProp('fields', flds); }}
+                title="Remove field"
+                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}
+              ><Trash2 size={12} /></button>
+            </div>
+            <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+              <select
+                className="input-field"
+                value={f.type || 'text'}
+                onChange={e => { const flds = [...p.fields]; flds[i] = { ...flds[i], type: e.target.value }; updateProp('fields', flds); }}
+                style={{ flex: 1, padding: '0.25rem', fontSize: '0.75rem' }}
+              >
+                <option value="text">Text</option>
+                <option value="email">Email</option>
+                <option value="tel">Phone</option>
+                <option value="number">Number</option>
+                <option value="url">URL</option>
+              </select>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.75rem', color: '#94a3b8', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={!!f.required}
+                  onChange={e => { const flds = [...p.fields]; flds[i] = { ...flds[i], required: e.target.checked }; updateProp('fields', flds); }}
+                />
+                Required
+              </label>
+            </div>
           </div>
         ))}
         <button onClick={() => updateProp('fields', [...(p.fields || []), { label: 'New Field', name: 'field_' + Date.now(), type: 'text', required: false }])} style={{ fontSize: '0.75rem', color: 'var(--accent-color)', background: 'none', border: 'none', cursor: 'pointer', marginBottom: '0.75rem' }}>+ Add Field</button>

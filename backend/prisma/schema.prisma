@@ -121,31 +121,31 @@ model Tenant {
   // #413 batch 1 (wave 17): financial / PHI back-relations. Required because
   // each child model now declares `tenant Tenant @relation`; Prisma rejects
   // one-sided relations.
-  payments             Payment[]
-  accountingSyncs      AccountingSync[]
-  forecasts            Forecast[]
-  quotaRows            Quota[]
-  currenciesList       Currency[]
-  dealInsights         DealInsight[]
-  patientOtps          PatientOtp[]
-  consentRecords       ConsentRecord[]
-  dataExportRequests   DataExportRequest[]
-  signatureRequests    SignatureRequest[]
+  payments           Payment[]
+  accountingSyncs    AccountingSync[]
+  forecasts          Forecast[]
+  quotaRows          Quota[]
+  currenciesList     Currency[]
+  dealInsights       DealInsight[]
+  patientOtps        PatientOtp[]
+  consentRecords     ConsentRecord[]
+  dataExportRequests DataExportRequest[]
+  signatureRequests  SignatureRequest[]
 
   // #413 batch 2 (wave 18): security / auth / integration back-relations.
   // RevokedToken + ScimToken + SsoConfig are the high-leverage auth ones; the
   // rest are integration / RBAC / sandbox cleanup. Same one-sided-relation
   // rule applies.
-  ssoConfigs           SsoConfig[]
-  retentionPolicies    RetentionPolicy[]
-  pipelines            Pipeline[]
-  approvalRequests     ApprovalRequest[]
-  bookingPages         BookingPage[]
-  fieldPermissions     FieldPermission[]
-  scimTokens           ScimToken[]
-  playbooks            Playbook[]
-  sandboxSnapshots     SandboxSnapshot[]
-  revokedTokens        RevokedToken[]
+  ssoConfigs        SsoConfig[]
+  retentionPolicies RetentionPolicy[]
+  pipelines         Pipeline[]
+  approvalRequests  ApprovalRequest[]
+  bookingPages      BookingPage[]
+  fieldPermissions  FieldPermission[]
+  scimTokens        ScimToken[]
+  playbooks         Playbook[]
+  sandboxSnapshots  SandboxSnapshot[]
+  revokedTokens     RevokedToken[]
 
   // #413 batch 3 (wave 18): calendar + scheduled-email + sales-config + KB + SLA
   // back-relations. Calendar cluster (CalendarIntegration / CalendarEvent /
@@ -167,7 +167,31 @@ model Tenant {
   // passed tenantId in every where-clause. Now the schema matches the queries
   // and the @@unique includes tenantId to guard against future id-allocation
   // changes. See PlaybookProgress model docstring for the full rationale.
-  playbookProgress     PlaybookProgress[]
+  playbookProgress PlaybookProgress[]
+
+  // #413 batch 4 (wave 19): voice / chat-and-live / marketing-attribution /
+  // dashboards+reports / social / scheduled / shared-inbox back-relations.
+  // Closes out the remaining 18 drifters; data-leak gate already covered by
+  // the tenantId column itself, this just makes Prisma aware of the FK so
+  // joins/cascades work uniformly with the rest of the schema.
+  voiceSessions        VoiceSession[]
+  abTests              AbTest[]
+  touchpoints          Touchpoint[]
+  webVisitors          WebVisitor[]
+  chatbots             Chatbot[]
+  chatbotConversations ChatbotConversation[]
+  cannedResponses      CannedResponse[]
+  surveys              Survey[]
+  surveyResponses      SurveyResponse[]
+  documentTemplates    DocumentTemplate[]
+  dashboards           Dashboard[]
+  customReports        CustomReport[]
+  sharedInboxes        SharedInbox[]
+  liveChatSessions     LiveChatSession[]
+  liveChatMessages     LiveChatMessage[]
+  documentViews        DocumentView[]
+  socialPosts          SocialPost[]
+  socialMentions       SocialMention[]
 }
 
 model User {
@@ -224,21 +248,21 @@ model User {
 }
 
 model Contact {
-  id      Int     @id @default(autoincrement())
-  name    String
-  email   String
-  phone   String?
-  company String?
-  title   String?
-  status  String  @default("Lead") // Lead, Prospect, Customer, Churned
-  source  String? @default("Organic")
-  aiScore                Int       @default(0) // 1-100 predictive close probability
+  id                    Int       @id @default(autoincrement())
+  name                  String
+  email                 String
+  phone                 String?
+  company               String?
+  title                 String?
+  status                String    @default("Lead") // Lead, Prospect, Customer, Churned
+  source                String?   @default("Organic")
+  aiScore               Int       @default(0) // 1-100 predictive close probability
   /// Last time leadScoringEngine wrote aiScore for this contact. Used as
   /// the recompute-window key so the cron only re-scores contacts whose
   /// score is older than RECOMPUTE_WINDOW_HOURS (default 24h). Without
   /// this, every tick re-scored every contact (#421 gap 2). Nullable so
   /// pre-existing rows backfill on first tick.
-  aiScoreLastComputedAt  DateTime?
+  aiScoreLastComputedAt DateTime?
 
   // Data enrichment
   industry       String?
@@ -771,15 +795,15 @@ model Task {
 }
 
 model Expense {
-  id          Int      @id @default(autoincrement())
+  id          Int       @id @default(autoincrement())
   title       String
   amount      Float
-  category    String   @default("General") // General, Travel, Software, Office, Marketing, Other
-  status      String   @default("Pending") // Pending, Approved, Rejected, Reimbursed
+  category    String    @default("General") // General, Travel, Software, Office, Marketing, Other
+  status      String    @default("Pending") // Pending, Approved, Rejected, Reimbursed
   receiptUrl  String?
-  notes       String?  @db.Text
+  notes       String?   @db.Text
   expenseDate DateTime? @default(now())
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1410,6 +1434,7 @@ model VoiceSession {
   userId       Int?
   contactId    Int?
   tenantId     Int       @default(1)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())
   endedAt      DateTime?
 }
@@ -1531,6 +1556,7 @@ model AbTest {
   winningVariant  String? // "A" or "B"
   status          String   @default("DRAFT") // DRAFT, RUNNING, COMPLETED
   tenantId        Int      @default(1)
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
@@ -1547,6 +1573,7 @@ model Touchpoint {
   url        String?
   timestamp  DateTime @default(now())
   tenantId   Int      @default(1)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, contactId])
 }
@@ -1566,6 +1593,7 @@ model WebVisitor {
   firstSeen  DateTime @default(now())
   lastSeen   DateTime @default(now())
   tenantId   Int      @default(1)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, lastSeen])
 }
@@ -1578,6 +1606,7 @@ model Chatbot {
   flow      String   @db.LongText // JSON node graph
   isActive  Boolean  @default(false)
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -1590,6 +1619,7 @@ model ChatbotConversation {
   contactId Int?
   status    String   @default("ACTIVE") // ACTIVE, COMPLETED, ABANDONED
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -1646,6 +1676,7 @@ model CannedResponse {
   content   String   @db.Text
   category  String   @default("General")
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -1659,6 +1690,7 @@ model Survey {
   question  String
   isActive  Boolean  @default(true)
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -1671,6 +1703,7 @@ model SurveyResponse {
   comment     String?  @db.Text
   respondedAt DateTime @default(now())
   tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, surveyId])
 }
@@ -1702,6 +1735,7 @@ model DocumentTemplate {
   content   String   @db.LongText // HTML with {{variable}} placeholders
   variables String?  @db.Text // JSON list of expected vars
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -1772,6 +1806,7 @@ model Dashboard {
   layout    String   @db.LongText // JSON: array of widgets {type, x, y, w, h, config}
   userId    Int?
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -1785,6 +1820,7 @@ model CustomReport {
   config      String   @db.LongText // JSON: entity, filters, columns, groupBy, chartType
   userId      Int?
   tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
@@ -1884,6 +1920,7 @@ model SharedInbox {
   emailAddress String   @unique
   members      String?  @db.Text // JSON array of userIds
   tenantId     Int      @default(1)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime @default(now())
 }
 
@@ -1912,6 +1949,7 @@ model LiveChatSession {
   closedAt     DateTime?
   rating       Int? // 1-5 satisfaction
   tenantId     Int       @default(1)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, status])
 }
@@ -1924,6 +1962,7 @@ model LiveChatMessage {
   body      String   @db.Text
   createdAt DateTime @default(now())
   tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 // ── Sales Playbooks ──────────────────────────────────────────────
@@ -1968,6 +2007,7 @@ model DocumentView {
   userAgent    String?   @db.Text
   duration     Int? // seconds spent viewing
   tenantId     Int       @default(1)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())
 }
 
@@ -1994,6 +2034,7 @@ model SocialPost {
   externalId   String?
   status       String    @default("DRAFT") // DRAFT, SCHEDULED, PUBLISHED, FAILED
   tenantId     Int       @default(1)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())
 }
 
@@ -2008,6 +2049,7 @@ model SocialMention {
   contactId    Int?
   fetchedAt    DateTime @default(now())
   tenantId     Int      @default(1)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 // ── Sandbox ──────────────────────────────────────────────────────
@@ -2026,10 +2068,10 @@ model SandboxSnapshot {
 // ── Wellness vertical (clinics, salons, aesthetics) ──────────────
 
 model Patient {
-  id         Int       @id @default(autoincrement())
-  name       String
-  email      String?
-  phone      String?
+  id              Int       @id @default(autoincrement())
+  name            String
+  email           String?
+  phone           String?
   // #401 — canonical form of `phone` for dedup. Last-10-digits with
   // country code prepended (per backend/utils/deduplication.js's
   // normalizePhone helper). Backfilled by
@@ -2037,14 +2079,14 @@ model Patient {
   // unique key for (tenantId, normalizedPhone) to PREVENT the
   // recurring "Kavita Reddy × 10" inflation pattern.
   normalizedPhone String?
-  dob        DateTime?
-  gender     String? // M, F, Other
-  bloodGroup String?
-  allergies  String?   @db.Text
-  notes      String?   @db.Text
-  photoUrl   String?
-  source     String? // ad, walk-in, referral, whatsapp
-  contactId  Int? // optional link back to CRM Contact
+  dob             DateTime?
+  gender          String? // M, F, Other
+  bloodGroup      String?
+  allergies       String?   @db.Text
+  notes           String?   @db.Text
+  photoUrl        String?
+  source          String? // ad, walk-in, referral, whatsapp
+  contactId       Int? // optional link back to CRM Contact
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2066,10 +2108,6 @@ model Patient {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([tenantId, name])
-  @@index([tenantId, phone])
-  @@index([tenantId, locationId])
-  @@index([contactId])
   /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
   // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
   // lived in lib/leadJunkFilter + the route handler's best-effort
@@ -2079,6 +2117,10 @@ model Patient {
   // DUPLICATE_PHONE. Backfill + merge MUST run before this can apply
   // — see backend/scripts/backfill-patient-normalized-phone.js.
   @@unique([tenantId, normalizedPhone], name: "patient_tenant_normalized_phone_unique")
+  @@index([tenantId, name])
+  @@index([tenantId, phone])
+  @@index([tenantId, locationId])
+  @@index([contactId])
 }
 
 model Service {

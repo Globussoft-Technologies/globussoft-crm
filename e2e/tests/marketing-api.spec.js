@@ -486,6 +486,78 @@ test.describe('Marketing API — public /submit form ingest', () => {
   });
 });
 
+// ── v3.4.11 sanitization regression suite (#398/#447 class) ──────────
+//
+// Closes the v3.4.10 audit's marketing.js finding. Campaign.name is
+// rendered in the marketing admin UI cards (the campaign list); the
+// Campaign.scheduleFilters JSON is re-rendered in the scheduled-campaigns
+// admin view. HTML payloads in either field would land as stored XSS the
+// next time an admin opens the marketing page or the schedule list.
+// routes/marketing.js now runs sanitizeText on name + sanitizeJsonForStringColumn
+// on scheduleFilters (both imported from backend/lib/sanitizeJson.js — the
+// v3.4.11 097ef5a promotion of the helpers).
+
+test.describe('Marketing API — sanitization (#398/#447 class, v3.4.10 audit)', () => {
+  test('POST /campaigns strips HTML from campaign name', async ({ request }) => {
+    const res = await authPost(request, '/api/marketing/campaigns', {
+      name: `${RUN_TAG} <img src=x onerror=alert(1)>safe-name`,
+      channel: 'EMAIL',
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(body.name).not.toMatch(/<img/i);
+    expect(body.name).not.toMatch(/onerror/i);
+    expect(body.name).toContain('safe-name');
+  });
+
+  test('PUT /campaigns/:id strips HTML from name on partial update', async ({ request }) => {
+    const created = await createCampaign(request, { name: 'put-target' });
+    const res = await authPut(request, `/api/marketing/campaigns/${created.id}`, {
+      name: `<a href="javascript:alert(1)">Updated</a>name`,
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.name).not.toMatch(/<a /i);
+    expect(body.name).not.toMatch(/javascript:/i);
+    expect(body.name).toContain('Updated');
+  });
+
+  test('POST /campaigns/:id/schedule sanitizes HTML inside filters JSON', async ({ request }) => {
+    const created = await createCampaign(request, { name: 'sched-xss-target' });
+    const futureDate = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    const token = await getAuthToken(request);
+    const res = await authPost(request, `/api/marketing/campaigns/${created.id}/schedule`, {
+      scheduledAt: futureDate,
+      filters: {
+        source: '<script>alert(1)</script>website-form',
+        city: { op: 'contains', value: '<img onerror=alert(2)>San Francisco' },
+      },
+    });
+    expect(res.status()).toBe(200);
+    // Read back the stored campaign to verify scheduleFilters is sanitized.
+    const getRes = await request.get(`${BASE_URL}/api/marketing/campaigns/${created.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(getRes.status()).toBe(200);
+    const c = await getRes.json();
+    const filtersStr = c.scheduleFilters || '';
+    expect(filtersStr).not.toMatch(/<script/i);
+    expect(filtersStr).not.toMatch(/<img/i);
+    expect(filtersStr).toContain('website-form');
+    expect(filtersStr).toContain('San Francisco');
+  });
+
+  test('merge tags ({{firstName}}) survive sanitization in campaign name', async ({ request }) => {
+    const created = await authPost(request, '/api/marketing/campaigns', {
+      name: `${RUN_TAG} Hello {{firstName}}`,
+      channel: 'EMAIL',
+    });
+    expect(created.status()).toBe(201);
+    const body = await created.json();
+    expect(body.name).toContain('{{firstName}}');
+  });
+});
+
 // ─── Auth gate ───────────────────────────────────────────────────────
 
 test.describe('Marketing API — auth', () => {

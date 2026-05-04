@@ -2,6 +2,8 @@
 
 ## v3.4.5 — 2026-05-04 — autonomous-orchestrator continuation: 4 issues closed, 4 E2E_GAPS rows shipped, schema invariant drift 49 → 39
 
+  - G-18 shipped (561ab6b) — 76 tests; 12 endpoints (4 JSON + 8 export); CSV BOM + PDF magic-bytes pinned; #233 attribution leak invariant locked
+
 A direct continuation of v3.4.4's autonomous-orchestrator session. **No new product features**; this release lands four medium-effort gap closures (G-19 wellness-telecaller, G-22 Stripe integration tier, G-23 migration safety, plus the off-backlog #423 numeric-id sweep) plus four bug fixes (#421/#422/#423/#424) plus the first batch of #413 schema-relation hygiene plus the `docs/gaps/archive/` convention for fully-closed gap-files plus six healing commits that resolved cascading test-shape regressions across spec files.
 
 ### Test surface continued growth

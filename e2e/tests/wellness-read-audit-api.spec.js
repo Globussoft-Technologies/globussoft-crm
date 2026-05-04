@@ -138,11 +138,18 @@ test.beforeAll(async ({ request }) => {
   const services = sRes.ok() ? await sRes.json() : [];
   const serviceId = (services[0] || {}).id || null;
 
+  // Seed Visit. routes/wellness.js POST /visits (lines 859-864) requires
+  // BOTH serviceId AND doctorId when status is "completed" (or "in-treatment").
+  // We don't care about the visit's clinical correctness for this audit
+  // contract spec — we just need a Visit row to exist so VISIT_LIST_READ
+  // returns a non-empty list and the audit row is generated.
+  // Using status:'booked' bypasses the completed-visit constraints
+  // (per the same lines, "Booked/cancelled/no-show statuses can be partial").
   const vRes = await post(request, token, '/api/wellness/visits', {
     patientId: seededIds.patientId,
     serviceId,
     visitDate: new Date().toISOString(),
-    status: 'completed',
+    status: 'booked',
     amountCharged: 1000,
   });
   expect(vRes.status(), 'seed visit').toBeLessThan(300);

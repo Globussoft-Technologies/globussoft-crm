@@ -134,6 +134,17 @@ jobs:
       # real ENC:v1: ciphertext value (not the documented no-op-when-
       # unset fallback). 64 hex chars = 32 bytes per lib/fieldEncryption.js.
       WELLNESS_FIELD_KEY: "ci0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab"
+      # v3.4.9 wellness-portal-dsar-api.spec.js needs the demo-OTP bypass
+      # (#238/#292) to mint a portal token for the seeded "+919876500001"
+      # patient (seed-wellness.js:333-355). routes/wellness.js:4287-4299 gates
+      # the bypass on three conditions: WELLNESS_DEMO_OTP env-var set,
+      # NODE_ENV !== 'production' (we set 'test' above), AND the phone in
+      # WELLNESS_DEMO_OTP_PHONES (defaults to "9876500001" — matches the
+      # seeded patient, no override needed). Without this env-var the
+      # spec's beforeAll blocks at verify-otp 401 and every test in the
+      # file fails. Demo box has the same env-var per the v3.4.9 release
+      # checklist.
+      WELLNESS_DEMO_OTP: "1234"
     steps:
       - uses: actions/checkout@v5
 

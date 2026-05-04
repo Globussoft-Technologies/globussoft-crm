@@ -70,20 +70,29 @@ const _walkSanitize = (value) => {
   }
   return value;
 };
-// Always returns a string (or null/undefined for nullish input). The
-// SequenceStep.conditionJson column is `String? @db.Text` per
-// prisma/schema.prisma — Prisma rejects an object value with
-// "PrismaClientValidationError: Argument `conditionJson` … type
-// String". When the route's body parser hands us a parsed object
-// (the common modern-client case), we must re-serialise after
-// walking. The string-input branch already JSON.stringifies; this
-// final branch matches.
+// Shape-preserving sanitizer (Option A revert from fd8ad67):
+//   null      → null
+//   undefined → undefined
+//   number / boolean → returned as-is (matches sanitize-json.test.js contract)
+//   object / array → walked recursively, returned with same shape (object-in →
+//                    object-out, NOT JSON.stringify'd here)
+//   string with parseable JSON → parsed, walked, JSON.stringify'd back (string
+//                    in / string out — preserves the caller's storage shape)
+//   string non-JSON → sanitizeText (HTML-stripped, merge-tags preserved)
+//
+// Why shape-preserving instead of always-string: the v3.4.9 unit test pinned
+// shape-preservation as the contract, and other JSON-walking callers (e.g.
+// future routes accepting nested validation rules + storing as a real JSON
+// column rather than `String? @db.Text`) need the helper to leave the shape
+// intact. The String? @db.Text constraint at the SequenceStep storage site
+// is the call site's problem, not the helper's. Each route that stores into
+// a JSON-string Prisma column MUST stringify the helper's output — see the
+// `sanitizeJson(...) → string-or-stringify` pattern in POST /:id/steps and
+// PUT /steps/:id below.
 const sanitizeJson = (input) => {
   if (input == null) return input;
+  if (typeof input !== "object" && typeof input !== "string") return input;
   if (typeof input === "string") {
-    // Treat as a JSON-encoded blob if it parses; otherwise sanitize as
-    // plain text so a hand-rolled curl payload of "<script>" doesn't
-    // bypass the helper just because it isn't valid JSON.
     let parsed;
     try {
       parsed = JSON.parse(input);
@@ -92,7 +101,19 @@ const sanitizeJson = (input) => {
     }
     return JSON.stringify(_walkSanitize(parsed));
   }
-  return JSON.stringify(_walkSanitize(input));
+  return _walkSanitize(input);
+};
+
+// Helper used at SequenceStep.conditionJson call sites — `String? @db.Text`
+// column needs every non-null value to be a string. sanitizeJson alone would
+// hand back an object when given an object input (correct per the helper's
+// shape-preservation contract); this wrapper stringifies the walked object so
+// Prisma accepts the write.
+const sanitizeJsonForStringColumn = (input) => {
+  if (input == null) return null;
+  const cleaned = sanitizeJson(input);
+  if (cleaned == null) return null;
+  return typeof cleaned === "string" ? cleaned : JSON.stringify(cleaned);
 };
 
 // Fetch all drip sequences
@@ -431,10 +452,12 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
 
     // v3.4.9 carry-over #1: scrub HTML out of free-text step fields
     // before persisting. smsBody is plain text (merge-tags pass through);
-    // conditionJson may be an object or string blob — sanitizeJson walks
-    // every string value recursively.
+    // conditionJson may be an object or string blob — sanitizeJsonForStringColumn
+    // walks every string value recursively AND stringifies an object input
+    // because SequenceStep.conditionJson is `String? @db.Text` (Prisma
+    // rejects an object here).
     const cleanSmsBody = smsBody != null ? sanitizeText(smsBody) : null;
-    const cleanConditionJson = conditionJson != null ? sanitizeJson(conditionJson) : null;
+    const cleanConditionJson = sanitizeJsonForStringColumn(conditionJson);
 
     const created = await prisma.sequenceStep.create({
       data: {
@@ -500,7 +523,7 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
         ...(delayMinutes !== undefined && {
           delayMinutes: delayMinutes == null ? null : parseInt(delayMinutes, 10),
         }),
-        ...(conditionJson !== undefined && { conditionJson: conditionJson == null ? null : sanitizeJson(conditionJson) }),
+        ...(conditionJson !== undefined && { conditionJson: sanitizeJsonForStringColumn(conditionJson) }),
         ...(trueNextPosition !== undefined && {
           trueNextPosition: trueNextPosition == null ? null : parseInt(trueNextPosition, 10),
         }),

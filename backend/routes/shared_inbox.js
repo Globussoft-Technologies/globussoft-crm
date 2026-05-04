@@ -111,9 +111,21 @@ router.delete("/:id", async (req, res) => {
 router.post("/:id/members", async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    const { userId, action } = req.body;
+    // #436-class fix (v3.4.8 carry-over #4 audit): the global
+    // `stripDangerous` middleware (server.js:299) deletes `userId` from
+    // every req.body. Pre-fix this route destructured `userId` directly
+    // → always undefined → 400 "userId required" even when the caller
+    // passed it. Members could never be added or removed via this route.
+    // Accept `targetUserId` (the renamed surface, never stripped) AND
+    // fall through to req.strippedFields.userId for back-compat with
+    // older clients that still POST `userId`. Mirrors routes/tasks.js
+    // POST handler shape.
+    const { targetUserId, action } = req.body;
+    const userId = (targetUserId !== undefined && targetUserId !== null && targetUserId !== "")
+      ? targetUserId
+      : (req.strippedFields && req.strippedFields.userId);
     if (!userId || !["add", "remove"].includes(action)) {
-      return res.status(400).json({ error: "userId and action ('add'|'remove') required." });
+      return res.status(400).json({ error: "userId (or targetUserId) and action ('add'|'remove') required." });
     }
 
     const inbox = await prisma.sharedInbox.findFirst({
@@ -201,7 +213,13 @@ router.get("/:id/messages", async (req, res) => {
 router.post("/:id/assign-message", async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    const { messageId, userId } = req.body;
+    // Same #436-class fix as POST /:id/members above. Pre-fix
+    // assign-message always set assigneeId=null because stripDangerous
+    // deleted body.userId — the assign feature was effectively broken.
+    const { messageId, targetUserId } = req.body;
+    const userId = (targetUserId !== undefined && targetUserId !== null && targetUserId !== "")
+      ? targetUserId
+      : (req.strippedFields && req.strippedFields.userId);
     if (!messageId) return res.status(400).json({ error: "messageId required." });
 
     const inbox = await prisma.sharedInbox.findFirst({

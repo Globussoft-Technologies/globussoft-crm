@@ -338,3 +338,79 @@ test.describe('Lead-routing API — auth gate', () => {
     expect([401, 403]).toContain(r.status());
   });
 });
+
+// ── v3.4.11 sanitization regression suite (#398/#447 class) ───────────
+//
+// Closes the v3.4.10 audit's lead_routing.js finding. Both name and
+// conditions are rendered in the /lead-routing admin UI (#245 chip
+// display). HTML payloads in either field would land as stored XSS the
+// next time an admin views the rule list. routes/lead_routing.js now
+// runs sanitizeText on name + sanitizeJsonForStringColumn on conditions
+// (both imported from backend/lib/sanitizeJson.js, the v3.4.11 promotion
+// of the helpers from routes/sequences.js).
+test.describe('Lead-routing API — sanitization (#398/#447 class, v3.4.10 audit)', () => {
+  test('POST strips HTML from rule name', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const r = await authPost(request, '/api/lead-routing', {
+      name: `${RUN_TAG} <img src=x onerror=alert(1)>safe-name`,
+      conditions: { status: 'Lead' },
+    });
+    expect(r.status()).toBe(201);
+    const body = await r.json();
+    expect(body.name).not.toMatch(/<img/i);
+    expect(body.name).not.toMatch(/onerror/i);
+    expect(body.name).toContain('safe-name');
+  });
+
+  test('POST sanitizes HTML inside non-status condition values (e.g. city contains)', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const r = await authPost(request, '/api/lead-routing', {
+      name: `${RUN_TAG} city-rule`,
+      // Use a non-status field so validateConditions doesn't reject the
+      // <script> wrapper as an invalid status (sanitization runs AFTER
+      // validation; status validation happens against the raw bytes).
+      conditions: { city: { op: 'contains', value: '<script>alert(1)</script>San Francisco' } },
+    });
+    expect(r.status()).toBe(201);
+    const body = await r.json();
+    // routes/lead_routing.js GET responses parse the JSON back, so we
+    // can assert on the structure directly.
+    expect(JSON.stringify(body.conditions)).not.toMatch(/<script/i);
+    expect(JSON.stringify(body.conditions)).toContain('San Francisco');
+  });
+
+  test('PUT strips HTML from name on partial update', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const created = await authPost(request, '/api/lead-routing', {
+      name: `${RUN_TAG} put-target`,
+      conditions: { status: 'Lead' },
+    });
+    expect(created.status()).toBe(201);
+    const id = (await created.json()).id;
+    const r = await request.put(`${API}/lead-routing/${id}`, {
+      data: { name: `<a href="javascript:alert(1)">Updated</a>name` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    });
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.name).not.toMatch(/<a /i);
+    expect(body.name).not.toMatch(/javascript:/i);
+    expect(body.name).toContain('Updated');
+  });
+
+  test('merge tags ({{firstName}}) survive sanitization in conditions', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    // Defensive: the codebase elsewhere supports merge-tag preservation
+    // (sanitize-html allowedTags:[] only strips <…>-shaped tokens, not
+    // {{…}}). Pin that contract holds for lead_routing too.
+    const r = await authPost(request, '/api/lead-routing', {
+      name: `${RUN_TAG} merge-tag`,
+      conditions: { city: { op: 'eq', value: 'Hello {{firstName}} from {{company}}' } },
+    });
+    expect(r.status()).toBe(201);
+    const body = await r.json();
+    const condStr = JSON.stringify(body.conditions);
+    expect(condStr).toContain('{{firstName}}');
+    expect(condStr).toContain('{{company}}');
+  });
+});

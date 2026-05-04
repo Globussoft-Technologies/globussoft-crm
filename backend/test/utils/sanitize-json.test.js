@@ -22,8 +22,12 @@
 //  - non-JSON strings fall back to plain sanitizeText
 import { describe, test, expect } from 'vitest';
 
-const sequences = require('../../routes/sequences.js');
-const { sanitizeText, sanitizeJson } = sequences;
+// v3.4.11: helpers moved from routes/sequences.js to backend/lib/sanitizeJson.js
+// for reuse across the lead_routing / ab_tests / marketing / report_schedules
+// routes identified by the v3.4.10 audit. Importing from the new canonical
+// path; the test name (`sanitize-json.test.js`) stays the same since the
+// covered helper signature is unchanged.
+const { sanitizeText, sanitizeJson } = require('../../lib/sanitizeJson.js');
 
 describe('sanitize helpers — module shape', () => {
   test('exports sanitizeText + sanitizeJson as functions', () => {

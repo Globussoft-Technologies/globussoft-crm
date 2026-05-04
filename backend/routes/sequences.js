@@ -1,35 +1,26 @@
 const express = require("express");
-const sanitizeHtml = require("sanitize-html");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
 
-// #398: strip ALL HTML/JS markup from free-text fields stored on a Sequence.
-// Global middleware/security.js only strips dangerous tags (script/iframe/img),
-// but sequence names + step content are pure text fields — no formatting is
-// expected, so we strip everything to avoid stored-XSS sinks (PDF previews,
-// email subject lines, dashboard cards).
-//
-// #187: sanitize-html's default text serialiser HTML-encodes `&` → `&amp;`,
-// which corrupted "Q3 Plan & Brief" into "Q3 Plan &amp; Brief". Override
-// the textFilter to undo the four entities the library re-encodes — storage
-// stays raw, render-time encoding is React's job.
-const ENTITY_DECODE_RE = /&(amp|lt|gt|quot|#x27|#39);/g;
-const ENTITY_DECODE_MAP = {
-  "amp": "&", "lt": "<", "gt": ">", "quot": '"', "#x27": "'", "#39": "'",
-};
-const sanitizeText = (input) => {
-  if (typeof input !== "string") return input;
-  return sanitizeHtml(input, {
-    allowedTags: [],
-    allowedAttributes: {},
-    textFilter: (text) => text.replace(ENTITY_DECODE_RE, (_, e) => ENTITY_DECODE_MAP[e] || _),
-  }).trim();
-};
+// v3.4.11: sanitization helpers moved to backend/lib/sanitizeJson.js so the
+// 4 routes identified by the v3.4.10 audit (lead_routing, ab_tests, marketing,
+// report_schedules) can adopt the same toolkit. sanitizeText handles
+// HTML-stripping with merge-tag preservation; sanitizeJson is shape-preserving
+// for object → object handoff (e.g. real JSON-typed Prisma columns);
+// sanitizeJsonForStringColumn wraps sanitizeJson + stringifies for
+// `String? @db.Text` storage columns like SequenceStep.conditionJson.
+const {
+  sanitizeText,
+  sanitizeJson,
+  sanitizeJsonForStringColumn,
+} = require("../lib/sanitizeJson");
 
 // Walk an array of ReactFlow nodes and strip any text inside data.label so a
 // payload like `{ data: { label: "<img onerror=…>" } }` cannot persist.
+// This wrapper is sequence-specific (knows the ReactFlow node shape) so it
+// stays local to this route.
 const sanitizeNodes = (nodes) => {
   if (!Array.isArray(nodes)) return nodes;
   return nodes.map((n) => {
@@ -41,79 +32,6 @@ const sanitizeNodes = (nodes) => {
     }
     return n;
   });
-};
-
-// v3.4.9 carry-over #1: STEP-level fields (smsBody + conditionJson) on
-// POST /:id/steps + PUT /steps/:id were assigned without sanitization.
-// Same XSS class as #398 (which closed the parent Sequence.name path);
-// step bodies surface in admin diff views and could exfiltrate via a
-// crafted href / event handler that an admin clicks while editing.
-//
-// `conditionJson` is a JSON object (express body-parser already parsed
-// it for us) but may also arrive as a JSON-encoded string blob from
-// older clients. Public entry handles both: it parses-then-walks if the
-// input is a JSON string, then re-serialises so the caller's storage
-// shape is preserved. Strings inside the structure are passed straight
-// through `sanitizeText` (NOT re-parsed as JSON). Merge tags like
-// `{{firstName}}` are NOT HTML and pass through untouched
-// (`allowedTags: []` only strips `<…>`-shaped tokens).
-const _walkSanitize = (value) => {
-  if (value == null) return value;
-  if (typeof value === "string") return sanitizeText(value);
-  if (Array.isArray(value)) return value.map(_walkSanitize);
-  if (typeof value === "object") {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) {
-      out[k] = _walkSanitize(v);
-    }
-    return out;
-  }
-  return value;
-};
-// Shape-preserving sanitizer (Option A revert from fd8ad67):
-//   null      → null
-//   undefined → undefined
-//   number / boolean → returned as-is (matches sanitize-json.test.js contract)
-//   object / array → walked recursively, returned with same shape (object-in →
-//                    object-out, NOT JSON.stringify'd here)
-//   string with parseable JSON → parsed, walked, JSON.stringify'd back (string
-//                    in / string out — preserves the caller's storage shape)
-//   string non-JSON → sanitizeText (HTML-stripped, merge-tags preserved)
-//
-// Why shape-preserving instead of always-string: the v3.4.9 unit test pinned
-// shape-preservation as the contract, and other JSON-walking callers (e.g.
-// future routes accepting nested validation rules + storing as a real JSON
-// column rather than `String? @db.Text`) need the helper to leave the shape
-// intact. The String? @db.Text constraint at the SequenceStep storage site
-// is the call site's problem, not the helper's. Each route that stores into
-// a JSON-string Prisma column MUST stringify the helper's output — see the
-// `sanitizeJson(...) → string-or-stringify` pattern in POST /:id/steps and
-// PUT /steps/:id below.
-const sanitizeJson = (input) => {
-  if (input == null) return input;
-  if (typeof input !== "object" && typeof input !== "string") return input;
-  if (typeof input === "string") {
-    let parsed;
-    try {
-      parsed = JSON.parse(input);
-    } catch (_e) {
-      return sanitizeText(input);
-    }
-    return JSON.stringify(_walkSanitize(parsed));
-  }
-  return _walkSanitize(input);
-};
-
-// Helper used at SequenceStep.conditionJson call sites — `String? @db.Text`
-// column needs every non-null value to be a string. sanitizeJson alone would
-// hand back an object when given an object input (correct per the helper's
-// shape-preservation contract); this wrapper stringifies the walked object so
-// Prisma accepts the write.
-const sanitizeJsonForStringColumn = (input) => {
-  if (input == null) return null;
-  const cleaned = sanitizeJson(input);
-  if (cleaned == null) return null;
-  return typeof cleaned === "string" ? cleaned : JSON.stringify(cleaned);
 };
 
 // Fetch all drip sequences

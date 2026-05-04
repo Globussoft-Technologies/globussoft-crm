@@ -34,6 +34,28 @@ Each agent recovered by code-grepping the route file before writing code, but ~1
 
 Combined v3.4.8 + v3.4.9 record: **4 of 8 issues** picked from TODOS.md were already done. That's a 50% doc-drift rate — high enough that pre-pickup verification should be the default for any TODOS row older than the most recent 1-2 release-bumps.
 
+## Batch-sweep mode — proactive backlog hygiene (added 2026-05-05)
+
+Same verification primitives as pre-pickup, **different trigger**: when the cron-driven autonomous loop is in "wave finished, user away, waiting on next CI" state, batch-verify the open backlog instead of going idle. The 2026-05-05 firing closed **5 issues in one cron tick** (4 verified-already-shipped + 1 small alias fix) by sweeping a sample of P1-P3 candidates: #191 (SECURITY brute-force), #167 (CRITICAL hard-DELETE), #182 (SMS queue), #402 (sidebar 404), #406 (stale URLs).
+
+Cumulative: **8 stale closures across the v3.4.8 → v3.4.11 arc**, each backed by a triage comment citing implementing-commit + spec path + CHANGELOG line. Zero code regressions, all verified by the same grep checklist below.
+
+When to invoke batch-sweep mode (vs pre-pickup):
+- Cron firing finds wave already finished + skill/doc updates already shipped
+- User-authorization queue is pending (tags / SSH ops / invasive design changes) and the user isn't responding yet
+- CI on the most recent push is in_progress — there's a 5-15 minute window before the next decision point
+
+How to scope a batch-sweep so it doesn't run forever:
+- **Sample 5-10 candidates** by scanning `gh issue list --state open --limit 40` and picking the ones whose titles name a specific function / route / status code (those are the easiest to grep-verify; vague UX issues need fresh repro and don't drift-close cleanly).
+- **Time-box at ~30 minutes**. If you've found 0 drift in the first 5 candidates, the batch is depleted — stop, don't keep grepping.
+- **Skip P3 unless the title mentions a literal claim** (e.g. "X returns 404", "Y missing audit"). P3 cosmetic / UX framings usually need a UI repro, not a grep.
+- **Save the time-budget for genuine fixes too** — the #406 alias fix in this firing took 5 minutes (2 `<Navigate>` lines mirroring an existing pattern). If a sweep candidate is genuinely open AND the fix is mechanical AND there's an existing pattern to clone, ship it inline rather than logging it for later.
+
+What NOT to do during batch-sweep:
+- **Don't close P2+ issues without a clear citation chain** (implementing-commit + spec + CHANGELOG). Patient/Lead/Audit retention (#431) reported 3 fields that don't exist in current code (5 entities); the right move was a triage comment requesting fresh repro, NOT a verified-shipped closure. GDPR/security/data-retention issues warrant the user-direction risk-aversion bias even in batch mode.
+- **Don't sweep issues you authored in the same session.** Memory of recent work is enough.
+- **Don't bundle drift findings into a code commit.** Each closure is its own `gh issue close` + comment. Code commits should be code; drift closures are tracker hygiene.
+
 ## The grep checklist (2-5 minutes)
 
 Run before estimating or briefing any agent. Treat the issue body as a **hypothesis**, not ground truth.

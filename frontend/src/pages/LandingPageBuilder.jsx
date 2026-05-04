@@ -23,13 +23,40 @@ export default function LandingPageBuilder() {
   const [selected, setSelected] = useState(null);
   const [saving, setSaving] = useState(false);
   const [previewMode, setPreviewMode] = useState('desktop');
+  // #454: dirty-state tracking + beforeunload guard.
+  // Pre-fix the user could add components, configure properties, and
+  // navigate away (browser back, sidebar link, refresh) — all changes
+  // silently discarded. We track a "dirty since last save" flag and
+  // wire a beforeunload listener so the browser shows its native
+  // "leave site?" confirm dialog. The flag flips true on any state
+  // mutation (addComponent / updateProp / moveComponent / deleteComponent)
+  // and back to false on successful save or initial load. Full
+  // sessionStorage autosave was scoped out of this fix — beforeunload
+  // is the highest-leverage piece (catches accidental refreshes +
+  // tab-closes immediately).
+  const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
     fetchApi(`/api/landing-pages/${id}`).then(data => {
       setPage(data);
       try { setComponents(JSON.parse(data.content || '[]')); } catch { setComponents([]); }
+      setIsDirty(false);
     }).catch(() => {});
   }, [id]);
+
+  // #454: native beforeunload guard. Modern browsers ignore the custom
+  // string and always show their canned "Changes you made may not be
+  // saved" dialog — we just need preventDefault + assigning returnValue.
+  useEffect(() => {
+    if (!isDirty) return;
+    const onBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isDirty]);
 
   // #378: normalize slug input — lowercase, replace any non [a-z0-9-] with '-',
   // collapse repeats, and truncate to 50 chars. Applied on every keystroke so
@@ -55,6 +82,9 @@ export default function LandingPageBuilder() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      // #454: clear dirty after successful save so the beforeunload
+      // guard goes silent on the next navigation.
+      setIsDirty(false);
     } catch { notify.error('Save failed'); }
     setSaving(false);
   };
@@ -62,10 +92,12 @@ export default function LandingPageBuilder() {
   const addComponent = (type) => {
     const def = COMPONENT_TYPES.find(t => t.type === type);
     setComponents([...components, { id: Date.now().toString(), type, props: { ...def.defaultProps } }]);
+    setIsDirty(true);
   };
 
   const updateProp = (compId, key, value) => {
     setComponents(components.map(c => c.id === compId ? { ...c, props: { ...c.props, [key]: value } } : c));
+    setIsDirty(true);
   };
 
   const moveComponent = (idx, dir) => {
@@ -74,10 +106,12 @@ export default function LandingPageBuilder() {
     if (swap < 0 || swap >= newComps.length) return;
     [newComps[idx], newComps[swap]] = [newComps[swap], newComps[idx]];
     setComponents(newComps);
+    setIsDirty(true);
   };
 
   const removeComponent = (idx) => {
     setComponents(components.filter((_, i) => i !== idx));
+    setIsDirty(true);
     setSelected(null);
   };
 
@@ -89,12 +123,12 @@ export default function LandingPageBuilder() {
       {/* Top Bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.75rem 1.5rem', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
         <Link to="/landing-pages" style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>
-        <input className="input-field" value={page.title} onChange={e => setPage({ ...page, title: e.target.value })} style={{ fontWeight: '600', fontSize: '1rem', padding: '0.375rem 0.75rem', width: '250px' }} />
+        <input className="input-field" value={page.title} onChange={e => { setPage({ ...page, title: e.target.value }); setIsDirty(true); }} style={{ fontWeight: '600', fontSize: '1rem', padding: '0.375rem 0.75rem', width: '250px' }} />
         {/* #378: slug input with HTML pattern + onChange normalization */}
         <input
           className="input-field"
           value={page.slug || ''}
-          onChange={e => setPage({ ...page, slug: normalizeSlug(e.target.value) })}
+          onChange={e => { setPage({ ...page, slug: normalizeSlug(e.target.value) }); setIsDirty(true); }}
           placeholder="slug"
           title="Lowercase letters, numbers, and hyphens only (max 50 chars)"
           pattern="[a-z0-9-]+"

@@ -3397,6 +3397,147 @@ router.get("/portal/prescriptions", verifyPatientToken, async (req, res) => {
   }
 });
 
+// POST /portal/export — patient self-DSAR (DPDP Act §15 / GDPR Article 15).
+// Closes v3.4.8 carry-over #2: prior to this endpoint, wellness-portal
+// patients had NO mechanism to obtain a copy of their own data — they
+// could only read scoped slices via /portal/me + /portal/visits +
+// /portal/prescriptions. The staff-side equivalent is POST
+// /api/gdpr/export/me but the global auth gate (middleware/auth.js:23)
+// blocks portal tokens from /api/gdpr/* by design (those tokens carry
+// patientId, not userId).
+//
+// Mirrors the SHAPE of /api/gdpr/export/me: returns one JSON envelope
+// keyed by entity, plus a `counts` summary, and writes ONE AuditLog row
+// (action='GDPR_EXPORT_SELF', entity='Patient', actorType='patient').
+// FK chain walked: Patient → Visit → Prescription → ConsentForm →
+// TreatmentPlan → LoyaltyTransaction → Referral. Every query filters by
+// `patientId: req.patient.id` (NOT tenantId — the patient already proved
+// tenancy via the OTP login flow; filtering on tenantId only would leak
+// other patients' rows in the same clinic).
+//
+// Field-level encryption (WELLNESS_FIELD_KEY, see CLAUDE.md): the Prisma
+// $extends client decrypts on read since v3.2.1, so findMany returns
+// plaintext — no manual decryption here.
+//
+// Audit: writeAudit gets actorType='patient' + patientId=req.patient.id
+// per backend/lib/audit.js convention so a reviewer filtering by
+// _actorType="patient" + action=GDPR_EXPORT_SELF can audit every
+// self-export trivially. Audit failures are caught — a logging blip
+// must not block the patient's data-access right.
+router.post("/portal/export", verifyPatientToken, async (req, res) => {
+  try {
+    const patient = await prisma.patient.findUnique({
+      where: { id: req.patient.id },
+      select: {
+        id: true, name: true, phone: true, email: true,
+        dob: true, gender: true, bloodGroup: true, allergies: true,
+        notes: true, photoUrl: true, source: true, contactId: true,
+        tenantId: true, locationId: true,
+        createdAt: true, updatedAt: true,
+      },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    // Fan-out FK-chain reads. All filtered by patientId (the OTP login
+    // already pinned tenancy; tenantId-only filters would cross-leak).
+    const [
+      visits,
+      prescriptions,
+      consents,
+      treatmentPlans,
+      loyaltyTransactions,
+      referrals,
+    ] = await Promise.all([
+      prisma.visit.findMany({
+        where: { patientId: patient.id },
+        orderBy: { visitDate: "desc" },
+        include: {
+          service: { select: { id: true, name: true, category: true } },
+          doctor: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.prescription.findMany({
+        where: { patientId: patient.id },
+        orderBy: { createdAt: "desc" },
+        include: {
+          doctor: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.consentForm.findMany({
+        where: { patientId: patient.id },
+        orderBy: { signedAt: "desc" },
+      }),
+      prisma.treatmentPlan.findMany({
+        where: { patientId: patient.id },
+        orderBy: { startedAt: "desc" },
+      }),
+      prisma.loyaltyTransaction.findMany({
+        where: { patientId: patient.id },
+        orderBy: { createdAt: "desc" },
+      }).catch(() => []),
+      prisma.referral.findMany({
+        where: { referrerPatientId: patient.id },
+        orderBy: { createdAt: "desc" },
+      }).catch(() => []),
+    ]);
+
+    const counts = {
+      patient: 1,
+      visits: visits.length,
+      prescriptions: prescriptions.length,
+      consents: consents.length,
+      treatmentPlans: treatmentPlans.length,
+      loyaltyTransactions: loyaltyTransactions.length,
+      referrals: referrals.length,
+    };
+
+    // PRD §11 + DPDP Act §15: every self-DSAR is itself a PHI access event
+    // and MUST land in AuditLog. Distinct action name `_SELF` so reviewers
+    // can filter staff-initiated GDPR_EXPORT vs patient-initiated exports
+    // without parsing details JSON.
+    let audited = false;
+    try {
+      await writeAudit(
+        'Patient',
+        'GDPR_EXPORT_SELF',
+        patient.id,
+        null,
+        patient.tenantId,
+        {
+          reason: 'DPDP §15 / GDPR Article 15 self-export (portal)',
+          source: 'portal/export',
+          counts,
+        },
+        { actorType: 'patient', patientId: patient.id }
+      );
+      audited = true;
+    } catch (auditErr) {
+      console.warn("[wellness] audit portal/export failed:", auditErr.message);
+    }
+
+    // Strip tenantId from the public response shape — patient never needs
+    // to see the integer id of their clinic.
+    const { tenantId: _t, ...patientPublic } = patient;
+
+    res.set('Content-Disposition', `attachment; filename=patient-${patient.id}-export.json`);
+    res.json({
+      exportedAt: new Date().toISOString(),
+      patient: patientPublic,
+      visits,
+      prescriptions,
+      consents,
+      treatmentPlans,
+      loyaltyTransactions,
+      referrals,
+      counts,
+      audited,
+    });
+  } catch (e) {
+    console.error("[wellness] portal export error:", e.message);
+    res.status(500).json({ error: "Failed to export patient data" });
+  }
+});
+
 router.get("/invoices/:id/branded-pdf", async (req, res) => {
   try {
     const id = parseInt(req.params.id);

@@ -73,7 +73,7 @@ User asked to triage the QA-filed P0/P1 issues, fix the real ones, and add regre
 2. **Verify the 3 surviving `_teardown_iso_*` locations on demo are scrubbed by the next e2e-full cycle.** Right after the manual trigger this session, IDs 301/319/328 were still visible — these are likely created by the matrix shards AFTER the scrub started (concurrent shard activity). Next scheduled e2e-full or a fresh manual trigger will catch them. If they persist after 2 cycles, investigate whether some other workflow is writing fixtures to demo outside the e2e-full lifecycle.
 
 3. **Pick the next P1/P2 from the open-issue list** (most are quick wins now that the false positives are out of the way):
-   - **#180** No JWT revocation / logout endpoint (4-6h, build session-revocation table)
+   - ~~**#180** No JWT revocation / logout endpoint~~ — already shipped in v3.2.1; v3.4.7 follow-up added the missing per-push spec (commit auth-revocation-api). See long-tail row below for IssuedToken follow-up.
    - **#436** Tasks queue empty for Owner persona (2-4h investigation — likely a where-clause bug)
    - **#435** Inbox compose "To" treats comma string as one recipient (multi-day if proper chip UI; 2-3h if backend split + array support — see issue triage notes)
    - **#398** Drip Sequences accept HTML/JS in name (1h — wire `sanitizeBody` middleware on the route)
@@ -84,7 +84,7 @@ User asked to triage the QA-filed P0/P1 issues, fix the real ones, and add regre
 | Item | Effort | Status |
 |---|---|---|
 | **#413** schema cleanup — 18 models still without `tenant Tenant @relation` | 2 batches × 1h | partial — batches 1+2+3 done (30 of 49); chat/live + dashboards clusters next (batch 4) |
-| **#180** JWT revocation / logout | 4-6h | ⬜ open — auth-security work |
+| **#180** JWT revocation / logout | 4-6h | ✅ shipped — implementation already in v3.2.1 (RevokedToken model + jti claim + verifyToken lookup + POST /auth/logout + GET /auth/sessions + DELETE /auth/sessions/:jti); v3.4.7 follow-up adds the missing `e2e/tests/auth-revocation-api.spec.js` (10 tests pinning happy logout, idempotency, /sessions shape, history reflection, malformed-jti 400, tenant isolation, auth gates). The 4-6h estimate compressed to spec-only work because the implementation gap was actually a test-coverage gap. Open follow-up: build IssuedToken table for active-session enumeration (currently /sessions surfaces only the current jti as active). |
 | **#436** Tasks queue empty for Owner | 2-4h | ⬜ open — needs investigation |
 | **#435** Inbox compose comma emails | 2-3h backend, days for proper UI | ⬜ open |
 | **#398** Sequences input sanitization | 1h | ⬜ open |
@@ -99,7 +99,7 @@ User asked to triage the QA-filed P0/P1 issues, fix the real ones, and add regre
 
 **P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #406 #407 #429 #430 #431 #433 #434 #437 #438 #439 #440 #441 #402
 
-**Estimate to reach 0 open issues**: ~10-12 calendar days of focused work (most P3 items are 30min-1h each; the big rocks are #180, #167, T2.2, G-21).
+**Estimate to reach 0 open issues**: ~8-10 calendar days of focused work (most P3 items are 30min-1h each; the remaining big rocks are #167 hard-DELETE audit and G-21 frontend RTL setup — T2.2 and #180 closed in v3.4.7 follow-up sessions).
 
 ### Notes for the office continuation
 

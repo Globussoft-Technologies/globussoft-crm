@@ -40,7 +40,7 @@
 | **9× landing-page builder/UI issues** (#438/#446/#449/#450/#452/#454/#455/#456 + #451 unblocked by Nginx fix) | varies | ⬜ open — frontend coordinated pickup |
 | **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
 
-**P3 / minor UX (defer):** #262 #307 #384 #407
+**P3 / minor UX (defer):** #384 #407
 
 ### Stale-sweep tally update — 2026-05-05 late-AM + post-noon batches
 
@@ -88,6 +88,18 @@ User said "fix these issues" → autonomous fix-cluster on /issues backlog. Sing
 **#456 frontend remainder still open:** validation feedback, "derive from title" helper button, wire the new \`?confirmSlugChange=true\` 409 flow. Posted detailed status comment on the issue. ~1h frontend session.
 
 **Cumulative cumulative across v3.4.8 → today's arc:** **20 issues closed** (14 stale-sweep + 6 real fixes) + **5 small fixes shipped** + **1 backend partial** + **1 partial-drift triage**. ~70 minutes total batch time vs days of phantom-work.
+
+### Late-PM batch round 3 — 2 stale closures + 1 triage
+
+This firing's autonomous batch-sweep:
+
+| Issue | Action | Outcome |
+|---|---|---|
+| **#262** wellness calendar 3 doctor columns | Pattern A drift | Closed — `Calendar.jsx:23-29` `PRACTITIONER_ROLES = new Set(['doctor', 'professional'])` shipped earlier; both roles now render columns |
+| **#307** calendar misleading "1 of 16" header | Pattern A drift | Closed — `Calendar.jsx:168-176` "All practitioners (16)" / "X of Y practitioners" copy already shipped |
+| **#384** KB `{tenant}` placeholder | No-repro triage | Posted comment — searched entire codebase + seed data, NO `{tenant}` literal anywhere; user's repro must have been against custom article body or stale bundle. Awaiting fresh repro |
+
+**Cumulative across v3.4.8 → today (post-batch-3):** **22 issues closed** (16 stale-sweep + 6 real fixes) + **5 small fixes shipped** + **1 backend partial** + **2 partial/no-repro triages**. ~75 min total batch time.
 
 ### Notes for the next session
 

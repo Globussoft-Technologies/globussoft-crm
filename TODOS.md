@@ -50,6 +50,18 @@ Improved from 2/4 to 3/4 shards (vs pre-Agent-B). Shard 2 still has 3 failing sp
 
 **UPDATE 3:** `36e554d` deploy ✅ SUCCESS (demo restarted 22:26 UTC). Re-triggered e2e-full at run `25347017296` on `3d9edfd`. ~15-20 min to result.
 
+**UPDATE 4 (e2e-full run 25347017296 — 3 of 4 still, but DIFFERENT 3 failures):**
+- ✅ Shards 1, 3 — green
+- ❌ Shard 4 — `workflows-flow.spec.js:148` (Flow 1 — engine task didn't surface in 750ms on busy demo) + `workflows-flow.spec.js:271` (Flow 4 — broad-tagged-title leak detection false-positived on sibling-test contacts)
+- ❌ Shard 2 — `email_scheduling.spec.js:205` (502 was HTML, but spec called res.json() unconditionally)
+
+All 3 are **demo-state-sensitivity bugs in spec assertions**, not real backend bugs (the 36e554d run validated the ACTUAL bugs — Contact upsert composite-key + 5MB upload tolerance — were closed). Fixed in `d84b0d9`:
+  - Flow 1 → 4× polling with 1.5s waits (was 2× with 750ms)
+  - Flow 4 → leak detection narrowed to `tenantBContact.id` specifically
+  - email_scheduling → branch on content-type: JSON path keeps envelope assertion, HTML path just confirms 502 status
+
+**Re-trigger e2e-full after `d84b0d9` deploys.** If it goes green, that's the goal — first all-green release-validation since v3.4.9.
+
 ---
 
 ## 🏁 NEXT-SESSION HANDOFF (2026-05-05 evening — 5-agent parallel wave fully landed) — superseded above

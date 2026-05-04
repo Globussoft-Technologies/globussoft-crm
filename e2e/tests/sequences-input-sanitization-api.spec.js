@@ -213,10 +213,19 @@ test.describe('Sequences sanitization — POST name', () => {
     expect(label).toContain('click');
   });
 
-  // 4. POST with a name that's PURELY HTML — after strip the value is
-  // empty, so the route returns 400 INVALID_SEQUENCE.
+  // 4. POST with a name that's PURELY HTML — after sanitisation the value
+  // is empty, so the route returns 400 INVALID_SEQUENCE.
+  //
+  // Payload choice matters: the global sanitizeBody middleware strips
+  // dangerous TAGS but preserves their inner text content. So
+  // `<script>x</script>` becomes `'x'` after sanitizeBody → non-empty →
+  // route accepts 201. We need a payload whose ENTIRE content is in
+  // tag attributes / self-closing tags so nothing survives the strip.
+  // `<img src=x onerror=alert(1)>` matches DANGEROUS_TAG_RE wholesale
+  // (img is in the list) → '' after sanitizeBody → '' after sanitizeText
+  // → length 0 → 400 INVALID_SEQUENCE.
   test('POST with name that\'s only HTML → 400/422 INVALID_SEQUENCE', async ({ request }) => {
-    const onlyHtml = '<script>x</script>';
+    const onlyHtml = '<img src=x onerror=alert(1)>';
     const { res } = await createSequence(request, 'generic', onlyHtml);
     // Route returns 400 today; accept 422 in case the contract gets
     // tightened to the conventional validation status.

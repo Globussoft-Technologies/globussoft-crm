@@ -70,6 +70,14 @@ const _walkSanitize = (value) => {
   }
   return value;
 };
+// Always returns a string (or null/undefined for nullish input). The
+// SequenceStep.conditionJson column is `String? @db.Text` per
+// prisma/schema.prisma — Prisma rejects an object value with
+// "PrismaClientValidationError: Argument `conditionJson` … type
+// String". When the route's body parser hands us a parsed object
+// (the common modern-client case), we must re-serialise after
+// walking. The string-input branch already JSON.stringifies; this
+// final branch matches.
 const sanitizeJson = (input) => {
   if (input == null) return input;
   if (typeof input === "string") {
@@ -84,7 +92,7 @@ const sanitizeJson = (input) => {
     }
     return JSON.stringify(_walkSanitize(parsed));
   }
-  return _walkSanitize(input);
+  return JSON.stringify(_walkSanitize(input));
 };
 
 // Fetch all drip sequences

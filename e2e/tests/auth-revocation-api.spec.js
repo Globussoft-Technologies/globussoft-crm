@@ -147,13 +147,18 @@ test.describe('Auth revocation contract — #180', () => {
     expect([200, 401], 'idempotent re-revoke').toContain(r3.status());
   });
 
-  test('POST /logout without token → 401', async ({ request }) => {
+  test('POST /logout without token → 401/403', async ({ request }) => {
     const r = await request.post(`${BASE_URL}/api/auth/logout`, {
       headers: { 'Content-Type': 'application/json' },
       data: {},
       timeout: REQUEST_TIMEOUT,
     });
-    expect(r.status()).toBe(401);
+    // backend/middleware/auth.js returns 403 for missing Authorization
+    // header ("Access Denied") and 401 for invalid/expired tokens. The
+    // codebase convention (e.g. appointment-reminders-api.spec.js,
+    // wellness-clinical-api.spec.js) accepts either — assert the
+    // unauth contract, not the specific code.
+    expect([401, 403]).toContain(r.status());
   });
 
   test('GET /sessions returns { currentJti, activeSessions, revokedSessions, note } shape', async ({ request }) => {

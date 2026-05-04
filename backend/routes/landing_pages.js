@@ -1,10 +1,68 @@
 const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
 const { renderPage } = require("../services/landingPageRenderer");
 
 const router = express.Router();
 const publicRouter = express.Router();
 const prisma = require("../lib/prisma");
+
+// ── #446 — image-upload multer config ─────────────────────────────
+//
+// Why: pre-fix the Image component in the LandingPageBuilder only accepted
+// a URL string (`props.src`). Users had to host the image elsewhere first
+// (S3, Imgur, etc.) and paste a URL. This route lets the builder POST the
+// raw file and get back a `{ url }` we can drop straight into props.src.
+//
+// Storage: backend/uploads/landing-page-images/<tenantId>/<unique>.<ext>
+// Served by: app.use("/uploads", express.static(...)) at server.js:428,
+// so the returned `url` field is the public path "/uploads/landing-page-
+// images/<tenantId>/<file>".
+//
+// Constraints:
+//   - 5 MB hard limit (multer LIMIT_FILE_SIZE → 400)
+//   - MIME-type allowlist: png / jpg / jpeg / webp / gif. SVG is OFF —
+//     SVG is a script-execution surface (XSS via inline <script> /
+//     onload) when served from same-origin /uploads. The branding logo
+//     route (wellness.js:3585) accepts SVG because tenant ADMINs are a
+//     trusted population; the landing-page upload should match the
+//     tighter image-allowlist used in the public renderer's safeUrl
+//     helper (services/landingPageRenderer.js:67-69 only allows http/
+//     https/data:image/* — but not svg+xml).
+//   - File extension is derived from MIME, not the client's filename,
+//     so `evil.svg` masquerading as image/png renders as .png on disk.
+const ALLOWED_IMAGE_MIMES = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+};
+const imageUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const dir = path.join(
+        __dirname, "..", "uploads", "landing-page-images", `tenant-${req.user.tenantId}`
+      );
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (_req, file, cb) => {
+      // Derive ext from MIME, not from the client filename. The MIME
+      // allowlist is enforced in fileFilter so this lookup is safe.
+      const ext = ALLOWED_IMAGE_MIMES[(file.mimetype || "").toLowerCase()] || ".bin";
+      const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      cb(null, `${unique}${ext}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_IMAGE_MIMES[(file.mimetype || "").toLowerCase()]) return cb(null, true);
+    cb(new Error("Only PNG, JPG, WebP, and GIF images are allowed"));
+  },
+});
 
 // #378: slug validation — only lowercase a-z, 0-9, hyphens; max 50 chars.
 // Anything else produces broken public URLs (spaces, uppercase, special chars).
@@ -27,6 +85,49 @@ router.get("/", verifyToken, async (req, res) => {
 router.get("/templates/list", verifyToken, (req, res) => {
   res.json(TEMPLATES);
 });
+
+// ── #446 — image upload for the builder's Image block ─────────────
+//
+// POST /api/landing-pages/upload (multipart/form-data, field name "image")
+//
+// Returns: 201 { url, mimetype, size, filename }
+// Errors:
+//   400 — wrong MIME, missing file, multer LIMIT_FILE_SIZE
+//   401/403 — verifyToken (mounted in the global guard, but route-level
+//             verifyToken duplicated for explicit defence-in-depth)
+//
+// Tenant isolation: storage path includes req.user.tenantId so a
+// directory listing on disk is segmented per tenant. The returned
+// `url` is `/uploads/landing-page-images/tenant-<id>/<file>`. We do
+// NOT persist a row in the DB — the URL is opaque and gets stored in
+// the parent LandingPage row's `content` JSON when the user saves.
+router.post(
+  "/upload",
+  verifyToken,
+  (req, res, next) => {
+    imageUpload.single("image")(req, res, (err) => {
+      if (err) {
+        const msg = err.code === "LIMIT_FILE_SIZE"
+          ? "Image too large (max 5 MB)"
+          : (err.message || "Image upload failed");
+        return res.status(400).json({ error: msg });
+      }
+      next();
+    });
+  },
+  (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: "No image file provided (field 'image')" });
+    }
+    const url = `/uploads/landing-page-images/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
+    res.status(201).json({
+      url,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      filename: path.basename(req.file.path),
+    });
+  }
+);
 
 router.get("/:id", verifyToken, async (req, res) => {
   try {
@@ -236,11 +337,124 @@ publicRouter.get("/:slug", async (req, res) => {
   }
 });
 
+// ── #451 — verify a Cloudflare Turnstile token ─────────────────────
+//
+// Stub-friendly: if `TURNSTILE_SECRET_KEY` is unset we WARN once per
+// process and skip verification (returns true so the submit goes
+// through). This means dev/CI environments don't 500 just because the
+// secret is missing. In production the env-var must be set.
+//
+// On real verification we POST the token to Cloudflare's siteverify
+// endpoint with `secret + response + remoteip`. Cloudflare returns
+// `{ success: true|false, ... }`.
+let _turnstileWarnedMissing = false;
+async function verifyTurnstile(token, remoteIp) {
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) {
+    if (!_turnstileWarnedMissing) {
+      console.warn(
+        "[LandingPage] TURNSTILE_SECRET_KEY not set — CAPTCHA verification skipped. Set this env var to enforce Cloudflare Turnstile."
+      );
+      _turnstileWarnedMissing = true;
+    }
+    return true;
+  }
+  if (!token || typeof token !== "string") return false;
+  try {
+    const body = new URLSearchParams();
+    body.set("secret", secret);
+    body.set("response", token);
+    if (remoteIp) body.set("remoteip", remoteIp);
+    const r = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    if (!r.ok) return false;
+    const j = await r.json();
+    return !!j.success;
+  } catch (err) {
+    console.error("[LandingPage] Turnstile verify error:", err.message);
+    return false;
+  }
+}
+
+// ── #451 — apply a per-form lead-routing rule ──────────────────────
+//
+// Reads the form-level config out of the page's content JSON. If the
+// form component has `leadRoutingRuleId`, we look up that rule (must
+// belong to the same tenant), compute the assignee per rule type, and
+// set contact.assignedToId. Errors are swallowed — routing failure
+// shouldn't reject the lead.
+//
+// If unset, the contact is created without an assignee so the
+// tenant-level lead_routing apply-all path picks it up later.
+async function pickFormFromContent(content) {
+  if (!content) return null;
+  let arr = [];
+  try {
+    arr = typeof content === "string" ? JSON.parse(content) : content;
+  } catch (_e) {
+    return null;
+  }
+  if (!Array.isArray(arr)) return null;
+  // First top-level form wins. Columns nested forms aren't covered yet.
+  return arr.find((c) => c && c.type === "form") || null;
+}
+async function applyLeadRouting(formProps, tenantId, contactId) {
+  if (!formProps || !formProps.leadRoutingRuleId) return null;
+  const ruleId = parseInt(formProps.leadRoutingRuleId, 10);
+  if (!Number.isFinite(ruleId)) return null;
+  try {
+    const rule = await prisma.leadRoutingRule.findFirst({
+      where: { id: ruleId, tenantId, isActive: true },
+    });
+    if (!rule) return null;
+    let assigneeId = null;
+    if (rule.assignType === "user" && rule.assignTo) {
+      assigneeId = parseInt(rule.assignTo, 10) || null;
+    } else if (rule.assignType === "round_robin") {
+      // Best-effort: pick the first ADMIN/MANAGER/USER on this tenant.
+      // Full round-robin counter lives in lead_routing.js — we don't
+      // duplicate that complexity here for the inbound landing-page
+      // path.
+      const candidate = await prisma.user.findFirst({
+        where: { tenantId, role: { in: ["ADMIN", "MANAGER", "USER"] } },
+        orderBy: { id: "asc" },
+        select: { id: true },
+      });
+      assigneeId = candidate?.id ?? null;
+    }
+    if (assigneeId) {
+      await prisma.contact.update({ where: { id: contactId }, data: { assignedToId: assigneeId } });
+      return assigneeId;
+    }
+  } catch (err) {
+    console.error("[LandingPage] applyLeadRouting failed:", err.message);
+  }
+  return null;
+}
+
 publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
   try {
     const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
     if (!page) return res.status(404).json({ error: "Page not found" });
     const tenantId = page.tenantId || 1;
+
+    // #451: locate the form component in the page's content so we can
+    // honour its enableCaptcha / leadRoutingRuleId / successRedirectUrl
+    // props on the server side too. The renderer-side checks aren't
+    // sufficient — a malicious client could bypass the JS guard.
+    const formComp = await pickFormFromContent(page.content);
+    const formProps = (formComp && formComp.props) || {};
+
+    // #451: CAPTCHA verification before any DB writes.
+    if (formProps.enableCaptcha) {
+      const ok = await verifyTurnstile(req.body.cfTurnstileToken, req.ip);
+      if (!ok) {
+        return res.status(400).json({ error: "CAPTCHA verification failed. Please try again." });
+      }
+    }
 
     const { email, name, full_name, phone, company, company_name } = req.body;
     const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
@@ -260,6 +474,9 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
         tenantId,
       },
     });
+
+    // #451: apply per-form lead routing if configured.
+    await applyLeadRouting(formProps, tenantId, contact.id);
 
     await prisma.deal.create({
       data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id, tenantId },

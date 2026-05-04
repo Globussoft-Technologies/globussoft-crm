@@ -353,6 +353,7 @@ jobs:
             tests/gdpr-dsar-export-api.spec.js \
             tests/wellness-portal-dsar-api.spec.js \
             tests/report-schedules-api.spec.js \
+            tests/landing-page-upload-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

@@ -1,5 +1,55 @@
 # CHANGELOG
 
+## v3.4.11 — 2026-05-05 — sanitizeJson helper promoted to lib + 4 routes adopted + matched regression coverage (#398/#447 audit closure)
+
+A continuation of v3.4.10's QA-triage arc. The v3.4.10 release surfaced a 4-route audit finding (commit `68e6c5b`): `LeadRoutingRule.conditions`, `AbTest.variantA/B`, `Campaign.scheduleFilters`, and `ReportSchedule.metrics/recipients` were all `String? @db.Text` columns storing JSON, written without HTML sanitization — same #398/#447 XSS class. v3.4.11 closes the entire audit: helper promoted from `routes/sequences.js` to a dedicated `backend/lib/sanitizeJson.js` for cross-route reuse, adopted at all 4 audit-identified routes, and matched regression coverage in each route's `*-api.spec.js` (4 spec extensions + 1 new dedicated spec for report_schedules) all wired into the per-push gate.
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.10 | v3.4.11 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | ~76 specs / ~2,514 tests | **~77 specs** / **~2,522 tests** | +1 spec / +8 tests |
+| Per-push unit tests | vitest | 42 files / ~1,184 tests | 42 files / ~1,184 tests | 0 / 0 |
+| **Total per-push** |  | ~3,698 | **~3,706** | **+8 tests / +0.2%** |
+
+### Refactored — sanitizeJson helper promoted to backend/lib/
+
+- **`backend/lib/sanitizeJson.js`** (NEW, commit `097ef5a`) — exports `sanitizeText`, `sanitizeJson`, `sanitizeJsonForStringColumn`. Helpers were previously local to `routes/sequences.js` (since the v3.4.7 #398 + v3.4.9 carry-over #1 + v3.4.10 940b4f0 lineage). Promotion enables the 4-route adoption below without each route re-deriving the implementation.
+- **`backend/test/utils/sanitize-json.test.js`** — import path updated to `../../lib/sanitizeJson.js`. All 16 unit tests still pass — helper signatures unchanged.
+- **`backend/routes/sequences.js`** — imports the toolkit from `lib/`; `sanitizeNodes` (ReactFlow-shape-aware wrapper) stays local. Re-exports `sanitizeText` + `sanitizeJson` from the module for back-compat (no current consumers, kept defensive).
+
+### Fixed — 4 routes adopted the helper (closes the v3.4.10 audit)
+
+| Route | Commit | Fields sanitized | Spec |
+|---|---|---|---|
+| `routes/lead_routing.js` POST + PUT | `097ef5a` | `name` (sanitizeText) + `conditions` JSON (sanitizeJsonForStringColumn) | `lead-routing-api.spec.js` extended with 4 sanitization tests |
+| `routes/ab_tests.js` POST + PUT | `6a9e450` | `name` + `variantA` + `variantB` JSON | `ab-tests-api.spec.js` extended with 4 sanitization tests |
+| `routes/marketing.js` Campaign POST + PUT + schedule | `a916f59` | `name` + `scheduleFilters` JSON | `marketing-api.spec.js` extended with 4 sanitization tests |
+| `routes/report_schedules.js` POST + PUT | `a916f59` (route) + `dd56df3` (spec) | `name` + `metrics` JSON + `recipients` JSON (defense-in-depth — #171 already gates) | NEW `report-schedules-api.spec.js` (8 tests: 6 sanitization + 2 auth-gate) wired into deploy.yml + coverage.yml |
+
+Each route's regression suite covers: HTML stripped from name, HTML stripped inside the JSON column's string values, partial PUT updates honor sanitization, merge tags ({{firstName}}) survive (sanitize-html `allowedTags:[]` only strips `<…>`-shaped tokens, not `{{…}}`).
+
+### CLAUDE.md updated
+
+- **"JSON-string columns" standing rule** — pointer updated from stale `routes/sequences.js:73` to canonical `backend/lib/sanitizeJson.js`. Rule now explicitly enumerates all 5 routes that have adopted the helper (sequences + lead_routing + ab_tests + marketing + report_schedules).
+
+### Process notes
+
+- **The audit-pivot pattern worked cleanly** — 15-min audit (commit `68e6c5b`) → refactor + first-route in one commit (097ef5a) → per-route batches with CI-confirmation between (6a9e450 / a916f59 / dd56df3). No regressions across 5 commits; each batch's CI green confirmed before stacking the next.
+- **Cron-driven autonomous loop** drove the entire v3.4.10 → v3.4.11 arc — user set up a 15-min durable cron firing the prompt "if mid-coding defer; if waiting on CI pick parallel-safe; if wave finished capture learnings + docs + next pickup". The decision tree triggered correctly across multiple wake cycles, picking pre-verification work during CI windows and bundling fixes per the relevant skills.
+- **No new skill earned this arc** — work was disciplined application of existing skills (`triaging-stuck-deploy-gate`, `verifying-issue-before-pickup`, `writing-api-gate-spec`, `wiring-spec-into-gate`, `bumping-version-docs`). The v3.4.10 wave added 2 new buckets to the triaging skill; v3.4.11 reinforced them but didn't earn new abstractions.
+
+### Carry-over for v3.4.12
+
+- **#445 P1 [landing-pages][security] public /p/:slug → /login** — diagnosed in v3.4.10's wave as Nginx config + frontend SPA route work, NOT a code-only fix. Detailed comment + recommended `location /p/ { proxy_pass http://localhost:5099; }` block already posted to the issue. ~5 min ops fix; needs SSH access.
+- **9× landing-page builder/UI issues** filed by QA on 2026-05-04 morning (#438 thumbnail / #446 image upload / #449 alignment / #450 undo/redo / #451 form-blocked-by-#445 / #452 delete copy / #454 unsaved-changes / #455 push-on-public / #456 slug derive). All frontend-shaped; coordinated builder pickup (~1 day total).
+- **#435** Inbox compose comma emails — 2-3h backend (multi-recipient split + N EmailMessage rows + roll-up tracking response shape change). Most invasive remaining backend pickup.
+- **G-21** Frontend vitest + RTL coverage expansion — 3-5d, multi-day flagship; NOT parallel-agent dispatchable.
+- **package.json bump** — currently `3.3.0`; both v3.4.10 and v3.4.11 git tags should bump it (manual step at tag time so `/api/health` surfaces the latest).
+- **Git tag pushes** — neither v3.4.10 nor v3.4.11 has had its `git tag -a vX.Y.Z` pushed yet. Both are pending user authorization (release tags fire e2e-full release-validation against demo, which has visible side-effects). Both can be pushed back-to-back when the user is ready; doing so will fire the e2e-full workflow twice (once per tag) — acceptable since each verifies a distinct release surface.
+
+---
+
 ## v3.4.10 — 2026-05-04 — deploy-gate stuck unblocked + #447 P1 XSS + /api/health hardcoded-version follow-up + new triaging-stuck-deploy-gate skill
 
 A v3.4.9-carry-over arc that started red and ended with two new skills' worth of distilled learning. The deploy.yml api_tests + unit_tests gates went red on `b44291b` (the T2.2 wellness-audit landing in v3.4.8) and stayed red for **11+ consecutive pushes over ~2 hours**, blocking demo deploys while testers reported regressions against stale code. This arc unstuck the gate (4 bundled fixes), closed a P1 XSS surface in the landing-page renderer (#447), removed a deploy-divergence anti-pattern (`/api/health` hardcoded version), and codified the lessons in a new **`triaging-stuck-deploy-gate`** skill that battle-tested its two new classification buckets (CI env-block gap + spec-bad-fixture) within the same session.

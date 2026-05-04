@@ -6,7 +6,68 @@
 
 ---
 
-## 🏁 NEXT-SESSION HANDOFF (2026-05-04 night — v3.4.10 doc bump landed; tag pending)
+## 🏁 NEXT-SESSION HANDOFF (2026-05-05 early-AM — v3.4.11 doc bump landed; v3.4.10 + v3.4.11 git tags both pending)
+
+**HEAD on origin/main:** post-this-doc-bump. **v3.4.10 + v3.4.11 docs both landed**; **git tag pushes for both still pending user authorization** (release tags fire `e2e-full.yml` against demo with visible side-effects). The whole arc since v3.4.9 is documented in two CHANGELOG entries (v3.4.10 + v3.4.11) ready to be tagged back-to-back when the user is ready. Per-push gate ✅ GREEN on every push. Demo `/api/health` reports real `package.json` version (3.3.0).
+
+### What this arc accomplished (autonomous loop, 2026-05-04 → 2026-05-05)
+
+**v3.4.10 (`dbe611a` doc bump):**
+- Deploy-gate stuck red 11+ pushes → unblocked by 4 bundled fixes (`940b4f0`)
+- #447 P1 landing-page XSS closed (`0618882` — `safeUrl()` allowlist + 55 regression tests)
+- /api/health hardcoded-version anti-pattern killed (`44747b4`)
+- New `triaging-stuck-deploy-gate` skill (project skill #10)
+- 2 new skill buckets battle-tested same session (CI env-block gap + spec-bad-fixture)
+- 3 new CLAUDE.md standing rules (CI env-block parity / /api/health caveat / JSON-string call-site stringify)
+
+**v3.4.11 (this doc bump):**
+- sanitizeJson helper promoted to `backend/lib/sanitizeJson.js` (`097ef5a`)
+- 4 routes adopted: lead_routing / ab_tests / marketing / report_schedules
+- Matched regression coverage in each route's `*-api.spec.js` (4 spec extensions + 1 NEW dedicated `report-schedules-api.spec.js` wired into the per-push gate)
+- CLAUDE.md "JSON-string columns" rule updated to point at the new lib path
+
+### Three things to do first next session
+
+1. **Push v3.4.10 + v3.4.11 git tags** (back-to-back). Each fires `e2e-full.yml` release-validation against demo. Recommended sequence:
+   ```bash
+   git tag -a v3.4.10 -m "deploy-gate unblock + #447 P1 XSS + /api/health follow-up"
+   git push origin v3.4.10
+   # wait for v3.4.10's e2e-full to start; doesn't need to finish before v3.4.11 tag
+   git tag -a v3.4.11 -m "sanitizeJson helper promoted to lib + 4-route audit closure"
+   git push origin v3.4.11
+   ```
+   Optional: bump `backend/package.json` from `3.3.0` → `3.4.11` in the same cycle so `/api/health` surfaces the latest tag. (The literal-version fix in `44747b4` made the field track package.json automatically; package.json itself just hasn't been bumped since v3.3.0.)
+
+2. **Pick the next P1/P2** (per `verifying-issue-before-pickup` — grep first):
+   - **#445 P1 [landing-pages][security]** Nginx config gap — fully diagnosed and documented; needs SSH access to add the `location /p/ { proxy_pass... }` block.
+   - **#435 P2** Inbox compose comma emails — 2-3h backend (most invasive remaining backend pickup).
+   - **9× landing-page builder/UI issues** (#438/#446/#449/#450/#452/#454/#455/#456 + #451 blocked by #445) — frontend-shaped, ~1 day total for a coordinated builder pickup.
+   - **G-21** Frontend vitest + RTL coverage expansion — 3-5d, multi-day flagship.
+
+3. **Cron `316ff9fb`** (durable, fires :07/:22/:37/:52) is still active. Will keep firing every 15 min with the "if mid-coding defer; if waiting on CI pick parallel-safe; if wave finished capture learnings + docs + next pickup" decision tree. Battle-tested across the v3.4.10 → v3.4.11 arc; no fixes needed.
+
+### Long tail still open
+
+| Item | Effort | Status |
+|---|---|---|
+| **v3.4.10 + v3.4.11 git tags** | 5 min | ⬜ pending user authorization |
+| **#445** Nginx /p/ proxy config | 5 min ops | ⬜ documented; needs SSH access |
+| **#435** Inbox compose comma emails | 2-3h backend | ⬜ open |
+| **9× landing-page builder/UI issues** | varies | ⬜ open — frontend coordinated pickup |
+| **G-21** Frontend vitest + RTL coverage expansion | 3-5d | ⬜ open — multi-day flagship |
+| **package.json version bump** (3.3.0 → 3.4.11) | <5 min | ⬜ tag-time follow-up |
+
+**P3 / minor UX (defer):** #115 #226 #245 #252 #262 #307 #344 #384 #406 #407 #429 #430 #431 #433 #434 #437 #439 #440 #441 #402
+
+### Notes for the next session
+
+- **Cron-driven autonomous arc validated** — the prompt's branching ("mid-coding" / "waiting on CI" / "wave finished") proved its value across this whole arc. Pre-verification work (audits, doc reads, spec drafting) consistently fit the "waiting on CI" branch; bundled fixes consistently fit the "wave finished" → "high-priority pickup" branch.
+- **The `bumping-version-docs` skill was used twice in this arc** (v3.4.10 in `dbe611a`, v3.4.11 in this commit). Both used the canonical 5-file lockstep. No drift.
+- **Backend vitest count locally:** 42 files / 1184 passed (3 skipped). Per-push gate's `unit_tests` job sees the same 42.
+
+---
+
+## 🏁 NEXT-SESSION HANDOFF (2026-05-04 night — v3.4.10 doc bump landed; tag pending) — superseded above
 
 **HEAD on origin/main:** post-this-doc-bump. **v3.4.10 docs landed** (CHANGELOG / README / CLAUDE.md / TODOS / E2E_GAPS in lockstep per `bumping-version-docs` skill). **v3.4.10 git tag NOT yet pushed** — next session's first step is `git tag -a v3.4.10 -m "..." && git push origin v3.4.10` to fire `e2e-full.yml` release-validation against demo. Per-push gate ✅ GREEN on every push since 940b4f0. Demo `/api/health` now reports `version: "3.3.0"` (real, from package.json) — the 5-tag drift mirage is fixed. All code commits since v3.4.9 deployed cleanly.
 

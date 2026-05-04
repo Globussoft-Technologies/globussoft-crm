@@ -2,9 +2,27 @@
 
 > A full-stack enterprise CRM built by Globussoft Technologies. **102 API routes, 110 data models, 90+ UI pages, 16 automation engines.** Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with **5 mandatory deploy gates** (build / lint / api_tests / unit_tests / migration_check) + commit-message blessings (`[allow-unique]` etc.) for legitimate-but-flagged schema changes + auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **~3,629 tests on every push** (~2,514 Playwright + 1,115 vitest); release-validation full chromium suite on every tag. **9 reusable Claude Skills** + **live agent-activity widget** at /developer for parallel-wave visibility. `docs/gaps/archive/` convention for fully-closed gap-files.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.10
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.4.11
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
+
+## What's new in v3.4.11 (May 5 2026 — sanitizeJson helper promoted to lib + 4 routes adopted + matched regression coverage)
+
+A continuation of v3.4.10's QA-triage arc. Closes the entire v3.4.10 audit (`68e6c5b`) — 4 routes that were writing JSON-blob columns without HTML sanitization, same #398/#447 XSS class.
+
+- **Helper promoted to `backend/lib/sanitizeJson.js`** (commit `097ef5a`): `sanitizeText` + `sanitizeJson` (shape-preserving) + `sanitizeJsonForStringColumn` (stringifies for `String? @db.Text` columns). Was previously local to `routes/sequences.js`; promotion enables cross-route reuse via a one-line import. 16 unit tests at `backend/test/utils/sanitize-json.test.js` pin the contract.
+- **4 routes adopted the helper** with matched regression coverage in each route's `*-api.spec.js`:
+  - `routes/lead_routing.js` — `name` + `conditions` JSON (commit `097ef5a`, +4 tests in `lead-routing-api.spec.js`)
+  - `routes/ab_tests.js` — `name` + `variantA` + `variantB` JSON (commit `6a9e450`, +4 tests)
+  - `routes/marketing.js` Campaign — `name` + `scheduleFilters` JSON (commit `a916f59`, +4 tests in `marketing-api.spec.js`)
+  - `routes/report_schedules.js` — `name` + `metrics` JSON + `recipients` JSON (commit `a916f59` route + `dd56df3` NEW `report-schedules-api.spec.js` 8 tests + gate wire-in)
+- **Per-push gate now ~3,706 tests** (+8 vs v3.4.10) with 5 routes using the canonical `lib/sanitizeJson.js` helper.
+- **CLAUDE.md "JSON-string columns" standing rule** updated to point at the new lib path; rule now enumerates all 5 routes that have adopted the helper (sequences + lead_routing + ab_tests + marketing + report_schedules).
+- **No new skill earned** — work was disciplined application of existing skills (`triaging-stuck-deploy-gate`, `writing-api-gate-spec`, `wiring-spec-into-gate`, `bumping-version-docs`). Audit → refactor → per-route batches with CI-between is now codified across these existing skills.
+
+5 commits total since v3.4.10's doc bump (`dbe611a`): `097ef5a` + `6a9e450` + `a916f59` + `dd56df3` + `2e21da2` (TODOS close).
+
+See [CHANGELOG.md](CHANGELOG.md#v3411--2026-05-05--sanitizejson-helper-promoted-to-lib--4-routes-adopted--matched-regression-coverage-398447-audit-closure) for the full v3.4.11 entry.
 
 ## What's new in v3.4.10 (May 4 2026 — deploy-gate stuck unblocked + #447 P1 XSS + /api/health follow-up + new triaging-stuck-deploy-gate skill)
 

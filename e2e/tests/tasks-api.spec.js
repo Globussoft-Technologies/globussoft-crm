@@ -609,3 +609,136 @@ test.describe('Tasks API — cross-tenant isolation (#403)', () => {
     // ephemeral CI gate, and demo-health.spec.js does the same on demo.
   });
 });
+
+// #436: Owner persona's task queue was reading empty even when tasks
+// existed in the DB. Two interlocking bugs surfaced:
+//
+//   (a) POST /api/tasks accepted `userId` in the body, but the global
+//       `stripDangerous` middleware (server.js:299) deletes `userId` from
+//       req.body before any route handler runs (it's a cross-tenant pivot
+//       on most entities). On Task `userId` is the assignee — stripping
+//       it meant every API-created task landed with userId=null. A future
+//       "?mine=true" filter (or any legitimate per-user widget) would see
+//       zero rows because no task was ever assigned via the API surface.
+//
+//   (b) The Sidebar badge query is `?status=PENDING` (uppercase) but the
+//       schema enum is Title-case (`Pending`). An exact-match where-clause
+//       returned zero, so the Owner saw "Task Queue (0)" even when the
+//       orchestrator had fanned out tasks for them.
+//
+// Both classes of bug are now covered by these regression-guard tests.
+// The fix accepts `targetUserId` (renamed POST field — never stripped)
+// and normalizes the GET status filter case-insensitively.
+const RUN_TAG_OWNER = `E2E_FLOW_OWNER_TASKS_${Date.now()}`;
+
+test.describe("Tasks API — Owner persona task queue (#436)", () => {
+  // Helper: log in as Rishu (wellness ADMIN, tenant 2 owner) and return a
+  // bearer token. Rishu is the canonical Owner persona on the demo box;
+  // the seed sets her email to rishu@enhancedwellness.in / password123.
+  async function getRishuToken(request) {
+    const login = await request.post(`${BASE_URL}/api/auth/login`, {
+      data: { email: "rishu@enhancedwellness.in", password: "password123" },
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(login.status(), `rishu login: ${await login.text()}`).toBe(200);
+    const body = await login.json();
+    return { token: body.token, userId: body.user.id };
+  }
+
+  test("POST /api/tasks honors targetUserId (userId is stripped by middleware)", async ({ request }) => {
+    // Sanity: posting `userId` directly is silently dropped by stripDangerous.
+    // The new contract is `targetUserId`, which survives the strip pass.
+    const { token, userId } = await getRishuToken(request);
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+    const create = await request.post(`${BASE_URL}/api/tasks`, {
+      headers,
+      data: {
+        title: `${RUN_TAG_OWNER} owner-self-assign`,
+        priority: "Medium",
+        targetUserId: userId,
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(create.status(), `task create: ${await create.text()}`).toBe(201);
+    const t = await create.json();
+    expect(t.userId, "targetUserId must populate Task.userId").toBe(userId);
+    expect(t.tenantId).toBe(2);
+
+    // Cleanup: same-tenant ADMIN soft-delete.
+    await request.delete(`${BASE_URL}/api/tasks/${t.id}`, { headers, timeout: REQUEST_TIMEOUT });
+  });
+
+  test("GET /api/tasks?mine=true returns Owner's assigned task", async ({ request }) => {
+    const { token, userId } = await getRishuToken(request);
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+    // Seed: create a task assigned to Rishu via the new `targetUserId` field.
+    const create = await request.post(`${BASE_URL}/api/tasks`, {
+      headers,
+      data: {
+        title: `${RUN_TAG_OWNER} owner-queue-fixture`,
+        priority: "High",
+        targetUserId: userId,
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(create.status()).toBe(201);
+    const seeded = await create.json();
+    expect(seeded.userId).toBe(userId);
+
+    try {
+      // Hit the Owner-tasks endpoint with the new ?mine=true filter and
+      // confirm the seeded task is in the response. Pre-fix this would
+      // return empty even though the task exists (no assignee filter
+      // surface existed at all).
+      const list = await request.get(`${BASE_URL}/api/tasks?mine=true&limit=500`, {
+        headers,
+        timeout: REQUEST_TIMEOUT,
+      });
+      expect(list.status()).toBe(200);
+      const rows = await list.json();
+      expect(Array.isArray(rows)).toBe(true);
+      const found = rows.find((r) => r.id === seeded.id);
+      expect(found, `Owner's assigned task missing from ?mine=true response`).toBeTruthy();
+      expect(found.userId).toBe(userId);
+    } finally {
+      await request.delete(`${BASE_URL}/api/tasks/${seeded.id}`, { headers, timeout: REQUEST_TIMEOUT });
+    }
+  });
+
+  test("GET /api/tasks?status=PENDING (uppercase, sidebar query) matches canonical Pending", async ({ request }) => {
+    // Sidebar.jsx queries `/api/tasks?status=PENDING` for the badge counter.
+    // Pre-#436 this was an exact-match against the Title-case enum and
+    // returned zero. After fix, the route normalizes case and the badge
+    // shows the real count.
+    const { token, userId } = await getRishuToken(request);
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+    const create = await request.post(`${BASE_URL}/api/tasks`, {
+      headers,
+      data: {
+        title: `${RUN_TAG_OWNER} pending-case-probe`,
+        priority: "Medium",
+        targetUserId: userId,
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(create.status()).toBe(201);
+    const seeded = await create.json();
+
+    try {
+      const upper = await request.get(`${BASE_URL}/api/tasks?status=PENDING&limit=500`, {
+        headers,
+        timeout: REQUEST_TIMEOUT,
+      });
+      expect(upper.status()).toBe(200);
+      const upperRows = await upper.json();
+      expect(upperRows.find((r) => r.id === seeded.id),
+        "uppercase PENDING must match Title-case Pending row").toBeTruthy();
+    } finally {
+      await request.delete(`${BASE_URL}/api/tasks/${seeded.id}`, { headers, timeout: REQUEST_TIMEOUT });
+    }
+  });
+});

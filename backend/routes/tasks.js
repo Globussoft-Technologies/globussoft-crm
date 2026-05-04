@@ -32,17 +32,51 @@ function validateTaskInput(body) {
 
 // GET /api/tasks — with optional filters
 // #167: soft-deleted tasks hidden by default. ?includeDeleted=true opts in.
+// #436: status filter is now case-insensitive AND tolerant of the legacy
+// "OPEN"/"PENDING" enum values. The Sidebar badge query is hard-coded to
+// `?status=PENDING` (uppercase) and the orchestrator-engine fan-out writes
+// new tasks with `status: "OPEN"` (also uppercase). Both fall outside the
+// canonical Title-case enum the schema/UI expects (`Pending`/`Completed`),
+// so an exact-match `where.status = status` returned zero rows — the
+// Owner's "Task Queue" badge counter sat at 0 even when the orchestrator
+// had created tasks. Treat OPEN/PENDING (and their casing variants) as
+// `Pending` for query purposes; everything else still hits exact match.
+function normalizeStatusFilter(raw) {
+  if (!raw) return null;
+  const upper = String(raw).toUpperCase();
+  if (upper === "PENDING" || upper === "OPEN") return "Pending";
+  if (upper === "COMPLETED" || upper === "DONE" || upper === "CLOSED") return "Completed";
+  if (upper === "IN PROGRESS" || upper === "INPROGRESS") return "In Progress";
+  if (upper === "CANCELLED" || upper === "CANCELED") return "Cancelled";
+  return raw; // unrecognized — pass through, will exact-match (or return [])
+}
+
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const { status, priority, contactId, overdue } = req.query;
+    const { status, priority, contactId, overdue, mine } = req.query;
 
     const where = { tenantId: req.user.tenantId };
-    if (status) where.status = status;
+    if (status) where.status = normalizeStatusFilter(status);
     if (priority) where.priority = priority;
     if (contactId) where.contactId = parseInt(contactId);
     if (overdue === "true") {
       where.dueDate = { lt: new Date() };
       where.status = "Pending";
+    }
+    // #436: ?mine=true → show tasks assigned to the caller. Owner persona
+    // hits this via the upcoming "My Tasks" tab; we keep the existing
+    // tenant-wide list for ?mine!=true so admin/manager oversight is
+    // unchanged. ADMIN/MANAGER also see tasks they CREATED but never
+    // assigned to a specific user (userId=null) so the Owner's recent
+    // self-created queue items are visible — orchestrator-fan-out tasks
+    // historically wrote userId=null because `stripDangerous` deleted the
+    // assignee field on the create path (see POST handler comment).
+    if (mine === "true") {
+      const me = req.user.userId;
+      const isOrgRole = req.user.role === "ADMIN" || req.user.role === "MANAGER";
+      where.OR = isOrgRole
+        ? [{ userId: me }, { userId: null }]
+        : [{ userId: me }];
     }
     if (req.query.includeDeleted !== "true") where.deletedAt = null;
 
@@ -71,7 +105,19 @@ router.get("/", verifyToken, async (req, res) => {
 // POST /api/tasks
 router.post("/", verifyToken, async (req, res) => {
   try {
-    const { title, dueDate, contactId, userId, notes, priority } = req.body;
+    // #436: the global `stripDangerous` middleware (server.js:299, applied to
+    // every route) deletes `userId` from req.body — that's the right thing
+    // for entities where `userId` is the row owner / cross-tenant pivot, but
+    // on Task `userId` is the assignee. Stripping it meant POST /api/tasks
+    // could never assign a task to a user; every row landed with userId=null,
+    // so the Owner's "my tasks" queue read empty and the Sidebar pending-task
+    // badge sat at 0. Accept `targetUserId` (renamed surface, never stripped)
+    // and fall through to req.strippedFields.userId for back-compat with old
+    // clients that still POST `userId`.
+    const { title, dueDate, contactId, targetUserId, notes, priority } = req.body;
+    const assigneeRaw = (targetUserId !== undefined && targetUserId !== null && targetUserId !== "")
+      ? targetUserId
+      : (req.strippedFields && req.strippedFields.userId);
     if (!title) return res.status(400).json({ error: "title is required" });
     // #163: reject invalid status / priority instead of silently coercing.
     const inputErr = validateTaskInput(req.body);
@@ -83,7 +129,9 @@ router.post("/", verifyToken, async (req, res) => {
         priority: priority || "Medium",
         dueDate: dueDate ? new Date(dueDate) : null,
         contactId: contactId ? parseInt(contactId) : null,
-        userId: userId ? parseInt(userId) : null,
+        userId: assigneeRaw !== undefined && assigneeRaw !== null && assigneeRaw !== ""
+          ? parseInt(assigneeRaw)
+          : null,
         notes: notes || null,
         tenantId: req.user.tenantId,
       },

@@ -44,11 +44,25 @@ Look for the **first red after the last green**. That's where the regression ent
 
 ```bash
 # Verify demo divergence — quick sanity check
-curl -sk https://crm.globusdemos.com/api/health | jq -r '.version'
+curl -sk https://crm.globusdemos.com/api/health | jq -r '.version, .uptime'
 # Compare with: cat backend/package.json | grep '"version"'
 ```
 
-If demo version < main version, the deploy backlog is real and customer-facing.
+> **⚠️ Caveat (added 2026-05-04 from the 940b4f0 wave)**: `/api/health` returns
+> a **hardcoded** version string (currently `"3.2.0"` per `backend/server.js:435+443`),
+> NOT a value read from `package.json`. The version field is therefore NOT a
+> reliable demo-divergence signal — a successful deploy will leave the field
+> reading the same hardcoded value. The reliable signal is **`uptime`** —
+> a fresh deploy restarts pm2 so uptime drops to <300s. Cross-check by
+> grepping the deployed code via SSH (`git rev-parse HEAD` in
+> `~/globussoft-crm` on the demo box) or by hitting an endpoint whose
+> behaviour changed in the new commits. Filed as a follow-up: change the
+> `/api/health` handler to `require('../package.json').version` and bump
+> `backend/package.json` on every release-tag.
+
+If demo uptime is high (hours) AND the deploy.yml run completed minutes
+ago, the deploy step is silently failing — that's a real divergence even
+if the version field looks unchanged.
 
 ### 2. Pull failure detail (90 seconds)
 
@@ -79,6 +93,8 @@ For each unique failing test, decide which bucket it falls into. **Read the spec
 | **Route bug** | Helper returns wrong type, schema mismatch, missing field | Fix route/helper. Often a 5-line diff. | 1 route file ± 1 helper |
 | **Stale spec** | Route was refactored; spec asserts old contract | Update spec to match new contract | 1 spec |
 | **Schema/data mismatch** | Prisma column type differs from value passed | Fix the producer (sanitizer, helper, route handler) — never widen the column "to make the test pass" | 1 helper |
+| **CI env-block gap** *(added 2026-05-04 from 940b4f0)* | Spec exercises a code path that's gated on an env-var (e.g. `WELLNESS_DEMO_OTP`); the env-var is set on demo + locally but missing from `deploy.yml`'s `env:` block. Symptom: spec passes locally, fails on CI with the route's "missing config" error path (often a 401/403/400 with a clear `error` string). | Add the env-var to the api_tests `env:` block. Cross-reference whatever sets it on demo (the deploy script, a `.env.example`, the operator runbook). | 1 line in deploy.yml |
+| **Spec-bad-fixture** *(added 2026-05-04 from 940b4f0)* | Spec seeds a fixture that fails route-side validation (e.g. `status:'completed'` Visit without `doctorId`). Spec wants the row for downstream assertions but doesn't care about the row's clinical correctness. | Switch to a status/shape that bypasses the strict validation (e.g. `status:'booked'`) — keep the spec focused on the contract under test, not incidental seed correctness. | 1 spec |
 
 If you can't classify within 5 minutes, **read the route handler end-to-end and run the failing assertion locally against an inline mock**. The simulation pattern from `sanitizeJson` triage (test the helper output type/shape against the column declaration) catches schema mismatches in seconds.
 

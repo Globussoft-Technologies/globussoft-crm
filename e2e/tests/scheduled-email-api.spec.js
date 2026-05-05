@@ -10,7 +10,7 @@
  *          tenantId inherited from the source row).
  *       2. Creates an EmailTracking row (type='open') with a UUID
  *          trackingId that's embedded in the body as a 1×1 pixel <img>.
- *       3. Calls Mailgun (POST /v3/<domain>/messages). When MAILGUN_API_KEY
+ *       3. Calls SendGrid (POST /v3/<domain>/messages). When SENDGRID_API_KEY
  *          is unset (CI default) the helper returns
  *          { sent:false, reason:'no_api_key' }.
  *       4. On send success → ScheduledEmail.status flips to 'SENT' (sentAt
@@ -34,9 +34,9 @@
  *
  * Acceptance criteria covered (G-10 from docs/E2E_GAPS.md):
  *   1. PENDING + scheduledFor<=now → status flips, EmailMessage row created.
- *      In CI (no MAILGUN_API_KEY) the dispatch returns no_api_key, so the
+ *      In CI (no SENDGRID_API_KEY) the dispatch returns no_api_key, so the
  *      row flips to FAILED — but that's still proof the state machine
- *      moved. The EmailMessage row IS created BEFORE the Mailgun call,
+ *      moved. The EmailMessage row IS created BEFORE the SendGrid call,
  *      so it persists regardless of send outcome.
  *   2. Future-scheduled rows untouched (scheduledFor > now → engine skips).
  *   3. Already-SENT rows not re-processed (PENDING-only filter).
@@ -75,7 +75,7 @@
  * Test environment expectations:
  *   - BASE_URL defaults to http://127.0.0.1:5000 (local stack). CI sets
  *     BASE_URL=http://127.0.0.1:5000 (deploy.yml's matrix backend boot).
- *   - MAILGUN_API_KEY may or may not be set; both branches of the engine
+ *   - SENDGRID_API_KEY may or may not be set; both branches of the engine
  *     are tested. If KEY is set, the row flips to SENT; if not, FAILED.
  *     We assert the post-state of the row matches one of those two
  *     statuses, not which one specifically.
@@ -388,7 +388,7 @@ test.describe('Scheduled Email Engine — windowing + status transitions', () =>
     const res = await runScheduled(request, tokens.admin);
     expect(res.status()).toBe(200);
     const body = await res.json();
-    // At least one transition (sent OR failed depending on Mailgun key).
+    // At least one transition (sent OR failed depending on SendGrid key).
     expect(body.processed).toBeGreaterThanOrEqual(1);
     expect(body.sent + body.failed).toBeGreaterThanOrEqual(1);
 
@@ -404,7 +404,7 @@ test.describe('Scheduled Email Engine — windowing + status transitions', () =>
     }
 
     // Sanity: an EmailMessage row was created for the recipient
-    // BEFORE the Mailgun call, so it persists either way.
+    // BEFORE the SendGrid call, so it persists either way.
     const msgs = await findEmailMessagesByRecipient(row.to, body.tenantId);
     expect(msgs.length, 'EmailMessage row persisted').toBeGreaterThanOrEqual(1);
     expect(msgs[0].direction).toBe('OUTBOUND');

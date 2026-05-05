@@ -3,9 +3,9 @@
  * eventBus.executeAction() dispatcher coverage.
  *
  * Exercises every branch of the actionType switch:
- *   - send_email           (Mailgun path; provider may not be configured —
+ *   - send_email           (SendGrid path; provider may not be configured —
  *                           we assert the WORKFLOW audit row is written
- *                           and no crash; the Mailgun call itself is logged
+ *                           and no crash; the SendGrid call itself is logged
  *                           as `sent: false, no_api_key` in that case)
  *   - send_notification    → Notification row created (covered by
  *                            workflows-flow.spec.js too; we do a smoke check)
@@ -138,11 +138,11 @@ test.describe('eventBus.executeAction() — dispatcher coverage', () => {
   }
 
   // ── send_email ─────────────────────────────────────────────────────
-  // Side-effect: sendMailgun() is called. If MAILGUN_API_KEY isn't set
+  // Side-effect: sendSendGrid() is called. If SENDGRID_API_KEY isn't set
   // (typical for the dev box), the function early-returns with
   // {sent:false, reason:"no_api_key"} and the WORKFLOW audit row is still
   // written. We assert the audit row.
-  test('send_email branch executes and writes audit (Mailgun call may be logged-only)', async ({ request }) => {
+  test('send_email branch executes and writes audit (SendGrid call may be logged-only)', async ({ request }) => {
     const rule = await createRule(request, {
       name: `act-email-${TAG}`,
       triggerType: 'invoice.overdue',
@@ -150,7 +150,7 @@ test.describe('eventBus.executeAction() — dispatcher coverage', () => {
       targetState: {
         to: `e2e_flow_${TAG_SUFFIX}@example.test`,
         subject: `Test [${TAG}]`,
-        body: 'Plain body, will be HTML-converted by sendMailgun',
+        body: 'Plain body, will be HTML-converted by sendSendGrid',
       },
     });
     await fireRule(request, rule.id, { invoiceId: 1, amount: 999 });
@@ -160,7 +160,7 @@ test.describe('eventBus.executeAction() — dispatcher coverage', () => {
 
   test('send_email with no recipient logs warning and still writes audit', async ({ request }) => {
     // No `to` in config and no `email` in payload → engine warns + skips
-    // sendMailgun, but the audit log line still fires (it's after the switch).
+    // sendSendGrid, but the audit log line still fires (it's after the switch).
     const rule = await createRule(request, {
       name: `act-email-norecip-${TAG}`,
       triggerType: 'invoice.overdue',

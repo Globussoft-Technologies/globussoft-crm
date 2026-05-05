@@ -34,12 +34,12 @@
  * prefix collision; the spec verifies both halves of the contract:
  * pixel/click stay public, stats requires auth.
  *
- * Mailgun is not configured on CI (no MAILGUN_API_KEY env var) so the
- * route's `sendMailgun()` falls into the `no_api_key` branch and returns
+ * SendGrid is not configured on CI (no SENDGRID_API_KEY env var) so the
+ * route's `sendSendGrid()` falls into the `no_api_key` branch and returns
  * `{sent: false, reason: 'no_api_key'}`. The handler still creates the
  * EmailMessage + EmailTracking rows and responds 200 with
  * `{success: true, delivered: false, email}`. Demo box happens to have
- * Mailgun configured so its `delivered` field is `true`; spec accepts both.
+ * SendGrid configured so its `delivered` field is `true`; spec accepts both.
  *
  * Pattern: cached-token / authXyz helpers identical to push-api.spec.js
  * and estimates-api.spec.js. Test data tagged `E2E_COMM_<ts>`. afterAll
@@ -169,7 +169,7 @@ test.describe('Communications API — POST /send-email', () => {
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.success).toBe(true);
-    expect(typeof body.delivered).toBe('boolean'); // true on demo (Mailgun configured), false on CI (no key)
+    expect(typeof body.delivered).toBe('boolean'); // true on demo (SendGrid configured), false on CI (no key)
     expect(body.email).toBeTruthy();
     expect(body.email.id).toEqual(expect.any(Number));
     expect(body.email.subject).toBe(`${RUN_TAG} happy`);
@@ -222,9 +222,9 @@ test.describe('Communications API — POST /send-email', () => {
 //     for the Inbox / DocumentTemplates / pre-existing 50+ specs that destructure
 //     `body.email.id`).
 //   - 2+ recipients fan out into N EmailMessage rows + N tracking pixels (one
-//     Mailgun call per recipient — no BCC).
-//   - `totalSent` / `totalFailed` reflect Mailgun-acceptance count (CI without
-//     MAILGUN_API_KEY → totalSent=0, totalFailed=N; demo → matches valid count).
+//     SendGrid call per recipient — no BCC).
+//   - `totalSent` / `totalFailed` reflect SendGrid-acceptance count (CI without
+//     SENDGRID_API_KEY → totalSent=0, totalFailed=N; demo → matches valid count).
 //   - Mixed valid + invalid: 200 with envelope, valid recipients delivered,
 //     invalids surfaced in `failures` (NOT a 400 — partial success is success).
 //   - All-invalid: 400 with `failures` enumerated.

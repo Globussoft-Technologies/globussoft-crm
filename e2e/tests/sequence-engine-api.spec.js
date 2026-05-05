@@ -62,8 +62,8 @@
  *     - flat {{name}} resolves to contact.name
  *     - missing variable left as raw {{x}} (renderTemplate behavior)
  *
- * Env vars: engine reads MAILGUN_API_KEY at module load. CI does NOT set it →
- * tryMailgunSend() short-circuits with reason='no_api_key_or_to' and the
+ * Env vars: engine reads SENDGRID_API_KEY at module load. CI does NOT set it →
+ * trySendGridSend() short-circuits with reason='no_api_key_or_to' and the
  * EmailMessage row is still persisted (the assertion target). All assertions
  * here check the DB row, never an actual outbound HTTP send.
  *

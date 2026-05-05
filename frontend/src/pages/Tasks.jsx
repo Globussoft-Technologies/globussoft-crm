@@ -109,7 +109,7 @@ export default function Tasks() {
   const overdueCount = activeTasks.filter(isOverdue).length;
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="tasks-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <Flame size={26} color="var(--accent-color)" /> Agent Task Queue
@@ -143,7 +143,7 @@ export default function Tasks() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem' }}>
+      <div className="tasks-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
 
         {/* Enqueue Panel */}
         <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
@@ -279,7 +279,20 @@ export default function Tasks() {
         </div>
       </div>
 
-      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }`}</style>
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        /* #480: collapse the 1fr 2fr two-column layout to a single stack on mobile.
+           Without this, the Enqueue Activity card title clips ("Enqueu...") and
+           field labels ("Directive Title" etc.) wrap word-by-word vertically because
+           the left column is squeezed to ~30% of a 425px viewport. minmax(0, ...) on
+           desktop prevents form min-content from blowing the column wider than 1fr. */
+        @media (max-width: 768px) {
+          .tasks-page { padding: 1rem !important; }
+          .tasks-grid { grid-template-columns: 1fr !important; gap: 1.25rem !important; }
+          .tasks-page .card { padding: 1.25rem !important; }
+          .tasks-page h3 { white-space: normal !important; }
+        }
+      `}</style>
     </div>
   );
 }

@@ -34,6 +34,8 @@ Each agent recovered by code-grepping the route file before writing code, but ~1
 
 Combined v3.4.8 + v3.4.9 record: **4 of 8 issues** picked from TODOS.md were already done. That's a 50% doc-drift rate — high enough that pre-pickup verification should be the default for any TODOS row older than the most recent 1-2 release-bumps.
 
+**v3.4.12+ extended the record: 5 of 6 GitHub-issue cluster (#505-#510) were not real or not reproducible** (only #509 was a real bug, fixed in 4 lines). The cluster filing pattern (one symptom → multiple sub-tickets attributing causes) inflates drift rate to 83%. See "Pattern E" below.
+
 ## Batch-sweep mode — proactive backlog hygiene (added 2026-05-05)
 
 Same verification primitives as pre-pickup, **different trigger**: when the cron-driven autonomous loop is in "wave finished, user away, waiting on next CI" state, batch-verify the open backlog instead of going idle. The 2026-05-05 firing closed **5 issues in one cron tick** (4 verified-already-shipped + 1 small alias fix) by sweeping a sample of P1-P3 candidates: #191 (SECURITY brute-force), #167 (CRITICAL hard-DELETE), #182 (SMS queue), #402 (sidebar 404), #406 (stale URLs).
@@ -126,6 +128,29 @@ Second-most common (#443, T2.2). The route works. The compliance-relevant audit 
 ### Pattern D — issue framing is just wrong
 
 #443 said "501 stub" when there was no 501 anywhere. The real gap was elsewhere in the same file. **Work item = read the file end-to-end with the issue's intent as a hint, not a fact. Don't trust line numbers, function names, or status codes from the issue card without grep verification.**
+
+### Pattern E — cluster-of-attributed-causes filed from a single symptom (added 2026-05-05)
+
+QA observes one symptom (a toast firing on `/invoices` page-load) and files **multiple sub-issues attributing causes**: "the 503 backend bug" + "the no-backoff retry loop" + "the misleading toast text" + "the per-widget global-toast pattern" + "the wallet-extension noise." Each sub-issue is filed as if its attributed cause is observed fact. **Most of those attributed causes are speculation about the code, not verified diagnoses.** Verify each independently — they don't share a single root cause that, once fixed, closes them all.
+
+The v3.4.12 #505-#510 cluster was the canonical case: 6 sub-tickets filed from one /invoices repro session. Reality check at HEAD `f489df1`:
+- **#505/#506** (CRITICAL backend 503): not reproducible — all 4 endpoints + filter combos + burst tests + edge cases returned 200. Likely transient at QA's testing window.
+- **#507** (infinite retry loop): doesn't match code. `Sidebar.jsx:181` polls every 60s in a `Promise.all` batch; `safeLen.catch(()=>null)` keeps previous count without retry; `fetchApi` doesn't auto-retry.
+- **#508** (misleading "check your connection" toast on 503): doesn't match code. `utils/api.js:154` returns "Server error — please try again." on 5xx; "check your connection" only fires on no-response (line 128).
+- **#509** (widget→global toast): **REAL.** Sidebar background polls were missing `{silent:true}` despite the api.js docstring at line 107 saying "Pages can opt OUT of the auto-toast by passing { silent: true }. Useful for background polls." 4-line fix (commit `8b747db`).
+- **#510** (wallet-extension exceptions): not actionable on our side — third-party browser extension noise.
+
+**5 of 6 = 83% drift rate.** Higher than the v3.4.8/9 50% baseline. The cluster filing pattern amplifies the rate because each sub-ticket is about an *attributed cause* that the QA didn't actually verify; only the *observed symptom* is real.
+
+**Recipe for cluster-of-attributed-causes:**
+
+1. **Find the one observed symptom.** Strip out attributions ("Caused by Bug 1", "Triggered by #505") — those are QA's hypothesis, not data. The symptom is "toast appeared on /invoices page-load," nothing more.
+2. **Verify the symptom first.** If it doesn't reproduce, close ALL sub-tickets as not-reproducible. Don't waste agent-rounds investigating each attributed cause separately. The 5 v3.4.12 sub-tickets that closed without code change collectively saved ~6 agent-hours of phantom-work.
+3. **If the symptom does reproduce, walk the symptom-to-cause path with grep**, not via the QA's attribution chain. Read `Sidebar.jsx`'s polling code first, then `fetchApi`'s error handling — DON'T jump from the issue body's "infinite retry loop" claim to an assumed retry-loop fix.
+4. **Comment-and-close non-real sub-tickets with code citations**, not adjectives. "Closed — `Sidebar.jsx:181` polls every 60s with no retry; `safeLen.catch(()=>null)` keeps previous count without retry" is auditable. "Closed — not reproducible" alone invites re-opens.
+5. **Keep the genuinely-real sub-ticket open and fix it.** #509 was the one real bug; closing it with a 4-line code change + commit-message `Closes #509.` trailer auto-closes via GitHub.
+
+What this looks like in practice: 5 of 6 sub-tickets closed in ~10 minutes via curl + grep + 5 close-with-comment commands; the 1 real fix shipped in ~5 minutes (4-line edit + commit + push). Total: ~15 minutes for what would have been a 4-agent parallel wave on phantom causes.
 
 ## What to do when drift is found
 

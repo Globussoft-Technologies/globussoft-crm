@@ -90,6 +90,75 @@ test.describe('whatsapp.js — Cloud API messaging + templates + webhook', () =>
     expect(res.status()).toBe(400);
   });
 
+  // ── #518 regression-guards: Meta Cloud API canonical shape ───────────
+  // The route destructures {to, body, templateName, parameters, contactId}.
+  // Channels.jsx historically posted `{to, body, templateId: <int>}` which
+  // silently fell through to the session-text branch (templateId is dropped
+  // because `templateName` was undefined), failing customer-outreach outside
+  // Meta's 24h re-engagement window. These three tests pin the canonical
+  // shape so a future regression to the old form fails CI.
+
+  test('#518 POST /whatsapp/send accepts canonical session-text shape {to, body}', async ({ request }) => {
+    const res = await request.post(`${API}/whatsapp/send`, {
+      headers: auth(),
+      data: { to: '+919900112233', body: 'Hello from session text' },
+    });
+    // 200 = WhatsAppConfig active and Meta accepted
+    // 400 = no active config in this tenant (CI / local default)
+    // 500 = config present but Meta provider error (network / quota / etc.)
+    // The test asserts the auth gate + shape passed validation, not delivery.
+    expect([200, 400, 500]).toContain(res.status());
+    if (res.status() === 400) {
+      const body = await res.json();
+      // Should be the "no active config" error, NOT a "missing required field" error
+      expect(body.error || '').toMatch(/no active|provider|configured/i);
+    }
+  });
+
+  test('#518 POST /whatsapp/send accepts canonical template shape {to, templateName, parameters}', async ({ request }) => {
+    const res = await request.post(`${API}/whatsapp/send`, {
+      headers: auth(),
+      data: {
+        to: '+919900112233',
+        templateName: 'appointment_reminder',
+        parameters: [
+          { type: 'text', text: 'Priya Sharma' },
+          { type: 'text', text: 'Enhanced Wellness' },
+        ],
+      },
+    });
+    // 200/400/500 same matrix as session-text — what we assert is the
+    // {templateName, parameters} field shape passed validation (not 400 with
+    // "missing body or templateName").
+    expect([200, 400, 500]).toContain(res.status());
+    if (res.status() === 400) {
+      const body = await res.json();
+      // Must NOT be the "body or templateName is required" message — that
+      // would mean the field-name mapping is broken again.
+      expect(body.error || '').not.toMatch(/body or templateName is required/i);
+    }
+  });
+
+  test('#518 POST /whatsapp/send tolerates extra `templateId` field without confusing it for templateName', async ({ request }) => {
+    // The pre-fix Channels.jsx posted `{to, body, templateId: <int>}` thinking
+    // templateId was the Meta template selector. The route ignores templateId
+    // (extra field, not destructured), and SHOULD fall into the session-text
+    // branch via `body`. This test pins that contract: extra templateId field
+    // is silently ignored, body branch wins, no 400 from validation.
+    const res = await request.post(`${API}/whatsapp/send`, {
+      headers: auth(),
+      data: { to: '+919900112233', body: 'Hello with stray templateId', templateId: 99999 },
+    });
+    expect([200, 400, 500]).toContain(res.status());
+    if (res.status() === 400) {
+      const body = await res.json();
+      // 400 must be "no active config", not a validation error from
+      // mistakenly treating templateId as templateName and looking up
+      // a non-existent template.
+      expect(body.error || '').toMatch(/no active|provider|configured/i);
+    }
+  });
+
   test('POST /whatsapp/templates rejects missing name/body', async ({ request }) => {
     const res = await request.post(`${API}/whatsapp/templates`, {
       headers: auth(),

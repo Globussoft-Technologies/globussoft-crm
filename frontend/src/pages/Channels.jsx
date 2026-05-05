@@ -92,6 +92,33 @@ function previewSubstitute(template, contact) {
     .replace(/\{\{3\}\}/g, contact.email || '');
 }
 
+// #518: Extract WhatsApp template variables in the Meta Cloud API parameters
+// shape. Templates use positional {{1}}, {{2}}, ... placeholders; Meta requires
+// a parameters array of {type:'text', text:'<value>'} per placeholder, in
+// occurrence order, deduped (each {{N}} maps to one parameters entry even if
+// it appears multiple times in the body). For Send Test / Send Blast in
+// Channels.jsx, we substitute from SAMPLE_CONTACT so the recipient sees
+// realistic preview content. A real per-contact send (e.g. from a sequence
+// or campaign) should pass the recipient's actual fields instead.
+function extractWhatsappParameters(templateBody, contact) {
+  if (!templateBody) return [];
+  const ordered = [];
+  const seen = new Set();
+  const regex = /\{\{(\d+)\}\}/g;
+  let m;
+  while ((m = regex.exec(templateBody)) !== null) {
+    const idx = m[1];
+    if (seen.has(idx)) continue;
+    seen.add(idx);
+    let value = '';
+    if (idx === '1') value = contact.name || '';
+    else if (idx === '2') value = contact.company || '';
+    else if (idx === '3') value = contact.email || '';
+    ordered.push({ type: 'text', text: value });
+  }
+  return ordered;
+}
+
 export default function Channels() {
   const notify = useNotify();
   // #519: consume the ?tab= deep-link param from Marketing CTAs (which
@@ -674,7 +701,10 @@ function SendModal({ kind, template, mode, onClose, notify }) {
             await fetchApi('/api/sms/send', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ to: num, body: template.body, templateId: template.id }),
+              // #518 hygiene: SMS canonical shape is {to, body} (pinned by
+              // PR #511 #13 regression spec). templateId was extra noise
+              // silently dropped server-side.
+              body: JSON.stringify({ to: num, body: template.body }),
             });
             ok++;
           } catch { fail++; }
@@ -690,12 +720,20 @@ function SendModal({ kind, template, mode, onClose, notify }) {
           return;
         }
         let ok = 0, fail = 0;
+        // #518: Meta Cloud API expects {to, templateName, parameters} for
+        // template sends, NOT the schema FK templateId. Old shape was
+        // {to, body, templateId} → route silently fell into session-text
+        // branch (because templateName was undefined), which fails outside
+        // Meta's 24h re-engagement window with a non-obvious provider error.
+        // New shape passes the template name + extracts {{N}} placeholder
+        // values from SAMPLE_CONTACT.
+        const params = extractWhatsappParameters(template.body, SAMPLE_CONTACT);
         for (const num of recipients) {
           try {
             await fetchApi('/api/whatsapp/send', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ to: num, body: template.body, templateId: template.id }),
+              body: JSON.stringify({ to: num, templateName: template.name, parameters: params }),
             });
             ok++;
           } catch { fail++; }

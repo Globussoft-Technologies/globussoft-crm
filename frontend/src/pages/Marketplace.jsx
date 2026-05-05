@@ -41,7 +41,7 @@ export default function Marketplace() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
       <header style={{ marginBottom: '2.5rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Enterprise App Marketplace</h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Extend Globussoft CRM functionality via one-click encrypted third-party handshakes.</p>
@@ -66,10 +66,10 @@ export default function Marketplace() {
                 {app.desc}
               </p>
               
-              <button 
+              <button
                 onClick={() => toggleApp(app.id, installed)}
-                style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: 'none', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
-                background: installed ? 'rgba(59, 130, 246, 0.1)' : 'var(--accent-color)', color: installed ? 'var(--accent-color)' : '#fff' }}
+                className={installed ? 'btn-secondary' : 'btn-primary'}
+                style={{ width: '100%' }}
               >
                 {installed ? <><CheckCircle2 size={18} /> Integrated securely</> : 'Initiate OAuth Handshake'}
               </button>

@@ -150,6 +150,24 @@ const Leads = () => {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
+      <style>{`
+        .leads-table-wrapper {
+          overflow-x: auto;
+        }
+        .leads-table {
+          width: 100%;
+        }
+        @media (min-width: 1600px) {
+          .leads-layout {
+            grid-template-columns: 340px 1fr !important;
+          }
+        }
+        @media (max-width: 1599px) {
+          .leads-layout {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <UserPlus size={24} style={{ color: 'var(--accent-color)' }} />
@@ -164,7 +182,7 @@ const Leads = () => {
 
       {/* Bulk Assign Bar */}
       {selectedLeads.length > 0 && (
-        <div className="card" style={{ padding: '0.75rem 1.25rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+        <div className="card" style={{ padding: '0.75rem 1.25rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', flexWrap: 'wrap' }}>
           <Users size={18} color="var(--accent-color)" />
           <span style={{ fontWeight: '500', fontSize: '0.875rem' }}>{selectedLeads.length} lead{selectedLeads.length !== 1 ? 's' : ''} selected</span>
           <select
@@ -193,7 +211,7 @@ const Leads = () => {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '1.5rem', alignItems: 'start' }}>
+      <div className="leads-layout" style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '1.5rem', alignItems: 'start' }}>
         {/* Left Panel: Create Lead Form */}
         <div className="card" style={{ padding: '1.5rem' }}>
           <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1.25rem' }}>Create Lead</h3>
@@ -214,7 +232,7 @@ const Leads = () => {
         </div>
 
         {/* Right Panel: Leads Table */}
-        <div className="card" style={{ overflow: 'hidden' }}>
+        <div className="card leads-table-wrapper" style={{ overflow: 'hidden' }}>
           <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
             <div style={{ position: 'relative', maxWidth: '300px' }}>
               <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
@@ -229,7 +247,7 @@ const Leads = () => {
             </div>
           </div>
 
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+          <table className="leads-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                 <th style={{ padding: '1rem', width: '40px' }}>

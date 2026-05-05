@@ -251,13 +251,17 @@ const Sidebar = ({
     ? { ...sectionLabel, color: brandColor }
     : sectionLabel;
 
-  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, count }) => {
+  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, count, matchPaths = [] }) => {
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
     return (
       <NavLink
         to={to}
-        className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+        className={({ isActive }) => {
+          const isPathMatch = matchPaths.some(path => location.pathname === path);
+          const active = isActive || isPathMatch;
+          return `nav-link ${active ? "active" : ""}`;
+        }}
         style={navStyle}
       >
         <Icon size={20} /> <span style={{ flex: 1 }}>{label}</span>
@@ -593,6 +597,7 @@ function renderWellnessNav({
         icon={ShoppingBag}
         label="Marketplace Leads"
         managerOnly
+        matchPaths={["/marketplace"]}
       />
       <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
 
@@ -678,6 +683,7 @@ function renderWellnessNav({
             adminOnly
           />
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
+          <Link to="/channels" icon={Radio} label="Channels" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />

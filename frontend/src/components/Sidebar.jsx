@@ -173,11 +173,16 @@ const Sidebar = ({
       p
         .then((r) => (Array.isArray(r) ? r.length : (r?.total ?? 0)))
         .catch(() => null);
+    // #509: pass {silent:true} so transient 503s on these background polls
+    // don't pile up "Server error" toasts. safeLen's .catch(()=>null) already
+    // keeps previous count on failure; the toast was redundant noise. The
+    // fetchApi docstring at utils/api.js:107-109 explicitly recommends
+    // {silent} for background-poll callsites.
     const [leads, tasks, tickets, inbox] = await Promise.all([
-      safeLen(fetchApi("/api/contacts?status=Lead")),
-      safeLen(fetchApi("/api/tasks?status=PENDING")),
-      safeLen(fetchApi("/api/tickets?status=OPEN")),
-      safeLen(fetchApi("/api/email?unread=1")),
+      safeLen(fetchApi("/api/contacts?status=Lead", { silent: true })),
+      safeLen(fetchApi("/api/tasks?status=PENDING", { silent: true })),
+      safeLen(fetchApi("/api/tickets?status=OPEN", { silent: true })),
+      safeLen(fetchApi("/api/email?unread=1", { silent: true })),
     ]);
     setCounts((prev) => ({
       leads: leads ?? prev.leads,

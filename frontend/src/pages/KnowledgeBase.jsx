@@ -228,7 +228,7 @@ export default function KnowledgeBase() {
             }}
           >
             <BookOpen size={26} color="var(--accent-color)" />{" "}
-            {tenantData?.name ? `${tenantData.name} Knowledge Base` : "Knowledge Base"}
+            {tenant?.name ? `${tenant.name} Knowledge Base` : "Knowledge Base"}
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: "0.25rem" }}>
             {totalArticles} {totalArticles === 1 ? "article" : "articles"} ·

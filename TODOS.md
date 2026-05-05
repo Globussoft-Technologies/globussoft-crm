@@ -18,7 +18,46 @@ When B-01 ships, move it to "## Recently shipped" and remove from this section. 
 
 ---
 
-## 🏁 NEXT-SESSION HANDOFF (2026-05-06 early-AM — 5-agent wave closed 19 of 20 fresh QA bugs)
+## 🏁 NEXT-SESSION HANDOFF (2026-05-05 — v3.4.12 release tag pushed, e2e-full validation in flight)
+
+**HEAD on origin/main:** `aa59133` (PR #453 conflict-marker resolution — release-prep). v3.4.12 doc-bump on top. Tag `v3.4.12` pushed; `e2e-full.yml` release-validation fired automatically against demo (~15-20 min runtime).
+
+### v3.4.12 release surface
+
+The biggest single-release surface since v3.4.0. See [CHANGELOG.md](CHANGELOG.md#v3412--2026-05-05--pr-453-merged--5-agent-qa-wave-30-issues--e2e-full-all-green--g-21-frontend-vitest-gate--doc-canonicality-discipline) for full notes. Headlines:
+
+- **PR #453** merged (`8ad93fe` + `aa59133` resolution) — Sidebar redesign + KB rewrite + Patients edit + Staff role filters + Callified errors (~1,700 lines)
+- **5-agent QA wave** (`55fef9f` `a2895d8` `867c34d` `ecb4ae0` `fc9898e`) — 30+ issues closed
+- **e2e-full all-green** for first time since v3.4.9 (chase: `e72cd5c` `e8cce09` `cc1a0ca` `6f140bc` `47e7a1d` `36e554d` `d84b0d9`)
+- **G-21 frontend vitest CI gate** bootstrapped (`51e8891`) — 6 files / 35 tests + new `frontend_unit_tests` deploy job
+- **#413 cascade-leak** closed (`1ef4ba5`) — Cascade→Restrict on 6 high-value tables
+- **9× landing-page builder issues** + **#445 Nginx** + **#456 slug** + **#451 CAPTCHA stub** + **#454 beforeunload** all shipped
+- **#435 multi-recipient inbox compose** (`b892174`)
+- **axios 1.15.0 → 1.16.0** (`8e04432`) — closes 13 high-severity CVEs
+- **Doc canonicality discipline** (`46737e5` + `81a157a`) — README + CLAUDE.md no longer narrate per-version; CHANGELOG.md is the single source
+
+### Open backlog (post-release)
+
+5 items, all blocked on user input or operator action:
+- **B-01** TURNSTILE_SECRET_KEY env-var on demo (operator-blocker)
+- **#431** Privacy retention silent-revert — awaiting fresh repro
+- **#437** Marketplace integration visibility — awaiting product-design call on UX
+- **#457** Manual-only QA surface umbrella — intentionally stays open
+- **17 fresh QA bugs filed 2026-05-05 09:44–09:53 UTC** (#478–#492) — UI/responsive cluster, ready for the next parallel-agent wave
+
+### Three things to do first next session
+
+1. **Confirm the e2e-full release-validation went green.** If red, follow CLAUDE.md's "Release" rule — fix on main and retag. If green, the v3.4.12 release stands.
+2. **Pick up the #478–#492 wave** if QA bandwidth allows — UI/responsive issues are well-suited to a 4-agent parallel dispatch via `dispatching-parallel-agent-wave`.
+3. **B-01** still open — operator needs to set TURNSTILE_SECRET_KEY on demo.
+
+### Process learnings worth surfacing later
+
+- **PR-level CI gap surfaced by PR #453**: PRs only get `secret-scan` checks; build/lint/api_tests run after merge to main. PR #453 shipped with literal git conflict markers in two files; the per-push gates went red and silently blocked deploy. **Recommendation**: extend PR-level CI to at least run `npx vite build` for source changes. Filed for follow-up.
+
+---
+
+## 🏁 PREVIOUS-SESSION HANDOFF (2026-05-06 early-AM — 5-agent wave closed 19 of 20 fresh QA bugs) — superseded by v3.4.12 release above
 
 **HEAD on origin/main:** `fc9898e` (Agent I — backend enforcement + new 10-test gate spec). Open backlog back to **3 issues** all blocked on user input — same state as pre-QA-wave.
 

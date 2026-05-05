@@ -1,5 +1,114 @@
 # CHANGELOG
 
+## v3.4.12 — 2026-05-05 — PR #453 merged + 5-agent QA wave (30+ issues) + e2e-full all-green + G-21 frontend vitest gate + doc canonicality discipline
+
+The biggest single-release surface since v3.4.0. Closes the entire v3.4.11 carry-over backlog (9 landing-page builder issues + #435 multi-recipient + G-21 frontend vitest + #445 P1 Nginx). Lands the largest customer-visible UI delivery of the v3.4.x arc (PR #453 — Sidebar redesign + Knowledge Base rewrite + Patients edit flow + Staff role filters + Callified SSO error UX). Closes 30+ QA issues across a 5-agent parallel wave. Achieves first-ever all-green `e2e-full.yml` release-validation since v3.4.9 (multi-commit chase). Bootstraps the frontend vitest CI gate (G-21 — new test surface). Establishes a new doc-canonicality discipline (README + CLAUDE.md no longer narrate per-version arcs; CHANGELOG.md is the only place that does).
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.11 | v3.4.12 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | ~77 specs / ~2,522 tests | **~78 specs** / **~2,532 tests** | +1 spec / +10 tests |
+| Per-push backend unit tests | vitest | 42 files / ~1,184 tests | 42 files / ~1,184 tests | 0 / 0 |
+| Per-push frontend unit tests | vitest | — | **6 files** / **~35 tests** (NEW gate) | +6 files / +35 tests |
+| **Total per-push** |  | ~3,706 | **~3,751** | **+45 tests / +1.2%** |
+
+Per-push deploy gates also grew from 5 → 6 (build / lint / api_tests / unit_tests / **frontend_unit_tests** / migration_check).
+
+### Added — PR #453 (~1,700 lines of customer-visible UI)
+
+Single PR by @shiksharoy-ai squash-merged at `8ad93fe`. Touches 9 files; multi-week feature work consolidated.
+
+| Area | Highlights |
+|---|---|
+| Sidebar | Major redesign — role-aware filtering, clickable stat-card affordances, restructured layout (`Sidebar.jsx` 132 → 720+ lines) |
+| Knowledge Base | UI rewrite (`KnowledgeBase.jsx` 169 → 878 lines) — clickable status filters, combined filtering, direct customer-portal article view, publish/unpublish flow, tenant-slug fix continued from #472 |
+| Patients (wellness) | Edit flow — pre-filled form, auto-scroll on edit, reused create/edit JSX (`Patients.jsx` 70 → 394 lines) |
+| Staff | Role-based filtering — clickable role-stat chips, toggle behavior, empty-state handling |
+| Payments | Visual hierarchy refresh (StatCard / ConfigCard) |
+| LandingPageBuilder | Misc UI polish |
+| backend/routes/integrations.js | User-friendly Callified SSO error mapping with correct 503 status codes |
+| backend/routes/knowledge_base.js | Unpublish endpoint + tenant-slug lookup hardening |
+
+**Caveat:** PR shipped with literal git merge-conflict markers in `Sidebar.jsx:720` and `KnowledgeBase.jsx:189` (author merged main into branch twice without resolving). Build/lint/api_tests/frontend_unit_tests went red on `8ad93fe`. **Resolved in `aa59133`** — kept main's safer `tenantSlug` derivation (prop-first + try/catch on malformed JSON, no `"your-tenant"` placeholder leak) merged with the PR's `publicArticleUrl(slug)` function (used at line 945); took main's `"Calendar Sync"` Sidebar label entirely (the #474 fix matches actual `/calendar-sync` destination). Discipline note: PR-level CI only runs `secret-scan`; the per-push gates only fire after merge to main, so conflict markers slip through. Process change worth considering: extend PR-level CI to at least run `npx vite build` for source changes.
+
+### Added — 5-agent QA-closure wave (30+ issues across `55fef9f` `a2895d8` `867c34d` `ecb4ae0` `fc9898e`)
+
+20 fresh QA bugs filed 2026-05-05 06:12–06:26 UTC; 19 closed by 01:00 UTC the same day via 5 parallel agents on disjoint clusters. No merge collisions thanks to the `git commit --only` pattern + disjoint-files dispatch invariant.
+
+| Agent | Commit | Issues closed | Notes |
+|---|---|---|---|
+| F | `55fef9f` | #459 #460 #461 (real fixes) + #458 (Pattern A drift, not-planned) | Inbox dialer modal + 4-tab row-detail modal + Contacts search/status filter |
+| G | `a2895d8` | #462 #463 | Reports donut sizing (flex-layout race) + Win/Loss pie clipping (cy/Legend miscompute). Bonus: applied #439 `domain={[0,'auto']}` pattern across other YAxis/XAxis usages |
+| H | `867c34d` | #472 (real, root-cause for #384) + #469 #470 #471 (QA pollution scrubbed) | KnowledgeBase read non-existent `localStorage.getItem('tenantSlug')` — auth flow stores `tenant` JSON. Extended `scrub-test-data-pollution.js` to cover Campaign / ApprovalRequest / LeadRoutingRule (had previously covered 10 models, missed these 3) |
+| I | `fc9898e` | #464 #465 + 2 latent-bug bonuses + 1 NEW gate spec | `fieldFilter` middleware existed with 20 unit tests but ZERO callsites — wired into 6 handlers across deals.js + contacts.js. SLA `coerceMinutes` was intentionally accepting 0 for "deterministic-breach fast-path" — replaced with admin-only `POST /api/sla/_test/backdate-ticket/:id` helper gated by `SLA_TEST_HELPERS=1` env. New 10-test `field-permissions-enforcement-api.spec.js` wired into per-push |
+| J | `ecb4ae0` | #466 #467 #468 #473 #474 #475 #476 | Dashboard / DealInsights row-clickability + DocumentTracking silent-fail toast + Currencies "preview" label + Sidebar Calendar/Calendar-Sync alignment + Layout dropdown + LiveChat status-badge UX |
+
+### Added — G-21 Frontend vitest CI gate (commit `51e8891`)
+
+Brand-new test tier. 6 vitest test files / 35 tests covering frontend lib + utils + critical components. New `frontend_unit_tests` job in `deploy.yml` runs on every push; missing the gate now fails the deploy. Closes the largest carry-over from v3.4.11.
+
+### Fixed — e2e-full release-validation chase (multi-commit, finally green at `2fcb214`)
+
+The `e2e-full.yml` release-validation suite had been red across the entire v3.4.10 → v3.4.11 doc-bump arc — multi-shard failures masked real product bugs and blocked release tagging.
+
+| Commit | What it fixed | Bucket |
+|---|---|---|
+| `e72cd5c` | `backup-engine-api` filesystem readback skips when running cross-machine (introduced `IS_LOCAL_STACK` regex on `BASE_URL`) | Local-stack-only spec / cross-machine guard |
+| `e8cce09` | `migration-safety.spec.js` gets the same `IS_LOCAL_STACK` guard | Same |
+| `cc1a0ca` | eventbus-conditions / eventbus-template / lead-scoring / email-threading / marketplace specs handle demo-state divergence | Demo-state sensitivity |
+| `6f140bc` | `landing-page-upload-api` spec — wrong-field tenantId capture (read `j.user.tenantId` instead of `j.tenant.id`) | spec-bad-fixture |
+| `47e7a1d` | `workflows-api` tenant-history check — was count-based, now leak-specific (search for the wellness rule's id in generic's history) | Cron-engine-noise tolerance |
+| `36e554d` | Two real fixes — Contact `where: { email }` upsert against `@@unique([email, tenantId])` model (latent since landing-pages module shipped, never hit prod until #445 Nginx fix unblocked the route) + 5MB-upload spec accepts both Nginx 413 and multer 400 | Real backend bug + Nginx variance |
+| `d84b0d9` | `workflows-flow` polling widened (4× / 1.5s vs 2× / 750ms); `email_scheduling` branches on content-type (HTML 502 vs JSON envelope) | Demo-state sensitivity |
+
+After all 7 fixes, e2e-full run `25348132618` on `c8bab33` went **all 4 shards green** (incl. `scrub-demo` + `merge-reports`) — first all-green since v3.4.9.
+
+### Fixed — landing-page builder cluster (closes 9× v3.4.11 carry-over)
+
+| Issue | Commit | Fix |
+|---|---|---|
+| #438 thumbnail | `4e116ad` | Renderer reads first hero-image block; placeholder fallback |
+| #446 image upload + #449 alignment + #450 undo/redo | `9abbafe` | Builder-side persistence; pointer-event capture; 50-step ring-buffer |
+| #451 form-blocked-by-#445 (CAPTCHA + lead routing + redirect) | `9abbafe` + `d763a1d` | Public form submit now works (#445 Nginx fix unblocked); per-field type dropdown + required toggle in builder; CAPTCHA stub-friendly when `TURNSTILE_SECRET_KEY` unset (operator-blocker B-01 below) |
+| #454 unsaved-changes | `9e557e6` | `beforeunload` guard on dirty state |
+| #455 push-on-public + #456 slug derive + 409 confirm flow | `b180c4b` (frontend) closes the `4e116ad` backend partial | Slug validity hint + auto-derive from title + 409-on-conflict confirm dialog |
+
+### Fixed — #413 cascade-leak (Cascade → Restrict on 6 high-value tables, commit `1ef4ba5`)
+
+Six tables had `onDelete: Cascade` where Restrict would have prevented a class of accidental cross-tenant data loss (Tenant deletion would silently cascade through child models). Switched to `Restrict` with explicit detector-bug-fix in the schema-invariants suite. Real production-safety improvement.
+
+### Fixed — #435 multi-recipient inbox compose (commit `b892174`)
+
+POST `/api/communications/send-email` now accepts comma-separated `to:` and dispatches N EmailMessage rows with roll-up tracking. Response shape uses additive envelope (`totalSent` / `totalFailed` / `results` / `failures` added; top-level `email` / `messageId` / `delivered` preserved for back-compat with 50+ existing specs + Inbox / DocumentTemplates frontends). Closes v3.4.11 carry-over.
+
+### Fixed — #445 P1 landing-pages → /login (operator-shaped via Nginx config)
+
+Nginx was proxying `/p/:slug` to the SPA instead of the backend. Closed via `applying-demo-ssh-config` skill — `location /p/ { proxy_pass http://localhost:5099; }` block added with backup → `nginx -t` validate → reload-or-rollback safety net.
+
+### Fixed — axios CVE bump (commit `8e04432`)
+
+Bumped `axios` 1.15.0 → 1.16.0 to close 13 high-severity CVEs that were blocking the deploy gate's `lint` job (`npm audit` gate). All 5 wave-deploy commits (`55fef9f` → `fc9898e`) had gone red on lint until this landed.
+
+### Fixed — PR #453 unresolved merge-conflict markers (commit `aa59133`, this release)
+
+See PR #453 caveat above. The release-prep fix that made this v3.4.12 release possible.
+
+### Process — doc canonicality discipline established (commits `46737e5` + `81a157a`)
+
+README.md dropped from 684 → 384 lines by stripping 22 stacked `## What's new in vX.Y.Z` sections (~45% of the file) that duplicated CHANGELOG.md. CLAUDE.md's `Version:` paragraph (200 words, in every session's loaded context) shrunk to a one-liner pointing at CHANGELOG.md. The `bumping-version-docs` skill rewritten so future bumps stop adding "What's new" sections to README/CLAUDE.md; obsolete `README_WHATSNEW_TEMPLATE.md` deleted. **CHANGELOG.md is now the only file that narrates per-version arcs.** Memory entry `feedback_doc_canonicality.md` saved so future sessions hold the discipline.
+
+### Carry-over for v3.4.13
+
+- **B-01 operator-blocker** (TURNSTILE_SECRET_KEY env-var on demo) — needs Sumit/ops to create a Cloudflare Turnstile sitekey+secret pair and set on demo. Landing-page form CAPTCHA currently stub-friendly when unset.
+- **#431 Privacy retention silent-revert** — awaiting fresh repro from user.
+- **#437 Marketplace integration visibility** — partial-drift triage posted; awaiting product-design call on the indicator UX.
+- **#457 Manual-only QA surface umbrella** — intentionally stays open.
+- **17 fresh QA bugs filed 2026-05-05 09:44–09:53 UTC** (#478–#492) — UI/responsive cluster: 6× `[Bug][High]` (mobile responsive), 5× `[Bug][Medium]` (layout overflow), 4× `[Bug][Low]` (color/contrast). All unlabeled tier in title; could batch into next parallel-agent wave.
+- **PR-level CI extension** — consider adding `npx vite build` to PR-level CI so future merge-conflict-marker incidents (PR #453 class) get caught before merge, not after.
+
+---
+
 ## v3.4.11 — 2026-05-05 — sanitizeJson helper promoted to lib + 4 routes adopted + matched regression coverage (#398/#447 audit closure)
 
 A continuation of v3.4.10's QA-triage arc. The v3.4.10 release surfaced a 4-route audit finding (commit `68e6c5b`): `LeadRoutingRule.conditions`, `AbTest.variantA/B`, `Campaign.scheduleFilters`, and `ReportSchedule.metrics/recipients` were all `String? @db.Text` columns storing JSON, written without HTML sanitization — same #398/#447 XSS class. v3.4.11 closes the entire audit: helper promoted from `routes/sequences.js` to a dedicated `backend/lib/sanitizeJson.js` for cross-route reuse, adopted at all 4 audit-identified routes, and matched regression coverage in each route's `*-api.spec.js` (4 spec extensions + 1 new dedicated spec for report_schedules) all wired into the per-push gate.

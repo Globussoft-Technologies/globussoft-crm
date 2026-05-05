@@ -499,10 +499,12 @@ test.describe('Integrations API — tenant isolation on credentials', () => {
 // ── Callified SSO surface ──────────────────────────────────────────
 //
 // Both endpoints mint a fresh JWT signed with CALLIFIED_SSO_SECRET. In
-// CI / local stack that env var is unset so the route returns 500 with a
-// "not configured" hint — that's fine, we still get to assert the auth
-// gate, the not-configured shape, and tenant scoping (no token leaks
-// between tenants).
+// CI / local stack that env var is unset so the route returns 503 (PR
+// #453 — "Service Unavailable" matches HTTP semantics for "not yet
+// configured") with a friendly hint — that's fine, we still get to
+// assert the auth gate, the not-configured shape, and tenant scoping
+// (no token leaks between tenants). Spec accepts legacy 500 too for
+// back-compat with any older deploy.
 
 test.describe('Integrations API — Callified SSO surface', () => {
   test('GET /callified/auth-url requires auth (403 without token)', async ({ request }) => {
@@ -517,14 +519,15 @@ test.describe('Integrations API — Callified SSO surface', () => {
     expect([401, 403]).toContain(res.status());
   });
 
-  test('GET /callified/auth-url with admin token — 200 authUrl OR 500 not-configured', async ({ request }) => {
+  test('GET /callified/auth-url with admin token — 200 authUrl OR 503 not-configured', async ({ request }) => {
     const { token } = await getGenericAdmin(request);
     const res = await get(request, token, '/api/integrations/callified/auth-url');
     // Two valid outcomes depending on whether CALLIFIED_SSO_SECRET is set:
     //   200 → returns {authUrl: "..."}
-    //   500 → returns {error: "Callified SSO not configured..."}
+    //   503 → returns {error: "Callified integration is not yet available..."} (PR #453)
+    //   500 → legacy "not configured" (older deploys)
     // Both prove the auth gate passed (handler ran).
-    expect([200, 500]).toContain(res.status());
+    expect([200, 500, 503]).toContain(res.status());
     const body = await res.json();
     if (res.status() === 200) {
       expect(typeof body.authUrl).toBe('string');
@@ -532,11 +535,11 @@ test.describe('Integrations API — Callified SSO surface', () => {
       // The minted JWT must NOT contain the CRM session token (no leak)
       expect(body.authUrl).not.toContain(token);
     } else {
-      expect(body.error).toMatch(/callified.*not configured/i);
+      expect(body.error).toMatch(/callified.*(not configured|not yet available)/i);
     }
   });
 
-  test('GET /callified/sso with admin token — 302 redirect OR 500 not-configured', async ({ request }) => {
+  test('GET /callified/sso with admin token — 302 redirect OR 503 not-configured', async ({ request }) => {
     const { token } = await getGenericAdmin(request);
     const res = await request.get(`${BASE_URL}/api/integrations/callified/sso`, {
       headers: headers(token),
@@ -544,8 +547,9 @@ test.describe('Integrations API — Callified SSO surface', () => {
       timeout: REQUEST_TIMEOUT,
     });
     // 302 → minted JWT and redirected (CALLIFIED_SSO_SECRET set)
-    // 500 → not configured (CI / local default)
-    expect([302, 500]).toContain(res.status());
+    // 503 → not configured / not-yet-available (PR #453, CI / local default)
+    // 500 → legacy "not configured" (older deploys)
+    expect([302, 500, 503]).toContain(res.status());
     if (res.status() === 302) {
       const location = res.headers().location;
       expect(location).toMatch(/token=/);
@@ -561,8 +565,8 @@ test.describe('Integrations API — Callified SSO surface', () => {
     const gRes = await get(request, gTok, '/api/integrations/callified/auth-url');
     const wRes = await get(request, wTok, '/api/integrations/callified/auth-url');
     // Both should succeed-or-not-configure consistently.
-    expect([200, 500]).toContain(gRes.status());
-    expect([200, 500]).toContain(wRes.status());
+    expect([200, 500, 503]).toContain(gRes.status());
+    expect([200, 500, 503]).toContain(wRes.status());
     if (gRes.status() === 200 && wRes.status() === 200) {
       const gUrl = (await gRes.json()).authUrl;
       const wUrl = (await wRes.json()).authUrl;

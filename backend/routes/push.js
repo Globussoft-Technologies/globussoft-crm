@@ -90,6 +90,49 @@ router.post("/send", verifyToken, async (req, res) => {
   }
 });
 
+// POST /send-test — fire a single test push to the calling user (#515)
+//
+// Recipient is inferred from req.user.userId — no body field needed for
+// recipient. This endpoint replaces the Channels.jsx Push-tab workaround
+// that read localStorage.user.id and posted to /send. Three reasons it's
+// a first-class endpoint:
+//   1. localStorage.user is a soft contract — any change to the auth-
+//      storage shape silently broke the test-push button.
+//   2. Audit-trail integrity — test sends are tagged type="TEST" so they
+//      don't conflate with INTERNAL/MARKETING in the PushNotification
+//      table.
+//   3. Allows future test-specific rate-limiting + role gating without
+//      affecting the general /send path.
+//
+// Body fields are all optional; sensible defaults if absent.
+router.post("/send-test", verifyToken, async (req, res) => {
+  try {
+    const { title, body, url, icon } = req.body || {};
+    const finalTitle = title || "Test notification";
+    const finalBody = body || "This is a test push from your CRM.";
+
+    const notification = await prisma.pushNotification.create({
+      data: { title: finalTitle, body: finalBody, url, icon, type: "TEST", tenantId: req.user.tenantId },
+    });
+
+    const result = await pushService.sendToUser(
+      req.user.userId,
+      { title: finalTitle, body: finalBody, url, icon },
+      prisma,
+    );
+
+    await prisma.pushNotification.update({
+      where: { id: notification.id },
+      data: { sentCount: result.sent, failedCount: result.failed, status: "SENT" },
+    });
+
+    res.json({ success: true, sent: result.sent, failed: result.failed });
+  } catch (err) {
+    console.error("[Push] Send-test error:", err);
+    res.status(500).json({ error: "Failed to send test push" });
+  }
+});
+
 // Send marketing push to all visitor subscriptions in this tenant
 router.post("/send-campaign", verifyToken, async (req, res) => {
   try {

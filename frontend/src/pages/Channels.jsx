@@ -710,18 +710,14 @@ function SendModal({ kind, template, mode, onClose, notify }) {
           });
           notify.success('Push campaign queued for all subscribers');
         } else {
-          // Test push — read current user from localStorage and target self
-          let userId = null;
-          try { userId = JSON.parse(localStorage.getItem('user') || '{}')?.id || null; } catch { /* noop */ }
-          if (!userId) {
-            notify.error('Could not identify current user for test push');
-            setBusy(false);
-            return;
-          }
-          const result = await fetchApi('/api/push/send', {
+          // Test push — recipient inferred server-side from req.user.userId.
+          // Was previously a localStorage.user.id workaround posting to /send;
+          // #515 added /send-test as a first-class endpoint so the auth-
+          // storage shape is no longer a soft contract.
+          const result = await fetchApi('/api/push/send-test', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userIds: [userId], title: template.title, body: template.body, url: template.url, icon: template.icon }),
+            body: JSON.stringify({ title: template.title, body: template.body, url: template.url, icon: template.icon }),
           });
           if (result?.sent === 0) {
             notify.error('No active push subscription for your device — enable browser notifications first');

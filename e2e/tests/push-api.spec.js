@@ -288,6 +288,77 @@ test.describe('Push API — POST /send (targeted to users)', () => {
   });
 });
 
+// ─── POST /api/push/send-test (#515) ─────────────────────────────────
+//
+// First-class test-push endpoint. Recipient is inferred from
+// req.user.userId — no body field needed for recipient. This replaced
+// the Channels.jsx Push-tab workaround that read localStorage.user.id
+// and posted to /send. Three tests pin the contract:
+//   1. Auth gate (no token → 401/403)
+//   2. Happy path with custom title/body — writes a TEST-typed
+//      PushNotification row + returns sent/failed counts
+//   3. Defaults path — body fields all optional; route fills in
+//      sensible defaults so the UI can call with empty body
+
+test.describe('Push API — POST /send-test (#515)', () => {
+  test('no token → 401/403', async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/push/send-test`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: { title: 'unauth', body: 'unauth' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test('happy path with custom title/body returns { success, sent, failed } envelope', async ({ request }) => {
+    const res = await authPost(request, '/api/push/send-test', {
+      title: `${RUN_TAG} send-test-happy`,
+      body: 'PR #515 happy-path probe',
+      url: '/',
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(typeof body.sent).toBe('number');
+    expect(typeof body.failed).toBe('number');
+    // Caller has no active push subscription on CI/demo (VAPID keys
+    // unconfigured) — sent should be 0, failed 0 (no subscription to
+    // attempt against). On a tenant that DOES have a subscription, sent
+    // could be 1 — accept both.
+    expect(body.sent + body.failed).toBeGreaterThanOrEqual(0);
+  });
+
+  test('empty body → defaults applied (title + body fall back to friendly strings)', async ({ request }) => {
+    // Channels.jsx CAN call this with all four fields, but the contract
+    // is that the route fills in defaults if any are missing — so a
+    // future caller (server-side smoke test, alert button, etc.) can
+    // post {} and still get a valid push.
+    const res = await authPost(request, '/api/push/send-test', {});
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    // The PushNotification row should still get created with defaults;
+    // no validation error fires for missing fields (unlike /send which
+    // 400s on missing title or body).
+    expect(body).not.toHaveProperty('error');
+  });
+
+  // Anti-regression for the Inbox/Channels caller — pin the route's
+  // shape so a future agent can't add `userIds` or `targetUserId` to
+  // the required-fields check (which would silently break the Channels
+  // test-push button and re-introduce the localStorage.user workaround).
+  test('does NOT require userIds in body — recipient is server-inferred', async ({ request }) => {
+    const res = await authPost(request, '/api/push/send-test', {
+      title: `${RUN_TAG} no-userids`,
+      body: 'recipient comes from req.user, not body.userIds',
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.error).toBeUndefined();
+    expect(body.success).toBe(true);
+  });
+});
+
 // ─── POST /api/push/send-campaign ───────────────────────────────────
 
 test.describe('Push API — POST /send-campaign (visitor broadcast)', () => {

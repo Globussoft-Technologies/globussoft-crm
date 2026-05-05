@@ -59,7 +59,6 @@ import {
   Bell,
   Clock,
   Loader2,
-  Headphones,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -601,7 +600,6 @@ function renderWellnessNav({
         managerOnly
         matchPaths={["/marketplace"]}
       />
-      <Link to="/call-monitor" icon={Headphones} label="Live Call Monitor" managerOnly />
       <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
 
       {/* Money — clinic-side, in INR for Indian wellness tenants */}
@@ -782,7 +780,6 @@ function renderGenericNav({
       />
       <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly />
       <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly />
-      <Link to="/call-monitor" icon={Headphones} label="Live Call Monitor" managerOnly />
       <Link to="/territories" icon={Network} label="Territories" managerOnly />
 
       <Link to="/marketing" icon={Send} label="Marketing" managerOnly />

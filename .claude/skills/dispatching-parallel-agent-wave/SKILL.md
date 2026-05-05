@@ -112,6 +112,15 @@ Key elements every agent prompt should have:
 4. **Acceptance criteria** — the standard set + any task-specific extras
 5. **Wire-in handoff** — explicit pointer to the wire-in skill / script
 6. **Coordinate-with-siblings note** — names the other concurrent agents and which files they touch (so this agent can avoid)
+7. **Progress-reporting block (mandatory)** — every agent prompt MUST include the bash invocations from `reporting-agent-progress` (start / milestone / commit / done events via `.claude/skills/reporting-agent-progress/log.sh`). Without this, the user can't see anything until each agent finishes — the wave is opaque. The block is canned in `AGENT_PROMPT_TEMPLATE.md`'s "Progress reporting (mandatory)" section; copy it verbatim into each agent's prompt.
+
+## Tell the user to open /developer BEFORE launching the wave
+
+Before invoking the Agent tool with `run_in_background: true`, the dispatching parent should output:
+
+> **Open https://crm.globusdemos.com/developer (or your local frontend's /developer page) to watch the agents in real time.** Newest entries first; color-coded by status. The page polls every 3s.
+
+Do this once per wave dispatch, in the same response that fires the agents. The Live Agent Activity widget at the top of /developer surfaces every `start` / `milestone` / `commit` / `done` log line within 3 seconds. **Without this prompt the user has no idea the page exists; without the agent-side log calls the page stays empty.** Both halves of the contract are needed.
 7. **Authority statement** — "full" / "no commits" / "no pushes"
 8. **Final-report shape** — test count, runtime, commit hash, contract-drift findings
 

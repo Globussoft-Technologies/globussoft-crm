@@ -50,6 +50,30 @@ ALL agents touch:
 
 If `git push` rejects with non-fast-forward, `git pull --rebase origin main` and retry. The wire-in script is idempotent.
 
+## Progress reporting (mandatory)
+
+The user watches `/developer` page on the live frontend (polls every 3s). Tag yourself with a stable agent id and log start / milestone(s) / commit / done events via the helper:
+
+```bash
+TAG="<your-agent-tag>"   # e.g. "agent-F-onClick-cluster", "G-12-campaign-engine"
+LOG=".claude/skills/reporting-agent-progress/log.sh"
+
+# At start (before reading files):
+$LOG --agent "$TAG" --action "start" --message "<one-line task summary>"
+
+# After each major milestone (spec green, wire-in done, etc.):
+$LOG --agent "$TAG" --action "milestone" --message "<what just finished>"
+
+# Immediately after each git commit:
+$LOG --agent "$TAG" --action "commit" --commit "$(git rev-parse HEAD)" --file "<main file>" --message "<commit subject>"
+
+# At the end (success or failure):
+$LOG --agent "$TAG" --action "done" --status "green" --message "<one-line summary>"
+$LOG --agent "$TAG" --action "failed" --status "red" --message "<blocker description>"
+```
+
+Read [`.claude/skills/reporting-agent-progress/SKILL.md`](.claude/skills/reporting-agent-progress/SKILL.md) for the full protocol. The script falls back to file-only logging if the backend is down — never skip.
+
 ## Authority
 
 Full — run scripts, edit files, commit, push to origin/main. Cap iterations at 5 per failing test. Don't commit dubious workarounds; if blocked, report and stop.

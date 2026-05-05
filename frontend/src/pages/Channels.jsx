@@ -21,12 +21,17 @@
  *   /api/push/send-campaign    POST  (broadcast to all visitor subscriptions)
  */
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Radio, MessageSquare, MessageCircle, Phone, Bell, Plus, Save, Trash2, Copy,
   CheckCircle2, Edit2, Send, Eye, Megaphone, AlertCircle,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+
+// Allow-list of valid tab keys for the ?tab= deep-link param. Anything
+// outside this list falls back to the SMS default. Closes #519.
+const VALID_TABS = ['sms', 'whatsapp', 'telephony', 'push'];
 
 const TABS = [
   { key: 'sms', label: 'SMS', icon: MessageSquare, color: '#10b981' },
@@ -89,7 +94,14 @@ function previewSubstitute(template, contact) {
 
 export default function Channels() {
   const notify = useNotify();
-  const [activeTab, setActiveTab] = useState('sms');
+  // #519: consume the ?tab= deep-link param from Marketing CTAs (which
+  // pass /channels?tab=sms, /channels?tab=push, etc.). Allow-list-guarded
+  // so an arbitrary param can't escape into state.
+  const [searchParams] = useSearchParams();
+  const initialTab = VALID_TABS.includes(searchParams.get('tab'))
+    ? searchParams.get('tab')
+    : 'sms';
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [templates, setTemplates] = useState([]);
   const [showEditor, setShowEditor] = useState(false);
   const [editorMode, setEditorMode] = useState('create'); // 'create' | 'edit'

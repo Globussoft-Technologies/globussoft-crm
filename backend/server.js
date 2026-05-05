@@ -73,6 +73,18 @@ const server = http.createServer(app);
 initSentry(app);
 
 // CORS — restrict to known origins
+//
+// The four hardcoded entries below are intentional fail-safes:
+//   - crm.globusdemos.com         → demo (always-on, never moves)
+//   - localhost:5173 / localhost:5000 → local dev (Vite + same-origin SSR)
+//   - globuscrm.globussoft.com    → production (added in PR #511; canonical
+//                                   prod hostname for the customer-facing
+//                                   deployment)
+// These exist as literals so a misconfigured deploy (missing env-var,
+// typo in CORS_ALLOWED_ORIGINS) can never lock the demo or production
+// out of CORS — which would brick the Inbox count poll, websocket
+// upgrade, and every fetch from the frontend. Additional origins are
+// env-driven via FRONTEND_URL (single) and CORS_ALLOWED_ORIGINS (CSV).
 const ALLOWED_ORIGINS = [
   "https://crm.globusdemos.com",
   "http://localhost:5173",

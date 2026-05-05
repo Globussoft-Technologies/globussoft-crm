@@ -695,7 +695,7 @@ export default function Inbox() {
             <form onSubmit={handleSendSms} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Phone Number:</label>
-                <input type="tel" required className="input-field" value={composeSmsData.to} onChange={e => setComposeSmsData({...composeSmsData, to: e.target.value})} placeholder="+919830087848" />
+                <input type="tel" required className="input-field" value={composeSmsData.to} onChange={e => setComposeSmsData({...composeSmsData, to: e.target.value})} placeholder="+91 XXXXXXXXXX" />
               </div>
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Message:</label>

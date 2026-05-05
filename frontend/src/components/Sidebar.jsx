@@ -717,21 +717,6 @@ function renderGenericNav({
       <Link to="/leads" icon={UserPlus} label="Leads" count={counts.leads} />
       <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" />
       <Link to="/clients" icon={Building2} label="Clients" />
-<<<<<<< knowledgeBase/fixes
-      <Link
-        to="/tasks"
-        icon={CheckSquare}
-        label="Task Queue"
-        count={counts.tasks}
-      />
-      <Link
-        to="/tickets"
-        icon={Ticket}
-        label="Tickets"
-        count={counts.tickets}
-      />
-      <Link to="/calendar-sync" icon={Calendar} label="Calendar" />
-=======
       <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} />
       <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} />
       {/* #474: label was "Calendar" pointing at /calendar-sync — the integration
@@ -742,7 +727,6 @@ function renderGenericNav({
           reality; a future event-list /calendar route can be added separately
           and re-promoted to the bare "Calendar" label then. */}
       <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" />
->>>>>>> main
       <Link to="/live-chat" icon={MessageSquare} label="Live Chat" />
 
       <Link to="/deal-insights" icon={Eye} label="Deal Insights" />

@@ -40,7 +40,7 @@ const inputStyle = {
 
 const buttonStyle = (variant = 'primary') => {
   const variants = {
-    primary:   { bg: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff', border: 'transparent' },
+    primary:   { bg: 'var(--primary-color, var(--accent-color))', color: 'var(--accent-text, #fff)', border: 'transparent' },
     secondary: { bg: 'rgba(255,255,255,0.06)', color: '#e2e8f0', border: 'rgba(255,255,255,0.12)' },
     danger:    { bg: 'rgba(239,68,68,0.12)', color: '#ef4444', border: 'rgba(239,68,68,0.3)' },
     ghost:     { bg: 'transparent', color: '#94a3b8', border: 'rgba(255,255,255,0.08)' },

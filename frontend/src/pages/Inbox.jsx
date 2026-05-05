@@ -196,12 +196,15 @@ export default function Inbox() {
 
   return (
     <div style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
+      {/* #485: flex-wrap + gap so the action group cleanly wraps below the title at
+          narrow viewports instead of overlapping it. Inner action group also wraps
+          so individual buttons stack on very tight widths rather than overflowing. */}
+      <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ minWidth: 0, flex: '1 1 240px' }}>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Unified Inbox</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Manage all client emails, calls, and SMS from one hub.</p>
         </div>
-        <div style={{ display: 'flex', gap: '1rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
           {/* #294: the previous styling was 10%-tinted purple + accent-color text,
               which on the wellness cream background (#FAF7F2) rendered as nearly
               invisible blush-on-cream. Switched to the canonical --accent-bg /

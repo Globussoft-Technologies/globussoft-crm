@@ -9,29 +9,35 @@
 
 const prisma = require("./prisma");
 
-// --------------- Mailgun helper (inline, same pattern as communications.js) ---------------
-const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY || "";
-const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || "mail.globusdemos.com";
-const FROM_EMAIL = `Globussoft CRM <noreply@${MAILGUN_DOMAIN}>`;
+// --------------- SendGrid helper (inline, same pattern as communications.js) ---------------
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
+const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
-async function sendMailgun(to, subject, body) {
-  if (!MAILGUN_API_KEY) {
-    console.log(`[Notification-Email] Mailgun not configured — email to ${to} logged but not sent`);
+async function sendSendGrid(to, subject, body) {
+  if (!SENDGRID_API_KEY) {
+    console.log(`[Notification-Email] SendGrid not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
   }
 
-  const formData = new URLSearchParams();
-  formData.append("from", FROM_EMAIL);
-  formData.append("to", to);
-  formData.append("subject", subject);
-  formData.append("text", body);
-  formData.append("html", body.replace(/\n/g, "<br>"));
+  const htmlBody = body.replace(/\n/g, "<br>");
+  const payload = {
+    personalizations: [{ to: [{ email: to }] }],
+    from: { email: FROM_EMAIL },
+    subject: subject,
+    content: [
+      { type: "text/plain", value: body },
+      { type: "text/html", value: htmlBody }
+    ]
+  };
 
   try {
-    const response = await fetch(`https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`, {
+    const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
-      headers: { Authorization: "Basic " + Buffer.from("api:" + MAILGUN_API_KEY).toString("base64") },
-      body: formData,
+      headers: {
+        "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
     });
 
     if (response.ok) {
@@ -39,11 +45,11 @@ async function sendMailgun(to, subject, body) {
       return { sent: true };
     } else {
       const text = await response.text();
-      console.error(`[Notification-Email] Mailgun error ${response.status}: ${text}`);
+      console.error(`[Notification-Email] SendGrid error ${response.status}: ${text}`);
       return { sent: false, reason: text };
     }
   } catch (err) {
-    console.error("[Notification-Email] Mailgun request failed:", err.message);
+    console.error("[Notification-Email] SendGrid request failed:", err.message);
     return { sent: false, reason: err.message };
   }
 }
@@ -98,7 +104,7 @@ async function notify({ userId, tenantId, title, message, type, link, channels, 
     try {
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (user?.email) {
-        await sendMailgun(user.email, title, message);
+        await sendSendGrid(user.email, title, message);
       }
     } catch (e) {
       console.warn("[Notification-Email] Email delivery failed:", e.message);

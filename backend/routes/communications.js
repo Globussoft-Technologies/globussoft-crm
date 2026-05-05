@@ -7,10 +7,9 @@ const crypto = require("crypto");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 
-// Mailgun email sending via their REST API
-const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
-const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || "crm.globusdemos.com";
-const FROM_EMAIL = `Globussoft CRM <noreply@${MAILGUN_DOMAIN}>`;
+// SendGrid email sending via their REST API
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
 function isValidEmail(email) {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -22,9 +21,9 @@ function escapeHtml(text) {
   return text.replace(/[&<>"']/g, m => map[m]);
 }
 
-async function sendMailgun(to, subject, body) {
-  if (!MAILGUN_API_KEY) {
-    console.log(`[Email] Mailgun not configured — email to ${to} logged but not sent`);
+async function sendSendGrid(to, subject, body) {
+  if (!SENDGRID_API_KEY) {
+    console.log(`[Email] SendGrid not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
   }
 
@@ -37,29 +36,35 @@ async function sendMailgun(to, subject, body) {
     return { sent: false, reason: "missing_subject_or_body" };
   }
 
-  const formData = new URLSearchParams();
-  formData.append("from", FROM_EMAIL);
-  formData.append("to", to);
-  formData.append("subject", subject);
-  formData.append("text", body);
   const htmlBody = escapeHtml(body).replace(/\n/g, "<br>");
-  formData.append("html", htmlBody);
+  const payload = {
+    personalizations: [{ to: [{ email: to }] }],
+    from: { email: FROM_EMAIL },
+    subject: subject,
+    content: [
+      { type: "text/plain", value: body },
+      { type: "text/html", value: htmlBody }
+    ]
+  };
 
   try {
-    const response = await fetch(`https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`, {
+    const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
-      headers: { Authorization: "Basic " + Buffer.from("api:" + MAILGUN_API_KEY).toString("base64") },
-      body: formData,
+      headers: {
+        "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
     });
 
     if (response.ok) {
-      const data = await response.json();
-      console.log(`[Email] Sent to ${to}: ${data.id}`);
-      return { sent: true, id: data.id };
+      const messageId = response.headers.get("x-message-id") || "sent";
+      console.log(`[Email] Sent to ${to}: ${messageId}`);
+      return { sent: true, id: messageId };
     } else {
       const err = await response.text();
-      console.error(`[Email] Mailgun error (${response.status}):`, err);
-      return { sent: false, reason: `mailgun_error_${response.status}`, details: err };
+      console.error(`[Email] SendGrid error (${response.status}):`, err);
+      return { sent: false, reason: `sendgrid_error_${response.status}`, details: err };
     }
   } catch (err) {
     console.error("[Email] Send error:", err.message);
@@ -67,10 +72,10 @@ async function sendMailgun(to, subject, body) {
   }
 }
 
-if (MAILGUN_API_KEY) {
-  console.log(`[Email] Mailgun configured for domain: ${MAILGUN_DOMAIN}`);
+if (SENDGRID_API_KEY) {
+  console.log(`[Email] SendGrid configured with sender: ${FROM_EMAIL}`);
 } else {
-  console.warn("[Email] MAILGUN_API_KEY not set — emails will be logged but not delivered");
+  console.warn("[Email] SENDGRID_API_KEY not set — emails will be logged but not delivered");
 }
 
 // GET all communications (Unified Inbox) — scoped to current tenant
@@ -170,14 +175,23 @@ router.post("/send-email", async (req, res) => {
         }
       });
 
-      // Per-recipient tracking pixel so opens / clicks attribute correctly.
+      // Create tracking pixel for open tracking
       const trackingId = crypto.randomUUID();
       await prisma.emailTracking.create({
         data: { emailId: emailRecord.id, trackingId, type: "open", tenantId: req.user.tenantId }
       });
+
+      // Inject tracking pixel into email body for SendGrid
+      const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
       const trackedBody = `${body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
 
-      const mailResult = await sendMailgun(recipient, subject, trackedBody);
+
+      // Send via SendGrid with tracking pixel.
+      // PR #511 review blocker #1: pass `recipient` (loop iteratee) NOT `to`
+      // (outer comma-separated string). v3.4.12 #435 fix introduced the
+      // per-recipient loop; passing `to` here would send every iteration to
+      // ALL recipients, undoing #435.
+      const mailResult = await sendSendGrid(recipient, subject, trackedBody);
 
       // Per-recipient Activity on the linked contact (if any). Same pattern as
       // single-recipient: best-effort, non-critical.
@@ -190,7 +204,7 @@ router.post("/send-email", async (req, res) => {
             userId: req.user.userId,
             tenantId: req.user.tenantId,
           }
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       if (req.io) req.io.emit('email_sent', emailRecord);

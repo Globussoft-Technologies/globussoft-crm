@@ -99,6 +99,7 @@ const Social = lazy(() => import("./pages/Social"));
 const Sandbox = lazy(() => import("./pages/Sandbox"));
 const Funnel = lazy(() => import("./pages/Funnel"));
 const Zapier = lazy(() => import("./pages/Zapier"));
+const CallMonitor = lazy(() => import("./pages/CallMonitor"));
 // Public pages
 const SsoReturn = lazy(() => import("./pages/SsoReturn"));
 // Wellness vertical
@@ -620,6 +621,7 @@ export default function App() {
                       }
                     />
                     <Route path="zapier" element={<Zapier />} />
+                    <Route path="call-monitor" element={<CallMonitor />} />
                     {/* #303: bare /calendar previously rendered a blank <main>. Wellness
                   tenants get bounced to their themed calendar; everyone else sees
                   the calendar-sync page (which is the closest generic equivalent). */}

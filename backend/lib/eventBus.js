@@ -6,38 +6,44 @@ const prisma = require("./prisma");
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
 
-// Mailgun email sending (same pattern as communications.js)
-const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
-const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || "crm.globusdemos.com";
-const FROM_EMAIL = `Globussoft CRM <noreply@${MAILGUN_DOMAIN}>`;
+// SendGrid email sending (same pattern as communications.js)
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
-async function sendMailgun(to, subject, body) {
-  if (!MAILGUN_API_KEY) {
-    console.log(`[WorkflowEngine] Mailgun not configured — email to ${to} logged but not sent`);
+async function sendSendGrid(to, subject, body) {
+  if (!SENDGRID_API_KEY) {
+    console.log(`[WorkflowEngine] SendGrid not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
   }
 
-  const formData = new URLSearchParams();
-  formData.append("from", FROM_EMAIL);
-  formData.append("to", to);
-  formData.append("subject", subject);
-  formData.append("text", body);
-  formData.append("html", body.replace(/\n/g, "<br>"));
+  const htmlBody = body.replace(/\n/g, "<br>");
+  const payload = {
+    personalizations: [{ to: [{ email: to }] }],
+    from: { email: FROM_EMAIL },
+    subject: subject,
+    content: [
+      { type: "text/plain", value: body },
+      { type: "text/html", value: htmlBody }
+    ]
+  };
 
   try {
-    const response = await fetch(`https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`, {
+    const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
-      headers: { Authorization: "Basic " + Buffer.from("api:" + MAILGUN_API_KEY).toString("base64") },
-      body: formData,
+      headers: {
+        "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
     });
 
     if (response.ok) {
-      const data = await response.json();
-      console.log(`[WorkflowEngine] Email sent to ${to}: ${data.id}`);
-      return { sent: true, id: data.id };
+      const messageId = response.headers.get("x-message-id") || "sent";
+      console.log(`[WorkflowEngine] Email sent to ${to}: ${messageId}`);
+      return { sent: true, id: messageId };
     } else {
       const err = await response.text();
-      console.error(`[WorkflowEngine] Mailgun error (${response.status}):`, err);
+      console.error(`[WorkflowEngine] SendGrid error (${response.status}):`, err);
       return { sent: false, reason: err };
     }
   } catch (err) {
@@ -206,7 +212,7 @@ async function executeAction(rule, payload, tenantId, io) {
       const subject = config.subject || `Notification: ${rule.name}`;
       const body = config.body || `Workflow "${rule.name}" was triggered.`;
       if (to) {
-        await sendMailgun(to, subject, body);
+        await sendSendGrid(to, subject, body);
       } else {
         console.warn(`[WorkflowEngine] send_email rule ${rule.id}: no recipient address`);
       }

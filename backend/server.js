@@ -77,6 +77,11 @@ const ALLOWED_ORIGINS = [
   "https://crm.globusdemos.com",
   "http://localhost:5173",
   "http://localhost:5000",
+  "https://globuscrm.globussoft.com",
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+  ...(process.env.CORS_ALLOWED_ORIGINS
+    ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
+    : []),
 ];
 app.use(cors({
   origin: (origin, callback) => {
@@ -165,16 +170,16 @@ app.use((req, res, next) => {
 
 io.on("connection", (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);
-  
+
   socket.on('join_presence', (data) => {
     socket.userData = { id: socket.id, name: data.name, color: presenceColors[Math.floor(Math.random() * presenceColors.length)] };
   });
 
   socket.on('mouse_move', (data) => {
     if (!socket.userData) return;
-    socket.broadcast.emit('cursor_update', { 
-      id: socket.id, rx: data.rx, ry: data.ry, 
-      name: socket.userData.name, color: socket.userData.color 
+    socket.broadcast.emit('cursor_update', {
+      id: socket.id, rx: data.rx, ry: data.ry,
+      name: socket.userData.name, color: socket.userData.color
     });
   });
 
@@ -491,7 +496,7 @@ const _gracefulShutdown = (signal) => {
   }, 10000).unref();
 };
 process.on('SIGTERM', () => _gracefulShutdown('SIGTERM'));
-process.on('SIGINT',  () => _gracefulShutdown('SIGINT'));
+process.on('SIGINT', () => _gracefulShutdown('SIGINT'));
 
 // DISABLE_CRONS=1 lets us boot a side-by-side instance (e.g. for c8 line-
 // coverage runs on a different port) without double-firing reminders, blasts,
@@ -501,82 +506,82 @@ if (process.env.DISABLE_CRONS === '1') {
   console.log('[crons] DISABLE_CRONS=1 — skipping all cron init (coverage / sandbox mode)');
 } else {
 
-// Scheduled Report Engine (checks hourly for due report schedules)
-const { initReportCron } = require('./cron/reportEngine');
-initReportCron();
+  // Scheduled Report Engine (checks hourly for due report schedules)
+  const { initReportCron } = require('./cron/reportEngine');
+  initReportCron();
 
-// Initialize Sequence Engine
-const { initSequenceCron } = require('./cron/sequenceEngine');
-initSequenceCron();
+  // Initialize Sequence Engine
+  const { initSequenceCron } = require('./cron/sequenceEngine');
+  initSequenceCron();
 
-// Initialize Lead Scoring Engine (runs every 10 min, immediate first tick)
-const { initLeadScoringCron } = require('./cron/leadScoringEngine');
-initLeadScoringCron(io);
+  // Initialize Lead Scoring Engine (runs every 10 min, immediate first tick)
+  const { initLeadScoringCron } = require('./cron/leadScoringEngine');
+  initLeadScoringCron(io);
 
-// Initialize Recurring Invoice Engine (runs daily at 6 AM)
-const { initRecurringInvoiceCron } = require('./cron/recurringInvoiceEngine');
-initRecurringInvoiceCron(io);
+  // Initialize Recurring Invoice Engine (runs daily at 6 AM)
+  const { initRecurringInvoiceCron } = require('./cron/recurringInvoiceEngine');
+  initRecurringInvoiceCron(io);
 
-// Initialize Marketplace Sync Engine (runs every 5 min)
-const { initMarketplaceCron } = require('./cron/marketplaceEngine');
-initMarketplaceCron(io);
+  // Initialize Marketplace Sync Engine (runs every 5 min)
+  const { initMarketplaceCron } = require('./cron/marketplaceEngine');
+  initMarketplaceCron(io);
 
-// Initialize GDPR Retention Engine (runs daily at 3 AM)
-const { initRetentionCron } = require('./cron/retentionEngine');
-initRetentionCron();
+  // Initialize GDPR Retention Engine (runs daily at 3 AM)
+  const { initRetentionCron } = require('./cron/retentionEngine');
+  initRetentionCron();
 
-// Initialize Scheduled Email Engine (runs every minute)
-const { initScheduledEmailCron } = require('./cron/scheduledEmailEngine');
-initScheduledEmailCron();
+  // Initialize Scheduled Email Engine (runs every minute)
+  const { initScheduledEmailCron } = require('./cron/scheduledEmailEngine');
+  initScheduledEmailCron();
 
-// Initialize Sentiment Analysis Engine (runs every 15 min)
-const { initSentimentCron } = require('./cron/sentimentEngine');
-initSentimentCron();
+  // Initialize Sentiment Analysis Engine (runs every 15 min)
+  const { initSentimentCron } = require('./cron/sentimentEngine');
+  initSentimentCron();
 
-// Initialize AI Deal Insights Engine (runs every 6 hours)
-const { initDealInsightsCron } = require('./cron/dealInsightsEngine');
-initDealInsightsCron(io);
+  // Initialize AI Deal Insights Engine (runs every 6 hours)
+  const { initDealInsightsCron } = require('./cron/dealInsightsEngine');
+  initDealInsightsCron(io);
 
-// Initialize Forecast Snapshot Engine (weekly Monday 1 AM)
-const { initForecastSnapshotCron } = require('./cron/forecastSnapshotEngine');
-initForecastSnapshotCron();
+  // Initialize Forecast Snapshot Engine (weekly Monday 1 AM)
+  const { initForecastSnapshotCron } = require('./cron/forecastSnapshotEngine');
+  initForecastSnapshotCron();
 
-// Initialize Workflow Trigger Engine (event-driven, not polled)
-const { initWorkflowEngine } = require('./cron/workflowEngine');
-initWorkflowEngine(io);
+  // Initialize Workflow Trigger Engine (event-driven, not polled)
+  const { initWorkflowEngine } = require('./cron/workflowEngine');
+  initWorkflowEngine(io);
 
-// Initialize Campaign Send Engine (processes scheduled campaigns every minute)
-const { initCampaignCron } = require('./cron/campaignEngine');
-initCampaignCron();
+  // Initialize Campaign Send Engine (processes scheduled campaigns every minute)
+  const { initCampaignCron } = require('./cron/campaignEngine');
+  initCampaignCron();
 
-// Initialize Automated Backup Engine (daily at 2 AM)
-const { initBackupCron } = require('./cron/backupEngine');
-initBackupCron();
+  // Initialize Automated Backup Engine (daily at 2 AM)
+  const { initBackupCron } = require('./cron/backupEngine');
+  initBackupCron();
 
-// Initialize Wellness Orchestrator (daily 07:00 IST)
-const { initOrchestratorCron } = require('./cron/orchestratorEngine');
-initOrchestratorCron();
+  // Initialize Wellness Orchestrator (daily 07:00 IST)
+  const { initOrchestratorCron } = require('./cron/orchestratorEngine');
+  initOrchestratorCron();
 
-// Initialize Appointment Reminders Engine (every 15 min, wellness tenants)
-const { initAppointmentRemindersCron } = require('./cron/appointmentRemindersEngine');
-initAppointmentRemindersCron();
+  // Initialize Appointment Reminders Engine (every 15 min, wellness tenants)
+  const { initAppointmentRemindersCron } = require('./cron/appointmentRemindersEngine');
+  initAppointmentRemindersCron();
 
-// Initialize Wellness Ops Engine (hourly: NPS surveys + junk-lead retention)
-const { initWellnessOpsCron } = require('./cron/wellnessOpsEngine');
-initWellnessOpsCron();
+  // Initialize Wellness Ops Engine (hourly: NPS surveys + junk-lead retention)
+  const { initWellnessOpsCron } = require('./cron/wellnessOpsEngine');
+  initWellnessOpsCron();
 
-// Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
-const { initLowStockCron } = require('./cron/lowStockEngine');
-initLowStockCron();
+  // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
+  const { initLowStockCron } = require('./cron/lowStockEngine');
+  initLowStockCron();
 
-// Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
-const { initSlaBreachCron } = require('./cron/slaBreachEngine');
-initSlaBreachCron();
+  // Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
+  const { initSlaBreachCron } = require('./cron/slaBreachEngine');
+  initSlaBreachCron();
 
-// Initialize Lead-side SLA Breach Engine (every 2 min — flips Contact.slaBreached
-// + emits 'lead.sla_breached' for the PRD §6.4 lead first-response SLA)
-const { initLeadSlaCron } = require('./cron/leadSlaEngine');
-initLeadSlaCron();
+  // Initialize Lead-side SLA Breach Engine (every 2 min — flips Contact.slaBreached
+  // + emits 'lead.sla_breached' for the PRD §6.4 lead first-response SLA)
+  const { initLeadSlaCron } = require('./cron/leadSlaEngine');
+  initLeadSlaCron();
 
 } // end DISABLE_CRONS guard
 

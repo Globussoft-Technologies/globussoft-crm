@@ -6,11 +6,15 @@
 // createRequire so we patch the *real* CJS module.exports object that the
 // SUT will see.
 //
-// MAILGUN_API_KEY is captured at module load time inside the SUT (top-level
-// `const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY || ""`). We therefore
-// set it BEFORE the SUT import so the email channel test exercises the
-// "Mailgun configured" branch.
-process.env.MAILGUN_API_KEY = process.env.MAILGUN_API_KEY || 'test-key-for-unit';
+// PR #511 (2026-05-05) swapped Mailgun → SendGrid. SENDGRID_API_KEY is
+// captured at module load time inside the SUT (top-level
+// `const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || ""`). We
+// therefore set it BEFORE the SUT import so the email channel tests
+// exercise the "SendGrid configured" branch. The previous incarnation
+// of this test file set MAILGUN_API_KEY which was harmlessly ignored
+// after the swap — tests still passed but asserted nothing about the
+// new code path. Closes PR #511 review blocker #2 for this module.
+process.env.SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || 'test-sendgrid-key';
 
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { createRequire } from 'node:module';
@@ -110,22 +114,73 @@ describe('lib/notificationService — notify', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  // SKIPPED: vi.mock of `global.fetch` doesn't intercept the SUT's import of
-  // node:fetch / undici under vitest 4 + CJS. The MAILGUN_API_KEY branch
-  // happens through the SUT's own require chain, not our mocked fetch.
-  // The OTHER email tests (skips when no key, skips when user missing) DO
-  // pass because they assert the *negative* path which doesn't depend on
-  // the mock firing. This positive-path test would need a deeper mock or
-  // a real Mailgun stub server to verify, which belongs in integration
-  // tests (already deferred per TODOS.md).
-  test.skip('email channel: looks up user + calls fetch when MAILGUN_API_KEY set', async () => {
-    process.env.MAILGUN_API_KEY = 'test-key';
+  // PR #511 SendGrid coverage: with SENDGRID_API_KEY set (above, line 24)
+  // the SUT calls global.fetch directly — no node:undici import chain to
+  // intercept, so the previously-skipped Mailgun test now works as-is on
+  // the SendGrid path.
+  test('email channel: looks up user + calls fetch when SENDGRID_API_KEY set', async () => {
     prisma.user.findUnique.mockResolvedValue({ email: 'a@b.com' });
     global.fetch.mockResolvedValue({ ok: true });
     await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', channels: ['db', 'email'] });
     expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { id: 1 } });
     expect(global.fetch).toHaveBeenCalled();
-    delete process.env.MAILGUN_API_KEY;
+  });
+
+  // PR #511 SendGrid contract: assert the request hits the right URL,
+  // sends Bearer auth (not Mailgun's Basic), and JSON body (not Mailgun's
+  // URLSearchParams). These are the exact assertions that would have
+  // caught the silent provider mismatch the review blocker flagged.
+  test('email channel: SendGrid request URL is api.sendgrid.com/v3/mail/send', async () => {
+    prisma.user.findUnique.mockResolvedValue({ email: 'a@b.com' });
+    global.fetch.mockResolvedValue({ ok: true });
+    await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', channels: ['db', 'email'] });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.sendgrid.com/v3/mail/send');
+  });
+
+  test('email channel: SendGrid request uses Bearer auth + Content-Type JSON', async () => {
+    prisma.user.findUnique.mockResolvedValue({ email: 'a@b.com' });
+    global.fetch.mockResolvedValue({ ok: true });
+    await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', channels: ['db', 'email'] });
+    const [, opts] = global.fetch.mock.calls[0];
+    expect(opts.method).toBe('POST');
+    expect(opts.headers.Authorization).toMatch(/^Bearer test-sendgrid-key$/);
+    expect(opts.headers['Content-Type']).toBe('application/json');
+    // Anti-regression: Mailgun used Basic auth + URLSearchParams. Pin the
+    // current contract to catch a silent revert.
+    expect(opts.headers.Authorization).not.toMatch(/^Basic /);
+    expect(opts.body).not.toBeInstanceOf(URLSearchParams);
+  });
+
+  test('email channel: SendGrid payload shape — personalizations / from / subject / content', async () => {
+    prisma.user.findUnique.mockResolvedValue({ email: 'recipient@example.com' });
+    global.fetch.mockResolvedValue({ ok: true });
+    await notify({ userId: 1, tenantId: 1, title: 'Welcome', message: 'Line 1\nLine 2', channels: ['db', 'email'] });
+    const [, opts] = global.fetch.mock.calls[0];
+    const payload = JSON.parse(opts.body);
+    expect(payload.personalizations).toEqual([{ to: [{ email: 'recipient@example.com' }] }]);
+    expect(payload.from.email).toMatch(/@/);
+    expect(payload.subject).toBe('Welcome');
+    expect(Array.isArray(payload.content)).toBe(true);
+    // Both plain-text and HTML parts; HTML converts \n → <br>
+    const html = payload.content.find((c) => c.type === 'text/html');
+    const plain = payload.content.find((c) => c.type === 'text/plain');
+    expect(html.value).toContain('<br>');
+    expect(plain.value).toBe('Line 1\nLine 2');
+  });
+
+  test('email channel: returns notification row even when SendGrid 4xx (best-effort)', async () => {
+    prisma.user.findUnique.mockResolvedValue({ email: 'a@b.com' });
+    global.fetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: () => Promise.resolve('Unauthorized'),
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const out = await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', channels: ['db', 'email'] });
+    expect(out).toEqual(NOTIF_ROW);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   test('email channel: skips fetch when user has no email', async () => {
@@ -148,15 +203,13 @@ describe('lib/notificationService — notify', () => {
     warnSpy.mockRestore();
   });
 
-  test('email channel: swallows mailgun fetch failures', async () => {
-    process.env.MAILGUN_API_KEY = 'test-key';
+  test('email channel: swallows SendGrid fetch failures', async () => {
     prisma.user.findUnique.mockResolvedValue({ email: 'a@b.com' });
     global.fetch.mockRejectedValue(new Error('network error'));
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const out = await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', channels: ['db', 'email'] });
     expect(out).toEqual(NOTIF_ROW);
     errSpy.mockRestore();
-    delete process.env.MAILGUN_API_KEY;
   });
 
   // SKIPPED: pushService is loaded via require() inside the SUT's `notify`

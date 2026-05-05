@@ -392,7 +392,7 @@ const MarketplaceLeads = () => {
             <button className="btn-primary" onClick={() => setShowConfig(true)} style={{ padding: '0.5rem 1.25rem' }}>
               <Settings size={15} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Configure Marketplaces
             </button>
-            <a href="/marketplace" style={{ padding: '0.5rem 1.25rem', borderRadius: '6px', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '0.875rem', display: 'inline-flex', alignItems: 'center' }}>
+            <a href="/marketplace" className="btn-primary" style={{ padding: '0.5rem 1.25rem', fontSize: '0.875rem', display: 'inline-flex', alignItems: 'center' }}>
               Browse all integrations
             </a>
           </div>

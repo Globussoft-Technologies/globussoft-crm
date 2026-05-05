@@ -1,19 +1,26 @@
-import React, { useState, useEffect, useRef, useCallback, useContext } from 'react';
-import { Bell, Check, X } from 'lucide-react';
-import { io } from 'socket.io-client';
-import { fetchApi } from '../utils/api';
-import { AuthContext } from '../App';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useContext,
+} from "react";
+import { Bell, Check, X } from "lucide-react";
+import { io } from "socket.io-client";
+import { fetchApi } from "../utils/api";
+import { AuthContext } from "../App";
 
 const NotificationBell = () => {
   const { user } = useContext(AuthContext);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const ref = useRef(null);
 
   const fetchUnreadCount = useCallback(async () => {
     try {
-      const data = await fetchApi('/api/notifications/unread-count');
+      const data = await fetchApi("/api/notifications/unread-count");
       setUnreadCount(data.count);
     } catch (err) {
       // silently fail
@@ -22,11 +29,15 @@ const NotificationBell = () => {
 
   const fetchNotifications = useCallback(async () => {
     try {
-      const data = await fetchApi('/api/notifications');
+      const data = await fetchApi("/api/notifications");
       // Backend returns { notifications, total, page, limit, pages }; tolerate the
       // older array shape too in case any other consumer is still on it. Crashed the
       // whole app pre-fix when state became an object and .map() was called on it (#113).
-      const list = Array.isArray(data) ? data : Array.isArray(data?.notifications) ? data.notifications : [];
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.notifications)
+          ? data.notifications
+          : [];
       setNotifications(list);
     } catch (err) {
       // silently fail
@@ -50,14 +61,18 @@ const NotificationBell = () => {
 
     if (!user) return;
 
-    const socket = io('/', { reconnection: false, timeout: 5000 });
-    socket.on('connect_error', () => { /* nginx may not proxy socket.io — silent */ });
-    socket.on('error', () => { /* silent */ });
+    const socket = io("/", { reconnection: false, timeout: 5000 });
+    socket.on("connect_error", () => {
+      /* nginx may not proxy socket.io — silent */
+    });
+    socket.on("error", () => {
+      /* silent */
+    });
 
     // New notification → bump the local count if it's for this user.
     // The server broadcasts globally with { userId, notification }; we filter
     // client-side so other users' notifications don't inflate our badge.
-    socket.on('notification_new', (payload) => {
+    socket.on("notification_new", (payload) => {
       if (!payload) return;
       if (payload.userId && user.id && payload.userId !== user.id) return;
       setUnreadCount((c) => c + 1);
@@ -69,7 +84,7 @@ const NotificationBell = () => {
     });
 
     // Server signals all-cleared (mark-all-read, bulk delete) for a user.
-    socket.on('notifications_cleared', (payload) => {
+    socket.on("notifications_cleared", (payload) => {
       if (payload?.userId && user.id && payload.userId !== user.id) return;
       setUnreadCount(0);
     });
@@ -80,6 +95,12 @@ const NotificationBell = () => {
   }, [fetchUnreadCount, user]);
 
   useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
     if (open) fetchNotifications();
   }, [open, fetchNotifications]);
 
@@ -87,14 +108,16 @@ const NotificationBell = () => {
     const handleClickOutside = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   const markAsRead = async (id) => {
     try {
-      await fetchApi(`/api/notifications/${id}/read`, { method: 'PUT' });
-      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+      await fetchApi(`/api/notifications/${id}/read`, { method: "PUT" });
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)),
+      );
       setUnreadCount((c) => Math.max(0, c - 1));
     } catch (err) {
       // silently fail
@@ -103,7 +126,7 @@ const NotificationBell = () => {
 
   const markAllRead = async () => {
     try {
-      await fetchApi('/api/notifications/read-all', { method: 'PUT' });
+      await fetchApi("/api/notifications/read-all", { method: "PUT" });
       setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       setUnreadCount(0);
     } catch (err) {
@@ -114,7 +137,7 @@ const NotificationBell = () => {
   const deleteNotification = async (e, id) => {
     e.stopPropagation();
     try {
-      await fetchApi(`/api/notifications/${id}`, { method: 'DELETE' });
+      await fetchApi(`/api/notifications/${id}`, { method: "DELETE" });
       const removed = notifications.find((n) => n.id === id);
       setNotifications((prev) => prev.filter((n) => n.id !== id));
       if (removed && !removed.isRead) setUnreadCount((c) => Math.max(0, c - 1));
@@ -124,8 +147,10 @@ const NotificationBell = () => {
   };
 
   const timeAgo = (dateStr) => {
-    const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
-    if (seconds < 60) return 'just now';
+    const seconds = Math.floor(
+      (Date.now() - new Date(dateStr).getTime()) / 1000,
+    );
+    if (seconds < 60) return "just now";
     const minutes = Math.floor(seconds / 60);
     if (minutes < 60) return `${minutes}m ago`;
     const hours = Math.floor(minutes / 60);
@@ -136,116 +161,117 @@ const NotificationBell = () => {
 
   const typeColor = (type) => {
     switch (type) {
-      case 'success': return '#10b981';
-      case 'warning': return '#f59e0b';
-      case 'error': return '#ef4444';
-      default: return 'var(--accent-color)';
+      case "success":
+        return "#10b981";
+      case "warning":
+        return "#f59e0b";
+      case "error":
+        return "#ef4444";
+      default:
+        return "var(--accent-color)";
     }
   };
 
-  // #483: on narrow viewports (<=480px) the bell sits near the right edge, so
-  // a `right: 0` anchored 360px-wide popover would extend off the LEFT edge of
-  // the viewport, hiding notification titles. Detect mobile and switch to a
-  // fixed full-viewport-width overlay with side padding so titles + bodies
-  // stay visible. window guarded for SSR safety.
-  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 480;
-  const dropdownStyle = isMobile
-    ? {
-        position: 'fixed',
-        top: 56,
-        left: 8,
-        right: 8,
-        width: 'auto',
-        maxHeight: 'calc(100vh - 72px)',
-        overflowY: 'auto',
-        background: 'var(--surface-color)',
-        border: '1px solid var(--border-color)',
-        borderRadius: 12,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
-        zIndex: 9999,
-      }
-    : {
-        position: 'absolute',
-        top: '100%',
-        right: 0,
-        width: 360,
-        maxHeight: 460,
-        overflowY: 'auto',
-        background: 'var(--surface-color)',
-        border: '1px solid var(--border-color)',
-        borderRadius: 12,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
-        zIndex: 9999,
-      };
-
   return (
-    <div ref={ref} style={{ position: 'relative' }}>
+    <div ref={ref} style={{ position: "relative" }}>
       <button
         onClick={() => setOpen(!open)}
-        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
         aria-expanded={open}
         style={{
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          position: 'relative',
-          padding: '8px',
-          color: 'var(--text-primary)',
-          display: 'flex',
-          alignItems: 'center',
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          position: "relative",
+          padding: "8px",
+          color: "var(--text-primary)",
+          display: "flex",
+          alignItems: "center",
         }}
       >
         <Bell size={20} />
         {unreadCount > 0 && (
           <span
             style={{
-              position: 'absolute',
+              position: "absolute",
               top: 2,
               right: 2,
-              background: '#ef4444',
-              color: '#fff',
-              borderRadius: '50%',
+              background: "#ef4444",
+              color: "#fff",
+              borderRadius: "50%",
               width: 18,
               height: 18,
               fontSize: 11,
               fontWeight: 700,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
               lineHeight: 1,
             }}
           >
-            {unreadCount > 99 ? '99+' : unreadCount}
+            {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         )}
       </button>
 
       {open && (
-        <div style={dropdownStyle}>
+        <div
+          style={{
+            position: isMobile ? "fixed" : "absolute",
+            ...(isMobile
+              ? {
+                  top: ref.current
+                    ? ref.current.getBoundingClientRect().bottom + 8
+                    : "auto",
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                }
+              : {
+                  top: "100%",
+                  right: 0,
+                }),
+            width: isMobile ? "calc(100vw - 16px)" : 360,
+            maxHeight: 460,
+            overflowY: "auto",
+            overflowX: "hidden",
+            background: "var(--surface-color)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 12,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
+            zIndex: 9999,
+            ...(isMobile ? {} : { marginTop: 8 }),
+          }}
+        >
           {/* Header */}
           <div
             style={{
-              padding: '14px 16px',
-              borderBottom: '1px solid var(--border-color)',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
+              padding: "14px 16px",
+              borderBottom: "1px solid var(--border-color)",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
             }}
           >
-            <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>
+            <span
+              style={{
+                fontWeight: 600,
+                fontSize: 15,
+                color: "var(--text-primary)",
+              }}
+            >
               Notifications
             </span>
             {unreadCount > 0 && (
               <button
                 onClick={markAllRead}
                 style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--accent-color)',
-                  cursor: 'pointer',
+                  background: "none",
+                  border: "none",
+                  color: "var(--accent-color)",
+                  cursor: "pointer",
                   fontSize: 13,
-                  display: 'flex',
-                  alignItems: 'center',
+                  display: "flex",
+                  alignItems: "center",
                   gap: 4,
                 }}
               >
@@ -258,9 +284,9 @@ const NotificationBell = () => {
           {notifications.length === 0 ? (
             <div
               style={{
-                padding: '32px 16px',
-                textAlign: 'center',
-                color: 'var(--text-secondary)',
+                padding: "32px 16px",
+                textAlign: "center",
+                color: "var(--text-secondary)",
                 fontSize: 14,
               }}
             >
@@ -272,18 +298,24 @@ const NotificationBell = () => {
                 key={n.id}
                 onClick={() => !n.isRead && markAsRead(n.id)}
                 style={{
-                  padding: '12px 16px',
-                  borderBottom: '1px solid var(--border-color)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'flex-start',
+                  padding: "12px 16px",
+                  borderBottom: "1px solid var(--border-color)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "flex-start",
                   gap: 10,
-                  background: n.isRead ? 'transparent' : 'rgba(59,130,246,0.06)',
-                  transition: 'background 0.15s',
+                  background: n.isRead
+                    ? "transparent"
+                    : "rgba(59,130,246,0.06)",
+                  transition: "background 0.15s",
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.04)')}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = "rgba(255,255,255,0.04)")
+                }
                 onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = n.isRead ? 'transparent' : 'rgba(59,130,246,0.06)')
+                  (e.currentTarget.style.background = n.isRead
+                    ? "transparent"
+                    : "rgba(59,130,246,0.06)")
                 }
               >
                 {/* Unread dot */}
@@ -293,8 +325,8 @@ const NotificationBell = () => {
                       style={{
                         width: 8,
                         height: 8,
-                        borderRadius: '50%',
-                        background: '#3b82f6',
+                        borderRadius: "50%",
+                        background: "#3b82f6",
                       }}
                     />
                   )}
@@ -304,9 +336,9 @@ const NotificationBell = () => {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
                       marginBottom: 2,
                     }}
                   >
@@ -314,14 +346,21 @@ const NotificationBell = () => {
                       style={{
                         fontWeight: 600,
                         fontSize: 13,
-                        color: 'var(--text-primary)',
+                        color: "var(--text-primary)",
                         borderLeft: `3px solid ${typeColor(n.type)}`,
                         paddingLeft: 6,
                       }}
                     >
                       {n.title}
                     </span>
-                    <span style={{ fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'nowrap', marginLeft: 8 }}>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: "var(--text-secondary)",
+                        whiteSpace: "nowrap",
+                        marginLeft: 8,
+                      }}
+                    >
                       {timeAgo(n.createdAt)}
                     </span>
                   </div>
@@ -329,11 +368,11 @@ const NotificationBell = () => {
                     style={{
                       margin: 0,
                       fontSize: 12,
-                      color: 'var(--text-secondary)',
+                      color: "var(--text-secondary)",
                       lineHeight: 1.4,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
                     }}
                   >
                     {n.message}
@@ -344,16 +383,16 @@ const NotificationBell = () => {
                 <button
                   onClick={(e) => deleteNotification(e, n.id)}
                   style={{
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    color: 'var(--text-secondary)',
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "var(--text-secondary)",
                     padding: 4,
                     opacity: 0.5,
-                    transition: 'opacity 0.15s',
+                    transition: "opacity 0.15s",
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.5')}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.5")}
                 >
                   <X size={14} />
                 </button>

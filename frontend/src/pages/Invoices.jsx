@@ -213,7 +213,10 @@ export default function Invoices() {
         </span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem' }}>
+      {/* #481: two-column grid (Create | Ledger) collapses to a single column
+          below 768px so the form labels + helper text don't wrap word-by-word
+          and the ledger isn't squeezed to invisible-bar width. */}
+      <div className="invoices-grid">
 
         {/* Create Invoice Panel */}
         <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
@@ -577,7 +580,13 @@ export default function Invoices() {
         </div>
       )}
 
-      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }`}</style>
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .invoices-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 2rem; }
+        @media (max-width: 768px) {
+          .invoices-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+        }
+      `}</style>
     </div>
   );
 }

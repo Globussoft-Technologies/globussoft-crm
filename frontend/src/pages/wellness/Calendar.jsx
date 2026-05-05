@@ -191,22 +191,27 @@ export default function CalendarGrid() {
       )}
 
       {!loading && columns.length > 0 && (
-        <div className="glass" style={{ padding: '1rem', overflow: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(120px, 1fr))`, gap: '4px' }}>
+        <div className="glass calendar-scroll" style={{ padding: '1rem', overflow: 'auto' }}>
+          <div className="calendar-grid" style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(120px, 1fr))`, gap: '4px' }}>
             <div style={{ ...colHead, background: 'transparent' }}></div>
             {columns.map((c) => (
-              <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1 }}>
+              <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1, minWidth: 0, overflow: 'hidden' }} title={c.role ? `${c.name} · ${c.role}` : c.name}>
                 {c.isUnassigned ? (
-                  <UserIcon size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7 }} />
+                  <UserIcon size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7, flexShrink: 0 }} />
                 ) : (
-                  <Stethoscope size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7 }} />
+                  <Stethoscope size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7, flexShrink: 0 }} />
                 )}
-                {c.name}
-                {c.role && (
-                  <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginLeft: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    {c.role}
-                  </span>
-                )}
+                {/* #486: name + role row needs explicit overflow:hidden + ellipsis,
+                    otherwise "Sandeep Bose" (12 chars) + " DOCTOR" suffix overflows
+                    the 120px min column width and clips into the next column. */}
+                <span style={{ display: 'inline-block', verticalAlign: 'middle', maxWidth: 'calc(100% - 22px)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {c.name}
+                  {c.role && (
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginLeft: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {c.role}
+                    </span>
+                  )}
+                </span>
               </div>
             ))}
 
@@ -226,6 +231,8 @@ export default function CalendarGrid() {
                         ...hourCell,
                         cursor: isCreatable ? 'pointer' : 'default',
                         position: 'relative',
+                        minWidth: 0,
+                        overflow: 'hidden',
                       }}
                       onClick={isCreatable ? () => setNewVisit({ columnId: c.id, hour: h }) : undefined}
                       title={isCreatable ? `Book ${fmtHour(h)} with ${c.name}` : undefined}
@@ -242,7 +249,12 @@ export default function CalendarGrid() {
                             borderLeft: `3px solid ${STATUS_BORDER[v.status] || '#64748b'}`,
                             padding: '0.4rem 0.5rem', borderRadius: '6px',
                             fontSize: '0.75rem', display: 'block',
+                            // #486: keep the event chip clamped to its grid-cell width
+                            // so long patient names + service titles ellipsis-truncate
+                            // instead of overflowing into the next practitioner column.
+                            minWidth: 0, maxWidth: '100%', overflow: 'hidden',
                           }}
+                          title={`${new Date(v.visitDate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} IST · ${v.patient?.name || `#${v.patientId}`}${v.service?.name ? ` — ${v.service.name}` : ''}`}
                           onClick={(e) => e.stopPropagation()}
                         >
                           <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>

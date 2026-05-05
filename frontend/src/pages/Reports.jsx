@@ -209,10 +209,10 @@ export default function Reports() {
 
       {/* View Mode Tabs */}
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-        <button onClick={() => setViewMode('chart')} style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', background: viewMode === 'chart' ? 'var(--accent-color)' : 'var(--subtle-bg)', color: viewMode === 'chart' ? '#fff' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', transition: 'var(--transition)' }}>
+        <button onClick={() => setViewMode('chart')} style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', background: viewMode === 'chart' ? 'var(--primary-color, var(--accent-color))' : 'var(--subtle-bg)', color: viewMode === 'chart' ? '#fff' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', transition: 'var(--transition)' }}>
           <BarChart3 size={16} /> Charts
         </button>
-        <button onClick={() => setViewMode('table')} style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', background: viewMode === 'table' ? 'var(--accent-color)' : 'var(--subtle-bg)', color: viewMode === 'table' ? '#fff' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', transition: 'var(--transition)' }}>
+        <button onClick={() => setViewMode('table')} style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', background: viewMode === 'table' ? 'var(--primary-color, var(--accent-color))' : 'var(--subtle-bg)', color: viewMode === 'table' ? '#fff' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', transition: 'var(--transition)' }}>
           <Table size={16} /> Detailed Data
         </button>
       </div>

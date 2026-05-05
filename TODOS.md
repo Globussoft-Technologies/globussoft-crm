@@ -13,7 +13,6 @@ These are NOT autonomous-fixable. They need a real person with credentials, infr
 | # | Task | Who needs to do it | Why it's blocked |
 |---|---|---|---|
 | ~~**B-01**~~ | ~~Set TURNSTILE_SECRET_KEY env-var on demo for real CAPTCHA enforcement~~ | ✅ **SHIPPED** 2026-05-05 evening | Cloudflare Turnstile sitekey + secret-key pair created via dashboard. Both keys deployed to demo's `backend/.env` via [scripts/apply-turnstile-env.py](scripts/apply-turnstile-env.py) (paramiko + SFTP + backup-and-rollback safety net). pm2 restart with --update-env confirmed; `/api/health` returned 200 with fresh uptime 3.16s. **Per-form opt-in still required** — landing-page forms must set `props.enableCaptcha: true` in the LandingPageBuilder UI to actually render the widget. The frontend wiring at [landingPageRenderer.js:149-205](backend/services/landingPageRenderer.js#L149) is complete; the env-var-default behaviour is "render-only-when-explicitly-enabled" so no surprise activation on existing forms. Optional follow-up: add TURNSTILE_SECRET_KEY to GH Actions secrets if you want CI to enforce verification (currently CI passes with unset → stub-friendly 200). |
-| **B-02** | **Rotate two credentials pasted in the 2026-05-05 evening session chat transcript** | Sumit | Both were saved to gitignored files (no leak via git) BUT live in the chat transcript and could be replayed by anyone with conversation-history access. **Both values are in chat history; do NOT mirror them into TODOS / commit messages / public docs** (gitleaks push-protection will reject; that's the right behavior). (1) **SendGrid API key** (label: `medcore-test`, prefix `SG.Rfcm…`) — rotate via SendGrid dashboard → update local `backend/.env` → `gh secret set --env-file backend/.env` → re-run the SSH apply-demo-ssh-config script to push the new key onto demo. (2) **Demo SSH password** (32 chars, alphanumeric, prefix `rSPa…`) — rotate via `passwd` on demo as `empcloud-development`, then update `.env` at repo root locally. After both: regenerate the `.env` files on every machine that has them. **Note 2026-05-05 evening:** the Turnstile keys (Site + Secret) are ALSO now in chat — they're separate from B-02 because they're CAPTCHA keys for a public widget, not infra credentials, and the Site Key is public by design. The Secret Key still warrants rotation if you ever suspect chat-history access; rotate via Cloudflare dashboard same flow as the original creation. |
 
 When B-NN ships, move it to "## Recently shipped" and remove from this section. Add new operator-blockers above with B-NN ids.
 
@@ -63,7 +62,6 @@ QA filed a 6-issue cluster (#505-#510) on /invoices today. Verification at HEAD 
 
 **Blocked on user input** (state unchanged from morning):
 - **B-01** TURNSTILE_SECRET_KEY env-var on demo (operator-blocker)
-- **B-02** Rotate the 2 chat-leaked credentials (SendGrid key + demo SSH password) — see operator-blocker section above
 - **#431** [P2][privacy] retention form silent-revert — awaiting fresh repro
 - **#437** [P3][marketplace] /marketplace-leads visibility indicator — awaiting product-design call
 - **#457** Manual-only QA umbrella — intentionally stays open
@@ -121,8 +119,6 @@ These were noted in the previous handoff and remain candidates for promotion to 
 ### Three things to do first at home
 
 1. **Smoke-test demo email** — log in as admin@globussoft.com on `https://crm.globusdemos.com`, compose an email via `/inbox` to a real address you control, and confirm it lands. This validates that the SendGrid swap + the operator setup actually works end-to-end. If it doesn't deliver, check `pm2 logs globussoft-crm-backend` on demo for SendGrid 4xx/5xx errors. Same shape as the `36e554d` post-Nginx-unblock latent bug class.
-
-2. **Rotate B-02 credentials** — both the SendGrid key (medcore-test) and the demo SSH password were pasted in chat. Rotate before anyone with conversation-history access could replay them. Sequence: SendGrid first (1 min), demo SSH second (1 min), then re-run `gh secret set --env-file backend/.env` + the SSH apply-demo-ssh-config script to push the new key.
 
 3. **PR #511 carry-over (test coverage)** — blocker #2 is the highest-value remaining item. Adding SendGrid mock-and-test coverage to email-api / communications-api / email-scheduling-api specs + cron/lib vitests would catch regressions in the new code path. The existing tests use Mailgun's `URLSearchParams` + Basic auth shape; the new SendGrid path uses JSON + Bearer. Without test extensions, the auto-mocked tests pass blindly. ~2-3h focused work.
 

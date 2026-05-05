@@ -56,6 +56,8 @@ That's it. **No autonomous-fixable items remain in the GitHub backlog.** All ope
 
 1. **Watch deploys for `55fef9f` `a2895d8` `867c34d` `ecb4ae0` `fc9898e`** — 5 commits pushed in quick succession; deploy.yml runs sequentially. Last commit `fc9898e` should be the one demo lands on. If api_tests goes red on any of them, triage via `triaging-stuck-deploy-gate`.
 
+   **UPDATE:** all 5 wave-deploys went RED on the lint job (npm audit). Root cause: 13 fresh axios CVEs against versions <1.15.2 (none allowlisted). Fixed in `8e04432` (bumped axios 1.15.0 → 1.16.0 latest). `npm run audit:check` now reports OK. Demo will catch up to HEAD on the next deploy completion.
+
 2. **B-01 still open** — operator needs to set TURNSTILE_SECRET_KEY on demo for real CAPTCHA enforcement.
 
 3. **Cron-learnings now at 9 entries** — ready for next manual review whenever.

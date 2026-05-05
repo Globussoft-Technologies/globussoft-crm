@@ -13,9 +13,14 @@ export default function Inbox() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('emails');
 
+
   // Compose modal state
   const [showCompose, setShowCompose] = useState(false);
   const [composeData, setComposeData] = useState({ to: '', subject: '', body: '' });
+
+  // SMS Compose modal state
+  const [showComposeSms, setShowComposeSms] = useState(false);
+  const [composeSmsData, setComposeSmsData] = useState({ to: '', body: '' });
 
   // Meeting modal state
   const [showMeet, setShowMeet] = useState(false);
@@ -37,6 +42,11 @@ export default function Inbox() {
   // Call dialer modal state
   const [showCallDial, setShowCallDial] = useState(false);
   const [callDialData, setCallDialData] = useState({ contactId: '', notes: '' });
+
+  // Email detail view state (PR #511 — separate modal pattern; coexists with
+  // the shared `detail` modal for sms/wa/call. Blocker #7 in the review;
+  // intentional carry-over for v3.4.13 cleanup.)
+  const [selectedEmail, setSelectedEmail] = useState(null);
 
   // #253: track which call recording is currently expanded into a player.
   // playerErrors keyed by call.id so a single broken URL doesn't poison
@@ -67,14 +77,32 @@ export default function Inbox() {
   const handleSendEmail = async (e) => {
     e.preventDefault();
     await fetchApi('/api/communications/send-email', { method: 'POST', body: JSON.stringify(composeData) });
-    
+
     notify.success(`Email Sent Successfully!\n\n[Epic #104] Tracking Pixel Active: You will be notified the instant ${composeData.to} opens or clicks links in this message.`);
-    
+
     setShowCompose(false);
     setComposeData({ to: '', subject: '', body: '' });
     // Refresh
     const data = await fetchApi('/api/communications/inbox');
     setEmails(Array.isArray(data) ? data : []);
+  };
+
+  const handleSendSms = async (e) => {
+    e.preventDefault();
+    try {
+      await fetchApi('/api/sms/send', { method: 'POST', body: JSON.stringify(composeSmsData) });
+
+      notify.success(`SMS Sent Successfully!\n\nYour message has been queued and will be delivered to ${composeSmsData.to}.`);
+
+      setShowComposeSms(false);
+      setComposeSmsData({ to: '', body: '' });
+      // Refresh SMS messages
+      const data = await fetchApi('/api/sms/messages').catch(() => ({}));
+      setSmsMessages(Array.isArray(data?.messages || data) ? (data?.messages || data) : []);
+    } catch (err) {
+      notify.error('Failed to send SMS. Please check the phone number and try again.');
+      console.error(err);
+    }
   };
 
   const handleScheduleMeeting = async (e) => {
@@ -237,6 +265,9 @@ export default function Inbox() {
           <button onClick={() => setShowCallDial(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Phone size={18} /> Call Dialer
           </button>
+          <button onClick={() => setShowComposeSms(true)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <MessageSquare size={18} /> Compose SMS
+          </button>
           <button onClick={() => setShowCompose(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Mail size={18} /> Compose Email
           </button>
@@ -334,15 +365,7 @@ export default function Inbox() {
               </p>
             )}
             {emails.map(email => (
-              <div
-                key={email.id}
-                onClick={() => setDetail({ kind: 'email', item: email })}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail({ kind: 'email', item: email }); } }}
-                className="table-row-hover"
-                style={{ padding: '1.5rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: email.read ? 'rgba(0,0,0,0.2)' : 'rgba(59, 130, 246, 0.05)', display: 'flex', gap: '1.5rem', cursor: 'pointer' }}
-              >
+              <div key={email.id} className="table-row-hover" onClick={() => setSelectedEmail(email)} style={{ padding: '1.5rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: email.read ? 'rgba(0,0,0,0.2)' : 'rgba(59, 130, 246, 0.05)', display: 'flex', gap: '1.5rem', cursor: 'pointer' }}>
                 <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <User size={20} color="#fff" />
                 </div>
@@ -546,6 +569,144 @@ export default function Inbox() {
                 <button type="button" onClick={() => setShowCallDial(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Cancel</button>
                 <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Phone size={16} /> Start Call
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* #460: Row-detail modal — shared across email/call/sms/whatsapp tabs.
+          Renders the full body, headers, status, and (for calls) the recording.
+          NOTE: PR #512 (squash-merge 8b59fcb) accidentally dropped this block
+          while keeping setDetail() callsites. PR #511's rebase restores it. */}
+      {detail && (
+        <div onClick={() => setDetail(null)} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}>
+          <div onClick={(e) => e.stopPropagation()} className="card" style={{ padding: '2.5rem', width: '640px', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {detail.kind === 'email' && <><Mail size={20} color="var(--accent-color)" /> Email</>}
+                {detail.kind === 'call' && <><Phone size={20} color="var(--warning-color)" /> Call Log</>}
+                {detail.kind === 'sms' && <><MessageSquare size={20} color="#10b981" /> SMS Message</>}
+                {detail.kind === 'wa' && <><MessageCircle size={20} color="#25D366" /> WhatsApp Message</>}
+              </h3>
+              <button onClick={() => setDetail(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }} aria-label="Close">
+                <X size={20} />
+              </button>
+            </div>
+            {detail.kind === 'email' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>From:</strong> {detail.item.from}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>To:</strong> {detail.item.to}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>Date:</strong> {new Date(detail.item.createdAt).toLocaleString()}</div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 600, marginTop: '0.5rem' }}>{detail.item.subject}</div>
+                <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, color: 'var(--text-primary)', marginTop: '0.5rem' }}>
+                  {detail.item.body || <em style={{ color: 'var(--text-secondary)' }}>(empty body)</em>}
+                </div>
+              </div>
+            )}
+            {detail.kind === 'call' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>Direction:</strong> {detail.item.direction}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>Duration:</strong> {detail.item.duration ?? 0} seconds</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>From:</strong> {detail.item.callerNumber || '—'}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>To:</strong> {detail.item.calleeNumber || '—'}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>Status:</strong> {detail.item.status || '—'}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>When:</strong> {new Date(detail.item.createdAt).toLocaleString()}</div>
+                {detail.item.notes && (
+                  <div style={{ marginTop: '0.5rem', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
+                    <strong style={{ display: 'block', marginBottom: '0.25rem' }}>Notes</strong>
+                    {detail.item.notes}
+                  </div>
+                )}
+                {detail.item.recordingUrl && (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <strong style={{ display: 'block', marginBottom: '0.25rem' }}>Recording</strong>
+                    <audio controls src={detail.item.recordingUrl} style={{ width: '100%' }} />
+                  </div>
+                )}
+              </div>
+            )}
+            {(detail.kind === 'sms' || detail.kind === 'wa') && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>Direction:</strong> {detail.item.direction}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>From:</strong> {detail.item.from || '—'}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>To:</strong> {detail.item.to || '—'}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>Status:</strong> {detail.item.status || '—'}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>When:</strong> {new Date(detail.item.createdAt).toLocaleString()}</div>
+                {detail.kind === 'wa' && detail.item.templateName && (
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>Template:</strong> {detail.item.templateName}</div>
+                )}
+                <div style={{ marginTop: '0.5rem', whiteSpace: 'pre-wrap', lineHeight: 1.55, padding: '0.75rem 1rem', borderRadius: '8px', background: detail.kind === 'wa' ? 'rgba(37, 211, 102, 0.06)' : 'rgba(16, 185, 129, 0.06)' }}>
+                  {detail.item.body || <em style={{ color: 'var(--text-secondary)' }}>(no body — template only)</em>}
+                </div>
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button onClick={() => setDetail(null)} className="btn-secondary">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedEmail && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}>
+          <div className="card" style={{ padding: '2.5rem', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border-color)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
+            <button onClick={() => setSelectedEmail(null)} style={{ float: 'right', background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+              ✕
+            </button>
+
+            <div style={{ marginBottom: '2rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div style={{ width: '50px', height: '50px', borderRadius: '50%', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <User size={24} color="#fff" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>{selectedEmail.from}</p>
+                  <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>to {selectedEmail.to}</p>
+                </div>
+              </div>
+
+              <h2 style={{ fontSize: '1.8rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{selectedEmail.subject}</h2>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '2rem' }}>{new Date(selectedEmail.createdAt).toLocaleString()}</p>
+
+              <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '2rem' }}>
+                <div style={{ fontSize: '1rem', lineHeight: '1.8', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+                  {selectedEmail.body}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem', display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
+              <button onClick={() => setSelectedEmail(null)} className="btn-secondary" style={{ cursor: 'pointer' }}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showComposeSms && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}>
+          <div className="card" style={{ padding: '2.5rem', width: '600px', border: '1px solid rgba(16, 185, 129, 0.3)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
+            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <MessageSquare size={24} color="#10b981" /> New SMS Message
+            </h3>
+            <form onSubmit={handleSendSms} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Phone Number:</label>
+                <input type="tel" required className="input-field" value={composeSmsData.to} onChange={e => setComposeSmsData({...composeSmsData, to: e.target.value})} placeholder="+919830087848" />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Message:</label>
+                <textarea required className="input-field" value={composeSmsData.body} onChange={e => setComposeSmsData({...composeSmsData, body: e.target.value})} placeholder="Type your SMS message here..." rows={4} style={{ resize: 'vertical' }} />
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem', display: 'block' }}>Character count: {composeSmsData.body.length}/160</span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', gap: '1rem' }}>
+                <button type="button" onClick={() => setShowComposeSms(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
+                <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#10b981', borderColor: '#10b981' }}>
+                  <Send size={16} /> Send SMS
                 </button>
               </div>
             </form>

@@ -27,30 +27,36 @@ const cron = require('node-cron');
 const prisma = require('../lib/prisma');
 const { evaluateCondition, renderTemplate } = require('../lib/eventBus');
 
-// ── Mailgun (best-effort) ─────────────────────────────────────────────
-const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
-const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || 'crm.globusdemos.com';
-const FROM_EMAIL = `Globussoft CRM <noreply@${MAILGUN_DOMAIN}>`;
+// ── SendGrid (best-effort) ─────────────────────────────────────────────
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@crm.globusdemos.com';
 
-async function tryMailgunSend(to, subject, body) {
-  if (!MAILGUN_API_KEY || !to) return { sent: false, reason: 'no_api_key_or_to' };
+async function trySendGridSend(to, subject, body) {
+  if (!SENDGRID_API_KEY || !to) return { sent: false, reason: 'no_api_key_or_to' };
   try {
-    const formData = new URLSearchParams();
-    formData.append('from', FROM_EMAIL);
-    formData.append('to', to);
-    formData.append('subject', subject);
-    formData.append('text', body);
-    formData.append('html', String(body).replace(/\n/g, '<br>'));
-    const response = await fetch(`https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`, {
+    const htmlBody = String(body).replace(/\n/g, '<br>');
+    const payload = {
+      personalizations: [{ to: [{ email: to }] }],
+      from: { email: FROM_EMAIL },
+      subject: subject,
+      content: [
+        { type: 'text/plain', value: body },
+        { type: 'text/html', value: htmlBody }
+      ]
+    };
+    const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
-      headers: { Authorization: 'Basic ' + Buffer.from('api:' + MAILGUN_API_KEY).toString('base64') },
-      body: formData,
+      headers: {
+        'Authorization': `Bearer ${SENDGRID_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload),
     });
     if (response.ok) {
-      const data = await response.json().catch(() => ({}));
-      return { sent: true, id: data.id };
+      const messageId = response.headers.get('x-message-id') || 'sent';
+      return { sent: true, id: messageId };
     }
-    return { sent: false, reason: `mailgun_${response.status}` };
+    return { sent: false, reason: `sendgrid_${response.status}` };
   } catch (err) {
     return { sent: false, reason: err.message };
   }
@@ -118,8 +124,8 @@ async function processStep(step, enrollment) {
     });
 
     // Best-effort delivery.
-    if (MAILGUN_API_KEY) {
-      tryMailgunSend(to, subject, body).catch(() => {});
+    if (SENDGRID_API_KEY) {
+      trySendGridSend(to, subject, body).catch(() => {});
     }
     return { advance: true };
   }

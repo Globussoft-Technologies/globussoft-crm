@@ -2,32 +2,37 @@ const cron = require("node-cron");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 
-const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
-const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || "crm.globusdemos.com";
-const FROM_EMAIL = `Globussoft CRM <noreply@${MAILGUN_DOMAIN}>`;
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
-async function sendViaMailgun(to, subject, body) {
-  const key = process.env.MAILGUN_API_KEY || MAILGUN_API_KEY;
-  const domain = process.env.MAILGUN_DOMAIN || MAILGUN_DOMAIN;
+async function sendViaSendGrid(to, subject, body) {
+  const key = process.env.SENDGRID_API_KEY || SENDGRID_API_KEY;
   if (!key) return { sent: false, reason: "no_api_key" };
-  const fd = new URLSearchParams();
-  fd.append("from", `Globussoft CRM <noreply@${domain}>`);
-  fd.append("to", to);
-  fd.append("subject", subject);
-  fd.append("text", body);
-  fd.append("html", body.replace(/\n/g, "<br>"));
+  const htmlBody = body.replace(/\n/g, "<br>");
+  const payload = {
+    personalizations: [{ to: [{ email: to }] }],
+    from: { email: FROM_EMAIL },
+    subject: subject,
+    content: [
+      { type: "text/plain", value: body },
+      { type: "text/html", value: htmlBody }
+    ]
+  };
   try {
-    const r = await fetch(`https://api.mailgun.net/v3/${domain}/messages`, {
+    const r = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
-      headers: { Authorization: "Basic " + Buffer.from("api:" + key).toString("base64") },
-      body: fd,
+      headers: {
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
     });
     if (r.ok) {
-      const data = await r.json().catch(() => ({}));
-      return { sent: true, id: data.id };
+      const messageId = r.headers.get("x-message-id") || "sent";
+      return { sent: true, id: messageId };
     }
     const txt = await r.text().catch(() => "");
-    return { sent: false, reason: `mailgun ${r.status}: ${txt}` };
+    return { sent: false, reason: `sendgrid ${r.status}: ${txt}` };
   } catch (err) {
     return { sent: false, reason: err.message };
   }
@@ -73,7 +78,7 @@ async function processScheduledEmails() {
         const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
         const trackedBody = `${item.body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
 
-        const result = await sendViaMailgun(item.to, item.subject, trackedBody);
+        const result = await sendViaSendGrid(item.to, item.subject, trackedBody);
 
         if (result.sent) {
           await prisma.scheduledEmail.update({

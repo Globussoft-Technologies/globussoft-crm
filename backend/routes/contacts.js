@@ -7,6 +7,11 @@ const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, httpFr
 const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const { normalizePhone } = require("../utils/deduplication");
+// #464: field-level permission enforcement. The fieldFilter middleware
+// existed but was never called from any route; rules saved via the
+// FieldPermissions UI had zero effect on read/write payloads. Default
+// (no rule in DB) is full access.
+const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
 
 // #167: soft-delete helper. Aggregations / reports / merge / internal joins
 // (e.g. activities, deals, sequenceEnrollments) are NOT yet filtered by
@@ -61,11 +66,14 @@ router.get('/', async (req, res) => {
     // and exposing a perf/DoS surface.
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
-    res.json(await prisma.contact.findMany({
+    const contacts = await prisma.contact.findMany({
       where, take: limit, skip: offset,
       orderBy: { id: 'desc' },
       include: { activities: true, tasks: true, assignedTo: { select: { id: true, name: true, email: true } } },
-    }));
+    });
+    // #464: strip read-restricted fields per the caller's role.
+    const filtered = await filterReadFields(contacts, req.user.role, "Contact", req.user.tenantId);
+    res.json(filtered);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
   }
@@ -83,7 +91,9 @@ router.get('/:id', async (req, res) => {
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     // #167: 404 soft-deleted rows unless caller opts in.
     if (contact.deletedAt && !includeDeleted) return res.status(404).json({ error: 'Contact not found' });
-    res.json(contact);
+    // #464: strip read-restricted fields per the caller's role.
+    const filtered = await filterReadFields(contact, req.user.role, "Contact", req.user.tenantId);
+    res.json(filtered);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contact' });
   }
@@ -91,6 +101,12 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    // #464: strip write-restricted fields BEFORE validation so a USER who has
+    // canWrite=false on Contact.email can't push a value through. Validation
+    // then runs on the filtered body — if email was stripped, the !isUpdate
+    // path will surface EMAIL_REQUIRED instead of silently storing the
+    // forbidden value.
+    req.body = await filterWriteFields(req.body, req.user.role, "Contact", req.user.tenantId);
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
     // clear code instead of a 500 from the DB layer.
     const inputErr = validateContactInput(req.body, { isUpdate: false });
@@ -153,6 +169,9 @@ router.put('/:id', async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    // #464: strip write-restricted fields per the caller's role BEFORE
+    // validation so blocked-field updates can't slip through.
+    req.body = await filterWriteFields(req.body, req.user.role, "Contact", req.user.tenantId);
     // #168: same input checks as create so PUT can't bypass POST validation.
     const inputErr = validateContactInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);

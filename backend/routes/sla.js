@@ -13,16 +13,19 @@ const minutesBetween = (a, b) => {
   return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 60000);
 };
 
-// Coerce a minutes input. Treats 0 as a valid "instant SLA" value (used by
-// deterministic breach tests). null / undefined / non-numeric → returns the
-// supplied default. Negative → returns the sentinel { negative: true } so the
-// caller can return a 400.
+// Coerce a minutes input. Rejects 0 and negative values (issue #465: a
+// 0-minute SLA is vacuous — every ticket auto-breaches the moment the policy
+// is applied). null / undefined / non-numeric → returns the supplied default.
+// Zero or negative → returns the sentinel { invalid: true } so the caller
+// returns a 400. The deterministic-breach mechanism formerly relied on
+// 0-minute SLAs; tests now use the admin-only test-helper at
+// POST /api/sla/_test/backdate-ticket/:id to backdate slaResponseDue directly.
 const coerceMinutes = (raw, fallback) => {
   if (raw === null || raw === undefined || raw === "") return { value: fallback };
   const n = Number(raw);
   if (!Number.isFinite(n)) return { value: fallback };
   const i = Math.trunc(n);
-  if (i < 0) return { negative: true };
+  if (i <= 0) return { invalid: true };
   return { value: i };
 };
 
@@ -50,19 +53,21 @@ router.post("/policies", async (req, res) => {
       return res.status(400).json({ error: "name and priority are required" });
     }
 
-    // 0 is a VALID "instant SLA" value; only null/undefined/non-numeric fall
-    // back to the default of 60 (response) / 1440 (resolve).
+    // #465: zero and negative are rejected — a 0-minute SLA auto-breaches
+    // every ticket the instant it's applied, which is a vacuous policy.
+    // null/undefined/non-numeric still fall back to the default of 60
+    // (response) / 1440 (resolve) for backwards-compat with old clients.
     const respCoerced = coerceMinutes(responseMinutes, 60);
-    if (respCoerced.negative) {
+    if (respCoerced.invalid) {
       return res
         .status(400)
-        .json({ error: "responseMinutes cannot be negative", code: "INVALID_RESPONSE_MINUTES" });
+        .json({ error: "responseMinutes must be at least 1", code: "INVALID_RESPONSE_MINUTES" });
     }
     const resolveCoerced = coerceMinutes(resolveMinutes, 1440);
-    if (resolveCoerced.negative) {
+    if (resolveCoerced.invalid) {
       return res
         .status(400)
-        .json({ error: "resolveMinutes cannot be negative", code: "INVALID_RESOLVE_MINUTES" });
+        .json({ error: "resolveMinutes must be at least 1", code: "INVALID_RESOLVE_MINUTES" });
     }
 
     const policy = await prisma.slaPolicy.create({
@@ -98,21 +103,22 @@ router.put("/policies/:id", async (req, res) => {
     if (name !== undefined) data.name = String(name);
     if (priority !== undefined) data.priority = String(priority);
     if (responseMinutes !== undefined) {
-      // Same rules as POST: 0 is valid (instant SLA); negative → 400.
+      // Same rules as POST (#465): 0 and negative both 400. Tests that need
+      // a deterministic breach use POST /_test/backdate-ticket/:id instead.
       const c = coerceMinutes(responseMinutes, existing.responseMinutes);
-      if (c.negative) {
+      if (c.invalid) {
         return res
           .status(400)
-          .json({ error: "responseMinutes cannot be negative", code: "INVALID_RESPONSE_MINUTES" });
+          .json({ error: "responseMinutes must be at least 1", code: "INVALID_RESPONSE_MINUTES" });
       }
       data.responseMinutes = c.value;
     }
     if (resolveMinutes !== undefined) {
       const c = coerceMinutes(resolveMinutes, existing.resolveMinutes);
-      if (c.negative) {
+      if (c.invalid) {
         return res
           .status(400)
-          .json({ error: "resolveMinutes cannot be negative", code: "INVALID_RESOLVE_MINUTES" });
+          .json({ error: "resolveMinutes must be at least 1", code: "INVALID_RESOLVE_MINUTES" });
       }
       data.resolveMinutes = c.value;
     }
@@ -344,6 +350,60 @@ router.post("/check-breaches", verifyRole(["ADMIN"]), async (req, res) => {
   } catch (err) {
     console.error("[SLA][check-breaches]", err);
     res.status(500).json({ error: "Failed to run SLA breach check" });
+  }
+});
+
+// ─── TEST-ONLY HELPERS ─────────────────────────────────────────────────────
+
+// POST /api/sla/_test/backdate-ticket/:id — admin-only, opt-in via the
+// SLA_TEST_HELPERS env-var OR NODE_ENV !== 'production'.
+// Backdates a ticket's slaResponseDue / slaResolveDue into the past so the
+// SLA breach engine + GET /api/sla/breaches deterministically flag it on the
+// next tick / read. Replaces the deprecated 0-minute SLA mechanism that
+// issue #465 disallows. Body: { responseOffsetMinutes?: number,
+// resolveOffsetMinutes?: number } — both default to 60 (one hour into the
+// past).
+//
+// Production demo (crm.globusdemos.com) opts in by setting
+// SLA_TEST_HELPERS=1 in the PM2 env so the e2e-full release-validation
+// suite can drive Flow 3 of sla-flow.spec.js. Real production deployments
+// leave the env-var unset and the route 404s. Mirrors the
+// WELLNESS_DEMO_OTP / NODE_ENV !== 'production' precedent in
+// backend/routes/wellness.js (verify-otp bypass).
+const slaTestHelpersEnabled = () =>
+  process.env.SLA_TEST_HELPERS === "1" ||
+  process.env.SLA_TEST_HELPERS === "true" ||
+  process.env.NODE_ENV !== "production";
+
+router.post("/_test/backdate-ticket/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  if (!slaTestHelpersEnabled()) {
+    return res.status(404).json({ error: "Not found" });
+  }
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid ticket id" });
+
+    const ticket = await prisma.ticket.findFirst({
+      where: { id, tenantId: tenantId(req) },
+    });
+    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
+
+    const { responseOffsetMinutes = 60, resolveOffsetMinutes = 60 } = req.body || {};
+    const respOff = Math.max(1, parseInt(responseOffsetMinutes) || 60);
+    const resoOff = Math.max(1, parseInt(resolveOffsetMinutes) || 60);
+    const now = Date.now();
+
+    const updated = await prisma.ticket.update({
+      where: { id },
+      data: {
+        slaResponseDue: new Date(now - respOff * 60000),
+        slaResolveDue: new Date(now - resoOff * 60000),
+      },
+    });
+    res.json({ ticket: updated, backdatedBy: { responseOffsetMinutes: respOff, resolveOffsetMinutes: resoOff } });
+  } catch (err) {
+    console.error("[SLA][backdate-ticket]", err);
+    res.status(500).json({ error: "Failed to backdate ticket" });
   }
 });
 

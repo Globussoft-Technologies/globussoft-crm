@@ -232,22 +232,18 @@ test.describe('SLA + Tickets — deep business-logic flow', () => {
     const breachTicket = await ticketRes.json();
     crossTenantTicketId = breachTicket.id; // reuse afterAll cleanup slot
 
-    // Force the policy to a 0-minute response window. After Gap #13 fix, both
-    // POST and PUT accept 0 as a valid "instant SLA" value (negative is
-    // rejected with 400 / INVALID_RESPONSE_MINUTES).
-    const putRes = await request.put(`${API}/sla/policies/${createdPolicyId}`, {
-      headers: gauth(),
-      data: { responseMinutes: 0 },
-    });
-    expect(putRes.status()).toBe(200);
-    expect((await putRes.json()).responseMinutes).toBe(0);
-
-    // Re-apply the (now 0-minute) policy to our breach ticket. This sets
-    // slaResponseDue = createdAt + 0 = createdAt, which is in the past, so the
-    // breach detector at /sla/breaches flags it on its very next read.
+    // #465: 0-minute SLAs are now rejected (vacuous policy class). The
+    // deterministic-breach mechanism is the admin-only test-helper which
+    // backdates slaResponseDue / slaResolveDue directly. First apply the
+    // existing policy so /breaches has a row to enrich, then backdate.
     const apply = await request.post(`${API}/sla/apply/${breachTicket.id}`, { headers: gauth() });
     expect(apply.status(), `apply: ${await apply.text()}`).toBe(200);
-    const applied = (await apply.json()).ticket;
+    const backdate = await request.post(`${API}/sla/_test/backdate-ticket/${breachTicket.id}`, {
+      headers: gauth(),
+      data: { responseOffsetMinutes: 30, resolveOffsetMinutes: 30 },
+    });
+    expect(backdate.status(), `backdate: ${await backdate.text()}`).toBe(200);
+    const applied = (await backdate.json()).ticket;
     expect(new Date(applied.slaResponseDue).getTime()).toBeLessThanOrEqual(Date.now());
 
     // Now the breach feed must include this ticket with responseBreach=true.

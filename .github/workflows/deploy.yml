@@ -279,7 +279,8 @@ jobs:
           #   - booking-pages-api.spec.js    (43 tests: routes/booking_pages.js — R-4)
           #   - email-threading-api.spec.js  (33 tests: routes/email_threading.js — R-4)
           #   - migration-safety.spec.js     (10 tests: backend/scripts/check-migration-safety.js fixture regression — G-23)
-          # Total: ~1441 API tests run on every push.
+          #   - field-permissions-enforcement-api.spec.js (9 tests: middleware/fieldFilter.js wired into routes/deals.js + routes/contacts.js — #464)
+          # Total: ~1450 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -354,6 +355,7 @@ jobs:
             tests/wellness-portal-dsar-api.spec.js \
             tests/report-schedules-api.spec.js \
             tests/landing-page-upload-api.spec.js \
+            tests/field-permissions-enforcement-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

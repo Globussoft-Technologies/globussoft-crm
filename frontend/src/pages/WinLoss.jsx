@@ -164,13 +164,31 @@ export default function WinLoss() {
           {pieData.length === 0 ? (
             <div style={emptyState}>No closed deals in this range.</div>
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
+            /* #463: pie was rendering as a top-half-only dome. Three layered
+               causes:
+               1. ResponsiveContainer height=280 + outerRadius=100 leaves only
+                  40px vertical margin (cy=140 at 50%, pie bottom at 240px out
+                  of 280).
+               2. The bottom-anchored <Legend/> consumes ~36px of plot area
+                  height but cy="50%" is computed against the FULL container,
+                  so the pie's geometric center sits BELOW the Legend's top
+                  edge — bottom slices clip behind the Legend.
+               3. The `label={...}` callback renders OUTSIDE the slice with a
+                  default labelLine, pushing visible content ~20px past
+                  outerRadius. The bottom slice's label and the bottom of the
+                  arc both fall outside the SVG viewBox.
+               Fix: bump height (320), shift cy up to 42% to make room for the
+               Legend strip, shrink outerRadius (90) so the arc + outside
+               labels both fit, and pin a Legend height so layout is
+               deterministic. Slice label kept since it conveys count which
+               the Legend doesn't. */
+            <ResponsiveContainer width="100%" height={320} minWidth={0} minHeight={0}>
               <PieChart>
-                <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={(p) => `${p.name}: ${p.value}`}>
+                <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="42%" outerRadius={90} label={(p) => `${p.name}: ${p.value}`}>
                   {pieData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
                 </Pie>
                 <Tooltip contentStyle={tooltipStyle} />
-                <Legend />
+                <Legend verticalAlign="bottom" height={36} />
               </PieChart>
             </ResponsiveContainer>
           )}
@@ -181,10 +199,13 @@ export default function WinLoss() {
           {lossReasons.length === 0 ? (
             <div style={emptyState}>No tracked loss reasons yet.</div>
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
+            <ResponsiveContainer width="100%" height={280} minWidth={0} minHeight={0}>
               <BarChart data={lossReasons} layout="vertical" margin={{ left: 30, right: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                <XAxis type="number" stroke="var(--text-secondary)" allowDecimals={false} />
+                {/* #463 follow-up: mirror #439 — count is non-negative; pin
+                    domain=[0,'auto'] to silence Recharts negative-domain
+                    warning on empty datasets. */}
+                <XAxis type="number" stroke="var(--text-secondary)" allowDecimals={false} domain={[0, 'auto']} />
                 <YAxis type="category" dataKey="reason" stroke="var(--text-secondary)" width={140} />
                 <Tooltip contentStyle={tooltipStyle} />
                 <Bar dataKey="count" fill="#ef4444" radius={[0, 6, 6, 0]} />

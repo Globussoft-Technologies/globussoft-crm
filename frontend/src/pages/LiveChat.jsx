@@ -208,11 +208,24 @@ export default function LiveChat() {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            background: 'rgba(16,185,129,0.12)', color: 'var(--success-color)',
-            padding: '6px 12px', borderRadius: 20, fontSize: 13, fontWeight: 600,
-          }}>
+          {/* #476: previously a pill-shaped <span> with no cursor — but the
+              pill styling (rounded background + accent color) led some users
+              to expect it was a clickable online/offline toggle. Mark it
+              explicitly as a passive status indicator with cursor:default,
+              role="status", and a title so the affordance matches reality.
+              A real online/offline toggle would need a backend "agent
+              presence" API which doesn't exist yet; tracked separately. */}
+          <span
+            role="status"
+            aria-label="Live chat agent status: online"
+            title="Live chat is online — visitors can start new sessions"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              background: 'rgba(16,185,129,0.12)', color: 'var(--success-color)',
+              padding: '6px 12px', borderRadius: 20, fontSize: 13, fontWeight: 600,
+              cursor: 'default', userSelect: 'none',
+            }}
+          >
             <Circle size={8} fill="#16a34a" color="#16a34a" /> Online
           </span>
           <span style={{ fontSize: 13, color: 'var(--text-secondary, #6b7280)' }}>

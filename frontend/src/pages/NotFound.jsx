@@ -59,7 +59,7 @@ export default function NotFound() {
   };
   const linkPrimary = {
     ...linkBase,
-    background: 'var(--accent-color)',
+    background: 'var(--primary-color, var(--accent-color))',
     color: 'var(--accent-text, #fff)',
     border: '1px solid transparent',
   };

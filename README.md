@@ -18,14 +18,14 @@ This README documents the product as it stands today. It does not narrate per-ve
 | Layer | Technologies |
 |-------|-------------|
 | Frontend | React 18, Vite, React Router v7, React.lazy() code splitting, Lucide Icons, Recharts, ReactFlow, React Grid Layout, Socket.io-client |
-| Backend | Node.js, Express.js, Prisma ORM, MySQL, Socket.io, node-cron, PDFKit, pdf-lib, Nodemailer, Mailgun, express-rate-limit, express-validator, Swagger UI |
+| Backend | Node.js, Express.js, Prisma ORM, MySQL, Socket.io, node-cron, PDFKit, pdf-lib, express-rate-limit, express-validator, Swagger UI |
 | AI | Google Gemini 2.5 (@google/generative-ai), sentiment analysis, deal insights, lead scoring, voice transcription, data enrichment |
 | Auth | JWT (bcryptjs), RBAC (ADMIN / MANAGER / USER), 2FA (speakeasy), SSO, SCIM |
-| Security | Helmet, CSRF (csurf), sanitize-html, field-level permissions, GDPR consent tracking, rate limiting |
+| Security | Helmet, CSRF (csurf), sanitize-html, field-level permissions, GDPR consent tracking, rate limiting, **Cloudflare Turnstile CAPTCHA on landing-page forms** |
 | Payments | Stripe, Razorpay |
-| Communications | Twilio (SMS/Voice), Mailgun, WhatsApp Cloud API, Web Push (VAPID), IMAP inbound email |
+| Communications | **SendGrid (transactional email — live on demo)**, Twilio (SMS/Voice), Fast2SMS / MSG91 (Indian SMS providers — DLT-aware), WhatsApp Cloud API, Web Push (VAPID), IMAP inbound email |
 | Production | PM2, Nginx reverse proxy, Certbot SSL, Sentry error tracking |
-| Testing | Playwright E2E (40 spec files) |
+| Testing | Playwright E2E (~199 spec files; ~79 in the per-push gate, the rest in `e2e-full.yml` release-validation), vitest (42 backend + 6 frontend unit-test files) |
 | Styling | Vanilla CSS with glassmorphism design, dark/light theme support |
 
 ---
@@ -83,6 +83,8 @@ Schedule automated email reports with configurable **frequency (Daily, Weekly, M
 
 ### Marketplace Leads (India Market Integration)
 Auto-import leads from **IndiaMART, JustDial, and TradeIndia** -- India's largest B2B/B2C marketplaces. Supports both **real-time webhooks** and **cron-based API polling** (every 5 min). Features smart deduplication (by external lead ID, email, and normalized phone), one-click or bulk import into CRM contacts, provider-wise stats dashboard, and an admin configuration panel with webhook URL display.
+
+**Always-visible integration status chip row** above the leads table — each provider shows configured / active state, last-sync timestamp, 30-day lead count, and a per-provider Sync-now button. **3-state empty UX** distinguishes "no integrations configured" / "configured but stale (no sync >24h)" / "all quiet (recent sync, no leads in window)". Backed by `GET /api/integrations/marketplace/status` (non-admin readable).
 
 ---
 
@@ -185,13 +187,13 @@ Three integration options: drop-in script, pure iframe, direct API POST. Full gu
 - **Social** -- Social media post scheduling and mention monitoring
 
 ### Communication
-- **Inbox** -- Omnichannel communications hub (Email, Calls, SMS, WhatsApp)
-- **Email** -- Email compose and management with Mailgun delivery
+- **Inbox** -- Omnichannel communications hub (Email, Calls, SMS, WhatsApp). Single unified row-detail modal handles all 4 channels.
+- **Email** -- Email compose + management via **SendGrid** (live on demo). Multi-recipient send via comma-separated `to:` returns an additive `{totalSent, totalFailed, results, failures}` envelope (back-compat single-recipient `email`/`messageId` fields preserved).
 - **Email Inbound** -- IMAP-based inbound email processing
 - **Email Threading** -- Conversation threading for email chains
 - **Email Scheduling** -- Scheduled email send with cron engine
-- **SMS** -- SMS messaging via MSG91/Twilio with DLT compliance
-- **WhatsApp** -- WhatsApp Cloud API with template approval workflow
+- **SMS** -- SMS messaging via Fast2SMS / MSG91 / Twilio with DLT compliance. **Bulk send via `POST /api/sms/send-bulk`** returns `{totalSent, totalFailed, results, failures}` envelope; pre-flight phone validation surfaces invalid recipients before any provider call.
+- **WhatsApp** -- WhatsApp Cloud API with template approval workflow. Canonical send shape `{to, templateName, parameters}` per Meta Cloud spec; session-text fallback for messages within 24h re-engagement window.
 - **Telephony** -- Click-to-call via MyOperator/Knowlarity with call logging
 - **Voice** -- Twilio VoIP softphone integration
 - **Voice Transcription** -- AI-powered call transcription
@@ -324,60 +326,88 @@ Rate limiting: 5000 req/15min general, 1000 req/15min on auth.
 
 Interactive docs at `/api-docs` (Swagger UI).
 
-## Automation Engines (15 Cron Jobs)
+## Automation Engines (16 Cron Jobs)
 
 | Engine | Schedule | Purpose |
 |--------|----------|---------|
-| leadScoringEngine | Every 10 min | AI-powered lead score recalculation |
+| leadScoringEngine | Every 10 min | AI-powered lead score recalculation (per-tenant iteration; recompute window via `Contact.aiScoreLastComputedAt`) |
 | sequenceEngine | Every 5 min | Drip sequence step execution |
 | marketplaceEngine | Every 5 min | IndiaMART/JustDial/TradeIndia lead sync |
 | workflowEngine | Event-driven | Automation rule evaluation via eventBus |
-| campaignEngine | Every 1 min | Marketing campaign dispatch |
+| campaignEngine | Every 1 min | Marketing campaign dispatch (DB-persisted schedules) |
 | reportEngine | Scheduled | Auto email report generation and delivery |
-| recurringInvoiceEngine | Daily | Recurring invoice generation |
+| recurringInvoiceEngine | Daily | Recurring invoice generation (excludes `VOID` and `VOIDED`) |
 | forecastSnapshotEngine | Weekly | Revenue forecast snapshot capture |
 | dealInsightsEngine | Every 6 hr | AI deal insight generation |
 | sentimentEngine | Every 15 min | Customer sentiment analysis |
-| scheduledEmailEngine | Every 1 min | Scheduled email dispatch |
-| retentionEngine | Daily 03:00 | Data retention policy enforcement (GDPR) |
+| scheduledEmailEngine | Every 1 min | Scheduled email dispatch via SendGrid |
+| retentionEngine | Daily 03:00 | GDPR data retention enforcement (writes AuditLog on every run, including no-op) |
 | backupEngine | Daily 02:00 | Automated mysqldump backup |
 | **orchestratorEngine** | Daily 07:00 IST | **Wellness AI orchestration — generates Owner Dashboard recommendation cards** |
 | **appointmentRemindersEngine** | Every 15 min | **Queue SMS reminders 24h + 1h before each booked visit (wellness)** |
 | **wellnessOpsEngine** | Hourly | **NPS survey 72h post-visit + 90-day junk-lead retention purge (wellness)** |
 
+Each engine has an admin-gated manual trigger at `POST /api/<area>/run` (forecasting, billing/recurring, email/scheduled, gdpr/retention) for deterministic testing + ops. The `DISABLE_CRONS=1` env switch skips cron init at boot — used by side-by-side coverage instances.
+
 ## Security Features
 
-- **Authentication** -- JWT with bcryptjs password hashing
+- **Authentication** -- JWT with bcryptjs password hashing; in-memory + sessionStorage token (migrated off `localStorage` per #343 hardening)
 - **2FA** -- TOTP-based two-factor authentication (speakeasy)
 - **SSO** -- SAML/OAuth single sign-on
-- **RBAC** -- Role-based access control (Admin / Manager / User)
-- **Field Permissions** -- Field-level access restrictions by role
+- **RBAC** -- Role-based access control (Admin / Manager / User) + field-level permissions middleware (`fieldFilter` wired into 6 sensitive handlers)
 - **CSRF Protection** -- csurf middleware
-- **Security Headers** -- Helmet.js
-- **Input Sanitization** -- sanitize-html + express-validator
-- **Rate Limiting** -- express-rate-limit on all endpoints
-- **GDPR Compliance** -- Consent records, data export, retention policies
+- **Security Headers** -- Helmet (HSTS 1y, X-Frame SAMEORIGIN, Referrer-Policy strict-origin-when-cross-origin, X-Content-Type-Options nosniff, COOP same-origin, CORP cross-origin)
+- **Input Sanitization** -- `sanitize-html` + express-validator; canonical `backend/lib/sanitizeJson.js` helper for JSON-string columns (covers 5 routes: sequences, lead_routing, ab_tests, marketing, report_schedules)
+- **Cross-tenant scoping** -- every route filters on `req.user.tenantId`; `tenant-isolation-api.spec.js` pins 29 resources / 93 cross-tenant assertions
+- **Rate Limiting** -- express-rate-limit (5000 req/15min general, 1000 req/15min on auth, OTP 3/10min/phone + 10/10min/IP)
+- **CAPTCHA** -- Cloudflare Turnstile on landing-page forms; per-form opt-in via `props.enableCaptcha: true`
+- **GDPR / DPDP Compliance** -- Consent records, `/export/me` (DSAR self-export), `/export/contact/:id` (admin), retention policies + audit log
+- **Patient self-DSAR** -- `POST /api/wellness/portal/export` (wellness vertical) — patient-token-authenticated walk of `Patient → Visit / Prescription / ConsentForm / TreatmentPlan / LoyaltyTransaction / Referral`
 - **SCIM Provisioning** -- Automated user lifecycle management
-- **Audit Logging** -- Full entity/action audit trail
+- **Audit Logging** -- Full entity/action audit trail; `writeAudit()` covers PHI reads (visits, prescriptions, consents, treatment plans, photos, inventory) for staff, NOT patient self-reads
+- **Output filtering** -- Global `scrubResponse` middleware strips `portalPasswordHash` / `passwordHash` / `isAdmin` from every `res.json` payload, including nested `include: { contact: true }` shapes
+- **Secret scanning** -- gitleaks on every push (incremental ~10-20s) + scheduled full-history scan Mondays
+- **`npm audit` gate** -- fails CI on new high/critical CVEs; allowlist with `sunsetBy` dates
 
 ## E2E Testing
 
-**124+ tests passing on production** across 40+ spec files.
+**~3,784 tests on every push** across 6 mandatory deploy gates; ~199 spec files in `e2e/tests/` total. The per-push gate runs ~79 Playwright API specs (~2,560 tests) against a CI-local MySQL stack. The full `e2e-full.yml` chromium suite runs sharded 4-way against the live demo on every `git tag` push (release validation).
 
-- `tests/ship-readiness.spec.js` — 74 tests: auth, 50 API endpoints, security (CORS, tenantId injection), public endpoints, UI page serving
-- `tests/wellness.spec.js` — 50 tests: tenant + currency segregation, dashboard data, patient/visit/Rx/consent create flow, recommendations approval, full external API flow (lead → poll → lookup → call recording back), reports (P&L + per-pro + per-location + attribution), junk filter, auto-router, public booking, orchestrator manual run, SPA route smoke
-- Plus 30+ legacy specs for individual modules
+**Per-push gate composition:**
+- `api_tests` — ~79 Playwright API specs against CI-local MySQL (~2,560 tests, ~10 min)
+- `unit_tests` — 42 backend vitest files (~1,189 tests covering `lib/` + `middleware/` + `services/` + `utils/` + `cron/`)
+- `frontend_unit_tests` — 6 frontend vitest files (~35 tests on critical components)
+- `build` — vite build + `node --check` parse-check on every backend `.js`
+- `lint` — ESLint flat config + `npm audit` allowlist gate
+- `migration_check` — Prisma schema-safety detector with commit-message bless markers (`[allow-unique]`, `[allow-drop]`, `[allow-not-null]`, `[allow-narrow]`)
+
+**Release validation (`e2e-full.yml` on tag push):** full chromium project + auth-tests + api-health, sharded 4-way against `https://crm.globusdemos.com`, with `scrub-demo` post-test cleanup + merged HTML report. Typical runtime ~15-20 min.
+
+**PR pre-merge checks (`pr-checks.yml` on every PR):** vite build + ESLint. Catches the PR #453-class regressions (conflict markers, JSX errors, `req.user.id` anti-pattern) BEFORE merge to main rather than after — the per-push gate caught those for the first 6 months but only after the bad commit was already on main.
+
+**Highlight specs:**
+- `tests/ship-readiness.spec.js` — auth, 50 API endpoints, security (CORS, tenantId injection), public endpoints
+- `tests/wellness.spec.js` — tenant + currency segregation, dashboard data, patient/visit/Rx/consent create flow, recommendations approval, full external API flow, reports, junk filter, auto-router, public booking, orchestrator manual run
+- `tests/tenant-isolation-api.spec.js` — 29 resources / 93 cross-tenant assertions (every multi-tenant Prisma model)
+- `tests/migration-safety.spec.js` — 4 schema-class detectors (UNIQUE addition, NOT NULL addition, column drop, type narrowing)
 
 ```bash
+# Per-push gate locally (mirrors deploy.yml exactly):
+.\scripts\test-local.ps1 -Local              # Windows
+./scripts/test-local.sh --local              # macOS / Linux / git-bash
+
+# Or just one suite against demo:
 cd e2e && BASE_URL=https://crm.globusdemos.com npx playwright test --project=chromium
 ```
 
 ## Deployment
 
-- **Domain:** crm.globusdemos.com
+- **Domain:** [crm.globusdemos.com](https://crm.globusdemos.com)
 - **Architecture:** PM2 (backend) + Nginx (frontend static + reverse proxy) + Certbot SSL
-- **Monitoring:** Sentry error tracking (@sentry/node)
-- **Deploy flow:** git pull > npm install > prisma generate > vite build > copy dist to Nginx > pm2 restart
+- **Monitoring:** Sentry error tracking (@sentry/node) + 30-min demo-monitor cron (auto-files a tracker GitHub issue on `/api/health` 5xx)
+- **Deploy flow** (`.github/workflows/deploy.yml`): on push to `main`, runs the 6-gate matrix in parallel; on all green → SSH pull → `npm install` → `prisma generate` → PM2 restart with `--update-env` → poll `/api/health` (auto-rollback to `HEAD~1` if unhealthy) → `vite build` → sudo rsync to `/var/www` → smoke check `/` + `/api/health`. Hotfix bypass via `workflow_dispatch.skip_tests=true` (manual UI only — a regular push can never bypass the gates).
+- **Release tag** (`v*`): `git tag -a vX.Y.Z && git push origin vX.Y.Z` fires `e2e-full.yml` against the live demo. If green, the release stands; if red, fix on main and retag.
+- **Provider plumbing on demo:** `SENDGRID_API_KEY` (transactional email), `TURNSTILE_SECRET_KEY` (landing-page form CAPTCHA — per-form opt-in via `props.enableCaptcha: true`), `WELLNESS_DEMO_OTP=1234` (patient portal OTP bypass for QA).
 
 ---
 

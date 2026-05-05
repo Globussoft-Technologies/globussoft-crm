@@ -122,7 +122,7 @@ export default function Expenses() {
     .reduce((sum, e) => sum + e.amount, 0);
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="expenses-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <Receipt size={26} color="var(--accent-color)" /> Expense Management
@@ -163,7 +163,7 @@ export default function Expenses() {
         </span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem' }}>
+      <div className="expenses-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
 
         {/* Create Expense Form */}
         <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
@@ -332,7 +332,18 @@ export default function Expenses() {
         </div>
       </div>
 
-      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }`}</style>
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        /* #513: collapse the 1fr 2fr two-column layout to a single stack on mobile.
+           Same pattern as #478 (Tickets) and #480 (Tasks). minmax(0, ...) on the
+           desktop grid prevents form-field min-content from forcing the column
+           wider than 1fr would allow. */
+        @media (max-width: 768px) {
+          .expenses-page { padding: 1rem !important; }
+          .expenses-grid { grid-template-columns: 1fr !important; gap: 1.25rem !important; }
+          .expenses-page .card { padding: 1.25rem !important; }
+        }
+      `}</style>
     </div>
   );
 }

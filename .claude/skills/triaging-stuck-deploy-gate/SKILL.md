@@ -162,3 +162,31 @@ When all three are true, **interrupt the current task** and run this skill. The 
 - Companion to [verifying-issue-before-pickup](../verifying-issue-before-pickup/SKILL.md) — that skill prevents broken specs entering the gate; this one cleans up when they slip through
 - Companion to [writing-api-gate-spec](../writing-api-gate-spec/SKILL.md) — that skill teaches "how to write a spec that won't be too strict"; this one is the recovery path
 - See [CLAUDE.md](../../../CLAUDE.md) "Standing rules for new code" for the inline rules that prevent this class of failure
+
+## Same shape applies to release-validation gates (added 2026-05-06)
+
+This skill was authored for the per-push `deploy.yml` gate, but the **identical workflow shape** unblocks chronically-red `e2e-full.yml` (release-validation against demo). The 2026-05-05 → 2026-05-06 arc cleared a 5+-tag-old chronic-red e2e-full in ~3 hours of fix-and-iterate using exactly this triage flow.
+
+The 2026-05-05 sequence:
+1. Triggered run → categorized failures (real-bug / spec-fixture / demo-state / deploy-block) → fixed the first category → pushed → waited for deploy → re-triggered → repeated.
+2. 4 e2e-full re-triggers across the session, each revealing a different failure class as the prior was cleared:
+   - (a) `backup-engine-api` + `migration-safety` needed `IS_LOCAL_STACK` guards (e72cd5c, e8cce09)
+   - (b) Agent A's new upload spec had a `j.user.tenantId` capture bug blocking the per-push deploy gate (6f140bc) — fixed FIRST since release-validation runs against the deployed state
+   - (c) workflows-api count-based assertion was demo-noise-flaky (47e7a1d)
+   - (d) Contact upsert had a latent composite-unique bug exposed by the #445 Nginx fix (36e554d) + 5MB upload returns Nginx 413 not multer 400
+   - (e) email_scheduling 502 path returned HTML not JSON; workflows-flow polling too short + leak detection too broad (d84b0d9)
+3. Final result: all 4 shards green for the first time since v3.4.9.
+
+**The classifications from "Step 3" above generalize directly:**
+- `auth-revocation 401↔403` → demo-state-divergence assertion needs to accept `[401, 403]`
+- `WELLNESS_DEMO_OTP env-var missing in CI` → release-validation runs against demo where the var IS set, so this exact failure class can't recur in e2e-full; but the inverse (env-var set on demo, missing in CI) bites the per-push gate
+- `wellness-read-audit seed-visit 400` → spec-bad-fixture; same shape on either gate
+- `sanitize-json 16 unit tests` → schema/data mismatch; same shape on either gate
+
+**Per-push vs release-validation discrepancies usually come from:**
+- Background cron activity on demo that isn't present on local stack (`DISABLE_CRONS=1`) — assertions that compare aggregate counters (`afterTotal === beforeTotal`) are noise-flaky
+- Local-stack-only specs that need `IS_LOCAL_STACK` guards (see CLAUDE.md standing rule)
+- Latent bugs in code paths that only the demo's external network reaches (e.g. Cloudflare, Mailgun, Nginx in front of the route)
+- Demo-state assumptions in fixtures (the test expects a specific seed row that doesn't exist on demo)
+
+**Don't assume a chronically-red e2e-full is "we'll fix it next session" work.** ~1.5-3 hours of fix-and-iterate beats weeks of tag pushes that all show red. Same triage flow as per-push deploy gates.

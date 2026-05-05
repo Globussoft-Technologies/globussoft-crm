@@ -170,6 +170,83 @@ The 2026-05-05 #439/#440/#441/#448/#452/#456-partial cluster (`4e116ad`) hit thi
 
 The autonomous bug-fix-cluster pattern (when the user says "fix these issues" with a list of 5+) is **shape 1 by default**: pre-grep each candidate first (catches Pattern A drift in 30s/issue, often more than half qualify per the v3.4.8 → v3.4.11 arc), cluster the genuine fixes by file-locality, ship as a structured single commit. This is faster and easier for closing-comment hygiene than N sequential commits.
 
+## Concurrent-agent git hygiene (added 2026-05-06)
+
+Multiple agents in the same repo share **two** mutexes that are easy to forget:
+
+1. **Working tree** — every agent reads + writes the same files. Avoided by the disjoint-files invariant (above).
+2. **Git index** — every agent's `git add file` mutates the same staging area. A parent's later `git commit` (no pathspec) sweeps up *whatever* is currently staged, which may include sibling agents' WIP from in-flight work.
+
+The 2026-05-05 5-agent QA wave hit this twice:
+- A parent's `git commit` of the #413 schema fix bundled 6 unrelated files (Agent B's e2e specs + the deduplication helper). Caught pre-push, soft-reset, re-staged with explicit pathspec.
+- Agent F's first commit (`cfb9973`) accidentally captured 7 of Agent J's files via the same race. They soft-reset and recovered.
+
+**Mandatory mitigation pattern — use `git commit --only <pathspec> -F msg.txt`:**
+
+```bash
+# UNSAFE during parallel waves — race window between add and commit:
+git add backend/routes/foo.js e2e/tests/foo.spec.js
+git commit -m "fix(foo): close #N"
+
+# SAFE — atomically pins the commit to ONLY the named files,
+# even if the index races mid-operation:
+git commit --only backend/routes/foo.js e2e/tests/foo.spec.js -F /tmp/msg.txt
+```
+
+The `--only` flag bypasses the staging area entirely for the commit step. Even if a sibling agent ran `git add unrelated_file.js` between your add and commit, the commit still includes only your two files.
+
+**Rule of thumb:** if there's any chance another agent might be touching the repo concurrently, use `--only`. The dispatching parent should also use it for any consolidation commits.
+
+## Verify each issue's auto-close after multi-issue commits (added 2026-05-06)
+
+GitHub's auto-close-on-trailer behavior has TWO silent failure modes that bit the 2026-05-05 5-agent wave:
+
+1. **Shortform `Closes #N + #M` only auto-closes the FIRST issue.** Per GitHub's grammar, the keyword must immediately precede each `#N`. `Closes #462 + #463` closes #462 but NOT #463.
+2. **Per-commit auto-close cap.** Even with one `Closes #N` per line (the correct grammar), commits with 5+ trailers appear to silently cap. Agent J's `ecb4ae0` had 7 separate `Closes #N` lines; only 6 fired (`#476` stayed OPEN). Agent I's `fc9898e` (multi-fix) had `#465` and `#473` stay OPEN despite explicit trailers.
+
+**Mandatory verification step after any commit that's supposed to auto-close 2+ issues:**
+
+```bash
+# After push, verify each issue actually closed:
+for n in 462 463 466 467 468 473 474 475 476; do
+  echo -n "#$n: "; gh issue view $n --json state --jq '.state'
+done
+```
+
+Any issue still showing `OPEN` → close manually with citation:
+
+```bash
+gh issue close 463 --reason completed --comment "Fixed in commit \`a2895d8\` — auto-close trailer didn't fire (GitHub cap). [<root-cause-summary>]. See <SHA> commit body."
+```
+
+The `bumping-version-docs` companion skill should encode this verify-then-manual-close step too.
+
+## Stop-before-push when a local CI-equivalent gate fails (added 2026-05-06)
+
+Agents have access to local equivalents of every CI gate (`npm test`, `eslint`, `node backend/scripts/check-migration-safety.js`, `cd e2e && npx playwright test`). When one of those flags an issue an agent can't trivially resolve, **STOP and report — don't push and hope the gate is wrong.**
+
+The 2026-05-05 5-agent wave's Agent C demonstrated this perfectly: completed the #413 schema work but `check-migration-safety.js` flagged 6 false-positive risks (`FK_WITHOUT_ON_DELETE` matching DROP-FOREIGN-KEY statements that can't carry ON DELETE). Agent C reported the flag, asked for direction, and waited rather than push. The parent confirmed the false-positive analysis and shipped a one-line detector bug-fix bundled with the schema change in the same commit (`1ef4ba5`). Had the agent pushed anyway, `migration-check.yml` would have gone red on `main` and blocked all subsequent schema work until manually cleared.
+
+**Rule for every dispatched agent prompt:** "If a local CI-equivalent gate (eslint, vitest, migration-safety, prisma validate, etc.) flags an issue you can't trivially resolve in 5 minutes, STOP, report the failure with the full error output, and wait for parent direction. Do NOT push and hope the gate is wrong; do NOT skip-the-check (`--no-verify`, `--ignore-scripts`) to bypass it."
+
+This complements the existing "5-iteration heal cap" rule (which applies to test failures); the same shape applies to all non-test gates.
+
+## NEW spec authored by an agent? Run it locally before commit (added 2026-05-06)
+
+Build / lint / `node --check` do not catch a class of spec bug that only fires when the spec is actually executed: **wrong-field reads in fixture-loading helpers** (e.g. `j.user?.tenantId` when the response shape is `j.tenant?.id`), missing assertions on async resource creation, etc.
+
+The 2026-05-05 wave's Agent A landed `landing-page-upload-api.spec.js` that compiled clean (build green, eslint clean, `node --check` green) but failed every per-push api_tests run because `genericTenantId` was captured from the wrong response field — assertions read `tenant-${null}/`. Result: 4 consecutive failed deploys (9abbafe → 51e8891 → 1ef4ba5 → cc1a0ca), demo stuck for ~50 min.
+
+**Rule for every dispatched agent prompt that authors a NEW spec (not editing existing ones):** before commit, run the new spec locally against the local stack:
+
+```bash
+cd e2e && BASE_URL=http://127.0.0.1:5000 npx playwright test --project=chromium tests/<new-spec>.spec.js
+```
+
+(Boot the local stack first with `.\scripts\local-stack-up.ps1` if needed.) The spec must be all-green against local before the agent commits. If a sibling agent is currently using the local stack for their own spec run, queue or use a freshly-named project to avoid races.
+
+For spec EDITS (not new files), running locally is recommended but not mandatory — the diff is small and easier to reason about statically.
+
 ## Templates
 
 See `AGENT_PROMPT_TEMPLATE.md` for the full per-agent prompt skeleton with placeholder slots.

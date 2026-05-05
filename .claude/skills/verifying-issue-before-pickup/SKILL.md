@@ -175,3 +175,34 @@ grep -nE "#NNN|<keyword>" CHANGELOG.md | head
 ```
 
 5 minutes of grep saves 30+ minutes of re-derivation per agent.
+
+## Apply to multi-day flagships, not just GitHub issues (added 2026-05-06)
+
+Same pre-flight grep applies to any TODOS.md row that frames the work as **"set up X"**, **"stand up Y"**, **"bootstrap Z"**, or any fresh-greenfield assumption. The estimate is usually wrong because some non-zero amount of the infrastructure already exists.
+
+The 2026-05-05 G-21 incident was the canonical case: TODOS estimated "Frontend vitest + RTL coverage expansion" at 3-5 days for several sessions. Agent D shipped it in ~10 minutes of real work because:
+- vitest infrastructure was already in `frontend/vite.config.js` from earlier waves (`f752c85` Mar 2026 + `6e66845` Apr 2026)
+- 18 test files already existed
+- The actual gap was just (a) wire the existing tests into a CI gate (didn't exist on per-push), (b) fix 3 stale failing tests pinned to pre-#343 contracts, (c) add 6 new test files for under-covered surfaces
+
+The 3-5 day estimate was based on "greenfield setup from zero." The real work was a 30-minute config + spec round.
+
+**Pre-flight grep checklist for "set up X" rows:**
+
+```bash
+# 1. Does X already exist anywhere?
+grep -rn "<framework-name>" <project-area>/   # e.g. "vitest" frontend/, "playwright" e2e/
+
+# 2. Does any test infrastructure already exist?
+find . -name "*.test.*" -o -name "*.spec.*" | head -20
+
+# 3. Does the project already have config?
+ls <project-area>/*.config.* <project-area>/*.json | head
+
+# 4. Was X (or its predecessors) installed but never wired to CI?
+grep -lE "<framework>" .github/workflows/*.yml
+```
+
+If grep returns matches → re-frame the row from "set up X" to "wire existing X into CI" or "extend existing X coverage." Estimate compresses dramatically (days → hours typically).
+
+**Don't trust the estimate on a TODO row that's been carrying the same `multi-day flagship` label for 3+ session-handoffs.** Multi-session-stale flagship rows are exactly the rows where the original "needs to be set up" framing has drifted — the infrastructure was likely added incrementally during unrelated work.

@@ -85,6 +85,43 @@ export default function CallMonitor() {
         </p>
       </div>
 
+      {/* PR #511 #4: Backend WS infrastructure (`/ws/monitor/:streamSid`)
+          is not implemented yet. The full UI + WS client is in place so
+          we can wire the producer (Twilio Media Streams + streaming-
+          transcription provider) without touching the frontend. The
+          Connect button is disabled until the backend lands; users see
+          this honest WIP banner instead of a hung "connecting..." state.
+          Tracked under the fresh issue filed alongside the v3.4.13 wave. */}
+      <div
+        role="status"
+        style={{
+          marginBottom: '2rem',
+          padding: '1rem 1.25rem',
+          border: '1px solid var(--warning-color, #ff9800)',
+          borderLeft: '4px solid var(--warning-color, #ff9800)',
+          borderRadius: '8px',
+          background: 'var(--warning-bg, rgba(255, 152, 0, 0.08))',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '0.75rem',
+          fontSize: '0.92rem',
+          color: 'var(--text-primary)',
+        }}
+      >
+        <AlertCircle size={20} style={{ flexShrink: 0, color: 'var(--warning-color, #ff9800)', marginTop: '2px' }} />
+        <div>
+          <strong style={{ display: 'block', marginBottom: '0.25rem' }}>
+            Live Call Monitor is in active development
+          </strong>
+          <span style={{ color: 'var(--text-secondary)' }}>
+            The frontend monitor surface (transcripts panel, audio playback, whisper / takeover controls)
+            is in place; the backend stream producer needs Twilio Media Streams + a streaming-transcription
+            provider before live monitoring can connect. The Connect button is disabled until the backend
+            ships.
+          </span>
+        </div>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '2rem' }}>
         {/* Left: Connection Panel */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -145,7 +182,8 @@ export default function CallMonitor() {
                 />
                 <button
                   onClick={handleConnect}
-                  disabled={!inputValue.trim()}
+                  disabled
+                  title="Backend WS endpoint is not implemented yet — see banner above"
                   style={{
                     padding: '0.75rem 1rem',
                     backgroundColor: 'var(--primary-color, var(--accent-color))',
@@ -153,13 +191,13 @@ export default function CallMonitor() {
                     border: 'none',
                     borderRadius: '8px',
                     fontWeight: 500,
-                    cursor: inputValue.trim() ? 'pointer' : 'not-allowed',
-                    opacity: inputValue.trim() ? 1 : 0.6,
+                    cursor: 'not-allowed',
+                    opacity: 0.5,
                     fontSize: '0.9rem',
                     transition: 'all 0.2s ease',
                   }}
                 >
-                  Connect
+                  Connect (backend pending)
                 </button>
               </div>
             ) : (

@@ -69,6 +69,13 @@ const Contacts = () => {
   const [dupes, setDupes] = useState([]);
   const [merging, setMerging] = useState(false);
 
+  // #461: search + status filter inputs were rendered without value/onChange
+  // and the table read straight from `contacts`, so neither one filtered.
+  // Wire both to local state and derive a filtered view client-side
+  // (mirrors the existing Leads.jsx pattern). Status === 'All' = show all.
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
+
   const handleFindDupes = async () => {
     try {
       const data = await fetchApi('/api/contacts/duplicates/find');
@@ -186,6 +193,21 @@ const Contacts = () => {
     fetchContacts();
   };
 
+  // #461: derive the visible rows from `contacts` + the two filter inputs.
+  // Search matches name / email / company / title (case-insensitive). The
+  // dropdown supports the canonical statuses; 'All' disables status filtering.
+  const visibleContacts = contacts.filter((c) => {
+    if (statusFilter !== 'All' && c.status !== statusFilter) return false;
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return true;
+    return (
+      (c.name || '').toLowerCase().includes(term) ||
+      (c.email || '').toLowerCase().includes(term) ||
+      (c.company || '').toLowerCase().includes(term) ||
+      (c.title || '').toLowerCase().includes(term)
+    );
+  });
+
   return (
     <div style={{ padding: '2rem' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
@@ -221,21 +243,36 @@ const Contacts = () => {
       </header>
       
       <div className="card" style={{ overflow: 'hidden' }}>
-        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem' }}>
+        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center' }}>
           <div style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
             <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
-            <input 
-              type="text" 
-              className="input-field" 
-              placeholder="Search contacts..." 
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Search contacts..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
               style={{ paddingLeft: '2.5rem', backgroundColor: 'var(--surface-hover)' }}
             />
           </div>
-          <select className="input-field" style={{ width: '150px' }}>
+          <select
+            className="input-field"
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            style={{ width: '150px' }}
+          >
             <option value="All">All Statuses</option>
             <option value="Lead">Lead</option>
+            <option value="Prospect">Prospect</option>
             <option value="Customer">Customer</option>
+            <option value="Churned">Churned</option>
+            <option value="Junk">Junk</option>
           </select>
+          {(searchTerm || statusFilter !== 'All') && (
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              Showing {visibleContacts.length} of {contacts.length}
+            </span>
+          )}
         </div>
         
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
@@ -254,7 +291,13 @@ const Contacts = () => {
           <tbody>
             {loading ? (
               <tr><td colSpan="8" style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
-            ) : contacts.map(contact => (
+            ) : visibleContacts.length === 0 ? (
+              <tr><td colSpan="8" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                {contacts.length === 0
+                  ? 'No contacts yet. Click "Add Contact" or import a CSV.'
+                  : `No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}.`}
+              </td></tr>
+            ) : visibleContacts.map(contact => (
               <tr key={contact.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                 <td style={{ padding: '1rem' }}>
                   <div style={{ fontWeight: '500' }}>

@@ -210,8 +210,10 @@ const Contacts = () => {
 
   return (
     <div style={{ padding: '2rem' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <div>
+      {/* #488: flex-wrap + gap so the action group wraps cleanly below the title
+          on narrow viewports instead of stacking awkwardly over the description. */}
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ minWidth: 0, flex: '1 1 240px' }}>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Contacts</h2>
           {/* #143: surface the total count so the user knows what they're looking at,
               matching the parity that /wellness/patients already has. */}
@@ -219,7 +221,7 @@ const Contacts = () => {
             {contacts.length.toLocaleString()} contact{contacts.length === 1 ? '' : 's'} · manage your leads and customers
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <button
             onClick={handleRescore}
             disabled={rescoring}
@@ -307,7 +309,24 @@ const Contacts = () => {
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{contact.title}</div>
                 </td>
-                <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.email}</td>
+                {/* #488: long emails (auto-generated test rows like
+                    `arjun.mehta.17779656822@e2e.dev`) used to truncate mid-string
+                    on narrow viewports with no affordance. Cap the cell width,
+                    add ellipsis, and surface the full address via the native
+                    title-attribute tooltip on hover. */}
+                <td
+                  style={{
+                    padding: '1rem',
+                    color: 'var(--text-secondary)',
+                    maxWidth: 240,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={contact.email || ''}
+                >
+                  {contact.email}
+                </td>
                 <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.phone || '—'}</td>
                 <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.company}</td>
                 <td style={{ padding: '1rem' }}>

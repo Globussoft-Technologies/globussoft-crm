@@ -222,7 +222,7 @@ export default function Reports() {
           {/* Controls Sidebar */}
           <div className="card" style={{ width: '300px', minWidth: '260px', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '2rem', flex: '0 0 auto' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Filter size={20} color="var(--accent-color)" /> Query Builder
+              <Filter size={20} color="var(--primary-color, var(--accent-color))" /> Query Builder
             </h3>
 
             <div>
@@ -340,7 +340,7 @@ export default function Reports() {
             {DETAIL_TYPES.map(t => (
               <button key={t.value} onClick={() => setDetailType(t.value)} style={{
                 padding: '0.5rem 1rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', fontSize: '0.85rem',
-                background: detailType === t.value ? 'var(--accent-color)' : 'var(--subtle-bg)',
+                background: detailType === t.value ? 'var(--primary-color, var(--accent-color))' : 'var(--subtle-bg)',
                 color: detailType === t.value ? '#fff' : 'var(--text-primary)', transition: 'var(--transition)'
               }}>
                 {t.label}
@@ -477,7 +477,7 @@ export default function Reports() {
                         wrapping div so the cell still behaves as a table cell. */}
                     <td style={{ ...tdStyle, textAlign: 'right' }}>
                       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-                        <button onClick={() => handleToggleSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-color)', fontSize: '0.8rem' }}>
+                        <button onClick={() => handleToggleSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.8rem' }}>
                           {s.enabled ? 'Pause' : 'Enable'}
                         </button>
                         <button onClick={() => handleDeleteSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '0.8rem' }}>

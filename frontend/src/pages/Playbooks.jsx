@@ -251,7 +251,7 @@ export default function Playbooks() {
         marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <FileText size={28} color="#8b5cf6" />
+          <FileText size={28} color="var(--primary-color, var(--accent-color))" />
           <div>
             <h1 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 700 }}>Sales Playbooks</h1>
             <p style={{ margin: '0.25rem 0 0', color: '#94a3b8', fontSize: '0.85rem' }}>
@@ -355,7 +355,7 @@ export default function Playbooks() {
       {/* Apply to Deal */}
       <div style={{ ...glassCard, marginTop: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-          <Target size={18} color="#6366f1" />
+          <Target size={18} color="var(--primary-color, var(--accent-color))" />
           <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700 }}>Apply to Deal</h3>
         </div>
         <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: 0 }}>

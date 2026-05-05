@@ -45,6 +45,7 @@ export default function Staff() {
   const canManageStaff = user?.role === 'ADMIN';
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState(null);
 
   useEffect(() => { loadStaff(); }, []);
 
@@ -98,6 +99,8 @@ export default function Staff() {
   const managerCount = staff.filter(s => s.role === 'MANAGER').length;
   const userCount = staff.filter(s => s.role === 'USER').length;
 
+  const filteredStaff = filter ? staff.filter(s => s.role === filter) : staff;
+
   return (
     <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem' }}>
@@ -112,31 +115,46 @@ export default function Staff() {
       {/* Stats bar */}
       {staff.length > 0 && (
         <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
-          <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(168,85,247,0.1)',
-            color: '#a855f7', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(168,85,247,0.3)',
-            display: 'flex', alignItems: 'center', gap: '0.3rem',
-          }}>
+          <button
+            onClick={() => setFilter(filter === 'ADMIN' ? null : 'ADMIN')}
+            style={{
+              padding: '0.4rem 1rem', borderRadius: '999px', background: filter === 'ADMIN' ? 'rgba(168,85,247,0.2)' : 'rgba(168,85,247,0.1)',
+              color: '#a855f7', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(168,85,247,0.3)',
+              display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer', transition: 'all 0.2s',
+            }}
+          >
             <Shield size={12} /> {adminCount} Admins
-          </span>
-          <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(59,130,246,0.1)',
-            color: '#3b82f6', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(59,130,246,0.3)',
-          }}>
+          </button>
+          <button
+            onClick={() => setFilter(filter === 'MANAGER' ? null : 'MANAGER')}
+            style={{
+              padding: '0.4rem 1rem', borderRadius: '999px', background: filter === 'MANAGER' ? 'rgba(59,130,246,0.2)' : 'rgba(59,130,246,0.1)',
+              color: '#3b82f6', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(59,130,246,0.3)',
+              cursor: 'pointer', transition: 'all 0.2s',
+            }}
+          >
             {managerCount} Managers
-          </span>
-          <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', background: 'var(--subtle-bg-4)',
-            color: 'var(--text-secondary)', fontSize: '0.8rem', border: '1px solid var(--border-color)',
-          }}>
+          </button>
+          <button
+            onClick={() => setFilter(filter === 'USER' ? null : 'USER')}
+            style={{
+              padding: '0.4rem 1rem', borderRadius: '999px', background: filter === 'USER' ? 'var(--subtle-bg-3)' : 'var(--subtle-bg-4)',
+              color: filter === 'USER' ? 'var(--text-primary)' : 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: '600', border: '1px solid var(--border-color)',
+              cursor: 'pointer', transition: 'all 0.2s',
+            }}
+          >
             {userCount} Users
-          </span>
-          <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', background: 'var(--subtle-bg-4)',
-            color: 'var(--text-secondary)', fontSize: '0.8rem', border: '1px solid var(--border-color)',
-          }}>
+          </button>
+          <button
+            onClick={() => setFilter(null)}
+            style={{
+              padding: '0.4rem 1rem', borderRadius: '999px', background: !filter ? 'var(--subtle-bg-3)' : 'var(--subtle-bg-4)',
+              color: !filter ? 'var(--text-primary)' : 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: '600', border: '1px solid var(--border-color)',
+              cursor: 'pointer', transition: 'all 0.2s',
+            }}
+          >
             {staff.length} total
-          </span>
+          </button>
         </div>
       )}
 
@@ -152,6 +170,10 @@ export default function Staff() {
           <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
             No staff members found.
           </p>
+        ) : filteredStaff.length === 0 ? (
+          <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
+            No staff members with that role.
+          </p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
@@ -166,7 +188,7 @@ export default function Staff() {
                 </tr>
               </thead>
               <tbody>
-                {staff.map(member => (
+                {filteredStaff.map(member => (
                   <tr key={member.id} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s' }}
                     onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}

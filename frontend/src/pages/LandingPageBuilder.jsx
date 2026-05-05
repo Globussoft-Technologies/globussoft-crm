@@ -45,6 +45,7 @@ const COMPONENT_TYPES = [
   { type: 'divider', label: 'Divider', icon: Minus, defaultProps: { color: '#e2e8f0', margin: '1rem' } },
   { type: 'spacer', label: 'Spacer', icon: Space, defaultProps: { height: '40px' } },
   { type: 'video', label: 'Video', icon: Video, defaultProps: { url: 'https://www.youtube.com/embed/dQw4w9WgXcQ', width: '100%' } },
+  { type: 'columns', label: 'Two Columns', icon: Columns, defaultProps: { gap: '2rem', columns: [{ components: [] }, { components: [] }] } },
 ];
 
 // ── #450 — undo / redo reducer ───────────────────────────────────────
@@ -515,6 +516,17 @@ function ComponentPreview({ comp }) {
     case 'divider': return <hr style={{ border: 'none', borderTop: `1px solid ${p.color}`, margin: p.margin }} />;
     case 'spacer': return <div style={{ height: p.height }} />;
     case 'video': return <div style={{ textAlign: 'center' }}><iframe src={p.url} style={{ width: p.width || '100%', maxWidth: '100%', height: '360px', border: 'none', borderRadius: '6px' }} allowFullScreen /></div>;
+    case 'columns': return (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: p.gap || '2rem' }}>
+        {(p.columns || []).map((col, i) => (
+          <div key={i} style={{ flex: 1, minWidth: '200px' }}>
+            {(col.components || []).map((child, j) => (
+              <ComponentPreview key={j} comp={child} />
+            ))}
+          </div>
+        ))}
+      </div>
+    );
     default: return <div style={{ padding: '1rem', background: 'var(--subtle-bg)', borderRadius: '6px', fontSize: '0.85rem' }}>Unknown: {comp.type}</div>;
   }
 }
@@ -550,6 +562,7 @@ function PropertyEditor({ comp, updateProp, routingRules }) {
     case 'divider': return <>{field('Color', 'color', 'color')}{field('Margin', 'margin')}</>;
     case 'spacer': return <>{field('Height', 'height')}</>;
     case 'video': return <>{field('Embed URL', 'url')}{field('Width', 'width')}</>;
+    case 'columns': return <>{field('Gap Between Columns', 'gap')}</>;
     default: return <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No properties for this component.</p>;
   }
 }

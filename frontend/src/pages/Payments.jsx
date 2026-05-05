@@ -466,47 +466,115 @@ function Td({ children, onClick }) {
 }
 
 function StatCard({ icon, label, value, color }) {
+  const bgAlpha = color === '#10b981' ? '0.08' : color === '#f59e0b' ? '0.08' : '0.08';
+  const getBgColor = () => {
+    if (color === '#10b981') return 'rgba(16,185,129,0.1)';
+    if (color === '#f59e0b') return 'rgba(245,158,11,0.1)';
+    if (color === '#ef4444') return 'rgba(239,68,68,0.1)';
+    return 'rgba(99,91,255,0.1)';
+  };
+
   return (
-    <div style={{ ...GLASS, padding: '1.1rem 1.25rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color, marginBottom: '0.4rem' }}>
-        {icon}
-        <span style={{ fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+    <div style={{
+      padding: '1.5rem',
+      borderRadius: '12px',
+      background: getBgColor(),
+      border: `1.5px solid ${color}40`,
+      boxShadow: `0 0 20px ${color}15`,
+      transition: 'all 0.3s ease',
+      cursor: 'default',
+      position: 'relative',
+      overflow: 'hidden',
+    }}
+    onMouseEnter={e => {
+      e.currentTarget.style.background = getBgColor();
+      e.currentTarget.style.transform = 'translateY(-2px)';
+      e.currentTarget.style.boxShadow = `0 8px 24px ${color}25`;
+    }}
+    onMouseLeave={e => {
+      e.currentTarget.style.background = getBgColor();
+      e.currentTarget.style.transform = 'translateY(0)';
+      e.currentTarget.style.boxShadow = `0 0 20px ${color}15`;
+    }}
+    >
+      <div style={{ position: 'relative', zIndex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '10px',
+            background: `${color}20`,
+            border: `1px solid ${color}60`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color,
+          }}>
+            {icon}
+          </div>
+          <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', fontWeight: 600 }}>{label}</span>
+        </div>
+        <div style={{ fontSize: '2.2rem', fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
       </div>
-      <div style={{ fontSize: '1.55rem', fontWeight: 700 }}>{value}</div>
+
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        right: -40,
+        width: '120px',
+        height: '120px',
+        borderRadius: '50%',
+        background: `${color}10`,
+        filter: 'blur(30px)',
+      }} />
     </div>
   );
 }
 
 function ConfigCard({ name, configured, extras, hint, brandColor }) {
+  const borderColor = configured ? `${brandColor}60` : 'rgba(255,255,255,0.1)';
+  const bgColor = configured ? `${brandColor}08` : 'rgba(255,255,255,0.02)';
+
   return (
     <div style={{
-      padding: '1rem',
-      borderRadius: '10px',
-      background: 'rgba(255,255,255,0.03)',
-      border: `1px solid ${configured ? `${brandColor}55` : 'rgba(255,255,255,0.08)'}`,
+      padding: '1.25rem',
+      borderRadius: '12px',
+      background: bgColor,
+      border: `1px solid ${borderColor}`,
+      boxShadow: `0 0 16px ${configured ? `${brandColor}12` : 'rgba(0,0,0,0.1)'}`,
+      transition: 'all 0.3s ease',
+      position: 'relative',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.6rem' }}>
-        <strong style={{ color: brandColor }}>{name}</strong>
+      <div style={{ position: 'absolute', top: 0, left: 0, width: '4px', height: '100%', background: brandColor, borderRadius: '12px 0 0 12px', opacity: configured ? 1 : 0.3 }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', paddingLeft: '0.5rem' }}>
+        <div>
+          <strong style={{ color: brandColor, fontSize: '0.95rem' }}>{name}</strong>
+        </div>
         {configured ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#10b981', fontSize: '0.78rem' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', color: '#10b981', fontSize: '0.78rem', fontWeight: 600, background: 'rgba(16,185,129,0.1)', padding: '0.3rem 0.7rem', borderRadius: '6px', border: '1px solid rgba(16,185,129,0.3)' }}>
             <CheckCircle size={14} /> Configured
           </span>
         ) : (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#f59e0b', fontSize: '0.78rem' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', color: '#f59e0b', fontSize: '0.78rem', fontWeight: 600, background: 'rgba(245,158,11,0.1)', padding: '0.3rem 0.7rem', borderRadius: '6px', border: '1px solid rgba(245,158,11,0.3)' }}>
             <AlertTriangle size={14} /> Not configured
           </span>
         )}
       </div>
-      <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 0.6rem 0', fontSize: '0.78rem' }}>
+
+      <ul style={{ listStyle: 'none', padding: '0 0 0 0.5rem', margin: '0 0 1rem 0', fontSize: '0.78rem' }}>
         {extras.map((x, i) => (
-          <li key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem' }}>
-            {x.ok ? <CheckCircle size={12} color="#10b981" /> : <XCircle size={12} color="#ef4444" />}
-            <span style={{ color: 'var(--text-secondary)' }}>{x.label}</span>
-            {x.value && <code style={{ marginLeft: '0.3rem', color: 'var(--text-primary)' }}>{x.value}</code>}
+          <li key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem', color: 'var(--text-secondary)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', width: '16px', justifyContent: 'center' }}>
+              {x.ok ? <CheckCircle size={13} color="#10b981" /> : <XCircle size={13} color="#ef4444" />}
+            </div>
+            <span>{x.label}</span>
+            {x.value && <code style={{ marginLeft: 'auto', color: 'var(--text-primary)', fontSize: '0.7rem', background: 'rgba(255,255,255,0.05)', padding: '0.2rem 0.4rem', borderRadius: '4px' }}>{x.value}</code>}
           </li>
         ))}
       </ul>
-      <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{hint}</p>
+
+      <p style={{ margin: 0, fontSize: '0.73rem', color: 'var(--text-secondary)', lineHeight: 1.6, paddingLeft: '0.5rem' }}>{hint}</p>
     </div>
   );
 }

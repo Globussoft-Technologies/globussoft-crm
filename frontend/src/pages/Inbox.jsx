@@ -46,7 +46,11 @@ export default function Inbox() {
   // Email detail view state (PR #511 — separate modal pattern; coexists with
   // the shared `detail` modal for sms/wa/call. Blocker #7 in the review;
   // intentional carry-over for v3.4.13 cleanup.)
-  const [selectedEmail, setSelectedEmail] = useState(null);
+  // PR #511 #7: was a second modal pattern competing with `detail` for the
+  // email tab specifically. Consolidated into the unified `detail` modal
+  // above (the email branch now ports the avatar + bigger-subject layout
+  // from the old selectedEmail modal). Email rows now setDetail({kind:'email',
+  // item}) like every other channel.
 
   // #253: track which call recording is currently expanded into a player.
   // playerErrors keyed by call.id so a single broken URL doesn't poison
@@ -365,7 +369,7 @@ export default function Inbox() {
               </p>
             )}
             {emails.map(email => (
-              <div key={email.id} className="table-row-hover" onClick={() => setSelectedEmail(email)} style={{ padding: '1.5rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: email.read ? 'rgba(0,0,0,0.2)' : 'rgba(59, 130, 246, 0.05)', display: 'flex', gap: '1.5rem', cursor: 'pointer' }}>
+              <div key={email.id} className="table-row-hover" onClick={() => setDetail({ kind: 'email', item: email })} style={{ padding: '1.5rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: email.read ? 'rgba(0,0,0,0.2)' : 'rgba(59, 130, 246, 0.05)', display: 'flex', gap: '1.5rem', cursor: 'pointer' }}>
                 <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <User size={20} color="#fff" />
                 </div>
@@ -595,12 +599,23 @@ export default function Inbox() {
               </button>
             </div>
             {detail.kind === 'email' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>From:</strong> {detail.item.from}</div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>To:</strong> {detail.item.to}</div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><strong>Date:</strong> {new Date(detail.item.createdAt).toLocaleString()}</div>
-                <div style={{ fontSize: '1.05rem', fontWeight: 600, marginTop: '0.5rem' }}>{detail.item.subject}</div>
-                <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, color: 'var(--text-primary)', marginTop: '0.5rem' }}>
+              <div>
+                {/* Avatar + from/to row — ported from the previous selectedEmail
+                    modal (PR #511 #7 consolidation). Same visual hierarchy
+                    sms/wa/call branches use, just with the email-specific
+                    sender card on top. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.25rem' }}>
+                  <div style={{ width: '50px', height: '50px', borderRadius: '50%', background: 'var(--primary-color, var(--accent-color))', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <User size={24} color="#fff" />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: '1.05rem', fontWeight: 'bold', margin: 0, marginBottom: '0.15rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={detail.item.from}>{detail.item.from}</p>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={detail.item.to}>to {detail.item.to}</p>
+                  </div>
+                </div>
+                <h2 style={{ fontSize: '1.4rem', fontWeight: 'bold', margin: 0, marginBottom: '0.4rem' }}>{detail.item.subject}</h2>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, marginBottom: '1.25rem' }}>{new Date(detail.item.createdAt).toLocaleString()}</p>
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', whiteSpace: 'pre-wrap', wordWrap: 'break-word', lineHeight: 1.65, color: 'var(--text-primary)' }}>
                   {detail.item.body || <em style={{ color: 'var(--text-secondary)' }}>(empty body)</em>}
                 </div>
               </div>
@@ -644,43 +659,6 @@ export default function Inbox() {
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
               <button onClick={() => setDetail(null)} className="btn-secondary">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {selectedEmail && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}>
-          <div className="card" style={{ padding: '2.5rem', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border-color)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
-            <button onClick={() => setSelectedEmail(null)} style={{ float: 'right', background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-              ✕
-            </button>
-
-            <div style={{ marginBottom: '2rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
-                <div style={{ width: '50px', height: '50px', borderRadius: '50%', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  <User size={24} color="#fff" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <p style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>{selectedEmail.from}</p>
-                  <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>to {selectedEmail.to}</p>
-                </div>
-              </div>
-
-              <h2 style={{ fontSize: '1.8rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{selectedEmail.subject}</h2>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '2rem' }}>{new Date(selectedEmail.createdAt).toLocaleString()}</p>
-
-              <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '2rem' }}>
-                <div style={{ fontSize: '1rem', lineHeight: '1.8', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
-                  {selectedEmail.body}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem', display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-              <button onClick={() => setSelectedEmail(null)} className="btn-secondary" style={{ cursor: 'pointer' }}>
-                Close
-              </button>
             </div>
           </div>
         </div>

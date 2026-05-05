@@ -206,6 +206,15 @@ The `--only` flag bypasses the staging area entirely for the commit step. Even i
 
 **Rule of thumb:** if there's any chance another agent might be touching the repo concurrently, use `--only`. The dispatching parent should also use it for any consolidation commits.
 
+**`-o` is the short form of `--only`** — same semantics, fewer keystrokes, more pleasant to retain in agent prompts. Use either:
+
+```bash
+git commit -o backend/routes/foo.js -o e2e/tests/foo.spec.js -F msg.txt
+git commit --only backend/routes/foo.js e2e/tests/foo.spec.js -F msg.txt
+```
+
+**Empirical confirmation — v3.4.12 closure wave (2026-05-05):** the W1/W2/W3 waves dispatched 7 agents across 27 issues with `-o` baked into the per-agent prompt template from the start (see [AGENT_PROMPT_TEMPLATE.md "Commit hygiene"](AGENT_PROMPT_TEMPLATE.md)). **Zero index-race collisions across the entire wave.** The pattern that bit the 2026-05-05 morning waves twice (Agent F sweeping 7 of Agent J's files; #413 bundling 6 unrelated) didn't recur once the template required `-o`. **Bake the `-o` rule into the per-agent prompt** — relying on the agent to remember the existing skill section is unreliable; making it canned in the template is what converted the pattern from "occasionally bit us" to "zero incidents."
+
 ## Verify each issue's auto-close after multi-issue commits (added 2026-05-06)
 
 GitHub's auto-close-on-trailer behavior has TWO silent failure modes that bit the 2026-05-05 5-agent wave:

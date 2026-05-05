@@ -78,6 +78,26 @@ Read [`.claude/skills/reporting-agent-progress/SKILL.md`](.claude/skills/reporti
 
 Full — run scripts, edit files, commit, push to origin/main. Cap iterations at 5 per failing test. Don't commit dubious workarounds; if blocked, report and stop.
 
+## Commit hygiene (mandatory during parallel waves)
+
+Use `git commit -o <pathspec> -F /tmp/msg.txt` (the `-o` short for `--only`), NEVER `git add <file> && git commit -m "..."`. The `-o` form atomically pins the commit to ONLY the named files even if a sibling agent races and stages something into the index between your add and commit:
+
+```bash
+# UNSAFE during waves — race window:
+git add backend/routes/foo.js e2e/tests/foo.spec.js
+git commit -m "fix(foo): close #N"
+
+# SAFE — equivalent to --only, atomic, no index race:
+cat > /tmp/msg.txt <<'EOF'
+fix(foo): close #N
+
+<body>
+EOF
+git commit -o backend/routes/foo.js -o e2e/tests/foo.spec.js -F /tmp/msg.txt
+```
+
+The 2026-05-05 5-agent wave hit two index-race incidents (Agent F's `cfb9973` captured 7 of Agent J's files; the #413 commit bundled 6 unrelated). The v3.4.12 closure wave switched to `-o` from the start and shipped 27 issues across 5 agents with **zero collisions**. See [SKILL.md "Concurrent-agent git hygiene"](SKILL.md) for the full pattern.
+
 ## DO NOT
 
 - Include "Co-Authored-By: Claude" in commit messages (global rule)

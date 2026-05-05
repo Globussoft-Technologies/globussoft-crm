@@ -143,6 +143,41 @@ const NotificationBell = () => {
     }
   };
 
+  // #483: on narrow viewports (<=480px) the bell sits near the right edge, so
+  // a `right: 0` anchored 360px-wide popover would extend off the LEFT edge of
+  // the viewport, hiding notification titles. Detect mobile and switch to a
+  // fixed full-viewport-width overlay with side padding so titles + bodies
+  // stay visible. window guarded for SSR safety.
+  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 480;
+  const dropdownStyle = isMobile
+    ? {
+        position: 'fixed',
+        top: 56,
+        left: 8,
+        right: 8,
+        width: 'auto',
+        maxHeight: 'calc(100vh - 72px)',
+        overflowY: 'auto',
+        background: 'var(--surface-color)',
+        border: '1px solid var(--border-color)',
+        borderRadius: 12,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+        zIndex: 9999,
+      }
+    : {
+        position: 'absolute',
+        top: '100%',
+        right: 0,
+        width: 360,
+        maxHeight: 460,
+        overflowY: 'auto',
+        background: 'var(--surface-color)',
+        border: '1px solid var(--border-color)',
+        borderRadius: 12,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+        zIndex: 9999,
+      };
+
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button
@@ -186,21 +221,7 @@ const NotificationBell = () => {
       </button>
 
       {open && (
-        <div
-          style={{
-            position: 'absolute',
-            top: '100%',
-            right: 0,
-            width: 360,
-            maxHeight: 460,
-            overflowY: 'auto',
-            background: 'var(--surface-color)',
-            border: '1px solid var(--border-color)',
-            borderRadius: 12,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
-            zIndex: 9999,
-          }}
-        >
+        <div style={dropdownStyle}>
           {/* Header */}
           <div
             style={{

@@ -259,25 +259,40 @@ export default function Reports() {
           </div>
 
           {/* Chart View */}
-          <div className="card" style={{ flex: 1, padding: '2rem', display: 'flex', flexDirection: 'column' }}>
+          {/* #462: `flex: 1` on the parent card paired with `flexWrap: 'wrap'`
+              on the grandparent (so the controls sidebar can wrap on narrow
+              viewports) leaves the card's flex-basis ambiguous during the
+              first layout pass — Recharts ResponsiveContainer measures parent
+              dims and gets width=-1 / height=-1, which it then logs as a
+              warning AND draws the SVG outside its bounds (overlapping the
+              Scheduled Email Reports table beneath). Fix: pin a deterministic
+              pixel height on the chart wrapper instead of `flex: 1` height,
+              and add `minWidth: 0` so the card can shrink below its content
+              width without forcing a -1 measurement. Mirrors the
+              OwnerDashboard.jsx revenue-trend pattern (`<div style={{ height: 220 }}>`). */}
+          <div className="card" style={{ flex: 1, minWidth: 0, padding: '2rem', display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
               <h3 style={{ fontSize: '1.25rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <PieChartIcon size={20} color="var(--success-color)" /> Data Projection
               </h3>
             </div>
 
-            <div style={{ flex: 1, position: 'relative', minHeight: '350px' }}>
+            <div style={{ position: 'relative', height: '450px', minHeight: '350px', minWidth: 0 }}>
               {loading ? (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>Crunching metrics...</div>
               ) : data.length === 0 ? (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>No data available for this query.</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                   {chartType === 'bar' ? (
                     <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                       <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
+                      {/* #462 follow-up: mirror the #439 OwnerDashboard fix —
+                          all metrics here (revenue/count/win-rate/expenses) are
+                          non-negative; pinning domain=[0,'auto'] silences the
+                          Recharts negative-domain warning on all-zero data. */}
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
                       <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {data.map((entry, index) => (
@@ -304,7 +319,11 @@ export default function Reports() {
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                       <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
+                      {/* #462 follow-up: mirror the #439 OwnerDashboard fix —
+                          all metrics here (revenue/count/win-rate/expenses) are
+                          non-negative; pinning domain=[0,'auto'] silences the
+                          Recharts negative-domain warning on all-zero data. */}
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
                       <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
                       <Area type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorVal)" />
                     </AreaChart>

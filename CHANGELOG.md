@@ -1,5 +1,88 @@
 # CHANGELOG
 
+## v3.4.13 — 2026-05-06 — 24-issue closure arc: PR #511 SendGrid + B-01 TURNSTILE + 8 tracked follow-ups closed + #437 marketplace status chip + Call Monitor removed (Callified owns it)
+
+The largest closure arc since v3.4.0 — **24 GitHub issues + 5 PR-review carry-overs closed across two days** (yesterday evening + today). Started with the v3.4.12 release-validation green, picked up 2 open PRs (squash-merged), filed all 8 v3.4.12-wave follow-ups as tracked issues, and worked the backlog top-to-bottom until only 2 user-blocked items remain. Major themes: provider migrations live (SendGrid email + Turnstile CAPTCHA), backend gaps closed (push send-test, sms send-bulk, marketplace status), frontend dead-code cleared (Call Monitor — Callified.ai owns live-call surfaces), 4 process learnings promoted to standing rules, 1 pragmatic decision (Call Monitor removed rather than half-built).
+
+### Test surface continued growth
+
+| Tier | Tool | v3.4.12 | v3.4.13 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | ~78 specs / ~2,532 tests | **~79 specs** / ~2,560 tests | +1 spec / +28 tests |
+| Per-push backend unit tests | vitest | 42 files / ~1,184 tests | 42 files / **~1,189 tests** | +5 SendGrid contract tests |
+| Per-push frontend unit tests | vitest | 6 files / ~35 tests | 6 files / ~35 tests | 0 |
+| **Total per-push** |  | ~3,751 | **~3,784** | **+33 tests / +0.9%** |
+
+Added regression-guards: `whatsapp.spec.js` wired into the gate (existed but ungated) + 3 #518 contract tests; 8 #516 tests on `sms-api.spec.js`; 6 #437 tests on `integrations-api.spec.js`; 4 #515 tests on `push-api.spec.js`; 5 PR #511 SendGrid contract tests on `notificationService.test.js`; 1 PR #511 #13 SMS canonical-shape pin.
+
+### Added — new product surfaces
+
+- **#437 marketplace status chip row + 3-state empty UX** (commit `a286b1e`) — new `GET /api/integrations/marketplace/status` (non-admin readable) returns `{provider, label, configured, isActive, lastSyncAt, leadsLast30d, healthHint}` per known marketplace (indiamart/justdial/tradeindia). Frontend `MarketplaceLeads.jsx` gets an always-visible chip row above the leads table + 3-mode differentiated empty state (no integrations / may be stale / all quiet). Pattern reusable for the same UX gap on `/payments` (#371-class), `/sequences`, `/calendar-sync`.
+- **#516 `POST /api/sms/send-bulk` multi-recipient envelope** (commit `f04e130`) — mirrors the v3.4.12 #435 email envelope. Frontend Channels SMS Blast + Marketing SMS Campaigns composer migrated from N HTTP round-trips to one bulk call. Pre-flight phone validation surfaces invalid recipients in `failures[]` before any provider call. 8 regression tests.
+- **#515 `POST /api/push/send-test`** (commit `aafa1e2`) — first-class endpoint inferring recipient from `req.user.userId`. Replaces W2-F's `localStorage.user.id` workaround. 4 regression tests.
+- **B-01 TURNSTILE_SECRET_KEY shipped to demo** (commit `5960864`) — Cloudflare Turnstile sitekey + secret deployed via new reusable [scripts/apply-turnstile-env.py](scripts/apply-turnstile-env.py) (paramiko + SFTP + backup-rollback). Operator-blocker count back to **0**. Per-form opt-in via `props.enableCaptcha: true` in LandingPageBuilder.
+
+### Added — provider migration LIVE on demo
+
+- **PR #511 squash-merge: Mailgun → SendGrid email** (commit `f489df1`) — required local rebase (2 file conflicts) + inline fix for blocker #1 (`recipient` → `to` regression in /send-email loop, would have undone v3.4.12 #435). Demo `backend/.env` updated via the canonical SSH-config pattern. **Demo email is delivering for the first time.** GitHub Actions repo secret `SENDGRID_API_KEY` set. **5 SendGrid contract tests** added to `notificationService.test.js` (commit `b9a8ab8`) — pin URL, Bearer auth, JSON body, payload shape, 4xx best-effort.
+
+### Added — CI infrastructure
+
+- **#521 PR pre-merge checks workflow** (commit `20d57d8`) — new `pr-checks.yml` runs vite build + ESLint on every PR. Surfaced by the PR #453 conflict-marker incident: PR-level CI was only secret-scan + migration-check; full build/lint/api_tests fired ONLY on push to main. The new workflow catches conflict markers + JSX errors + `req.user.id` anti-pattern + jsx-a11y misuse before merge instead of after.
+
+### Fixed — provider contract drift
+
+- **#518 WhatsApp send canonical Meta Cloud shape** (commit `197f576`) — `Channels.jsx` was posting `{to, body, templateId: <int>}` but the route destructures `{to, body, templateName, parameters}`. `templateId` was silently dropped → templateName undefined → fell into session-text branch → outside Meta's 24h re-engagement window the call failed with non-obvious provider errors. Fixed: `templateName: template.name` + new `extractWhatsappParameters()` helper that walks `{{1}}`/`{{2}}`/`{{3}}` placeholders and substitutes from SAMPLE_CONTACT. Existing `whatsapp.spec.js` wired into the gate (it existed but wasn't gated — surfaced during the fix) + 3 regression tests.
+
+### Fixed — UI / responsive
+
+- **#513 1fr-2fr collapse on Contracts/Estimates/Expenses/Projects mobile** (commit `0b3b2b2`) — same fix recipe as W1-A's #478/#480 from v3.4.12, applied across 4 more pages.
+- **#514 responsive.css:151 Calendar selector** (commit `0921cc6`) — was a brittle `[style*="minmax(180px"]` attribute selector but the actual grid renders `minmax(120px, 1fr)`; the rule never fired. Migrated to `.calendar-grid` class (the W1-A scaffold from v3.4.12).
+- **#519 Channels.jsx deep-link consumer** (commit `66b7526`) — Marketing CTAs now pass `/channels?tab=sms` etc.; Channels.jsx reads `useSearchParams()` to seed `activeTab`. Allow-list-guarded so an arbitrary param can't escape into state.
+- **#520 wellness off-brand color stragglers** (commit `1ea592d`) — 5 lines across Playbooks + Reports migrated to the `var(--primary-color, var(--accent-color))` fallback per the v3.4.12 standing rule.
+- **PR #511 #9 CallMonitor brand colors** (commit `768607c`) — applied before the Call Monitor was removed (#522, see below); pattern was the same `--primary-color` migration.
+
+### Fixed — refactors / cleanups
+
+- **PR #511 #7 Inbox modal pattern consolidation** (commit `cd30f7a`) — two competing modals (`detail` for sms/wa/call + `selectedEmail` for emails). Upgraded the unified `detail` modal's email branch with the avatar + bigger-subject UX from `selectedEmail`, then deleted the duplicate state + modal. Net -22 / +20 lines but every channel now uses the same modal contract.
+- **PR #511 #6 hardcoded CORS origin comment** + **PR #511 #10 SMS placeholder cosmetic** (commit `66b7526`) — trivial-debt sweep bundled with #519.
+- **PR #511 #13 `/api/sms/send {to, body}` shape regression spec** (commit `f68501e`) — pins the canonical Inbox.jsx Compose shape so a future `required:` extension at `routes/sms.js:12` doesn't silently 400 the form.
+
+### Removed — Call Monitor (Callified.ai owns it)
+
+- **#522 + PR #511 #4 Live Call Monitor frontend dropped** (commits `8fe77ea` then `98b456a`) — first shipped a WIP banner + disabled Connect button, then per user direction removed the entire surface (8 files / -739 lines). Live-call surfaces are owned by sister product **Callified.ai**; the CRM ingests calls via `/api/v1/external/calls` (POST + PATCH for late transcripts) but does not render live-monitoring UI. The `/ws/monitor/:streamSid` backend producer that the #522 follow-up issue would have implemented (Twilio Media Streams + streaming-transcription provider) is no longer needed — that work happens in Callified, not here.
+
+### Hotfix — deploy gate unblocked
+
+- **`fix(unit-tests)`: hoist SENDGRID_API_KEY env-set above SUT import** (commit `f4fc271`) — the 5 SendGrid contract tests added in `b9a8ab8` had been failing on every CI run since they landed because ESM hoists imports above runtime statements. The previous `process.env.SENDGRID_API_KEY = ...` at line 17 ran AFTER the SUT import at line 28; SUT's module-load-time `const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || ""` saw the empty string. Wrapped the env-set in `vi.hoisted()` so vitest's transformer lifts it above the imports. 5 tests green, deploy gate unblocked, three downstream commits caught up.
+
+### Process — 5 v3.4.12-wave learnings promoted into the codebase
+
+- **`--accent-color` vs `--primary-color` rule** → CLAUDE.md "Standing rules" (commit `539e6ba`). Round-tripped 6 issues alone (#520 + PR #511 #9 hit 14 instances).
+- **`min-width: 0` chain pattern** for ellipsis on flex/grid children → CLAUDE.md.
+- **Single-source responsive grid pattern** (`repeat(auto-fit, minmax(min(100%, 240px), 1fr))`) → CLAUDE.md.
+- **Lint-rule defensive policy** (verify a rule is configured before adding `eslint-disable-next-line`) → CLAUDE.md. Surfaced by the W2-F `jsx-a11y/alt-text` regression in v3.4.12 + applied to today's #518 fix.
+- **`git commit -o <file>` parallel-wave hygiene** → AGENT_PROMPT_TEMPLATE.md "Commit hygiene" + dispatching-parallel-agent-wave skill (commit `df91ee3`).
+
+### Process — Pattern E added to verifying-issue-before-pickup skill
+
+- **Pattern E (cluster-of-attributed-causes)** added to `verifying-issue-before-pickup` (commit `ca4b734`). v3.4.12+ drift-rate is now **5 of 6 = 83%** (vs 50% baseline at v3.4.8/9). Today's #431 verify is the canonical example: 3-field schema-drift framing turned out to describe a UI that doesn't exist; current `Privacy.jsx` exposes 5 different entities and the route iterates the full array correctly. Recommended close as not-reproducible.
+
+### Filed for follow-up (carry-over to v3.4.14)
+
+- **#522 (filed then closed)** — Live Call Monitor backend WS producer was originally filed as Tech-debt Medium with a 3-5 day estimate; closed as wontfix when the user confirmed Callified owns the live-call surface.
+- **`responsive.css` 11-other-brittle-selectors sweep** — surfaced in the `0921cc6` commit body. 11 more inline-style attribute selectors live on lines 121-212 (same regression class as #514). ~2-3h once each target gets a className scaffold. Will file as a tracked issue alongside this release.
+
+### Carry-over for v3.4.14
+
+- **#431** — current state: my "not-reproducible" comment posted; will close after this release if no reporter response.
+- **#457** — manual-only QA umbrella, intentional, stays open.
+- **Apply #437's chip + 3-state empty pattern to `/payments`, `/sequences`, `/calendar-sync`** — the issue cited #371 as adjacent; pattern is now reusable as `<IntegrationStatusChip />` + `<EmptyState mode="..." />` pair. ~1-2h per page once the components are extracted.
+- **`responsive.css` 11-selectors sweep** (when filed) — small refactor.
+- **Demo smoke-test pass at 375px** — needs human; covers Contracts/Estimates/Expenses/Projects/wellness-Calendar/Tickets/Tasks/Invoices/KnowledgeBase/BookingPages/Inbox/Channels Push tab/Turnstile-enabled landing page. None of these have been hand-verified since the v3.4.12 wave shipped them.
+
+---
+
 ## v3.4.12 — 2026-05-05 — PR #453 merged + 5-agent QA wave (30+ issues) + e2e-full all-green + G-21 frontend vitest gate + doc canonicality discipline
 
 The biggest single-release surface since v3.4.0. Closes the entire v3.4.11 carry-over backlog (9 landing-page builder issues + #435 multi-recipient + G-21 frontend vitest + #445 P1 Nginx). Lands the largest customer-visible UI delivery of the v3.4.x arc (PR #453 — Sidebar redesign + Knowledge Base rewrite + Patients edit flow + Staff role filters + Callified SSO error UX). Closes 30+ QA issues across a 5-agent parallel wave. Achieves first-ever all-green `e2e-full.yml` release-validation since v3.4.9 (multi-commit chase). Bootstraps the frontend vitest CI gate (G-21 — new test surface). Establishes a new doc-canonicality discipline (README + CLAUDE.md no longer narrate per-version arcs; CHANGELOG.md is the only place that does).

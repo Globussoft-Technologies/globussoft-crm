@@ -89,10 +89,15 @@ export default function BookingPages() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <Calendar size={24} style={{ color: 'var(--accent-color)' }} />
-          <div>
+      {/* #492: header was display:flex with no flexWrap, so on narrow viewports
+          (<768px) the Create Page button overlapped the description text. Adding
+          flexWrap:'wrap' + a min-width on the title block lets the button drop
+          to its own line on mobile while keeping the side-by-side layout on
+          wider viewports. */}
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0, flex: '1 1 280px' }}>
+          <Calendar size={24} style={{ color: 'var(--accent-color)', flexShrink: 0 }} />
+          <div style={{ minWidth: 0 }}>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Booking Pages</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
               Share scheduling links so prospects can book meetings on your calendar.
@@ -102,7 +107,7 @@ export default function BookingPages() {
         <button
           className="btn-primary"
           onClick={() => setShowCreate(true)}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}
         >
           <Plus size={18} /> Create Page
         </button>

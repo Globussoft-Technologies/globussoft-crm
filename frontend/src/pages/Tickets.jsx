@@ -108,7 +108,7 @@ export default function Tickets() {
   const urgentCount = tickets.filter(t => t.priority === 'Urgent' && t.status !== 'Closed').length;
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="tickets-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <Ticket size={26} color="var(--accent-color)" /> Support Tickets
@@ -145,7 +145,7 @@ export default function Tickets() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem' }}>
+      <div className="tickets-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
 
         {/* Create Ticket Panel */}
         <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
@@ -285,7 +285,20 @@ export default function Tickets() {
         </div>
       </div>
 
-      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }`}</style>
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        /* #478: collapse the 1fr 2fr two-column layout to a single stack on mobile.
+           Without this, the Create Ticket form columns shrink to ~30px wide and the
+           Description textarea renders text vertically (one letter per line). The
+           minmax(0, ...) on the desktop grid is also load-bearing — it prevents the
+           form-field min-content from forcing the column wider than 1fr would allow,
+           which is what was triggering the textarea-collapse at sub-1024px widths. */
+        @media (max-width: 768px) {
+          .tickets-page { padding: 1rem !important; }
+          .tickets-grid { grid-template-columns: 1fr !important; gap: 1.25rem !important; }
+          .tickets-page .card { padding: 1.25rem !important; }
+        }
+      `}</style>
     </div>
   );
 }

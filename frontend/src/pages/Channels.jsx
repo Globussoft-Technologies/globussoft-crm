@@ -616,8 +616,7 @@ function PushPreviewCard({ title, body, icon }) {
     <div style={{ padding: '0.85rem', background: '#1f2937', color: '#f9fafb', borderRadius: '8px', display: 'flex', gap: '0.75rem', alignItems: 'flex-start', boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}>
       <div style={{ width: 36, height: 36, borderRadius: '6px', background: '#374151', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
         {icon ? (
-          // eslint-disable-next-line jsx-a11y/alt-text
-          <img src={icon} style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { e.currentTarget.style.display = 'none'; }} />
+          <img src={icon} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { e.currentTarget.style.display = 'none'; }} />
         ) : (
           <Bell size={18} color="#9ca3af" />
         )}

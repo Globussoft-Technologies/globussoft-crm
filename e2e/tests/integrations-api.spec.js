@@ -581,6 +581,113 @@ test.describe('Integrations API — Callified SSO surface', () => {
   });
 });
 
+// ── Marketplace status surface (#437) ──────────────────────────────
+//
+// New endpoint per #437: per-provider chip data so the /marketplace-leads
+// page header can show "Justdial — Connected, last sync ...", "IndiaMART
+// — Not configured", etc. Non-admin readable (the status panel is
+// informational; the existing /api/marketplace-leads/config endpoint
+// stays admin-only because it returns API keys).
+
+test.describe('Integrations API — GET /marketplace/status (#437)', () => {
+  test('requires auth (401/403 without token)', async ({ request }) => {
+    const res = await request.get(`${BASE_URL}/api/integrations/marketplace/status`);
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test('returns array of 3 known providers (indiamart / justdial / tradeindia)', async ({ request }) => {
+    const { token } = await getGenericAdmin(request);
+    const res = await get(request, token, '/api/integrations/marketplace/status');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBe(3);
+    const providers = body.map(p => p.provider).sort();
+    expect(providers).toEqual(['indiamart', 'justdial', 'tradeindia']);
+  });
+
+  test('per-provider envelope shape — required keys present + correct types', async ({ request }) => {
+    const { token } = await getGenericAdmin(request);
+    const res = await get(request, token, '/api/integrations/marketplace/status');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    for (const p of body) {
+      expect(typeof p.provider).toBe('string');
+      expect(typeof p.label).toBe('string');
+      expect(typeof p.configured).toBe('boolean');
+      expect(typeof p.isActive).toBe('boolean');
+      expect(typeof p.leadsLast30d).toBe('number');
+      // lastSyncAt is ISO string OR null
+      expect(p.lastSyncAt === null || typeof p.lastSyncAt === 'string').toBe(true);
+      // healthHint is one of the documented values
+      expect(['connected', 'idle', 'stale', 'never_configured', 'inactive'])
+        .toContain(p.healthHint);
+    }
+  });
+
+  test('healthHint coheres with configured + isActive flags', async ({ request }) => {
+    const { token } = await getGenericAdmin(request);
+    const res = await get(request, token, '/api/integrations/marketplace/status');
+    const body = await res.json();
+    for (const p of body) {
+      // never_configured iff configured is false
+      if (p.healthHint === 'never_configured') {
+        expect(p.configured).toBe(false);
+      }
+      // inactive iff configured but not active
+      if (p.healthHint === 'inactive') {
+        expect(p.configured).toBe(true);
+        expect(p.isActive).toBe(false);
+      }
+      // connected / idle / stale all imply configured + isActive
+      if (['connected', 'idle', 'stale'].includes(p.healthHint)) {
+        expect(p.configured).toBe(true);
+        expect(p.isActive).toBe(true);
+      }
+      // connected requires leadsLast30d > 0
+      if (p.healthHint === 'connected') {
+        expect(p.leadsLast30d).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test('manager + non-admin USER can read the status (informational, not admin-gated)', async ({ request }) => {
+    // The status endpoint deliberately is NOT admin-gated — Owners and
+    // Managers need to see the chip without elevated perms. Confirm a
+    // non-admin token (manager@crm.com) gets 200, not 403.
+    const login = await request.post(`${BASE_URL}/api/auth/login`, {
+      data: { email: 'manager@crm.com', password: 'password123' },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (!login.ok()) test.skip(true, 'manager seed not present in this env');
+    const mgrToken = (await login.json()).token;
+    const res = await request.get(`${BASE_URL}/api/integrations/marketplace/status`, {
+      headers: { Authorization: `Bearer ${mgrToken}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(200);
+  });
+
+  test('per-tenant scoping — wellness tenant sees its own status not generic', async ({ request }) => {
+    const { token: gTok } = await getGenericAdmin(request);
+    const { token: wTok } = await getWellnessAdmin(request);
+    if (!wTok) test.skip(true, 'no wellness token');
+
+    const gRes = await get(request, gTok, '/api/integrations/marketplace/status');
+    const wRes = await get(request, wTok, '/api/integrations/marketplace/status');
+    expect(gRes.status()).toBe(200);
+    expect(wRes.status()).toBe(200);
+
+    // Both tenants get exactly 3 providers (the canonical list); the
+    // configured/isActive/leadsLast30d values may differ per tenant.
+    const gBody = await gRes.json();
+    const wBody = await wRes.json();
+    expect(gBody.length).toBe(3);
+    expect(wBody.length).toBe(3);
+  });
+});
+
 // ── Auth gate (catch-all) ──────────────────────────────────────────
 
 test.describe('Integrations API — auth gate', () => {

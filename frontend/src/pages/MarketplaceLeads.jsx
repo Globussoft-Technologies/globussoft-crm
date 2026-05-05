@@ -36,6 +36,13 @@ const MarketplaceLeads = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [configs, setConfigs] = useState([]);
   const [configForm, setConfigForm] = useState({ provider: 'indiamart', apiKey: '', apiSecret: '', glueCrmKey: '', isActive: false });
+  // #437: per-provider status for the always-visible chip row above the
+  // table. Driven by GET /api/integrations/marketplace/status (non-admin
+  // readable, derives healthHint from configured + isActive + lastSyncAt
+  // + leadsLast30d). Replaces the previous "0 leads with no context"
+  // empty state — now we can distinguish never-configured / inactive /
+  // stale / idle / connected.
+  const [marketplaceStatus, setMarketplaceStatus] = useState([]);
 
   const fetchLeads = () => {
     setLoading(true);
@@ -64,8 +71,17 @@ const MarketplaceLeads = () => {
       .catch(() => {});
   };
 
+  // #437: chip-row data. Silent-mode so a transient 503 doesn't toast
+  // (same pattern as Sidebar's #509 background polls — keeps previous
+  // values on failure).
+  const fetchMarketplaceStatus = () => {
+    fetchApi('/api/integrations/marketplace/status', { silent: true })
+      .then(data => setMarketplaceStatus(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  };
+
   useEffect(() => { fetchLeads(); }, [activeProvider, statusFilter, page]);
-  useEffect(() => { fetchStats(); fetchConfigs(); }, []);
+  useEffect(() => { fetchStats(); fetchConfigs(); fetchMarketplaceStatus(); }, []);
 
   const handleImport = async (id) => {
     await fetchApi(`/api/marketplace-leads/import/${id}`, { method: 'POST' });
@@ -97,6 +113,7 @@ const MarketplaceLeads = () => {
       await fetchApi(`/api/marketplace-leads/sync/${provider}`, { method: 'POST' });
       fetchLeads();
       fetchStats();
+      fetchMarketplaceStatus(); // #437: pick up the fresh lastSyncAt
     } catch (e) { /* handled */ }
     setSyncing(false);
   };
@@ -307,6 +324,94 @@ const MarketplaceLeads = () => {
         </div>
       )}
 
+      {/* #437: Per-provider integration status chip row. Always visible
+          (your direction) so an Owner glancing at the page can see at a
+          glance whether each marketplace is connected, idle, or possibly
+          broken. Each chip shows: provider name + health-color dot +
+          last-sync timestamp + 30d lead count + Sync-now button when
+          configured + Configure button when not. */}
+      {marketplaceStatus.length > 0 && (
+        <div className="card" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+            <Filter size={14} color="var(--text-secondary)" />
+            <p style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.04em', fontWeight: 600, margin: 0 }}>
+              Integration status
+            </p>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+            {marketplaceStatus.map(s => {
+              const prov = PROVIDER_COLORS[s.provider] || { bg: '#eee', color: '#666' };
+              const hint = s.healthHint;
+              const dot = hint === 'connected' ? '#10b981'
+                : hint === 'idle' ? '#6b7280'
+                : hint === 'stale' ? '#f59e0b'
+                : '#9ca3af'; // never_configured / inactive
+              const hintLabel = {
+                connected: 'Connected',
+                idle: 'No new leads',
+                stale: 'May be stale',
+                inactive: 'Inactive',
+                never_configured: 'Not configured',
+              }[hint];
+              return (
+                <div key={s.provider} style={{
+                  flex: '1 1 220px',
+                  minWidth: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.4rem',
+                  padding: '0.85rem 1rem',
+                  borderRadius: '8px',
+                  background: prov.bg,
+                  border: `1px solid ${dot}40`,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ width: 9, height: 9, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+                    <span style={{ fontWeight: 600, color: prov.color, fontSize: '0.9rem' }}>{s.label}</span>
+                    <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: dot, marginLeft: 'auto', fontWeight: 600, letterSpacing: '0.04em' }}>
+                      {hintLabel}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    {s.configured ? (
+                      <>
+                        {s.lastSyncAt
+                          ? <>Last sync: {formatDate(s.lastSyncAt)}</>
+                          : <>Never synced</>}
+                        {' · '}
+                        {s.leadsLast30d} lead{s.leadsLast30d === 1 ? '' : 's'} (30d)
+                      </>
+                    ) : (
+                      <>No credentials on file</>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.15rem' }}>
+                    {s.configured && s.isActive ? (
+                      <button
+                        onClick={() => handleSync(s.provider)}
+                        disabled={syncing}
+                        title={`Sync ${s.label} now`}
+                        style={{ padding: '0.3rem 0.65rem', fontSize: '0.72rem', borderRadius: '5px', border: `1px solid ${dot}60`, background: 'transparent', color: prov.color, cursor: syncing ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                      >
+                        <RefreshCw size={11} /> Sync now
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setShowConfig(true)}
+                        title={`Configure ${s.label}`}
+                        style={{ padding: '0.3rem 0.65rem', fontSize: '0.72rem', borderRadius: '5px', border: `1px solid ${dot}60`, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                      >
+                        <Settings size={11} /> Configure
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Filters Bar */}
       <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
         {/* Provider Tabs */}
@@ -379,24 +484,56 @@ const MarketplaceLeads = () => {
       {loading ? (
         <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading marketplace leads...</div>
       ) : filteredLeads.length === 0 ? (
-        <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
-          <ShoppingBag size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
-          <h3 style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>No marketplace leads found</h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-            Configure your marketplace integrations to start receiving leads automatically.
-          </p>
-          {/* #368: empty-state CTA opens the inline config panel (no /integrations
-              route exists in App.jsx). Secondary link goes to /marketplace, the
-              actual existing integrations browser. */}
-          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '1rem', flexWrap: 'wrap' }}>
-            <button className="btn-primary" onClick={() => setShowConfig(true)} style={{ padding: '0.5rem 1.25rem' }}>
-              <Settings size={15} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Configure Marketplaces
-            </button>
-            <a href="/marketplace" className="btn-primary" style={{ padding: '0.5rem 1.25rem', fontSize: '0.875rem', display: 'inline-flex', alignItems: 'center' }}>
-              Browse all integrations
-            </a>
-          </div>
-        </div>
+        // #437: 3-state empty differentiation. The status array tells us
+        // which mode we're in:
+        //   never_configured for ALL    → "set up an integration first"
+        //   any stale                   → "may be broken — check sync"
+        //   configured + isActive any   → "all quiet, no recent leads"
+        (() => {
+          const noneConfigured = marketplaceStatus.length > 0 &&
+            marketplaceStatus.every(s => s.healthHint === 'never_configured');
+          const anyStale = marketplaceStatus.some(s => s.healthHint === 'stale');
+          const anyActive = marketplaceStatus.some(s => s.healthHint === 'connected' || s.healthHint === 'idle' || s.healthHint === 'stale');
+
+          let title, message, color;
+          if (noneConfigured) {
+            title = 'No marketplace integrations configured';
+            message = 'Set up at least one of IndiaMART / JustDial / TradeIndia to start auto-importing leads.';
+            color = 'var(--text-secondary)';
+          } else if (anyStale) {
+            title = 'No leads — and one or more integrations may be stale';
+            message = 'A configured integration has not synced in over 24 hours. Try the "Sync now" button on the chip above, or check API credentials in Configure.';
+            color = '#f59e0b';
+          } else if (anyActive) {
+            title = 'No leads in this view';
+            message = 'All your active integrations are connected and recently synced — there are simply no leads matching the current filters. Adjust the provider/status filters above or wait for the next sync cycle.';
+            color = 'var(--text-secondary)';
+          } else {
+            title = 'No marketplace leads found';
+            message = 'Configure your marketplace integrations to start receiving leads automatically.';
+            color = 'var(--text-secondary)';
+          }
+          return (
+            <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
+              <ShoppingBag size={48} style={{ color, opacity: 0.4, marginBottom: '1rem' }} />
+              <h3 style={{ color, marginBottom: '0.5rem' }}>{title}</h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', maxWidth: '460px', margin: '0 auto' }}>
+                {message}
+              </p>
+              {/* #368: empty-state CTA opens the inline config panel (no /integrations
+                  route exists in App.jsx). Secondary link goes to /marketplace, the
+                  actual existing integrations browser. */}
+              <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '1rem', flexWrap: 'wrap' }}>
+                <button className="btn-primary" onClick={() => setShowConfig(true)} style={{ padding: '0.5rem 1.25rem' }}>
+                  <Settings size={15} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Configure Marketplaces
+                </button>
+                <a href="/marketplace" className="btn-primary" style={{ padding: '0.5rem 1.25rem', fontSize: '0.875rem', display: 'inline-flex', alignItems: 'center' }}>
+                  Browse all integrations
+                </a>
+              </div>
+            </div>
+          );
+        })()
       ) : (
         <div className="card" style={{ overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>

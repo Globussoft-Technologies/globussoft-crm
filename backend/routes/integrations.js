@@ -83,6 +83,100 @@ router.post("/toggle", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
+// GET /api/integrations/marketplace/status
+// Closes #437. Per-provider status chip data for the /marketplace-leads page
+// header — lets the Owner see at a glance whether each marketplace integration
+// is configured, when it last synced, and whether leads are flowing.
+//
+// Response shape:
+//   [{
+//     provider: "indiamart",
+//     label:    "IndiaMART",
+//     configured: true,           // a MarketplaceConfig row exists
+//     isActive:   true,           // ...and isActive is set
+//     lastSyncAt: "2026-05-06T...",
+//     leadsLast30d: 47,
+//     healthHint: "connected" | "idle" | "stale" | "never_configured" | "inactive"
+//   }, ...]
+//
+// healthHint semantics (consumer-facing chip color cue):
+//   - "connected"        — configured + isActive + leadsLast30d > 0 (green)
+//   - "idle"             — configured + isActive + 0 leads in last 30d but
+//                          lastSyncAt within last 24h (gray — "all quiet")
+//   - "stale"            — configured + isActive + lastSyncAt older than 24h
+//                          OR null (amber — "may be broken")
+//   - "inactive"         — configured but isActive=false (gray)
+//   - "never_configured" — no MarketplaceConfig row (gray + CTA)
+//
+// Non-admin readable so Owners + Managers can see the status row; the
+// existing /api/marketplace-leads/config endpoint stays admin-only because
+// it returns the (masked) API keys.
+const MARKETPLACE_PROVIDERS = [
+  { provider: "indiamart",  label: "IndiaMART" },
+  { provider: "justdial",   label: "JustDial" },
+  { provider: "tradeindia", label: "TradeIndia" },
+];
+
+router.get("/marketplace/status", verifyToken, async (req, res) => {
+  try {
+    const now = Date.now();
+    const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+    const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
+
+    const tenantId = req.user.tenantId;
+
+    // One round-trip for all configs; one count per provider for the
+    // 30-day lead volume. The cron interval is every 5 min so 24h is
+    // ample slack for the "stale" detection — anything older than 24h
+    // means cron has been failing for 288+ ticks.
+    const [configs, ...leadCounts] = await Promise.all([
+      prisma.marketplaceConfig.findMany({
+        where: { tenantId },
+        select: { provider: true, isActive: true, lastSyncAt: true },
+      }),
+      ...MARKETPLACE_PROVIDERS.map(({ provider }) =>
+        prisma.marketplaceLead.count({
+          where: { tenantId, provider, createdAt: { gte: thirtyDaysAgo } },
+        })
+      ),
+    ]);
+
+    const configMap = {};
+    for (const c of configs) configMap[c.provider] = c;
+
+    const status = MARKETPLACE_PROVIDERS.map((p, i) => {
+      const cfg = configMap[p.provider];
+      const leadsLast30d = leadCounts[i];
+      let healthHint;
+      if (!cfg) {
+        healthHint = "never_configured";
+      } else if (!cfg.isActive) {
+        healthHint = "inactive";
+      } else if (leadsLast30d > 0) {
+        healthHint = "connected";
+      } else if (cfg.lastSyncAt && cfg.lastSyncAt > oneDayAgo) {
+        healthHint = "idle";
+      } else {
+        healthHint = "stale";
+      }
+      return {
+        provider: p.provider,
+        label: p.label,
+        configured: !!cfg,
+        isActive: !!(cfg && cfg.isActive),
+        lastSyncAt: cfg?.lastSyncAt || null,
+        leadsLast30d,
+        healthHint,
+      };
+    });
+
+    res.json(status);
+  } catch (err) {
+    console.error("[Integrations] Marketplace status error:", err);
+    res.status(500).json({ error: "Failed to fetch marketplace status" });
+  }
+});
+
 // GET /api/integrations/callified/auth-url
 // Generates a signed JWT token for Callified SSO and returns the Callified auth URL.
 // The JWT is signed with the shared Callified secret from environment variables.

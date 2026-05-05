@@ -177,8 +177,24 @@ export default function Dashboard() {
         <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '500', marginBottom: '1.5rem' }}>Recent Deals</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            {filteredDeals.slice(0, 4).map((deal, i) => (
-              <div key={i} className="table-row-hover" onClick={() => navigate('/pipeline')} style={{ display: 'flex', alignItems: 'center', gap: '1rem', cursor: 'pointer', padding: '0.5rem', borderRadius: '8px' }}>
+            {filteredDeals.slice(0, 4).map((deal) => (
+              // #466: row was wrapped in a div with onClick → navigate('/pipeline')
+              // but reporters experienced it as "not clickable" because the
+              // hand-cursor only appeared on the inner text, not on the gap
+              // between bullet and label, and the destination was a generic
+              // pipeline page with no context for the clicked deal. Switch to a
+              // role="button" with explicit cursor:pointer covering the entire
+              // row, pass the deal id via ?dealId so Pipeline can scroll/focus.
+              <div
+                key={deal.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => navigate(`/pipeline?dealId=${deal.id}`)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/pipeline?dealId=${deal.id}`); } }}
+                className="table-row-hover"
+                style={{ display: 'flex', alignItems: 'center', gap: '1rem', cursor: 'pointer', padding: '0.5rem', borderRadius: '8px', userSelect: 'none' }}
+                title={`Open ${deal.title} in pipeline`}
+              >
                 <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: deal.stage === 'won' ? 'var(--success-color)' : 'var(--accent-color)', boxShadow: `0 0 8px ${deal.stage === 'won' ? 'var(--success-color)' : 'var(--accent-color)'}` }} />
                 <div>
                   <p style={{ fontSize: '0.875rem', fontWeight: '500' }}>{deal.title}</p>

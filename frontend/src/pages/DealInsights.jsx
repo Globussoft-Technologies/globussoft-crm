@@ -211,11 +211,21 @@ export default function DealInsights() {
           const deal = dealById[dealId];
           return (
             <div key={dealId} className="card" style={{ padding: '1.5rem', marginBottom: '1.25rem' }}>
+              {/* #467: header used to navigate to '/pipeline' with no deal
+                  context, so reporters experienced the "Deal #xxxx →" arrow
+                  as non-clickable (it landed on the kanban board with no
+                  highlight). Pass ?dealId=<id> so Pipeline can scroll/focus
+                  the right card; expose role="button" + Enter/Space keyboard
+                  for a11y. */}
               <div
-                onClick={() => navigate('/pipeline')}
+                role="button"
+                tabIndex={0}
+                onClick={() => navigate(`/pipeline?dealId=${dealId}`)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/pipeline?dealId=${dealId}`); } }}
+                title={deal ? `Open ${deal.title} in pipeline` : `Open deal #${dealId} in pipeline`}
                 style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  marginBottom: '1rem', cursor: 'pointer',
+                  marginBottom: '1rem', cursor: 'pointer', userSelect: 'none',
                   paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-color)',
                 }}
               >

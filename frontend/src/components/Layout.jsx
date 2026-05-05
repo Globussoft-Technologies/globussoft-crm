@@ -1,6 +1,11 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
-import { LogOut, ChevronDown, Menu } from 'lucide-react';
+// #475: removed ChevronDown import — the chevron next to the user name
+// implied a dropdown affordance that didn't exist; clicking it just navigated
+// to /profile. Logout is already a separate sibling button, so the simplest
+// honest fix is to drop the chevron rather than add a dropdown that
+// duplicates the logout button.
+import { LogOut, Menu } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Omnibar from './Omnibar';
 import Presence from './Presence';
@@ -178,7 +183,6 @@ const Layout = () => {
               {(user?.name || user?.email || '?').charAt(0).toUpperCase()}
             </div>
             <span>{user?.name || user?.email || 'User'}</span>
-            <ChevronDown size={14} style={{ opacity: 0.5 }} />
           </button>
           <button
             onClick={handleLogout}

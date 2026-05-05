@@ -15,7 +15,17 @@ export default function Currencies() {
   const [form, setForm] = useState({ code: '', symbol: '', name: '', exchangeRate: 1.0, isBase: false });
   const [error, setError] = useState('');
 
-  const isPersisted = currencies.length > 0 && currencies[0].id > 0;
+  // #473: the prior heuristic — `currencies[0].id > 0` — assumed the backend
+  // ordering put a persisted row first. The /api/currencies route sorts by
+  // `[isBase desc, code asc]`, and the preview shape uses negative ids. In
+  // practice that's been correct, but reporters saw BOTH the "not initialized"
+  // banner AND a fully populated table at the same time. The likely cause is
+  // a transient race where one row in the cached state still had a negative id
+  // while the rest were persisted. Make the check robust by requiring EVERY
+  // row to be persisted (positive id) before hiding the banner — that way a
+  // mixed state errs on the side of "show the banner" rather than the
+  // contradictory "show banner over real data."
+  const isPersisted = currencies.length > 0 && currencies.every((c) => c.id > 0);
 
   const load = async () => {
     setLoading(true);
@@ -105,16 +115,21 @@ export default function Currencies() {
       </header>
 
       {/* Stats */}
+      {/* #473: when in preview mode (banner showing), labelling the stat as
+          "Active Currencies: 6" looks like a contradiction with the
+          "not initialized" banner above it. Append "(preview)" so the two
+          statements agree — they're showing the default set, not persisted
+          tenant data. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard
           icon={<DollarSign size={18} />}
-          label="Active Currencies"
+          label={isPersisted ? 'Active Currencies' : 'Available Currencies (preview)'}
           value={currencies.length}
           accent="#10b981"
         />
         <StatCard
           icon={<Star size={18} />}
-          label="Base Currency"
+          label={isPersisted ? 'Base Currency' : 'Default Base (preview)'}
           value={baseCurrency ? `${baseCurrency.code} (${baseCurrency.symbol})` : '—'}
           accent="#f59e0b"
         />

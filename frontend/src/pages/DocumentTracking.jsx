@@ -52,9 +52,23 @@ export default function DocumentTracking() {
   const loadAll = async () => {
     setLoading(true);
     try {
+      // #468: previously used Promise.all over both calls without `silent: true`,
+      // so any transient 404 (or even one of the two endpoints failing for an
+      // unrelated reason like a brief tenant-data race) would surface a red
+      // "Not found" toast on every page load even though the page rendered
+      // fine. Use silent fetches with per-call .catch fallbacks so a single
+      // failure no longer poisons the toast tray; same shape as DealInsights /
+      // Currencies which already use `.catch(() => …)` for their secondary
+      // calls. Errors still log to the console for debugging.
       const [list, st] = await Promise.all([
-        fetchApi('/api/document-views'),
-        fetchApi('/api/document-views/stats'),
+        fetchApi('/api/document-views', { silent: true }).catch((err) => {
+          console.warn('[DocumentTracking] views fetch failed:', err?.message);
+          return [];
+        }),
+        fetchApi('/api/document-views/stats', { silent: true }).catch((err) => {
+          console.warn('[DocumentTracking] stats fetch failed:', err?.message);
+          return null;
+        }),
       ]);
       setViews(Array.isArray(list) ? list : []);
       setStats(st || stats);

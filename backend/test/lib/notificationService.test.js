@@ -14,9 +14,20 @@
 // of this test file set MAILGUN_API_KEY which was harmlessly ignored
 // after the swap — tests still passed but asserted nothing about the
 // new code path. Closes PR #511 review blocker #2 for this module.
-process.env.SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || 'test-sendgrid-key';
-
+//
+// IMPORTANT: ESM `import` statements are hoisted above any runtime code
+// in the module. A top-level `process.env.X = ...` statement does NOT run
+// before the imports — it runs AFTER. Use `vi.hoisted()` so the env-var
+// assignment is itself hoisted above the SUT import, ensuring the SUT's
+// `const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || ""` sees the
+// fixture key. Caught by the unit_tests gate going red on `aafa1e2`
+// (5 SendGrid contract tests failed because fetch was never called →
+// SUT had taken the `no_api_key` early-return branch).
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
+
+vi.hoisted(() => {
+  process.env.SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || 'test-sendgrid-key';
+});
 import { createRequire } from 'node:module';
 import prisma from '../../lib/prisma.js';
 

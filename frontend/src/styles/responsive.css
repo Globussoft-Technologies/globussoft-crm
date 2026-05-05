@@ -147,8 +147,13 @@
 
   /* Calendar day-view: doctor columns are inline-styled. Allow the grid
      to overflow horizontally; reduce min column width to 120px so the
-     timetable fits 2-3 columns at 375px without breaking layout. */
-  main > div > div[style*="repeat("][style*="minmax(180px"] {
+     timetable fits 2-3 columns at 375px without breaking layout.
+     #514: was previously `[style*="minmax(180px"]` — but the actual
+     Calendar grid renders `minmax(120px, 1fr)`, so the rule never fired.
+     W1-A's `b9927c3` added `.calendar-grid` to Calendar.jsx:195; this
+     rule now targets that class directly so future inline-style edits
+     don't silently break the mobile layout. */
+  .calendar-grid {
     grid-template-columns: 80px repeat(var(--cal-cols, 6), minmax(120px, 1fr)) !important;
     min-width: max-content;
   }

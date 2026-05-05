@@ -4,20 +4,29 @@
  *
  * cron/slaBreachEngine.js was 24.50% covered. This spec drives every branch
  * of `processTenant` / `tickSlaBreaches` / `runForTenant` deterministically by
- * (a) creating SlaPolicy rows with tiny / zero responseMinutes, (b) creating
- * Tickets in known states, (c) calling the admin-only manual trigger
- * `POST /api/sla/check-breaches` so we don't have to wait on the 5-min cron
- * tick. The trigger calls runForTenant -> processTenant against the caller's
- * tenant, exercising the same query, update, and emitEvent code path the
- * scheduled cron uses.
+ * (a) creating SlaPolicy rows with sensible responseMinutes (>= 1, per #465),
+ * (b) creating Tickets in known states, (c) backdating their slaResponseDue
+ * via the admin-only test-helper POST /api/sla/_test/backdate-ticket/:id,
+ * (d) calling the admin-only manual trigger POST /api/sla/check-breaches so
+ * we don't have to wait on the 5-min cron tick. The trigger calls
+ * runForTenant -> processTenant against the caller's tenant, exercising the
+ * same query, update, and emitEvent code path the scheduled cron uses.
+ *
+ * #465 (2026-05-05): the route now rejects responseMinutes <= 0 and
+ * resolveMinutes <= 0 with 400 / INVALID_*_MINUTES (a 0-minute SLA is
+ * vacuous — every ticket auto-breaches the moment the policy is applied).
+ * The deterministic-breach mechanism formerly used 0-minute policies +
+ * /apply; it now uses POST /api/sla/_test/backdate-ticket/:id which is
+ * admin-only and gated to NODE_ENV !== 'production'.
  *
  * Endpoints covered:
  *   GET    /api/sla/policies                — list
- *   POST   /api/sla/policies                — create + 400 missing fields + 0-minute SLA + negative
- *   PUT    /api/sla/policies/:id            — update + 404 + invalid id + negative-minutes
+ *   POST   /api/sla/policies                — create + 400 missing fields + 0/negative both rejected (#465)
+ *   PUT    /api/sla/policies/:id            — update + 404 + invalid id + 0/negative-minutes (#465)
  *   DELETE /api/sla/policies/:id            — 200 + 404 + invalid id
  *   POST   /api/sla/apply/:ticketId         — match by priority + 404 ticket + 404 no-policy + invalid id
  *   POST   /api/sla/apply-all               — default (slaResponseDue=null only) + ?force=true overwrite
+ *   POST   /api/sla/_test/backdate-ticket/:id — admin-only test-helper (replaces 0-minute SLA fast-path) (#465)
  *   GET    /api/sla/breaches                — response + resolve breach enrichment
  *   GET    /api/sla/stats                   — counts/averages
  *   POST   /api/sla/check-breaches          — admin-only manual trigger (drives the engine)
@@ -126,19 +135,29 @@ async function createTicket(request, overrides = {}) {
 }
 
 // Move a ticket's slaResponseDue into the past so the engine considers it
-// breached on the next tick. We do this by: (1) creating a 0-minute SLA
-// policy for the same priority, (2) calling /apply/:ticketId which stamps
-// slaResponseDue = createdAt + 0min = createdAt (always < now). This is the
-// deterministic fast-path used throughout the spec.
+// breached on the next tick. After issue #465 banned 0-minute SLAs, the
+// previous mechanism (create a 0-min policy + apply) no longer works — the
+// route returns 400 INVALID_RESPONSE_MINUTES. The replacement is the
+// admin-only test-helper at POST /api/sla/_test/backdate-ticket/:id which
+// directly stamps slaResponseDue / slaResolveDue 60 minutes in the past.
+// The helper is gated to NODE_ENV !== 'production' so it can't be hit on the
+// real production box.
 async function makeOverdue(request, ticket) {
+  // We still need an active policy for the same priority so /apply (used by
+  // the existing /breaches integration tests) and the engine's join logic
+  // both have something to match. Use a normal 60-minute window — the
+  // backdate call below is what actually flips the ticket into breach state.
   const policy = await createPolicy(request, {
     name: `overdue-helper-${ticket.id}`,
     priority: ticket.priority,
-    responseMinutes: 0,
-    resolveMinutes: 0,
+    responseMinutes: 60,
+    resolveMinutes: 60,
   });
-  const r = await authPost(request, `/api/sla/apply/${ticket.id}`, {});
-  expect(r.status()).toBe(200);
+  const r = await authPost(request, `/api/sla/_test/backdate-ticket/${ticket.id}`, {
+    responseOffsetMinutes: 60,
+    resolveOffsetMinutes: 60,
+  });
+  expect(r.status(), `backdate: ${await r.text()}`).toBe(200);
   return policy;
 }
 
@@ -181,15 +200,32 @@ test.describe('SLA API — POST /policies', () => {
     expect(p.isActive).toBe(true);
   });
 
-  test('accepts 0 as a valid "instant SLA" responseMinutes', async ({ request }) => {
-    const p = await createPolicy(request, {
-      name: 'zero-instant',
+  // #465: 0-minute SLAs are vacuous (every ticket auto-breaches the moment
+  // the policy is applied). Both POST and PUT now reject zero AND negative
+  // with 400 / INVALID_*_MINUTES. The test-only backdate helper at
+  // POST /api/sla/_test/backdate-ticket/:id is the deterministic-breach
+  // mechanism for engine specs.
+  test('400 when responseMinutes is 0 (#465 — no vacuous policies)', async ({ request }) => {
+    const res = await authPost(request, '/api/sla/policies', {
+      name: `${RUN_TAG} zero-resp`,
       priority: 'Urgent',
       responseMinutes: 0,
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_RESPONSE_MINUTES');
+    expect(body.error).toMatch(/at least 1/i);
+  });
+
+  test('400 when resolveMinutes is 0 (#465 — no vacuous policies)', async ({ request }) => {
+    const res = await authPost(request, '/api/sla/policies', {
+      name: `${RUN_TAG} zero-resv`,
+      priority: 'Urgent',
       resolveMinutes: 0,
     });
-    expect(p.responseMinutes).toBe(0);
-    expect(p.resolveMinutes).toBe(0);
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_RESOLVE_MINUTES');
   });
 
   test('400 when responseMinutes is negative', async ({ request }) => {
@@ -307,11 +343,18 @@ test.describe('SLA API — PUT /policies/:id', () => {
     expect((await res.json()).code).toBe('INVALID_RESOLVE_MINUTES');
   });
 
-  test('PUT accepts responseMinutes=0 (instant SLA)', async ({ request }) => {
+  test('PUT 400 on responseMinutes=0 (#465 — no vacuous policies)', async ({ request }) => {
     const p = await createPolicy(request, { name: 'edit-zero', priority: 'Low', responseMinutes: 60 });
     const res = await authPut(request, `/api/sla/policies/${p.id}`, { responseMinutes: 0 });
-    expect(res.status()).toBe(200);
-    expect((await res.json()).responseMinutes).toBe(0);
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_RESPONSE_MINUTES');
+  });
+
+  test('PUT 400 on resolveMinutes=0 (#465 — no vacuous policies)', async ({ request }) => {
+    const p = await createPolicy(request, { name: 'edit-zero-res', priority: 'Low', resolveMinutes: 1440 });
+    const res = await authPut(request, `/api/sla/policies/${p.id}`, { resolveMinutes: 0 });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_RESOLVE_MINUTES');
   });
 });
 
@@ -507,15 +550,20 @@ test.describe('SLA Breach Engine — POST /check-breaches', () => {
     expect(result.ids).not.toContain(t.id);
   });
 
-  test('0-minute SLA + brand-new ticket → breached on first tick', async ({ request }) => {
+  test('backdated ticket + brand-new policy → breached on first tick (#465 replaces 0-minute SLA fast-path)', async ({ request }) => {
     const t = await createTicket(request, { subject: 'engine-instant', priority: 'Urgent' });
+    // Pre-#465 this used responseMinutes:0; the route now rejects that.
+    // Backdate the ticket directly via the test-helper instead.
     await createPolicy(request, {
       name: 'instant-urgent',
       priority: 'Urgent',
-      responseMinutes: 0,
-      resolveMinutes: 0,
+      responseMinutes: 60,
+      resolveMinutes: 60,
     });
-    await authPost(request, `/api/sla/apply/${t.id}`, {});
+    await authPost(request, `/api/sla/_test/backdate-ticket/${t.id}`, {
+      responseOffsetMinutes: 30,
+      resolveOffsetMinutes: 30,
+    });
 
     const result = await tick(request);
     expect(result.ids).toContain(t.id);
@@ -548,15 +596,17 @@ test.describe('SLA Breach Engine — POST /check-breaches', () => {
     expect(result.breached).toBeLessThanOrEqual(result.checked);
   });
 
-  test('breachedBy is non-negative for an instant SLA breach', async ({ request }) => {
-    // Create instant-SLA breach, fetch the ticket, assert breachedAt >= dueAt.
+  test('breachedBy is non-negative for a backdated breach (#465 replaces 0-minute SLA fast-path)', async ({ request }) => {
+    // Create breach via backdate, fetch the ticket, assert breachedAt >= dueAt.
     const t = await createTicket(request, { subject: 'engine-breachedBy', priority: 'Urgent' });
     await createPolicy(request, {
       name: 'instant-by',
       priority: 'Urgent',
-      responseMinutes: 0,
+      responseMinutes: 60,
     });
-    await authPost(request, `/api/sla/apply/${t.id}`, {});
+    await authPost(request, `/api/sla/_test/backdate-ticket/${t.id}`, {
+      responseOffsetMinutes: 30,
+    });
     await tick(request);
     const after = await (await authGet(request, `/api/tickets/${t.id}`)).json();
     if (after.slaResponseDue && after.breachedAt) {

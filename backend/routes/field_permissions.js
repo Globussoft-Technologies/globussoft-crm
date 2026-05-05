@@ -2,6 +2,12 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+// #464: invalidate the in-process fieldFilter cache whenever a rule changes,
+// otherwise routes/deals.js + routes/contacts.js (which call filterReadFields
+// / filterWriteFields) will keep stripping fields based on the OLD rule for
+// up to 30 seconds (CACHE_TTL_MS). This makes admin-side rule changes
+// effectively immediate instead of "wait half a minute then retry".
+const { clearCache: clearFieldFilterCache } = require("../middleware/fieldFilter");
 
 const tenantId = (req) => req.user?.tenantId || 1;
 
@@ -115,6 +121,7 @@ router.post("/", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
         tenantId: tid,
       },
     });
+    clearFieldFilterCache();
     res.status(201).json(rule);
   } catch (err) {
     console.error("[FieldPermissions][create]", err);
@@ -166,6 +173,7 @@ router.post("/bulk-update", verifyToken, verifyRole(["ADMIN"]), async (req, res)
       }
     }
 
+    if (results.length > 0) clearFieldFilterCache();
     res.json({ updated: results.length, errors, rules: results });
   } catch (err) {
     console.error("[FieldPermissions][bulk]", err);
@@ -190,6 +198,7 @@ router.put("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
     if (canWrite !== undefined) data.canWrite = Boolean(canWrite);
 
     const rule = await prisma.fieldPermission.update({ where: { id }, data });
+    clearFieldFilterCache();
     res.json(rule);
   } catch (err) {
     console.error("[FieldPermissions][update]", err);
@@ -209,6 +218,7 @@ router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Field permission not found" });
 
     await prisma.fieldPermission.delete({ where: { id } });
+    clearFieldFilterCache();
     res.json({ message: "Field permission deleted" });
   } catch (err) {
     console.error("[FieldPermissions][delete]", err);

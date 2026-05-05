@@ -110,11 +110,26 @@ const SLA = () => {
   };
   const savePolicy = async () => {
     if (!policyForm.name.trim()) { setError('Policy name is required'); return; }
+    // #465: client-side mirror of the API rule — both targets must be >= 1.
+    // A 0-minute SLA auto-breaches every ticket the moment it's applied,
+    // which is a vacuous policy. The server returns 400 INVALID_RESPONSE_MINUTES
+    // / INVALID_RESOLVE_MINUTES if these slip through (e.g. user types 0
+    // manually and bypasses the input min=1 attribute).
+    const respMin = parseInt(policyForm.responseMinutes);
+    const resoMin = parseInt(policyForm.resolveMinutes);
+    if (Number.isFinite(respMin) && respMin <= 0) {
+      setError('Response Target must be at least 1 minute');
+      return;
+    }
+    if (Number.isFinite(resoMin) && resoMin <= 0) {
+      setError('Resolve Target must be at least 1 minute');
+      return;
+    }
     try {
       const body = {
         ...policyForm,
-        responseMinutes: parseInt(policyForm.responseMinutes) || 60,
-        resolveMinutes: parseInt(policyForm.resolveMinutes) || 1440,
+        responseMinutes: Number.isFinite(respMin) && respMin > 0 ? respMin : 60,
+        resolveMinutes: Number.isFinite(resoMin) && resoMin > 0 ? resoMin : 1440,
       };
       if (editingPolicy) {
         await fetchApi(`/api/sla/policies/${editingPolicy.id}`, { method: 'PUT', body: JSON.stringify(body) });

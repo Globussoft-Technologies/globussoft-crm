@@ -2,6 +2,13 @@ const express = require("express");
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
+// #464: field-level permission enforcement. The fieldFilter middleware
+// existed since v3.x but was never wired into any route — rules saved via
+// the FieldPermissions UI had zero effect on read/write payloads. The
+// helpers below strip fields the caller's role isn't permitted to read or
+// write, based on rows in the FieldPermission table (per-tenant, per-role).
+// Default (no rule in DB) is full access.
+const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
 
 const router = express.Router();
 
@@ -52,7 +59,10 @@ router.get("/", async (req, res) => {
       include: { contact: true, owner: true },
       orderBy: { createdAt: "desc" },
     });
-    res.json(deals);
+    // #464: strip fields the caller's role can't read (e.g. amount hidden
+    // for USER if FieldPermission rule says canRead=false on Deal.amount).
+    const filtered = await filterReadFields(deals, req.user.role, "Deal", req.user.tenantId);
+    res.json(filtered);
   } catch (error) {
     console.error("[deals] list error:", error.message);
     res.status(500).json({ error: "Failed to fetch deals" });
@@ -126,7 +136,9 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    res.json({ ...deal, activities });
+    // #464: strip read-restricted fields per the caller's role.
+    const filtered = await filterReadFields({ ...deal, activities }, req.user.role, "Deal", req.user.tenantId);
+    res.json(filtered);
   } catch (error) {
     console.error("[deals] get-by-id error:", error.message);
     res.status(500).json({ error: "Failed to fetch deal" });
@@ -158,6 +170,9 @@ function validateDealInput(body, { isUpdate: _isUpdate = false } = {}) {
 // ─── POST / — create deal ────────────────────────────────────────────
 router.post("/", async (req, res) => {
   try {
+    // #464: strip write-restricted fields BEFORE destructuring so a USER
+    // who has canWrite=false on Deal.amount can't push a value through.
+    req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
     const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
@@ -221,6 +236,8 @@ router.put("/:id", async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Deal not found" });
 
+    // #464: strip write-restricted fields per the caller's role.
+    req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
     const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId } = req.body;
     // #168 #173: same validation as POST — PUT can no longer accept negative
     // amount / out-of-range probability / unknown stage.

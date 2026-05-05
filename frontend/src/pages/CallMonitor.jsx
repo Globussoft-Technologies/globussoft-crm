@@ -51,13 +51,17 @@ export default function CallMonitor() {
     }
   };
 
+  // Status colors use semantic theme vars so they recolor under wellness
+  // (sage success, burgundy danger, amber warning) instead of the raw
+  // Material palette. Hardcoded fallbacks preserve original look on any
+  // env that hasn't loaded the theme stylesheet.
   const statusColors = {
-    idle: '#999',
-    connecting: '#ff9800',
-    connected: '#4caf50',
-    reconnecting: '#ff9800',
-    error: '#f44336',
-    disconnected: '#999',
+    idle: 'var(--text-secondary, #999)',
+    connecting: 'var(--warning-color, #ff9800)',
+    connected: 'var(--success-color, #4caf50)',
+    reconnecting: 'var(--warning-color, #ff9800)',
+    error: 'var(--danger-color, #f44336)',
+    disconnected: 'var(--text-secondary, #999)',
   };
 
   const statusLabels = {
@@ -112,7 +116,7 @@ export default function CallMonitor() {
                 </span>
               </div>
               {error && (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', color: '#f44336', fontSize: '0.85rem' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', color: 'var(--danger-color, #f44336)', fontSize: '0.85rem' }}>
                   <AlertCircle size={16} style={{ marginTop: '2px', flexShrink: 0 }} />
                   <span>{error}</span>
                 </div>
@@ -144,7 +148,7 @@ export default function CallMonitor() {
                   disabled={!inputValue.trim()}
                   style={{
                     padding: '0.75rem 1rem',
-                    backgroundColor: 'var(--accent-color)',
+                    backgroundColor: 'var(--primary-color, var(--accent-color))',
                     color: '#fff',
                     border: 'none',
                     borderRadius: '8px',
@@ -200,7 +204,7 @@ export default function CallMonitor() {
                   onClick={handleDisconnect}
                   style={{
                     padding: '0.75rem 1rem',
-                    backgroundColor: '#f44336',
+                    backgroundColor: 'var(--danger-color, #f44336)',
                     color: '#fff',
                     border: 'none',
                     borderRadius: '8px',
@@ -259,7 +263,7 @@ export default function CallMonitor() {
                       disabled={!whisperText.trim() || status !== 'connected'}
                       style={{
                         padding: '0.75rem 1.25rem',
-                        backgroundColor: 'var(--accent-color)',
+                        backgroundColor: 'var(--primary-color, var(--accent-color))',
                         color: '#fff',
                         border: 'none',
                         borderRadius: '8px',
@@ -287,7 +291,7 @@ export default function CallMonitor() {
                     style={{
                       width: '100%',
                       padding: '0.875rem 1rem',
-                      backgroundColor: status === 'connected' ? '#ff9800' : '#ccc',
+                      backgroundColor: status === 'connected' ? 'var(--warning-color, #ff9800)' : 'var(--text-tertiary, #ccc)',
                       color: '#fff',
                       border: 'none',
                       borderRadius: '8px',
@@ -383,10 +387,10 @@ export default function CallMonitor() {
                     padding: '0.875rem',
                     borderRadius: '8px',
                     backgroundColor: t.role === 'user' ? 'rgba(63, 81, 181, 0.1)' : 'rgba(76, 175, 80, 0.1)',
-                    borderLeft: `3px solid ${t.role === 'user' ? '#3f51b5' : '#4caf50'}`,
+                    borderLeft: `3px solid ${t.role === 'user' ? 'var(--primary-color, #3f51b5)' : 'var(--success-color, #4caf50)'}`,
                   }}
                 >
-                  <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem', color: t.role === 'user' ? '#3f51b5' : '#4caf50' }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem', color: t.role === 'user' ? 'var(--primary-color, #3f51b5)' : 'var(--success-color, #4caf50)' }}>
                     {t.role === 'user' ? '👤 Caller' : '🤖 AI'}
                   </div>
                   <div style={{ fontSize: '0.9rem', lineHeight: 1.5 }}>{t.text}</div>

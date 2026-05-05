@@ -209,6 +209,138 @@ test.describe('Communications API — POST /send-email', () => {
   });
 });
 
+// ─── #435 multi-recipient (envelope shape) ─────────────────────────
+//
+// Pre-#435: POST /send-email validated `to` as a single email; comma-separated
+// strings were treated as one recipient and rejected by isValidEmail with 400.
+// Post-#435: parseRecipients() splits on comma + dedupes + per-recipient sends;
+// response is the envelope shape `{ totalSent, totalFailed, results, failures }`
+// on TOP of the back-compat top-level `email` + `messageId` keys.
+//
+// What this asserts:
+//   - Single-recipient invocation keeps top-level `email` populated (back-compat
+//     for the Inbox / DocumentTemplates / pre-existing 50+ specs that destructure
+//     `body.email.id`).
+//   - 2+ recipients fan out into N EmailMessage rows + N tracking pixels (one
+//     Mailgun call per recipient — no BCC).
+//   - `totalSent` / `totalFailed` reflect Mailgun-acceptance count (CI without
+//     MAILGUN_API_KEY → totalSent=0, totalFailed=N; demo → matches valid count).
+//   - Mixed valid + invalid: 200 with envelope, valid recipients delivered,
+//     invalids surfaced in `failures` (NOT a 400 — partial success is success).
+//   - All-invalid: 400 with `failures` enumerated.
+//   - Whitespace + trailing-comma + duplicate handling per parseRecipients()
+//     contract.
+test.describe('Communications API — POST /send-email multi-recipient (#435)', () => {
+  test('single recipient keeps top-level email populated (back-compat)', async ({ request }) => {
+    const res = await authPost(request, '/api/communications/send-email', {
+      to: 'single@example.com',
+      subject: `${RUN_TAG} single-back-compat`,
+      body: 'single-recipient back-compat probe',
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // Pre-#435 contract preserved
+    expect(body.success).toBe(true);
+    expect(body.email).toBeTruthy();
+    expect(body.email.id).toEqual(expect.any(Number));
+    expect(body.email.to).toBe('single@example.com');
+    // Post-#435 envelope additions
+    expect(body.totalSent + body.totalFailed).toBe(1);
+    expect(Array.isArray(body.results)).toBe(true);
+    expect(body.results.length).toBe(1);
+    expect(body.results[0].to).toBe('single@example.com');
+    expect(Array.isArray(body.failures)).toBe(true);
+    expect(body.failures.length).toBe(0);
+  });
+
+  test('comma-separated 3 recipients → 3 EmailMessage rows + envelope', async ({ request }) => {
+    const subject = `${RUN_TAG} multi-3`;
+    const res = await authPost(request, '/api/communications/send-email', {
+      to: 'a@example.com, b@example.com,c@example.com',
+      subject,
+      body: '3-recipient fan-out probe',
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.results.length).toBe(3);
+    expect(body.results.map(r => r.to).sort()).toEqual(['a@example.com', 'b@example.com', 'c@example.com']);
+    // Each result has its own EmailMessage id (no row reuse across recipients)
+    const ids = body.results.map(r => r.email.id);
+    expect(new Set(ids).size).toBe(3);
+    // Each row has the canonical OUTBOUND/read fields set
+    for (const r of body.results) {
+      expect(r.email.direction).toBe('OUTBOUND');
+      expect(r.email.read).toBe(true);
+      expect(r.email.subject).toBe(subject);
+    }
+    // Top-level back-compat: `email` is the FIRST result (deterministic order)
+    expect(body.email.id).toBe(body.results[0].email.id);
+    // No invalid pre-flight failures
+    expect(body.failures.length).toBe(0);
+    // Inbox should now contain all 3 (subject is unique enough to find them)
+    const inbox = await authGet(request, '/api/communications/inbox');
+    expect(inbox.status()).toBe(200);
+    const list = await inbox.json();
+    const matching = list.filter(e => e.subject === subject);
+    expect(matching.length).toBe(3);
+  });
+
+  test('whitespace + trailing comma + duplicate are normalized', async ({ request }) => {
+    const res = await authPost(request, '/api/communications/send-email', {
+      to: '  alpha@example.com , beta@example.com,, alpha@example.com ,',
+      subject: `${RUN_TAG} normalize`,
+      body: 'normalize probe',
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // alpha is deduped, beta kept, empties dropped → 2 unique recipients
+    expect(body.results.length).toBe(2);
+    expect(body.results.map(r => r.to).sort()).toEqual(['alpha@example.com', 'beta@example.com']);
+  });
+
+  test('mixed valid + invalid → 200 with valid sent + invalid in failures (partial success)', async ({ request }) => {
+    const res = await authPost(request, '/api/communications/send-email', {
+      to: 'good@example.com, not-an-email, also-bad@',
+      subject: `${RUN_TAG} mixed-validity`,
+      body: 'mixed probe',
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.results.length).toBe(1);
+    expect(body.results[0].to).toBe('good@example.com');
+    expect(body.failures.length).toBe(2);
+    expect(body.failures.map(f => f.to).sort()).toEqual(['also-bad@', 'not-an-email']);
+    for (const f of body.failures) {
+      expect(f.reason).toBe('invalid_recipient_email');
+    }
+  });
+
+  test('all-invalid → 400 with failures enumerated (no DB rows created)', async ({ request }) => {
+    const res = await authPost(request, '/api/communications/send-email', {
+      to: 'not-an-email, also-bad@, ,',
+      subject: `${RUN_TAG} all-invalid`,
+      body: 'all-invalid probe',
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/no valid recipient/i);
+    expect(Array.isArray(body.failures)).toBe(true);
+    expect(body.failures.length).toBe(2);
+  });
+
+  test('comma-only / whitespace-only "to" → 400 (no parsable recipient)', async ({ request }) => {
+    const res = await authPost(request, '/api/communications/send-email', {
+      to: ' , , ',
+      subject: `${RUN_TAG} empty-after-parse`,
+      body: 'empty probe',
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/no valid recipient/i);
+  });
+});
+
 // ─── GET /api/communications/calls ─────────────────────────────────
 
 test.describe('Communications API — GET /calls', () => {

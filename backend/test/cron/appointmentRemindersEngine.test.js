@@ -2,8 +2,8 @@
  * Unit tests for backend/cron/appointmentRemindersEngine.js — wellness
  * vertical engine that runs every 15 minutes and queues SMS reminder rows
  * for Visit rows landing inside two windows:
- *   - T-24h: visitDate ∈ [now+23h, now+25h] → marker [reminder:24h]
- *   - T-1h : visitDate ∈ [now+50min, now+70min] → marker [reminder:1h]
+ *   - T-24h: visitDate ∈ [now+23h, now+25h] → body says "tomorrow at <time>"
+ *   - T-1h : visitDate ∈ [now+50min, now+70min] → body says "in 1 hour"
  *
  * Why this file exists (regression class):
  *   - The engine has api-level coverage via e2e/tests/appointment-reminders-api.spec.js
@@ -12,19 +12,25 @@
  *       - Window math at exact boundaries (23h/25h, 50min/70min). The api
  *         spec seeds happy-path visits inside the windows; out-of-window
  *         visits would require time-travel which costs DB roundtrips.
- *       - 48h dedup branching — the engine first checks `body contains
- *         "24h"` then re-checks for the explicit marker. Pure prisma
- *         contract, faster at unit level.
+ *       - 48h dedup branching — pins the customer-friendly phrase used as
+ *         the dedup signal ("tomorrow at" for 24h, "in 1 hour" for 1h).
  *       - Junk-contact suppression via Patient.contactId → Contact.status.
  *         Verifies a Junk-status contact silently skips the reminder.
  *       - Per-visit error containment — one failing visit doesn't kill the
  *         loop (try/catch in `handle`). API specs can't easily inject
  *         a controlled prisma failure mid-run.
  *
+ * #182 regression guards (2026-05-04 reopen):
+ *   - body must NOT contain "[reminder:24h]" or "[reminder:1h]" debug
+ *     markers (they used to leak to the customer SMS).
+ *   - body must NOT contain the double-word "appointment appointment"
+ *     (when serviceName was null, the previous template rendered
+ *     "your appointment appointment at <clinic>").
+ *
  * Functions / branches covered:
  *   - processTenant
- *       T-24h happy path — body marker, OUTBOUND/QUEUED, contact link.
- *       T-1h happy path  — body marker.
+ *       T-24h happy path — OUTBOUND/QUEUED, contact link, customer-friendly body.
+ *       T-1h happy path.
  *       null patient skipped (counted as skipped).
  *       no-phone patient skipped.
  *       Junk-contact patient skipped (contact.findUnique returns Junk).
@@ -32,11 +38,12 @@
  *       per-visit error caught → loop continues, returns counters for siblings.
  *   - alreadySent (via processTenant)
  *       findFirst probe shape — `createdAt: { gte: now-48h }` + body contains
- *       "24h" or "1h" + OR over (contactId, to:phone).
+ *       "tomorrow at" or "in 1 hour" + OR over (contactId, to:phone).
  *   - composeBody (indirect via SmsMessage.create.body assertion)
- *       carries the [reminder:24h] / [reminder:1h] marker.
  *       carries patientName / clinic / serviceName.
- *       falls back to "appointment" when service missing, "there" when patient name null.
+ *       falls back to bare "appointment" when service missing (NOT "appointment appointment").
+ *       falls back to "there" when patient name null.
+ *       NO debug markers leak.
  *   - findDueVisits (via window assertions on findMany calls)
  *       status='booked' (the engine's enum casing).
  *       visitDate window is bounded gte+lte.
@@ -57,9 +64,9 @@
  *   findMany→[24h-result, 1h-result] using mockResolvedValueOnce twice. Each
  *   test that wants to drive only one window passes [] for the other.
  *
- *   NOTE: `alreadySent` makes UP TO 2 calls to prisma.smsMessage.findFirst
- *   per visit (a "body contains kind" probe, then a fallback marker probe).
- *   By default we resolve null on both → engine falls through to create.
+ *   NOTE: `alreadySent` makes ONE call to prisma.smsMessage.findFirst per
+ *   visit (a "body contains <kind-phrase>" probe). By default we resolve
+ *   null → engine falls through to create.
  */
 
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
@@ -163,7 +170,7 @@ describe('cron/appointmentRemindersEngine — findDueVisits window queries', () 
 // ─── 24h reminder happy path ────────────────────────────────────────────────
 
 describe('cron/appointmentRemindersEngine — T-24h reminder dispatch', () => {
-  test('happy path → queues OUTBOUND/QUEUED SMS with [reminder:24h] marker', async () => {
+  test('happy path → queues OUTBOUND/QUEUED SMS with customer-friendly body', async () => {
     const v = visit({
       id: 'v-24',
       hours: 24,
@@ -192,12 +199,15 @@ describe('cron/appointmentRemindersEngine — T-24h reminder dispatch', () => {
     expect(arg.data.tenantId).toBe('tenant-A');
     expect(arg.data.contactId).toBe('contact-1');
     expect(arg.data.body).toMatch(/Rishu Sharma/);
-    expect(arg.data.body).toMatch(/Hydrafacial/);
+    expect(arg.data.body).toMatch(/Hydrafacial appointment/);
     expect(arg.data.body).toMatch(/Enhanced Wellness/);
-    expect(arg.data.body).toMatch(/\[reminder:24h\]/);
-    // 24h-ahead body says "tomorrow", not "in 1 hour"
-    expect(arg.data.body).toMatch(/tomorrow/i);
+    // 24h-ahead body says "tomorrow at <time>", not "in 1 hour"
+    expect(arg.data.body).toMatch(/tomorrow at/i);
+    expect(arg.data.body).not.toMatch(/in 1 hour/i);
+    // #182 regression guards: no debug markers, no double-word
+    expect(arg.data.body).not.toMatch(/\[reminder:24h\]/);
     expect(arg.data.body).not.toMatch(/\[reminder:1h\]/);
+    expect(arg.data.body).not.toMatch(/appointment appointment/);
   });
 
   test('contactId optional → SmsMessage.create gets contactId:null', async () => {
@@ -221,7 +231,7 @@ describe('cron/appointmentRemindersEngine — T-24h reminder dispatch', () => {
     expect(prisma.contact.findUnique).not.toHaveBeenCalled();
   });
 
-  test('falls back to "appointment" when service missing', async () => {
+  test('falls back to bare "appointment" when service missing — NOT "appointment appointment" (#182)', async () => {
     prisma.visit.findMany
       .mockResolvedValueOnce([
         visit({
@@ -235,7 +245,11 @@ describe('cron/appointmentRemindersEngine — T-24h reminder dispatch', () => {
 
     await processTenant(TENANT);
     const arg = prisma.smsMessage.create.mock.calls[0][0];
-    expect(arg.data.body).toMatch(/your appointment/i);
+    expect(arg.data.body).toMatch(/your appointment at/i);
+    // Pre-fix the body rendered "your appointment appointment at <clinic>"
+    // because svc defaulted to "appointment" and the template appended a
+    // second "appointment" suffix. Pin the post-fix shape.
+    expect(arg.data.body).not.toMatch(/appointment appointment/);
   });
 
   test('falls back to "there" when patient name is null', async () => {
@@ -276,7 +290,7 @@ describe('cron/appointmentRemindersEngine — T-24h reminder dispatch', () => {
 // ─── 1h reminder happy path ─────────────────────────────────────────────────
 
 describe('cron/appointmentRemindersEngine — T-1h reminder dispatch', () => {
-  test('happy path → queues OUTBOUND/QUEUED SMS with [reminder:1h] marker + "in 1 hour"', async () => {
+  test('happy path → queues OUTBOUND/QUEUED SMS with "in 1 hour" phrase', async () => {
     const v = visit({
       id: 'v-1h',
       mins: 60,
@@ -297,8 +311,11 @@ describe('cron/appointmentRemindersEngine — T-1h reminder dispatch', () => {
     expect(res.queued1).toBe(1);
     expect(prisma.smsMessage.create).toHaveBeenCalledTimes(1);
     const arg = prisma.smsMessage.create.mock.calls[0][0];
-    expect(arg.data.body).toMatch(/\[reminder:1h\]/);
+    expect(arg.data.body).toMatch(/Botox appointment/);
     expect(arg.data.body).toMatch(/in 1 hour/i);
+    expect(arg.data.body).not.toMatch(/tomorrow at/i);
+    // #182 regression guards
+    expect(arg.data.body).not.toMatch(/\[reminder:1h\]/);
     expect(arg.data.body).not.toMatch(/\[reminder:24h\]/);
   });
 });
@@ -397,7 +414,7 @@ describe('cron/appointmentRemindersEngine — patient/contact suppression', () =
 // ─── 48h dedup ──────────────────────────────────────────────────────────────
 
 describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
-  test('24h: prior body containing "24h" → SmsMessage.create NOT called, skipped++', async () => {
+  test('24h: prior body containing "tomorrow at" → SmsMessage.create NOT called, skipped++', async () => {
     prisma.visit.findMany
       .mockResolvedValueOnce([
         visit({
@@ -408,7 +425,7 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
         }),
       ])
       .mockResolvedValueOnce([]);
-    // First findFirst probe (body contains "24h") returns a hit.
+    // findFirst probe (body contains "tomorrow at") returns a hit.
     prisma.smsMessage.findFirst.mockResolvedValueOnce({ id: 'sms-prev-24' });
 
     const res = await processTenant(TENANT);
@@ -416,9 +433,10 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
     expect(res.skipped).toBe(1);
     expect(prisma.smsMessage.create).not.toHaveBeenCalled();
 
-    // Probe shape — keyed on (contactId OR phone) within last 48h, body contains "24h".
+    // Probe shape — keyed on (contactId OR phone) within last 48h, body
+    // contains the unique-to-engine phrase "tomorrow at".
     const probe = prisma.smsMessage.findFirst.mock.calls[0][0];
-    expect(probe.where.body).toEqual({ contains: '24h' });
+    expect(probe.where.body).toEqual({ contains: 'tomorrow at' });
     expect(probe.where.createdAt).toHaveProperty('gte');
     const gte = probe.where.createdAt.gte.getTime();
     expect(gte).toBeGreaterThanOrEqual(Date.now() - 48 * 3600 * 1000 - 1000);
@@ -429,7 +447,7 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
     );
   });
 
-  test('1h: prior body containing "1h" → SmsMessage.create NOT called, skipped++', async () => {
+  test('1h: prior body containing "in 1 hour" → SmsMessage.create NOT called, skipped++', async () => {
     prisma.visit.findMany
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
@@ -448,33 +466,10 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
     expect(prisma.smsMessage.create).not.toHaveBeenCalled();
 
     const probe = prisma.smsMessage.findFirst.mock.calls[0][0];
-    expect(probe.where.body).toEqual({ contains: '1h' });
+    expect(probe.where.body).toEqual({ contains: 'in 1 hour' });
   });
 
-  test('first probe miss + second marker probe hit → still dedup, no create', async () => {
-    // Engine performs a SECOND findFirst probe against the explicit marker
-    // when the first one missed. This pins that fallback path.
-    prisma.visit.findMany
-      .mockResolvedValueOnce([
-        visit({
-          id: 'v-marker-only',
-          hours: 24,
-          patient: { id: 'p', name: 'X', phone: '+91900', contactId: 'c-1' },
-          service: null,
-        }),
-      ])
-      .mockResolvedValueOnce([]);
-    prisma.smsMessage.findFirst
-      .mockResolvedValueOnce(null) // first probe (kind body) miss
-      .mockResolvedValueOnce({ id: 'sms-marker' }); // marker probe hit
-
-    const res = await processTenant(TENANT);
-    expect(res.skipped).toBe(1);
-    expect(prisma.smsMessage.create).not.toHaveBeenCalled();
-    expect(prisma.smsMessage.findFirst).toHaveBeenCalledTimes(2);
-  });
-
-  test('both probes miss → reminder is dispatched', async () => {
+  test('probe miss → reminder is dispatched (single probe per visit, no fallback)', async () => {
     prisma.visit.findMany
       .mockResolvedValueOnce([
         visit({
@@ -485,13 +480,14 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
         }),
       ])
       .mockResolvedValueOnce([]);
-    prisma.smsMessage.findFirst
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(null);
+    prisma.smsMessage.findFirst.mockResolvedValueOnce(null);
 
     const res = await processTenant(TENANT);
     expect(res.queued24).toBe(1);
     expect(prisma.smsMessage.create).toHaveBeenCalledTimes(1);
+    // The fallback marker probe was removed in #182 (no more visible markers).
+    // Only ONE findFirst per visit now.
+    expect(prisma.smsMessage.findFirst).toHaveBeenCalledTimes(1);
   });
 
   test('no contactId AND no phone → alreadySent returns false (no probes), but no-phone branch already skipped earlier', async () => {

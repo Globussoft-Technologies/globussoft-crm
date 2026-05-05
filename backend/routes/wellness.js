@@ -781,6 +781,23 @@ router.get("/visits", async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
+    // PRD §11 / T2.2: staff-side cross-patient visit list is a PHI read
+    // (response includes patient name + phone). One audit row per request,
+    // with the filter params and result count — never the row contents.
+    try {
+      await writeAudit('Visit', 'VISIT_LIST_READ', null, req.user.userId, req.user.tenantId, {
+        count: visits.length,
+        filters: {
+          patientId: patientId ? parseInt(patientId) : null,
+          doctorId: doctorId ? parseInt(doctorId) : null,
+          status: status || null,
+          from: from || null,
+          to: to || null,
+        },
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /visits list failed:", auditErr.message);
+    }
     res.json(visits);
   } catch (e) {
     console.error("[wellness] list visits error:", e.message);
@@ -1032,6 +1049,16 @@ router.get("/visits/:id/consumptions", async (req, res) => {
       where: tenantWhere(req, { visitId: id }),
       orderBy: { createdAt: "desc" },
     });
+    // PRD §11 / T2.2: consumption items reveal what was administered during a
+    // visit — clinical context tied to the patient. Audit per request.
+    try {
+      await writeAudit('Visit', 'VISIT_CONSUMPTIONS_READ', id, req.user.userId, req.user.tenantId, {
+        visitId: id,
+        count: items.length,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /visits/:id/consumptions failed:", auditErr.message);
+    }
     res.json(items);
   } catch (_e) {
     res.status(500).json({ error: "Failed to list consumption items" });
@@ -1118,6 +1145,16 @@ router.get("/prescriptions", async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
+    // PRD §11 / T2.2: staff-side prescription list is a PHI read
+    // (response embeds patient name + drugs JSON). Medico-legal trail.
+    try {
+      await writeAudit('Prescription', 'PRESCRIPTION_LIST_READ', null, req.user.userId, req.user.tenantId, {
+        count: items.length,
+        filters: { patientId: patientId ? parseInt(patientId) : null },
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /prescriptions list failed:", auditErr.message);
+    }
     res.json(items);
   } catch (e) {
     console.error("[wellness] list prescriptions error:", e.message);
@@ -1234,6 +1271,16 @@ router.get("/consents", async (req, res) => {
         service: { select: { id: true, name: true } },
       },
     });
+    // PRD §11 / T2.2: staff-side consent list is a PHI read
+    // (response embeds patient name + signed template type).
+    try {
+      await writeAudit('ConsentForm', 'CONSENT_LIST_READ', null, req.user.userId, req.user.tenantId, {
+        count: items.length,
+        filters: { patientId: patientId ? parseInt(patientId) : null },
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /consents list failed:", auditErr.message);
+    }
     res.json(items);
   } catch (e) {
     console.error("[wellness] list consents error:", e.message);
@@ -1348,6 +1395,18 @@ router.get("/treatment-plans", async (req, res) => {
       },
       orderBy: { startedAt: "desc" },
     });
+    // PRD §11 / T2.2: treatment plans embed patient name + phone + service.
+    try {
+      await writeAudit('TreatmentPlan', 'TREATMENT_PLAN_LIST_READ', null, req.user.userId, req.user.tenantId, {
+        count: plans.length,
+        filters: {
+          patientId: patientId ? parseInt(patientId) : null,
+          status: status || null,
+        },
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /treatment-plans list failed:", auditErr.message);
+    }
     res.json(plans);
   } catch (e) {
     console.error("[wellness] list treatment-plans error:", e.message);
@@ -1367,6 +1426,17 @@ router.get("/treatment-plans/:id", async (req, res) => {
       },
     });
     if (!plan) return res.status(404).json({ error: "Treatment plan not found" });
+    // PRD §11 / T2.2: treatment plan detail reveals patient + service +
+    // session progress. Audit per request.
+    try {
+      await writeAudit('TreatmentPlan', 'TREATMENT_PLAN_READ', plan.id, req.user.userId, req.user.tenantId, {
+        treatmentPlanId: plan.id,
+        patientId: plan.patientId,
+        serviceId: plan.serviceId,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit /treatment-plans/:id failed:", auditErr.message);
+    }
     res.json(plan);
   } catch (e) {
     console.error("[wellness] read treatment-plan error:", e.message);
@@ -3327,6 +3397,147 @@ router.get("/portal/prescriptions", verifyPatientToken, async (req, res) => {
   }
 });
 
+// POST /portal/export — patient self-DSAR (DPDP Act §15 / GDPR Article 15).
+// Closes v3.4.8 carry-over #2: prior to this endpoint, wellness-portal
+// patients had NO mechanism to obtain a copy of their own data — they
+// could only read scoped slices via /portal/me + /portal/visits +
+// /portal/prescriptions. The staff-side equivalent is POST
+// /api/gdpr/export/me but the global auth gate (middleware/auth.js:23)
+// blocks portal tokens from /api/gdpr/* by design (those tokens carry
+// patientId, not userId).
+//
+// Mirrors the SHAPE of /api/gdpr/export/me: returns one JSON envelope
+// keyed by entity, plus a `counts` summary, and writes ONE AuditLog row
+// (action='GDPR_EXPORT_SELF', entity='Patient', actorType='patient').
+// FK chain walked: Patient → Visit → Prescription → ConsentForm →
+// TreatmentPlan → LoyaltyTransaction → Referral. Every query filters by
+// `patientId: req.patient.id` (NOT tenantId — the patient already proved
+// tenancy via the OTP login flow; filtering on tenantId only would leak
+// other patients' rows in the same clinic).
+//
+// Field-level encryption (WELLNESS_FIELD_KEY, see CLAUDE.md): the Prisma
+// $extends client decrypts on read since v3.2.1, so findMany returns
+// plaintext — no manual decryption here.
+//
+// Audit: writeAudit gets actorType='patient' + patientId=req.patient.id
+// per backend/lib/audit.js convention so a reviewer filtering by
+// _actorType="patient" + action=GDPR_EXPORT_SELF can audit every
+// self-export trivially. Audit failures are caught — a logging blip
+// must not block the patient's data-access right.
+router.post("/portal/export", verifyPatientToken, async (req, res) => {
+  try {
+    const patient = await prisma.patient.findUnique({
+      where: { id: req.patient.id },
+      select: {
+        id: true, name: true, phone: true, email: true,
+        dob: true, gender: true, bloodGroup: true, allergies: true,
+        notes: true, photoUrl: true, source: true, contactId: true,
+        tenantId: true, locationId: true,
+        createdAt: true, updatedAt: true,
+      },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    // Fan-out FK-chain reads. All filtered by patientId (the OTP login
+    // already pinned tenancy; tenantId-only filters would cross-leak).
+    const [
+      visits,
+      prescriptions,
+      consents,
+      treatmentPlans,
+      loyaltyTransactions,
+      referrals,
+    ] = await Promise.all([
+      prisma.visit.findMany({
+        where: { patientId: patient.id },
+        orderBy: { visitDate: "desc" },
+        include: {
+          service: { select: { id: true, name: true, category: true } },
+          doctor: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.prescription.findMany({
+        where: { patientId: patient.id },
+        orderBy: { createdAt: "desc" },
+        include: {
+          doctor: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.consentForm.findMany({
+        where: { patientId: patient.id },
+        orderBy: { signedAt: "desc" },
+      }),
+      prisma.treatmentPlan.findMany({
+        where: { patientId: patient.id },
+        orderBy: { startedAt: "desc" },
+      }),
+      prisma.loyaltyTransaction.findMany({
+        where: { patientId: patient.id },
+        orderBy: { createdAt: "desc" },
+      }).catch(() => []),
+      prisma.referral.findMany({
+        where: { referrerPatientId: patient.id },
+        orderBy: { createdAt: "desc" },
+      }).catch(() => []),
+    ]);
+
+    const counts = {
+      patient: 1,
+      visits: visits.length,
+      prescriptions: prescriptions.length,
+      consents: consents.length,
+      treatmentPlans: treatmentPlans.length,
+      loyaltyTransactions: loyaltyTransactions.length,
+      referrals: referrals.length,
+    };
+
+    // PRD §11 + DPDP Act §15: every self-DSAR is itself a PHI access event
+    // and MUST land in AuditLog. Distinct action name `_SELF` so reviewers
+    // can filter staff-initiated GDPR_EXPORT vs patient-initiated exports
+    // without parsing details JSON.
+    let audited = false;
+    try {
+      await writeAudit(
+        'Patient',
+        'GDPR_EXPORT_SELF',
+        patient.id,
+        null,
+        patient.tenantId,
+        {
+          reason: 'DPDP §15 / GDPR Article 15 self-export (portal)',
+          source: 'portal/export',
+          counts,
+        },
+        { actorType: 'patient', patientId: patient.id }
+      );
+      audited = true;
+    } catch (auditErr) {
+      console.warn("[wellness] audit portal/export failed:", auditErr.message);
+    }
+
+    // Strip tenantId from the public response shape — patient never needs
+    // to see the integer id of their clinic.
+    const { tenantId: _t, ...patientPublic } = patient;
+
+    res.set('Content-Disposition', `attachment; filename=patient-${patient.id}-export.json`);
+    res.json({
+      exportedAt: new Date().toISOString(),
+      patient: patientPublic,
+      visits,
+      prescriptions,
+      consents,
+      treatmentPlans,
+      loyaltyTransactions,
+      referrals,
+      counts,
+      audited,
+    });
+  } catch (e) {
+    console.error("[wellness] portal export error:", e.message);
+    res.status(500).json({ error: "Failed to export patient data" });
+  }
+});
+
 router.get("/invoices/:id/branded-pdf", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -3712,7 +3923,15 @@ router.get("/loyalty/leaderboard/month", requireManagerPlus, async (req, res) =>
         createdAt: { gte: monthStart },
       },
       _sum: { points: true },
-      orderBy: { _sum: { points: "desc" } },
+      // #440: ties on _sum points used to leak the underlying row order, which
+      // varied between query runs (no stable secondary sort). Anchor ties on
+      // patientId asc so the leaderboard is deterministic across refreshes —
+      // customers complained about jumping from rank 4 to rank 6 with zero
+      // points change. Lower id = earlier-registered patient = stable surrogate.
+      orderBy: [
+        { _sum: { points: "desc" } },
+        { patientId: "asc" },
+      ],
       take: 10,
     });
     const ids = grouped.map((g) => g.patientId);

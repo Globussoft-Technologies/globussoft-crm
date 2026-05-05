@@ -279,21 +279,34 @@ test.describe('Workflows API — GET /history', () => {
   test('history is tenant-scoped — wellness rule executions do not leak to generic', async ({ request }) => {
     const { token: genTok } = await getGeneric(request);
     // Force a wellness execution by /test on a wellness rule, then assert
-    // generic admin's history doesn't reflect it. (We can only check by
-    // total count delta because the route hides entityId mapping behind
-    // tenantId filtering — exactly what we want to prove.)
+    // the wellness rule's id does NOT appear in generic admin's history.
+    //
+    // Pre-fix this asserted exact `afterTotal === beforeTotal` count
+    // equality; on demo (where background cron engines — workflow,
+    // sequence, sentiment, scheduled-email — fire generic-tenant rules
+    // continuously) the count grew by +6 in the few hundred ms between
+    // before/after measurements, producing a false leak signal. The
+    // per-push gate (local stack with DISABLE_CRONS=1) had no such
+    // background activity so the count was always exact.
+    //
+    // The actual leak signal we care about: does the wellness rule's
+    // entityId appear in generic's history? That's tenant-id-specific
+    // and immune to background-cron noise. Search generic's recent
+    // history for the wellness rule's id; expect not-found.
     const wellnessRule = await createRule(request, 'wellness', {
       name: `${RUN_TAG} hist-iso-${Date.now()}`,
       actionType: 'send_sms',
     });
-    const before = await get(request, genTok, '/api/workflows/history?limit=200');
-    const beforeTotal = (await before.json()).total;
     const { token: wellTok } = await getWellness(request);
     const fire = await post(request, wellTok, `/api/workflows/${wellnessRule.id}/test`, {});
     expect(fire.status()).toBe(200);
     const after = await get(request, genTok, '/api/workflows/history?limit=200');
-    const afterTotal = (await after.json()).total;
-    expect(afterTotal, 'generic history should NOT grow when wellness fires a /test').toBe(beforeTotal);
+    const afterBody = await after.json();
+    const leakedRow = (afterBody.logs || []).find((row) => row.entityId === wellnessRule.id);
+    expect(
+      leakedRow,
+      `wellness rule id ${wellnessRule.id} should NOT appear in generic history (would prove cross-tenant leak)`
+    ).toBeFalsy();
   });
 });
 

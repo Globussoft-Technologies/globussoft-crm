@@ -1,5 +1,12 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+// v3.4.11: sanitization adopted from the v3.4.10 audit. AbTest variantA /
+// variantB are JSON blobs storing the email/SMS variant content (subject,
+// body, button text, etc.) — re-rendered in the AB-test detail page +
+// (potentially) email previews. HTML payloads here would land as stored
+// XSS the next time an admin opens the test or recipients receive a
+// preview email. Same #398/#447 class as lead_routing.js (v3.4.11 097ef5a).
+const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 
 const router = express.Router();
 
@@ -79,17 +86,16 @@ router.post("/", async (req, res) => {
     const { name, campaignId, variantA, variantB } = req.body || {};
     if (!name) return res.status(400).json({ error: "name is required" });
 
-    const variantAStr =
-      typeof variantA === "string" ? variantA : JSON.stringify(variantA || {});
-    const variantBStr =
-      typeof variantB === "string" ? variantB : JSON.stringify(variantB || {});
-
+    // v3.4.11: HTML-strip name + sanitize variant JSON for the
+    // re-render path (admin detail page, email preview).
+    // sanitizeJsonForStringColumn handles object-or-string inputs uniformly
+    // and stringifies for the `String @db.Text` column.
     const test = await prisma.abTest.create({
       data: {
-        name,
+        name: sanitizeText(name),
         campaignId: campaignId ? Number(campaignId) : null,
-        variantA: variantAStr,
-        variantB: variantBStr,
+        variantA: sanitizeJsonForStringColumn(variantA || {}),
+        variantB: sanitizeJsonForStringColumn(variantB || {}),
         status: "DRAFT",
         tenantId,
       },
@@ -126,15 +132,16 @@ router.put("/:id", async (req, res) => {
     const { name, campaignId, variantA, variantB, status, winningVariant } =
       req.body || {};
     const data = {};
-    if (name !== undefined) data.name = name;
+    // v3.4.11: same sanitization as POST. variantA/B fall back to "{}" for
+    // null inputs (was `JSON.stringify(null)` → "null" string before, which
+    // was already a weird value); empty object is a more sensible default.
+    if (name !== undefined) data.name = sanitizeText(name);
     if (campaignId !== undefined)
       data.campaignId = campaignId ? Number(campaignId) : null;
     if (variantA !== undefined)
-      data.variantA =
-        typeof variantA === "string" ? variantA : JSON.stringify(variantA);
+      data.variantA = sanitizeJsonForStringColumn(variantA || {});
     if (variantB !== undefined)
-      data.variantB =
-        typeof variantB === "string" ? variantB : JSON.stringify(variantB);
+      data.variantB = sanitizeJsonForStringColumn(variantB || {});
     if (status !== undefined) data.status = status;
     if (winningVariant !== undefined) data.winningVariant = winningVariant;
 

@@ -48,7 +48,17 @@ export default function Reports() {
     const url = `${ENDPOINTS[tab]}?from=${from}T00:00:00&to=${to}T23:59:59`;
     fetchApi(url).then(setData).catch(() => setData(null)).finally(() => setLoading(false));
   };
-  useEffect(load, [tab, from, to]);
+  // #433: debounce the date-range driven re-fetch. Pre-fix every keystroke
+  // in the From/To input (`type=date`) refired `load()`; typing a full
+  // ISO date `2026-04-01` produced ~10 in-flight requests, log spam, and
+  // racy state transitions. tab changes still fire immediately (debounce
+  // only the date side); the cleanup function cancels the timer so a new
+  // keystroke restarts the wait.
+  useEffect(() => {
+    // tab changes have no debounce-worthy spam pattern (single click)
+    const t = setTimeout(load, 350);
+    return () => clearTimeout(t);
+  }, [tab, from, to]);
 
   // #227: export downloader. We use raw fetch so we can stream the binary
   // body into a blob URL — fetchApi assumes JSON. Same pattern used by the

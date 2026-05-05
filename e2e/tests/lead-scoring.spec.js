@@ -66,7 +66,15 @@ test.describe('Lead Scoring — AI Lead Intelligence', () => {
     });
     expect(res.success).toBe(true);
     expect(typeof res.scored).toBe('number');
-    expect(res.scored).toBeGreaterThan(0);
+    // The engine only rescores contacts whose aiScoreLastComputedAt is null
+    // OR older than RECOMPUTE_WINDOW_HOURS (24h). A `scored: 0` is a valid,
+    // load-bearing answer when the cron has just run (every 10 min on demo)
+    // — every contact is "fresh", nothing needs work. Pre-fix this asserted
+    // `> 0`, which broke against demo precisely when the cron was healthy.
+    // The contract we DO want to pin is: shape is `{ success: true, scored: number }`
+    // with no NaN/null in `scored`. Negative is impossible from the engine.
+    expect(res.scored).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(res.scored)).toBe(true);
   });
 
   test('full lead scoring page screenshot', async ({ page }) => {

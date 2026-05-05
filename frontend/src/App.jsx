@@ -638,6 +638,13 @@ export default function App() {
               <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
               {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
               <Route path="telecaller" element={<Navigate to="/wellness/telecaller" replace />} />
+              {/* #406: stale-URL aliases. Older docs / QA prompts reference
+                  /wellness/service-catalog + /wellness/telecaller-queue;
+                  canonical routes are /wellness/services + /wellness/telecaller.
+                  Mirrors the #183 alias pattern above so deep links from old
+                  docs / bookmarks still land on the right page. */}
+              <Route path="wellness/service-catalog" element={<Navigate to="/wellness/services" replace />} />
+              <Route path="wellness/telecaller-queue" element={<Navigate to="/wellness/telecaller" replace />} />
               <Route path="wellness/per-location" element={<WellnessOnly><WellnessPerLocation /></WellnessOnly>} />
               <Route path="wellness/loyalty" element={<WellnessOnly><WellnessLoyalty /></WellnessOnly>} />
               <Route path="wellness/waitlist" element={<WellnessOnly><WellnessWaitlist /></WellnessOnly>} />

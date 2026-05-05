@@ -2,6 +2,16 @@ const express = require("express");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+// v3.4.11: sanitization adopted from the v3.4.10 audit. ReportSchedule.name
+// is rendered in the schedule-list admin UI; ReportSchedule.metrics is a
+// JSON array (`String? @db.Text`) of metric ids that flow into the
+// rendered report template; ReportSchedule.recipients is a JSON array
+// of email addresses already tenant-validated by #171's
+// validateRecipientsAgainstTenant — sanitize defense-in-depth here in
+// case a bypass slips through, since recipient strings are surfaced in
+// the report-delivery preview. Same #398/#447 class as lead_routing.js
+// (097ef5a) + ab_tests.js (6a9e450) + marketing.js (this batch).
+const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 
 // #127: validate recipient lists before persisting. The cron mailer would
 // otherwise try to deliver to junk like "@@@" and harm sender reputation.
@@ -95,15 +105,19 @@ router.post("/", async (req, res) => {
       if (recipErr) return res.status(recipErr.status).json(recipErr);
     }
 
+    // v3.4.11 sanitization sweep — strip HTML from name + metrics + recipients
+    // before storage. recipients was already tenant-validated above (#171
+    // gates against User.email allow-list); sanitization here is defense
+    // in depth and a no-op for legitimate emails.
     const schedule = await prisma.reportSchedule.create({
       data: {
-        name,
+        name: sanitizeText(name),
         reportType: reportType || 'deals',
-        metrics: metrics ? JSON.stringify(metrics) : null,
+        metrics: metrics ? sanitizeJsonForStringColumn(metrics) : null,
         groupBy: groupBy || null,
         frequency: frequency || 'weekly',
         cronExpression: cronExpression || getCronFromFrequency(frequency || 'weekly'),
-        recipients: JSON.stringify(recipients || [req.user.email || 'admin@globussoft.com']),
+        recipients: sanitizeJsonForStringColumn(recipients || [req.user.email || 'admin@globussoft.com']),
         format: format || 'PDF',
         enabled: enabled !== false,
         userId: req.user.userId,
@@ -128,9 +142,11 @@ router.put("/:id", async (req, res) => {
     const { name, reportType, metrics, groupBy, frequency, cronExpression, recipients, format, enabled } = req.body;
 
     const data = {};
-    if (name !== undefined) data.name = name;
+    // v3.4.11: same sanitization as POST — name → sanitizeText,
+    // metrics + recipients → sanitizeJsonForStringColumn.
+    if (name !== undefined) data.name = sanitizeText(name);
     if (reportType !== undefined) data.reportType = reportType;
-    if (metrics !== undefined) data.metrics = JSON.stringify(metrics);
+    if (metrics !== undefined) data.metrics = sanitizeJsonForStringColumn(metrics);
     if (groupBy !== undefined) data.groupBy = groupBy;
     if (frequency !== undefined) {
       data.frequency = frequency;
@@ -141,7 +157,7 @@ router.put("/:id", async (req, res) => {
       // #171: same tenant-bounded check on update.
       const recipErr = await validateRecipientsAgainstTenant(recipients, req.user.tenantId);
       if (recipErr) return res.status(recipErr.status).json(recipErr);
-      data.recipients = JSON.stringify(recipients);
+      data.recipients = sanitizeJsonForStringColumn(recipients);
     }
     if (format !== undefined) {
       if (!ALLOWED_REPORT_FORMATS.has(format)) {

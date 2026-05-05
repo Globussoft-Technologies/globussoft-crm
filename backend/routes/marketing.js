@@ -4,6 +4,13 @@ const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { sendSms } = require("../services/smsProvider");
 const { computeFirstResponseDueAt } = require("../lib/leadSla");
+// v3.4.11: sanitization adopted from the v3.4.10 audit. Campaign.name is
+// rendered in the marketing admin UI cards; Campaign.scheduleFilters is
+// a JSON blob (String? @db.Text) re-rendered in the scheduled-campaigns
+// admin view. Both surface admin-side; HTML payloads here would land
+// as stored XSS when admins open the marketing page or schedule list.
+// Same #398/#447 class as lead_routing.js (097ef5a) + ab_tests.js (6a9e450).
+const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 
 const router = express.Router();
 
@@ -249,9 +256,14 @@ router.get("/campaigns", verifyToken, async (req, res) => {
 router.post("/campaigns", verifyToken, async (req, res) => {
   try {
     const { name, channel, budget } = req.body;
+    // v3.4.11 sanitization sweep (#398/#447 class) — Campaign.name is
+    // rendered in the marketing admin UI cards. sanitizeText strips
+    // HTML/JS while preserving merge-tags and the literal `& < > " '`
+    // chars sanitize-html re-encodes by default.
+    const cleanName = sanitizeText(name) || "Untitled Campaign";
     const campaign = await prisma.campaign.create({
       data: {
-        name: name || "Untitled Campaign",
+        name: cleanName,
         channel: channel || "EMAIL",
         budget: parseFloat(budget || 0),
         tenantId: req.user.tenantId,
@@ -290,7 +302,8 @@ router.put("/campaigns/:id", verifyToken, async (req, res) => {
     const updated = await prisma.campaign.update({
       where: { id: existing.id },
       data: {
-        ...(name && { name }),
+        // v3.4.11: same name sanitization as POST.
+        ...(name && { name: sanitizeText(name) }),
         ...(channel && { channel }),
         ...(budget != null && { budget: parseFloat(budget) }),
         ...(status && { status }),
@@ -418,7 +431,12 @@ router.post("/campaigns/:id/schedule", verifyToken, async (req, res) => {
     // because Prisma `String? @db.Text` is the cheapest way to carry a
     // structured filter alongside the schema migration without minting a
     // new sub-table. The cron engine + /run trigger both JSON.parse it.
-    const scheduleFilters = req.body.filters ? JSON.stringify(req.body.filters) : null;
+    //
+    // v3.4.11 sanitization sweep (#398/#447 class) — sanitizeJsonForStringColumn
+    // walks every string value in the filter JSON before storage so an
+    // HTML payload in (e.g.) a city/segment filter can't surface as
+    // stored XSS in the scheduled-campaigns admin view.
+    const scheduleFilters = req.body.filters ? sanitizeJsonForStringColumn(req.body.filters) : null;
 
     await prisma.campaign.update({
       where: { id: campaign.id },

@@ -77,6 +77,18 @@
       "Bash(bash .claude/skills/*)",
       "Bash(bash ./.claude/skills/*)",
 
+      "Bash(mkdir .claude/skills/*)",
+      "Bash(mkdir -p .claude/skills/*)",
+      "Bash(mkdir ./.claude/skills/*)",
+      "Bash(mkdir -p ./.claude/skills/*)",
+      "Bash(ls .claude/skills*)",
+      "Bash(ls ./.claude/skills*)",
+      "Bash(rm .claude/skills/*)",
+      "Bash(rm -r .claude/skills/*)",
+      "Bash(rm -rf .claude/skills/*)",
+      "Bash(mv .claude/skills/*)",
+      "Bash(cp .claude/skills/*)",
+
       "Write(.claude/skills/**)",
       "Edit(.claude/skills/**)",
       "Write(./.claude/skills/**)",

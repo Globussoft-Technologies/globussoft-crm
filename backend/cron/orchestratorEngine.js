@@ -151,8 +151,10 @@ async function executeApproved(rec, { actorUserId } = {}) {
       const { deduped } = await findOrCreateTask({
         title: `Marketer: ${rec.title}`,
         notes: `${rec.body}\n\nApproved by user #${actorUserId} on ${new Date().toISOString()}`,
-        status: "OPEN",
-        priority: "HIGH",
+        // Canonical Task case per backend/prisma/schema.prisma:773-774
+        // (status: "Pending", priority: "High"). v3.4.8 carry-over #5.
+        status: "Pending",
+        priority: "High",
         tenantId: rec.tenantId,
         userId: actorUserId || null,
       });
@@ -186,11 +188,13 @@ async function executeApproved(rec, { actorUserId } = {}) {
     case "occupancy_alert":
     case "schedule_gap": {
       // Translate to a manager task (deduped — see findOrCreateTask).
+      // Canonical Task case per backend/prisma/schema.prisma:773-774
+      // (status: "Pending", priority: "High"). v3.4.8 carry-over #5.
       const { deduped } = await findOrCreateTask({
         title: rec.title,
         notes: rec.body,
-        status: "OPEN",
-        priority: "HIGH",
+        status: "Pending",
+        priority: "High",
         tenantId: rec.tenantId,
         userId: actorUserId || null,
       });
@@ -566,7 +570,10 @@ async function cleanupExistingDupes(tenantId) {
     }
     for (const rows of tgroups.values()) {
       if (rows.length < 2) continue;
-      const keeper = rows.find((r) => r.status !== "OPEN" && r.status !== "Pending") || rows[0];
+      // Prefer to keep a row the user has already progressed past the
+      // initial state. Schema canonical is "Pending"; legacy rows from
+      // pre-v3.4.9 may carry "OPEN" — keep both checks for back-compat.
+      const keeper = rows.find((r) => r.status !== "Pending" && r.status !== "OPEN") || rows[0];
       const toDelete = rows.filter((r) => r.id !== keeper.id).map((r) => r.id);
       if (toDelete.length === 0) continue;
       // Soft-delete to preserve audit trail (Task has deletedAt column).

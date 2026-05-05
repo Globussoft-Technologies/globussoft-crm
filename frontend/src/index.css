@@ -258,3 +258,26 @@ aside nav::-webkit-scrollbar-thumb:hover {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
+
+/* ── #449 — Builder fullscreen mode ────────────────────────────────────
+ * When LandingPageBuilder mounts it sets `body.body--builder-fullscreen`,
+ * which hides the global app sidebar + the global top header. The
+ * builder owns its own three-column layout and the global chrome only
+ * competes for horizontal space (~250 px sidebar + ~48 px header). On
+ * unmount the class is removed and the chrome returns. The pattern
+ * mirrors the wellness public-booking page, which similarly suppresses
+ * chrome via the `/book/:slug` route living outside <Layout>.
+ */
+body.body--builder-fullscreen .app-sidebar,
+body.body--builder-fullscreen .sidebar-backdrop {
+  display: none !important;
+}
+body.body--builder-fullscreen .app-main > header {
+  display: none !important;
+}
+body.body--builder-fullscreen .app-main {
+  padding: 0 !important;
+}
+body.body--builder-fullscreen .app-main > main {
+  padding: 0 !important;
+}

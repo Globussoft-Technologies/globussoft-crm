@@ -134,6 +134,17 @@ jobs:
       # real ENC:v1: ciphertext value (not the documented no-op-when-
       # unset fallback). 64 hex chars = 32 bytes per lib/fieldEncryption.js.
       WELLNESS_FIELD_KEY: "ci0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab"
+      # v3.4.9 wellness-portal-dsar-api.spec.js needs the demo-OTP bypass
+      # (#238/#292) to mint a portal token for the seeded "+919876500001"
+      # patient (seed-wellness.js:333-355). routes/wellness.js:4287-4299 gates
+      # the bypass on three conditions: WELLNESS_DEMO_OTP env-var set,
+      # NODE_ENV !== 'production' (we set 'test' above), AND the phone in
+      # WELLNESS_DEMO_OTP_PHONES (defaults to "9876500001" — matches the
+      # seeded patient, no override needed). Without this env-var the
+      # spec's beforeAll blocks at verify-otp 401 and every test in the
+      # file fails. Demo box has the same env-var per the v3.4.9 release
+      # checklist.
+      WELLNESS_DEMO_OTP: "1234"
     steps:
       - uses: actions/checkout@v5
 
@@ -336,6 +347,13 @@ jobs:
             tests/wellness-dashboard-api.spec.js \
             tests/sensitive-field-leak-api.spec.js \
             tests/tenant-header-ignored-api.spec.js \
+            tests/wellness-read-audit-api.spec.js \
+            tests/auth-revocation-api.spec.js \
+            tests/sequences-input-sanitization-api.spec.js \
+            tests/gdpr-dsar-export-api.spec.js \
+            tests/wellness-portal-dsar-api.spec.js \
+            tests/report-schedules-api.spec.js \
+            tests/landing-page-upload-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"
@@ -446,7 +464,45 @@ jobs:
           npm test
           echo "::notice::Unit tests passed"
 
-  # ── 5. MIGRATION_CHECK: dry-run prisma migrate diff between HEAD~1 and ──
+  # ── 5. FRONTEND_UNIT_TESTS: vitest + RTL over frontend/src components + ─
+  # utils. G-21 — first wave of frontend unit-test infra. Mirrors backend's
+  # unit_tests gate but in jsdom; no DB, no server boot, no Playwright. The
+  # config lives inline in frontend/vite.config.js's `test:` block plus the
+  # frontend/vitest.setup.js bootstrap (jest-dom matchers + jsdom polyfills
+  # for matchMedia / ResizeObserver / getBoundingClientRect that recharts +
+  # react-grid-layout + a few wellness-vertical pages depend on).
+  #
+  # Standing rule: every new frontend page/component/util gets a partner
+  # test under frontend/src/__tests__/. Mocks fetchApi + socket.io-client +
+  # third-party SDKs only — never React itself.
+  frontend_unit_tests:
+    if: ${{ inputs.skip_tests != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend — npm ci
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Run frontend vitest
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm test
+          echo "::notice::Frontend unit tests passed"
+
+  # ── 6. MIGRATION_CHECK: dry-run prisma migrate diff between HEAD~1 and ──
   # the proposed schema, flag prod-outage risk patterns (G-23). The
   # standalone .github/workflows/migration-check.yml runs on PRs (so
   # reviewers see the risk count comment); this in-workflow job is the
@@ -492,21 +548,21 @@ jobs:
           fi
           echo "::notice::Migration safety check passed"
 
-  # ── 6. DEPLOY: only runs if build + api_tests + unit_tests + lint + ────
-  # migration_check all pass.
+  # ── 7. DEPLOY: only runs if every upstream gate passes. ────────────────
   deploy:
-    needs: [build, api_tests, unit_tests, lint, migration_check]
-    # All five gates mandatory:
-    #   - build            (vite + node syntax)
-    #   - api_tests        (Playwright API specs against ephemeral MySQL + seeded backend)
-    #   - unit_tests       (vitest pure-fn coverage of lib + middleware + services + utils)
-    #   - lint             (ESLint — semantic checks + project-specific req.user.id rule)
-    #   - migration_check  (G-23 — dry-run prisma migrate diff vs HEAD~1)
+    needs: [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
+    # All six gates mandatory:
+    #   - build               (vite + node syntax)
+    #   - api_tests           (Playwright API specs against ephemeral MySQL + seeded backend)
+    #   - unit_tests          (backend vitest — lib + middleware + services + utils)
+    #   - lint                (ESLint — semantic checks + project-specific req.user.id rule)
+    #   - frontend_unit_tests (G-21 — vitest + RTL over frontend/src/__tests__/)
+    #   - migration_check     (G-23 — dry-run prisma migrate diff vs HEAD~1)
     # Any failure blocks deploy.
     # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
     # bypass for emergency hotfixes (still requires manual workflow_dispatch
     # — a regular push can never bypass).
-    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -522,7 +578,7 @@ jobs:
           echo "Commit:  ${{ github.sha }}"
           echo "Pusher:  ${{ github.actor }}"
           printf 'Message: %s\n' "$COMMIT_MSG" | head -3
-          echo "Tests:   build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }} unit_tests=${{ needs.unit_tests.result }} lint=${{ needs.lint.result }} migration_check=${{ needs.migration_check.result }}"
+          echo "Tests:   build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }} unit_tests=${{ needs.unit_tests.result }} lint=${{ needs.lint.result }} frontend_unit_tests=${{ needs.frontend_unit_tests.result }} migration_check=${{ needs.migration_check.result }}"
 
       # ── Backend deploy ──────────────────────────────────────────────
       # git pull -> npm install -> prisma generate -> pm2 restart -> health.

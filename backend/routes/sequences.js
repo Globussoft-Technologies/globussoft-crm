@@ -1,35 +1,26 @@
 const express = require("express");
-const sanitizeHtml = require("sanitize-html");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
 
-// #398: strip ALL HTML/JS markup from free-text fields stored on a Sequence.
-// Global middleware/security.js only strips dangerous tags (script/iframe/img),
-// but sequence names + step content are pure text fields — no formatting is
-// expected, so we strip everything to avoid stored-XSS sinks (PDF previews,
-// email subject lines, dashboard cards).
-//
-// #187: sanitize-html's default text serialiser HTML-encodes `&` → `&amp;`,
-// which corrupted "Q3 Plan & Brief" into "Q3 Plan &amp; Brief". Override
-// the textFilter to undo the four entities the library re-encodes — storage
-// stays raw, render-time encoding is React's job.
-const ENTITY_DECODE_RE = /&(amp|lt|gt|quot|#x27|#39);/g;
-const ENTITY_DECODE_MAP = {
-  "amp": "&", "lt": "<", "gt": ">", "quot": '"', "#x27": "'", "#39": "'",
-};
-const sanitizeText = (input) => {
-  if (typeof input !== "string") return input;
-  return sanitizeHtml(input, {
-    allowedTags: [],
-    allowedAttributes: {},
-    textFilter: (text) => text.replace(ENTITY_DECODE_RE, (_, e) => ENTITY_DECODE_MAP[e] || _),
-  }).trim();
-};
+// v3.4.11: sanitization helpers moved to backend/lib/sanitizeJson.js so the
+// 4 routes identified by the v3.4.10 audit (lead_routing, ab_tests, marketing,
+// report_schedules) can adopt the same toolkit. sanitizeText handles
+// HTML-stripping with merge-tag preservation; sanitizeJson is shape-preserving
+// for object → object handoff (e.g. real JSON-typed Prisma columns);
+// sanitizeJsonForStringColumn wraps sanitizeJson + stringifies for
+// `String? @db.Text` storage columns like SequenceStep.conditionJson.
+const {
+  sanitizeText,
+  sanitizeJson,
+  sanitizeJsonForStringColumn,
+} = require("../lib/sanitizeJson");
 
 // Walk an array of ReactFlow nodes and strip any text inside data.label so a
 // payload like `{ data: { label: "<img onerror=…>" } }` cannot persist.
+// This wrapper is sequence-specific (knows the ReactFlow node shape) so it
+// stays local to this route.
 const sanitizeNodes = (nodes) => {
   if (!Array.isArray(nodes)) return nodes;
   return nodes.map((n) => {
@@ -377,15 +368,24 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
       }
     }
 
+    // v3.4.9 carry-over #1: scrub HTML out of free-text step fields
+    // before persisting. smsBody is plain text (merge-tags pass through);
+    // conditionJson may be an object or string blob — sanitizeJsonForStringColumn
+    // walks every string value recursively AND stringifies an object input
+    // because SequenceStep.conditionJson is `String? @db.Text` (Prisma
+    // rejects an object here).
+    const cleanSmsBody = smsBody != null ? sanitizeText(smsBody) : null;
+    const cleanConditionJson = sanitizeJsonForStringColumn(conditionJson);
+
     const created = await prisma.sequenceStep.create({
       data: {
         sequenceId: seq.id,
         position: target,
         kind,
         emailTemplateId: emailTemplateId != null ? parseInt(emailTemplateId, 10) : null,
-        smsBody: smsBody || null,
+        smsBody: cleanSmsBody || null,
         delayMinutes: delayMinutes != null ? parseInt(delayMinutes, 10) : null,
-        conditionJson: conditionJson || null,
+        conditionJson: cleanConditionJson || null,
         trueNextPosition: trueNextPosition != null ? parseInt(trueNextPosition, 10) : null,
         falseNextPosition: falseNextPosition != null ? parseInt(falseNextPosition, 10) : null,
         pauseOnReply: pauseOnReply == null ? true : !!pauseOnReply,
@@ -429,6 +429,7 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
       }
     }
 
+    // v3.4.9 carry-over #1: same step-level sanitization on update.
     const updated = await prisma.sequenceStep.update({
       where: { id: existing.id },
       data: {
@@ -436,11 +437,11 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
         ...(emailTemplateId !== undefined && {
           emailTemplateId: emailTemplateId == null ? null : parseInt(emailTemplateId, 10),
         }),
-        ...(smsBody !== undefined && { smsBody }),
+        ...(smsBody !== undefined && { smsBody: smsBody == null ? null : sanitizeText(smsBody) }),
         ...(delayMinutes !== undefined && {
           delayMinutes: delayMinutes == null ? null : parseInt(delayMinutes, 10),
         }),
-        ...(conditionJson !== undefined && { conditionJson }),
+        ...(conditionJson !== undefined && { conditionJson: sanitizeJsonForStringColumn(conditionJson) }),
         ...(trueNextPosition !== undefined && {
           trueNextPosition: trueNextPosition == null ? null : parseInt(trueNextPosition, 10),
         }),
@@ -503,4 +504,11 @@ router.post("/debug/tick", verifyToken, verifyRole(["ADMIN"]), async (req, res) 
   }
 });
 
+// v3.4.9 carry-over #1: expose the sanitization helpers for unit tests
+// (backend/test/utils/sanitize-json.test.js). Express routers ignore
+// extra properties on the exported function, so this is a no-op for the
+// runtime app.mount() path.
 module.exports = router;
+module.exports.sanitizeText = sanitizeText;
+module.exports.sanitizeJson = sanitizeJson;
+module.exports.sanitizeNodes = sanitizeNodes;

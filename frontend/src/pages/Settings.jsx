@@ -226,6 +226,44 @@ export default function Settings() {
                 <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Slug</label>
                 <input type="text" disabled className="input-field" value={tenant.slug || ''} title="Organization slug is permanent" />
               </div>
+              {/* #441: surface the public booking URL with a one-click copy
+                  button. Pre-fix the owner had to view-source / DOM-inspect
+                  to retrieve the URL — friction at the "send me your booking
+                  link" moment. The URL is built from window.location.origin
+                  + slug; SSR doesn't apply (Settings is auth-required, never
+                  rendered server-side). */}
+              {tenant.slug && (
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Public Booking URL</label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <input
+                      type="text"
+                      readOnly
+                      className="input-field"
+                      value={`${window.location.origin}/book/${tenant.slug}`}
+                      style={{ flex: 1 }}
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        const url = `${window.location.origin}/book/${tenant.slug}`;
+                        navigator.clipboard?.writeText(url).then(
+                          () => notify.success('Public booking URL copied to clipboard'),
+                          () => notify.error('Could not copy — please select and copy manually')
+                        );
+                      }}
+                      style={{ padding: '0.5rem 1rem', whiteSpace: 'nowrap' }}
+                    >
+                      Copy URL
+                    </button>
+                  </div>
+                  <p style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    Share this with patients to let them self-book without logging in.
+                  </p>
+                </div>
+              )}
               <div>
                 <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Owner Email</label>
                 <input type="email" className="input-field" value={tenant.ownerEmail || ''} onChange={e => setTenantState({ ...tenant, ownerEmail: e.target.value })} />

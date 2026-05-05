@@ -113,6 +113,17 @@ const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const API = `${BASE_URL}/api`;
 const REQUEST_TIMEOUT = 60000;
 
+// Disk-readback assertions only work when the test is running on the SAME
+// machine as the backend — the route returns the basename of a file under
+// the server's BACKUP_DIR, and we resolve it via local filesystem walk.
+// On the per-push gate (api_tests, BASE_URL=http://127.0.0.1:5000) this is
+// fine. On e2e-full release validation (BASE_URL=https://crm.globusdemos.com)
+// the file is on demo's disk, not the runner's — `resolveBackupPath` returns
+// null and the assertions cascade-fail. Skip the disk-readback portion when
+// remote; the response-shape assertions above the disk read still run and
+// give us regression coverage for the route contract.
+const IS_LOCAL_STACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(BASE_URL);
+
 const RUN_TAG = `E2E_BACKUP_${Date.now()}`;
 // Plaintext sentinel embedded into Patient.allergies. We grep the dump
 // for this exact string post-run; it must NOT appear when WELLNESS_FIELD_KEY
@@ -451,6 +462,13 @@ test.describe('POST /api/admin/backup/run — happy path', () => {
     // below fails, afterAll should still unlink.
     createdBackupFiles.add(body.file);
 
+    // Disk-readback only works when test + backend share a filesystem.
+    // e2e-full runs against demo from a CI runner — file is on demo's disk.
+    if (!IS_LOCAL_STACK) {
+      console.log(`[G-15] BASE_URL=${BASE_URL} is remote — skipping disk-readback assertions (response-shape contract above is sufficient cross-machine coverage)`);
+      return;
+    }
+
     // Resolve the file on disk + verify roundtrip-readability.
     const fp = resolveBackupPath(body.file);
     expect(fp, `backup file ${body.file} should be findable on disk`).not.toBeNull();
@@ -513,6 +531,11 @@ test.describe('POST /api/admin/backup/run — happy path', () => {
 test.describe('POST /api/admin/backup/run — PII safety', () => {
   test('plaintext PII in encrypted columns does NOT leak into the dump (when WELLNESS_FIELD_KEY is set)', async ({ request }) => {
     test.skip(!tokens.wellnessAdmin, 'wellness admin fixture not seeded');
+    // PII assertions require reading the dump file off-disk + the raw-DB
+    // column probe — both need the test to share a filesystem with the
+    // backend. Cross-machine (e2e-full vs demo) → skip; rely on the
+    // local-stack run for regression coverage of the encryption pipeline.
+    test.skip(!IS_LOCAL_STACK, `BASE_URL=${BASE_URL} is remote — PII dump check requires a local stack`);
 
     // 1. Seed a wellness Patient with sentinel plaintext in the two
     //    encrypted Patient fields (allergies + notes). The lib/prisma.js

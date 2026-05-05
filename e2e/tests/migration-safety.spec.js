@@ -72,6 +72,18 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SCRIPT = path.join(REPO_ROOT, 'backend', 'scripts', 'check-migration-safety.js');
 const FIXTURES = path.join(REPO_ROOT, 'backend', 'scripts', 'fixtures', 'migration-safety');
 
+// G-23 specs run the migration-safety script via execFileSync(process.execPath, ...).
+// The script invokes `prisma migrate diff` under the hood, which needs
+// @prisma/client + the prisma binary in backend/node_modules. The per-push gate
+// (api_tests, BASE_URL=127.0.0.1) installs both. The e2e-full runner does NOT
+// — it only npm-installs e2e/, then targets demo via BASE_URL=https://… — so
+// every runScript() invocation here ENOENTs on prisma. Skip the whole describe
+// when remote; the per-push gate is the regression-coverage canon for G-23
+// (the dedicated `Migration safety check (G-23)` workflow also runs these
+// against a locally-installed backend).
+const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
+const IS_LOCAL_STACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(BASE_URL);
+
 // Run the script as a child node process. Returns the exit code +
 // captured stdout / stderr. Doesn't throw on non-zero exit (we want
 // to assert on it).
@@ -102,6 +114,8 @@ function runScript(args = [], env = {}) {
 const fx = (name) => path.join(FIXTURES, name);
 
 test.describe('Migration safety gate (G-23) — detector regression suite', () => {
+  test.skip(!IS_LOCAL_STACK, `BASE_URL=${BASE_URL} is remote — G-23 specs spawn the migration-safety script which needs backend/node_modules (prisma binary). Per-push gate + dedicated G-23 workflow cover these locally.`);
+
   test.beforeAll(() => {
     // Surface a clearer failure if the script or fixtures aren't
     // present — otherwise every test below fails with an opaque

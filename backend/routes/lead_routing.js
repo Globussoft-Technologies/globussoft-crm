@@ -1,5 +1,12 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+// v3.4.11: sanitization adopted from the v3.4.10 audit. LeadRoutingRule has
+// two free-text writeable fields:
+//   - name (String) — rendered in the /lead-routing admin UI cards (#245)
+//   - conditions (String @db.Text storing JSON) — rendered as a chip per #245
+// Both surface in the admin UI; an HTML payload here would land as stored
+// XSS the next time an admin views the rule list.
+const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 
 const router = express.Router();
 
@@ -172,8 +179,12 @@ router.post("/", async (req, res) => {
 
     const rule = await prisma.leadRoutingRule.create({
       data: {
-        name,
-        conditions: JSON.stringify(conditions || {}),
+        // v3.4.11: HTML-strip name + sanitize conditions JSON for the admin UI
+        // render path. validateConditions ran first against the raw input —
+        // sanitizing here doesn't affect that gate (it operates on the
+        // pre-sanitized bytes that hit Prisma, NOT on validation logic).
+        name: sanitizeText(name),
+        conditions: sanitizeJsonForStringColumn(conditions || {}),
         assignType: assignType || "round_robin",
         assignTo: assignTo ? Number(assignTo) : null,
         priority: priorityNum,
@@ -219,8 +230,10 @@ router.put("/:id", async (req, res) => {
     const updated = await prisma.leadRoutingRule.update({
       where: { id },
       data: {
-        ...(name !== undefined && { name }),
-        ...(conditions !== undefined && { conditions: JSON.stringify(conditions || {}) }),
+        // v3.4.11: same sanitization as POST. Partial updates only sanitize
+        // the fields actually being changed (preserves existing safe values).
+        ...(name !== undefined && { name: sanitizeText(name) }),
+        ...(conditions !== undefined && { conditions: sanitizeJsonForStringColumn(conditions || {}) }),
         ...(assignType !== undefined && { assignType }),
         ...(assignTo !== undefined && { assignTo: assignTo === null ? null : Number(assignTo) }),
         ...(priority !== undefined && { priority: priorityNum }),

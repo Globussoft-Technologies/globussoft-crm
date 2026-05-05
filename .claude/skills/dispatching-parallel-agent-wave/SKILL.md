@@ -47,11 +47,19 @@ Empirical from v3.4.x:
 
 **Default to 4 per wave.** If you have more than 4 candidates, run sequential waves of 4.
 
+## Verify each issue before dispatch (added v3.4.8)
+
+**Run the `verifying-issue-before-pickup` skill on EACH issue in the planned batch BEFORE writing the agent prompts.** 5 minutes of code-grep by the parent agent saves ~10 minutes × N agents of in-flight re-derivation.
+
+The v3.4.8 4-agent wave shipped clean but **3 of 4 agents (#180, #398, #443) found doc-vs-reality drift** — the implementation was already shipped; the actual gap was test-coverage. Each agent recovered, but the parent agent could have narrowed each prompt accordingly ("the route is already sanitized; write a contract spec, no impl needed") if it had grepped first. See `.claude/skills/verifying-issue-before-pickup/SKILL.md` for the grep checklist + the four common drift patterns (impl-shipped-spec-missing, impl-shipped-audit-missing, partial-fix-second-bug, framing-wrong).
+
+When the verification surfaces drift on a row, **rewrite the agent prompt to match the actual gap** — don't pass the original issue framing through. The agent will re-derive faster from a tight prompt than from "the issue says X but actually Y."
+
 ## Discovery-first vs jump-to-closers
 
 Two patterns:
 
-**Pattern A: jump to closers** — when the work is well-defined in `docs/E2E_GAPS.md` and you can pick disjoint items off the table without exploration. Used for G-2/G-3/G-5, G-7/G-14/G-16, G-9/G-10/G-11, R-1 trio. **Default for most rounds.**
+**Pattern A: jump to closers** — when the work is well-defined in `docs/E2E_GAPS.md` and you can pick disjoint items off the table without exploration. Used for G-2/G-3/G-5, G-7/G-14/G-16, G-9/G-10/G-11, R-1 trio. **Default for most rounds — but always after running the verifying-issue-before-pickup skill on each item.**
 
 **Pattern B: discovery agent first** — when the user says "find more gaps and close them" or you've shipped the obvious E2E_GAPS items. Spawn ONE Explore agent (read-only) to survey:
 1. `docs/regression-coverage-backlog.md` — closed-bug audit
@@ -140,6 +148,27 @@ When all agents in a wave return:
 - **Don't skip the discovery step** when the user says "find more gaps". Without discovery, you're guessing at gaps and may pick already-shipped items.
 - **Don't bundle the wire-in commits with the spec commits if you're worried about collisions.** Sometimes a separate wire-in commit AFTER all spec commits land is cleaner.
 - **Don't forget to update TODOS.md** after a wave. The next session's pickup depends on it.
+
+## When to bundle multiple fixes into ONE commit (added 2026-05-05)
+
+A single closer agent often lands N fixes in M files. Two valid commit shapes:
+
+**1 commit covering all N fixes** — right when:
+- The fixes touch DIFFERENT files with no shared touchpoint
+- They're being dispatched together as a coherent "fix this cluster" ask from the user
+- You want one closing-comment SHA to point all N closed issues at
+- The commit body can structure each fix into a per-issue section with "Closes #N" trailers
+
+The 2026-05-05 #439/#440/#441/#448/#452/#456-partial cluster (`4e116ad`) hit this shape — 6 issues in 6 files, no overlap, single commit, GitHub auto-closed each via the trailers.
+
+**N separate commits (one per fix)** — right when:
+- The fixes touch the SAME file and you want clean `git bisect`
+- One fix is significantly more invasive than the others and the others can ship without it
+- You want each issue's closing-comment SHA to point at its own targeted commit
+
+**Rule of thumb:** N fixes in M files with no shared touchpoint → 1 commit. N fixes you want to bisect-isolate → N commits.
+
+The autonomous bug-fix-cluster pattern (when the user says "fix these issues" with a list of 5+) is **shape 1 by default**: pre-grep each candidate first (catches Pattern A drift in 30s/issue, often more than half qualify per the v3.4.8 → v3.4.11 arc), cluster the genuine fixes by file-locality, ship as a structured single commit. This is faster and easier for closing-comment hygiene than N sequential commits.
 
 ## Templates
 

@@ -192,22 +192,41 @@ describe('deduplication — findDuplicateMarketplaceLead', () => {
   });
 
   test('queries by composite unique key when id present', async () => {
-    const row = { id: 99, provider: 'indiamart', externalLeadId: 'EXT-42' };
+    // #414 — composite unique is now (tenantId, provider, externalLeadId);
+    // the Prisma generated finder name is `tenantId_provider_externalLeadId`.
+    // Pre-fix this looked up by the legacy `provider_externalLeadId` alias
+    // (which no longer exists in the generated client) → ran fine while the
+    // schema still had the old 2-col constraint, threw "Argument `where`
+    // ...needs at least one argument" once the constraint widened. The 500
+    // surfaced on every marketplace webhook ingest until the helper was
+    // realigned with the schema (commit fixing this same arc).
+    const row = { id: 99, provider: 'indiamart', externalLeadId: 'EXT-42', tenantId: 1 };
     fakePrisma.marketplaceLead.findUnique.mockResolvedValue(row);
     const out = await findDuplicateMarketplaceLead('indiamart', 'EXT-42');
     expect(out).toBe(row);
     expect(fakePrisma.marketplaceLead.findUnique).toHaveBeenCalledWith({
       where: {
-        provider_externalLeadId: { provider: 'indiamart', externalLeadId: 'EXT-42' },
+        tenantId_provider_externalLeadId: {
+          tenantId: 1,
+          provider: 'indiamart',
+          externalLeadId: 'EXT-42',
+        },
       },
     });
+  });
+
+  test('honors explicit tenantId when caller passes one (cross-tenant scope)', async () => {
+    fakePrisma.marketplaceLead.findUnique.mockResolvedValue(null);
+    await findDuplicateMarketplaceLead('indiamart', 'EXT-42', 5);
+    const arg = fakePrisma.marketplaceLead.findUnique.mock.calls[0][0];
+    expect(arg.where.tenantId_provider_externalLeadId.tenantId).toBe(5);
   });
 
   test('coerces numeric externalLeadId to string', async () => {
     fakePrisma.marketplaceLead.findUnique.mockResolvedValue(null);
     await findDuplicateMarketplaceLead('justdial', 12345);
     const arg = fakePrisma.marketplaceLead.findUnique.mock.calls[0][0];
-    expect(arg.where.provider_externalLeadId.externalLeadId).toBe('12345');
+    expect(arg.where.tenantId_provider_externalLeadId.externalLeadId).toBe('12345');
   });
 
   test('returns null when no row exists', async () => {

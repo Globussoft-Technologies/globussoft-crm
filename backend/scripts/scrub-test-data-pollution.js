@@ -19,7 +19,8 @@
  *   - valid-17……@example.com
  *   - @e2e.test
  *
- * Models swept: Location, Contact, Patient, Estimate, EmailMessage, CallLog.
+ * Models swept: Location, Service, Contact, Patient, Estimate, EmailMessage,
+ * CallLog, Task, AgentRecommendation.
  *
  * Defaults to DRY-RUN; pass --apply to mutate. Safe to re-run. Cross-tenant by
  * design (test pollution exists on both generic + wellness tenants).
@@ -62,6 +63,37 @@ async function scrubLocations() {
     if (APPLY) {
       const r = await prisma.location.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
       console.log(`     → DELETED ${r.count} locations (Patient.locationId / Visit.locationId set to NULL by FK)`);
+    }
+  }
+  return bad.length;
+}
+
+async function scrubServices() {
+  // v3.4.7 follow-up: demo's public /api/wellness/public/tenant/:slug
+  // endpoint surfaced 3 surviving `_teardown_iso_*` services (ids
+  // 301/319/328) right after v3.4.7's scrub-demo. The G-20
+  // tenant-isolation spec creates services and renames them
+  // `_teardown_iso_<id>` instead of hard-deleting (per the rename-on-
+  // cleanup pattern at e2e/tests/tenant-isolation-api.spec.js). The
+  // pattern was added to e2e/test-data-patterns.js but this script
+  // never had a scrubServices() function — only Locations / Contacts /
+  // Patients / Estimates / Emails / CallLogs / Tasks / AgentRecs.
+  // Same #405 root-cause class: the pattern source was extended but
+  // the iteration list wasn't. Visit.serviceId is SetNull on Service
+  // delete per the schema, so killing test-tagged services nulls out
+  // historical Visit.serviceId pointers on test-tagged visits (which
+  // are scrubbed via Patient cascade above). Safe.
+  const all = await prisma.service.findMany({ select: { id: true, name: true, tenantId: true, description: true } });
+  const bad = all.filter((r) =>
+    isTestName(r.name) ||
+    (r.description && /wellness-real-user-journeys/i.test(r.description))
+  );
+  console.log(`Services: ${bad.length} of ${all.length} are test rows`);
+  if (bad.length) {
+    previewRows(bad, (r) => `svc ${r.id} (tenant ${r.tenantId}): "${r.name}"`);
+    if (APPLY) {
+      const r = await prisma.service.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
+      console.log(`     → DELETED ${r.count} services (Visit.serviceId set to NULL by FK)`);
     }
   }
   return bad.length;
@@ -176,6 +208,39 @@ async function scrubAgentRecommendations() {
   return bad.length;
 }
 
+async function scrubSmsMessages() {
+  // #182 (2026-05-04 reopen): the wellness-sms.spec.js smoke test creates
+  // SmsMessage rows via POST /api/sms with `to: '0000000000'` and body
+  // `'E2E smoke test — ignore'`. After the persistence path normalises a
+  // bare 10-digit number into +91-prefixed E.164, those rows surface in
+  // the customer-visible Inbox as `to=910000000000` / `to=+910000000000`.
+  // Tester nilimeshnayak-max counted 5+ leaked rows on demo. Sweep them.
+  //
+  // Patterns: `to` matches all-zero phone variants OR body matches the
+  // smoke-test sentinel OR body matches isTestName (catches Coverage/E2E
+  // template messages).
+  const all = await prisma.smsMessage.findMany({
+    select: { id: true, to: true, body: true, tenantId: true },
+    take: 5000,
+  });
+  const ZERO_PHONE_RE = /^\+?9?1?0{10,12}$/;
+  const SMOKE_BODY_RE = /E2E smoke test|Playwright smoke|smoke test — ignore/i;
+  const bad = all.filter((r) =>
+    (r.to && ZERO_PHONE_RE.test(r.to)) ||
+    (r.body && SMOKE_BODY_RE.test(r.body)) ||
+    (r.body && isTestName(r.body)),
+  );
+  console.log(`SmsMessages (first 5000): ${bad.length} are test rows`);
+  if (bad.length) {
+    previewRows(bad, (r) => `sms ${r.id} (tenant ${r.tenantId}): to=${r.to} body="${(r.body || "").slice(0, 50)}"`);
+    if (APPLY) {
+      const r = await prisma.smsMessage.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
+      console.log(`     → DELETED ${r.count} sms messages`);
+    }
+  }
+  return bad.length;
+}
+
 async function scrubCallLogs() {
   // CallLog has no `summary` field — notes is the closest free-text. Transcript
   // URL is stored under recordingUrl (the schema doesn't have transcriptUrl).
@@ -206,10 +271,12 @@ async function main() {
 
   const counts = {
     locations: await scrubLocations(),
+    services: await scrubServices(),
     contacts: await scrubContacts(),
     patients: await scrubPatients(),
     estimates: await scrubEstimates(),
     emails: await scrubEmails(),
+    smsMessages: await scrubSmsMessages(),
     callLogs: await scrubCallLogs(),
     tasks: await scrubTasks(),
     agentRecs: await scrubAgentRecommendations(),

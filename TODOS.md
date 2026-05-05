@@ -89,18 +89,22 @@ The merge resolved conflicts + fixed blocker #1 (regression) inline. The other b
 
 Plus the v3.4.7 carry-over still applies: the 1-line fix at line 190 of `routes/communications.js` was applied during merge — preserves v3.4.12 #435 multi-recipient behavior.
 
-### Follow-ups STILL un-filed from v3.4.12 wave (8)
+### Follow-ups filed as GitHub issues 2026-05-06
 
-These were in the previous 2026-05-05 afternoon handoff and still need filing as fresh GitHub issues:
+All 8 v3.4.12-wave follow-ups now have tracking issues. Each carries the diagnosis, fix recipe, file:line refs, and effort estimate from the source agent's finding:
 
-1. `1fr 2fr` mobile-collapse bug also in Contracts/Estimates/Expenses/Projects (4-agent disjoint-files batch)
-2. `responsive.css:151` Calendar selector broken — sweep for similar attribute-selector brittleness
-3. `POST /api/push/send-test` first-class endpoint
-4. `POST /api/sms/send-bulk` multi-recipient envelope (#435 pattern)
-5. `POST /api/whatsapp/send` Meta Cloud spec verification
-6. `Channels.jsx` `useSearchParams()` deep-link consumption (~2 lines)
-7. 5 off-brand color stragglers under wellness theme (Playbooks.jsx + Reports.jsx)
-8. PR-level CI extension — add `npx vite build` to PR-level CI to catch conflict markers (PR #453 incident class)
+| # | Issue | Severity | Effort |
+|---|---|---|---|
+| 1 | [#513](https://github.com/Globussoft-Technologies/globussoft-crm/issues/513) `1fr 2fr` widespread on Contracts/Estimates/Expenses/Projects | Medium | 30m, 4-agent disjoint batch |
+| 2 | [#514](https://github.com/Globussoft-Technologies/globussoft-crm/issues/514) `responsive.css:151` broken attribute selector + sweep | Low | ~1h |
+| 3 | [#515](https://github.com/Globussoft-Technologies/globussoft-crm/issues/515) `POST /api/push/send-test` first-class endpoint | Low | ~1h |
+| 4 | [#516](https://github.com/Globussoft-Technologies/globussoft-crm/issues/516) `POST /api/sms/send-bulk` multi-recipient envelope (#435 mirror) | Medium | 3-4h |
+| 5 | [#518](https://github.com/Globussoft-Technologies/globussoft-crm/issues/518) `POST /api/whatsapp/send` Meta Cloud spec verify | Medium | 30m + 1-2h fix |
+| 6 | [#519](https://github.com/Globussoft-Technologies/globussoft-crm/issues/519) `Channels.jsx` `useSearchParams()` deep-link | Low | ~5m |
+| 7 | [#520](https://github.com/Globussoft-Technologies/globussoft-crm/issues/520) 5 wellness off-brand color stragglers | Low | ~30m |
+| 8 | [#521](https://github.com/Globussoft-Technologies/globussoft-crm/issues/521) PR-level CI extension (vite build + ESLint on PRs) | Medium | ~10m |
+
+**Filing notes:** GitHub returned 504 twice during the run; #517 was a duplicate of #516 created by a transport-level retry (closed as not-planned, body consolidated on #516). Total backlog inflation: 8 fresh tracked items, ~7-8h of work spread across the surface, several are perfect parallel-agent disjoint-files batches.
 
 ### Process learnings still un-promoted (5 from v3.4.12 wave)
 

@@ -84,6 +84,170 @@ router.post("/send", verifyToken, async (req, res) => {
   }
 });
 
+// ─── Send Bulk SMS (multi-recipient envelope) ────────────────────────────────
+// Closes #516. Mirrors the /api/communications/send-email envelope from
+// v3.4.12 #435 so frontend Blast composers (Channels.jsx, Marketing.jsx)
+// can stop fan-out N HTTP round-trips and post once with `to: [...]`.
+//
+// Request shapes:
+//   { to: ["+91...", "+91..."], body: "..." }              — bulk
+//   { to: "+91, +91, +91",      body: "..." }              — comma-separated
+//   { to: "+91...",             body: "..." }              — back-compat single
+//
+// Response envelope (always 200 if at least one recipient was attempted):
+//   {
+//     success: true,
+//     messageId: <first-row-id-for-back-compat>,
+//     totalSent:   N,
+//     totalFailed: M,
+//     results:  [{ to, messageId, providerMsgId, status, error? }, ...],
+//     failures: [{ to, reason }, ...]    // pre-flight invalid recipients
+//   }
+//
+// Returns 400 with `error` when:
+//   - `to` is missing or all entries fail pre-flight normalisation
+//   - `body` is missing
+//   - no active SMS provider configured for the tenant
+function parseSmsRecipients(to) {
+  if (!to) return [];
+  if (Array.isArray(to)) return to.map(s => String(s || "").trim()).filter(Boolean);
+  // Comma / whitespace / newline separated string
+  return String(to).split(/[,\s\n]+/).map(s => s.trim()).filter(Boolean);
+}
+
+router.post("/send-bulk", verifyToken, async (req, res) => {
+  try {
+    const { to, body, contactId, templateId } = req.body;
+
+    if (!to) return res.status(400).json({ error: "to is required" });
+    if (!body) return res.status(400).json({ error: "body is required" });
+
+    const raw = parseSmsRecipients(to);
+    if (raw.length === 0) {
+      return res.status(400).json({ error: "No recipients parsed from 'to'" });
+    }
+
+    // Pre-flight: split deliverable vs invalid (E.164-ish length sanity check
+    // on the normalized form — normalizePhone() returns digits-only, prepending
+    // "91" for 10-digit Indian inputs; below 8 digits is implausible).
+    const deliverable = [];
+    const failures = [];
+    for (const r of raw) {
+      const normalized = normalizePhone(r);
+      if (normalized && normalized.length >= 8 && normalized.length <= 15) {
+        deliverable.push({ original: r, normalized });
+      } else {
+        failures.push({ to: r, reason: "invalid_recipient_phone" });
+      }
+    }
+    if (deliverable.length === 0) {
+      return res.status(400).json({
+        error: "No valid recipient parsed from 'to'",
+        failures,
+      });
+    }
+
+    // One active provider per tenant — read once outside the loop.
+    const config = await prisma.smsConfig.findFirst({
+      where: { isActive: true, tenantId: req.user.tenantId },
+    });
+    if (!config) {
+      return res.status(400).json({ error: "No active SMS provider configured" });
+    }
+
+    // Optional template substitution (used by the per-contact path; bulk
+    // typically passes the body verbatim and substitutes per-recipient
+    // client-side — the path is here for completeness so single-contact
+    // /send-bulk calls behave identically to /send).
+    let templateRecord = null;
+    if (templateId) {
+      templateRecord = await prisma.smsTemplate.findFirst({
+        where: { id: templateId, tenantId: req.user.tenantId },
+      });
+    }
+    let resolvedContact = null;
+    if (templateRecord && contactId) {
+      resolvedContact = await prisma.contact.findFirst({
+        where: { id: contactId, tenantId: req.user.tenantId },
+      });
+    }
+
+    const results = [];
+
+    // Walk recipients in series. Provider rate limits are usually per-second;
+    // sequential keeps us inside any sensible cap without coordination.
+    for (const { original, normalized } of deliverable) {
+      const messageBody = (templateRecord && resolvedContact)
+        ? substituteVars(templateRecord.body, resolvedContact)
+        : body;
+
+      const message = await prisma.smsMessage.create({
+        data: {
+          to: normalized,
+          from: config.senderId || "",
+          body: messageBody,
+          direction: "OUTBOUND",
+          status: "QUEUED",
+          provider: config.provider,
+          dltTemplateId: templateRecord?.dltTemplateId || null,
+          contactId: contactId || null,
+          userId: req.user.userId,
+          tenantId: req.user.tenantId,
+        },
+      });
+
+      const sendResult = await sendSms({
+        to: normalized,
+        body: messageBody,
+        provider: config.provider,
+        apiKey: config.apiKey,
+        senderId: config.senderId,
+        authToken: config.authToken,
+      });
+
+      await prisma.smsMessage.update({
+        where: { id: message.id },
+        data: {
+          status: sendResult.success ? "SENT" : "FAILED",
+          providerMsgId: sendResult.providerMsgId || null,
+          errorMessage: sendResult.error || null,
+        },
+      });
+
+      if (req.io) {
+        req.io.emit("sms:sent", {
+          messageId: message.id,
+          to: normalized,
+          status: sendResult.success ? "SENT" : "FAILED",
+        });
+      }
+
+      results.push({
+        to: original,
+        messageId: message.id,
+        providerMsgId: sendResult.providerMsgId || null,
+        status: sendResult.success ? "SENT" : "FAILED",
+        ...(sendResult.success ? {} : { error: sendResult.error }),
+      });
+    }
+
+    const totalSent = results.filter(r => r.status === "SENT").length;
+    const totalFailed = results.length - totalSent + failures.length;
+
+    res.status(200).json({
+      success: true,
+      messageId: results[0]?.messageId,
+      totalSent,
+      totalFailed,
+      results,
+      failures,
+    });
+  } catch (err) {
+    console.error("SMS send-bulk error:", err);
+    res.status(500).json({ error: "Failed to send bulk SMS" });
+  }
+});
+
 // ─── List SMS Messages ───────────────────────────────────────────────────────
 // #254 / #269: OTP / verification SMSes must NOT be visible to staff. The
 // initial fix redacted the digit group, but #269 confirmed the full exploit

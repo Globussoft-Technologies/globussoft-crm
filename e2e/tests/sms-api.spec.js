@@ -154,6 +154,136 @@ test.describe('SMS API — POST /send', () => {
   });
 });
 
+// ─── POST /send-bulk — multi-recipient envelope (#516) ────────────────
+//
+// Mirror of the /api/communications/send-email envelope from v3.4.12 #435.
+// Lets Channels Blast UI + Marketing SMS Campaigns composer post once with
+// `to: [..]` instead of fanning out N HTTP round-trips client-side.
+//
+// CI / generic tenant has NO active SmsConfig → most tests assert the
+// validation/auth/shape contract via the 400 "No active SMS provider"
+// branch. Tests that need to exercise the 200 envelope path would need a
+// seeded SmsConfig (out of scope here — the existing /send tests use the
+// same pattern). Wellness tenant runs against Fast2SMS in production.
+
+test.describe('SMS API — POST /send-bulk (#516 multi-recipient envelope)', () => {
+  test('400 when "to" is missing', async ({ request }) => {
+    const res = await authPost(request, '/api/sms/send-bulk', { body: 'hello' });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/to is required/i);
+  });
+
+  test('400 when "body" is missing', async ({ request }) => {
+    const res = await authPost(request, '/api/sms/send-bulk', { to: ['+919876543210'] });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/body is required/i);
+  });
+
+  test('400 with failures[] when to: [] is empty', async ({ request }) => {
+    const res = await authPost(request, '/api/sms/send-bulk', { to: [], body: 'x' });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/no recipients/i);
+  });
+
+  test('400 with failures[] when every entry is unparseable', async ({ request }) => {
+    const res = await authPost(request, '/api/sms/send-bulk', {
+      to: ['', '   ', 'not-a-phone', '12'],
+      body: `${RUN_TAG} all-invalid`,
+    });
+    // All entries fail pre-flight: empty / whitespace-only get filtered by
+    // parseSmsRecipients; 'not-a-phone' has no digits → normalizePhone="";
+    // '12' is too short. Either route returns 400 "No recipients parsed"
+    // (if parseSmsRecipients drops them all) OR 400 "No valid recipient"
+    // (if some survive parsing but fail length sanity).
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/no (valid )?recipient/i);
+  });
+
+  test('accepts canonical bulk shape { to: [..], body }', async ({ request }) => {
+    // 3 valid Indian-format numbers. CI generic tenant has no SmsConfig →
+    // expect 400 "No active SMS provider" (proving the validation/parse
+    // gate passed). With a config the response would be a 200 envelope
+    // with totalSent: 3 / totalFailed: 0.
+    const res = await authPost(request, '/api/sms/send-bulk', {
+      to: ['+919876500001', '+919876500002', '+919876500003'],
+      body: `${RUN_TAG} bulk 3-recipient`,
+    });
+    expect([200, 400, 500]).toContain(res.status());
+    const body = await res.json();
+    if (res.status() === 200) {
+      // Envelope shape pinned for the success path
+      expect(body.success).toBe(true);
+      expect(typeof body.totalSent).toBe('number');
+      expect(typeof body.totalFailed).toBe('number');
+      expect(Array.isArray(body.results)).toBe(true);
+      expect(Array.isArray(body.failures)).toBe(true);
+      expect(body.results.length).toBe(3);
+      // Per-recipient row shape
+      for (const r of body.results) {
+        expect(typeof r.to).toBe('string');
+        expect(typeof r.messageId).toBe('number');
+        expect(['SENT', 'FAILED']).toContain(r.status);
+      }
+      // Back-compat top-level messageId = first row's id
+      expect(body.messageId).toBe(body.results[0].messageId);
+    } else if (res.status() === 400) {
+      // No-provider error, not a validation error
+      expect(body.error).toMatch(/no active|provider|configured/i);
+    }
+  });
+
+  test('back-compat: accepts single-string `to` (mirrors /send)', async ({ request }) => {
+    const res = await authPost(request, '/api/sms/send-bulk', {
+      to: '+919876500099',
+      body: `${RUN_TAG} bulk single-string`,
+    });
+    expect([200, 400, 500]).toContain(res.status());
+    const body = await res.json();
+    // Must NOT 400 with the "to is required" / "no recipients" validation
+    // — the single string is a valid input that parseSmsRecipients accepts.
+    expect(body.error || '').not.toMatch(/to is required|no recipients/i);
+  });
+
+  test('back-compat: accepts comma-separated string `to`', async ({ request }) => {
+    const res = await authPost(request, '/api/sms/send-bulk', {
+      to: '+919876500001, +919876500002, +919876500003',
+      body: `${RUN_TAG} bulk comma-separated`,
+    });
+    expect([200, 400, 500]).toContain(res.status());
+    const body = await res.json();
+    expect(body.error || '').not.toMatch(/to is required|no recipients/i);
+  });
+
+  test('partial pre-flight: invalid entries surface in failures[] (when at least one valid)', async ({ request }) => {
+    const res = await authPost(request, '/api/sms/send-bulk', {
+      to: ['+919876500001', 'not-a-phone', '+919876500002'],
+      body: `${RUN_TAG} bulk partial`,
+    });
+    expect([200, 400, 500]).toContain(res.status());
+    const body = await res.json();
+    if (res.status() === 200) {
+      // The valid two went through; the invalid one is in failures[] before
+      // any provider call was attempted
+      expect(body.failures.length).toBe(1);
+      expect(body.failures[0].to).toBe('not-a-phone');
+      expect(body.failures[0].reason).toMatch(/invalid_recipient_phone/);
+    } else if (res.status() === 400 && body.failures) {
+      // No-provider 400 with the failures array still populated
+      expect(body.failures.length).toBe(1);
+    }
+  });
+
+  test('requires auth (401/403 without token)', async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/sms/send-bulk`, {
+      data: { to: ['+919876500001'], body: 'x' },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+});
+
 // ─── GET /messages — list + filter + OTP redaction ────────────────────
 
 test.describe('SMS API — GET /messages', () => {

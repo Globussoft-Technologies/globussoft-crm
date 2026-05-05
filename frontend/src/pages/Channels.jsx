@@ -671,10 +671,10 @@ function PushPreviewCard({ title, body, icon }) {
 /**
  * SendModal — handles "Send Test" (single recipient) and "Blast" (broadcast).
  *
- * SMS test  → POST /api/sms/send   { to, body, templateId }
- * SMS blast → POST /api/sms/send   per number (loops the recipient list)
- * WhatsApp  → POST /api/whatsapp/send { to, body }
- * Push test → POST /api/push/send  { userIds:[me], title, body, url, icon }
+ * SMS test  → POST /api/sms/send       { to, body }
+ * SMS blast → POST /api/sms/send-bulk  { to: [...recipients], body } (#516)
+ * WhatsApp  → POST /api/whatsapp/send  { to, templateName, parameters } (#518)
+ * Push test → POST /api/push/send-test { title, body, url, icon } (#515)
  * Push blast→ POST /api/push/send-campaign { title, body, url, icon }
  */
 function SendModal({ kind, template, mode, onClose, notify }) {
@@ -695,21 +695,31 @@ function SendModal({ kind, template, mode, onClose, notify }) {
           setBusy(false);
           return;
         }
-        let ok = 0, fail = 0;
-        for (const num of recipients) {
-          try {
+        // #516: blast posts ONCE to /send-bulk with the full recipients
+        // array; the route walks them server-side and returns an envelope
+        // with totalSent / totalFailed / per-recipient results. Single-
+        // recipient test sends still use /send for the simpler shape.
+        try {
+          if (isBlast) {
+            const result = await fetchApi('/api/sms/send-bulk', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ to: recipients, body: template.body }),
+            });
+            const sent = result?.totalSent ?? 0;
+            const failed = result?.totalFailed ?? 0;
+            notify.success(`SMS sent: ${sent} OK${failed ? `, ${failed} failed` : ''}`);
+          } else {
             await fetchApi('/api/sms/send', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              // #518 hygiene: SMS canonical shape is {to, body} (pinned by
-              // PR #511 #13 regression spec). templateId was extra noise
-              // silently dropped server-side.
-              body: JSON.stringify({ to: num, body: template.body }),
+              body: JSON.stringify({ to: recipients[0], body: template.body }),
             });
-            ok++;
-          } catch { fail++; }
+            notify.success('SMS sent');
+          }
+        } catch {
+          notify.error('SMS send failed');
         }
-        notify.success(`SMS sent: ${ok} OK${fail ? `, ${fail} failed` : ''}`);
       } else if (kind === 'whatsapp') {
         const recipients = isBlast
           ? to.split(/[,\s\n]+/).map(s => s.trim()).filter(Boolean)

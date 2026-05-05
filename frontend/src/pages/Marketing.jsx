@@ -283,6 +283,10 @@ export default function Marketing() {
   };
 
   // ───── SMS Blast (#502) ─────
+  // #516: posts ONCE to /send-bulk; the route walks the recipient array
+  // server-side. Was N HTTP round-trips client-side previously. Single-
+  // recipient case still works (back-compat: parseSmsRecipients accepts
+  // either a comma-separated string OR an array).
   const handleSendSmsBlast = async (e) => {
     e.preventDefault();
     const to = smsTo.trim();
@@ -291,14 +295,23 @@ export default function Marketing() {
       notify.error('Recipient and message body are required');
       return;
     }
+    const recipients = to.split(/[,\s\n]+/).map(s => s.trim()).filter(Boolean);
     setSmsSending(true);
     try {
-      await fetchApi('/api/sms/send', {
+      const result = await fetchApi('/api/sms/send-bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to, body }),
+        body: JSON.stringify({ to: recipients, body }),
       });
-      notify.success(`SMS sent to ${to}`);
+      const sent = result?.totalSent ?? 0;
+      const failed = result?.totalFailed ?? 0;
+      if (sent > 0) {
+        notify.success(`SMS sent: ${sent} OK${failed ? `, ${failed} failed` : ''}`);
+      } else if (failed > 0) {
+        notify.error(`SMS send failed: 0 of ${recipients.length} delivered`);
+      } else {
+        notify.success(`SMS queued for ${recipients.length}`);
+      }
       setSmsTo('');
       setSmsBody('');
       loadSmsHistory();

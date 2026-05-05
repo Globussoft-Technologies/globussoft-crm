@@ -241,6 +241,92 @@ async function scrubSmsMessages() {
   return bad.length;
 }
 
+// #469 / #470 / #471: QA test runs save free-form text that contains
+// literal mustache placeholders ({{name}}, {{firstName}}, {{deal.title}})
+// into Campaign.name, ApprovalRequest.reason, and LeadRoutingRule
+// conditions. There's no template engine at the display surface for these
+// fields (Campaign.name is rendered raw on cards, reason is rendered raw
+// in the table, conditions are rendered raw via formatConditions), so the
+// placeholder shows literally to admins. The renderTemplate() at
+// backend/lib/eventBus.js is intentional fail-loud behavior for automation
+// rules — the bug is purely test-data pollution + that the QA forms
+// don't validate against unrendered mustache. The scrub side is here.
+const HAS_MUSTACHE_RE = /\{\{[^}]+\}\}/;
+const isUnrenderedMustache = (s) => typeof s === "string" && HAS_MUSTACHE_RE.test(s);
+
+async function scrubCampaigns() {
+  // Campaign.name is the card title on /marketing. QA tests have saved
+  // campaigns named like `E2E_MKT_1777935961433` and `Hello {{firstName}}`
+  // — both of which surface as visible test pollution to admins.
+  const all = await prisma.campaign.findMany({
+    select: { id: true, name: true, tenantId: true, status: true },
+  });
+  const bad = all.filter(
+    (r) => isTestName(r.name) || isUnrenderedMustache(r.name)
+  );
+  console.log(`Campaigns: ${bad.length} of ${all.length} are test rows`);
+  if (bad.length) {
+    previewRows(bad, (r) => `campaign ${r.id} (tenant ${r.tenantId}): "${r.name}" [${r.status}]`);
+    if (APPLY) {
+      // Cascades: AbTest.campaignId is SetNull. Touchpoint.campaignId is
+      // SetNull. EmailMessage.campaignId is SetNull. All test artifacts;
+      // safe to drop the parent campaigns.
+      const r = await prisma.campaign.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
+      console.log(`     → DELETED ${r.count} campaigns`);
+    }
+  }
+  return bad.length;
+}
+
+async function scrubApprovalRequests() {
+  // ApprovalRequest.reason is rendered raw in the /approvals table. QA tests
+  // have left rows with reasons like `Hi {{ name }} E2E_FLOW_727042`,
+  // `User: {{name}}, missing: {{nonexistent.field}}`, etc. Unrendered
+  // mustache + the E2E tag is a strong test-pollution signal.
+  const all = await prisma.approvalRequest.findMany({
+    select: { id: true, entity: true, entityId: true, reason: true, tenantId: true },
+  });
+  const bad = all.filter(
+    (r) => isTestName(r.reason) || isUnrenderedMustache(r.reason)
+  );
+  console.log(`ApprovalRequests: ${bad.length} of ${all.length} are test rows`);
+  if (bad.length) {
+    previewRows(bad, (r) => `approval ${r.id} (tenant ${r.tenantId}): ${r.entity}#${r.entityId} reason="${(r.reason || "").slice(0, 60)}"`);
+    if (APPLY) {
+      const r = await prisma.approvalRequest.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
+      console.log(`     → DELETED ${r.count} approval requests`);
+    }
+  }
+  return bad.length;
+}
+
+async function scrubLeadRoutingRules() {
+  // LeadRoutingRule.conditions is JSON — formatConditions() in
+  // LeadRouting.jsx renders it as `field op value` chips. QA tests have
+  // saved rules with conditions like `city contains alert(1)San Francisco`
+  // and `city is Hello {{firstName}} from {{company}}`. Sweep on rule
+  // NAME (E2E tag) plus a substring scan of the conditions JSON for
+  // unrendered mustache or XSS-probe markers.
+  const XSS_PROBE_RE = /alert\s*\(|<\s*script/i;
+  const all = await prisma.leadRoutingRule.findMany({
+    select: { id: true, name: true, conditions: true, tenantId: true },
+  });
+  const bad = all.filter((r) => {
+    if (isTestName(r.name)) return true;
+    if (typeof r.conditions !== "string") return false;
+    return HAS_MUSTACHE_RE.test(r.conditions) || XSS_PROBE_RE.test(r.conditions);
+  });
+  console.log(`LeadRoutingRules: ${bad.length} of ${all.length} are test rows`);
+  if (bad.length) {
+    previewRows(bad, (r) => `rule ${r.id} (tenant ${r.tenantId}): "${r.name}" conds="${(r.conditions || "").slice(0, 60)}"`);
+    if (APPLY) {
+      const r = await prisma.leadRoutingRule.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
+      console.log(`     → DELETED ${r.count} routing rules`);
+    }
+  }
+  return bad.length;
+}
+
 async function scrubCallLogs() {
   // CallLog has no `summary` field — notes is the closest free-text. Transcript
   // URL is stored under recordingUrl (the schema doesn't have transcriptUrl).
@@ -266,7 +352,7 @@ async function scrubCallLogs() {
 
 async function main() {
   console.log(`Mode: ${APPLY ? "\x1b[31mAPPLY (mutating)\x1b[0m" : "\x1b[36mDRY-RUN (no changes)\x1b[0m"}`);
-  console.log("Patterns matched: Test*, E2E*, CRM Test*, Race*, Dedupe*, Playwright*, Coverage*, *<13-digit-timestamp>, @racecond.test, dup-*, valid-17*@*, @e2e.test");
+  console.log("Patterns matched: Test*, E2E*, CRM Test*, Race*, Dedupe*, Playwright*, Coverage*, *<13-digit-timestamp>, @racecond.test, dup-*, valid-17*@*, @e2e.test, *{{...}}* (unrendered mustache in admin UI fields — campaigns/approvals/routing-rules)");
   console.log("");
 
   const counts = {
@@ -280,6 +366,11 @@ async function main() {
     callLogs: await scrubCallLogs(),
     tasks: await scrubTasks(),
     agentRecs: await scrubAgentRecommendations(),
+    // #469 / #470 / #471 — admin-page pollution ({{firstName}} cards,
+    // raw {{name}} reasons, XSS-probe / mustache routing conditions).
+    campaigns: await scrubCampaigns(),
+    approvalRequests: await scrubApprovalRequests(),
+    leadRoutingRules: await scrubLeadRoutingRules(),
   };
 
   const total = Object.values(counts).reduce((a, b) => a + b, 0);

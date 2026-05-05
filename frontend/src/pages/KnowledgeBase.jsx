@@ -147,8 +147,24 @@ export default function KnowledgeBase() {
   const draftCount = totalArticles - publishedCount;
   const totalViews = articles.reduce((s, a) => s + (a.views || 0), 0);
 
-  const tenantSlug = (typeof window !== 'undefined' && localStorage.getItem('tenantSlug')) || 'your-tenant';
-  const publicUrlHint = `/api/knowledge-base/public/${tenantSlug}/articles`;
+  // #384 / #472: the public-URL hint used to read a non-existent
+  // `tenantSlug` localStorage key and fall back to the literal placeholder
+  // `your-tenant`, which is what users were seeing on the live page. The
+  // canonical source of the slug is the AuthContext `tenant` object
+  // (already imported above) — fall back to parsing the persisted
+  // `tenant` JSON in localStorage for the brief window between page-load
+  // and AuthContext rehydration. As a last-ditch fallback show a friendly
+  // hint instead of the literal `your-tenant` placeholder.
+  let tenantSlug = tenant?.slug;
+  if (!tenantSlug && typeof window !== 'undefined') {
+    try {
+      const stored = JSON.parse(localStorage.getItem('tenant') || 'null');
+      tenantSlug = stored?.slug || null;
+    } catch (_) { /* malformed JSON — ignore */ }
+  }
+  const publicUrlHint = tenantSlug
+    ? `/api/knowledge-base/public/${tenantSlug}/articles`
+    : '/api/knowledge-base/public/<your-tenant-slug>/articles';
 
   return (
     <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>

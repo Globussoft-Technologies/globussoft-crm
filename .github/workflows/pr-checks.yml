@@ -1,0 +1,134 @@
+name: PR pre-merge checks (build + lint)
+
+# Closes #521. Surfaced by the PR #453 incident: the PR shipped with
+# literal git conflict markers (<<<<<<<, =======, >>>>>>>) in two source
+# files because PR-level CI only ran secret-scan + migration-check at the
+# time. The conflict markers slipped through review; the per-push deploy
+# gate ran ONLY after squash-merge to main, where build/lint went red and
+# blocked the deploy until a follow-up cleanup commit (aa59133) landed.
+#
+# This workflow mirrors the build + lint jobs from deploy.yml so the same
+# class of failure fails the PR check before merge instead of after.
+# It deliberately does NOT run api_tests / unit_tests / frontend_unit_tests
+# / migration_check — those need a MySQL container or substantial setup
+# and would dominate PR-level CI time. Build (vite build catches conflict
+# markers + JSX/import errors) + lint (ESLint catches the bare req.user.id
+# anti-pattern + jsx-a11y misuse + parse errors) cover the highest-value
+# pre-merge signals at ~3-5 min runtime.
+#
+# If a PR's commits later land on main, deploy.yml runs the FULL gate
+# matrix (build/lint/api_tests/unit_tests/frontend_unit_tests/migration_check
+# → deploy). PR-level checks are a fast-path subset, not a replacement.
+
+on:
+  pull_request:
+    branches: [main]
+    # Skip docs-only / scripts-only / tests-only PRs the same way deploy.yml
+    # does on push-to-main, so PRs touching only those don't burn CI minutes
+    # on a build that has nothing to verify.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "TODOS.md"
+      - "CHANGELOG.md"
+      - "scripts/**"
+      - ".github/**"
+      - "qa_screenshots/**"
+      - "e2e_screenshots/**"
+
+concurrency:
+  # Cancel an in-flight PR-checks run when a new commit lands on the same PR.
+  # Keep main-branch runs unique by their ref so they don't cancel each other.
+  group: pr-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── BUILD: vite build + node --check ─────────────────────────────────
+  # Catches conflict markers, JSX errors, import typos, missing modules.
+  # No DB, no server boot. ~3 min.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Backend — npm ci + prisma generate + syntax check
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx prisma generate
+          fails=0
+          while IFS= read -r f; do
+            if ! node --check "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::node --check failed"
+              fails=$((fails + 1))
+            fi
+          done < <(find . -path ./node_modules -prune -o -name "*.js" -print)
+          if [ $fails -gt 0 ]; then
+            echo "::error::$fails backend file(s) failed parse-check"
+            exit 1
+          fi
+          echo "::notice::All backend .js files parse cleanly"
+
+      - name: Frontend — npm ci + vite build
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx vite build --logLevel=error
+          du -sh dist
+          echo "::notice::Frontend bundle builds cleanly"
+
+  # ── LINT: ESLint over backend + frontend ─────────────────────────────
+  # Catches bare req.user.id (the JWT key is userId), jsx-a11y misuse,
+  # parse errors. ~2 min.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Backend — npm ci
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Run backend ESLint
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm run lint
+          echo "::notice::Backend ESLint passed (errors=0; warnings allowed on legacy code)"
+
+      - name: Frontend — npm ci
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Run frontend ESLint
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm run lint
+          echo "::notice::Frontend ESLint passed (errors=0; warnings allowed on legacy code)"

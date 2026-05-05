@@ -129,6 +129,29 @@ test.describe('SMS API — POST /send', () => {
       expect(body.error).toMatch(/provider/i);
     }
   });
+
+  // PR #511 review carry-over #13 — pin that the canonical Inbox.jsx
+  // SMS Compose shape `{to, body}` (no contactId, no templateId) gets
+  // PAST the validation gate. Inbox.jsx:90 posts exactly this minimal
+  // shape; if a future agent adds contactId / templateId / kind / ANY
+  // other field to the required-fields check at routes/sms.js:12, the
+  // SMS Compose form silently 400s and this test pins the regression.
+  test('accepts {to, body} alone — Inbox.jsx canonical shape (PR #511 #13)', async ({ request }) => {
+    const res = await authPost(request, '/api/sms/send', {
+      to: '+919876500088',
+      body: `${RUN_TAG} pr511-13-shape-pin`,
+    });
+    // Status will be 400 (no provider on generic tenant) OR 500 (provider
+    // configured, network call failed) OR 200 (real send). All three
+    // confirm the validation gate let {to, body} through. The ONLY status
+    // that would prove a regression is 400 with the validation message —
+    // assert NOT that.
+    const body = await res.json();
+    expect(body.error).not.toMatch(/to and body/i);
+    // Must surface a structured response, not an HTML error page (which
+    // happens if a middleware crashes upstream of the JSON serializer).
+    expect(typeof body).toBe('object');
+  });
 });
 
 // ─── GET /messages — list + filter + OTP redaction ────────────────────

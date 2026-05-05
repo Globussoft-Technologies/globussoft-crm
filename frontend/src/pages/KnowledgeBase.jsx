@@ -358,13 +358,10 @@ export default function KnowledgeBase() {
         </p>
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "280px 1fr",
-          gap: "1.5rem",
-        }}
-      >
+      {/* #482: 280px | 1fr two-column layout pushed the All Articles right
+          column off-screen on narrow viewports (<768px). Collapse to a
+          single column on mobile so both panes are reachable. */}
+      <div className="kb-grid">
         {/* Categories tree */}
         <div
           className="card"
@@ -979,7 +976,13 @@ export default function KnowledgeBase() {
         </div>
       </div>
 
-      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }`}</style>
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .kb-grid { display: grid; grid-template-columns: 280px 1fr; gap: 1.5rem; }
+        @media (max-width: 768px) {
+          .kb-grid { grid-template-columns: 1fr; gap: 1rem; }
+        }
+      `}</style>
     </div>
   );
 }

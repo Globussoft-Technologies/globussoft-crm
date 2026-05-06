@@ -361,16 +361,16 @@ Plus #364 ticketTier round-trip pin (low/medium/high preserved + default), full 
 
 ---
 
-## ☐ 17. Extend [tasks-api.spec.js](e2e/tests/tasks-api.spec.js)
+## ☑ 17. Extend [tasks-api.spec.js](e2e/tests/tasks-api.spec.js) ✅ shipped
 
 **Closes:** #163, #250, #313
 
 **Acceptance:**
-- [ ] dueDate year < 1990 or > 2100 → 400 (#163, #250).
-- [ ] status not in enum → 400 (no silent coercion to 'Pending') (#163).
-- [ ] dueDate round-trip preserves IST wall-clock — POST `2026-05-15T10:30` (IST) reads back as `2026-05-15T10:30` not `2026-05-15T05:00` (#313).
+- [x] dueDate year < 1990 or > 2100 → 400 (#163, #250). Path A — already covered by the validators.js [2000, 2100] guard (route's actual lower bound is 2000, not the gap-card's 1990 — per the "tighter-of-{actual, card}" standing rule the new pins assert against 2000). Added explicit `(#163, #250)`-tagged POST + PUT pins so the gap-card linkage survives a future re-org.
+- [x] status not in enum → 400 (no silent coercion to 'Pending') (#163). Path A — `INVALID_STATUS` already returned by `validateTaskInput`. Added a defence-in-depth pin: bogus status ("WaitingForReview") → 400 + verify the row was NOT created with a coerced status.
+- [x] dueDate round-trip preserves IST wall-clock — POST `2026-05-15T10:30` (IST) stores as `2026-05-15T05:00:00.000Z`, reads back unchanged (#313). Path B — Wave-7 Agent O's datetime callsite-sweep (`bfb098d`) explicitly did NOT migrate tasks.js (only visit POST/PUT + waitlist + audit_viewer). This dispatch added the migration: `parseTenantDateInput` sniffer in tasks.js mirroring routes/wellness.js's pattern (datetime-local `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` regex routes through `parseDateTimeLocalInTZ(input, 'Asia/Kolkata')`; full-ISO with Z/±HH:mm passes through native `new Date()` unchanged), applied to both POST and PUT handlers. Added 3 round-trip tests: datetime-local 10:30 → 05:00Z + GET-readback, full-ISO Z passthrough, PUT-update round-trip.
 
-**Estimated effort:** 0.5 day. Commit: ___________
+Test count delta: 58 → 65 (+7). Commit: ___________
 
 ---
 

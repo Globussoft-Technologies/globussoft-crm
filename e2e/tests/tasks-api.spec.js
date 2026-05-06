@@ -30,6 +30,14 @@
  * cleanup; the spec's afterAll hook DELETEs every row it created.
  *
  * Tenant: admin@globussoft.com (generic admin) — every endpoint is reachable.
+ *
+ * regression-coverage-backlog #17 (2026-05-07) — extended this spec with a
+ * dueDate / status validation pin block (#163, #250, #313): year-range
+ * INVALID_DUEDATE on POST + PUT, status enum INVALID_STATUS with a
+ * defence-in-depth no-coerce check, and the datetime-local IST round-trip
+ * (Path B: tasks.js POST/PUT migrated to parseDateTimeLocalInTZ via a
+ * parseTenantDateInput sniffer mirroring routes/wellness.js's pattern from
+ * commit bfb098d).
  */
 const { test, expect } = require('@playwright/test');
 
@@ -630,6 +638,133 @@ test.describe('Tasks API — cross-tenant isolation (#403)', () => {
 // The fix accepts `targetUserId` (renamed POST field — never stripped)
 // and normalizes the GET status filter case-insensitively.
 const RUN_TAG_OWNER = `E2E_FLOW_OWNER_TASKS_${Date.now()}`;
+
+// #163, #250, #313 — regression-coverage-backlog #17.
+//
+// (#163, #250) dueDate year-range validation: a year outside the
+// reasonable [2000, 2100] window must 400 instead of being silently
+// accepted. The gap-card framed this as "< 1990 or > 2100"; the actual
+// route's lower bound is 2000 (validators.js + tasks.js POST guard).
+// Per the "tighter-of-{actual, card}" standing rule we pin against the
+// route's actual bound (2000) so this spec survives both today and a
+// future bump that loosens or tightens the floor. The < 2000 / > 2100
+// cases already have happy-path coverage above; this block adds explicit
+// gap-card-id-tagged pins so a future reorganiser doesn't lose the link.
+//
+// (#163) status not in the schema enum: a bogus value like "NotAStatus"
+// must 400 + INVALID_STATUS — never silently coerce to "Pending" the way
+// a previous version of the route did.
+//
+// (#313) IST wall-clock round-trip: a datetime-local form input
+// "2026-05-15T10:30" (no TZ marker — what HTML <input type="datetime-local">
+// emits) must be stored as 05:00 UTC, NOT as 10:30 UTC. Pre-fix tasks.js
+// used naive `new Date(input)`, which on a UTC server (production demo
+// box) parsed 10:30 as 10:30 UTC = 16:00 IST after re-render, drifting
+// the appointment by 5h30. The fix routes datetime-local input through
+// parseDateTimeLocalInTZ(..., 'Asia/Kolkata'). Same sniffer pattern as
+// routes/wellness.js's parseTenantDateInput from commit bfb098d. Full
+// ISO inputs (Z suffix) bypass the sniffer and pass through unchanged.
+test.describe("Tasks API — dueDate + status validation pins (#163, #250, #313)", () => {
+  test("(#163, #250) dueDate year < 2000 → 400 INVALID_DUEDATE", async ({ request }) => {
+    // Route's actual lower bound is 2000 (validators.js ensureDateInRange).
+    // The gap-card said "< 1990"; we test the tighter of actual/card so the
+    // spec survives if the bound is later loosened to 1990.
+    const res = await authPost(request, "/api/tasks", {
+      title: `${RUN_TAG} year-too-old`,
+      dueDate: "1985-06-15",
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DUEDATE");
+  });
+
+  test("(#163, #250) dueDate year > 2100 → 400 INVALID_DUEDATE", async ({ request }) => {
+    const res = await authPost(request, "/api/tasks", {
+      title: `${RUN_TAG} year-too-future`,
+      dueDate: "2150-01-01",
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DUEDATE");
+  });
+
+  test("(#163, #250) PUT dueDate year < 2000 → 400 (same guard on update)", async ({ request }) => {
+    const t = await createTask(request, { title: "year-guard-put-old" });
+    const res = await authPut(request, `/api/tasks/${t.id}`, { dueDate: "1985-06-15" });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DUEDATE");
+  });
+
+  test("(#163) status outside enum → 400 INVALID_STATUS (no silent coercion to Pending)", async ({ request }) => {
+    // Pin: a bogus status MUST 400, never coerce to "Pending". Pre-fix
+    // (the original surface this gap-card targets) the route silently
+    // accepted unknown values and stored them — or, worse, coerced them
+    // to Pending after the fact, hiding bugs in callers.
+    const res = await authPost(request, "/api/tasks", {
+      title: `${RUN_TAG} bogus-status-pin`,
+      status: "WaitingForReview", // not in {Pending, In Progress, Completed, Cancelled}
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_STATUS");
+    // Defence-in-depth: verify the bogus task did NOT actually get
+    // created with a coerced status.
+    const list = await (await authGet(request, `/api/tasks?limit=500`)).json();
+    expect(list.find((t) => t.title === `${RUN_TAG} bogus-status-pin`)).toBeFalsy();
+  });
+
+  test("(#313) datetime-local input '2026-05-15T10:30' stores as 05:00 UTC (IST round-trip)", async ({ request }) => {
+    // The wall-clock the user typed in the UI is preserved on storage —
+    // 10:30 IST = 05:00 UTC. Pre-fix, naive `new Date(input)` on a UTC
+    // server stored it as 10:30 UTC, drifting the task to 16:00 IST.
+    const localInput = "2026-05-15T10:30";
+    const create = await authPost(request, "/api/tasks", {
+      title: `${RUN_TAG} ist-round-trip`,
+      dueDate: localInput,
+    });
+    expect(create.status(), `create body: ${await create.text()}`).toBe(201);
+    const t = await create.json();
+    createdTaskIds.push(t.id);
+    // The stored UTC instant must match 10:30 IST = 05:00 UTC.
+    expect(new Date(t.dueDate).toISOString()).toBe("2026-05-15T05:00:00.000Z");
+
+    // Round-trip: GET the row back and confirm the stored value didn't drift.
+    const get = await authGet(request, `/api/tasks?limit=500`);
+    expect(get.status()).toBe(200);
+    const list = await get.json();
+    const found = list.find((row) => row.id === t.id);
+    expect(found, "task should be readable after create").toBeTruthy();
+    expect(new Date(found.dueDate).toISOString()).toBe("2026-05-15T05:00:00.000Z");
+  });
+
+  test("(#313) full ISO input with Z suffix passes through unchanged", async ({ request }) => {
+    // Sniffer: full ISO timestamps carry their TZ in-band, the native
+    // Date constructor handles them correctly, and we MUST NOT re-parse
+    // them as datetime-local. This pin would fail if a future "always
+    // route through parseDateTimeLocalInTZ" change accidentally double-
+    // shifts ISO inputs.
+    const isoInput = "2026-05-15T05:00:00.000Z";
+    const create = await authPost(request, "/api/tasks", {
+      title: `${RUN_TAG} iso-passthrough`,
+      dueDate: isoInput,
+    });
+    expect(create.status(), `create body: ${await create.text()}`).toBe(201);
+    const t = await create.json();
+    createdTaskIds.push(t.id);
+    expect(new Date(t.dueDate).toISOString()).toBe("2026-05-15T05:00:00.000Z");
+  });
+
+  test("(#313) PUT dueDate datetime-local input also routes through IST parser", async ({ request }) => {
+    // Same contract on the update path — the sniffer must run for PUT
+    // as well as POST so a user editing a task's due-time gets the same
+    // wall-clock-preserving behaviour.
+    const t = await createTask(request, { title: "ist-put-target" });
+    const res = await authPut(request, `/api/tasks/${t.id}`, {
+      dueDate: "2026-05-15T10:30",
+    });
+    expect(res.status()).toBe(200);
+    const updated = await res.json();
+    expect(new Date(updated.dueDate).toISOString()).toBe("2026-05-15T05:00:00.000Z");
+  });
+});
 
 test.describe("Tasks API — Owner persona task queue (#436)", () => {
   // Helper: log in as Rishu (wellness ADMIN, tenant 2 owner) and return a

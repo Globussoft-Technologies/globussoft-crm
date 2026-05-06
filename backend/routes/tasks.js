@@ -4,8 +4,32 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { ensureEnum, ensureDateInRange } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { parseDateTimeLocalInTZ } = require("../lib/datetime");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+
+// #313 datetime callsite-sweep: HTML <input type="datetime-local"> emits
+// strings shaped 'YYYY-MM-DDTHH:mm' with NO TZ marker. Naive `new Date(input)`
+// parses such strings using the *server* timezone — on the production demo
+// box (UTC) a 10:30 IST appointment landed at 10:30 UTC = 16:00 IST after
+// re-render, drifting the wall-clock by 5h30. We pin parsing to Asia/Kolkata
+// (the product-anchored TZ, identical to routes/wellness.js's WELLNESS_TZ
+// — same rationale: India-based deployments, cron schedules at IST hours)
+// so the user's typed wall-clock survives the round-trip regardless of
+// where the backend runs. Full ISO timestamps (with 'Z' or '±HH:mm' suffix)
+// carry their TZ in-band; the native Date constructor is correct for those
+// and we pass them through unchanged.
+const TASKS_TZ = "Asia/Kolkata";
+const DATETIME_LOCAL_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
+function parseTenantDateInput(input) {
+  if (input == null) return null;
+  if (input instanceof Date) return input;
+  if (typeof input !== "string") return new Date(input);
+  if (DATETIME_LOCAL_RE.test(input)) {
+    return parseDateTimeLocalInTZ(input, TASKS_TZ);
+  }
+  return new Date(input);
+}
 // #163: enums used elsewhere in the app — surfaced as strict checks instead of
 // silent coercion to "Pending".
 const ALLOWED_TASK_STATUSES = new Set(["Pending", "In Progress", "Completed", "Cancelled"]);
@@ -127,7 +151,10 @@ router.post("/", verifyToken, async (req, res) => {
       data: {
         title,
         priority: priority || "Medium",
-        dueDate: dueDate ? new Date(dueDate) : null,
+        // #313: route datetime-local form input ("2026-05-15T10:30") through
+        // the IST parser so the wall-clock the user typed survives storage.
+        // Full ISO timestamps stay on the native ctor.
+        dueDate: dueDate ? parseTenantDateInput(dueDate) : null,
         contactId: contactId ? parseInt(contactId) : null,
         userId: assigneeRaw !== undefined && assigneeRaw !== null && assigneeRaw !== ""
           ? parseInt(assigneeRaw)
@@ -169,7 +196,8 @@ router.put("/:id", verifyToken, async (req, res) => {
     const data = {};
     if (title !== undefined) data.title = title;
     if (notes !== undefined) data.notes = notes;
-    if (dueDate !== undefined) data.dueDate = dueDate ? new Date(dueDate) : null;
+    // #313: same datetime-local-vs-ISO sniffing as POST.
+    if (dueDate !== undefined) data.dueDate = dueDate ? parseTenantDateInput(dueDate) : null;
     if (priority !== undefined) data.priority = priority;
     if (status !== undefined) data.status = status;
 

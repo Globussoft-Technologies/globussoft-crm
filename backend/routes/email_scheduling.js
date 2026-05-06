@@ -295,7 +295,18 @@ router.post("/:id/send-now", async (req, res) => {
     } else {
       const updated = await prisma.scheduledEmail.update({
         where: { id: record.id },
-        data: { status: "FAILED", errorMessage: String(result.reason || "send failed").slice(0, 500) },
+        data: {
+          status: "FAILED",
+          // #524 follow-up: errorMessage column widened to @db.Text in
+          // schema. SendGrid rejection bodies routinely exceed 500 chars
+          // (their JSON error envelope wraps a per-recipient error block);
+          // 4000 is comfortable headroom while still bounding write size
+          // for log forwarding. Was .slice(0, 500) — the row never landed
+          // because column was VARCHAR(191) default → P2000 (column too
+          // long) → caller saw SEND_NOW_INTERNAL instead of the intended
+          // SENDGRID_REJECTED code.
+          errorMessage: String(result.reason || "send failed").slice(0, 4000),
+        },
       });
       // 502 = upstream provider rejected. Keep separate from 500 so SLO
       // dashboards can distinguish "our bug" from "SendGrid down".
@@ -315,7 +326,11 @@ router.post("/:id/send-now", async (req, res) => {
           where: { id: record.id },
           data: {
             status: "FAILED",
-            errorMessage: `send-now: ${err.message || err.code || "unknown"}`.slice(0, 500),
+            // #524 follow-up: errorMessage column widened to @db.Text;
+            // matches the 4000 cap used in the SendGrid-rejected branch
+            // above. Prevents future log-bomb / unbounded-error surface
+            // even though the column itself can hold ~64KB.
+            errorMessage: `send-now: ${err.message || err.code || "unknown"}`.slice(0, 4000),
           },
         });
       } catch (_) { /* already in error path */ }

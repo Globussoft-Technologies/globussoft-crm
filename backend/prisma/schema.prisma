@@ -1813,7 +1813,13 @@ model ScheduledEmail {
   scheduledFor DateTime
   status       String    @default("PENDING") // PENDING, SENT, FAILED, CANCELED
   sentAt       DateTime?
-  errorMessage String?
+  // #524 follow-up: was String? (VARCHAR(191) default) → P2000 on SendGrid
+  // rejection bodies which routinely exceed 191 chars. Widened to @db.Text
+  // (~64KB) so the FAILED-path can persist the upstream provider's full
+  // error response. The SSH probe on 2026-05-06 evening confirmed the slice
+  // at routes/email_scheduling.js:298 was hitting P2000 (column too long)
+  // BEFORE reaching the SENDGRID_REJECTED response code path.
+  errorMessage String?   @db.Text
   contactId    Int?
   userId       Int?
   tenantId     Int       @default(1)

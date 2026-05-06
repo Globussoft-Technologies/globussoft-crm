@@ -2989,8 +2989,19 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
 
 router.get("/public/tenant/:slug", async (req, res) => {
   try {
+    // #378: tenant slugs are lower-kebab-case ([a-z0-9-]+, length 2-64).
+    // Reject anything outside that shape with a fast 404 BEFORE the DB
+    // lookup — MySQL's default collation is case-insensitive, so a literal
+    // findUnique on "ENHANCED-WELLNESS" would otherwise match the seeded
+    // "enhanced-wellness" row. The shape check guarantees public URLs
+    // never get a "works in upper, works in lower, ambiguous in between"
+    // class of bug for SEO / sharing.
+    const slug = String(req.params.slug || "");
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(slug)) {
+      return res.status(404).json({ error: "Clinic not found" });
+    }
     const tenant = await prisma.tenant.findUnique({
-      where: { slug: req.params.slug },
+      where: { slug },
       select: { id: true, name: true, slug: true, vertical: true, country: true, defaultCurrency: true, locale: true },
     });
     if (!tenant || tenant.vertical !== "wellness") return res.status(404).json({ error: "Clinic not found" });
@@ -3018,7 +3029,27 @@ router.get("/public/tenant/:slug", async (req, res) => {
   }
 });
 
-router.post("/public/book", async (req, res) => {
+// #219: rate-limit /public/book per IP. The endpoint is unauthenticated
+// and creates Patient + Visit rows on every 201, so it's the trivial
+// flooding vector — Sangeeta's QA pass found the route would 201 five
+// concurrent requests in <1s with no throttle. 10 / minute / IP is
+// enough headroom for a real clinic's burst (page-loads → form submits)
+// and tight enough to make a flooding attack visible in the limiter
+// headers. Test mode (NODE_ENV=test) bumps the ceiling so the per-push
+// gate's other tests (which fire many requests from 127.0.0.1) don't
+// trip the limiter; the per-push spec asserts on header PRESENCE, not
+// the 429 itself, same shape as the auth-security spec for #295.
+const _publicBookIpMax = process.env.NODE_ENV === "test" ? 5000 : 10;
+const publicBookLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute window
+  max: _publicBookIpMax,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: { error: "Too many booking requests from this network. Please try again in a minute.", code: "RATE_LIMITED" },
+});
+
+router.post("/public/book", publicBookLimiter, async (req, res) => {
   try {
     const { tenantSlug, serviceId, locationId, name, phone, email, preferredSlot, notes } = req.body;
     if (!tenantSlug || !serviceId || !name || !phone) {

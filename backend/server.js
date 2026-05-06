@@ -535,6 +535,48 @@ app.use("/api/admin", adminRoutes);
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
 
+// #297: /embed/lead-form.html — server-side gate so a malformed/revoked
+// API key returns 404 at GET time rather than letting the form render and
+// only failing on submit. Pre-fix the static file always loaded with 200
+// regardless of key, so bots probing /embed?key=garbage got a 200 +
+// fully-rendered form. Now: shape-check the key first; if it's well-formed
+// look it up in the ApiKey table; only serve the static HTML when the
+// key is missing (slug-mode), or shape+DB valid. In production Nginx
+// serves the static asset directly from /var/www/.../embed/, but the
+// per-push API gate (against the Express backend on :5000) hits this
+// route — see public-booking-api.spec.js for the contract pin.
+app.get("/embed/lead-form.html", async (req, res, next) => {
+  try {
+    const key = req.query.key ? String(req.query.key) : null;
+    if (key) {
+      // Real keys are issued as `glbs_<base64ish>` (see ApiKey model + seed).
+      // A well-formed but unknown key still 404s, same as a malformed one.
+      if (!/^glbs_[A-Za-z0-9_-]{8,}$/.test(key)) {
+        return res.status(404).type("text/plain").send("Form not found");
+      }
+      // Lazy-require to avoid cyclic init concerns; the canonical singleton
+      // is at lib/prisma.js so all callers share one client.
+      const prismaClient = require("./lib/prisma");
+      const apiKey = await prismaClient.apiKey.findUnique({
+        where: { keySecret: key },
+        select: { id: true },
+      });
+      if (!apiKey) {
+        return res.status(404).type("text/plain").send("Form not found");
+      }
+    }
+    // Pass through to the static-file fallback (Nginx in prod; for the
+    // local stack the file lives at frontend/public/embed/lead-form.html).
+    const embedPath = path.join(__dirname, "..", "frontend", "public", "embed", "lead-form.html");
+    return res.sendFile(embedPath, (err) => {
+      if (err) next();
+    });
+  } catch (e) {
+    console.error("[embed] gate failed:", e.message);
+    return next();
+  }
+});
+
 // Server File Uploads Statically
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 

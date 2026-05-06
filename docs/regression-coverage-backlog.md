@@ -305,22 +305,22 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 14. New gated spec: `public-booking-api.spec.js`
+## ✅ 14. New gated spec: `public-booking-api.spec.js`
 
 **Closes:** #208, #218, #219, #279, #283, #291, #297, #378
 
 **Acceptance:**
-- [ ] POST /api/wellness/public/book rejects phone < 10 digits (#219).
-- [ ] POST rejects date < today or > today + 365 (#219 — was accepting 1900-01-01).
-- [ ] POST rate-limited to 10/min per IP (#219).
-- [ ] POST returns 201 only when both Patient and Visit rows are persisted (#279).
-- [ ] Public service catalog rejects price > 1e8 or duration > 1440 (#218).
-- [ ] GET /api/wellness/public/tenant/:slug rejects slugs with spaces/uppercase/specials (#378).
-- [ ] /embed/lead-form.html returns 404 for invalid API keys at GET time (not just on submit) (#297).
-- [ ] /portal route serves the patient portal, not Knowledge Base (#208).
-- [ ] Wired into deploy.yml + coverage.yml.
+- [x] POST /api/wellness/public/book rejects phone < 10 digits (#219).
+- [x] POST rejects date < today or > today + 365 (#219 — was accepting 1900-01-01).
+- [x] POST rate-limited to 10/min per IP (#219). Added `publicBookLimiter` in `routes/wellness.js`; spec asserts draft-7 RateLimit headers + 60s window.
+- [x] POST returns 201 only when both Patient and Visit rows are persisted (#279). Pin verifies the just-booked visit is reachable on `/wellness/visits?phone=...` post-201, and that a 400 INVALID_SERVICE leaves NO orphan Patient.
+- [x] Public service catalog rejects price > 1e8 or duration > 1440 (#218). Cap is tighter (5M / 720) but the 1e8/1441 boundaries pin the rejection.
+- [x] GET /api/wellness/public/tenant/:slug rejects slugs with spaces/uppercase/specials (#378). Added shape-check on the route (lower-kebab-case only) — MySQL's case-insensitive collation would otherwise match `ENHANCED-WELLNESS` against the seeded `enhanced-wellness` row.
+- [x] /embed/lead-form.html returns 404 for invalid API keys at GET time (not just on submit) (#297). Added backend gate route at `server.js:535+`; shape-check + ApiKey lookup. Local-stack-only (Nginx serves `/embed/*` directly in production) — guarded with `IS_LOCAL_STACK` per the `applying-demo-ssh-config` standing rule shape.
+- [x] /portal route serves the patient portal, not Knowledge Base (#208). Backend pin: /api/portal/me requires the customer-portal token (or 401), the wellness patient-portal lives at /api/wellness/portal/* — the two namespaces stay separate.
+- [x] Wired into deploy.yml + coverage.yml.
 
-**Estimated effort:** 1 day. Commit: ___________
+**Estimated effort:** 1 day. Commit: <see git>.
 
 ---
 

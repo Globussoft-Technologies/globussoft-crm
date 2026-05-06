@@ -1,5 +1,11 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+// #268: server-side guard — strips test-skip / test-junk / e2e-* / qa-* / rbac-*
+// source rows from operator-facing aggregations so the next round of E2E
+// fixtures doesn't leak into Marketing Attribution screens (the original
+// demo bug). Pairs with cleanup-p3-data-quality.js (one-shot remap of
+// existing rows) for durability.
+const { isJunkSource } = require("../lib/junkSourceFilter");
 
 const router = express.Router();
 
@@ -99,7 +105,12 @@ router.get("/report", async (req, res) => {
     const where = { tenantId };
     if (dateFilter) where.timestamp = dateFilter;
 
-    const touchpoints = await prisma.touchpoint.findMany({ where });
+    const allTouchpoints = await prisma.touchpoint.findMany({ where });
+    // #268: skip touchpoints sourced from test/e2e/qa/rbac fixtures.
+    // Channel is preserved (still aggregated under e.g. 'web') so we
+    // only strip the per-source bucket — but if both channel and source
+    // are junk, the row drops entirely.
+    const touchpoints = allTouchpoints.filter((tp) => !isJunkSource(tp.source));
 
     // Won deals for tenant — used to attribute revenue counts
     const wonDeals = await prisma.deal.findMany({
@@ -218,6 +229,10 @@ router.get("/first-touch-revenue", async (req, res) => {
       totalRevenue += amount;
       if (!d.contactId) continue;
       const src = firstTouchByContact.get(d.contactId) || "unknown";
+      // #268: drop junk-source attribution from the revenue breakdown.
+      // totalRevenue still counts the deal (it's real revenue) but it
+      // doesn't get bucketed against a fake source row.
+      if (isJunkSource(src)) continue;
       if (!bySource.has(src)) {
         bySource.set(src, { source: src, deals: 0, revenue: 0 });
       }
@@ -269,6 +284,8 @@ router.get("/multi-touch-revenue", async (req, res) => {
     const sourcesByContact = new Map();
     for (const tp of touchpoints) {
       const src = tp.source || tp.channel || "unknown";
+      // #268: drop junk-source touchpoints from the multi-touch denominator.
+      if (isJunkSource(src)) continue;
       if (!sourcesByContact.has(tp.contactId)) {
         sourcesByContact.set(tp.contactId, new Set());
       }

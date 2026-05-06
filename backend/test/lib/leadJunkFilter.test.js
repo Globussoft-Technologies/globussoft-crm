@@ -1,12 +1,31 @@
-// Unit tests for backend/lib/leadJunkFilter.js
+// Unit tests for backend/lib/leadJunkFilter.js + backend/lib/junkSourceFilter.js
 //
 // Mocking strategy: monkey-patch the prisma singleton (vi.mock doesn't
 // intercept CJS require in this vitest setup).
+//
+// Two helpers covered here because they're the matched pair gating "junk
+// leads" in two complementary places:
+//   - leadJunkFilter.classifyLead — gates lead INGESTION (POST /api/v1/external/leads,
+//                                    /marketing/submit) — flags junk before it
+//                                    persists.
+//   - junkSourceFilter.isJunkSource — gates report VISIBILITY (GET /api/attribution
+//                                      and GET /api/wellness/reports/attribution) —
+//                                      hides test-* / e2e-* / qa-* / rbac-* source
+//                                      buckets from operator-facing dashboards even
+//                                      if junk leads slip past the ingestion gate.
+//
+// junkSourceFilter pairs with the v3.4.x cleanup-p3-data-quality.js one-shot
+// (closed #268 by remapping existing rows) to make the filter durable: re-runs
+// of the wellness E2E suite re-create test-skip / test-junk contacts, and
+// without this helper they'd re-pollute the demo Marketing Attribution screen
+// until the operator re-runs the scrub.
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import junk from '../../lib/leadJunkFilter.js';
+import junkSourceFilter from '../../lib/junkSourceFilter.js';
 
 const { classifyLead, isIndianMobile, looksLikeGibberish, suspiciousEmail } = junk;
+const { isJunkSource, JUNK_SOURCE_EXACT, JUNK_SOURCE_PREFIXES } = junkSourceFilter;
 
 beforeAll(() => {
   prisma.contact = { findFirst: vi.fn() };
@@ -328,5 +347,119 @@ describe('lib/leadJunkFilter — classifyLead', () => {
     expect(arg.where.createdAt.gte).toBeInstanceOf(Date);
     const orStr = JSON.stringify(arg.where.OR);
     expect(orStr).toContain('9876543210');
+  });
+});
+
+// ─── lib/junkSourceFilter — closes regression-coverage-backlog #24 / #268 ─
+//
+// Pins the case-insensitive prefix-match contract that
+// routes/attribution.js (generic) + routes/wellness.js (computeAttribution)
+// rely on to keep test-skip / test-junk source rows out of operator-facing
+// dashboards. The four exact values match what cleanup-p3-data-quality.js
+// targeted; the prefix list is the durable forward-compat guard.
+
+describe('lib/junkSourceFilter — module shape', () => {
+  test('exports isJunkSource + canonical lists', () => {
+    expect(typeof isJunkSource).toBe('function');
+    expect(Array.isArray(JUNK_SOURCE_EXACT)).toBe(true);
+    expect(Array.isArray(JUNK_SOURCE_PREFIXES)).toBe(true);
+  });
+
+  test('canonical EXACT list pins the four values cleanup-p3 targeted', () => {
+    // Pin the contract: future agents adding/removing entries should be
+    // forced to update this assertion deliberately, not silently drift it.
+    expect(JUNK_SOURCE_EXACT).toEqual(['test-skip', 'test-junk', 'e2e-test', 'qa-test']);
+  });
+
+  test('PREFIXES covers test-/e2e-/qa-/rbac- — the original #268 issue suggestion', () => {
+    expect(JUNK_SOURCE_PREFIXES).toEqual(['test-', 'e2e-', 'qa-', 'rbac-']);
+  });
+});
+
+describe('lib/junkSourceFilter — isJunkSource (the report-visibility gate)', () => {
+  test('returns false for null / undefined / empty', () => {
+    expect(isJunkSource(null)).toBe(false);
+    expect(isJunkSource(undefined)).toBe(false);
+    expect(isJunkSource('')).toBe(false);
+    expect(isJunkSource('   ')).toBe(false);
+  });
+
+  test('returns false for non-string inputs', () => {
+    expect(isJunkSource(123)).toBe(false);
+    expect(isJunkSource({})).toBe(false);
+    expect(isJunkSource([])).toBe(false);
+  });
+
+  test('flags the four canonical exact values', () => {
+    expect(isJunkSource('test-skip')).toBe(true);
+    expect(isJunkSource('test-junk')).toBe(true);
+    expect(isJunkSource('e2e-test')).toBe(true);
+    expect(isJunkSource('qa-test')).toBe(true);
+  });
+
+  test('flags case-insensitively (External API doesnt lowercase)', () => {
+    expect(isJunkSource('TEST-SKIP')).toBe(true);
+    expect(isJunkSource('Test-Junk')).toBe(true);
+    expect(isJunkSource('E2E-TEST')).toBe(true);
+    expect(isJunkSource('QA-Test')).toBe(true);
+  });
+
+  test('flags by prefix — covers test-* / e2e-* / qa-* / rbac-* variants', () => {
+    expect(isJunkSource('test-foo')).toBe(true);
+    expect(isJunkSource('test-anything-here')).toBe(true);
+    expect(isJunkSource('e2e-bar')).toBe(true);
+    expect(isJunkSource('qa-baz')).toBe(true);
+    expect(isJunkSource('rbac-test')).toBe(true);
+    expect(isJunkSource('rbac-bypass-attempt')).toBe(true);
+  });
+
+  test('strips surrounding whitespace before matching', () => {
+    expect(isJunkSource('  test-skip  ')).toBe(true);
+    expect(isJunkSource('\ttest-junk\n')).toBe(true);
+  });
+
+  test('does NOT flag legit demo / production sources (the must-not-regress list)', () => {
+    // Pulled from the actual wellness tenant + #268 issue body.
+    expect(isJunkSource('whatsapp')).toBe(false);
+    expect(isJunkSource('website-form')).toBe(false);
+    expect(isJunkSource('meta_ad')).toBe(false);
+    expect(isJunkSource('callified')).toBe(false);
+    expect(isJunkSource('organic')).toBe(false);
+    expect(isJunkSource('web')).toBe(false);
+    expect(isJunkSource('embed_widget')).toBe(false);
+    expect(isJunkSource('walk-in')).toBe(false);
+    expect(isJunkSource('referral')).toBe(false);
+    expect(isJunkSource('google-ad')).toBe(false);
+    expect(isJunkSource('IndiaMART')).toBe(false);
+    expect(isJunkSource('JustDial')).toBe(false);
+    expect(isJunkSource('TradeIndia')).toBe(false);
+    expect(isJunkSource('other')).toBe(false);
+    expect(isJunkSource('unknown')).toBe(false);
+  });
+
+  test('does NOT flag sources that merely CONTAIN test/e2e in the middle', () => {
+    // Prefix-match, not contains. "test-" at position 0 is junk; "test"
+    // anywhere else is a legitimate source name (e.g. "best-test-platform"
+    // — unlikely in practice but the contract is prefix not substring).
+    expect(isJunkSource('best-platform')).toBe(false);
+    expect(isJunkSource('contest-winner')).toBe(false);
+    expect(isJunkSource('honest-feedback')).toBe(false);
+  });
+
+  test('a Contact with source=test-skip is excluded (the #268 acceptance criterion)', () => {
+    // This is the report-side filtering predicate: callers in
+    // routes/attribution.js + routes/wellness.js use isJunkSource(c.source)
+    // to skip junk rows before adding them to the byChannel/bySource maps.
+    const contacts = [
+      { id: 1, source: 'test-skip', firstTouchSource: 'test-skip' },
+      { id: 2, source: 'test-junk', firstTouchSource: null },
+      { id: 3, source: 'organic', firstTouchSource: 'organic' },
+      { id: 4, source: 'whatsapp', firstTouchSource: null },
+      { id: 5, source: null, firstTouchSource: null },
+    ];
+    const visible = contacts.filter(
+      (c) => !isJunkSource(c.firstTouchSource || c.source)
+    );
+    expect(visible.map((c) => c.id)).toEqual([3, 4, 5]);
   });
 });

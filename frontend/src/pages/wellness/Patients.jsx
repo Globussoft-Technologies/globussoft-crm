@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Search, Plus, Users, Phone, Mail, Pencil } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 
 export default function Patients() {
   const notify = useNotify();
@@ -95,7 +96,10 @@ export default function Patients() {
       load("");
       return;
     }
-    const t = setTimeout(() => load(qRef.current), 250);
+    // #548: standardised on SEARCH_DEBOUNCE_MS (300ms) — was 250ms; pen-test
+    // flagged drift between Patients (250) and Omnibar (300). One source of
+    // truth in utils/timing.js.
+    const t = setTimeout(() => load(qRef.current), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [q, reloadTick]);
 

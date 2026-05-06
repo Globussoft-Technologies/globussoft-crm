@@ -169,7 +169,82 @@ const loginUsernameLimiter = rateLimit({
 // (catches distributed attacks against one account). Both must pass before
 // the route handler runs. Scoped to POST so OPTIONS preflight isn't counted.
 app.post("/api/auth/login", loginIpLimiter, loginUsernameLimiter, (req, res, next) => next());
+
+// #531 (HI-02 mitigation): per-IP and per-email rate limiting on
+// /api/auth/forgot-password. Mirrors the login limiter pattern. Without
+// these, an attacker can hammer the endpoint to enumerate valid emails
+// (HI-02) or to rate-limit-grief other users (DoS the password-reset
+// flow). Quotas are looser than login because the forgot-password flow
+// has higher legitimate-use churn (typo-prone email entry), but tight
+// enough that a 1000-email enumeration attack hits the wall fast.
+//
+// Note we do NOT use skipSuccessfulRequests here — every successful call
+// counts toward the budget regardless. /forgot-password's success branch
+// already returns identical-shape response for known and unknown emails
+// (per #526), so distinguishing "valid email" vs "noop" via skip count
+// would itself be a new oracle.
+const forgotPasswordIpLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: process.env.NODE_ENV === "test" ? 10000 : 20, // 20 requests/hour/IP
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: { error: "Too many password-reset requests from this IP, please try again later." },
+  validate: { trustProxy: false, xForwardedForHeader: false },
+});
+const forgotPasswordEmailLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: process.env.NODE_ENV === "test" ? 10000 : 5, // 5 requests/hour/email
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req, res) => {
+    const email = (req.body?.email || "").toLowerCase().trim();
+    return email || `noemail:${ipKeyGenerator(req, res)}`;
+  },
+  message: { error: "Too many password-reset requests for this email, please try again later." },
+  validate: { trustProxy: false, xForwardedForHeader: false },
+});
+app.post("/api/auth/forgot-password", forgotPasswordIpLimiter, forgotPasswordEmailLimiter, (req, res, next) => next());
+
 app.use("/api", apiLimiter);
+
+// #545 (MED-04): reject unsupported Content-Type with 415 BEFORE the routes
+// run. Without this, a POST with text/plain (or any non-JSON/-form/-multipart
+// body) lands in the route with `req.body = {}` (because neither
+// express.json nor express.urlencoded matched), then routes typically
+// destructure missing fields and 500. Pen-test flagged the 500 as the
+// wrong contract — should be 415 (Unsupported Media Type).
+//
+// Conservative matching:
+//   - Only POST / PUT / PATCH (DELETE/GET don't carry bodies in our routes)
+//   - Only when Content-Length > 0 (some POSTs are bodyless)
+//   - Only when Content-Type is EXPLICITLY set to a non-supported value.
+//     Missing Content-Type passes through (back-compat with curl + some
+//     SDKs that omit the header on JSON bodies).
+//   - Excludes /api/marketing/submit (public form submit, intentionally
+//     accepts text/* per the embed widget contract). Add new exclusions
+//     here as needed.
+const SUPPORTED_CONTENT_TYPES = [
+  "application/json",
+  "application/x-www-form-urlencoded",
+  "multipart/form-data",
+];
+const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = ["/api/marketing/submit"];
+app.use("/api", (req, res, next) => {
+  if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
+  const lenHeader = req.headers["content-length"];
+  if (!lenHeader || lenHeader === "0") return next();
+  const ct = (req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+  if (!ct) return next(); // missing → back-compat pass-through
+  if (SUPPORTED_CONTENT_TYPES.includes(ct)) return next();
+  if (CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES.some((p) => req.originalUrl.startsWith(p))) return next();
+  return res.status(415).json({
+    error: "Unsupported Media Type",
+    code: "UNSUPPORTED_MEDIA_TYPE",
+    received: ct,
+    expected: SUPPORTED_CONTENT_TYPES,
+  });
+});
 
 const io = new Server(server, { cors: { origin: "*" } });
 const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
@@ -447,6 +522,28 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 // Health Check Endpoint
 const prisma = require("./lib/prisma");
 
+// #543 (MED-02): /api/health is unauthenticated by design (load-balancer
+// + uptime probes need to reach it without creds). The pen-test flagged
+// the public response as leaking the full version string + uptime to any
+// caller, which lets attackers fingerprint the deployed build for
+// vulnerable-version targeting.
+//
+// Two-tier response now:
+//   - Unauthenticated (no Authorization header) → minimal body:
+//     { status, timestamp } only. Enough for liveness/readiness probes
+//     and the demo-monitor cron. No version, no uptime, no DB string.
+//   - Authenticated (any valid JWT) → full body: status, version,
+//     uptime, timestamp, database. For ops + the
+//     `triaging-stuck-deploy-gate` skill's deploy-divergence check.
+//
+// Detection of "authenticated" is intentionally minimal — just the
+// presence of an Authorization header. We do NOT verify the JWT here
+// (that would add a DB round-trip for revoked-token check on every
+// liveness probe). The server only DISCLOSES extra fields to callers
+// who can present a token; it doesn't grant any access. If a stolen
+// token is used to probe /api/health, the worst outcome is fingerprint
+// disclosure to a caller who already has a tenant credential — not a
+// new escalation.
 app.get("/api/health", async (req, res) => {
   let dbStatus = "disconnected";
   try {
@@ -456,16 +553,26 @@ app.get("/api/health", async (req, res) => {
     dbStatus = `error: ${err.message}`;
   }
 
+  const status = dbStatus === "connected" ? "healthy" : "degraded";
+  const minimal = { status, timestamp: new Date().toISOString() };
+
+  if (!req.headers.authorization) {
+    return res.json(minimal);
+  }
   res.json({
-    status: dbStatus === "connected" ? "healthy" : "degraded",
+    ...minimal,
     version: APP_VERSION,
     uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
     database: dbStatus,
   });
 });
 
 app.get("/", (req, res) => {
+  // #543: same minimal-by-default policy applied to the API root. Public
+  // callers see "the API is up"; authenticated callers see the version.
+  if (!req.headers.authorization) {
+    return res.json({ message: "Enterprise CRM API Core Online" });
+  }
   res.json({ message: "Enterprise CRM API Core Online", version: APP_VERSION });
 });
 
@@ -490,17 +597,25 @@ app.use("/api", (req, res) => {
 // Catches express.json() body-parse errors, Prisma exceptions, and anything
 // uncaught downstream. Returns JSON instead of Express's default HTML page
 // so API consumers (browsers, Callified, AdsGPT) always get a parseable body.
+//
+// #544 (MED-03): canonical response envelope is { error, code } across the
+// whole API. The catch-alls below now ALL include `code` so SPA/SDK error
+// handlers can branch on stable identifiers instead of regexing the message.
+// (Per-route handlers that still return { message: ... } for delete-success
+// shapes are tracked under #549 — separate sweep, not blocking this fix.)
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (err && (err.type === "entity.parse.failed" || err instanceof SyntaxError)) {
-    return res.status(400).json({ error: "Invalid JSON body", detail: err.message });
+    return res.status(400).json({ error: "Invalid JSON body", code: "INVALID_JSON_BODY", detail: err.message });
   }
   if (err && err.type === "entity.too.large") {
-    return res.status(413).json({ error: "Payload too large" });
+    return res.status(413).json({ error: "Payload too large", code: "PAYLOAD_TOO_LARGE" });
   }
   console.error("[server] unhandled error:", err && err.stack ? err.stack : err);
-  res.status(err && err.status ? err.status : 500).json({
+  const status = err && err.status ? err.status : 500;
+  res.status(status).json({
     error: (err && err.message) || "Internal server error",
+    code: status === 500 ? "INTERNAL_ERROR" : (err && err.code) || `HTTP_${status}`,
   });
 });
 

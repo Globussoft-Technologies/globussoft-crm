@@ -102,6 +102,38 @@ router.param("id", (req, res, next, id) => {
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
+// #527 / #533 (CRIT-02 + HI-04): PHI access gates.
+//
+// Pre-fix the wellness clinical routes were tenant-scoped but had NO
+// wellnessRole check — a JWT with role=USER and no wellnessRole still got
+// 200 on GET /patients (full tenant PII), GET /visits, GET /prescriptions,
+// PUT /patients/:id, etc. Pen-test repro: a USER-role professional editing
+// an Admin-created patient row in tenant 2 (Patient 3584).
+//
+// Two gates layered onto every previously-ungated clinical route:
+//
+//   phiReadGate  — reads. Allowed: doctor, professional, telecaller, admin,
+//                  manager. Telecaller stays in because they need patient/
+//                  visit context to dispose junk leads. Helper is OUT —
+//                  helpers are non-clinical (front-desk / runner roles).
+//
+//   phiWriteGate — writes. Same minus telecaller — telecallers route leads
+//                  but don't author clinical records (Rx + consent already
+//                  use stricter gates: requireClinicalRole / verifyWellnessRole
+//                  with explicit ["doctor"]/["admin"] lists).
+//
+// Behavioural change: a USER with no wellnessRole now gets 403
+// WELLNESS_ROLE_FORBIDDEN on every clinical route instead of 200. ADMIN
+// and MANAGER pass through (the verifyWellnessRole "admin"/"manager"
+// special tokens). The cross-professional edit surface stays open by design
+// — clinics share patients across providers; the audit log already records
+// every UPDATE so cross-user edits are traceable.
+//
+// Tenant.vertical check is inherited from verifyWellnessRole — non-wellness
+// tenants get 403 WELLNESS_TENANT_REQUIRED before the role check runs.
+const phiReadGate = verifyWellnessRole(["doctor", "professional", "telecaller", "admin", "manager"]);
+const phiWriteGate = verifyWellnessRole(["doctor", "professional", "admin", "manager"]);
+
 // #348 — namespacing rule. The /api/wellness/* namespace is reserved for
 // CLINICAL resources (patients, visits, prescriptions, consents, treatments,
 // services, locations, etc.). Org-level resources — staff, audit logs,
@@ -488,12 +520,22 @@ function scrubPlainText(value) {
   // allowedTags=[] + allowedAttributes={} + disallowedTagsMode='discard' →
   // entire tag is dropped (text content kept). textFilter undoes the
   // library's default `&` → `&amp;` encoding so storage stays raw.
-  return sanitizeHtml(value, {
+  let scrubbed = sanitizeHtml(value, {
     allowedTags: [],
     allowedAttributes: {},
     disallowedTagsMode: "discard",
     textFilter: (text) => decodeBasicEntities(text),
   });
+  // #538 (PT-06) hardening: sanitize-html strips COMPLETE tags but leaves
+  // residual single `<` / `>` characters from unclosed/malformed shapes
+  // (e.g. `Mr. <Smith` or `Smith>` — neither parses as a tag, so the
+  // library passes them through). The pen-test flagged this as
+  // inconsistent: callers couldn't predict whether their input would be
+  // stored verbatim or mutated. Strip ALL residual angle brackets so the
+  // post-scrub contract is "no `<` or `>` ever survives", regardless of
+  // whether the input was a real tag or just stray punctuation.
+  scrubbed = scrubbed.replace(/[<>]/g, "");
+  return scrubbed;
 }
 
 // #159 #160 #165 #170 #178: shared validation for Patient create + update.
@@ -504,6 +546,16 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   // earlier 200 cap let names through that the DB then rejected with 500.
   const nameErr = ensureStringLength(body.name, { max: 191, field: "name", required: !isUpdate });
   if (nameErr) return nameErr;
+  // #538 (PT-06): control characters NEVER legitimately appear in a name
+  // (NUL, BEL, vertical-tab, DEL, etc.) — these are usually injection
+  // attempts (template-engine bypass, log-line injection, terminal
+  // sequences). Reject pre-scrub so the response is "your input is
+  // invalid", not silent mutation. Tag-shaped HTML stays as silent-scrub
+  // (preserves the long-standing #213 contract + the explicit "scrub is
+  // silent" e2e contract test).
+  if (body.name != null && /[\x00-\x1F\x7F]/.test(String(body.name))) {
+    return { status: 400, error: "name contains invalid control characters", code: "INVALID_NAME" };
+  }
   // #213: scrub HTML from free-text PHI fields. Strips ALL tags (no whitelist)
   // — patient names + notes never legitimately contain markup. Mutate the
   // body so the route's prisma.create/update sees the sanitised string.
@@ -526,6 +578,16 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   }
   const emailErr = ensureEmail(body.email);
   if (emailErr) return emailErr;
+  // #536 (PT-04): on create, phone is REQUIRED — the SPA marks it as
+  // required + downstream flows (SMS reminders, calendar T-24h/T-1h pings,
+  // dedup-by-normalizedPhone) silently no-op for phoneless rows. The
+  // backend was previously accepting null/omit silently — UI/API contract
+  // drift. On update (PUT), phone stays optional (don't force users to
+  // re-type it on every edit). isValidPhoneOrEmpty's "empty is OK" return
+  // is what we use on update; required-check fires only on create.
+  if (!isUpdate && (body.phone == null || String(body.phone).trim() === "")) {
+    return { status: 400, error: "phone is required", code: "PHONE_REQUIRED" };
+  }
   if (!isValidPhoneOrEmpty(body.phone)) {
     return { status: 400, error: "phone must contain 10–15 digits", code: "INVALID_PHONE" };
   }
@@ -561,7 +623,7 @@ const VISIT_TRANSITIONS = {
   "cancelled": new Set(["cancelled"]), // terminal
 };
 
-router.post("/patients", async (req, res) => {
+router.post("/patients", phiWriteGate, async (req, res) => {
   try {
     // #213: validate FIRST so validatePatientInput can scrub HTML on body.name
     // / body.notes / body.allergies in place, then destructure the sanitised
@@ -653,7 +715,7 @@ router.post("/patients", async (req, res) => {
   }
 });
 
-router.put("/patients/:id", async (req, res) => {
+router.put("/patients/:id", phiWriteGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.patient.findFirst({ where: tenantWhere(req, { id }) });
@@ -774,7 +836,7 @@ const CLINICAL_SERVICE_CATEGORIES = [
   "slimming",
 ];
 
-router.get("/visits", async (req, res) => {
+router.get("/visits", phiReadGate, async (req, res) => {
   try {
     const { patientId, doctorId, status, from, to, limit = 100, offset = 0 } = req.query;
     const where = tenantWhere(req);
@@ -854,7 +916,7 @@ router.get("/visits", async (req, res) => {
   }
 });
 
-router.get("/visits/:id", async (req, res) => {
+router.get("/visits/:id", phiReadGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const visit = await prisma.visit.findFirst({
@@ -890,7 +952,7 @@ router.get("/visits/:id", async (req, res) => {
   }
 });
 
-router.post("/visits", async (req, res) => {
+router.post("/visits", phiWriteGate, async (req, res) => {
   try {
     const { patientId, serviceId, doctorId, visitDate, status, vitals, notes, amountCharged, treatmentPlanId } = req.body;
     if (!patientId) return res.status(400).json({ error: "patientId is required" });
@@ -970,7 +1032,7 @@ router.post("/visits", async (req, res) => {
   }
 });
 
-router.put("/visits/:id", async (req, res) => {
+router.put("/visits/:id", phiWriteGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.visit.findFirst({ where: tenantWhere(req, { id }) });
@@ -1050,7 +1112,7 @@ router.put("/visits/:id", async (req, res) => {
 
 // ── Visit photos (before/after) ────────────────────────────────────
 
-router.post("/visits/:id/photos", photoUpload.array("photos", 10), async (req, res) => {
+router.post("/visits/:id/photos", phiWriteGate, photoUpload.array("photos", 10), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const visit = await prisma.visit.findFirst({ where: tenantWhere(req, { id }) });
@@ -1072,7 +1134,7 @@ router.post("/visits/:id/photos", photoUpload.array("photos", 10), async (req, r
   }
 });
 
-router.delete("/visits/:id/photos", async (req, res) => {
+router.delete("/visits/:id/photos", phiWriteGate, async (req, res) => {
   // Body: { url, kind }
   try {
     const id = parseInt(req.params.id);
@@ -1091,7 +1153,7 @@ router.delete("/visits/:id/photos", async (req, res) => {
 
 // ── Inventory consumption per visit ────────────────────────────────
 
-router.get("/visits/:id/consumptions", async (req, res) => {
+router.get("/visits/:id/consumptions", phiReadGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const items = await prisma.serviceConsumption.findMany({
@@ -1114,7 +1176,7 @@ router.get("/visits/:id/consumptions", async (req, res) => {
   }
 });
 
-router.post("/visits/:id/consumptions", async (req, res) => {
+router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const visit = await prisma.visit.findFirst({ where: tenantWhere(req, { id }) });
@@ -1180,7 +1242,7 @@ function requireClinicalRole(req, res, next) {
   });
 }
 
-router.get("/prescriptions", async (req, res) => {
+router.get("/prescriptions", phiReadGate, async (req, res) => {
   try {
     const { patientId, limit = 50 } = req.query;
     const where = tenantWhere(req);
@@ -1306,7 +1368,7 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
 
 // ── Consent forms ──────────────────────────────────────────────────
 
-router.get("/consents", async (req, res) => {
+router.get("/consents", phiReadGate, async (req, res) => {
   try {
     const { patientId, limit = 50 } = req.query;
     const where = tenantWhere(req);
@@ -1430,7 +1492,7 @@ router.put("/consents/:id", verifyWellnessRole(["admin"]), async (req, res) => {
 // retention-policy comment block at the top of this file.
 
 // GET /treatment-plans — list (filterable by patientId / status)
-router.get("/treatment-plans", async (req, res) => {
+router.get("/treatment-plans", phiReadGate, async (req, res) => {
   try {
     const { patientId, status } = req.query;
     const where = tenantWhere(req);
@@ -1464,7 +1526,7 @@ router.get("/treatment-plans", async (req, res) => {
 });
 
 // GET /treatment-plans/:id — read one (tenant-scoped via findFirst)
-router.get("/treatment-plans/:id", async (req, res) => {
+router.get("/treatment-plans/:id", phiReadGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const plan = await prisma.treatmentPlan.findFirst({
@@ -1494,7 +1556,7 @@ router.get("/treatment-plans/:id", async (req, res) => {
 });
 
 // POST /treatment-plans — create
-router.post("/treatment-plans", async (req, res) => {
+router.post("/treatment-plans", phiWriteGate, async (req, res) => {
   try {
     const { name, totalSessions, totalPrice, patientId, serviceId, nextDueAt } = req.body;
     if (!name || !totalSessions || !patientId) {

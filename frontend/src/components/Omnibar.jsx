@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, User, Briefcase, FileText, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { SEARCH_DEBOUNCE_MS } from '../utils/timing';
 
 export default function Omnibar() {
   const [isOpen, setIsOpen] = useState(false);
@@ -46,7 +47,9 @@ export default function Omnibar() {
       setIsLoading(false);
     };
 
-    const debounce = setTimeout(fetchOmni, 300);
+    // #548: shared SEARCH_DEBOUNCE_MS constant (300ms — was already 300 here;
+    // explicit import keeps this in sync with future bumps).
+    const debounce = setTimeout(fetchOmni, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(debounce);
   }, [query]);
 

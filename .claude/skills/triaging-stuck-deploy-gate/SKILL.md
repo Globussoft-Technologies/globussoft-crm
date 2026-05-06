@@ -190,3 +190,63 @@ The 2026-05-05 sequence:
 - Demo-state assumptions in fixtures (the test expects a specific seed row that doesn't exist on demo)
 
 **Don't assume a chronically-red e2e-full is "we'll fix it next session" work.** ~1.5-3 hours of fix-and-iterate beats weeks of tag pushes that all show red. Same triage flow as per-push deploy gates.
+
+## The release-validation tag-move dance (v3.4.14, 2026-05-06/07)
+
+When the e2e-full release run is red AND the production code is correct (the failures are stale spec assertions encoding old contracts, not real regressions), you don't need to re-bump the version — you need to **force-move the tag** to a new commit on main that has the spec fixes. The mechanic:
+
+```bash
+# 1. Push the spec-alignment commits to main first.
+git push origin main
+
+# 2. Wait for the per-push gate on the new HEAD to go green.
+gh run list --workflow=deploy.yml --branch=main --limit=2
+
+# 3. Delete the old tag locally + on origin, then re-tag at the new HEAD.
+git tag -d v3.4.14
+git push origin :refs/tags/v3.4.14
+git tag v3.4.14
+git push origin v3.4.14
+
+# 4. The push of the tag re-fires e2e-full automatically. Watch.
+gh run list --workflow=e2e-full.yml --limit=2
+```
+
+### GOTCHA: Force-moving a tag re-drafts a published GitHub Release
+
+If you've already published the GH Release (`gh release create vX.Y.Z`), force-moving the tag silently flips the Release back to **draft** state. Symptom: `gh release view vX.Y.Z` shows `draft: true` and a temporary `untagged-<hex>` URL. The Release is no longer Latest.
+
+Fix:
+
+```bash
+gh release edit v3.4.14 --draft=false --latest
+```
+
+Verify with `gh release view v3.4.14` — `draft: false`, `published: <timestamp>`. The canonical URL `releases/tag/vX.Y.Z` reactivates.
+
+If the tag never had a published Release (just `git push origin v...`, no `gh release create`), this gotcha doesn't apply.
+
+### v3.4.14 cycle — 4 tag attempts, 3 distinct failure classes
+
+| Tag | SHA | e2e-full result | Failure class |
+|---|---|---|---|
+| 1 | `751ab58` | Red | 7 stale specs encoding old contracts (#537 401-vs-403, #543 health two-tier): `ship-readiness`, `signatures`, `wellness`, `wellness-real-user-journeys`, `portal-api`, `zapier`, `demo-health` |
+| 2 | `f0fd190` | Push-trigger green; **release-trigger red** | #531 forgot-password rate-limiter bucket sharing across two e2e-full runs against same demo — the push-event run had drained the 5/hr/email budget for `admin@globussoft.com`, the release-event run 12 minutes later got 429 on the same email |
+| 3 | `befd867` | Red | 3 bare `*.spec.js` files missed by the #550 DELETE→204 sweep: `currencies.spec.js`, `custom_reports.spec.js`, `field-permissions.spec.js` (per-push gate runs only `*-api.spec.js`; the bare smoke tests aren't in its list) |
+| 4 | `a27843e` | **Green** | All three regression classes closed |
+
+**Class 1 + class 3** are both pre-emptable by the `auditing-cross-cutting-spec-impact` skill — the grep audit catches them before the first push.
+
+**Class 2 is unique to release-validation.** When two e2e-full runs hit the same demo within a per-route rate-limit window (e.g. #531's 5/hr/email), they share the bucket. The fix is at the spec layer:
+
+- Accept the rate-limited status as a non-blocking outcome: `expect([200, 429]).toContain(res.status())`
+- For tests that legitimately need a 200 (e.g. extracting a reset token), `test.skip(true, '#531 rate-limit hit — runs cleanly when bucket is fresh')`
+- For shape-equality tests (e.g. anti-enumeration "known and unknown email return identical body"), skip if either side is rate-limited because the rate-limiter envelope is structurally different from the route's success envelope
+
+The security property the spec asserts (no token leak / identical-shape enumeration defence / etc.) usually still holds on a 429 response — the rate-limiter envelope has its own shape that doesn't expose anything the success envelope was hiding.
+
+**Both push and release events fire e2e-full** when a tag is created. After publishing a GH Release on a tag, you'll see two runs in `gh run list --workflow=e2e-full.yml`: one with `event: push`, one with `event: release`. They run independently against the same demo. If your tests have any per-resource rate limit or shared-bucket state, the second run sees a different starting state than the first.
+
+### Standing rule: the GH Release re-publish is non-skippable
+
+After **any** force-move of a tag that has a published Release, `gh release edit X --draft=false --latest` is **mandatory**. The Release URL stops working until you re-publish. External links, npm, Docker hub-style consumers all break silently.

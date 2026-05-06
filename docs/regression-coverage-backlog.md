@@ -257,19 +257,19 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 11. Extend [estimates-api.spec.js](e2e/tests/estimates-api.spec.js)
+## ☑ 11. Extend [estimates-api.spec.js](e2e/tests/estimates-api.spec.js)
 
 **Closes:** #164, #174, #178, #199, #255, #256, #322, #333, #351
 
 **Acceptance:**
-- [ ] qty < 1 rejected (#164, #333, #351).
-- [ ] line items count > 200 rejected (#174 — DoS from 5000+ items).
-- [ ] validUntil year range 2026..2100 only (#178, #322).
-- [ ] totalAmount in response = sum of line totals (#255).
-- [ ] Currency string in response uses single symbol per field (#256 — no "$ ₹").
-- [ ] Old shape `{name, items}` returns 400 with hint to migrate to `{title, lineItems}` (#199 — backwards-compat shim or hard break is fine, just no 500).
+- [x] qty < 1 rejected (#164, #333, #351). — Path A; `qty=-5 → 400 INVALID_QUANTITY`, `qty=1 → 201` boundary.
+- [x] line items count > 200 rejected (#174 — DoS from 5000+ items). — Path A; existing test covers 201 → 400, new test covers exactly-200 → 201 boundary.
+- [x] validUntil year range 2026..2100 only (#178, #322). — **Path B.2 partial**: lower bound enforced (yesterday → 400, tomorrow → 201). Upper bound NOT capped today — year 2150 accepted; pinned with a "currently accepted" test + filed as TODOS follow-up under "Closely related — small follow-up worth filing" section. When the cap lands, flip that test's assertion.
+- [x] totalAmount in response = sum of line totals (#255). — Path A; decimal `3 * 99.5 = 298.5` + 5-line aggregate + PUT-doesn't-mutate-totalAmount cases.
+- [x] Currency string in response uses single symbol per field (#256 — no "$ ₹"). — Path A; route returns numeric totalAmount + zero formatted-currency strings, so the no-double-symbol invariant is vacuously satisfied. Pinned via stringify-and-grep over the full response (`/\$\s*₹/`, `/\$\$/`, `/USD\s*\$/` etc.) so any future addition of a `formattedTotal` string field can't sneak a regression in.
+- [x] Old shape `{name, items}` returns 400 with hint to migrate to `{title, lineItems}` (#199 — backwards-compat shim or hard break is fine, just no 500). — Path A; backend chose back-compat shim (`name`/`items` are aliases). Pinned: `{name, items}` together → 201, `{name, lineItems}` mixed → 201, `{name}` only (no items field) → 400 LINE_ITEMS_REQUIRED, never 500.
 
-**Estimated effort:** 0.5 day. Commit: ___________
+**Estimated effort:** 0.5 day. Commit: __TBD__
 
 ---
 

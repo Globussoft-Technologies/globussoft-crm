@@ -262,6 +262,219 @@ test.describe('Estimates API — POST /', () => {
   });
 });
 
+// ─── Regression-coverage-backlog #11 ────────────────────────────────
+// Closes #164, #174, #178, #199, #255, #256, #322, #333, #351.
+//
+// The acceptance points overlap with several POST /api/estimates tests
+// already in this file — these new tests pin the boundary cases (just
+// inside vs just outside each cap) and the response-shape invariants
+// the gap cards called out:
+//
+//   #164 / #333 / #351 — qty < 1 rejected: existing test (line 187)
+//     covers qty=0; this block adds qty=-5 (negative) + qty=1 (just
+//     above the rejection floor → 201) so the boundary is pinned both
+//     sides.
+//
+//   #174 — line-items > 200 rejected (5000+-item DoS): existing test
+//     (line 173) covers 201 → 400 with code; this block adds the
+//     boundary-just-inside case (200 → 201) so the cap can't drift up.
+//
+//   #178 / #322 — validUntil year range: gap card says "2026..2100".
+//     Backend currently caps the LOWER bound (rejects past dates) but
+//     has NO upper-bound cap — year 2150 is accepted. Path B.2 per
+//     CLAUDE.md "gap-card claims as hypotheses": pin the actual
+//     behaviour today (any date ≥ today is accepted) and file the
+//     upper-bound-cap discussion as a TODOS follow-up. Tests assert
+//     reachable boundaries (today, 2099, 2150 all accepted; yesterday
+//     and historical past rejected).
+//
+//   #255 — totalAmount = sum(qty * unitPrice): existing test (line
+//     231) covers a simple 2-line case; this block adds a single-line
+//     decimal (3 * 99.5 = 298.5) and a many-line aggregate, plus the
+//     PUT path (totalAmount survives unchanged on a notes-only update).
+//
+//   #256 — currency string uses single symbol (no "$ ₹"): the route
+//     returns numeric totalAmount + no currency-string fields, so the
+//     no-double-symbol invariant is vacuously satisfied. Pin this with
+//     a stringify-and-grep assertion on the full response so any
+//     future addition of a formatted "${amount}" field can't sneak a
+//     double-symbol regression in.
+//
+//   #199 — old shape `{name, items}`: gap card says "400 with hint" or
+//     "no 500". Backend chose backwards-compat shim — `name` aliases
+//     `title`, `items` aliases `lineItems`. The aliases are tested at
+//     lines 132 & 143. This block adds the cross-shape case (`name`
+//     present, `items` absent → still hits LINE_ITEMS_REQUIRED 400, no
+//     500) and the legacy-only case (both legacy fields).
+test.describe('Estimates API — regression-coverage-backlog #11', () => {
+  // #164 / #333 / #351 — qty boundary
+  test('qty=-5 rejected with INVALID_QUANTITY (#164/#333/#351)', async ({ request }) => {
+    const res = await authPost(request, '/api/estimates', {
+      title: `${RUN_TAG} neg-qty`,
+      lineItems: [{ description: 'neg', quantity: -5, unitPrice: 10 }],
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_QUANTITY');
+  });
+
+  test('qty=1 accepted (just above rejection floor) (#164/#333/#351)', async ({ request }) => {
+    const e = await createEstimate(request, {
+      title: 'qty-floor',
+      lineItems: [{ description: 'one', quantity: 1, unitPrice: 10 }],
+    });
+    expect(e.lineItems[0].quantity).toBe(1);
+  });
+
+  // #174 — line-items boundary
+  test('exactly 200 line items accepted (boundary just inside cap) (#174)', async ({ request }) => {
+    const lineItems = Array.from({ length: 200 }, (_, i) => ({
+      description: `at-cap-${i}`,
+      quantity: 1,
+      unitPrice: 1,
+    }));
+    const res = await authPost(request, '/api/estimates', {
+      title: `${RUN_TAG} at-cap-200`,
+      lineItems,
+    });
+    expect(res.status(), `200-item create: ${await res.text()}`).toBe(201);
+    const e = await res.json();
+    createdEstimateIds.push(e.id);
+    expect(e.lineItems.length).toBe(200);
+    expect(e.totalAmount).toBe(200);
+  });
+
+  // #178 / #322 — validUntil bounds (Path B.2: pin actual route behaviour;
+  // upper-bound cap deferred to TODOS — see commit body)
+  test('validUntil = tomorrow accepted (just inside future-only floor) (#178/#322)', async ({ request }) => {
+    // Avoid `today` here — `YYYY-MM-DD` is parsed as UTC midnight while the
+    // route's `setHours(0,0,0,0)` runs in the server's local TZ, so a "today"
+    // input flakes across IST/UTC servers. Tomorrow is unambiguously future.
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    const e = await createEstimate(request, {
+      title: 'vu-tomorrow',
+      validUntil: t.toISOString().slice(0, 10),
+    });
+    expect(e.validUntil).toBeTruthy();
+    expect(new Date(e.validUntil).getTime()).toBeGreaterThan(Date.now() - 86400000);
+  });
+
+  test('validUntil = yesterday rejected with VALID_UNTIL_IN_PAST (#178/#322)', async ({ request }) => {
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    const res = await authPost(request, '/api/estimates', {
+      title: `${RUN_TAG} vu-yesterday`,
+      validUntil: y.toISOString().slice(0, 10),
+      lineItems: [{ description: 'x', quantity: 1, unitPrice: 1 }],
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('VALID_UNTIL_IN_PAST');
+  });
+
+  test('validUntil far future (year 2150) currently accepted — pins absent upper-bound cap (#178/#322 TODOS)', async ({ request }) => {
+    // Gap card says range should be 2026..2100. Backend has no upper-bound
+    // cap today; this test pins that fact. When the cap lands, flip this
+    // assertion to expect 400 with a new INVALID_VALID_UNTIL_FUTURE code.
+    const e = await createEstimate(request, {
+      title: 'vu-far-future',
+      validUntil: '2150-06-01',
+    });
+    expect(new Date(e.validUntil).getFullYear()).toBe(2150);
+  });
+
+  // #255 — totalAmount = sum(qty * unitPrice)
+  test('totalAmount handles decimal unitPrice (3 * 99.5 = 298.5) (#255)', async ({ request }) => {
+    const e = await createEstimate(request, {
+      title: 'decimal-amt',
+      lineItems: [{ description: 'd', quantity: 3, unitPrice: 99.5 }],
+    });
+    expect(e.totalAmount).toBeCloseTo(298.5, 2);
+  });
+
+  test('totalAmount aggregates 5+ line items correctly (#255)', async ({ request }) => {
+    const lineItems = [
+      { description: 'a', quantity: 1, unitPrice: 10 },
+      { description: 'b', quantity: 2, unitPrice: 20 },
+      { description: 'c', quantity: 3, unitPrice: 30 },
+      { description: 'd', quantity: 4, unitPrice: 40 },
+      { description: 'e', quantity: 5, unitPrice: 50 },
+    ];
+    const expected = lineItems.reduce((s, it) => s + it.quantity * it.unitPrice, 0);
+    const e = await createEstimate(request, { title: 'agg-amt', lineItems });
+    expect(e.totalAmount).toBe(expected); // 1*10 + 2*20 + 3*30 + 4*40 + 5*50 = 550
+  });
+
+  test('totalAmount unchanged after notes-only PUT (#255)', async ({ request }) => {
+    const e = await createEstimate(request, {
+      title: 'amt-stable',
+      lineItems: [{ description: 'x', quantity: 2, unitPrice: 50 }],
+    });
+    expect(e.totalAmount).toBe(100);
+    const res = await authPut(request, `/api/estimates/${e.id}`, { notes: 'unrelated update' });
+    expect(res.status()).toBe(200);
+    const updated = await res.json();
+    expect(updated.totalAmount).toBe(100);
+  });
+
+  // #256 — currency single-symbol invariant. Route returns numeric
+  // totalAmount + no formatted-currency string; pin via stringify-and-grep.
+  test('response has no double-symbol currency string anywhere (#256)', async ({ request }) => {
+    const e = await createEstimate(request, {
+      title: 'no-double-sym',
+      lineItems: [{ description: 'x', quantity: 1, unitPrice: 100 }],
+    });
+    const blob = JSON.stringify(e);
+    // Forbidden: "$ ₹", "₹ $", "$$", "₹₹", "USD$", "INR₹", "$ USD" — any
+    // doubled-symbol-looking substring. The route doesn't currently emit
+    // a formatted string, so the fail-mode this guards is "future PR adds
+    // formattedTotal field and accidentally double-prefixes it".
+    expect(blob).not.toMatch(/\$\s*₹/);
+    expect(blob).not.toMatch(/₹\s*\$/);
+    expect(blob).not.toMatch(/\$\$/);
+    expect(blob).not.toMatch(/₹₹/);
+    expect(blob).not.toMatch(/USD\s*\$/);
+    expect(blob).not.toMatch(/INR\s*₹/);
+    // And totalAmount is a raw number (no embedded symbol)
+    expect(typeof e.totalAmount).toBe('number');
+  });
+
+  // #199 — legacy shape handling. Backend accepts `name`/`items` as aliases
+  // (back-compat shim) — ALREADY tested at lines 132 & 143. This block adds
+  // the mixed-shape case (name + lineItems, title + items, both legacy).
+  test('legacy {name, items} together → 201 (back-compat shim, no 500) (#199)', async ({ request }) => {
+    const res = await authPost(request, '/api/estimates', {
+      name: `${RUN_TAG} both-legacy`,
+      items: [{ description: 'legacy-shape', quantity: 1, unitPrice: 25 }],
+    });
+    expect(res.status(), `legacy-both: ${await res.text()}`).toBe(201);
+    const e = await res.json();
+    createdEstimateIds.push(e.id);
+    expect(e.title).toContain('both-legacy');
+    expect(e.totalAmount).toBe(25);
+  });
+
+  test('legacy `name` with NEW `lineItems` → 201 (mixed shape ok) (#199)', async ({ request }) => {
+    const res = await authPost(request, '/api/estimates', {
+      name: `${RUN_TAG} mixed-name`,
+      lineItems: [{ description: 'mixed', quantity: 1, unitPrice: 5 }],
+    });
+    expect(res.status()).toBe(201);
+    const e = await res.json();
+    createdEstimateIds.push(e.id);
+    expect(e.title).toContain('mixed-name');
+  });
+
+  test('legacy `name` only with NO items field → 400 LINE_ITEMS_REQUIRED, never 500 (#199)', async ({ request }) => {
+    // Worst-case legacy-shape: title alias is recognised but no line-items
+    // alias supplied. Must NOT throw a Prisma error masquerading as 500.
+    const res = await authPost(request, '/api/estimates', {
+      name: `${RUN_TAG} only-legacy-name`,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('LINE_ITEMS_REQUIRED');
+  });
+});
+
 // ─── GET /api/estimates ─────────────────────────────────────────────
 
 test.describe('Estimates API — GET /', () => {

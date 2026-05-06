@@ -12,6 +12,7 @@ import Presence from './Presence';
 import Softphone from './Softphone';
 import NotificationBell from './NotificationBell';
 import { AuthContext } from '../App';
+import { fetchApi } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
 
 // T2.1: drawer breakpoint. Mirror of the @media (max-width: 899px) rule in
@@ -86,7 +87,23 @@ const Layout = () => {
     if (token) setupPush(token).catch(() => {});
   }, [token]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // #528 (CRIT-03 fix): revoke the JWT SERVER-SIDE before clearing local
+    // state. POST /api/auth/logout reads req.user.jti and adds it to the
+    // RevokedToken denylist (verifyToken middleware checks it on every
+    // subsequent request). Without this call, the JWT remained valid until
+    // its 7-day natural expiry — anyone who captured the bearer pre-logout
+    // (XSS, shared device, leaked log line) could replay it indefinitely.
+    //
+    // We `await` so the server-side revocation is committed before we
+    // navigate away, but wrap in try/catch so a network blip doesn't stall
+    // the UI — local cleanup runs unconditionally either way. silent:true
+    // so a transient 5xx doesn't fire an error toast on a path the user
+    // is already leaving.
+    try {
+      await fetchApi('/api/auth/logout', { method: 'POST', silent: true });
+    } catch { /* server-side revoke failed — local cleanup still runs */ }
+
     // #343: setToken(null) flows through setAuthToken → clears the in-memory
     // holder + sessionStorage. The legacy localStorage.removeItem('token')
     // call is now a defensive no-op against any stale pre-#343 token, kept

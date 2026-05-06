@@ -97,8 +97,11 @@ export default function PatientDetail() {
       {/* Agent D: loyalty card — sits above the tab list, NOT inside it. */}
       <LoyaltyCard patientId={patient.id} />
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+      {/* Tabs.
+          #523: className-based responsive hook (was [style*="flex-wrap"]
+          attribute selector). Mobile rule allows the strip to scroll
+          horizontally when too many tabs survive the wrap. */}
+      <div className="wellness-tab-strip" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <button style={tabStyle(tab === 'history')} onClick={() => setTab('history')}><Calendar size={14} /> Case history</button>
         <button style={tabStyle(tab === 'prescribe')} onClick={() => setTab('prescribe')}><FileText size={14} /> New prescription</button>
         <button style={tabStyle(tab === 'consent')} onClick={() => setTab('consent')}><FileSignature size={14} /> Consent form</button>

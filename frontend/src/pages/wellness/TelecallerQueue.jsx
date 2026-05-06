@@ -475,7 +475,11 @@ export default function TelecallerQueue() {
         </div>
       )}
 
+      {/* #523: className-based responsive hook (was [style*="minmax(340px"]
+          attribute selector). Mobile collapses to 1-per-row since 340 +
+          padding overflows at 375px. */}
       <div
+        className="telecaller-leads-grid"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',

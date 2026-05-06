@@ -117,9 +117,13 @@
 
   /* OwnerDashboard: 2-up and 3-up KPI strips stack on mobile. The
      auto-fit grids already reflow; only the hard-coded 1fr 1fr / 1fr 1fr 1fr
-     rows need an override. We target the wellness landing root. */
-  [data-vertical="wellness"] main > div > div[style*="1fr 1fr 1fr"],
-  [data-vertical="wellness"] main > div > div[style*="1fr 1fr"] {
+     rows need an override.
+     #523: was previously `[data-vertical="wellness"] main > div > div[style*="1fr 1fr"]`
+     (and `1fr 1fr 1fr` variant) — brittle attribute-substring selectors that
+     would silently stop matching the moment the inline `style={...}` shape
+     drifted. Migrated to class hooks on OwnerDashboard.jsx:139, :142. */
+  .wellness-split-row,
+  .wellness-stat-row-3up {
     grid-template-columns: 1fr !important;
   }
 
@@ -139,8 +143,11 @@
 
   /* PatientDetail tabs already use flex+wrap so they naturally stack.
      Ensure the strip can also scroll horizontally if a tenant adds enough
-     tabs to overflow even after wrapping. */
-  main > div > div[style*="flex-wrap"] {
+     tabs to overflow even after wrapping.
+     #523: was previously `main > div > div[style*="flex-wrap"]` — broad
+     substring match that would have caught any flex-wrap container under
+     main. Migrated to a dedicated class on PatientDetail.jsx:101. */
+  .wellness-tab-strip {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -166,19 +173,33 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Reports: Totals strip uses fixed N-col grid — wrap it. */
-  main > div > div[style*="repeat("][style*=", 1fr)"] {
+  /* Reports: Totals strip uses fixed N-col grid — wrap it.
+     #523: was previously `main > div > div[style*="repeat("][style*=", 1fr)"]`
+     — would silently match (or miss) any `repeat(N, 1fr)` grid the wellness
+     team added, with no compile-time signal. Migrated to a dedicated class
+     on Reports.jsx:179 (Totals component). */
+  .reports-totals-grid {
     grid-template-columns: 1fr 1fr !important;
   }
 
   /* TelecallerQueue lead cards: minmax(340px, 1fr) overflows at 375px
-     because 340 + padding > 375. Force 1-per-row. */
-  main > div > div[style*="minmax(340px"] {
+     because 340 + padding > 375. Force 1-per-row.
+     #523: was previously `main > div > div[style*="minmax(340px"]`. Migrated
+     to a dedicated class on TelecallerQueue.jsx:481. */
+  .telecaller-leads-grid {
     grid-template-columns: 1fr !important;
   }
 
-  /* Generic safety: any horizontally-overflowing card-list grid with
-     a min track wider than 320px should collapse to 1 column. */
+  /* Generic safety net: any horizontally-overflowing card-list grid with a
+     min track wider than 320px collapses to 1 column. Intentionally kept as
+     attribute selectors — these patterns appear at 14+ JSX call sites
+     across pages (BookingPages, Chatbots, DocumentTemplates, Pipelines,
+     Marketplace, SharedInbox, AbTests, Funnel, WinLoss, Landing, Locations,
+     Loyalty, Services, etc.). Adding a className to every one is a much
+     larger refactor than #523 covers; the safety net is acceptable here
+     because the FORM (`minmax(<N>px, 1fr)`) is structurally stable across
+     those sites. If a single page diverges in the future, migrate that
+     site explicitly to a class hook rather than chasing a selector tweak. */
   div[style*="minmax(320px"],
   div[style*="minmax(340px"],
   div[style*="minmax(360px"] {
@@ -187,7 +208,11 @@
 
   /* Reports / Patients export+filter button rows — wrap. Scope to main
      content so the app-shell header (which has its own balance) is not
-     affected. */
+     affected. Intentionally kept as an attribute selector per #523's
+     "keep selector if no clean replacement" rule — the `display: flex` +
+     `gap` shape applies to ~888 JSX sites; per-site className migration
+     is wildly out of scope. The selector is also broad enough to catch
+     newly-added rows automatically, which is the intent. */
   main div[style*="display: flex"][style*="gap"] {
     flex-wrap: wrap;
   }
@@ -205,7 +230,16 @@
   }
 
   /* KPI cards inside auto-fit grids force to 1 column at this width
-     to avoid awkward 140px-each pairs. */
+     to avoid awkward 140px-each pairs. Intentionally kept as attribute
+     selectors per #523 — the `minmax(<N>px, 1fr)` patterns at 200/220/240/
+     260px appear at 13+ JSX call sites across pages (Dashboard, Currencies,
+     Quotas, Payments, WebVisitors, WinLoss, Privacy, DocumentTracking,
+     Forecasting, Landing, OwnerDashboard, Patients, Visits, Locations,
+     PublicBooking, Loyalty, PerLocationDashboard). Per-site className
+     migration is out of scope — the safety net works while the FORM is
+     stable. CLAUDE.md's `repeat(auto-fit, minmax(min(100%, 240px), 1fr))`
+     pattern would obviate this whole `<=380px` block, but adopting that
+     across 13+ sites is its own task. */
   div[style*="minmax(200px"],
   div[style*="minmax(220px"],
   div[style*="minmax(240px"],
@@ -213,8 +247,10 @@
     grid-template-columns: 1fr !important;
   }
 
-  /* Reports totals: collapse to 1 column at very narrow widths. */
-  main > div > div[style*="repeat("][style*=", 1fr)"] {
+  /* Reports totals: collapse to 1 column at very narrow widths.
+     #523: migrated from attribute selector to the same `.reports-totals-grid`
+     class used by the <=899px block above — single source of truth. */
+  .reports-totals-grid {
     grid-template-columns: 1fr !important;
   }
 }

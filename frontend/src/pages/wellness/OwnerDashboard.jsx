@@ -135,11 +135,13 @@ export default function OwnerDashboard() {
         />
       </div>
 
-      {/* Yesterday vs Today + Recommendations side by side */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+      {/* Yesterday vs Today + Recommendations side by side.
+          #523: className-based responsive hooks (was [style*="1fr 1fr"]
+          attribute selector — silently broke on inline-style refactor). */}
+      <div className="wellness-split-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
         <div className="glass" style={{ padding: '1.25rem' }}>
           <h3 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600 }}>Yesterday's actuals</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+          <div className="wellness-stat-row-3up" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
             <div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Visits</div>
               <div style={{ fontSize: '1.4rem', fontWeight: 600 }}>{data.yesterday.visits}</div>

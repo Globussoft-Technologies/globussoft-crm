@@ -269,7 +269,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 - [x] Currency string in response uses single symbol per field (#256 — no "$ ₹"). — Path A; route returns numeric totalAmount + zero formatted-currency strings, so the no-double-symbol invariant is vacuously satisfied. Pinned via stringify-and-grep over the full response (`/\$\s*₹/`, `/\$\$/`, `/USD\s*\$/` etc.) so any future addition of a `formattedTotal` string field can't sneak a regression in.
 - [x] Old shape `{name, items}` returns 400 with hint to migrate to `{title, lineItems}` (#199 — backwards-compat shim or hard break is fine, just no 500). — Path A; backend chose back-compat shim (`name`/`items` are aliases). Pinned: `{name, items}` together → 201, `{name, lineItems}` mixed → 201, `{name}` only (no items field) → 400 LINE_ITEMS_REQUIRED, never 500.
 
-**Estimated effort:** 0.5 day. Commit: __TBD__
+**Estimated effort:** 0.5 day. Commit: `b5971a1`
 
 ---
 

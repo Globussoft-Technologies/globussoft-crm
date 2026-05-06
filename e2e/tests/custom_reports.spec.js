@@ -170,7 +170,8 @@ test.describe('custom-reports routes', () => {
     const id = createdReportIds[0];
     test.skip(!id, 'no report from previous test');
     const res = await request.delete(`${API}/custom-reports/${id}`, { headers: auth() });
-    expect(res.status()).toBe(200);
+    // #550 sweep: DELETE-success is 204 No Content (was 200 with `{message}`).
+    expect(res.status()).toBe(204);
     createdReportIds.length = 0;
 
     const after = await request.get(`${API}/custom-reports/${id}`, { headers: auth() });

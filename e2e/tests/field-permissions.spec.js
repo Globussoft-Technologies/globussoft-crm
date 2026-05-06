@@ -140,7 +140,8 @@ test.describe('field-permissions API smoke', () => {
     expect(updated.canRead).toBe(false);
 
     const del = await request.delete(`${API}/field-permissions/${rule.id}`, { headers: adminAuth() });
-    expect(del.status()).toBe(200);
+    // #550 sweep: DELETE-success is 204 No Content (was 200 with `{message}`).
+    expect(del.status()).toBe(204);
     // mark cleaned up so afterAll doesn't double-delete
     createdRuleIds.splice(createdRuleIds.indexOf(rule.id), 1);
   });

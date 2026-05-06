@@ -159,7 +159,8 @@ test.describe('currencies routes', () => {
     const id = createdCurrencyIds[0];
     test.skip(!id, 'no currency from previous test');
     const res = await request.delete(`${API}/currencies/${id}`, { headers: auth() });
-    expect(res.status()).toBe(200);
+    // #550 sweep: DELETE-success is 204 No Content (was 200 with `{message}`).
+    expect(res.status()).toBe(204);
     // remove from afterAll cleanup
     createdCurrencyIds.length = 0;
   });

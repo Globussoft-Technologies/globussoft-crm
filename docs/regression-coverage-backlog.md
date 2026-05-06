@@ -287,7 +287,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 Plus a generic-tenant cross-tenant test (`admin@globussoft.com` → 403 `WELLNESS_TENANT_REQUIRED`) and an unauthenticated-request → 401/403 sanity. **21 new tests** on top of 51 existing = **72 total**, 17.6s on local stack. The spec was already wired into deploy.yml + coverage.yml gate-spec lists.
 
-**Estimated effort:** 1 day. Commit: `<pending>`
+**Estimated effort:** 1 day. Commit: `00438ef`
 
 ---
 

@@ -1,7 +1,11 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const router = express.Router();
+// #527 (CRIT-02 hardening): territory CRUD + assignment is admin-only.
+// GET stays open (USERs need to see their territory).
+const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 
 function safeJson(str, fallback) {
   if (!str) return fallback;
@@ -47,7 +51,7 @@ router.get("/", async (req, res) => {
 });
 
 // POST / — create
-router.post("/", async (req, res) => {
+router.post("/", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const { name, regions, assignedUserIds } = req.body || {};
@@ -71,7 +75,7 @@ router.post("/", async (req, res) => {
 });
 
 // PUT /:id — update
-router.put("/:id", async (req, res) => {
+router.put("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = Number(req.params.id);
@@ -101,7 +105,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // DELETE /:id
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = Number(req.params.id);
@@ -124,7 +128,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // POST /:id/assign-contact — assign contact to territory
-router.post("/:id/assign-contact", async (req, res) => {
+router.post("/:id/assign-contact", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = Number(req.params.id);

@@ -1,7 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
+// #527 (CRIT-02 hardening): admin-config writes are admin-only. GET routes
+// stay open to all authenticated tenant members (USERs need to see the
+// pipeline list to file deals against it).
+const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 
 // ── GET / ─ list all pipelines for tenant (with deal counts) ─────
 router.get("/", verifyToken, async (req, res) => {
@@ -28,7 +32,7 @@ router.get("/", verifyToken, async (req, res) => {
 });
 
 // ── POST / ─ create new pipeline ─────────────────────────────────
-router.post("/", verifyToken, async (req, res) => {
+router.post("/", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const { name, description, isDefault } = req.body || {};
@@ -66,7 +70,7 @@ router.post("/", verifyToken, async (req, res) => {
 });
 
 // ── PUT /:id ─ update name/description ───────────────────────────
-router.put("/:id", verifyToken, async (req, res) => {
+router.put("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
@@ -89,7 +93,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 });
 
 // ── DELETE /:id ─ delete pipeline (no default, no deals) ─────────
-router.delete("/:id", verifyToken, async (req, res) => {
+router.delete("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
@@ -115,7 +119,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
 });
 
 // ── POST /:id/set-default ─ atomically swap default ──────────────
-router.post("/:id/set-default", verifyToken, async (req, res) => {
+router.post("/:id/set-default", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);

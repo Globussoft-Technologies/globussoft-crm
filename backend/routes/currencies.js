@@ -1,6 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { verifyToken, verifyRole } = require("../middleware/auth");
+// #527 (CRIT-02 hardening): currency CRUD is admin-only. GET stays open
+// (USERs need rates to render deal/invoice values). POST /convert is also
+// open — it's a calculation endpoint with no side effect.
+const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 
 // Default currency set used when a tenant has not yet initialized anything.
 const DEFAULTS = [
@@ -31,7 +36,7 @@ router.get("/", async (req, res) => {
 });
 
 // POST /api/currencies — create a new currency for this tenant
-router.post("/", async (req, res) => {
+router.post("/", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const { code, symbol, name, exchangeRate, isBase } = req.body;
@@ -70,7 +75,7 @@ router.post("/", async (req, res) => {
 });
 
 // POST /api/currencies/seed — initialize default currency set for tenant
-router.post("/seed", async (req, res) => {
+router.post("/seed", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const existing = await prisma.currency.count({ where: { tenantId } });
@@ -92,7 +97,7 @@ router.post("/seed", async (req, res) => {
 });
 
 // PUT /api/currencies/:id — update a currency (tenant-scoped)
-router.put("/:id", async (req, res) => {
+router.put("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id);
@@ -128,7 +133,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // DELETE /api/currencies/:id — delete (only if not base)
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id);
@@ -149,7 +154,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // POST /api/currencies/:id/set-base — atomically set a currency as the base
-router.post("/:id/set-base", async (req, res) => {
+router.post("/:id/set-base", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id);

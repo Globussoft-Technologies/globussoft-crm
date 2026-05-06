@@ -1,5 +1,11 @@
 const router = require("express").Router();
 const prisma = require("../lib/prisma");
+const { verifyToken, verifyRole } = require("../middleware/auth");
+// #527 (CRIT-02 hardening): chatbot CRUD + activate/deactivate are admin-only.
+// GET stays open (USERs may need to see the bot list). POST /chat/:botId is
+// the actual chat-usage endpoint and stays open to all auth users — that's
+// what bots are FOR.
+const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 
 // ── Helpers ────────────────────────────────────────────────────────
 function parseJSON(s, fallback) {
@@ -144,7 +150,7 @@ router.get("/", async (req, res) => {
 });
 
 // POST /api/chatbots
-router.post("/", async (req, res) => {
+router.post("/", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const { name, flow } = req.body || {};
@@ -175,7 +181,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // PUT /api/chatbots/:id
-router.put("/:id", async (req, res) => {
+router.put("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
@@ -195,7 +201,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // DELETE /api/chatbots/:id
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
@@ -211,7 +217,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // POST /api/chatbots/:id/activate
-router.post("/:id/activate", async (req, res) => {
+router.post("/:id/activate", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
@@ -226,7 +232,7 @@ router.post("/:id/activate", async (req, res) => {
 });
 
 // POST /api/chatbots/:id/deactivate
-router.post("/:id/deactivate", async (req, res) => {
+router.post("/:id/deactivate", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);

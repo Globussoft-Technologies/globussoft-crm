@@ -416,11 +416,17 @@ test.describe('Wellness API — POST /patients (create + validation)', () => {
     expect(res.status()).toBe(400);
   });
 
-  test('201 phone optional (omitted)', async ({ request }) => {
+  test('400 PHONE_REQUIRED when phone omitted (#536 — was 201 phone-optional)', async ({ request }) => {
+    // #536 (PT-04): pen-test reported create succeeding with no phone,
+    // which then broke dialer / WhatsApp / SMS integrations (every
+    // outbound channel keys on phone). Phone is now required on create
+    // (not on update — existing patients without a phone still load).
     const res = await authPost(request, '/api/wellness/patients', {
       name: `E2E ${RUN_TAG} NoPhone`,
     });
-    expect(res.status()).toBe(201);
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('PHONE_REQUIRED');
   });
 
   test('400 on invalid email shape', async ({ request }) => {

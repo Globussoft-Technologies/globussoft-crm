@@ -71,9 +71,27 @@ async function fetchAll(request, path, token) {
   return body?.data || body?.tasks || body?.locations || body?.patients || body?.threads || body?.messages || [];
 }
 
+// Rows newer than this are excluded from the residue check — they're
+// almost certainly in-flight test data that another spec hasn't yet
+// hit its afterAll on. Playwright runs files in parallel by default, so
+// even though this spec is alphabetically late, a sibling file
+// (tasks-api.spec.js etc.) may still be running its describe blocks
+// when we sample. The afterAll will clean it up; we just need to not
+// fail the gate on the racing window. 60s is conservative — any spec
+// that creates a row and doesn't delete it within a minute IS a real
+// teardown miss and the gate still catches it.
+const RESIDUE_FRESH_WINDOW_MS = 60 * 1000;
+
 function residueIn(rows, fieldName) {
+  const cutoff = Date.now() - RESIDUE_FRESH_WINDOW_MS;
   return (rows || [])
     .filter((r) => r && typeof r[fieldName] === 'string' && RESIDUE_REGEX.test(r[fieldName]))
+    .filter((r) => {
+      // If createdAt is missing or too new, exclude — see comment above.
+      if (!r.createdAt) return true; // no timestamp → can't tell, treat as residue
+      const created = new Date(r.createdAt).getTime();
+      return Number.isFinite(created) && created < cutoff;
+    })
     .map((r) => `${fieldName}=${JSON.stringify(r[fieldName])} (id=${r.id})`);
 }
 

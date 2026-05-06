@@ -17,11 +17,16 @@ const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 
 test.describe('CI smoke', () => {
   test('GET /api/health returns 200 + {status:"healthy"}', async ({ request }) => {
+    // #543 (MED-02): /api/health is two-tier — minimal body for unauth
+    // callers (status, timestamp ONLY) and full body for authed callers
+    // (adds version/uptime/database). The unauth fingerprinting close-out
+    // means this test no longer asserts uptime here; the
+    // unauth+authed shape contract lives in api-health.spec.js.
     const res = await request.get(`${BASE_URL}/api/health`);
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.status).toBe('healthy');
-    expect(typeof body.uptime).toBe('number');
+    expect(typeof body.timestamp).toBe('string');
   });
 
   test('GET / serves the SPA layout shell (200)', async ({ request }) => {

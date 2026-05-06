@@ -50,6 +50,10 @@ function makeReqResNext({ headers = {}, user = null } = {}) {
       this.body = data;
       return this;
     }),
+    // #537 (PT-05): the unauthorized() helper sets the standard
+    // WWW-Authenticate response header on every 401 (RFC 7235 §4.1).
+    // Mock the setter so calls don't throw "res.set is not a function".
+    set: vi.fn(function () { return this; }),
     get statusCode() {
       return statusCode;
     },
@@ -59,11 +63,17 @@ function makeReqResNext({ headers = {}, user = null } = {}) {
 }
 
 describe('verifyToken', () => {
-  test('returns 403 when no Authorization header', async () => {
+  // #537 (PT-05) RFC 7235: missing Authorization header now returns 401
+  // (was 403). 403 is reserved for "authenticated but not allowed". Body
+  // also tightened — "Access Denied" → "Authentication required". The
+  // unauthorized() helper sets the standard WWW-Authenticate response
+  // header (asserted below).
+  test('returns 401 when no Authorization header (was 403 — #537)', async () => {
     const { req, res, next } = makeReqResNext();
     await verifyToken(req, res, next);
-    expect(res.status).toHaveBeenCalledWith(403);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Access Denied' });
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Authentication required' });
+    expect(res.set).toHaveBeenCalledWith('WWW-Authenticate', 'Bearer realm="api"');
     expect(next).not.toHaveBeenCalled();
   });
 

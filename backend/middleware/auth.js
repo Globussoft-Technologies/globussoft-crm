@@ -8,9 +8,19 @@ if (!process.env.JWT_SECRET) {
 }
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 
+// #537 (PT-05): RFC 7235 semantics — missing/invalid credentials are 401
+// (not 403). 403 is reserved for "authenticated but not allowed". Also
+// emit the standard WWW-Authenticate response header on every 401 so
+// SDKs / SPAs can auto-trigger their token-refresh flow correctly.
+const WWW_AUTH = 'Bearer realm="api"';
+function unauthorized(res, error) {
+  res.set("WWW-Authenticate", WWW_AUTH);
+  return res.status(401).json({ error });
+}
+
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(403).json({ error: "Access Denied" });
+  if (!authHeader) return unauthorized(res, "Authentication required");
 
   const token = authHeader.split(" ")[1];
   try {
@@ -21,7 +31,7 @@ const verifyToken = async (req, res, next) => {
     // be accepted by this middleware even if signed with the same secret.
     // Guard both ways: presence of patientId, AND absence of userId.
     if (verified.patientId || !verified.userId) {
-      return res.status(401).json({ error: "Invalid staff token (portal tokens are not allowed here)" });
+      return unauthorized(res, "Invalid staff token (portal tokens are not allowed here)");
     }
 
     // Backwards compat: tokens issued before multi-tenancy lack tenantId — default to 1 (Default Org)
@@ -30,7 +40,7 @@ const verifyToken = async (req, res, next) => {
     }
     // Block awaiting2FA temp tokens from accessing protected resources
     if (verified.awaiting2FA === true) {
-      return res.status(401).json({ error: "Two-factor authentication required. Complete 2FA verification first." });
+      return unauthorized(res, "Two-factor authentication required. Complete 2FA verification first.");
     }
 
     // Issue #180: token revocation. Tokens issued after this change carry a `jti`
@@ -46,7 +56,7 @@ const verifyToken = async (req, res, next) => {
           select: { id: true },
         });
         if (revoked) {
-          return res.status(401).json({ error: "Session revoked. Please log in again." });
+          return unauthorized(res, "Session revoked. Please log in again.");
         }
       } catch (dbErr) {
         // If the lookup fails (DB blip, table not yet migrated), fail open so
@@ -59,9 +69,9 @@ const verifyToken = async (req, res, next) => {
     next();
   } catch (err) {
     if (err && err.name === "TokenExpiredError") {
-      return res.status(401).json({ error: "Session expired, please log in again" });
+      return unauthorized(res, "Session expired, please log in again");
     }
-    res.status(401).json({ error: "Invalid Authentication Token" });
+    return unauthorized(res, "Invalid Authentication Token");
   }
 };
 

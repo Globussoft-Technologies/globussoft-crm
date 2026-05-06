@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download, RefreshCw } from 'lucide-react';
+import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download, RefreshCw, CreditCard, X } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -31,6 +31,7 @@ export default function Invoices() {
   const [invoices, setInvoices] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [paymentConfig, setPaymentConfig] = useState({ stripe: { configured: false }, razorpay: { configured: false } });
   const [newInvoice, setNewInvoice] = useState({
     invoiceNum: '',
     contactId: '',
@@ -44,10 +45,29 @@ export default function Invoices() {
   // explicitly instead of guessing the toggle.
   const [recurInvoice, setRecurInvoice] = useState(null);
   const [recurFreq, setRecurFreq] = useState('monthly');
+  const [paymentModal, setPaymentModal] = useState(null);
+  const [paymentGateway, setPaymentGateway] = useState('razorpay');
+  const [processingPayment, setProcessingPayment] = useState(false);
 
   useEffect(() => {
     loadData();
+    loadPaymentConfig();
   }, []);
+
+  const loadPaymentConfig = async () => {
+    try {
+      const config = await fetchApi('/api/payments/config');
+      setPaymentConfig(config);
+      // Set default to available gateway
+      if (config.razorpay?.configured) {
+        setPaymentGateway('razorpay');
+      } else if (config.stripe?.configured) {
+        setPaymentGateway('stripe');
+      }
+    } catch (err) {
+      console.error('Failed to load payment config:', err);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -166,6 +186,164 @@ export default function Invoices() {
       loadData();
     } catch (err) {
       notify.error('Failed to void invoice');
+    }
+  };
+
+  const initiatePayment = (inv) => {
+    setPaymentModal(inv);
+  };
+
+  const openRazorpayCheckout = async (paymentData, invoice) => {
+    try {
+      // Use key from order response first, then fallback to config
+      const razorpayKeyId = paymentData.key || paymentConfig.razorpay?.keyId;
+      console.log('[Payment] Razorpay Key ID:', razorpayKeyId);
+      console.log('[Payment] Order ID:', paymentData.orderId);
+      console.log('[Payment] Full payment data:', paymentData);
+
+      if (!razorpayKeyId) {
+        notify.error('⚠️ Razorpay public key not configured. Key: ' + JSON.stringify(paymentData));
+        setProcessingPayment(false);
+        return;
+      }
+
+      if (!paymentData.orderId) {
+        notify.error('⚠️ Payment order creation failed');
+        setProcessingPayment(false);
+        return;
+      }
+
+      const options = {
+        key: razorpayKeyId,
+        order_id: paymentData.orderId,
+        amount: Math.round(invoice.amount * 100),
+        currency: 'INR',
+        name: 'Invoice Payment',
+        description: `Invoice ${invoice.invoiceNum}`,
+        handler: async (response) => {
+          console.log('[Payment] Razorpay response received:', response);
+          try {
+            const verifyResponse = await fetchApi('/api/payments/confirm-razorpay', {
+              method: 'POST',
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                paymentId: paymentData.paymentId,
+              }),
+            });
+
+            console.log('[Payment] Verification response:', verifyResponse);
+            if (verifyResponse?.success) {
+              notify.success(`✓ Payment successful! Invoice ${invoice.invoiceNum} marked as PAID.`);
+              setPaymentModal(null);
+              await loadData();
+            } else {
+              notify.error(`Payment verification failed: ${verifyResponse?.error || 'Unknown error'}`);
+            }
+          } catch (err) {
+            console.error('[Payment] Verification error:', err);
+            notify.error(`Verification failed: ${err.message}`);
+          } finally {
+            setProcessingPayment(false);
+          }
+        },
+        prefill: {
+          name: invoice.contact?.name || 'Customer',
+          email: invoice.contact?.email || 'customer@example.com',
+        },
+        theme: { color: '#6366f1' },
+        modal: {
+          ondismiss: () => {
+            console.log('[Payment] Razorpay modal dismissed');
+            setProcessingPayment(false);
+          },
+        },
+      };
+
+      console.log('[Payment] Opening Razorpay with options:', options);
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (err) {
+      console.error('[Payment] Error opening checkout:', err);
+      notify.error(`Failed to open payment: ${err.message}`);
+      setProcessingPayment(false);
+    }
+  };
+
+  const processPayment = async () => {
+    if (!paymentModal) return;
+    setProcessingPayment(true);
+    console.log('[Payment] Starting payment for invoice:', paymentModal.invoiceNum, 'Gateway:', paymentGateway);
+
+    try {
+      if (paymentGateway === 'razorpay') {
+        if (!paymentConfig.razorpay?.configured) {
+          notify.error('⚠️ Razorpay is not configured. Please add credentials to .env file.');
+          setProcessingPayment(false);
+          return;
+        }
+
+        console.log('[Payment] Creating Razorpay order...');
+        const response = await fetchApi('/api/payments/create-razorpay-order', {
+          method: 'POST',
+          body: JSON.stringify({
+            invoiceId: paymentModal.id,
+            amount: paymentModal.amount,
+            currency: 'INR',
+          }),
+        });
+
+        console.log('[Payment] Order response:', response);
+        if (!response?.orderId) {
+          throw new Error('Failed to create payment order: ' + JSON.stringify(response));
+        }
+
+        if (!window.Razorpay) {
+          console.log('[Payment] Loading Razorpay SDK...');
+          const script = document.createElement('script');
+          script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+          script.async = true;
+          script.onload = () => {
+            console.log('[Payment] Razorpay SDK loaded');
+            openRazorpayCheckout(response, paymentModal);
+          };
+          script.onerror = () => {
+            console.error('[Payment] Failed to load Razorpay SDK');
+            notify.error('Failed to load Razorpay SDK');
+            setProcessingPayment(false);
+          };
+          document.body.appendChild(script);
+        } else {
+          console.log('[Payment] Razorpay SDK already loaded');
+          await openRazorpayCheckout(response, paymentModal);
+        }
+      } else if (paymentGateway === 'stripe') {
+        if (!paymentConfig.stripe?.configured) {
+          notify.error('⚠️ Stripe is not configured yet. Please add credentials to .env file.');
+          setProcessingPayment(false);
+          return;
+        }
+
+        const response = await fetchApi('/api/payments/create-stripe-intent', {
+          method: 'POST',
+          body: JSON.stringify({
+            invoiceId: paymentModal.id,
+            amount: paymentModal.amount,
+            currency: 'USD',
+          }),
+        });
+
+        if (response?.clientSecret) {
+          // TODO: Implement Stripe Elements checkout in modal
+          notify.error('Stripe checkout coming soon');
+          setProcessingPayment(false);
+        }
+      }
+    } catch (err) {
+      console.error('[Payment] Error:', err);
+      notify.error(`Payment failed: ${err.message}`);
+      setProcessingPayment(false);
     }
   };
 
@@ -438,19 +616,34 @@ export default function Invoices() {
                             <Download size={14} /> PDF
                           </button>
                           {inv.status !== 'PAID' && inv.status !== 'VOIDED' && (
-                            <button
-                              onClick={() => markPaid(inv.id)}
-                              className="btn-secondary"
-                              style={{
-                                display: 'flex', alignItems: 'center', gap: '0.3rem',
-                                background: 'var(--success-color)', color: '#fff', border: 'none',
-                                padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
-                                cursor: 'pointer',
-                              }}
-                              aria-label={`Mark invoice ${inv.invoiceNum} as paid`}
-                            >
-                              <CheckCircle2 size={14} /> Mark Paid
-                            </button>
+                            <>
+                              <button
+                                onClick={() => initiatePayment(inv)}
+                                className="btn-secondary"
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: '0.3rem',
+                                  background: '#3b82f6', color: '#fff', border: 'none',
+                                  padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
+                                  cursor: 'pointer',
+                                }}
+                                aria-label={`Pay invoice ${inv.invoiceNum}`}
+                              >
+                                <CreditCard size={14} /> Pay Now
+                              </button>
+                              <button
+                                onClick={() => markPaid(inv.id)}
+                                className="btn-secondary"
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: '0.3rem',
+                                  background: 'var(--success-color)', color: '#fff', border: 'none',
+                                  padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
+                                  cursor: 'pointer',
+                                }}
+                                aria-label={`Mark invoice ${inv.invoiceNum} as paid`}
+                              >
+                                <CheckCircle2 size={14} /> Mark Paid
+                              </button>
+                            </>
                           )}
                           {/* #304: a voided invoice should never offer recurring
                               billing — the user already cancelled it, and
@@ -574,6 +767,119 @@ export default function Invoices() {
                 }}
               >
                 {recurInvoice.isRecurring ? 'Stop recurring' : `Activate ${recurFreq}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Modal */}
+      {paymentModal && (
+        <div
+          onClick={() => !processingPayment && setPaymentModal(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="card"
+            style={{ background: 'var(--surface-bg)', padding: '2rem', borderRadius: '12px', minWidth: '420px', maxWidth: '500px' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 600, margin: 0 }}>
+                <CreditCard size={20} style={{ marginRight: '0.5rem', display: 'inline' }} />
+                Pay Invoice
+              </h3>
+              <button
+                onClick={() => setPaymentModal(null)}
+                disabled={processingPayment}
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: processingPayment ? 'not-allowed' : 'pointer', opacity: processingPayment ? 0.5 : 1 }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ background: 'var(--subtle-bg-2)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem' }}>
+              <p style={{ margin: '0.5rem 0', fontSize: '0.9rem' }}>
+                <strong>Invoice:</strong> {paymentModal.invoiceNum}
+              </p>
+              <p style={{ margin: '0.5rem 0', fontSize: '0.9rem' }}>
+                <strong>Amount:</strong> <span style={{ color: 'var(--success-color)', fontWeight: 600 }}>{formatCurrency(paymentModal.amount)}</span>
+              </p>
+            </div>
+
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Payment Method
+              </label>
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button
+                  onClick={() => !processingPayment && paymentConfig.stripe?.configured && setPaymentGateway('stripe')}
+                  disabled={processingPayment || !paymentConfig.stripe?.configured}
+                  title={!paymentConfig.stripe?.configured ? 'Stripe credentials not configured' : ''}
+                  style={{
+                    flex: 1, padding: '0.75rem', borderRadius: '8px',
+                    border: `2px solid ${paymentConfig.stripe?.configured ? (paymentGateway === 'stripe' ? 'var(--accent-color)' : 'var(--border-color)') : '#d1d5db'}`,
+                    background: paymentGateway === 'stripe' && paymentConfig.stripe?.configured ? 'rgba(99,102,241,0.1)' : !paymentConfig.stripe?.configured ? 'rgba(0,0,0,0.05)' : 'transparent',
+                    color: !paymentConfig.stripe?.configured ? '#9ca3af' : (paymentGateway === 'stripe' ? 'var(--accent-color)' : 'var(--text-secondary)'),
+                    fontWeight: 600, cursor: (processingPayment || !paymentConfig.stripe?.configured) ? 'not-allowed' : 'pointer',
+                    opacity: !paymentConfig.stripe?.configured ? 0.6 : (processingPayment ? 0.5 : 1),
+                  }}
+                >
+                  💳 Stripe {paymentConfig.stripe?.configured ? '✓' : '(Coming)'}
+                </button>
+                <button
+                  onClick={() => !processingPayment && paymentConfig.razorpay?.configured && setPaymentGateway('razorpay')}
+                  disabled={processingPayment || !paymentConfig.razorpay?.configured}
+                  title={!paymentConfig.razorpay?.configured ? 'Razorpay credentials not configured' : ''}
+                  style={{
+                    flex: 1, padding: '0.75rem', borderRadius: '8px',
+                    border: `2px solid ${paymentConfig.razorpay?.configured ? (paymentGateway === 'razorpay' ? '#1f4788' : 'var(--border-color)') : '#d1d5db'}`,
+                    background: paymentGateway === 'razorpay' && paymentConfig.razorpay?.configured ? 'rgba(31,71,136,0.1)' : !paymentConfig.razorpay?.configured ? 'rgba(0,0,0,0.05)' : 'transparent',
+                    color: !paymentConfig.razorpay?.configured ? '#9ca3af' : (paymentGateway === 'razorpay' ? '#1f4788' : 'var(--text-secondary)'),
+                    fontWeight: 600, cursor: (processingPayment || !paymentConfig.razorpay?.configured) ? 'not-allowed' : 'pointer',
+                    opacity: !paymentConfig.razorpay?.configured ? 0.6 : (processingPayment ? 0.5 : 1),
+                  }}
+                >
+                  💰 Razorpay {paymentConfig.razorpay?.configured ? '✓' : '(Setup)'}
+                </button>
+              </div>
+            </div>
+
+            {paymentGateway === 'razorpay' && paymentConfig.razorpay?.configured && (
+              <div style={{ background: 'rgba(31,71,136,0.05)', padding: '0.75rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.8rem', color: '#1f4788', borderLeft: '3px solid #1f4788' }}>
+                🧪 <strong>Razorpay Test Card:</strong><br/>
+                4386 2894 0766 0153 | Any MM/YY | Any CVV
+              </div>
+            )}
+            {paymentGateway === 'stripe' && paymentConfig.stripe?.configured && (
+              <div style={{ background: 'rgba(59,130,246,0.05)', padding: '0.75rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)', borderLeft: '3px solid #3b82f6' }}>
+                🧪 <strong>Stripe Test Card:</strong><br/>
+                4000 0027 6000 3184 | Any MM/YY | Any CVV (3DS required)
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                onClick={() => setPaymentModal(null)}
+                disabled={processingPayment}
+                style={{
+                  padding: '0.65rem 1.5rem', background: 'transparent', border: '1px solid var(--border-color)',
+                  color: 'var(--text-primary)', borderRadius: '6px', cursor: processingPayment ? 'not-allowed' : 'pointer',
+                  fontWeight: 500, opacity: processingPayment ? 0.5 : 1,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={processPayment}
+                disabled={processingPayment}
+                style={{
+                  padding: '0.65rem 1.5rem', background: 'var(--accent-color)', color: '#fff', border: 'none',
+                  borderRadius: '6px', cursor: processingPayment ? 'not-allowed' : 'pointer', fontWeight: 600,
+                  opacity: processingPayment ? 0.7 : 1, display: 'flex', alignItems: 'center', gap: '0.5rem',
+                }}
+              >
+                {processingPayment ? '⏳ Processing...' : '✓ Pay Now'}
               </button>
             </div>
           </div>

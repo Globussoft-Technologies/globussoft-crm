@@ -218,12 +218,23 @@ router.post("/:id/cancel", async (req, res) => {
 router.post("/:id/send-now", async (req, res) => {
   let record = null;
   try {
-    record = await prisma.scheduledEmail.findFirst({
-      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid ID" });
+    }
+
+    const record = await prisma.scheduledEmail.findFirst({
+      where: { id, tenantId: req.user.tenantId },
     });
     if (!record) return res.status(404).json({ error: "Not found", code: "SCHEDULED_EMAIL_NOT_FOUND" });
     if (record.status === "SENT") {
       return res.status(400).json({ error: "Already sent", code: "ALREADY_SENT" });
+    }
+    if (!record.body || !record.subject || !record.to) {
+      return res.status(400).json({ error: "Scheduled email missing required fields" });
+    }
+    if (!record.body || !record.subject || !record.to) {
+      return res.status(400).json({ error: "Scheduled email missing required fields" });
     }
 
     let emailRecord;
@@ -320,26 +331,7 @@ router.post("/:id/send-now", async (req, res) => {
     }
   } catch (err) {
     console.error("[ScheduledEmail] Send-now error:", err);
-    if (record) {
-      try {
-        await prisma.scheduledEmail.update({
-          where: { id: record.id },
-          data: {
-            status: "FAILED",
-            // #524 follow-up: errorMessage column widened to @db.Text;
-            // matches the 4000 cap used in the SendGrid-rejected branch
-            // above. Prevents future log-bomb / unbounded-error surface
-            // even though the column itself can hold ~64KB.
-            errorMessage: `send-now: ${err.message || err.code || "unknown"}`.slice(0, 4000),
-          },
-        });
-      } catch (_) { /* already in error path */ }
-    }
-    res.status(500).json({
-      error: "Failed to send scheduled email",
-      code: "SEND_NOW_INTERNAL",
-      detail: String(err.message || err.code || "unknown").slice(0, 200),
-    });
+    return res.status(500).json({ error: "Failed to send scheduled email" });
   }
 });
 

@@ -6,6 +6,23 @@
 
 ---
 
+## ⚠️ TASKS NEEDING USER ATTENTION (pen-test 2026-05-07 wave)
+
+These open issues from the 2026-05-07 QA pass need a design / product call before code work makes sense. Logged here by the autonomous-loop cron so the user can disposition them at their cadence (the cron fires every 15 min and parks user-input items here instead of guessing).
+
+| # | Issue | Why blocked on user |
+|---|---|---|
+| #552 + #553 + #554 | Dashboard non-determinism cluster (KPIs flicker / sometimes-zero / Expected Revenue varies between refreshes) | Needs root-cause investigation across both backend + frontend. May share cause with #529 sidebar dep-cycle (already fixed) but symptoms persist per QA. Suggested: dispatch a discovery agent to instrument /wellness/dashboard + /api/contacts list to capture the non-determinism source. ~half-day investigation + fix scope unclear until that's done. |
+| #555 | Tenant context flips silently between Default Org and Enhanced Wellness based on URL alone (no switcher, no audit entry) | Product / UX decision: should there be an explicit tenant-switcher widget in the topbar? Or stay URL-driven with an audit row + visual indicator? The pen-test flagged this as a privilege-confusion surface. Options: (a) explicit switcher with confirmation modal; (b) URL-driven + persistent banner; (c) lock to single tenant per session and require re-login for cross-tenant. ~½-day to ship after option chosen. |
+| #558 | Audit log has no tamper-evidence (no hash chain, no sequence number, no integrity check) | Needs design decision: hash-chain (each row's hash = SHA(prev_hash + row_data)) vs HMAC per-batch vs append-only signed file vs DB-trigger insert-only. Each has different replay/verify costs. Mid-size: ~1-2 days backend + a verification CLI + retroactive hash-backfill migration. Worth a 30-min design conversation before scoping. |
+| #564 | Wellness patient detail has no consent-form / signature surface | Product call for Rishu: which consent forms are required (general / per-procedure / DPDP-specific)? Where does the signed PDF live (S3 vs DB blob vs filesystem)? Does the signature flow happen IN the patient portal or staff-side with a tablet handoff? ConsentForm Prisma model + PDF rendering pipeline already exist; the gap is the surface + workflow. ~1-day implementation after product call. |
+| #565 | Wellness P&L doesn't reconcile — /wellness vs /wellness/reports show three different revenue figures | Product call: which figure is canonical? Likely each is computing from a different timezone window or different status-set (booked vs completed vs paid). Quick fix is to align the three; harder fix is to expose the breakdown explicitly. ~½-day once canonical definition pinned. |
+| #534 follow-ups | Profile remaining 2 list endpoints >2s on cold call | Already fixed Patient + TreatmentPlan. Pen-test originally named "4 list endpoints"; need to identify the other 2 against demo. ~30-min profiling session against `crm.globusdemos.com` cold-call window. |
+
+When you've decided on a direction for any of these, drop a comment on the linked issue and the autonomous-loop cron (or the next session) will pick up the implementation.
+
+---
+
 ## 🚧 OPERATOR-BLOCKER TASKS — need a human (programmer / ops) to act
 
 These are NOT autonomous-fixable. They need a real person with credentials, infrastructure access, or a product-design call. Auto-loops should NOT try to close these.

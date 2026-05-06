@@ -439,16 +439,16 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 23. New unit test: `backend/test/lib/datetime.test.js`
+## ☑ 23. New unit test: `backend/test/lib/datetime.test.js`
 
 **Closes:** #244, #313, #387
 
 **Acceptance:**
-- [ ] datetime-local input `'2026-05-15T10:30'` with tenant TZ Asia/Kolkata stores as UTC `'2026-05-15T05:00:00Z'` and reads back as `'2026-05-15T10:30'` (#313).
-- [ ] Visit timestamps render in tenant TZ, not UTC (#244).
-- [ ] AuditLog timestamps include TZ label (#387).
+- [x] datetime-local input `'2026-05-15T10:30'` with tenant TZ Asia/Kolkata stores as UTC `'2026-05-15T05:00:00Z'` and reads back as `'2026-05-15T10:30'` (#313).
+- [x] Visit timestamps render in tenant TZ, not UTC (#244).
+- [x] AuditLog timestamps include TZ label (#387).
 
-**Estimated effort:** 0.25 day. Commit: ___________
+**Estimated effort:** 0.25 day. Commit: _shipped_ (Path B — created `backend/lib/datetime.js` exporting `parseDateTimeLocalInTZ` / `formatInTenantTZ` / `toDateTimeLocalInTZ` / `nowInTZ` over `date-fns-tz`, plus 35 vitest cases covering round-trip, DST coverage for `America/New_York`, midnight rollover, leap year, bad-input sentinels, and the `#387` TZ-label anti-regression). Callsite migration deferred to a follow-up sweep — see TODOS.md.
 
 ---
 

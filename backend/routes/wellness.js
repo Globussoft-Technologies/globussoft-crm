@@ -33,6 +33,11 @@ const { writeAudit, diffFields } = require("../lib/audit");
 // the second axis: allow lists like ["doctor","admin"] gate clinical writes,
 // ["admin","manager"] gates org-wide reports + catalog edits.
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
+// #539: standard role-gate (orthogonal to verifyWellnessRole — checks the
+// generic role enum ADMIN/MANAGER/USER from the JWT, not the wellnessRole
+// axis). Used by DELETE /patients/:id and other admin-only operations
+// added to this file.
+const { verifyRole } = require("../middleware/auth");
 
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
@@ -700,6 +705,49 @@ router.put("/patients/:id", async (req, res) => {
     const mapped = httpFromPrismaError(e);
     if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update patient" });
+  }
+});
+
+// #539 (PT-02): DELETE /patients/:id was missing — pen-test reported HTML 404
+// on a route the demo-monitor scrub script + GDPR DSAR flow both want. This
+// is admin-only because deleting clinical records has compliance + legal
+// weight. Hard-delete (no soft-delete column on Patient yet); if the patient
+// has any FK-bound children (visits/prescriptions/consents/treatment-plans/
+// loyalty/referrals), Prisma's Restrict policy throws P2003 and we surface
+// a 409 telling the caller they need to clear children first OR file a
+// GDPR /export → /retention request which handles the cascade properly.
+// Soft-delete semantics + child-detach are a future migration (#527 PHI
+// scoping arc).
+router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ error: "Invalid patient id", code: "INVALID_ID" });
+    }
+    const existing = await prisma.patient.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Patient not found" });
+
+    await prisma.patient.delete({ where: { id } });
+
+    // #179 audit pattern — patient name only, no email/phone PII in the blob.
+    await writeAudit('Patient', 'DELETE', id, req.user.userId, req.user.tenantId, {
+      patientName: existing.name,
+    });
+
+    res.json({ success: true, id });
+  } catch (e) {
+    // Prisma FK Restrict — patient has clinical children that would be orphaned.
+    if (e && e.code === "P2003") {
+      return res.status(409).json({
+        error: "Patient has visits / prescriptions / consents / treatment plans on file. Resolve those first or use the GDPR retention flow.",
+        code: "PATIENT_HAS_CHILDREN",
+      });
+    }
+    if (e && e.code === "P2025") {
+      return res.status(404).json({ error: "Patient not found" });
+    }
+    console.error("[wellness] delete patient error:", e.message);
+    res.status(500).json({ error: "Failed to delete patient" });
   }
 });
 

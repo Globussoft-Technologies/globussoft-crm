@@ -56,7 +56,7 @@ test.describe('Portal API — public + auth gates', () => {
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.message).toBeTruthy();
+    expect(body.code || body.message).toBeTruthy(); // #550
   });
 
   test('POST /api/portal/reset without fields returns 400', async ({ request }) => {

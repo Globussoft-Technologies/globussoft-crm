@@ -361,8 +361,7 @@ test.describe('Contracts API — DELETE /:id', () => {
   test('happy path returns {message}', async ({ request }) => {
     const c = await createContract(request, { title: 'to-delete' });
     const res = await authDelete(request, `/api/contracts/${c.id}`);
-    expect(res.status()).toBe(200);
-    expect((await res.json()).message).toMatch(/deleted/i);
+    expect(res.status()).toBe(204); // #550: DELETE → 204 No Content
     // remove from the cleanup list — already gone.
     const idx = createdContractIds.indexOf(c.id);
     if (idx >= 0) createdContractIds.splice(idx, 1);
@@ -371,7 +370,7 @@ test.describe('Contracts API — DELETE /:id', () => {
   test('GET after DELETE returns 404', async ({ request }) => {
     const c = await createContract(request, { title: 'delete-then-get' });
     const del = await authDelete(request, `/api/contracts/${c.id}`);
-    expect(del.status()).toBe(200);
+    expect(del.status()).toBe(204); // #550: DELETE → 204
     const after = await authGet(request, `/api/contracts/${c.id}`);
     expect(after.status()).toBe(404);
     const idx = createdContractIds.indexOf(c.id);

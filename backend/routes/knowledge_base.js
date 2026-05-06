@@ -195,7 +195,7 @@ router.delete("/categories/:id", async (req, res) => {
       data: { categoryId: null },
     });
     await prisma.kbCategory.delete({ where: { id } });
-    res.json({ message: "Category deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("[KB][delete category]", err);
     res.status(500).json({ error: "Failed to delete category" });
@@ -305,7 +305,7 @@ router.delete("/articles/:id", async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Article not found" });
     await prisma.kbArticle.delete({ where: { id } });
-    res.json({ message: "Article deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("[KB][delete article]", err);
     res.status(500).json({ error: "Failed to delete article" });

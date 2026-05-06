@@ -635,15 +635,15 @@ test.describe('Email Threading — POST /reply', () => {
     // Route uses res.json (default 200), not res.status(201).
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.message).toBeTruthy();
-    expect(body.message.direction).toBe('OUTBOUND');
-    expect(body.message.threadId).toBe(t.threadId); // continuity preserved
+    expect(body.email).toBeTruthy(); // #550: was body.message (object); renamed to body.email
+    expect(body.email.direction).toBe('OUTBOUND');
+    expect(body.email.threadId).toBe(t.threadId); // continuity preserved
     // from/to swapped relative to the most recent message in thread.
     // The seeded inbound was a→b, so the reply's from must be b and to a.
-    expect(body.message.from).toBe(b);
-    expect(body.message.to).toBe(a);
+    expect(body.email.from).toBe(b);
+    expect(body.email.to).toBe(a);
     // Subject prefixed with Re: only if not already present.
-    expect(body.message.subject).toMatch(/^Re:\s*/i);
+    expect(body.email.subject).toMatch(/^Re:\s*/i);
     expect(typeof body.computedThreadId).toBe('string');
   });
 
@@ -694,8 +694,8 @@ test.describe('Email Threading — POST /reply', () => {
     expect(res.status()).toBe(200);
     const body = await res.json();
     // Subject should still match /^Re:/ (single prefix) — NOT "Re: Re: ..."
-    expect(body.message.subject).toMatch(/^Re:\s/);
-    expect(body.message.subject.match(/^Re:\s+Re:/i)).toBeNull();
+    expect(body.email.subject).toMatch(/^Re:\s/);
+    expect(body.email.subject.match(/^Re:\s+Re:/i)).toBeNull();
   });
 });
 

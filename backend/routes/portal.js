@@ -105,7 +105,7 @@ router.post("/set-password", async (req, res) => {
       where: { id: contact.id },
       data: { portalPasswordHash: hash },
     });
-    res.json({ message: "Password set successfully" });
+    res.json({ status: "ok", code: "PORTAL_PASSWORD_SET" }); // #550
   } catch (err) {
     console.error("[Portal][set-password]", err);
     res.status(500).json({ error: "Failed to set password" });
@@ -130,7 +130,7 @@ router.post("/forgot", async (req, res) => {
       // In production this would email the link to the contact
       console.log(`[Portal][forgot] Reset token for ${email}: ${token}`);
     }
-    res.json({ message: "If that email exists, a reset link has been sent." });
+    res.json({ status: "ack", code: "RESET_LINK_REQUESTED" }); // #550
   } catch (err) {
     console.error("[Portal][forgot]", err);
     res.status(500).json({ error: "Failed to process request" });
@@ -161,7 +161,7 @@ router.post("/reset", async (req, res) => {
     });
     resetTokens.delete(token);
 
-    res.json({ message: "Password reset successfully" });
+    res.json({ status: "ok", code: "PASSWORD_RESET_OK" }); // #550
   } catch (err) {
     console.error("[Portal][reset]", err);
     res.status(500).json({ error: "Failed to reset password" });

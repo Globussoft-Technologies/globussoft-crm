@@ -146,7 +146,7 @@ router.delete("/:id", ...adminOnly, async (req, res) => {
     }
 
     await prisma.currency.delete({ where: { id } });
-    res.json({ message: "Currency deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to delete currency" });

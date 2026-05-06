@@ -188,7 +188,7 @@ test.describe('Marketing API — campaign CRUD', () => {
   test('DELETE /campaigns/:id removes the row', async ({ request }) => {
     const c = await createCampaign(request, { name: 'to-delete' });
     const del = await authDelete(request, `/api/marketing/campaigns/${c.id}`);
-    expect(del.status()).toBe(200);
+    expect(del.status()).toBe(204); // #550: DELETE → 204
 
     const after = await authGet(request, `/api/marketing/campaigns/${c.id}`);
     expect(after.status()).toBe(404);

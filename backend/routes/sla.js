@@ -144,7 +144,7 @@ router.delete("/policies/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Policy not found" });
 
     await prisma.slaPolicy.delete({ where: { id } });
-    res.json({ message: "Policy deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("[SLA][delete policy]", err);
     res.status(500).json({ error: "Failed to delete SLA policy" });

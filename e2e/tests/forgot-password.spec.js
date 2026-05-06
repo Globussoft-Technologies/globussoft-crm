@@ -82,7 +82,7 @@ test.describe('Forgot Password — Password reset flow', () => {
     // because some envs may add request-id headers etc., but the body shape
     // should be stable.)
     expect(Object.keys(knownBody).sort()).toEqual(Object.keys(unknownBody).sort());
-    expect(knownBody.message).toBe(unknownBody.message);
+    expect(knownBody.code).toBe(unknownBody.code); expect(knownBody.code).toBe("RESET_LINK_REQUESTED"); // #550
   });
 
   test('API: POST /api/auth/reset-password with valid token resets password', async ({ request }) => {
@@ -114,7 +114,7 @@ test.describe('Forgot Password — Password reset flow', () => {
       expect(resetBody).toBeTruthy();
     } else {
       // If no token returned (e.g. sent via email), verify the forgot-password response indicates success
-      expect(forgotBody.message || forgotBody.success).toBeTruthy();
+      expect(forgotBody.code || forgotBody.message || forgotBody.success).toBeTruthy(); // #550 (back-compat with code)
     }
   });
 });

@@ -183,11 +183,11 @@ test.describe('knowledge-base API smoke', () => {
 
     // Delete
     const delArt = await request.delete(`${API}/knowledge-base/articles/${art.id}`, { headers: auth() });
-    expect(delArt.status()).toBe(200);
+    expect(delArt.status()).toBe(204); // #550: DELETE → 204
     createdArticleIds.splice(createdArticleIds.indexOf(art.id), 1);
 
     const delCat = await request.delete(`${API}/knowledge-base/categories/${cat.id}`, { headers: auth() });
-    expect(delCat.status()).toBe(200);
+    expect(delCat.status()).toBe(204); // #550: DELETE → 204
     createdCategoryIds.splice(createdCategoryIds.indexOf(cat.id), 1);
   });
 

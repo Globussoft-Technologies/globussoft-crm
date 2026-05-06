@@ -343,8 +343,7 @@ test.describe('Expenses API — DELETE /:id', () => {
   test('removes the row + returns confirmation message', async ({ request }) => {
     const e = await createExpense(request, { title: 'to-delete' });
     const del = await authDelete(request, `/api/expenses/${e.id}`);
-    expect(del.status()).toBe(200);
-    expect((await del.json()).message).toMatch(/deleted/i);
+    expect(del.status()).toBe(204); // #550: DELETE → 204 No Content
     // Confirm gone — GET after DELETE should 404.
     const after = await authGet(request, `/api/expenses/${e.id}`);
     expect(after.status()).toBe(404);
@@ -360,10 +359,10 @@ test.describe('Expenses API — DELETE /:id', () => {
     expect(res.status()).toBe(404);
   });
 
-  test('DELETE same id twice → first 200, second 404 (idempotent-safe)', async ({ request }) => {
+  test('DELETE same id twice → first 204, second 404 (idempotent-safe)', async ({ request }) => {
     const e = await createExpense(request, { title: 'twice' });
     const r1 = await authDelete(request, `/api/expenses/${e.id}`);
-    expect(r1.status()).toBe(200);
+    expect(r1.status()).toBe(204); // #550: DELETE → 204
     const r2 = await authDelete(request, `/api/expenses/${e.id}`);
     expect(r2.status()).toBe(404);
   });

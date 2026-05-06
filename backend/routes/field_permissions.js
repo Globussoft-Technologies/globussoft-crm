@@ -219,7 +219,7 @@ router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 
     await prisma.fieldPermission.delete({ where: { id } });
     clearFieldFilterCache();
-    res.json({ message: "Field permission deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("[FieldPermissions][delete]", err);
     res.status(500).json({ error: "Failed to delete field permission" });

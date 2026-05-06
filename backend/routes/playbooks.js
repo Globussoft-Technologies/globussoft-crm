@@ -283,7 +283,7 @@ router.delete("/:id", async (req, res) => {
 
     await prisma.playbookProgress.deleteMany({ where: { playbookId: id, tenantId: tId } });
     await prisma.playbook.delete({ where: { id: existing.id } });
-    res.json({ message: "Playbook deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("playbooks delete error", err);
     res.status(500).json({ error: "Failed to delete playbook" });

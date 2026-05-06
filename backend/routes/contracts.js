@@ -106,7 +106,7 @@ router.delete("/:id", async (req, res) => {
     const existing = await prisma.contract.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Contract not found" });
     await prisma.contract.delete({ where: { id: existing.id } });
-    res.json({ message: "Contract deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to delete contract" });

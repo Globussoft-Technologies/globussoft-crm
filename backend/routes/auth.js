@@ -329,7 +329,7 @@ router.post("/forgot-password", async (req, res) => {
 
     // Identical body for known + unknown emails (anti-enumeration). Token
     // is delivered via the email channel only — never in this response.
-    res.json({ message: "If the email exists, a reset link has been generated" });
+    res.json({ status: "ack", code: "RESET_LINK_REQUESTED" }); // #550
   } catch (_error) {
     res.status(500).json({ error: "Failed to process password reset request" });
   }
@@ -366,7 +366,7 @@ router.post("/reset-password", async (req, res) => {
       via: 'reset-token',
     });
 
-    res.json({ message: "Password reset successfully" });
+    res.json({ status: "ok", code: "PASSWORD_RESET_OK" }); // #550
   } catch (_error) {
     res.status(500).json({ error: "Failed to reset password" });
   }

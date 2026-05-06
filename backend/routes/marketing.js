@@ -325,7 +325,7 @@ router.delete("/campaigns/:id", verifyToken, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Campaign not found" });
 
     await prisma.campaign.delete({ where: { id: existing.id } });
-    res.json({ message: "Campaign deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("[Marketing] Delete campaign error:", err.message);
     res.status(500).json({ error: "Failed to delete campaign." });
@@ -399,7 +399,7 @@ router.post("/campaigns/:id/send", verifyToken, async (req, res) => {
 
     // Start send (async — respond immediately for large audiences)
     const result = await sendCampaign(campaign, req.io);
-    res.json({ message: "Campaign sent", ...result });
+    res.json({ status: "sent", code: "CAMPAIGN_SENT", ...result }); // #550
   } catch (err) {
     console.error("[Marketing] Send campaign error:", err.message);
     res.status(500).json({ error: "Failed to send campaign." });
@@ -448,7 +448,7 @@ router.post("/campaigns/:id/schedule", verifyToken, async (req, res) => {
       },
     });
 
-    res.json({ message: "Campaign scheduled", scheduledAt: scheduledDate.toISOString() });
+    res.json({ status: "scheduled", code: "CAMPAIGN_SCHEDULED", scheduledAt: scheduledDate.toISOString() }); // #550
   } catch (err) {
     console.error("[Marketing] Schedule campaign error:", err.message);
     res.status(500).json({ error: "Failed to schedule campaign." });
@@ -477,7 +477,7 @@ router.post("/campaigns/:id/pause", verifyToken, async (req, res) => {
       },
     });
 
-    res.json({ message: "Campaign paused and returned to Draft" });
+    res.json({ status: "paused", code: "CAMPAIGN_PAUSED" }); // #550
   } catch (err) {
     console.error("[Marketing] Pause campaign error:", err.message);
     res.status(500).json({ error: "Failed to pause campaign." });

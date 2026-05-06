@@ -117,7 +117,7 @@ router.delete("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Expense not found" });
 
     await prisma.expense.delete({ where: { id: existing.id } });
-    res.json({ message: "Expense Deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to delete Expense" });

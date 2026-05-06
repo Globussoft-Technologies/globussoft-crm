@@ -350,8 +350,7 @@ test.describe('Canned Responses API — DELETE /:id', () => {
     createdGenericIds.delete(created.id); // we'll delete it ourselves
 
     const res = await del(request, token, `/api/canned-responses/${created.id}`);
-    expect(res.status()).toBe(200);
-    expect((await res.json()).message).toMatch(/deleted/i);
+    expect(res.status()).toBe(204); // #550: DELETE → 204 No Content
 
     const after = await put(request, token, `/api/canned-responses/${created.id}`, {
       name: 'after',

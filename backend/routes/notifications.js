@@ -51,7 +51,7 @@ router.put("/read-all", async (req, res) => {
       data: { isRead: true },
     });
     if (req.io) req.io.emit("notifications_cleared", { userId: req.user.userId });
-    res.json({ message: "All notifications marked as read", updated: count });
+    res.json({ status: "ok", code: "NOTIFICATIONS_MARKED_READ", updated: count }); // #550
   } catch (err) {
     console.error("[Notifications] Mark all read error:", err);
     res.status(500).json({ error: "Failed to mark all as read" });
@@ -90,7 +90,7 @@ async function markAllReadHandler(req, res) {
       data: { isRead: true },
     });
     if (req.io) req.io.emit("notifications_cleared", { userId: req.user.userId });
-    res.json({ message: "All notifications marked as read", updated: count });
+    res.json({ status: "ok", code: "NOTIFICATIONS_MARKED_READ", updated: count }); // #550
   } catch (err) {
     console.error("[Notifications] Mark all read error:", err);
     res.status(500).json({ error: "Failed to mark all as read" });
@@ -115,7 +115,7 @@ router.delete("/:id", async (req, res) => {
       type: existing.type,
       targetUserId: existing.userId,
     });
-    res.json({ message: "Notification deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("[Notifications] Delete error:", err);
     res.status(500).json({ error: "Failed to delete notification" });
@@ -210,7 +210,7 @@ router.get("/preferences", async (req, res) => {
 // PUT /preferences — stub: save preferences
 router.put("/preferences", async (req, res) => {
   // TODO: persist to DB when model exists
-  res.json({ message: "Preferences saved (stub)", preferences: req.body });
+  res.json({ status: "ok", code: "PREFERENCES_SAVED", preferences: req.body }); // #550
 });
 
 module.exports = router;

@@ -48,7 +48,7 @@ router.delete('/reasons/:id', async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: 'Reason not found' });
     await prisma.winLossReason.delete({ where: { id } });
-    res.json({ message: 'Reason deleted' });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error('reason delete error:', err);
     res.status(500).json({ error: 'Failed to delete reason' });

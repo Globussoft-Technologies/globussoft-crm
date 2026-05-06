@@ -170,7 +170,7 @@ router.delete("/:id", async (req, res) => {
     await prisma.ticket.delete({
       where: { id: existing.id },
     });
-    res.json({ message: "Ticket deleted." });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     if (err.code === "P2025") {
       return res.status(404).json({ error: "Ticket not found." });

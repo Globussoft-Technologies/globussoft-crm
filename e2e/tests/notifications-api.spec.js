@@ -322,8 +322,7 @@ test.describe('Notifications API — DELETE /:id', () => {
     const n = await createSelfNotif(request, { title: 'delete-target' });
     createdNotificationIds.delete(n.id); // we'll assert deletion ourselves
     const res = await del(request, token, `/api/notifications/${n.id}`);
-    expect(res.status()).toBe(200);
-    expect((await res.json()).message).toMatch(/deleted/i);
+    expect(res.status()).toBe(204); // #550: DELETE → 204 No Content
 
     // Subsequent PUT /:id/read should now 404.
     const after = await put(request, token, `/api/notifications/${n.id}/read`, {});
@@ -508,7 +507,7 @@ test.describe('Notifications API — preferences (stub)', () => {
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.message).toMatch(/saved/i);
+    expect(body.code).toBe("PREFERENCES_SAVED"); // #550
     expect(body.preferences).toBeTruthy();
   });
 });

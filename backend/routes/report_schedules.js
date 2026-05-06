@@ -189,7 +189,7 @@ router.delete("/:id", async (req, res) => {
     const existing = await prisma.reportSchedule.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Schedule not found" });
     await prisma.reportSchedule.delete({ where: { id: existing.id } });
-    res.json({ message: "Schedule deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (_err) {
     res.status(500).json({ error: "Failed to delete report schedule" });
   }

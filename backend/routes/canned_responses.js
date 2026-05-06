@@ -79,7 +79,7 @@ router.delete("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Canned response not found" });
 
     await prisma.cannedResponse.delete({ where: { id } });
-    res.json({ message: "Canned response deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("[CannedResponses][delete]", err);
     res.status(500).json({ error: "Failed to delete canned response" });

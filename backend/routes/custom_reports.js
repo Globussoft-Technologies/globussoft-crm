@@ -213,7 +213,7 @@ router.delete("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Report not found" });
 
     await prisma.customReport.delete({ where: { id: existing.id } });
-    res.json({ message: "Report deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("Delete custom report error:", err);
     res.status(500).json({ error: "Failed to delete report" });

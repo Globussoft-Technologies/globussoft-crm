@@ -383,7 +383,7 @@ router.post("/reply", rejectImmutableTenant, async (req, res) => {
       },
     });
 
-    res.json({ message: created, computedThreadId: computed });
+    res.json({ status: "ok", code: "THREAD_RESOLVED", email: created, computedThreadId: computed }); // #550 (renamed `message` → `email` since it's the EmailMessage object, not a status string)
   } catch (err) {
     console.error("[email_threading] reply error:", err);
     res.status(500).json({ error: err.message });

@@ -228,7 +228,7 @@ router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Snapshot not found" });
 
     await prisma.sandboxSnapshot.delete({ where: { id: existing.id } });
-    res.json({ message: "Snapshot deleted" });
+    res.status(204).end(); // #550: DELETE → 204 No Content
   } catch (err) {
     console.error("[sandbox] delete error:", err);
     res.status(500).json({ error: "Failed to delete snapshot" });
@@ -407,7 +407,7 @@ router.post(
       }
 
       console.warn(`[sandbox] RESTORE complete — tenant ${tenantId}, counts: ${JSON.stringify(restored)}`);
-      res.json({ message: "Snapshot restored", restored });
+      res.json({ status: "ok", code: "SNAPSHOT_RESTORED", restored }); // #550
     } catch (err) {
       console.error("[sandbox] restore error:", err);
       res.status(500).json({ error: "Restore failed: " + (err.message || "unknown error") });
@@ -437,7 +437,7 @@ router.post(
 
       await wipeTenantData(tenantId);
 
-      res.json({ message: "Tenant data wiped clean", tenantId });
+      res.json({ status: "ok", code: "TENANT_WIPED", tenantId }); // #550
     } catch (err) {
       console.error("[sandbox] reset error:", err);
       res.status(500).json({ error: "Reset failed: " + (err.message || "unknown error") });

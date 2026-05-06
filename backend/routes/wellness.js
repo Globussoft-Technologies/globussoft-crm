@@ -2364,10 +2364,22 @@ async function computeAttribution(req) {
     select: { amountCharged: true, patient: { select: { source: true } } },
   });
 
+  // #268: filter out junk-source values (test-* / e2e-* / qa-* / rbac-*
+  // prefixes + 4 canonical exact values) from attribution aggregations.
+  // Same helper that backs the generic /api/attribution route at
+  // routes/attribution.js. Without this, every wellness E2E run
+  // re-pollutes the wellness P&L Attribution report with synthetic
+  // sources. Helper at lib/junkSourceFilter.js (commit bf7bbe1) +
+  // 14 vitest cases at test/lib/leadJunkFilter.test.js pin the
+  // case-insensitive prefix-match contract.
+  const { isJunkSource } = require("../lib/junkSourceFilter");
+
   const acc = {};
   const bucket = (src) => (src || "unknown").toLowerCase();
   for (const l of leads) {
-    const k = bucket(l.firstTouchSource || l.source);
+    const rawSrc = l.firstTouchSource || l.source;
+    if (isJunkSource(rawSrc)) continue;
+    const k = bucket(rawSrc);
     if (!acc[k]) acc[k] = { source: k, leads: 0, junk: 0, qualified: 0, revenue: 0 };
     acc[k].leads += 1;
     if (l.status === "Junk") acc[k].junk += 1;
@@ -2379,7 +2391,9 @@ async function computeAttribution(req) {
   // attribution, producing rows like "google-ad — 0 leads — ₹3,13,398.27 revenue"
   // that don't match what marketing actually drove.
   for (const v of visits) {
-    const k = bucket(v.patient?.source);
+    const rawSrc = v.patient?.source;
+    if (isJunkSource(rawSrc)) continue;
+    const k = bucket(rawSrc);
     if (!acc[k]) continue;
     acc[k].revenue += parseFloat(v.amountCharged) || 0;
   }

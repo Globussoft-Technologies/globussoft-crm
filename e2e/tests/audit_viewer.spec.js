@@ -103,6 +103,39 @@ test.describe('Audit log viewer — /api/audit-viewer', () => {
     expect(res.status()).toBe(200);
     expect(res.headers()['content-type']).toMatch(/text\/csv/);
     const text = await res.text();
-    expect(text).toMatch(/^ID,Timestamp,Action,Entity,EntityId,UserName,UserEmail,Details/);
+    // #387 datetime callsite-sweep: header now includes TimestampLocal
+    // (viewer-TZ rendered, with label) alongside the raw ISO Timestamp.
+    expect(text).toMatch(/^ID,Timestamp,TimestampLocal,Action,Entity,EntityId,UserName,UserEmail,Details/);
+  });
+
+  // #387 — the GET / and /entity/:entity/:id responses must include a
+  // viewer-TZ-rendered timestamp on every row + the resolved zone on the
+  // envelope. AuditLog.jsx consumes these for forensic-clear display.
+  test('GET / decorates rows with createdAtFormatted + envelope viewerTimezone', async ({ request }) => {
+    const res = await request.get(`${API}/audit-viewer?page=1&limit=5`, { headers: auth() });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(typeof body.viewerTimezone).toBe('string');
+    expect(body.viewerTimezone.length).toBeGreaterThan(0);
+    if (body.logs.length === 0) return; // empty tenant — shape pin still satisfied
+    for (const log of body.logs) {
+      expect(typeof log.createdAt).toBe('string');
+      expect(typeof log.createdAtFormatted).toBe('string');
+      // wall-clock prefix + non-empty TZ label (cross-ICU shape pin).
+      // helper outputs "YYYY-MM-DD HH:mm <label>" or '—' for null.
+      expect(log.createdAtFormatted).toMatch(/^(?:—|\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+)$/);
+      expect(log.viewerTimezone).toBe(body.viewerTimezone);
+    }
+  });
+
+  test('GET /entity/:entity/:id decorates rows with createdAtFormatted', async ({ request }) => {
+    const res = await request.get(`${API}/audit-viewer/entity/Contact/1`, { headers: auth() });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(typeof body.viewerTimezone).toBe('string');
+    expect(Array.isArray(body.logs)).toBe(true);
+    for (const log of body.logs) {
+      expect(log.createdAtFormatted).toMatch(/^(?:—|\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+)$/);
+    }
   });
 });

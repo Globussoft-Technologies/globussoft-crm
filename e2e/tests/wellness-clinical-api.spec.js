@@ -872,6 +872,45 @@ test.describe('Wellness API — POST /visits (create + validation)', () => {
     });
     expect(res.status()).toBe(400);
   });
+
+  // #313 datetime callsite-sweep — wellness route now routes datetime-local
+  // form input ('YYYY-MM-DDTHH:mm', no TZ marker) through
+  // parseDateTimeLocalInTZ(..., 'Asia/Kolkata') so the wall-clock the user
+  // typed in the UI is preserved on storage. Pre-fix, naive `new Date()`
+  // parsed it as UTC, drifting the visit by 5h30 (a 10:30 AM appointment
+  // landed at 5:00 AM IST). The full ISO ('Z' suffix) path is unchanged.
+  test('#313 datetime-local input "10:30" stores as 05:00Z (IST round-trip)', async ({ request }) => {
+    const p = await createPatient(request, { suffix: 'IstRoundTrip' });
+    // Pick a date 6 days out so the #170 [now-5y, now+1y] window passes.
+    const localInput = '2026-08-15T10:30';
+    const res = await authPost(request, '/api/wellness/visits', {
+      patientId: p.id,
+      serviceId: seededServiceId,
+      doctorId: drHarshUserId,
+      status: 'booked',
+      visitDate: localInput,
+    });
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
+    const created = await res.json();
+    // 10:30 IST = 05:00 UTC. Stored timestamp must match.
+    expect(new Date(created.visitDate).toISOString()).toBe('2026-08-15T05:00:00.000Z');
+  });
+
+  test('#313 full ISO input passes through unchanged (Z suffix path)', async ({ request }) => {
+    const p = await createPatient(request, { suffix: 'IsoPassthru' });
+    // Full ISO with Z suffix — unchanged native path.
+    const isoInput = '2026-08-15T05:00:00.000Z';
+    const res = await authPost(request, '/api/wellness/visits', {
+      patientId: p.id,
+      serviceId: seededServiceId,
+      doctorId: drHarshUserId,
+      status: 'booked',
+      visitDate: isoInput,
+    });
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
+    const created = await res.json();
+    expect(new Date(created.visitDate).toISOString()).toBe('2026-08-15T05:00:00.000Z');
+  });
 });
 
 test.describe('Wellness API — PUT /visits/:id (amend + transitions)', () => {

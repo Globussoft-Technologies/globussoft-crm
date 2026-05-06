@@ -259,6 +259,162 @@ describe('toDateTimeLocalInTZ — round-trip render half', () => {
   });
 });
 
+describe('callsite patterns — pins for the 2026-05-07 datetime sweep', () => {
+  // These tests pin the EXACT shape of computation the route-level
+  // callsites perform. They guard against future refactors of the
+  // helper that would silently break the wellness day-boundary +
+  // visit-POST datetime-local sniffing migrations (#313, #244).
+
+  describe('wellness day-boundary pattern (routes/wellness.js startOfDay/endOfDay)', () => {
+    // Pin: startOfDay(d) computes the IST calendar date of `d`, then
+    // returns the UTC instant that is 00:00 IST on that date. The new
+    // helper-based form must produce the IDENTICAL instant as the
+    // pre-migration offset-math form.
+    function startOfDayHelperForm(d) {
+      const istDate = formatInTenantTZ(d, 'Asia/Kolkata', 'yyyy-MM-dd');
+      return parseDateTimeLocalInTZ(`${istDate}T00:00:00`, 'Asia/Kolkata');
+    }
+    function startOfDayOffsetMathForm(d) {
+      const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+      const ist = new Date(d.getTime() + IST_OFFSET_MS);
+      ist.setUTCHours(0, 0, 0, 0);
+      return new Date(ist.getTime() - IST_OFFSET_MS);
+    }
+    function endOfDayHelperForm(d) {
+      const istDate = formatInTenantTZ(d, 'Asia/Kolkata', 'yyyy-MM-dd');
+      const utc = parseDateTimeLocalInTZ(`${istDate}T23:59:59`, 'Asia/Kolkata');
+      return new Date(utc.getTime() + 999);
+    }
+    function endOfDayOffsetMathForm(d) {
+      const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+      const ist = new Date(d.getTime() + IST_OFFSET_MS);
+      ist.setUTCHours(23, 59, 59, 999);
+      return new Date(ist.getTime() - IST_OFFSET_MS);
+    }
+
+    test('startOfDay: helper form === offset-math form (mid-day UTC)', () => {
+      const d = new Date('2026-05-15T08:30:00.000Z'); // 14:00 IST
+      expect(startOfDayHelperForm(d).getTime()).toBe(startOfDayOffsetMathForm(d).getTime());
+    });
+
+    test('startOfDay: helper form === offset-math form (00:30 IST = 19:00 UTC prev day)', () => {
+      // 00:30 IST is the canonical "would land on previous day under UTC"
+      // case — the original IST_OFFSET_MS hack existed precisely for this.
+      const d = new Date('2026-05-14T19:00:00.000Z'); // 00:30 IST May 15
+      const helper = startOfDayHelperForm(d);
+      const offset = startOfDayOffsetMathForm(d);
+      expect(helper.getTime()).toBe(offset.getTime());
+      // And the answer is 18:30 UTC (which is 00:00 IST on May 15).
+      expect(helper.toISOString()).toBe('2026-05-14T18:30:00.000Z');
+    });
+
+    test('endOfDay: helper form === offset-math form (incl. .999ms)', () => {
+      const d = new Date('2026-05-15T08:30:00.000Z');
+      expect(endOfDayHelperForm(d).getTime()).toBe(endOfDayOffsetMathForm(d).getTime());
+    });
+
+    test('endOfDay last instant of IST day = 18:29:59.999Z next day', () => {
+      const d = new Date('2026-05-15T12:00:00.000Z'); // 17:30 IST May 15
+      const out = endOfDayHelperForm(d);
+      // Last instant of IST May 15 = 23:59:59.999 IST = 18:29:59.999 UTC
+      expect(out.toISOString()).toBe('2026-05-15T18:29:59.999Z');
+    });
+  });
+
+  describe('parseTenantDateInput sniffing pattern (visit POST/PUT)', () => {
+    // Pin: the sniffer detects datetime-local form (no TZ marker) and
+    // routes through parseDateTimeLocalInTZ; full ISO with 'Z' or '±HH:mm'
+    // suffix passes to the native Date constructor.
+    const DATETIME_LOCAL_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
+    function parseTenantDateInput(input) {
+      if (input == null) return null;
+      if (input instanceof Date) return input;
+      if (typeof input !== 'string') return new Date(input);
+      if (DATETIME_LOCAL_RE.test(input)) {
+        return parseDateTimeLocalInTZ(input, 'Asia/Kolkata');
+      }
+      return new Date(input);
+    }
+
+    test('datetime-local form ("10:30") routes through helper → IST=05:00Z', () => {
+      const d = parseTenantDateInput('2026-05-15T10:30');
+      expect(d.toISOString()).toBe('2026-05-15T05:00:00.000Z');
+    });
+
+    test('datetime-local-with-seconds form ("10:30:45")', () => {
+      const d = parseTenantDateInput('2026-05-15T10:30:45');
+      expect(d.toISOString()).toBe('2026-05-15T05:00:45.000Z');
+    });
+
+    test('full ISO with Z suffix passes through native Date — no drift', () => {
+      const iso = '2026-05-15T05:00:00.000Z';
+      const d = parseTenantDateInput(iso);
+      expect(d.toISOString()).toBe(iso);
+    });
+
+    test('full ISO with explicit offset suffix passes through', () => {
+      const d = parseTenantDateInput('2026-05-15T10:30:00+05:30');
+      expect(d.toISOString()).toBe('2026-05-15T05:00:00.000Z');
+    });
+
+    test('full ISO with negative offset suffix passes through', () => {
+      const d = parseTenantDateInput('2026-05-15T00:00:00-05:00');
+      expect(d.toISOString()).toBe('2026-05-15T05:00:00.000Z');
+    });
+
+    test('null input returns null (caller can branch)', () => {
+      expect(parseTenantDateInput(null)).toBeNull();
+    });
+
+    test('Date instance passes through unchanged (idempotent)', () => {
+      const d = new Date('2026-05-15T05:00:00.000Z');
+      expect(parseTenantDateInput(d)).toBe(d);
+    });
+  });
+
+  describe('audit-viewer createdAtFormatted pattern (routes/audit_viewer.js)', () => {
+    // Pin: the row decorator renders createdAt in the viewer's TZ with a
+    // TZ label. Both null/Invalid (graceful '—') and valid Date inputs
+    // are exercised.
+    function decorateRow(row, tz) {
+      if (!row) return row;
+      return {
+        ...row,
+        createdAtFormatted: formatInTenantTZ(row.createdAt, tz),
+        viewerTimezone: tz,
+      };
+    }
+
+    test('valid createdAt + Asia/Kolkata → wall-clock + TZ label', () => {
+      const row = { id: 1, createdAt: new Date('2026-05-15T05:00:00.000Z') };
+      const out = decorateRow(row, 'Asia/Kolkata');
+      expect(out.createdAtFormatted.startsWith('2026-05-15 10:30 ')).toBe(true);
+      expect(out.viewerTimezone).toBe('Asia/Kolkata');
+    });
+
+    test('valid createdAt + UTC viewer → 05:00 UTC', () => {
+      const row = { id: 1, createdAt: new Date('2026-05-15T05:00:00.000Z') };
+      const out = decorateRow(row, 'UTC');
+      expect(out.createdAtFormatted.startsWith('2026-05-15 05:00 ')).toBe(true);
+    });
+
+    test('null createdAt renders "—" (graceful sentinel)', () => {
+      const row = { id: 1, createdAt: null };
+      const out = decorateRow(row, 'Asia/Kolkata');
+      expect(out.createdAtFormatted).toBe('—');
+    });
+
+    test('row decoration preserves all original fields', () => {
+      const row = { id: 1, action: 'CREATE', entity: 'Contact', createdAt: new Date('2026-05-15T05:00:00.000Z') };
+      const out = decorateRow(row, 'Asia/Kolkata');
+      expect(out.id).toBe(1);
+      expect(out.action).toBe('CREATE');
+      expect(out.entity).toBe('Contact');
+      expect(out.createdAt).toBe(row.createdAt);
+    });
+  });
+});
+
 describe('nowInTZ — convenience for current time render', () => {
   test('produces a non-empty string in the default display format', () => {
     const out = nowInTZ('Asia/Kolkata');

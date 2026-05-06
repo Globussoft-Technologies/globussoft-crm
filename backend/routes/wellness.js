@@ -26,6 +26,15 @@ const {
   renderBrandedInvoicePdf,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
+// #313/#244 datetime callsite-sweep: tenant-aware datetime helpers. The
+// `IST_OFFSET_MS` shortcut + naive `new Date(req.body.visitDate)` constructions
+// in this file pre-date the helper at backend/lib/datetime.js (commit 663bd7c).
+// They worked correctly only when both server clock and clinic operated in IST
+// — for the wellness vertical that's a product-anchored guarantee (India-based
+// clinics, cron schedules pinned to 07:00 IST), so we keep the TZ literally
+// pinned to Asia/Kolkata here rather than reading from tenant.locale. The
+// migration is a clarity + DST-safety win, not a tenant-multi-TZ enabler.
+const { parseDateTimeLocalInTZ, formatInTenantTZ } = require("../lib/datetime");
 // Issue #207/#214/#216: wellness users carry both `role` (ADMIN/MANAGER/USER)
 // and an orthogonal `wellnessRole` (doctor/professional/telecaller/helper).
 // verifyRole only knows about the former, so a USER+doctor could hit Owner-
@@ -194,17 +203,50 @@ async function maybeAutoCreditLoyalty(visit, tenantId) {
 // "today" must mean the IST calendar day — using server-local hours would
 // shift the window by 5h30 on UTC servers (the production default), making
 // 00:00–05:30 IST visits land on the previous day.
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+//
+// Migrated from raw IST_OFFSET_MS arithmetic to backend/lib/datetime.js
+// (#313 callsite-sweep, 2026-05-07): the helper handles DST-aware zone math
+// via date-fns-tz. Asia/Kolkata has no DST so behaviour is byte-identical
+// to the offset-math version, but the call shape is now reusable + the
+// drift-on-non-IST-tenants risk is gone for any future code that copies
+// this pattern.
+const WELLNESS_TZ = "Asia/Kolkata";
 const startOfDay = (d = new Date()) => {
-  const ist = new Date(d.getTime() + IST_OFFSET_MS);
-  ist.setUTCHours(0, 0, 0, 0);
-  return new Date(ist.getTime() - IST_OFFSET_MS);
+  // Render the input as the IST calendar date, then re-parse "<date>T00:00"
+  // in IST → UTC. Round-trips exactly through the #313 helper.
+  const istDate = formatInTenantTZ(d, WELLNESS_TZ, "yyyy-MM-dd");
+  return parseDateTimeLocalInTZ(`${istDate}T00:00:00`, WELLNESS_TZ);
 };
 const endOfDay = (d = new Date()) => {
-  const ist = new Date(d.getTime() + IST_OFFSET_MS);
-  ist.setUTCHours(23, 59, 59, 999);
-  return new Date(ist.getTime() - IST_OFFSET_MS);
+  const istDate = formatInTenantTZ(d, WELLNESS_TZ, "yyyy-MM-dd");
+  // Helper drops sub-second precision; pad with .999ms after parse for
+  // strict equivalence with the previous setUTCHours(23,59,59,999) form.
+  const utc = parseDateTimeLocalInTZ(`${istDate}T23:59:59`, WELLNESS_TZ);
+  return new Date(utc.getTime() + 999);
 };
+
+// #313 callsite-sweep: when the route receives a datetime-local form input
+// (no TZ marker — a string like "2026-05-15T10:30" emitted by HTML
+// <input type="datetime-local">), naively `new Date(input)` parses it as
+// UTC and silently drifts by 5h30 on storage. We route those through the
+// helper so the wall-clock the user typed is preserved.
+//
+// Full ISO timestamps (with trailing 'Z' or '±HH:mm' offset) carry their TZ
+// in-band; the native Date constructor handles them correctly. We detect
+// the difference by sniffing for a TZ marker.
+const DATETIME_LOCAL_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
+function parseTenantDateInput(input) {
+  if (input == null) return null;
+  if (input instanceof Date) return input;
+  if (typeof input !== "string") return new Date(input);
+  // datetime-local form (no TZ suffix) → route through tenant-TZ-aware
+  // parser so the wall-clock is preserved.
+  if (DATETIME_LOCAL_RE.test(input)) {
+    return parseDateTimeLocalInTZ(input, WELLNESS_TZ);
+  }
+  // Full ISO with TZ marker, RFC2822, etc. — Date constructor handles it.
+  return new Date(input);
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // CLINICAL ARTEFACT RETENTION POLICY (issue #21 — resolved by product/legal):
@@ -987,7 +1029,9 @@ router.post("/visits", phiWriteGate, async (req, res) => {
         serviceId: serviceId ? parseInt(serviceId) : null,
         doctorId: doctorId ? parseInt(doctorId) : null,
         treatmentPlanId: treatmentPlanId ? parseInt(treatmentPlanId) : null,
-        visitDate: visitDate ? new Date(visitDate) : new Date(),
+        // #313: route datetime-local form input ("2026-05-15T10:30") through
+        // the tenant-TZ parser; full ISO timestamps stay on the native ctor.
+        visitDate: visitDate ? parseTenantDateInput(visitDate) : new Date(),
         status: status || "completed",
         vitals: vitals ? (typeof vitals === "object" ? JSON.stringify(vitals) : vitals) : null,
         notes,
@@ -1039,7 +1083,8 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     // Agent B: added videoRoom (telehealth Jitsi room name)
     const allowed = ["status", "vitals", "notes", "photosBefore", "photosAfter", "amountCharged", "videoRoom"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
-    if (req.body.visitDate !== undefined) data.visitDate = new Date(req.body.visitDate);
+    // #313: same datetime-local-vs-ISO sniffing as POST /visits.
+    if (req.body.visitDate !== undefined) data.visitDate = parseTenantDateInput(req.body.visitDate);
 
     // #277: same per-visit cap as POST — reject overflow updates.
     if (data.amountCharged != null && data.amountCharged !== "") {
@@ -4202,11 +4247,13 @@ router.put("/waitlist/:id", async (req, res) => {
     const data = {};
     const allowed = ["status", "notes", "preferredDateRange"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    // #313: datetime-local form input from the waitlist UI gets routed
+    // through the tenant-TZ parser. Full ISO timestamps stay native.
     if (req.body.expiresAt !== undefined) {
-      data.expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
+      data.expiresAt = req.body.expiresAt ? parseTenantDateInput(req.body.expiresAt) : null;
     }
     if (req.body.offeredAt !== undefined) {
-      data.offeredAt = req.body.offeredAt ? new Date(req.body.offeredAt) : null;
+      data.offeredAt = req.body.offeredAt ? parseTenantDateInput(req.body.offeredAt) : null;
     }
 
     // #282: side-effects for the waiting → offered → booked state machine.
@@ -4239,8 +4286,9 @@ router.put("/waitlist/:id", async (req, res) => {
       let slot = null;
       const candidate = req.body.visitDate || req.body.preferredSlot || existing.preferredDateRange;
       if (candidate) {
-        const parsed = new Date(candidate);
-        if (!Number.isNaN(parsed.getTime())) slot = parsed;
+        // #313: route datetime-local form input through tenant-TZ parser.
+        const parsed = parseTenantDateInput(candidate);
+        if (parsed && !Number.isNaN(parsed.getTime())) slot = parsed;
       }
       if (!slot) slot = new Date(Date.now() + 24 * 3600000);
 

@@ -1,10 +1,57 @@
 const router = require('express').Router();
 const { verifyToken, verifyRole } = require('../middleware/auth');
+const { formatInTenantTZ } = require('../lib/datetime');
 
 const prisma = require("../lib/prisma");
 
 // Admin/Manager only — audit log viewer
 router.use(verifyToken, verifyRole(["ADMIN", "MANAGER"]));
+
+// #387 callsite-sweep (2026-05-07): audit rows ship with a UTC `createdAt`
+// timestamp. Reviewers reading the trail need the local-time-of-action
+// without doing offset math. We render each row's createdAt in the viewing
+// user's timezone and add an explicit TZ label.
+//
+// Resolution order for the viewer's TZ:
+//   1. User.timezone column (the personalisation setting, default 'UTC')
+//   2. 'Asia/Kolkata' for wellness tenants (clinics are India-anchored)
+//   3. 'UTC' as a final fallback
+//
+// We add `createdAtFormatted` ALONGSIDE the raw `createdAt` rather than
+// replacing it — the existing field stays for clients that do their own
+// formatting (the AuditLog.jsx frontend currently re-formats client-side
+// with hardcoded 'Asia/Kolkata'; this server-side field gives parity for
+// API consumers + CSV export and unblocks #387's TZ-label acceptance).
+async function resolveViewerTZ(req) {
+  // Cache on req so /export.csv + /list don't double-fetch when both run.
+  if (req._viewerTZ) return req._viewerTZ;
+  let tz = "UTC";
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: { timezone: true, tenant: { select: { vertical: true } } },
+    });
+    if (user?.timezone && user.timezone !== "UTC") {
+      tz = user.timezone;
+    } else if (user?.tenant?.vertical === "wellness") {
+      tz = "Asia/Kolkata";
+    }
+  } catch (_e) {
+    // tolerate lookup failures — fall through to UTC.
+  }
+  req._viewerTZ = tz;
+  return tz;
+}
+
+function decorateRow(row, tz) {
+  if (!row) return row;
+  return {
+    ...row,
+    // '—' for null/Invalid; formatted 'YYYY-MM-DD HH:mm <TZ>' otherwise.
+    createdAtFormatted: formatInTenantTZ(row.createdAt, tz),
+    viewerTimezone: tz,
+  };
+}
 
 // Build a Prisma `where` clause from query params, scoped to the caller's tenant.
 function buildWhere(req) {
@@ -51,12 +98,18 @@ router.get('/', async (req, res) => {
       prisma.auditLog.count({ where }),
     ]);
 
+    const tz = await resolveViewerTZ(req);
     res.json({
-      logs,
+      // #387: each row carries createdAt (raw UTC) + createdAtFormatted
+      // (rendered in the viewer's TZ with a label). viewerTimezone surfaces
+      // the resolved zone so the frontend / CSV consumer doesn't have to
+      // re-derive it.
+      logs: logs.map((log) => decorateRow(log, tz)),
       total,
       pages: Math.max(Math.ceil(total / limit), 1),
       page,
       limit,
+      viewerTimezone: tz,
     });
   } catch (err) {
     console.error('[AuditViewer] List error:', err);
@@ -145,7 +198,13 @@ router.get('/entity/:entity/:id', async (req, res) => {
       },
     });
 
-    res.json({ logs, entity: req.params.entity, entityId });
+    const tz = await resolveViewerTZ(req);
+    res.json({
+      logs: logs.map((log) => decorateRow(log, tz)),
+      entity: req.params.entity,
+      entityId,
+      viewerTimezone: tz,
+    });
   } catch (err) {
     console.error('[AuditViewer] Entity trail error:', err);
     res.status(500).json({ error: 'Failed to fetch entity audit trail' });
@@ -175,10 +234,18 @@ router.get('/export.csv', async (req, res) => {
       },
     });
 
-    const header = ['ID', 'Timestamp', 'Action', 'Entity', 'EntityId', 'UserName', 'UserEmail', 'Details'];
+    // #387: CSV gets BOTH the raw UTC timestamp (machine-friendly, sortable
+    // in Excel) AND the viewer-TZ-rendered form with a label (human-friendly,
+    // forensic-clear). Existing column order preserved so downstream parsers
+    // that hard-coded a 0-indexed offset stay green; the new column appends
+    // at the end alongside the existing trailing Details column shift would
+    // break those, so we slot Timestamp(local) AFTER Timestamp.
+    const tz = await resolveViewerTZ(req);
+    const header = ['ID', 'Timestamp', 'TimestampLocal', 'Action', 'Entity', 'EntityId', 'UserName', 'UserEmail', 'Details'];
     const rows = logs.map(l => [
       l.id,
       l.createdAt ? new Date(l.createdAt).toISOString() : '',
+      l.createdAt ? formatInTenantTZ(l.createdAt, tz) : '',
       l.action,
       l.entity,
       l.entityId ?? '',

@@ -116,3 +116,118 @@ test.describe('Portal API — public + auth gates', () => {
     expect(res.status()).toBe(401);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// #238 — wellness portal verify-otp must reject wrong codes
+// ──────────────────────────────────────────────────────────────────────
+//
+// Distinct from / broader than Agent G's #292 pin in
+// auth-security-regression-api.spec.js:508-535 (commit db543af). That spec
+// pins the hardcoded-1234 bypass against a non-whitelisted phone — i.e.
+// "even with WELLNESS_DEMO_OTP=1234 set, otp=1234 against 9999999999 must
+// return 401, not mint a portal token". The bypass-tightening hardening.
+//
+// THIS spec covers the v1 footgun before the bypass was introduced at all:
+// pre-#238 the verify-otp handler accepted ANY 4-digit code matching
+// /^\d{4}$/. The fix requires a real PatientOtp row with otp matching the
+// posted value. So the broader invariant: a freshly-issued OTP, then
+// verify with the WRONG 4-digit code, must return 401 (not 200).
+//
+// Two-layer defence: Agent G pins "the demo-bypass value 1234 doesn't
+// work outside the whitelist"; we pin "ANY non-issued 4-digit code
+// returns 401, regardless of bypass". A regression that re-introduced the
+// "any 4 digits accepts" bug would defeat the bypass-whitelist hardening
+// trivially — they're complementary.
+//
+// CI env-block parity: WELLNESS_DEMO_OTP=1234 is set in deploy.yml:147
+// (api_tests env block). Locally + CI: 1234 against the seeded
+// "+919876500001" demo phone WILL succeed (200 + token). Other 4-digit
+// codes against that same phone MUST fail (401). That's the contract.
+
+test.describe('#238 — wellness portal verify-otp rejects wrong codes', () => {
+  // Use a phone that is NOT the demo-bypass whitelist phone so the
+  // bypass branch can never accept '1234'. The wellness seed plants
+  // patients at "9811891334" (Kavita Reddy) and others — pick one
+  // that's outside WELLNESS_DEMO_OTP_PHONES (default "9876500001").
+  // We use a random suffix on a known-unseeded prefix so we don't
+  // depend on a specific seed phone (and any leaked OTP can't matter
+  // — there's no Patient row anyway, so 401 either way).
+  const NON_WHITELIST_PHONE = '9811891334'; // Kavita Reddy — seeded, NOT whitelisted
+
+  test('POST /portal/login/verify-otp with random wrong code → 401, no token', async ({ request }) => {
+    // Step 1: request an OTP for a real seeded patient. The handler
+    // creates a PatientOtp row with a random 4-digit code AND queues
+    // an SMS. We don't read the issued OTP (the #300 fix removed it
+    // from the response body, and reading from PatientOtp would
+    // require DB access we don't have at the spec layer).
+    const reqRes = await request.post(`${API}/wellness/portal/login/request-otp`, {
+      data: { phone: NON_WHITELIST_PHONE },
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(reqRes.status()).toBe(200);
+
+    // Step 2: try to verify with a random WRONG 4-digit code. The
+    // handler MUST consult the PatientOtp table — pre-#238 it just
+    // matched the regex shape and minted a token. Pick a code that
+    // is statistically unlikely to collide with the issued one
+    // (1/9000 chance per try; using two distinct attempts below).
+    const wrongCodes = ['0000', '7777'];
+    for (const wrong of wrongCodes) {
+      const verifyRes = await request.post(`${API}/wellness/portal/login/verify-otp`, {
+        data: { phone: NON_WHITELIST_PHONE, otp: wrong },
+        headers: { 'Content-Type': 'application/json' },
+      });
+      // Should be 401 unless we got astronomically unlucky AND hit
+      // the actual issued code. Even then a token would be a wrong
+      // outcome only because the test got lucky — we still consider
+      // 200 a failure here for non-whitelist phones because the
+      // PROBABILITY is so low this almost certainly indicates the
+      // "any 4 digits" footgun returning. Two attempts cuts the
+      // false-positive odds to ~1/40M.
+      expect(verifyRes.status(), `wrong code ${wrong} for ${NON_WHITELIST_PHONE} should 401`).toBe(401);
+      const body = await verifyRes.json().catch(() => ({}));
+      expect(body.token, '#238 regressed: verify-otp minted a token for a wrong code').toBeFalsy();
+      expect(body.error, 'verify-otp should return a structured error message').toBeTruthy();
+    }
+  });
+
+  test('POST /portal/login/verify-otp with otp=1234 + non-whitelisted phone → 401 (defence-in-depth vs Agent G #292)', async ({ request }) => {
+    // Mirror of auth-security-regression-api.spec.js:508 (Agent G's
+    // #292 pin) but at the portal-api.spec.js surface — defence in
+    // depth per the cross-cutting standing rule. Even with
+    // WELLNESS_DEMO_OTP=1234 set in CI, otp=1234 against a phone NOT
+    // in WELLNESS_DEMO_OTP_PHONES MUST NOT return a portal token.
+    const r = await request.post(`${API}/wellness/portal/login/verify-otp`, {
+      data: { phone: NON_WHITELIST_PHONE, otp: '1234' },
+      headers: { 'Content-Type': 'application/json' },
+    });
+    // 401 is the normal outcome (no PatientOtp row matches '1234'
+    // unless we get astronomically unlucky on the random issued OTP
+    // from a sibling test — but the bypass branch is gated on the
+    // whitelist regardless). 200 is the regression we're pinning
+    // against — the original #238 takeover.
+    expect(r.status(), 'otp=1234 against non-whitelisted phone should not 200').not.toBe(200);
+    if (r.ok()) {
+      const body = await r.json().catch(() => ({}));
+      expect(body.token, '#238/#292 regressed: 1234 minted a portal token for non-whitelist phone').toBeFalsy();
+    }
+  });
+
+  test('POST /portal/login/verify-otp with malformed code → 400 (validation, not 401)', async ({ request }) => {
+    // Belt-and-braces: a regression that loosens /^\d{4}$/ to /^\d+$/
+    // (or drops the regex) would let 5+digit / non-digit OTPs through.
+    // The handler should 400 on shape failure, not 401 (so a client
+    // sees a clear "fix your input" vs "auth failed").
+    const malformed = ['123', '12345', 'abcd', '12 4', ''];
+    for (const bad of malformed) {
+      const r = await request.post(`${API}/wellness/portal/login/verify-otp`, {
+        data: { phone: NON_WHITELIST_PHONE, otp: bad },
+        headers: { 'Content-Type': 'application/json' },
+      });
+      // 400 (validation) is the canonical outcome for malformed shape.
+      // Empty string takes the "phone and otp are required" branch
+      // which also 400s. Either way, NOT 200 + token.
+      expect(r.status(), `malformed otp "${bad}" should 400, got ${r.status()}`).toBe(400);
+    }
+  });
+});

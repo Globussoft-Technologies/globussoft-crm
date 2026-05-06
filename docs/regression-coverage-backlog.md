@@ -374,14 +374,14 @@ Plus #364 ticketTier round-trip pin (low/medium/high preserved + default), full 
 
 ---
 
-## ☐ 18. Extend [portal-api.spec.js](e2e/tests/portal-api.spec.js)
+## ☑ 18. Extend [portal-api.spec.js](e2e/tests/portal-api.spec.js) ✅ shipped
 
 **Closes:** #238
 
 **Acceptance:**
-- [ ] POST /api/wellness/portal/login/verify-otp with wrong code returns 401 (NOT 200 — current spec only has 13 tests, no real OTP-verify check). The "any 4 digits in v1" footgun was the root of the takeover exploit.
+- [x] POST /api/wellness/portal/login/verify-otp with wrong code returns 401 (NOT 200 — current spec only has 13 tests, no real OTP-verify check). The "any 4 digits in v1" footgun was the root of the takeover exploit. Added 3 tests under `#238 — wellness portal verify-otp rejects wrong codes` describe: (1) request OTP for seeded non-whitelist phone (Kavita Reddy 9811891334) then verify with wrong codes `0000` + `7777` → both 401 + structured error body + no token; (2) defence-in-depth mirror of Agent G's #292 pin (otp=1234 + non-whitelist phone → not 200); (3) malformed-otp shapes (wrong length, non-digit) → 400 validation, not 401. Distinct from Agent G's pin in [auth-security-regression-api.spec.js:508-535](e2e/tests/auth-security-regression-api.spec.js#L508) (db543af) which only covered the hardcoded-1234 + non-whitelist case — this new pin covers ANY non-issued 4-digit code.
 
-**Estimated effort:** 0.25 day. Commit: ___________
+Test count delta: 13 → 16 (+3). Commit: ___________
 
 ---
 

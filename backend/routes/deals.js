@@ -70,18 +70,46 @@ router.get("/", async (req, res) => {
 });
 
 // ─── GET /stats — pipeline statistics ────────────────────────────────
+// #567: Dashboard.jsx KPIs were computing Closed Revenue / Expected Revenue /
+// Total Deals client-side by reducing over `/api/deals?limit=100`. On large
+// tenants (5,381 deals on demo, 375 won, $5B aggregate) the newest-100
+// window contained only 1 won deal → "Closed Revenue $0" permanently. The
+// frontend now reads these aggregates from /stats. Added: wonCount, wonValue,
+// lostCount, lostValue, expectedValue (probability-weighted pipeline). Soft-
+// deleted rows excluded (dashboard never shows them). Existing fields
+// (totalDeals, totalValue, avgDealSize, winRate, byStage, closedThisMonth)
+// preserved — additive change, doesn't break existing /stats consumers.
 router.get("/stats", async (req, res) => {
   try {
     const tid = req.user.tenantId;
-    const deals = await prisma.deal.findMany({ where: { tenantId: tid } });
+    const deals = await prisma.deal.findMany({ where: { tenantId: tid, deletedAt: null } });
 
     const totalDeals = deals.length;
     const totalValue = deals.reduce((s, d) => s + (d.amount || 0), 0);
     const avgDealSize = totalDeals ? totalValue / totalDeals : 0;
 
-    const won = deals.filter((d) => d.stage === "won").length;
-    const closed = deals.filter((d) => d.stage === "won" || d.stage === "lost").length;
+    const wonDeals = deals.filter((d) => d.stage === "won");
+    const lostDeals = deals.filter((d) => d.stage === "lost");
+    const won = wonDeals.length;
+    const lost = lostDeals.length;
+    const closed = won + lost;
     const winRate = closed ? Math.round((won / closed) * 100) : 0;
+
+    const wonCount = won;
+    const wonValue = wonDeals.reduce((s, d) => s + (d.amount || 0), 0);
+    const lostCount = lost;
+    const lostValue = lostDeals.reduce((s, d) => s + (d.amount || 0), 0);
+
+    // #567: probability-weighted pipeline value. Mirrors the per-stage weights
+    // Dashboard.jsx used pre-fix so the rendered "Expected Revenue" tile lines
+    // up with what users saw before — but computed over the FULL population
+    // server-side, not the newest 100 rows. Stages outside this map contribute
+    // 0 (negotiation/lost have no expected uplift).
+    const probs = { lead: 0.1, contacted: 0.3, proposal: 0.7, won: 1.0 };
+    const expectedValue = deals.reduce(
+      (s, d) => s + ((d.amount || 0) * (probs[d.stage] || 0)),
+      0
+    );
 
     // Group by stage
     const stageMap = {};
@@ -99,7 +127,19 @@ router.get("/stats", async (req, res) => {
       (d) => (d.stage === "won" || d.stage === "lost") && d.createdAt >= monthStart
     ).length;
 
-    res.json({ totalDeals, totalValue, avgDealSize, winRate, byStage, closedThisMonth });
+    res.json({
+      totalDeals,
+      totalValue,
+      avgDealSize,
+      winRate,
+      byStage,
+      closedThisMonth,
+      wonCount,
+      wonValue,
+      lostCount,
+      lostValue,
+      expectedValue,
+    });
   } catch (error) {
     console.error("[deals] stats error:", error.message);
     res.status(500).json({ error: "Failed to compute deal stats" });

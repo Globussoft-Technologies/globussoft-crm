@@ -1,3 +1,18 @@
+/**
+ * Dashboard — generic CRM landing page (vertical=generic).
+ *
+ * KPI tiles (Closed Revenue, Expected Revenue, Total Contacts, Conversion
+ * Rate, Total Deals) read from `/api/deals/stats` so the numbers reflect the
+ * FULL tenant population, not a paginated window. The "Recent Deals" widget
+ * legitimately wants the newest, so it pulls `/api/deals?limit=10`.
+ *
+ * #567 fix: previously this page computed KPIs client-side by reducing over
+ * `/api/deals?limit=100`. On large tenants (5,381 deals / 375 won / $5B
+ * aggregate on demo), only 1 won deal sat in the newest-100 window →
+ * "Closed Revenue $0" permanently. The split below lets the server compute
+ * aggregates correctly while the client only paginates the row-list view
+ * that genuinely needs paging.
+ */
 import React, { useState, useEffect } from 'react';
 import { Users, DollarSign, Activity, Calendar, TrendingUp } from 'lucide-react';
 import { fetchApi } from '../utils/api';
@@ -5,87 +20,67 @@ import { formatMoney, formatMoneyCompact } from '../utils/money';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 
+const DEFAULT_STATS = {
+  totalDeals: 0,
+  totalValue: 0,
+  wonCount: 0,
+  wonValue: 0,
+  lostCount: 0,
+  lostValue: 0,
+  expectedValue: 0,
+  winRate: 0,
+  byStage: [],
+};
+
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [deals, setDeals] = useState([]);
+  const [stats, setStats] = useState(DEFAULT_STATS);
+  const [recentDeals, setRecentDeals] = useState([]);
   const [contacts, setContacts] = useState([]);
-  const [dateRange, setDateRange] = useState('all');
 
   useEffect(() => {
-    fetchApi('/api/deals').then(d => setDeals(Array.isArray(d) ? d : [])).catch(() => setDeals([]));
-    fetchApi('/api/contacts').then(d => setContacts(Array.isArray(d) ? d : [])).catch(() => setContacts([]));
+    // KPI numbers — full-population aggregates from the server.
+    fetchApi('/api/deals/stats')
+      .then((d) => setStats({ ...DEFAULT_STATS, ...(d || {}) }))
+      .catch(() => setStats(DEFAULT_STATS));
+    // Row list for the Recent Deals widget — newest 10 only.
+    fetchApi('/api/deals?limit=10&orderBy=createdAt:desc')
+      .then((d) => setRecentDeals(Array.isArray(d) ? d : []))
+      .catch(() => setRecentDeals([]));
+    fetchApi('/api/contacts')
+      .then((d) => setContacts(Array.isArray(d) ? d : []))
+      .catch(() => setContacts([]));
   }, []);
 
-  // Filter deals by date range
-  const filterByDate = (items) => {
-    if (dateRange === 'all') return items;
-    const now = new Date();
-    const days = { '7d': 7, '30d': 30, '90d': 90, '365d': 365 }[dateRange];
-    const cutoff = new Date(now.getTime() - days * 86400000);
-    return items.filter(d => new Date(d.createdAt) >= cutoff);
-  };
+  // KPIs derived purely from `stats` (server aggregates), not from any list.
+  const totalRevenue = stats.wonValue || 0;
+  const expectedRevenue = stats.expectedValue || 0;
+  const activeLeads = contacts.length;
+  const conversionRate = stats.totalDeals
+    ? Math.round(((stats.wonCount || 0) / stats.totalDeals) * 100)
+    : 0;
+  const dealCount = stats.totalDeals || 0;
 
-  // #128: prior-period filter for real period-over-period deltas.
-  // Only meaningful when a finite range is selected (not "all").
-  const filterByPriorPeriod = (items) => {
-    if (dateRange === 'all') return null;
-    const now = new Date();
-    const days = { '7d': 7, '30d': 30, '90d': 90, '365d': 365 }[dateRange];
-    const periodStart = new Date(now.getTime() - days * 86400000);
-    const priorStart = new Date(now.getTime() - 2 * days * 86400000);
-    return items.filter(d => {
-      const t = new Date(d.createdAt);
-      return t >= priorStart && t < periodStart;
-    });
+  // Pipeline Analytics chart — fed by the server-side byStage aggregation so
+  // the chart reflects the full tenant, not a paginated slice. We map the
+  // four headline stages and fall back to 0 when a stage is empty.
+  const stageValue = (name) => {
+    const row = (stats.byStage || []).find((r) => r.stage === name);
+    return row ? row.value : 0;
   };
-
-  const filteredDeals = filterByDate(deals);
-  const priorDeals = filterByPriorPeriod(deals);
-  const priorContacts = filterByPriorPeriod(contacts);
-
-  const calculateExpectedRevenue = (ds) => {
-    const probs = { lead: 0.1, contacted: 0.3, proposal: 0.7, won: 1.0 };
-    return ds.reduce((sum, d) => sum + ((d.amount || 0) * (probs[d.stage] || 0)), 0);
-  };
-  const computeStats = (ds, cs) => {
-    const won = ds.filter(d => d.stage === 'won');
-    const totalRevenue = won.reduce((sum, d) => sum + (d.amount || 0), 0);
-    const expected = calculateExpectedRevenue(ds);
-    const contactCount = cs.length;
-    const conversion = ds.length > 0 ? Math.round((won.length / ds.length) * 100) : 0;
-    const dealCount = ds.length;
-    return { totalRevenue, expected, contactCount, conversion, dealCount };
-  };
-
-  const cur = computeStats(filteredDeals, contacts);
-  const prior = priorDeals ? computeStats(priorDeals, priorContacts || []) : null;
-  const totalRevenue = cur.totalRevenue;
-  const expectedRevenue = cur.expected;
-  const activeLeads = cur.contactCount;
-  const conversionRate = cur.conversion;
-
-  // #128: real period-over-period delta. Returns `null` for un-comparable cases
-  // (no prior period because range is "all", or prior baseline is 0 so % undefined).
-  // Shown as em-dash in the UI rather than a fake "+22%".
-  const pctChange = (current, previous) => {
-    if (previous == null || previous === 0) return null;
-    return Math.round(((current - previous) / previous) * 100);
-  };
-  
-  // Aggregate data for chart (Revenue by Stage)
   const chartData = [
-    { name: 'Lead', value: filteredDeals.filter(d=>d.stage==='lead').reduce((s,d)=>s+(d.amount||0),0) },
-    { name: 'Contacted', value: filteredDeals.filter(d=>d.stage==='contacted').reduce((s,d)=>s+(d.amount||0),0) },
-    { name: 'Proposal', value: filteredDeals.filter(d=>d.stage==='proposal').reduce((s,d)=>s+(d.amount||0),0) },
-    { name: 'Won', value: totalRevenue }
+    { name: 'Lead', value: stageValue('lead') },
+    { name: 'Contacted', value: stageValue('contacted') },
+    { name: 'Proposal', value: stageValue('proposal') },
+    { name: 'Won', value: stageValue('won') },
   ];
 
-  const stats = [
-    { label: 'Closed Revenue',  value: formatMoney(totalRevenue),     deltaPct: prior ? pctChange(cur.totalRevenue, prior.totalRevenue) : null, icon: <DollarSign size={24} />, color: 'var(--accent-color)' },
-    { label: 'Expected Revenue',value: formatMoney(expectedRevenue),  deltaPct: prior ? pctChange(cur.expected, prior.expected) : null,         icon: <Activity size={24} />,   color: 'var(--success-color)' },
-    { label: 'Total Contacts',  value: activeLeads.toString(),        deltaPct: prior ? pctChange(cur.contactCount, prior.contactCount) : null, icon: <Users size={24} />,      color: '#3b82f6' },
-    { label: 'Conversion Rate', value: `${conversionRate}%`,          deltaPct: prior ? pctChange(cur.conversion, prior.conversion) : null,     icon: <TrendingUp size={24} />, color: 'var(--warning-color)' },
-    { label: 'Total Deals',     value: filteredDeals.length.toString(), deltaPct: prior ? pctChange(cur.dealCount, prior.dealCount) : null,     icon: <Calendar size={24} />,   color: '#a855f7' }
+  const tiles = [
+    { label: 'Closed Revenue',  value: formatMoney(totalRevenue),    icon: <DollarSign size={24} />, color: 'var(--accent-color)' },
+    { label: 'Expected Revenue',value: formatMoney(expectedRevenue), icon: <Activity size={24} />,   color: 'var(--success-color)' },
+    { label: 'Total Contacts',  value: activeLeads.toString(),       icon: <Users size={24} />,      color: '#3b82f6' },
+    { label: 'Conversion Rate', value: `${conversionRate}%`,         icon: <TrendingUp size={24} />, color: 'var(--warning-color)' },
+    { label: 'Total Deals',     value: dealCount.toString(),         icon: <Calendar size={24} />,   color: '#a855f7' }
   ];
 
   // #128: Cmd-K is macOS; show Ctrl-K on Windows/Linux. navigator.platform is
@@ -110,31 +105,14 @@ export default function Dashboard() {
       </header>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
-        {stats.map((stat, i) => (
+        {tiles.map((stat, i) => (
           <div key={i} className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--subtle-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: stat.color, border: `1px solid ${stat.color}40`, boxShadow: `0 0 15px ${stat.color}40` }}>
               {stat.icon}
             </div>
             <div>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>{stat.label}</p>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem' }}>
-                <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stat.value}</h2>
-                {(() => {
-                  // #128: real period-over-period delta. Em-dash when not comparable
-                  // (range = "all" or prior baseline = 0), green when up, red when down.
-                  const d = stat.deltaPct;
-                  if (d == null) {
-                    return <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>—</span>;
-                  }
-                  const up = d >= 0;
-                  return (
-                    <span style={{ color: up ? 'var(--success-color)' : '#ef4444', fontSize: '0.75rem', display: 'flex', alignItems: 'center' }}>
-                      <TrendingUp size={12} style={{ marginRight: '2px', transform: up ? 'none' : 'rotate(180deg)' }} />
-                      {up ? '+' : ''}{d}%
-                    </span>
-                  );
-                })()}
-              </div>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stat.value}</h2>
             </div>
           </div>
         ))}
@@ -144,13 +122,6 @@ export default function Dashboard() {
         <div className="card" style={{ padding: '2rem', minHeight: '350px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>Pipeline Analytics</h3>
-            <select className="input-field" style={{ width: 'auto', padding: '0.5rem' }} value={dateRange} onChange={e => setDateRange(e.target.value)}>
-              <option value="all">All Time</option>
-              <option value="7d">Last 7 Days</option>
-              <option value="30d">Last 30 Days</option>
-              <option value="90d">Last 90 Days</option>
-              <option value="365d">This Year</option>
-            </select>
           </div>
           <div style={{ width: '100%', height: '260px' }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -163,7 +134,7 @@ export default function Dashboard() {
                 </defs>
                 <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
                 <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatMoneyCompact(value)} />
-                <Tooltip 
+                <Tooltip
                   contentStyle={{ backgroundColor: 'var(--tooltip-bg)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px' }}
                   itemStyle={{ color: 'var(--text-primary)' }}
                 />
@@ -173,11 +144,11 @@ export default function Dashboard() {
             </ResponsiveContainer>
           </div>
         </div>
-        
+
         <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '500', marginBottom: '1.5rem' }}>Recent Deals</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            {filteredDeals.slice(0, 4).map((deal) => (
+            {recentDeals.slice(0, 4).map((deal) => (
               // #466: row was wrapped in a div with onClick → navigate('/pipeline')
               // but reporters experienced it as "not clickable" because the
               // hand-cursor only appeared on the inner text, not on the gap
@@ -202,7 +173,7 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
-            {filteredDeals.length === 0 && <p style={{ color: 'var(--text-secondary)' }}>No deals in pipeline.</p>}
+            {recentDeals.length === 0 && <p style={{ color: 'var(--text-secondary)' }}>No deals in pipeline.</p>}
           </div>
         </div>
       </div>

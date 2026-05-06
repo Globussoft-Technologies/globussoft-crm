@@ -303,7 +303,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 Plus #364 ticketTier round-trip pin (low/medium/high preserved + default), full RBAC matrix (admin/manager → 201; doctor/professional/telecaller/helper → 403 WELLNESS_ROLE_FORBIDDEN; generic-tenant admin → 403 WELLNESS_TENANT_REQUIRED #325), tenant isolation pin on GET /services, and create→update→soft-delete happy-path lifecycle. 33 tests, 15s on local stack.
 
-**Estimated effort:** 0.5 day. Commit: ___________
+**Estimated effort:** 0.5 day. Commit: `5ebcbdb`
 
 ---
 

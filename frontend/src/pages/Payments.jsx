@@ -10,7 +10,6 @@ import {
   Settings as SettingsIcon,
   AlertTriangle,
   Plus,
-  ArrowRight,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
@@ -195,10 +194,13 @@ export default function Payments() {
         </div>
       )}
 
-      {/* #371: surface a clear "Configure provider →" CTA when neither
-          Stripe nor Razorpay is wired up. Previously the page just rendered
-          "Stripe / Razorpay not configured" with no path forward — owners
-          had to dig into Settings to find the integrations panel. */}
+      {/* #371: surface a clear configuration banner when neither Stripe
+          nor Razorpay is wired up. Previously the page rendered a
+          "Configure provider →" button that linked to /settings, but
+          /settings has no payment-config UI (#560 — pen-test 2026-05-07).
+          Key storage is env-var-driven, not DB-backed, so the honest UX
+          is to name the env vars + direct admins to ops. The full
+          DB-backed provider-config UI is tracked separately. */}
       {!loading && config && !config?.stripe?.configured && !config?.razorpay?.configured && (
         <div style={{
           ...GLASS,
@@ -206,38 +208,35 @@ export default function Payments() {
           marginBottom: '1.5rem',
           borderColor: 'rgba(245,158,11,0.35)',
           background: 'rgba(245,158,11,0.08)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.75rem',
-          flexWrap: 'wrap',
         }}>
-          <AlertTriangle size={18} style={{ color: '#f59e0b', flexShrink: 0 }} />
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.2rem' }}>
-              Stripe / Razorpay not configured
-            </div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              Add API keys for at least one gateway to start collecting customer payments.
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', marginBottom: '0.75rem' }}>
+            <AlertTriangle size={18} style={{ color: '#f59e0b', flexShrink: 0, marginTop: '0.15rem' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.2rem' }}>
+                Stripe / Razorpay not configured
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Payment-gateway keys are configured server-side as environment variables (not via this UI). Ask your administrator to set the variables below and restart the backend. Activating either gateway will enable the payment table + the per-invoice Pay-Now flow.
+              </div>
             </div>
           </div>
-          <Link
-            to="/settings"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              padding: '0.5rem 1rem',
-              background: '#f59e0b',
-              color: '#0b0b14',
-              borderRadius: '8px',
-              fontWeight: 600,
-              fontSize: '0.85rem',
-              textDecoration: 'none',
-              border: 'none',
-            }}
-          >
-            <SettingsIcon size={14} /> Configure provider <ArrowRight size={14} />
-          </Link>
+          <div style={{ marginLeft: '2.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
+              <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Stripe — required env vars</summary>
+              <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+{`STRIPE_SECRET_KEY=sk_live_...        # from dashboard.stripe.com → Developers → API keys
+STRIPE_WEBHOOK_SECRET=whsec_...     # from dashboard.stripe.com → Developers → Webhooks
+                                      # endpoint URL: <BASE_URL>/api/payments/webhook/stripe`}</pre>
+            </details>
+            <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
+              <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Razorpay — required env vars</summary>
+              <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+{`RAZORPAY_KEY_ID=rzp_live_...        # from dashboard.razorpay.com → Settings → API Keys
+RAZORPAY_KEY_SECRET=...
+RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings → Webhooks
+                                      # endpoint URL: <BASE_URL>/api/payments/webhook/razorpay`}</pre>
+            </details>
+          </div>
         </div>
       )}
 

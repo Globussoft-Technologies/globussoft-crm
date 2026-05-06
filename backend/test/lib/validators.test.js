@@ -425,13 +425,41 @@ describe('httpFromPrismaError', () => {
       expect(r.prismaCode).toBe(code);
     }
   });
-  test('extracts last line of multi-line error message', () => {
-    const r = httpFromPrismaError({ code: 'P2000', message: 'first line\nsecond line\nuseful detail' });
-    expect(r.error).toBe('useful detail');
+  // #556 (HI-07) anti-regression: a multi-line Prisma error of the form
+  //   "Invalid `prisma.X.create()` invocation:\n... too long ... Column: title"
+  // used to surface "Column: title" in the response (last line). The
+  // helper now returns a stable per-code generic message instead.
+  test('does NOT leak raw Prisma message — uses per-code generic instead', () => {
+    const r = httpFromPrismaError({
+      code: 'P2000',
+      message: 'Invalid `prisma.contact.create()` invocation:\n\nThe provided value for the column is too long for the column\'s type. Column: title',
+    });
+    expect(r.error).toBe('Value too long for one of the fields');
+    expect(r.error).not.toMatch(/Column:/i);
+    expect(r.error).not.toMatch(/Table:/i);
+    expect(r.error).not.toMatch(/prisma\./i);
   });
-  test('falls back to "Invalid input" when no message', () => {
+  test('uses per-code default message when no `message` was attached', () => {
+    expect(httpFromPrismaError({ code: 'P2000' }).error).toBe('Value too long for one of the fields');
+    expect(httpFromPrismaError({ code: 'P2003' }).error).toBe('Referenced record does not exist');
+    expect(httpFromPrismaError({ code: 'P2011' }).error).toBe('A required field is missing');
+  });
+  // #556: the structured `field` from Prisma's `meta` IS safe to surface —
+  // it's the column identifier alone (no "Column:" prefix, no table-
+  // qualified syntax). The SPA needs it to highlight the right input.
+  test('surfaces structured field name from meta (safe — no leak)', () => {
+    const fromColumnName = httpFromPrismaError({ code: 'P2000', meta: { column_name: 'title' } });
+    expect(fromColumnName.field).toBe('title');
+    const fromFieldName = httpFromPrismaError({ code: 'P2011', meta: { field_name: 'email' } });
+    expect(fromFieldName.field).toBe('email');
+    const fromTableQualified = httpFromPrismaError({ code: 'P2000', meta: { column_name: 'Contact.title' } });
+    expect(fromTableQualified.field).toBe('title'); // table prefix stripped
+    const arrayMeta = httpFromPrismaError({ code: 'P2000', meta: { target: ['firstName', 'lastName'] } });
+    expect(arrayMeta.field).toBe('firstName,lastName');
+  });
+  test('omits `field` when meta has no field identifier', () => {
     const r = httpFromPrismaError({ code: 'P2000' });
-    expect(r.error).toBe('Invalid input');
+    expect(r.field).toBeUndefined();
   });
   test('handles PrismaClientValidationError by name', () => {
     const r = httpFromPrismaError({ name: 'PrismaClientValidationError' });

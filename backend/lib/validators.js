@@ -226,6 +226,49 @@ function conflictFromPrisma(e) {
 //   P2020 — value out of range for type
 //   P2025 — record to update/delete not found  (treat as 404)
 // Plus PrismaClientValidationError (which sets `name`, not `code`).
+//
+// #556 (HI-07): pre-this-fix the validation-class branch passed
+// `e.message.split("\n").pop()` straight into the response. Prisma's
+// stringified errors look like:
+//
+//   Invalid `prisma.contact.create()` invocation:
+//   The provided value for the column is too long for the column's type. Column: title
+//
+// — the last line ("Column: title") leaked the schema column name to any
+// caller submitting a too-long input. Pen-test #556 surfaced this on the
+// /leads Create form. The fix: stable per-prismaCode generic messages,
+// optional `field` extracted from `meta.target` / `meta.column_name` /
+// `meta.field_name` (Prisma exposes these structured), but never the raw
+// stringified message. The full error is still console.error'd by the
+// route's catch block for server-side log diagnosis.
+const PRISMA_VALIDATION_MESSAGES = {
+  P2000: "Value too long for one of the fields",
+  P2003: "Referenced record does not exist",
+  P2005: "Invalid value for one of the fields",
+  P2006: "Invalid value for one of the fields",
+  P2007: "Data validation failed",
+  P2011: "A required field is missing",
+  P2012: "A required field is missing",
+  P2013: "A required argument is missing",
+  P2019: "Input value is not valid",
+  P2020: "Value out of range for one of the fields",
+};
+function extractFieldFromPrismaMeta(meta) {
+  if (!meta || typeof meta !== "object") return null;
+  // Prisma populates one of these depending on the error class. Field name
+  // alone (without "Column:" prefix and without table-qualified syntax) is
+  // safe to surface — the SPA needs it to highlight the right input. The
+  // pen-test was specifically about the prefix tokens "Column: " and
+  // "Table: " leaking, not the field identifier itself.
+  const candidate = meta.field_name || meta.column_name || meta.target;
+  if (!candidate) return null;
+  if (Array.isArray(candidate)) return candidate.join(",");
+  if (typeof candidate !== "string") return null;
+  // Strip any "Table.column" qualifier → just the column name.
+  const tail = candidate.split(".").pop();
+  return tail || null;
+}
+
 function httpFromPrismaError(e) {
   if (!e) return null;
   // Re-use the unique-constraint handler so callers only need one helper.
@@ -240,23 +283,25 @@ function httpFromPrismaError(e) {
   }
 
   if (e.code === "P2025") {
+    // P2025's meta.cause is Prisma-authored (e.g. "Record to delete does
+    // not exist") and doesn't contain raw column / table names — safe to
+    // surface, falls back to a generic message otherwise.
     return {
       status: 404,
       error: e.meta?.cause || "Record not found",
       code: "NOT_FOUND",
     };
   }
-  const validationCodes = new Set([
-    "P2000", "P2003", "P2005", "P2006", "P2007",
-    "P2011", "P2012", "P2013", "P2019", "P2020",
-  ]);
-  if (validationCodes.has(e.code)) {
-    return {
+  if (PRISMA_VALIDATION_MESSAGES[e.code]) {
+    const out = {
       status: 400,
-      error: e.message ? String(e.message).split("\n").pop().trim() : "Invalid input",
+      error: PRISMA_VALIDATION_MESSAGES[e.code],
       code: "INVALID_INPUT",
       prismaCode: e.code,
     };
+    const field = extractFieldFromPrismaMeta(e.meta);
+    if (field) out.field = field;
+    return out;
   }
   // Prisma's validation wrapper (bad shape, wrong type) sets `name` only.
   if (e.name === "PrismaClientValidationError") {

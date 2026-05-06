@@ -13,6 +13,55 @@ const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 // In-memory store for password reset tokens (token -> { userId, expiresAt })
 const resetTokens = new Map();
 
+// #526 (CRIT-01): Send password-reset link via SendGrid. Local helper
+// because the same `sendSendGrid` function is duplicated in
+// `lib/notificationService.js` and `routes/email_scheduling.js`; promoting
+// to a shared `lib/sendgrid.js` is a separate cleanup (filed for follow-up).
+//
+// CRITICAL contract: this MUST NOT throw on a missing SENDGRID_API_KEY or
+// a SendGrid API error. The endpoint must respond identically for known
+// vs unknown emails to avoid the user-enumeration oracle (HI-02 / #531).
+// We therefore call this WITHOUT awaiting from the route handler — the
+// HTTP response goes out before the SendGrid round-trip even completes,
+// so timing is also identical. On dev/local with no API key, the link
+// is logged to stdout so QA can still complete the flow.
+async function sendPasswordResetEmail(toEmail, token, frontendBase) {
+  const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
+  const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
+  const resetUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}`;
+
+  if (!SENDGRID_API_KEY) {
+    console.log(`[auth/forgot-password] SendGrid not configured — reset link for ${toEmail}: ${resetUrl}`);
+    return;
+  }
+
+  try {
+    const payload = {
+      personalizations: [{ to: [{ email: toEmail }] }],
+      from: { email: FROM_EMAIL },
+      subject: "Reset your Globussoft CRM password",
+      content: [
+        { type: "text/plain", value: `Click this link to reset your Globussoft CRM password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.` },
+        { type: "text/html", value: `<p>Click the link below to reset your Globussoft CRM password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>` }
+      ]
+    };
+    const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      console.error(`[auth/forgot-password] SendGrid error ${response.status}: ${text}`);
+    }
+  } catch (err) {
+    console.error("[auth/forgot-password] SendGrid send failed:", err.message);
+  }
+}
+
 // Issue #180: every newly-issued JWT carries a unique `jti` so it can be
 // revoked individually via the RevokedToken table. Old tokens without jti
 // still verify (they just can't be revoked) until their 7-day TTL runs out.
@@ -250,7 +299,17 @@ router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res)
   }
 });
 
-// Forgot Password — generate reset token
+// Forgot Password — generate reset token + email it via SendGrid
+//
+// #526 (CRIT-01) HARDENING (2026-05-06): the response body NO LONGER contains
+// the reset token. Previously `response.resetToken = token` returned a valid
+// reset token to any unauthenticated caller — full account takeover for any
+// known email. Token now ships via SendGrid only; if SENDGRID_API_KEY is
+// unset the link is logged to server stdout (dev/local fallback). The
+// SendGrid call is fire-and-forget so response timing is identical for
+// known and unknown emails, mitigating the user-enumeration oracle (HI-02 /
+// #531). Carries a regression-guard test in e2e/tests/forgot-password.spec.js
+// that asserts the response body never contains a `resetToken`/`token` field.
 router.post("/forgot-password", async (req, res) => {
   try {
     const { email } = req.body;
@@ -258,16 +317,19 @@ router.post("/forgot-password", async (req, res) => {
 
     const user = await prisma.user.findUnique({ where: { email } });
 
-    // Always return success message to avoid email enumeration
-    const response = { message: "If the email exists, a reset link has been generated" };
-
     if (user) {
       const token = crypto.randomBytes(32).toString("hex");
       resetTokens.set(token, { userId: user.id, expiresAt: Date.now() + 3600000 }); // 1 hour
-      response.resetToken = token; // Returned since no email service configured
+      // Fire-and-forget. The .catch is just so an unhandled-rejection log
+      // doesn't fire — sendPasswordResetEmail already swallows + logs all
+      // errors internally.
+      const frontendBase = process.env.FRONTEND_URL || `https://${req.headers.host || "crm.globusdemos.com"}`;
+      sendPasswordResetEmail(user.email, token, frontendBase).catch(() => {});
     }
 
-    res.json(response);
+    // Identical body for known + unknown emails (anti-enumeration). Token
+    // is delivered via the email channel only — never in this response.
+    res.json({ message: "If the email exists, a reset link has been generated" });
   } catch (_error) {
     res.status(500).json({ error: "Failed to process password reset request" });
   }

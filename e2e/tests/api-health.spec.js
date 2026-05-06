@@ -77,22 +77,34 @@ async function safeJson(response) {
 // ============================================================
 
 test.describe('API Health — Health endpoint', () => {
-  test('GET /api/health returns healthy status with DB connected', async ({ request }) => {
+  test('GET /api/health returns minimal healthy body to UNAUTHENTICATED callers', async ({ request }) => {
+    // #543 (MED-02): pen-test flagged the public response as leaking
+    // version + uptime to unauth callers (vulnerable-version fingerprinting).
+    // Public callers now get { status, timestamp } only — enough for
+    // load-balancer probes + the demo-monitor cron.
     const response = await request.get(`${BASE_URL}/api/health`, { timeout: REQUEST_TIMEOUT });
-
     expect(response.status()).toBe(200);
-
     const body = await response.json();
-    expect(body).toHaveProperty('status');
-    // version field exists and matches semver shape — don't pin to a
-    // specific number since it bumps every release (was '2.0.0' originally,
-    // 3.x as of 2026-05).
+    expect(body).toHaveProperty('status', 'healthy');
+    expect(body).toHaveProperty('timestamp');
+    // Anti-regression: these fields MUST NOT leak to unauthenticated callers.
+    expect(body).not.toHaveProperty('version');
+    expect(body).not.toHaveProperty('uptime');
+    expect(body).not.toHaveProperty('database');
+  });
+
+  test('GET /api/health returns FULL body to authenticated callers', async ({ request }) => {
+    // Authenticated path: ops + the triaging-stuck-deploy-gate skill's
+    // deploy-divergence check still get the version/uptime/database fields.
+    const response = await authGet(request, '/api/health');
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+    expect(body).toHaveProperty('status', 'healthy');
+    expect(body).toHaveProperty('timestamp');
     expect(body).toHaveProperty('version');
     expect(body.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(body).toHaveProperty('database', 'connected');
     expect(body).toHaveProperty('uptime');
-    expect(body).toHaveProperty('timestamp');
-    expect(body.status).toBe('healthy');
   });
 });
 

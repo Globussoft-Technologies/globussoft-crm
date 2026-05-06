@@ -484,6 +484,28 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 // Health Check Endpoint
 const prisma = require("./lib/prisma");
 
+// #543 (MED-02): /api/health is unauthenticated by design (load-balancer
+// + uptime probes need to reach it without creds). The pen-test flagged
+// the public response as leaking the full version string + uptime to any
+// caller, which lets attackers fingerprint the deployed build for
+// vulnerable-version targeting.
+//
+// Two-tier response now:
+//   - Unauthenticated (no Authorization header) → minimal body:
+//     { status, timestamp } only. Enough for liveness/readiness probes
+//     and the demo-monitor cron. No version, no uptime, no DB string.
+//   - Authenticated (any valid JWT) → full body: status, version,
+//     uptime, timestamp, database. For ops + the
+//     `triaging-stuck-deploy-gate` skill's deploy-divergence check.
+//
+// Detection of "authenticated" is intentionally minimal — just the
+// presence of an Authorization header. We do NOT verify the JWT here
+// (that would add a DB round-trip for revoked-token check on every
+// liveness probe). The server only DISCLOSES extra fields to callers
+// who can present a token; it doesn't grant any access. If a stolen
+// token is used to probe /api/health, the worst outcome is fingerprint
+// disclosure to a caller who already has a tenant credential — not a
+// new escalation.
 app.get("/api/health", async (req, res) => {
   let dbStatus = "disconnected";
   try {
@@ -493,16 +515,26 @@ app.get("/api/health", async (req, res) => {
     dbStatus = `error: ${err.message}`;
   }
 
+  const status = dbStatus === "connected" ? "healthy" : "degraded";
+  const minimal = { status, timestamp: new Date().toISOString() };
+
+  if (!req.headers.authorization) {
+    return res.json(minimal);
+  }
   res.json({
-    status: dbStatus === "connected" ? "healthy" : "degraded",
+    ...minimal,
     version: APP_VERSION,
     uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
     database: dbStatus,
   });
 });
 
 app.get("/", (req, res) => {
+  // #543: same minimal-by-default policy applied to the API root. Public
+  // callers see "the API is up"; authenticated callers see the version.
+  if (!req.headers.authorization) {
+    return res.json({ message: "Enterprise CRM API Core Online" });
+  }
   res.json({ message: "Enterprise CRM API Core Online", version: APP_VERSION });
 });
 

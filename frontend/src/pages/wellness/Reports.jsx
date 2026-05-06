@@ -176,7 +176,7 @@ export default function Reports() {
 
 function Totals({ items, onVisitsClick }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${items.length}, 1fr)`, gap: '0.75rem', marginBottom: '1rem' }}>
+    <div className="wellness-reports-totals" style={{ display: 'grid', gridTemplateColumns: `repeat(${items.length}, 1fr)`, gap: '0.75rem', marginBottom: '1rem' }}>
       {items.map((it) => (
         <div key={it.label} className="glass" style={{ padding: '1rem', cursor: it.label === 'Visits' && onVisitsClick ? 'pointer' : 'default', transition: 'background 0.2s' }} onClick={() => it.label === 'Visits' && onVisitsClick && onVisitsClick()}>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{it.label}</div>

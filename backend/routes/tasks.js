@@ -51,6 +51,21 @@ function normalizeStatusFilter(raw) {
   return raw; // unrecognized — pass through, will exact-match (or return [])
 }
 
+// #505: lightweight count endpoint for sidebar polling. Sidebar calls
+// GET /api/tasks?status=PENDING every 60s; use cheap count instead of findMany.
+router.get("/count", verifyToken, async (req, res) => {
+  try {
+    const { status } = req.query;
+    const where = { tenantId: req.user.tenantId };
+    if (status) where.status = normalizeStatusFilter(status);
+    if (req.query.includeDeleted !== "true") where.deletedAt = null;
+    const total = await prisma.task.count({ where });
+    res.json({ total });
+  } catch (_err) {
+    res.json({ total: 0 });
+  }
+});
+
 router.get("/", verifyToken, async (req, res) => {
   try {
     const { status, priority, contactId, overdue, mine } = req.query;

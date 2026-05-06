@@ -1,4 +1,5 @@
 const express = require("express");
+const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -12,11 +13,43 @@ const VALID_PRIORITIES = ["Low", "Medium", "High", "Urgent"];
 const RESPONSIVE_STATUSES = ["in progress", "pending", "replied"];
 const TERMINAL_STATUSES = ["resolved", "closed", "cancelled"];
 
+// #505: Normalize status to Title-case for consistent filtering.
+// Sidebar sends ?status=OPEN but schema expects "Open".
+function normalizeTicketStatus(raw) {
+  if (!raw) return null;
+  const lower = String(raw).toLowerCase();
+  if (lower === "open") return "Open";
+  if (lower === "pending") return "Pending";
+  if (lower === "resolved") return "Resolved";
+  if (lower === "closed") return "Closed";
+  return raw;
+}
+
+router.use(verifyToken);
+
+// #505: lightweight count endpoint for sidebar polling. Sidebar calls
+// GET /api/tickets?status=OPEN every 60s; use cheap count instead of findMany.
+router.get("/count", async (req, res) => {
+  try {
+    const { status } = req.query;
+    const where = { tenantId: req.user.tenantId };
+    if (status) where.status = normalizeTicketStatus(status);
+    const total = await prisma.ticket.count({ where });
+    res.json({ total });
+  } catch (_err) {
+    res.json({ total: 0 });
+  }
+});
+
 // GET / — list all tickets in current tenant
 router.get("/", async (req, res) => {
   try {
+    const { status } = req.query;
+    const where = { tenantId: req.user.tenantId };
+    if (status) where.status = normalizeTicketStatus(status);
+
     const tickets = await prisma.ticket.findMany({
-      where: { tenantId: req.user.tenantId },
+      where,
       include: {
         assignee: { select: { id: true, name: true, email: true } },
       },

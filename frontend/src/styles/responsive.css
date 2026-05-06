@@ -117,9 +117,9 @@
 
   /* OwnerDashboard: 2-up and 3-up KPI strips stack on mobile. The
      auto-fit grids already reflow; only the hard-coded 1fr 1fr / 1fr 1fr 1fr
-     rows need an override. We target the wellness landing root. */
-  [data-vertical="wellness"] main > div > div[style*="1fr 1fr 1fr"],
-  [data-vertical="wellness"] main > div > div[style*="1fr 1fr"] {
+     rows need an override. */
+  .owner-dashboard-2col,
+  .owner-dashboard-3col {
     grid-template-columns: 1fr !important;
   }
 
@@ -138,8 +138,13 @@
   }
 
   /* PatientDetail tabs already use flex+wrap so they naturally stack.
-     Ensure the strip can also scroll horizontally if a tenant adds enough
-     tabs to overflow even after wrapping. */
+     TODO: add .patient-detail-tabs class to replace brittle [style*="flex-wrap"] selector.
+     Ensure the strip can also scroll horizontally if a tenant adds enough tabs. */
+  .patient-detail-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Fallback for compatibility during refactor. */
   main > div > div[style*="flex-wrap"] {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
@@ -167,27 +172,31 @@
   }
 
   /* Reports: Totals strip uses fixed N-col grid — wrap it. */
-  main > div > div[style*="repeat("][style*=", 1fr)"] {
+  .wellness-reports-totals {
     grid-template-columns: 1fr 1fr !important;
   }
 
   /* TelecallerQueue lead cards: minmax(340px, 1fr) overflows at 375px
      because 340 + padding > 375. Force 1-per-row. */
-  main > div > div[style*="minmax(340px"] {
+  .telecaller-leads-grid {
     grid-template-columns: 1fr !important;
   }
 
-  /* Generic safety: any horizontally-overflowing card-list grid with
-     a min track wider than 320px should collapse to 1 column. */
-  div[style*="minmax(320px"],
-  div[style*="minmax(340px"],
-  div[style*="minmax(360px"] {
-    grid-template-columns: 1fr !important;
-  }
+  /* NOTE: removed brittle attribute selectors for minmax(320/340/360px).
+     Replaced with class-based rules:
+     - .owner-dashboard-2col / .owner-dashboard-3col (OwnerDashboard)
+     - .telecaller-leads-grid (TelecallerQueue)
+     Future KPI / card grids should use class names instead of inline styles.
+  */
 
   /* Reports / Patients export+filter button rows — wrap. Scope to main
-     content so the app-shell header (which has its own balance) is not
-     affected. */
+     content so the app-shell header (which has its own balance) is not affected.
+     TODO: add .reports-actions or .filter-controls class to replace selector. */
+  .reports-actions,
+  .filter-controls {
+    flex-wrap: wrap;
+  }
+  /* Fallback for compatibility during refactor. */
   main div[style*="display: flex"][style*="gap"] {
     flex-wrap: wrap;
   }
@@ -204,17 +213,13 @@
     width: 260px !important;
   }
 
-  /* KPI cards inside auto-fit grids force to 1 column at this width
-     to avoid awkward 140px-each pairs. */
-  div[style*="minmax(200px"],
-  div[style*="minmax(220px"],
-  div[style*="minmax(240px"],
-  div[style*="minmax(260px"] {
-    grid-template-columns: 1fr !important;
-  }
+  /* NOTE: removed brittle attribute selectors for minmax(200/220/240/260px).
+     KPI cards that need narrow-breakpoint collapse should use class names.
+     See owner-dashboard-2col, owner-dashboard-3col, telecaller-leads-grid patterns.
+  */
 
   /* Reports totals: collapse to 1 column at very narrow widths. */
-  main > div > div[style*="repeat("][style*=", 1fr)"] {
+  .wellness-reports-totals {
     grid-template-columns: 1fr !important;
   }
 }

@@ -59,9 +59,10 @@ const verifyToken = async (req, res, next) => {
           return unauthorized(res, "Session revoked. Please log in again.");
         }
       } catch (dbErr) {
-        // If the lookup fails (DB blip, table not yet migrated), fail open so
-        // we don't lock everyone out. This still hardens the common case.
-        console.error("[auth] revoked-token lookup failed:", dbErr && dbErr.message);
+        // Critical: revocation check must not silently fail. If the lookup fails
+        // (DB blip, table not yet migrated), log it and reject conservatively.
+        console.error("[auth] CRITICAL: revoked-token lookup failed:", dbErr && dbErr.message);
+        return res.status(503).json({ error: "Session validation unavailable, please log in again" });
       }
     }
 

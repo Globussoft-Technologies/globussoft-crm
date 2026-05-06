@@ -22,7 +22,9 @@ router.get("/", verifyToken, async (req, res) => {
       where: { tenantId, pipelineId: { in: pipelines.map((p) => p.id) } },
       _count: { _all: true },
     });
-    const countMap = Object.fromEntries(counts.map((c) => [c.pipelineId, c._count._all]));
+    const countMap = Object.fromEntries(
+      counts.map((c) => [c.pipelineId, c._count._all]),
+    );
 
     res.json(pipelines.map((p) => ({ ...p, dealCount: countMap[p.id] || 0 })));
   } catch (err) {
@@ -74,9 +76,12 @@ router.put("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid pipeline id" });
+    if (Number.isNaN(id))
+      return res.status(400).json({ error: "Invalid pipeline id" });
 
-    const existing = await prisma.pipeline.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.pipeline.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Pipeline not found" });
 
     const { name, description } = req.body || {};
@@ -97,17 +102,27 @@ router.delete("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid pipeline id" });
+    if (Number.isNaN(id))
+      return res.status(400).json({ error: "Invalid pipeline id" });
 
-    const existing = await prisma.pipeline.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.pipeline.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Pipeline not found" });
     if (existing.isDefault) {
-      return res.status(400).json({ error: "Cannot delete the default pipeline. Set another pipeline as default first." });
+      return res.status(400).json({
+        error:
+          "Cannot delete the default pipeline. Set another pipeline as default first.",
+      });
     }
 
-    const dealCount = await prisma.deal.count({ where: { tenantId, pipelineId: id } });
+    const dealCount = await prisma.deal.count({
+      where: { tenantId, pipelineId: id },
+    });
     if (dealCount > 0) {
-      return res.status(400).json({ error: `Cannot delete pipeline with ${dealCount} deal(s). Move or remove deals first.` });
+      return res.status(400).json({
+        error: `Cannot delete pipeline with ${dealCount} deal(s). Move or remove deals first.`,
+      });
     }
 
     await prisma.pipeline.delete({ where: { id } });
@@ -123,9 +138,12 @@ router.post("/:id/set-default", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid pipeline id" });
+    if (Number.isNaN(id))
+      return res.status(400).json({ error: "Invalid pipeline id" });
 
-    const existing = await prisma.pipeline.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.pipeline.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Pipeline not found" });
 
     const result = await prisma.$transaction(async (tx) => {
@@ -148,16 +166,21 @@ router.get("/:id/deals", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid pipeline id" });
+    if (Number.isNaN(id))
+      return res.status(400).json({ error: "Invalid pipeline id" });
 
-    const pipeline = await prisma.pipeline.findFirst({ where: { id, tenantId } });
+    const pipeline = await prisma.pipeline.findFirst({
+      where: { id, tenantId },
+    });
     if (!pipeline) return res.status(404).json({ error: "Pipeline not found" });
 
     const deals = await prisma.deal.findMany({
       where: { tenantId, pipelineId: id },
       orderBy: { createdAt: "desc" },
       include: {
-        contact: { select: { id: true, name: true, email: true, company: true } },
+        contact: {
+          select: { id: true, name: true, email: true, company: true },
+        },
         owner: { select: { id: true, name: true, email: true } },
       },
     });
@@ -173,9 +196,12 @@ router.get("/:id/stats", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid pipeline id" });
+    if (Number.isNaN(id))
+      return res.status(400).json({ error: "Invalid pipeline id" });
 
-    const pipeline = await prisma.pipeline.findFirst({ where: { id, tenantId } });
+    const pipeline = await prisma.pipeline.findFirst({
+      where: { id, tenantId },
+    });
     if (!pipeline) return res.status(404).json({ error: "Pipeline not found" });
 
     const grouped = await prisma.deal.groupBy({
@@ -186,7 +212,10 @@ router.get("/:id/stats", verifyToken, async (req, res) => {
     });
 
     const totalDeals = grouped.reduce((sum, g) => sum + g._count._all, 0);
-    const totalValue = grouped.reduce((sum, g) => sum + (g._sum.amount || 0), 0);
+    const totalValue = grouped.reduce(
+      (sum, g) => sum + (g._sum.amount || 0),
+      0,
+    );
 
     res.json({
       pipelineId: id,

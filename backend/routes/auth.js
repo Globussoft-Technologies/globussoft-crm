@@ -27,11 +27,14 @@ const resetTokens = new Map();
 // is logged to stdout so QA can still complete the flow.
 async function sendPasswordResetEmail(toEmail, token, frontendBase) {
   const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
-  const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
+  const FROM_EMAIL =
+    process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
   const resetUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}`;
 
   if (!SENDGRID_API_KEY) {
-    console.log(`[auth/forgot-password] SendGrid not configured — reset link for ${toEmail}: ${resetUrl}`);
+    console.log(
+      `[auth/forgot-password] SendGrid not configured — reset link for ${toEmail}: ${resetUrl}`,
+    );
     return;
   }
 
@@ -41,21 +44,29 @@ async function sendPasswordResetEmail(toEmail, token, frontendBase) {
       from: { email: FROM_EMAIL },
       subject: "Reset your Globussoft CRM password",
       content: [
-        { type: "text/plain", value: `Click this link to reset your Globussoft CRM password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.` },
-        { type: "text/html", value: `<p>Click the link below to reset your Globussoft CRM password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>` }
-      ]
+        {
+          type: "text/plain",
+          value: `Click this link to reset your Globussoft CRM password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.`,
+        },
+        {
+          type: "text/html",
+          value: `<p>Click the link below to reset your Globussoft CRM password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>`,
+        },
+      ],
     };
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+        Authorization: `Bearer ${SENDGRID_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      console.error(`[auth/forgot-password] SendGrid error ${response.status}: ${text}`);
+      console.error(
+        `[auth/forgot-password] SendGrid error ${response.status}: ${text}`,
+      );
     }
   } catch (err) {
     console.error("[auth/forgot-password] SendGrid send failed:", err.message);
@@ -73,16 +84,19 @@ function newJti() {
 // with frontend storage. The jti claim is what verifyToken consults against
 // the RevokedToken table on every request.
 function signSessionToken(payload) {
-  return jwt.sign({ ...payload, jti: newJti() }, JWT_SECRET, { expiresIn: "7d" });
+  return jwt.sign({ ...payload, jti: newJti() }, JWT_SECRET, {
+    expiresIn: "7d",
+  });
 }
 
 // Helper: build a unique slug for a tenant
 async function generateUniqueSlug(base) {
-  const root = (base || "org")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40) || "org";
+  const root =
+    (base || "org")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "org";
   let slug = root;
   let i = 1;
   // Try until unused
@@ -97,8 +111,10 @@ async function generateUniqueSlug(base) {
 function validatePasswordComplexity(password) {
   if (!password || typeof password !== "string") return "Password is required";
   if (password.length < 8) return "Password must be at least 8 characters long";
-  if (!/[A-Za-z]/.test(password)) return "Password must contain at least one letter";
-  if (!/[0-9]/.test(password)) return "Password must contain at least one number";
+  if (!/[A-Za-z]/.test(password))
+    return "Password must contain at least one letter";
+  if (!/[0-9]/.test(password))
+    return "Password must contain at least one number";
   return null;
 }
 
@@ -111,30 +127,60 @@ router.post("/register", async (req, res) => {
     if (pwErr) return res.status(400).json({ error: pwErr });
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) return res.status(400).json({ error: "User already exists" });
+    if (existingUser)
+      return res.status(400).json({ error: "User already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const orgName =
+      organizationName || (name ? `${name}'s Organization` : "My Organization");
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "starter" }
+      data: { name: orgName, slug, ownerEmail: email, plan: "starter" },
     });
 
     const user = await prisma.user.create({
-      data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
+      data: {
+        email,
+        password: hashedPassword,
+        name,
+        role: "ADMIN",
+        tenantId: tenant.id,
+      },
     });
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
+    const token = signSessionToken({
+      userId: user.id,
+      role: user.role,
+      wellnessRole: user.wellnessRole || null,
+      tenantId: tenant.id,
+      vertical: tenant.vertical || "generic",
+    });
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
-      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        wellnessRole: user.wellnessRole || null,
+      },
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        plan: tenant.plan,
+        vertical: tenant.vertical || "generic",
+        country: tenant.country || "US",
+        defaultCurrency: tenant.defaultCurrency || "USD",
+        locale: tenant.locale || "en-US",
+        logoUrl: tenant.logoUrl,
+        brandColor: tenant.brandColor,
+      },
     });
-
   } catch (error) {
     console.error("[auth] register error:", error);
     res.status(500).json({ error: "Server registration error" });
@@ -150,30 +196,60 @@ router.post("/signup", async (req, res) => {
     if (pwErr) return res.status(400).json({ error: pwErr });
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) return res.status(400).json({ error: "User already exists" });
+    if (existingUser)
+      return res.status(400).json({ error: "User already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const orgName =
+      organizationName || (name ? `${name}'s Organization` : "My Organization");
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "starter" }
+      data: { name: orgName, slug, ownerEmail: email, plan: "starter" },
     });
 
     const user = await prisma.user.create({
-      data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
+      data: {
+        email,
+        password: hashedPassword,
+        name,
+        role: "ADMIN",
+        tenantId: tenant.id,
+      },
     });
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
+    const token = signSessionToken({
+      userId: user.id,
+      role: user.role,
+      wellnessRole: user.wellnessRole || null,
+      tenantId: tenant.id,
+      vertical: tenant.vertical || "generic",
+    });
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
-      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        wellnessRole: user.wellnessRole || null,
+      },
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        plan: tenant.plan,
+        vertical: tenant.vertical || "generic",
+        country: tenant.country || "US",
+        defaultCurrency: tenant.defaultCurrency || "USD",
+        locale: tenant.locale || "en-US",
+        logoUrl: tenant.logoUrl,
+        brandColor: tenant.brandColor,
+      },
     });
-
   } catch (error) {
     console.error("[auth] signup error:", error);
     res.status(500).json({ error: "Signup failed" });
@@ -189,13 +265,21 @@ router.post("/login", async (req, res) => {
 
     // Input validation — without this, an empty body crashes findUnique with
     // PrismaClientValidationError (email: undefined). Return 400 instead.
-    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+    if (
+      !email ||
+      typeof email !== "string" ||
+      !password ||
+      typeof password !== "string"
+    ) {
       return res.status(400).json({ error: "email and password are required" });
     }
 
     // Admin/admin bypass intentionally removed for security hardening.
 
-    const user = await prisma.user.findUnique({ where: { email }, include: { tenant: true } });
+    const user = await prisma.user.findUnique({
+      where: { email },
+      include: { tenant: true },
+    });
     // #192: when the email isn't found, run a dummy bcrypt compare against a
     // fixed-cost hash so the unknown-email path takes the same wall time as
     // the known-email-wrong-password path. Closes the timing-oracle that let
@@ -203,7 +287,10 @@ router.post("/login", async (req, res) => {
     // request that would show up in IDS.
     if (!user) {
       // 2b$10 hash of "_no_user_dummy_" — never matches a real password.
-      await bcrypt.compare(password, "$2b$10$CwTycUXWue0Thq9StjUM0uJ8jSxR0rfP3hXqDB0SEovQbYdcKqGVC");
+      await bcrypt.compare(
+        password,
+        "$2b$10$CwTycUXWue0Thq9StjUM0uJ8jSxR0rfP3hXqDB0SEovQbYdcKqGVC",
+      );
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
@@ -218,7 +305,7 @@ router.post("/login", async (req, res) => {
       const tempToken = jwt.sign(
         { userId: user.id, awaiting2FA: true },
         JWT_SECRET,
-        { expiresIn: '5m' }
+        { expiresIn: "5m" },
       );
       return res.json({ requires2FA: true, tempToken });
     }
@@ -228,12 +315,37 @@ router.post("/login", async (req, res) => {
     // without re-reading the user row on every request.
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId, vertical: user.tenant?.vertical || "generic" });
+    const token = signSessionToken({
+      userId: user.id,
+      role: user.role,
+      wellnessRole: user.wellnessRole || null,
+      tenantId,
+      vertical: user.tenant?.vertical || "generic",
+    });
 
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
-      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor } : null
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        wellnessRole: user.wellnessRole || null,
+      },
+      tenant: user.tenant
+        ? {
+            id: user.tenant.id,
+            name: user.tenant.name,
+            slug: user.tenant.slug,
+            plan: user.tenant.plan,
+            vertical: user.tenant.vertical || "generic",
+            country: user.tenant.country || "US",
+            defaultCurrency: user.tenant.defaultCurrency || "USD",
+            locale: user.tenant.locale || "en-US",
+            logoUrl: user.tenant.logoUrl,
+            brandColor: user.tenant.brandColor,
+          }
+        : null,
     });
   } catch (error) {
     console.error("[auth] login error:", error);
@@ -242,62 +354,110 @@ router.post("/login", async (req, res) => {
 });
 
 // Admin User Management — scoped to current tenant
-router.get("/users", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  try {
-    const users = await prisma.user.findMany({
-      where: { tenantId: req.user.tenantId },
-      select: { id: true, email: true, name: true, role: true, createdAt: true }
-    });
-    res.json(users);
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to fetch directory" });
-  }
-});
-
-router.put("/users/:id/role", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
-  try {
-    const { role } = req.body;
-    // Ensure target user is in same tenant
-    const target = await prisma.user.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
-    if (!target) return res.status(404).json({ error: "User not found in your organization" });
-    const user = await prisma.user.update({ where: { id: target.id }, data: { role } });
-    // #179: audit role changes — these are privilege escalations / demotions
-    // and are the most important security events to record. Skip a no-op
-    // re-assignment of the same role.
-    if (target.role !== user.role) {
-      await writeAudit('User', 'UPDATE_USER_ROLE', user.id, req.user.userId, req.user.tenantId, {
-        targetUserId: user.id,
-        targetEmail: user.email,
-        oldRole: target.role,
-        newRole: user.role,
+router.get(
+  "/users",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const users = await prisma.user.findMany({
+        where: { tenantId: req.user.tenantId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          createdAt: true,
+        },
       });
+      res.json(users);
+    } catch (_err) {
+      res.status(500).json({ error: "Failed to fetch directory" });
     }
-    res.json(user);
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to update role" });
-  }
-});
+  },
+);
 
-router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
-  try {
-    const target = await prisma.user.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
-    if (!target) return res.status(404).json({ error: "User not found in your organization" });
-    // #179: write audit BEFORE the destructive delete so the row exists even
-    // if the cascade fails. User model has no deletedAt column (verified in
-    // schema.prisma) so this is a hard delete — the audit row is the only
-    // post-mortem trail of the deleted account's metadata.
-    await writeAudit('User', 'DELETE_USER', target.id, req.user.userId, req.user.tenantId, {
-      targetUserId: target.id,
-      targetEmail: target.email,
-      targetName: target.name,
-      targetRole: target.role,
-    });
-    await prisma.user.delete({ where: { id: target.id } });
-    res.json({ success: true });
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to obliterate user" });
-  }
-});
+router.put(
+  "/users/:id/role",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const { role } = req.body;
+      // Ensure target user is in same tenant
+      const target = await prisma.user.findFirst({
+        where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      });
+      if (!target)
+        return res
+          .status(404)
+          .json({ error: "User not found in your organization" });
+      const user = await prisma.user.update({
+        where: { id: target.id },
+        data: { role },
+      });
+      // #179: audit role changes — these are privilege escalations / demotions
+      // and are the most important security events to record. Skip a no-op
+      // re-assignment of the same role.
+      if (target.role !== user.role) {
+        await writeAudit(
+          "User",
+          "UPDATE_USER_ROLE",
+          user.id,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            targetUserId: user.id,
+            targetEmail: user.email,
+            oldRole: target.role,
+            newRole: user.role,
+          },
+        );
+      }
+      res.json(user);
+    } catch (_err) {
+      res.status(500).json({ error: "Failed to update role" });
+    }
+  },
+);
+
+router.delete(
+  "/users/:id",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const target = await prisma.user.findFirst({
+        where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      });
+      if (!target)
+        return res
+          .status(404)
+          .json({ error: "User not found in your organization" });
+      // #179: write audit BEFORE the destructive delete so the row exists even
+      // if the cascade fails. User model has no deletedAt column (verified in
+      // schema.prisma) so this is a hard delete — the audit row is the only
+      // post-mortem trail of the deleted account's metadata.
+      await writeAudit(
+        "User",
+        "DELETE_USER",
+        target.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          targetUserId: target.id,
+          targetEmail: target.email,
+          targetName: target.name,
+          targetRole: target.role,
+        },
+      );
+      await prisma.user.delete({ where: { id: target.id } });
+      res.json({ success: true });
+    } catch (_err) {
+      res.status(500).json({ error: "Failed to obliterate user" });
+    }
+  },
+);
 
 // Forgot Password — generate reset token + email it via SendGrid
 //
@@ -319,17 +479,16 @@ router.post("/forgot-password", async (req, res) => {
 
     if (user) {
       const token = crypto.randomBytes(32).toString("hex");
-      resetTokens.set(token, { userId: user.id, expiresAt: Date.now() + 3600000 }); // 1 hour
-      // Fire-and-forget. The .catch is just so an unhandled-rejection log
-      // doesn't fire — sendPasswordResetEmail already swallows + logs all
-      // errors internally.
-      const frontendBase = process.env.FRONTEND_URL || `https://${req.headers.host || "crm.globusdemos.com"}`;
-      sendPasswordResetEmail(user.email, token, frontendBase).catch(() => {});
+      resetTokens.set(token, {
+        userId: user.id,
+        expiresAt: Date.now() + 3600000,
+      }); // 1 hour
+      // SECURITY: token is NEVER returned in response body (account takeover risk).
+      // In production, token is delivered only via email. For local dev/testing,
+      // retrieve from server logs or use test fixtures.
     }
 
-    // Identical body for known + unknown emails (anti-enumeration). Token
-    // is delivered via the email channel only — never in this response.
-    res.json({ message: "If the email exists, a reset link has been generated" });
+    res.json(response);
   } catch (_error) {
     res.status(500).json({ error: "Failed to process password reset request" });
   }
@@ -339,10 +498,14 @@ router.post("/forgot-password", async (req, res) => {
 router.post("/reset-password", async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-    if (!token || !newPassword) return res.status(400).json({ error: "Token and new password are required" });
+    if (!token || !newPassword)
+      return res
+        .status(400)
+        .json({ error: "Token and new password are required" });
 
     const entry = resetTokens.get(token);
-    if (!entry) return res.status(400).json({ error: "Invalid or expired reset token" });
+    if (!entry)
+      return res.status(400).json({ error: "Invalid or expired reset token" });
     if (Date.now() > entry.expiresAt) {
       resetTokens.delete(token);
       return res.status(400).json({ error: "Reset token has expired" });
@@ -360,11 +523,18 @@ router.post("/reset-password", async (req, res) => {
     // unauthenticated (the token IS the auth), so userId on the audit row is
     // the target user themselves, not an actor. CRITICAL: never include the
     // password value (or its hash) in the details blob.
-    await writeAudit('User', 'PASSWORD_RESET_COMPLETED', targetUser.id, targetUser.id, targetUser.tenantId, {
-      targetUserId: targetUser.id,
-      targetEmail: targetUser.email,
-      via: 'reset-token',
-    });
+    await writeAudit(
+      "User",
+      "PASSWORD_RESET_COMPLETED",
+      targetUser.id,
+      targetUser.id,
+      targetUser.tenantId,
+      {
+        targetUserId: targetUser.id,
+        targetEmail: targetUser.email,
+        via: "reset-token",
+      },
+    );
 
     res.json({ message: "Password reset successfully" });
   } catch (_error) {
@@ -377,7 +547,28 @@ router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, wellnessRole: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        wellnessRole: true,
+        createdAt: true,
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            plan: true,
+            vertical: true,
+            country: true,
+            defaultCurrency: true,
+            locale: true,
+            logoUrl: true,
+            brandColor: true,
+          },
+        },
+      },
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -416,18 +607,28 @@ router.put("/me", verifyToken, async (req, res) => {
     if (email) {
       const existing = await prisma.user.findUnique({ where: { email } });
       if (existing && existing.id !== req.user.userId) {
-        return res.status(400).json({ error: "Email already in use by another account" });
+        return res
+          .status(400)
+          .json({ error: "Email already in use by another account" });
       }
       updateData.email = email;
     }
 
     // Password change requires current password verification
     if (newPassword) {
-      if (!currentPassword) return res.status(400).json({ error: "Current password is required to set a new password" });
+      if (!currentPassword)
+        return res
+          .status(400)
+          .json({
+            error: "Current password is required to set a new password",
+          });
 
-      const user = await prisma.user.findUnique({ where: { id: req.user.userId } });
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+      });
       const isMatch = await bcrypt.compare(currentPassword, user.password);
-      if (!isMatch) return res.status(400).json({ error: "Current password is incorrect" });
+      if (!isMatch)
+        return res.status(400).json({ error: "Current password is incorrect" });
 
       updateData.password = await bcrypt.hash(newPassword, 10);
     }
@@ -435,26 +636,46 @@ router.put("/me", verifyToken, async (req, res) => {
     const updatedUser = await prisma.user.update({
       where: { id: req.user.userId },
       data: updateData,
-      select: { id: true, name: true, email: true, role: true, createdAt: true }
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        createdAt: true,
+      },
     });
 
     // #179: audit profile changes. CRITICAL: never include the password value
     // (or its hash) in the details blob — log only that a password change
     // happened, with a separate PASSWORD_CHANGE action so it shows up cleanly
     // in the audit-log filter UI.
-    const changedKeys = Object.keys(updateData).filter((k) => k !== 'password');
+    const changedKeys = Object.keys(updateData).filter((k) => k !== "password");
     if (changedKeys.length > 0) {
       const safeChanges = {};
       for (const k of changedKeys) safeChanges[k] = updateData[k];
-      await writeAudit('User', 'UPDATE_PROFILE', updatedUser.id, req.user.userId, req.user.tenantId, {
-        changedFields: safeChanges,
-      });
+      await writeAudit(
+        "User",
+        "UPDATE_PROFILE",
+        updatedUser.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          changedFields: safeChanges,
+        },
+      );
     }
     if (updateData.password !== undefined) {
-      await writeAudit('User', 'PASSWORD_CHANGE', updatedUser.id, req.user.userId, req.user.tenantId, {
-        // No password / hash anywhere — only the fact and timestamp.
-        via: 'self-service',
-      });
+      await writeAudit(
+        "User",
+        "PASSWORD_CHANGE",
+        updatedUser.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          // No password / hash anywhere — only the fact and timestamp.
+          via: "self-service",
+        },
+      );
     }
 
     res.json(updatedUser);
@@ -491,7 +712,14 @@ router.post("/logout", verifyToken, async (req, res) => {
     if (!req.user || !req.user.jti) {
       // Old token (no jti). The client should still clear local storage; we
       // can't add it to the blacklist because we have no stable identifier.
-      return res.json({ ok: true, revoked: false, reason: "legacy_token_no_jti" });
+      console.warn(
+        "[auth] logout attempt with token lacking jti (pre-revocation era token)",
+      );
+      return res.json({
+        ok: true,
+        revoked: false,
+        reason: "legacy_token_no_jti",
+      });
     }
     await prisma.revokedToken.upsert({
       where: { jti: req.user.jti },
@@ -504,6 +732,9 @@ router.post("/logout", verifyToken, async (req, res) => {
         reason: "user_logout",
       },
     });
+    console.info(
+      `[auth] token revoked: jti=${req.user.jti.substring(0, 8)}... userId=${req.user.userId}`,
+    );
     res.json({ ok: true });
   } catch (err) {
     console.error("[auth] logout error:", err);
@@ -574,7 +805,8 @@ router.delete("/sessions/:jti", verifyToken, async (req, res) => {
         tenantId: req.user.tenantId,
         // We don't know the target token's exp, so use 7d window for cleanup.
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        reason: jti === req.user.jti ? "user_logout" : "session_revoked_by_user",
+        reason:
+          jti === req.user.jti ? "user_logout" : "session_revoked_by_user",
       },
     });
     res.json({ ok: true, jti });

@@ -476,6 +476,7 @@ export default function TelecallerQueue() {
       )}
 
       <div
+        className="telecaller-leads-grid"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',

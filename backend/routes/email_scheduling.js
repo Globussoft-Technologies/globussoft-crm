@@ -206,29 +206,45 @@ router.post("/:id/send-now", async (req, res) => {
     }
 
     // Build EmailMessage row first so we can attach a tracking pixel
-    const emailRecord = await prisma.emailMessage.create({
-      data: {
-        subject: record.subject,
-        body: record.body,
-        from: FROM_EMAIL,
-        to: record.to,
-        direction: "OUTBOUND",
-        read: true,
-        contactId: record.contactId,
-        userId: record.userId,
-        tenantId: record.tenantId,
-      },
-    });
+    let emailRecord;
+    try {
+      emailRecord = await prisma.emailMessage.create({
+        data: {
+          subject: record.subject,
+          body: record.body,
+          from: FROM_EMAIL,
+          to: record.to,
+          direction: "OUTBOUND",
+          read: true,
+          contactId: record.contactId,
+          userId: record.userId,
+          tenantId: record.tenantId,
+        },
+      });
+    } catch (createErr) {
+      // FK or constraint violation — likely contactId or userId are invalid
+      console.error("[ScheduledEmail] EmailMessage create failed:", createErr.message);
+      await prisma.scheduledEmail.update({
+        where: { id: record.id },
+        data: { status: "FAILED", errorMessage: "Invalid contact or user reference" },
+      });
+      return res.status(400).json({ error: "Invalid contact or user reference" });
+    }
 
     const trackingId = crypto.randomUUID();
-    await prisma.emailTracking.create({
-      data: {
-        emailId: emailRecord.id,
-        trackingId,
-        type: "open",
-        tenantId: record.tenantId,
-      },
-    });
+    try {
+      await prisma.emailTracking.create({
+        data: {
+          emailId: emailRecord.id,
+          trackingId,
+          type: "open",
+          tenantId: record.tenantId,
+        },
+      });
+    } catch (trackErr) {
+      console.error("[ScheduledEmail] EmailTracking create failed:", trackErr.message);
+      // Continue — tracking is non-critical
+    }
 
     const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
     const trackedBody = `${record.body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;

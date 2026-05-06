@@ -50,8 +50,23 @@ function validateContactInput(body, { isUpdate = false } = {}) {
 
 // Protect all contact routes
 router.use(verifyToken);
-router.get("/by-status", audienceController.getContactsByStatus)
+router.get("/by-status", audienceController.getContactsByStatus);
 
+// #505: lightweight count endpoint for sidebar polling. Sidebar calls
+// GET /api/contacts?status=Lead every 60s to render badge; the full list
+// query (with activities/tasks includes) was expensive under burst load.
+// Return {total} to match the safeLen contract in Sidebar.jsx:173.
+router.get('/count', async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+    if (req.query.status) where.status = req.query.status;
+    applyDeletedAtFilter(where, req.query.includeDeleted === 'true');
+    const total = await prisma.contact.count({ where });
+    res.json({ total });
+  } catch (_err) {
+    res.json({ total: 0 });
+  }
+});
 
 router.get('/', async (req, res) => {
   try {

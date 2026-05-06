@@ -221,7 +221,8 @@ router.get("/reports/visit/:id", getPatientDetails)
 
 // ── Patients ───────────────────────────────────────────────────────
 
-router.get("/patients", async (req, res) => {
+// Patients list is sensitive PHI — admin-only read access per HIPAA guidelines.
+router.get("/patients", verifyWellnessRole(["admin"]), async (req, res) => {
   try {
     const { q, limit = 50, offset = 0, locationId } = req.query;
     const where = tenantWhere(req);
@@ -260,7 +261,7 @@ router.get("/patients", async (req, res) => {
   }
 });
 
-router.get("/patients/:id", async (req, res) => {
+router.get("/patients/:id", verifyWellnessRole(["admin"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const patient = await prisma.patient.findFirst({
@@ -310,8 +311,8 @@ router.get("/patients/:id", async (req, res) => {
 // patient-existence check so we return 404 for an unknown patient (rather
 // than an empty array, which would mask data-integrity bugs in the UI).
 
-// GET /patients/:id/visits — visits for a specific patient
-router.get("/patients/:id/visits", async (req, res) => {
+// GET /patients/:id/visits — visits for a specific patient (admin-only)
+router.get("/patients/:id/visits", verifyWellnessRole(["admin"]), async (req, res) => {
   try {
     const patientId = parseInt(req.params.id);
     const patient = await prisma.patient.findFirst({
@@ -344,8 +345,8 @@ router.get("/patients/:id/visits", async (req, res) => {
   }
 });
 
-// GET /patients/:id/prescriptions — Rx for a specific patient
-router.get("/patients/:id/prescriptions", async (req, res) => {
+// GET /patients/:id/prescriptions — Rx for a specific patient (admin-only)
+router.get("/patients/:id/prescriptions", verifyWellnessRole(["admin"]), async (req, res) => {
   try {
     const patientId = parseInt(req.params.id);
     const patient = await prisma.patient.findFirst({
@@ -376,8 +377,8 @@ router.get("/patients/:id/prescriptions", async (req, res) => {
   }
 });
 
-// GET /patients/:id/consents — signed consent forms for a specific patient
-router.get("/patients/:id/consents", async (req, res) => {
+// GET /patients/:id/consents — signed consent forms for a specific patient (admin-only)
+router.get("/patients/:id/consents", verifyWellnessRole(["admin"]), async (req, res) => {
   try {
     const patientId = parseInt(req.params.id);
     const patient = await prisma.patient.findFirst({
@@ -408,8 +409,8 @@ router.get("/patients/:id/consents", async (req, res) => {
   }
 });
 
-// GET /patients/:id/treatment-plans — treatment plans for a specific patient
-router.get("/patients/:id/treatment-plans", async (req, res) => {
+// GET /patients/:id/treatment-plans — treatment plans for a specific patient (admin-only)
+router.get("/patients/:id/treatment-plans", verifyWellnessRole(["admin"]), async (req, res) => {
   try {
     const patientId = parseInt(req.params.id);
     const patient = await prisma.patient.findFirst({

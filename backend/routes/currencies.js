@@ -9,12 +9,42 @@ const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 
 // Default currency set used when a tenant has not yet initialized anything.
 const DEFAULTS = [
-  { code: "USD", symbol: "$",  name: "US Dollar",        exchangeRate: 1.0,   isBase: true  },
-  { code: "INR", symbol: "₹",  name: "Indian Rupee",     exchangeRate: 83.0,  isBase: false },
-  { code: "EUR", symbol: "€",  name: "Euro",             exchangeRate: 0.92,  isBase: false },
-  { code: "GBP", symbol: "£",  name: "British Pound",    exchangeRate: 0.79,  isBase: false },
-  { code: "CAD", symbol: "C$", name: "Canadian Dollar",  exchangeRate: 1.36,  isBase: false },
-  { code: "AUD", symbol: "A$", name: "Australian Dollar",exchangeRate: 1.52,  isBase: false },
+  {
+    code: "USD",
+    symbol: "$",
+    name: "US Dollar",
+    exchangeRate: 1.0,
+    isBase: true,
+  },
+  {
+    code: "INR",
+    symbol: "₹",
+    name: "Indian Rupee",
+    exchangeRate: 83.0,
+    isBase: false,
+  },
+  { code: "EUR", symbol: "€", name: "Euro", exchangeRate: 0.92, isBase: false },
+  {
+    code: "GBP",
+    symbol: "£",
+    name: "British Pound",
+    exchangeRate: 0.79,
+    isBase: false,
+  },
+  {
+    code: "CAD",
+    symbol: "C$",
+    name: "Canadian Dollar",
+    exchangeRate: 1.36,
+    isBase: false,
+  },
+  {
+    code: "AUD",
+    symbol: "A$",
+    name: "Australian Dollar",
+    exchangeRate: 1.52,
+    isBase: false,
+  },
 ];
 
 // GET /api/currencies — list currencies for tenant (fall back to defaults if none)
@@ -26,7 +56,9 @@ router.get("/", async (req, res) => {
       orderBy: [{ isBase: "desc" }, { code: "asc" }],
     });
     if (rows.length === 0) {
-      return res.json(DEFAULTS.map((d, i) => ({ id: -(i + 1), tenantId, ...d })));
+      return res.json(
+        DEFAULTS.map((d, i) => ({ id: -(i + 1), tenantId, ...d })),
+      );
     }
     res.json(rows);
   } catch (err) {
@@ -41,7 +73,9 @@ router.post("/", ...adminOnly, async (req, res) => {
     const tenantId = req.user.tenantId;
     const { code, symbol, name, exchangeRate, isBase } = req.body;
     if (!code || !symbol || !name) {
-      return res.status(400).json({ error: "code, symbol, and name are required" });
+      return res
+        .status(400)
+        .json({ error: "code, symbol, and name are required" });
     }
     const rate = exchangeRate != null ? parseFloat(exchangeRate) : 1.0;
     const makeBase = !!isBase;
@@ -68,7 +102,9 @@ router.post("/", ...adminOnly, async (req, res) => {
   } catch (err) {
     console.error(err);
     if (err.code === "P2002") {
-      return res.status(409).json({ error: "Currency code already exists for this tenant" });
+      return res
+        .status(409)
+        .json({ error: "Currency code already exists for this tenant" });
     }
     res.status(500).json({ error: "Failed to create currency" });
   }
@@ -86,8 +122,8 @@ router.post("/seed", ...adminOnly, async (req, res) => {
       DEFAULTS.map((d) =>
         prisma.currency.create({
           data: { ...d, tenantId },
-        })
-      )
+        }),
+      ),
     );
     res.status(201).json(created);
   } catch (err) {
@@ -103,7 +139,9 @@ router.put("/:id", ...adminOnly, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
 
-    const existing = await prisma.currency.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.currency.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Currency not found" });
 
     const { code, symbol, name, exchangeRate, isBase } = req.body;
@@ -111,7 +149,8 @@ router.put("/:id", ...adminOnly, async (req, res) => {
     if (code !== undefined) data.code = String(code).toUpperCase();
     if (symbol !== undefined) data.symbol = symbol;
     if (name !== undefined) data.name = name;
-    if (exchangeRate !== undefined) data.exchangeRate = parseFloat(exchangeRate);
+    if (exchangeRate !== undefined)
+      data.exchangeRate = parseFloat(exchangeRate);
 
     const updated = await prisma.$transaction(async (tx) => {
       if (isBase === true) {
@@ -139,7 +178,9 @@ router.delete("/:id", ...adminOnly, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
 
-    const existing = await prisma.currency.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.currency.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Currency not found" });
     if (existing.isBase) {
       return res.status(400).json({ error: "Cannot delete the base currency" });
@@ -160,7 +201,9 @@ router.post("/:id/set-base", ...adminOnly, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
 
-    const existing = await prisma.currency.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.currency.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Currency not found" });
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -186,7 +229,9 @@ router.post("/convert", async (req, res) => {
     const tenantId = req.user.tenantId;
     const { amount, from, to } = req.body;
     if (amount == null || !from || !to) {
-      return res.status(400).json({ error: "amount, from, and to are required" });
+      return res
+        .status(400)
+        .json({ error: "amount, from, and to are required" });
     }
     const amt = parseFloat(amount);
     const fromCode = String(from).toUpperCase();
@@ -233,7 +278,9 @@ router.get("/pivot/deals", async (req, res) => {
       usingDefaults = true;
     }
     const base = currencies.find((c) => c.isBase) || currencies[0];
-    const rateByCode = Object.fromEntries(currencies.map((c) => [c.code, c.exchangeRate]));
+    const rateByCode = Object.fromEntries(
+      currencies.map((c) => [c.code, c.exchangeRate]),
+    );
 
     // "Open" = deals not in won or lost stage
     const deals = await prisma.deal.findMany({

@@ -172,15 +172,15 @@ const Sidebar = ({
       p
         .then((r) => (Array.isArray(r) ? r.length : (r?.total ?? 0)))
         .catch(() => null);
-    // #509: pass {silent:true} so transient 503s on these background polls
-    // don't pile up "Server error" toasts. safeLen's .catch(()=>null) already
-    // keeps previous count on failure; the toast was redundant noise. The
-    // fetchApi docstring at utils/api.js:107-109 explicitly recommends
-    // {silent} for background-poll callsites.
+    // #505: call the new count/ endpoints instead of list endpoints.
+    // The list endpoints were expensive (loading all activities/tasks per contact),
+    // and 4 parallel calls on page refresh could timeout/503. The count endpoints
+    // use cheap Prisma.count() queries. Pass {silent:true} to avoid toast noise
+    // on transient failures (safeLen keeps previous count on 503).
     const [leads, tasks, tickets, inbox] = await Promise.all([
-      safeLen(fetchApi("/api/contacts?status=Lead", { silent: true })),
-      safeLen(fetchApi("/api/tasks?status=PENDING", { silent: true })),
-      safeLen(fetchApi("/api/tickets?status=OPEN", { silent: true })),
+      safeLen(fetchApi("/api/contacts/count?status=Lead", { silent: true })),
+      safeLen(fetchApi("/api/tasks/count?status=PENDING", { silent: true })),
+      safeLen(fetchApi("/api/tickets/count?status=OPEN", { silent: true })),
       safeLen(fetchApi("/api/email?unread=1", { silent: true })),
     ]);
     setCounts((prev) => ({

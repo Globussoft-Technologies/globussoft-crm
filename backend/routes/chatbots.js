@@ -10,7 +10,11 @@ const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 // ── Helpers ────────────────────────────────────────────────────────
 function parseJSON(s, fallback) {
   if (!s) return fallback;
-  try { return JSON.parse(s); } catch { return fallback; }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return fallback;
+  }
 }
 
 function isEmail(v) {
@@ -25,30 +29,33 @@ function isPhone(v) {
 // node types: message, question, capture-email, capture-phone, branch, end
 
 function getStartNode(flow) {
-  if (!flow || !Array.isArray(flow.nodes) || flow.nodes.length === 0) return null;
+  if (!flow || !Array.isArray(flow.nodes) || flow.nodes.length === 0)
+    return null;
   const edges = Array.isArray(flow.edges) ? flow.edges : [];
-  const targets = new Set(edges.map(e => e.to));
+  const targets = new Set(edges.map((e) => e.to));
   // Start = first node not targeted by any edge, fallback to first
-  return flow.nodes.find(n => !targets.has(n.id)) || flow.nodes[0];
+  return flow.nodes.find((n) => !targets.has(n.id)) || flow.nodes[0];
 }
 
 function findNode(flow, id) {
   if (!flow || !Array.isArray(flow.nodes)) return null;
-  return flow.nodes.find(n => n.id === id) || null;
+  return flow.nodes.find((n) => n.id === id) || null;
 }
 
 function nextNodeId(flow, currentId, userInput) {
   if (!flow || !Array.isArray(flow.edges)) return null;
-  const edges = flow.edges.filter(e => e.from === currentId);
+  const edges = flow.edges.filter((e) => e.from === currentId);
   if (edges.length === 0) return null;
   // For branch/conditional: try matching condition (case-insensitive substring)
   if (userInput) {
     const lower = String(userInput).toLowerCase().trim();
-    const matched = edges.find(e => e.condition && lower.includes(String(e.condition).toLowerCase()));
+    const matched = edges.find(
+      (e) => e.condition && lower.includes(String(e.condition).toLowerCase()),
+    );
     if (matched) return matched.to;
   }
   // Default: first edge with no condition or first edge
-  const def = edges.find(e => !e.condition) || edges[0];
+  const def = edges.find((e) => !e.condition) || edges[0];
   return def ? def.to : null;
 }
 
@@ -71,14 +78,34 @@ function runEngine(flow, currentNodeId, userMessage) {
   if (node && nodeRequiresInput(node)) {
     if (node.type === "capture-email") {
       if (!isEmail(userMessage || "")) {
-        replyMessages.push({ from: "bot", text: "That doesn't look like a valid email. Please try again.", at: new Date().toISOString() });
-        return { replyMessages, currentNodeId: nodeId, completed: false, requiresInput: true, captured };
+        replyMessages.push({
+          from: "bot",
+          text: "That doesn't look like a valid email. Please try again.",
+          at: new Date().toISOString(),
+        });
+        return {
+          replyMessages,
+          currentNodeId: nodeId,
+          completed: false,
+          requiresInput: true,
+          captured,
+        };
       }
       captured.email = String(userMessage).trim().toLowerCase();
     } else if (node.type === "capture-phone") {
       if (!isPhone(userMessage || "")) {
-        replyMessages.push({ from: "bot", text: "Please enter a valid phone number.", at: new Date().toISOString() });
-        return { replyMessages, currentNodeId: nodeId, completed: false, requiresInput: true, captured };
+        replyMessages.push({
+          from: "bot",
+          text: "Please enter a valid phone number.",
+          at: new Date().toISOString(),
+        });
+        return {
+          replyMessages,
+          currentNodeId: nodeId,
+          completed: false,
+          requiresInput: true,
+          captured,
+        };
       }
       captured.phone = String(userMessage).trim();
     }
@@ -96,26 +123,61 @@ function runEngine(flow, currentNodeId, userMessage) {
   let safety = 0;
   while (node && safety < 50) {
     safety++;
-    if (node.type === "message" || node.type === "question" || node.type === "capture-email" || node.type === "capture-phone" || node.type === "branch") {
+    if (
+      node.type === "message" ||
+      node.type === "question" ||
+      node.type === "capture-email" ||
+      node.type === "capture-phone" ||
+      node.type === "branch"
+    ) {
       if (node.content) {
-        replyMessages.push({ from: "bot", text: String(node.content), at: new Date().toISOString(), nodeId: node.id });
+        replyMessages.push({
+          from: "bot",
+          text: String(node.content),
+          at: new Date().toISOString(),
+          nodeId: node.id,
+        });
       }
     }
     if (node.type === "end") {
-      return { replyMessages, currentNodeId: node.id, completed: true, requiresInput: false, captured };
+      return {
+        replyMessages,
+        currentNodeId: node.id,
+        completed: true,
+        requiresInput: false,
+        captured,
+      };
     }
     if (nodeRequiresInput(node)) {
-      return { replyMessages, currentNodeId: node.id, completed: false, requiresInput: true, captured };
+      return {
+        replyMessages,
+        currentNodeId: node.id,
+        completed: false,
+        requiresInput: true,
+        captured,
+      };
     }
     // message / branch with no input — auto-advance
     const nextId = nextNodeId(flow, node.id, null);
     if (!nextId) {
-      return { replyMessages, currentNodeId: node.id, completed: true, requiresInput: false, captured };
+      return {
+        replyMessages,
+        currentNodeId: node.id,
+        completed: true,
+        requiresInput: false,
+        captured,
+      };
     }
     nodeId = nextId;
     node = findNode(flow, nodeId);
   }
-  return { replyMessages, currentNodeId: nodeId, completed: true, requiresInput: false, captured };
+  return {
+    replyMessages,
+    currentNodeId: nodeId,
+    completed: true,
+    requiresInput: false,
+    captured,
+  };
 }
 
 // ── Authenticated routes ───────────────────────────────────────────
@@ -129,7 +191,7 @@ router.get("/", async (req, res) => {
       orderBy: { updatedAt: "desc" },
     });
     // Add conversation counts
-    const ids = bots.map(b => b.id);
+    const ids = bots.map((b) => b.id);
     const counts = ids.length
       ? await prisma.chatbotConversation.groupBy({
           by: ["chatbotId"],
@@ -137,12 +199,16 @@ router.get("/", async (req, res) => {
           _count: { _all: true },
         })
       : [];
-    const countMap = Object.fromEntries(counts.map(c => [c.chatbotId, c._count._all]));
-    res.json(bots.map(b => ({
-      ...b,
-      flow: parseJSON(b.flow, { nodes: [], edges: [] }),
-      conversationCount: countMap[b.id] || 0,
-    })));
+    const countMap = Object.fromEntries(
+      counts.map((c) => [c.chatbotId, c._count._all]),
+    );
+    res.json(
+      bots.map((b) => ({
+        ...b,
+        flow: parseJSON(b.flow, { nodes: [], edges: [] }),
+        conversationCount: countMap[b.id] || 0,
+      })),
+    );
   } catch (err) {
     console.error("[chatbots/list]", err);
     res.status(500).json({ error: "List failed" });
@@ -155,7 +221,10 @@ router.post("/", ...adminOnly, async (req, res) => {
     const tenantId = req.user.tenantId;
     const { name, flow } = req.body || {};
     if (!name) return res.status(400).json({ error: "name required" });
-    const flowJson = typeof flow === "string" ? flow : JSON.stringify(flow || { nodes: [], edges: [] });
+    const flowJson =
+      typeof flow === "string"
+        ? flow
+        : JSON.stringify(flow || { nodes: [], edges: [] });
     const bot = await prisma.chatbot.create({
       data: { name, flow: flowJson, isActive: false, tenantId },
     });
@@ -185,12 +254,15 @@ router.put("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
-    const existing = await prisma.chatbot.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.chatbot.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Not found" });
     const { name, flow, isActive } = req.body || {};
     const data = {};
     if (typeof name === "string") data.name = name;
-    if (flow !== undefined) data.flow = typeof flow === "string" ? flow : JSON.stringify(flow);
+    if (flow !== undefined)
+      data.flow = typeof flow === "string" ? flow : JSON.stringify(flow);
     if (typeof isActive === "boolean") data.isActive = isActive;
     const bot = await prisma.chatbot.update({ where: { id }, data });
     res.json({ ...bot, flow: parseJSON(bot.flow, { nodes: [], edges: [] }) });
@@ -205,9 +277,13 @@ router.delete("/:id", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
-    const existing = await prisma.chatbot.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.chatbot.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Not found" });
-    await prisma.chatbotConversation.deleteMany({ where: { chatbotId: id, tenantId } });
+    await prisma.chatbotConversation.deleteMany({
+      where: { chatbotId: id, tenantId },
+    });
     await prisma.chatbot.delete({ where: { id } });
     res.json({ success: true });
   } catch (err) {
@@ -221,9 +297,14 @@ router.post("/:id/activate", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
-    const existing = await prisma.chatbot.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.chatbot.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Not found" });
-    const bot = await prisma.chatbot.update({ where: { id }, data: { isActive: true } });
+    const bot = await prisma.chatbot.update({
+      where: { id },
+      data: { isActive: true },
+    });
     res.json({ ...bot, flow: parseJSON(bot.flow, { nodes: [], edges: [] }) });
   } catch (err) {
     console.error("[chatbots/activate]", err);
@@ -236,9 +317,14 @@ router.post("/:id/deactivate", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const id = parseInt(req.params.id, 10);
-    const existing = await prisma.chatbot.findFirst({ where: { id, tenantId } });
+    const existing = await prisma.chatbot.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Not found" });
-    const bot = await prisma.chatbot.update({ where: { id }, data: { isActive: false } });
+    const bot = await prisma.chatbot.update({
+      where: { id },
+      data: { isActive: false },
+    });
     res.json({ ...bot, flow: parseJSON(bot.flow, { nodes: [], edges: [] }) });
   } catch (err) {
     console.error("[chatbots/deactivate]", err);
@@ -258,10 +344,12 @@ router.get("/:id/conversations", async (req, res) => {
       orderBy: { updatedAt: "desc" },
       take: 100,
     });
-    res.json(convos.map(c => ({
-      ...c,
-      messages: parseJSON(c.messages, []),
-    })));
+    res.json(
+      convos.map((c) => ({
+        ...c,
+        messages: parseJSON(c.messages, []),
+      })),
+    );
   } catch (err) {
     console.error("[chatbots/conversations]", err);
     res.status(500).json({ error: "List conversations failed" });
@@ -275,7 +363,8 @@ router.post("/chat/:botId", async (req, res) => {
     const botId = parseInt(req.params.botId, 10);
     const { visitorId, message, tenantId: tenantIdBody } = req.body || {};
     if (!botId) return res.status(400).json({ error: "botId required" });
-    if (!visitorId) return res.status(400).json({ error: "visitorId required" });
+    if (!visitorId)
+      return res.status(400).json({ error: "visitorId required" });
 
     const bot = await prisma.chatbot.findUnique({ where: { id: botId } });
     if (!bot) return res.status(404).json({ error: "Bot not found" });
@@ -289,7 +378,12 @@ router.post("/chat/:botId", async (req, res) => {
 
     // Find or create conversation
     let convo = await prisma.chatbotConversation.findFirst({
-      where: { chatbotId: bot.id, visitorId, tenantId: bot.tenantId, status: "ACTIVE" },
+      where: {
+        chatbotId: bot.id,
+        visitorId,
+        tenantId: bot.tenantId,
+        status: "ACTIVE",
+      },
       orderBy: { updatedAt: "desc" },
     });
 
@@ -307,21 +401,34 @@ router.post("/chat/:botId", async (req, res) => {
     }
     // Recover captured fields from convo
     if (convo) {
-      try { captured = parseJSON(convo._captured || null, {}) || {}; } catch { captured = {}; }
+      try {
+        captured = parseJSON(convo._captured || null, {}) || {};
+      } catch {
+        captured = {};
+      }
     }
 
     // First-touch: no convo yet, no message — start the flow.
     if (!convo) {
       const start = getStartNode(flow);
       if (!start) {
-        return res.json({ reply: "This bot has no flow configured.", completed: true, requiresInput: false, messages: [] });
+        return res.json({
+          reply: "This bot has no flow configured.",
+          completed: true,
+          requiresInput: false,
+          messages: [],
+        });
       }
       currentNodeId = start.id;
     }
 
     // Append user message if provided
     if (message) {
-      messages.push({ from: "user", text: String(message), at: new Date().toISOString() });
+      messages.push({
+        from: "user",
+        text: String(message),
+        at: new Date().toISOString(),
+      });
     }
 
     // Run engine
@@ -333,7 +440,11 @@ router.post("/chat/:botId", async (req, res) => {
     // Append bot reply messages, embed state on the last one
     if (result.replyMessages.length === 0) {
       // ensure at least one bot reply for first-touch starts
-      result.replyMessages.push({ from: "bot", text: "Hello!", at: new Date().toISOString() });
+      result.replyMessages.push({
+        from: "bot",
+        text: "Hello!",
+        at: new Date().toISOString(),
+      });
     }
     const lastIdx = result.replyMessages.length - 1;
     result.replyMessages[lastIdx] = {
@@ -351,14 +462,18 @@ router.post("/chat/:botId", async (req, res) => {
       if (c) contactId = c.id;
       // Also identify the WebVisitor
       try {
-        const visitor = await prisma.webVisitor.findUnique({ where: { sessionId: visitorId } });
+        const visitor = await prisma.webVisitor.findUnique({
+          where: { sessionId: visitorId },
+        });
         if (visitor && c) {
           await prisma.webVisitor.update({
             where: { sessionId: visitorId },
             data: { contactId: c.id, identified: true },
           });
         }
-      } catch (_e) { /* ignore */ }
+      } catch (_e) {
+        /* ignore */
+      }
     }
 
     const status = result.completed ? "COMPLETED" : "ACTIVE";
@@ -384,7 +499,7 @@ router.post("/chat/:botId", async (req, res) => {
     const lastBot = result.replyMessages[result.replyMessages.length - 1];
     res.json({
       reply: lastBot ? lastBot.text : "",
-      replies: result.replyMessages.map(m => m.text),
+      replies: result.replyMessages.map((m) => m.text),
       completed: result.completed,
       requiresInput: result.requiresInput,
       conversationId: convo.id,

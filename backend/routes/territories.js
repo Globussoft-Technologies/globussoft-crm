@@ -10,7 +10,11 @@ const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 function safeJson(str, fallback) {
   if (!str) return fallback;
   if (typeof str === "object") return str;
-  try { return JSON.parse(str); } catch { return fallback; }
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
 }
 
 function shape(t, extra = {}) {
@@ -32,7 +36,7 @@ router.get("/", async (req, res) => {
     });
 
     // Count contacts per territory in one go
-    const ids = territories.map(t => t.id);
+    const ids = territories.map((t) => t.id);
     let counts = {};
     if (ids.length) {
       const grouped = await prisma.contact.groupBy({
@@ -40,10 +44,14 @@ router.get("/", async (req, res) => {
         where: { tenantId, territoryId: { in: ids } },
         _count: { _all: true },
       });
-      counts = Object.fromEntries(grouped.map(g => [g.territoryId, g._count._all]));
+      counts = Object.fromEntries(
+        grouped.map((g) => [g.territoryId, g._count._all]),
+      );
     }
 
-    res.json(territories.map(t => shape(t, { contactCount: counts[t.id] || 0 })));
+    res.json(
+      territories.map((t) => shape(t, { contactCount: counts[t.id] || 0 })),
+    );
   } catch (err) {
     console.error("territories GET / error:", err);
     res.status(500).json({ error: "Failed to load territories" });
@@ -62,7 +70,9 @@ router.post("/", ...adminOnly, async (req, res) => {
         name,
         regions: JSON.stringify(Array.isArray(regions) ? regions : []),
         assignedUserIds: JSON.stringify(
-          Array.isArray(assignedUserIds) ? assignedUserIds.map(Number).filter(n => !Number.isNaN(n)) : []
+          Array.isArray(assignedUserIds)
+            ? assignedUserIds.map(Number).filter((n) => !Number.isNaN(n))
+            : [],
         ),
         tenantId,
       },
@@ -81,18 +91,25 @@ router.put("/:id", ...adminOnly, async (req, res) => {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid id" });
 
-    const existing = await prisma.territory.findFirst({ where: { id, tenantId } });
-    if (!existing) return res.status(404).json({ error: "Territory not found" });
+    const existing = await prisma.territory.findFirst({
+      where: { id, tenantId },
+    });
+    if (!existing)
+      return res.status(404).json({ error: "Territory not found" });
 
     const { name, regions, assignedUserIds } = req.body || {};
     const updated = await prisma.territory.update({
       where: { id },
       data: {
         ...(name !== undefined && { name }),
-        ...(regions !== undefined && { regions: JSON.stringify(Array.isArray(regions) ? regions : []) }),
+        ...(regions !== undefined && {
+          regions: JSON.stringify(Array.isArray(regions) ? regions : []),
+        }),
         ...(assignedUserIds !== undefined && {
           assignedUserIds: JSON.stringify(
-            Array.isArray(assignedUserIds) ? assignedUserIds.map(Number).filter(n => !Number.isNaN(n)) : []
+            Array.isArray(assignedUserIds)
+              ? assignedUserIds.map(Number).filter((n) => !Number.isNaN(n))
+              : [],
           ),
         }),
       },
@@ -111,8 +128,11 @@ router.delete("/:id", ...adminOnly, async (req, res) => {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid id" });
 
-    const existing = await prisma.territory.findFirst({ where: { id, tenantId } });
-    if (!existing) return res.status(404).json({ error: "Territory not found" });
+    const existing = await prisma.territory.findFirst({
+      where: { id, tenantId },
+    });
+    if (!existing)
+      return res.status(404).json({ error: "Territory not found" });
 
     // Detach contacts
     await prisma.contact.updateMany({
@@ -133,11 +153,16 @@ router.post("/:id/assign-contact", ...adminOnly, async (req, res) => {
     const tenantId = req.user.tenantId;
     const id = Number(req.params.id);
     const { contactId } = req.body || {};
-    if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid territory id" });
-    if (!contactId) return res.status(400).json({ error: "contactId is required" });
+    if (Number.isNaN(id))
+      return res.status(400).json({ error: "Invalid territory id" });
+    if (!contactId)
+      return res.status(400).json({ error: "contactId is required" });
 
-    const territory = await prisma.territory.findFirst({ where: { id, tenantId } });
-    if (!territory) return res.status(404).json({ error: "Territory not found" });
+    const territory = await prisma.territory.findFirst({
+      where: { id, tenantId },
+    });
+    if (!territory)
+      return res.status(404).json({ error: "Territory not found" });
 
     const contact = await prisma.contact.findFirst({
       where: { id: Number(contactId), tenantId },
@@ -148,7 +173,10 @@ router.post("/:id/assign-contact", ...adminOnly, async (req, res) => {
       where: { id: contact.id },
       data: { territoryId: id },
     });
-    res.json({ success: true, contact: { id: updated.id, territoryId: updated.territoryId } });
+    res.json({
+      success: true,
+      contact: { id: updated.id, territoryId: updated.territoryId },
+    });
   } catch (err) {
     console.error("territories assign-contact error:", err);
     res.status(500).json({ error: "Failed to assign contact" });
@@ -162,14 +190,23 @@ router.get("/:id/contacts", async (req, res) => {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid id" });
 
-    const territory = await prisma.territory.findFirst({ where: { id, tenantId } });
-    if (!territory) return res.status(404).json({ error: "Territory not found" });
+    const territory = await prisma.territory.findFirst({
+      where: { id, tenantId },
+    });
+    if (!territory)
+      return res.status(404).json({ error: "Territory not found" });
 
     const contacts = await prisma.contact.findMany({
       where: { tenantId, territoryId: id },
       select: {
-        id: true, name: true, email: true, phone: true, company: true,
-        status: true, source: true, assignedToId: true,
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        company: true,
+        status: true,
+        source: true,
+        assignedToId: true,
       },
       orderBy: { id: "desc" },
     });

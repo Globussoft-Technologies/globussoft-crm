@@ -169,6 +169,43 @@ const loginUsernameLimiter = rateLimit({
 // (catches distributed attacks against one account). Both must pass before
 // the route handler runs. Scoped to POST so OPTIONS preflight isn't counted.
 app.post("/api/auth/login", loginIpLimiter, loginUsernameLimiter, (req, res, next) => next());
+
+// #531 (HI-02 mitigation): per-IP and per-email rate limiting on
+// /api/auth/forgot-password. Mirrors the login limiter pattern. Without
+// these, an attacker can hammer the endpoint to enumerate valid emails
+// (HI-02) or to rate-limit-grief other users (DoS the password-reset
+// flow). Quotas are looser than login because the forgot-password flow
+// has higher legitimate-use churn (typo-prone email entry), but tight
+// enough that a 1000-email enumeration attack hits the wall fast.
+//
+// Note we do NOT use skipSuccessfulRequests here — every successful call
+// counts toward the budget regardless. /forgot-password's success branch
+// already returns identical-shape response for known and unknown emails
+// (per #526), so distinguishing "valid email" vs "noop" via skip count
+// would itself be a new oracle.
+const forgotPasswordIpLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: process.env.NODE_ENV === "test" ? 10000 : 20, // 20 requests/hour/IP
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: { error: "Too many password-reset requests from this IP, please try again later." },
+  validate: { trustProxy: false, xForwardedForHeader: false },
+});
+const forgotPasswordEmailLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: process.env.NODE_ENV === "test" ? 10000 : 5, // 5 requests/hour/email
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req, res) => {
+    const email = (req.body?.email || "").toLowerCase().trim();
+    return email || `noemail:${ipKeyGenerator(req, res)}`;
+  },
+  message: { error: "Too many password-reset requests for this email, please try again later." },
+  validate: { trustProxy: false, xForwardedForHeader: false },
+});
+app.post("/api/auth/forgot-password", forgotPasswordIpLimiter, forgotPasswordEmailLimiter, (req, res, next) => next());
+
 app.use("/api", apiLimiter);
 
 const io = new Server(server, { cors: { origin: "*" } });

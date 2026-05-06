@@ -166,7 +166,38 @@ const Sidebar = ({
     tickets: 0,
     inbox: 0,
   });
-  const refreshCounts = useCallback(async () => {
+  // #529 / #530 (BUG-001): pen-test observed 390+ requests in 2 minutes
+  // against the four sidebar count endpoints when the dashboard was idle —
+  // ~3/sec instead of the 4/min the 60s polling interval implies. Root
+  // cause: the previous shape took `user` (an object reference from
+  // AuthContext) as a useCallback + useEffect dep. Because AuthContext's
+  // provider re-creates its value object on every App render (no useMemo),
+  // every consumer sees `user` as a "new reference" each time, even
+  // though the underlying user.id never changed. That cascaded into:
+  //   1. refreshCounts useCallback re-creates (new fn ref)
+  //   2. useEffect cleanup runs (clearInterval + socket.disconnect)
+  //   3. useEffect body runs again — fires refreshCounts() AND opens a
+  //      fresh socket AND sets a new 60s interval
+  // Anything in the parent tree that re-rendered (notifications, route
+  // change, theme toggle, in-flight fetches) thus fired four extra HTTP
+  // requests + a socket reconnect. On a busy page that adds up fast.
+  //
+  // Two-part fix:
+  //   • refreshCounts moves into a ref so the function identity stays
+  //     stable across renders (the body still closes over the latest
+  //     in-memory state).
+  //   • useEffect depends only on `user?.id` — a primitive that's stable
+  //     across re-renders unless the actual user changes. Cleanup +
+  //     re-mount fires once per real session change, not per render.
+  //
+  // The pen-test's secondary observation about retry-on-400 was wrong
+  // about cause: fetchApi has no retry logic (utils/api.js), and the
+  // three filter values (status=Lead / PENDING / OPEN) are all accepted
+  // by the backend (Lead matches contacts enum, tasks normalises
+  // PENDING→Pending per #436, tickets ignores ?status entirely). The
+  // storm was 100% the dep-cycle re-mount loop above.
+  const refreshCountsRef = useRef(null);
+  refreshCountsRef.current = async () => {
     if (!user) return;
     const safeLen = (p) =>
       p
@@ -189,7 +220,14 @@ const Sidebar = ({
       tickets: tickets ?? prev.tickets,
       inbox: inbox ?? prev.inbox,
     }));
-  }, [user]);
+  };
+  // Stable wrapper for socket / interval handlers — they call through the
+  // ref so the latest closure runs but the function identity itself never
+  // changes. Lint-disable: the dep array intentionally omits the ref
+  // (refs are stable by React contract).
+  const refreshCounts = useCallback(() => {
+    if (refreshCountsRef.current) refreshCountsRef.current();
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -229,7 +267,12 @@ const Sidebar = ({
       clearInterval(intervalId);
       socket.disconnect();
     };
-  }, [user, refreshCounts]);
+    // Depend only on user?.id — a primitive that ONLY changes on real
+    // login/logout. refreshCounts is now a stable useCallback (deps: []).
+    // exhaustive-deps WANTS the full `user` object here; depending on it
+    // is exactly the bug the storm-fix above unwound.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, refreshCounts]);
 
   // #151: persist sidebar scroll across re-renders. The browser usually does this
   // for free, but route-driven re-renders sometimes cause the nav to reset to top

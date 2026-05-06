@@ -3,6 +3,8 @@ import React, {
   useContext,
   createContext,
   useEffect,
+  useMemo,
+  useCallback,
   Suspense,
 } from "react";
 import {
@@ -332,11 +334,65 @@ export default function App() {
 
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
 
+  // #529 / #530: stable callback reference. Prior shape created a new fn
+  // on every App render, which (combined with the inline AuthContext
+  // value object below) made every consumer's useEffect re-run on every
+  // App render — Sidebar's count-fetcher fired a flurry of duplicate HTTP
+  // calls + a fresh socket on each cycle. Hoisted ABOVE the `loading`
+  // early-return so the hook count stays consistent across renders
+  // (rules-of-hooks).
+  const loginWithToken = useCallback(async (tokenArg, tenantArg) => {
+    // #343 [SECURITY] follow-up: setToken routes the token through
+    // setAuthToken (utils/api.js) which puts it in the in-memory holder +
+    // sessionStorage. A previous explicit localStorage write of the token key
+    // sat here from before the #343 migration and silently re-introduced the
+    // XSS-readable credential the migration removed. Deleted; the
+    // sessionStorage write inside setToken is the only canonical storage now.
+    // Regression-guarded by frontend/src/__tests__/security-token-storage.test.js.
+    setToken(tokenArg);
+    if (tenantArg) {
+      setTenant(tenantArg);
+      localStorage.setItem("tenant", JSON.stringify(tenantArg));
+    }
+    const res = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${tokenArg}` },
+    });
+    if (!res.ok) {
+      setToken(null);
+      localStorage.removeItem("token");
+      throw new Error("SSO token rejected");
+    }
+    const profile = await res.json();
+    setUser(profile);
+    localStorage.setItem("user", JSON.stringify(profile));
+    return profile;
+  }, []);
+
+  // #529 / #530: memoise the AuthContext value so consumers don't re-render
+  // (and re-fire mount effects) on every App render. State setters from
+  // useState are stable by React contract; loginWithToken is now a stable
+  // useCallback. The remaining inputs (user/token/tenant/loading) are real
+  // state — when one genuinely changes, all consumers SHOULD update.
+  const authValue = useMemo(
+    () => ({
+      user,
+      setUser,
+      token,
+      setToken,
+      tenant,
+      setTenant,
+      loading,
+      loginWithToken,
+    }),
+    [user, token, tenant, loading, loginWithToken],
+  );
+
   // #347: while AuthContext is still rehydrating the token from sessionStorage
   // we render a single splash. Pages mount their own fetches in useEffect, and
   // before this gate they raced the token and 403'd. Since `loading` flips
   // false on the first effect tick (synchronous after mount), this is a one-
-  // frame splash on cold-start, invisible in normal nav.
+  // frame splash on cold-start, invisible in normal nav. Lives BELOW the
+  // hooks so the hook count is consistent across renders (rules-of-hooks).
   if (loading) {
     return (
       <div
@@ -353,47 +409,9 @@ export default function App() {
     );
   }
 
-  const loginWithToken = async (token, tenant) => {
-    // #343 [SECURITY] follow-up: setToken routes the token through
-    // setAuthToken (utils/api.js) which puts it in the in-memory holder +
-    // sessionStorage. A previous explicit localStorage write of the token key
-    // sat here from before the #343 migration and silently re-introduced the
-    // XSS-readable credential the migration removed. Deleted; the
-    // sessionStorage write inside setToken is the only canonical storage now.
-    // Regression-guarded by frontend/src/__tests__/security-token-storage.test.js.
-    setToken(token);
-    if (tenant) {
-      setTenant(tenant);
-      localStorage.setItem("tenant", JSON.stringify(tenant));
-    }
-    const res = await fetch("/api/auth/me", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-      setToken(null);
-      localStorage.removeItem("token");
-      throw new Error("SSO token rejected");
-    }
-    const profile = await res.json();
-    setUser(profile);
-    localStorage.setItem("user", JSON.stringify(profile));
-    return profile;
-  };
-
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
-      <AuthContext.Provider
-        value={{
-          user,
-          setUser,
-          token,
-          setToken,
-          tenant,
-          setTenant,
-          loading,
-          loginWithToken,
-        }}
-      >
+      <AuthContext.Provider value={authValue}>
         <NotifyProvider>
           <BrowserRouter>
             <RouteErrorBoundary>

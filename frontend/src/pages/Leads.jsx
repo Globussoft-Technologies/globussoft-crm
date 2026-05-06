@@ -6,6 +6,50 @@ import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-rea
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
 
+// #557 (HI-08) — client-side hardening for the Create-Lead form. The backend
+// at routes/contacts.js + the global sanitizeBody middleware are the source
+// of truth; these guards exist purely so users get fast feedback (no server
+// round-trip) when they paste a 5000-char string, type `<script>…</script>`,
+// or sneak in control characters via clipboard. See the related #538 (PT-06)
+// pattern in routes/wellness.js (scrubPlainText) which this mirrors.
+//
+// Field caps line up with backend Contact column limits:
+//   • name   → VARCHAR(191) utf8mb4
+//   • email  → VARCHAR(191)
+//   • company → VARCHAR(191)
+//   • title  → VARCHAR(191) (cap UI at 200 to match the issue ask, then the
+//             backend's 191 cap will surface as the upper-bound)
+const FIELD_LIMITS = {
+  name: 191,
+  email: 191,
+  company: 191,
+  title: 200,
+};
+
+// Same shape as backend EMAIL_RE in lib/validateContactInput logic (and the
+// CSV importer in Contacts.jsx). Not RFC 5322 (no library does that
+// pragmatically) — just the "shape it must have" smoke test.
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+
+// HTML/script tag pre-strip — same canonical pattern as backend's
+// sanitizeBody DANGEROUS_TAG_RE. Inner text is preserved (matching backend
+// behaviour) so the user's actual content survives even if they accidentally
+// pasted markup. We surface a notice rather than silently mutating.
+const DANGEROUS_TAG_RE = /<\/?(?:script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)[^>]*>/gi;
+
+// Control characters never legitimately appear in a name/email/company/title.
+// NUL (0x00), BEL (0x07), VT (0x0B), DEL (0x7F), etc. — usually injection
+// attempts (template-engine bypass, log-line injection, terminal sequences).
+// eslint-disable-next-line no-control-regex -- intentionally matches control chars
+const CONTROL_CHAR_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
+
+function stripDangerousTags(value) {
+  if (typeof value !== 'string') return { value, stripped: false };
+  const cleaned = value.replace(DANGEROUS_TAG_RE, '');
+  return { value: cleaned, stripped: cleaned !== value };
+}
+
+
 const Leads = () => {
   const navigate = useNavigate();
   const notify = useNotify();
@@ -47,20 +91,85 @@ const Leads = () => {
 
   const handleCreateLead = async (e) => {
     e.preventDefault();
-    // #337: reject whitespace-only names. The HTML `required` attribute on
-    // the input only checks length, not whether the value is meaningful,
-    // so "   " was being persisted as a Contact with a blank-looking name.
-    // Trim and validate before the network call.
+
+    // #557 (HI-08) — client-side hardening. Order:
+    //   1. Trim required fields + reject whitespace-only (preserves #337).
+    //   2. Per-field length caps (rejects, doesn't silently truncate, so the
+    //      user knows they need to shorten the input).
+    //   3. Control-character rejection (NUL, BEL, VT, DEL, etc.) — these are
+    //      never legitimate in name/email/company/title and usually signal a
+    //      paste-from-malicious-source.
+    //   4. HTML/script tag pre-strip (defence-in-depth — backend's
+    //      sanitizeBody also strips, but surfacing a notice is better UX
+    //      than the user wondering why their input looks different).
+    //   5. Email shape sanity check (cheap regex — backend stays the source
+    //      of truth for the strict validation).
+    // The backend at routes/contacts.js + sanitizeBody is still the source
+    // of truth; these are just guard rails for fast feedback.
     const trimmedName = (newLead.name || '').trim();
     if (trimmedName.length < 1) {
-      // #337: reject whitespace-only names. The HTML `required` attribute
-      // only checks length, not whether the value is meaningful, so "   "
-      // was being persisted as a Contact with a blank-looking name. Surface
-      // a non-blocking error toast via the global notify helper. The
-      // companion backend validator will be the second line of defence.
+      // #337: reject whitespace-only names. Toast via global notify helper.
       notify.error('Name is required');
       return;
     }
+
+    // 2. Length caps — match backend Contact column limits (191) for name/
+    //    email/company; cap title at 200 (the issue ask). Reject so the user
+    //    sees a clear "too long" message rather than a server-side 400.
+    const lengthErrors = [];
+    for (const [field, max] of Object.entries(FIELD_LIMITS)) {
+      const v = String(newLead[field] || '');
+      if (v.length > max) {
+        lengthErrors.push(`${field} is too long (${v.length}/${max} chars)`);
+      }
+    }
+    if (lengthErrors.length > 0) {
+      notify.error(lengthErrors.join('; '));
+      return;
+    }
+
+    // 3. Control-character rejection across all text fields.
+    for (const field of ['name', 'email', 'company', 'title']) {
+      const v = String(newLead[field] || '');
+      if (v && CONTROL_CHAR_RE.test(v)) {
+        notify.error(`${field} contains invalid control characters`);
+        return;
+      }
+    }
+
+    // 4. HTML/script tag pre-strip — surface what was removed so the user
+    //    isn't surprised. We strip just the dangerous TAGS (matching the
+    //    server-side sanitizeBody contract); the inner text content is kept.
+    const stripped = {};
+    let anyStripped = false;
+    for (const field of ['name', 'company', 'title']) {
+      const v = String(newLead[field] || '');
+      const result = stripDangerousTags(v);
+      stripped[field] = result.value;
+      if (result.stripped) anyStripped = true;
+    }
+    if (anyStripped) {
+      notify.info('HTML markup was removed from your input before submitting.');
+    }
+    // Re-trim the stripped name in case stripping the tags reduced it to
+    // whitespace (e.g. the user submitted JUST `<img onerror=…>`). Use
+    // nullish-coalesce, NOT logical-OR, so an empty-string result of the
+    // strip falls through to the empty-name guard rather than reverting
+    // to the un-stripped original.
+    const finalName = String(stripped.name ?? trimmedName).trim();
+    if (finalName.length < 1) {
+      notify.error('Name is required');
+      return;
+    }
+
+    // 5. Email shape — basic regex (matches backend lib/validateContactInput
+    //    + CSV importer). The backend rejects with 400 either way.
+    const email = String(newLead.email || '').trim();
+    if (!email || !EMAIL_RE.test(email)) {
+      notify.error('Please enter a valid email address');
+      return;
+    }
+
     // #315: refetch leads after a successful create so the "All Leads" pipeline
     // counter chip in the header (which reads `leads.length`) refreshes
     // immediately. Pre-fix the await on the create call could throw and skip
@@ -71,7 +180,13 @@ const Leads = () => {
       await fetchApi('/api/contacts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...newLead, name: trimmedName }),
+        body: JSON.stringify({
+          ...newLead,
+          name: finalName,
+          email,
+          company: stripped.company,
+          title: stripped.title,
+        }),
       });
       setNewLead({ name: '', email: '', company: '', title: '', source: 'Organic', status: 'Lead' });
     } finally {
@@ -215,11 +330,69 @@ const Leads = () => {
         {/* Left Panel: Create Lead Form */}
         <div className="card" style={{ padding: '1.5rem' }}>
           <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1.25rem' }}>Create Lead</h3>
-          <form onSubmit={handleCreateLead} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-            <input type="text" placeholder="Full Name" required className="input-field" value={newLead.name} onChange={e => handleChange('name', e.target.value)} />
-            <input type="email" placeholder="Email Address" required className="input-field" value={newLead.email} onChange={e => handleChange('email', e.target.value)} />
-            <input type="text" placeholder="Company" className="input-field" value={newLead.company} onChange={e => handleChange('company', e.target.value)} />
-            <input type="text" placeholder="Job Title" className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
+          <form onSubmit={handleCreateLead} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }} noValidate>
+            {/* #557 (HI-08): explicit `name` + `maxLength` attributes prevent
+                the React-prototype-setter trick from injecting 5000-char
+                payloads (browser caps the native input value at maxLength
+                even when the value is set via the HTMLInputElement.prototype
+                setter, because the element re-validates on dispatchEvent).
+                The submit-handler still re-checks length defensively in case
+                an automated tool bypasses the DOM entirely. */}
+            <input
+              type="text"
+              name="name"
+              placeholder="Full Name"
+              required
+              maxLength={FIELD_LIMITS.name}
+              className="input-field"
+              value={newLead.name}
+              onChange={e => handleChange('name', e.target.value)}
+            />
+            <input
+              type="email"
+              name="email"
+              placeholder="Email Address"
+              required
+              maxLength={FIELD_LIMITS.email}
+              className="input-field"
+              value={newLead.email}
+              onChange={e => handleChange('email', e.target.value)}
+            />
+            <input
+              type="text"
+              name="company"
+              placeholder="Company"
+              maxLength={FIELD_LIMITS.company}
+              className="input-field"
+              value={newLead.company}
+              onChange={e => handleChange('company', e.target.value)}
+            />
+            <div>
+              <input
+                type="text"
+                name="jobTitle"
+                placeholder="Job Title"
+                maxLength={FIELD_LIMITS.title}
+                className="input-field"
+                value={newLead.title}
+                onChange={e => handleChange('title', e.target.value)}
+                style={{ width: '100%' }}
+              />
+              {/* Counter visible only when the user is approaching the cap
+                  — avoids visual noise on the empty / short-input case. */}
+              {newLead.title.length > FIELD_LIMITS.title - 50 && (
+                <div
+                  data-testid="title-char-counter"
+                  style={{
+                    fontSize: '0.75rem',
+                    color: newLead.title.length >= FIELD_LIMITS.title ? '#ef4444' : 'var(--text-secondary)',
+                    marginTop: '0.25rem',
+                  }}
+                >
+                  {newLead.title.length} / {FIELD_LIMITS.title}
+                </div>
+              )}
+            </div>
             <select className="input-field" value={newLead.source} onChange={e => handleChange('source', e.target.value)}>
               {SOURCE_OPTIONS.map(src => (
                 <option key={src} value={src}>{src}</option>

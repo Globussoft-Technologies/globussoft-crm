@@ -370,7 +370,7 @@ Plus #364 ticketTier round-trip pin (low/medium/high preserved + default), full 
 - [x] status not in enum → 400 (no silent coercion to 'Pending') (#163). Path A — `INVALID_STATUS` already returned by `validateTaskInput`. Added a defence-in-depth pin: bogus status ("WaitingForReview") → 400 + verify the row was NOT created with a coerced status.
 - [x] dueDate round-trip preserves IST wall-clock — POST `2026-05-15T10:30` (IST) stores as `2026-05-15T05:00:00.000Z`, reads back unchanged (#313). Path B — Wave-7 Agent O's datetime callsite-sweep (`bfb098d`) explicitly did NOT migrate tasks.js (only visit POST/PUT + waitlist + audit_viewer). This dispatch added the migration: `parseTenantDateInput` sniffer in tasks.js mirroring routes/wellness.js's pattern (datetime-local `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` regex routes through `parseDateTimeLocalInTZ(input, 'Asia/Kolkata')`; full-ISO with Z/±HH:mm passes through native `new Date()` unchanged), applied to both POST and PUT handlers. Added 3 round-trip tests: datetime-local 10:30 → 05:00Z + GET-readback, full-ISO Z passthrough, PUT-update round-trip.
 
-Test count delta: 58 → 65 (+7). Commit: ___________
+Test count delta: 58 → 65 (+7). Commit: 0d152c3
 
 ---
 

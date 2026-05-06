@@ -383,7 +383,24 @@ const externalRoutes = require("./routes/external");
 const adminRoutes = require("./routes/admin");
 
 // OpenAPI Swagger Bootloader
+//
+// #542: GET /api-docs/swagger.json must return the raw OpenAPI 3 spec as
+// JSON so SDK generators (openapi-generator, swagger-codegen, Postman
+// import) can consume it programmatically. swagger-ui-express's
+// `setup()` mount only serves the *UI*, so without the explicit handler
+// below `/api-docs/swagger.json` would fall through to the UI's
+// catch-all and return text/html. The explicit handler MUST be
+// registered BEFORE the `app.use('/api-docs', ...)` mount because
+// Express matches handlers in declaration order.
+//
+// Both routes are public on purpose — docs discoverability is the
+// whole point. The Nginx site config additionally proxies `/api-docs*`
+// to the backend (commit applied via scripts/apply-api-docs-nginx.py
+// closing #542).
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
+app.get('/api-docs/swagger.json', (req, res) => {
+  res.json(swaggerDocument);
+});
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
   customCss: '.swagger-ui .topbar { display: none }',
   customSiteTitle: "Globussoft CRM Docs"

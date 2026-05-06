@@ -1,58 +1,264 @@
 openapi: 3.0.0
 info:
   title: Globussoft Enterprise CRM API
-  version: 3.2.0
-  description: Public REST API for third-party developer integrations. Use Webhooks for streaming external state events and REST endpoints for CRUD fetching.
+  version: 3.4.13
+  description: |
+    Public REST API for Globussoft Enterprise CRM. Authenticated endpoints
+    require a Bearer JWT obtained from `POST /api/auth/login`. External
+    integrations (Callified.ai, Globus Phone, AdsGPT, etc.) authenticate
+    using `X-API-Key` against the `/api/v1/external/*` surface — see
+    `docs/wellness-client/EXTERNAL_API.md` in the repo for the contract.
+
+    This spec covers the canonical auth, health, and representative-route
+    contracts. The full route table (~91 route files) is documented inline
+    in the source under `backend/routes/*.js`; this file is the
+    machine-readable surface for SDK generators and Postman imports.
+  contact:
+    name: Globussoft Engineering
+    url: https://github.com/Globussoft-Technologies/globussoft-crm
 servers:
+  - url: https://crm.globusdemos.com/api
+    description: Demo (always-on)
   - url: http://localhost:5000/api
+    description: Local dev
 components:
   securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT issued by `POST /api/auth/login`. The token payload includes
+        `userId`, `tenantId`, and `role`. Pass as `Authorization: Bearer <token>`.
     ApiKeyAuth:
       type: apiKey
       in: header
-      name: X-API-KEY
+      name: X-API-Key
+      description: |
+        External-partner API key (prefix `glbs_`). Issued out-of-band per
+        partner integration. Used only on `/api/v1/external/*` routes.
+  schemas:
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: admin@globussoft.com
+        password:
+          type: string
+          format: password
+          example: password123
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT bearer token. Include in `Authorization` header.
+        user:
+          type: object
+          properties:
+            id: { type: integer }
+            email: { type: string, format: email }
+            name: { type: string }
+            role: { type: string, enum: [ADMIN, MANAGER, USER] }
+            tenantId: { type: integer }
+    HealthResponse:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+        version: { type: string, example: "3.4.13" }
+        uptime: { type: number, description: "Process uptime in seconds (authenticated callers only)" }
+        database: { type: string, enum: [up, down], description: "Authenticated callers only" }
+    Contact:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        company: { type: string }
+        status: { type: string, enum: [Lead, Prospect, Customer, Churned] }
+        tenantId: { type: integer, readOnly: true }
+        createdAt: { type: string, format: date-time, readOnly: true }
+        updatedAt: { type: string, format: date-time, readOnly: true }
+    Deal:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        value: { type: number }
+        currency: { type: string, example: "USD" }
+        stage: { type: string }
+        contactId: { type: integer }
+        ownerId: { type: integer }
+        tenantId: { type: integer, readOnly: true }
+    ErrorResponse:
+      type: object
+      properties:
+        error: { type: string, example: "Endpoint not found" }
+        code: { type: string, example: "API_ROUTE_NOT_FOUND" }
+        path: { type: string, example: "/api/foo" }
+        method: { type: string, example: "GET" }
 paths:
-  /deals:
+  /health:
     get:
-      summary: Retrieve Pipeline Deals
-      description: Returns an array of deal objects, optionally filtered.
-      security:
-        - ApiKeyAuth: []
+      summary: Health check
+      description: |
+        Liveness + version probe. Public (no auth required); returns minimal
+        envelope without an Authorization header. With a valid Bearer token,
+        the response also includes `uptime` and `database` status.
+      tags: [Platform]
       responses:
         "200":
-          description: A JSON array of deals alongside relational sub-nodes.
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /auth/login:
+    post:
+      summary: Authenticate and receive a JWT
+      description: |
+        Exchanges email + password for a JWT. Tokens are valid for 7 days
+        and carry `userId`, `tenantId`, `role` claims. Pass returned
+        `token` as `Authorization: Bearer <token>` on all subsequent
+        authenticated endpoints. Rate-limited to 1000 req/15min per IP.
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "429":
+          description: Rate limit exceeded
+  /auth/signup:
+    post:
+      summary: Register a new tenant + admin user
+      description: Creates a new Tenant and the founding ADMIN user in one transaction.
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name, companyName]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                name: { type: string }
+                companyName: { type: string }
+      responses:
+        "201": { description: Tenant + user created; returns LoginResponse }
+        "400": { description: Validation error }
   /contacts:
     get:
-      summary: Retrieve Address Book Contacts
+      summary: List contacts
+      description: Returns contacts scoped to the caller's tenant.
+      tags: [Contacts]
       security:
-        - ApiKeyAuth: []
-      responses:
-        "200":
-          description: Contact dataset
-  /contacts/by-status:
-    get:
-      summary: Retrieve Contacts By Status
-      description: Returns contacts filtered by status. Default status is Customer.
-      security:
-        - ApiKeyAuth: []
-
+        - BearerAuth: []
       parameters:
         - in: query
           name: status
-          required: false
           schema:
             type: string
-            enum:
-              - Lead
-              - Prospect
-              - Customer
-              - Churned
-            default: Customer
-          description: Contact status
-
+            enum: [Lead, Prospect, Customer, Churned]
+          description: Optional status filter.
       responses:
         "200":
-          description: Contacts fetched successfully
-
-        "500":
-          description: Internal server error
+          description: Array of contacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Contact'
+        "401":
+          description: Missing or invalid bearer token
+    post:
+      summary: Create a contact
+      tags: [Contacts]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Contact'
+      responses:
+        "201":
+          description: Contact created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contact'
+        "400": { description: Validation error }
+        "401": { description: Missing or invalid bearer token }
+  /deals:
+    get:
+      summary: List deals (pipeline)
+      description: Returns deals scoped to the caller's tenant, with optional pipeline-stage filter.
+      tags: [Deals]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: stageId
+          schema: { type: integer }
+          description: Optional pipeline-stage filter.
+      responses:
+        "200":
+          description: Array of deals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Deal'
+        "401": { description: Missing or invalid bearer token }
+  /v1/external/health:
+    get:
+      summary: External-partner API health probe
+      description: |
+        Verifies the API key is valid and returns the partner identity. Used
+        by Callified.ai / Globus Phone / AdsGPT integrations as a liveness +
+        auth probe.
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Authenticated; returns partner identity envelope.
+        "401":
+          description: Missing or invalid API key
+tags:
+  - name: Platform
+    description: Health, version, and platform-level endpoints.
+  - name: Auth
+    description: User authentication, signup, password reset, 2FA.
+  - name: Contacts
+    description: Address-book contacts (leads, prospects, customers, churned).
+  - name: Deals
+    description: Pipeline deals across configurable stages.
+  - name: External Partner API
+    description: |
+      API-key-authenticated surface consumed by sister Globussoft products
+      (Callified.ai, Globus Phone, AdsGPT). Mounted at `/api/v1/external/*`.

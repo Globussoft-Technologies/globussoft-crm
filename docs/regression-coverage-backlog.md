@@ -291,15 +291,17 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 # Priority bucket P2 — ship this quarter
 
-## ☐ 13. New gated spec: `services-api.spec.js`
+## ☑ 13. New gated spec: `services-api.spec.js`
 
 **Closes:** #115, #161, #209, #274, #364
 
 **Acceptance:**
-- [ ] POST /api/wellness/services rejects price <= 0 or > 1e7 (#115, #209).
-- [ ] POST rejects durationMin <= 0 or > 1440 (24h) (#161, #209).
-- [ ] PUT returns 4xx with structured error body (NOT silent 403) (#274).
-- [ ] Wired into deploy.yml + coverage.yml.
+- [x] POST /api/wellness/services rejects price <= 0 or > 1e7 (#115, #209). Actual cap is 5_000_000 (₹50L) per #209; spec sends 5_000_001 (just-over) AND 1e8 (acceptance value) — both 400 PRICE_TOO_HIGH.
+- [x] POST rejects durationMin <= 0 or > 1440 (24h) (#161, #209). Actual cap is 720 (12h) per #209; spec sends 721 (just-over) AND 1441 (acceptance value) — both 400 DURATION_TOO_HIGH.
+- [x] PUT returns 4xx with structured error body (NOT silent 403) (#274). Asserts {error, code, allowed} on 403 + {error, code} on 400 + {error} on 404 — drop any of these and #274 re-opens because the frontend toast mapper keys off `code`.
+- [x] Wired into deploy.yml + coverage.yml.
+
+Plus #364 ticketTier round-trip pin (low/medium/high preserved + default), full RBAC matrix (admin/manager → 201; doctor/professional/telecaller/helper → 403 WELLNESS_ROLE_FORBIDDEN; generic-tenant admin → 403 WELLNESS_TENANT_REQUIRED #325), tenant isolation pin on GET /services, and create→update→soft-delete happy-path lifecycle. 33 tests, 15s on local stack.
 
 **Estimated effort:** 0.5 day. Commit: ___________
 

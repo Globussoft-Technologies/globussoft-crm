@@ -31,6 +31,7 @@ const TEST_NAME_PATTERNS = [
   /^E2E_WC_/,
   /^E2E_EXT_/,
   /^E2E_PB_/,
+  /^E2E_SVC_/,
   /^Coverage /,
 
   // Embedded-tag patterns (test prefixes a real-looking name with the tag)

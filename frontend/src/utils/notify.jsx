@@ -32,7 +32,12 @@ export function NotifyProvider({ children }) {
   // ── Toast surface ────────────────────────────────────────────────
   const pushToast = useCallback((kind, message, opts = {}) => {
     const id = ++_idSeq;
-    const ttl = opts.ttl ?? (kind === 'error' ? 6000 : 3500);
+    // #540 (PT-07) — bumped from 3500/6000 to 4500/8000 so users can
+    // actually read the toast text. Pen-test report flagged dismissals
+    // happening too fast for screen readers + slow displays. Manual-
+    // dismiss already works (close button); hover-to-pause is a follow-up
+    // (would require per-toast state + setTimeout management).
+    const ttl = opts.ttl ?? (kind === 'error' ? 8000 : 4500);
     setToasts((prev) => {
       // #275: dedupe identical (kind, message) toasts within a 1.5s window.
       // Now that fetchApi auto-toasts errors, page-level .catch() handlers that

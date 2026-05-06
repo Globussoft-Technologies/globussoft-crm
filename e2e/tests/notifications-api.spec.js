@@ -16,6 +16,7 @@
  *   PUT    /api/notifications/read-all     — auth + bulk markRead
  *   PUT    /api/notifications/:id/read     — auth + 404 + tenant scope
  *   POST   /api/notifications/:id/read     — POST alias for the above
+ *   PATCH  /api/notifications/:id          — PATCH alias for /:id/read (#185)
  *   POST   /api/notifications/mark-all-read — POST alias for read-all
  *   POST   /api/notifications/read-all      — POST alias for read-all
  *   DELETE /api/notifications/:id          — auth + 404 + audit log
@@ -266,6 +267,31 @@ test.describe('Notifications API — mark single read', () => {
     const res = await post(request, token, `/api/notifications/${n.id}/read`, {});
     expect(res.status()).toBe(200);
     expect((await res.json()).isRead).toBe(true);
+  });
+
+  test('PATCH /:id no longer 404s — flips isRead=true (#185)', async ({ request }) => {
+    // #185 bug repro: clients tested all three of POST /:id/read, PATCH /:id,
+    // POST /mark-all-read and got 404 from the second one because only PUT +
+    // POST aliases were wired. Pinning PATCH /:id here blocks regression.
+    const { token } = await getAdmin(request);
+    const n = await createSelfNotif(request, { title: 'patch-id-alias' });
+    const res = await request.patch(`${BASE_URL}/api/notifications/${n.id}`, {
+      headers: headers(token),
+      data: { isRead: true },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status(), `PATCH /:id should not 404: got ${res.status()} (${await res.text()})`).toBe(200);
+    expect((await res.json()).isRead).toBe(true);
+  });
+
+  test('PATCH /:id 404 on unknown id (alias preserves not-found semantics)', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    const res = await request.patch(`${BASE_URL}/api/notifications/99999999`, {
+      headers: headers(token),
+      data: { isRead: true },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(404);
   });
 
   test('PUT /:id/read 404 on unknown id', async ({ request }) => {
@@ -544,5 +570,68 @@ test.describe('Notifications API — auth gate', () => {
   test('DELETE /:id without token → 401/403', async ({ request }) => {
     const res = await request.delete(`${BASE_URL}/api/notifications/1`);
     expect([401, 403]).toContain(res.status());
+  });
+});
+
+// ── Demo-hygiene defence-in-depth (#327) ───────────────────────────
+//
+// #327: Rishu's Owner Dashboard bell showed two pen-test residues —
+// "Targeted / just user 8" and "INJECT TEST / x". Closing #169 (the
+// broadcast-spam vulnerability) prevented new ones; closing #327 was a
+// one-time scrub on demo. demo-hygiene-api.spec.js polices this on the
+// release-validation gate against the live demo box, but per-push CI runs
+// against a freshly-seeded local stack — so we pin the assertion here too
+// as defence-in-depth: the seed should NEVER produce these markers, and
+// neither should anything created during the spec's own POST tests.
+//
+// If this trips, either (a) the seed has regressed (something is writing
+// "INJECT TEST" or "Targeted / just user N" into a notification body), or
+// (b) the BROADCAST_FORBIDDEN guard from #169 has regressed and a non-admin
+// hit through created the body. Both are real bugs — don't relax the
+// pattern, find the writer.
+test.describe('Notifications API — demo hygiene (#327)', () => {
+  const FORBIDDEN_BODY_PATTERNS = [
+    { re: /\bINJECT TEST\b/, why: '#327: INJECT TEST marker (pen-test residue)' },
+    { re: /^Targeted \/ just user \d/i, why: '#327: broadcast-targeting test residue' },
+  ];
+
+  test('admin@globussoft.com feed contains no #327 pen-test residue', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    if (!token) test.skip(true, 'no admin token available');
+    // Pull a generous slice to scan — the bell only shows the latest few
+    // but the regression could surface deeper in the list.
+    const res = await get(request, token, '/api/notifications?limit=100');
+    expect(res.status()).toBe(200);
+    const list = (await res.json()).notifications;
+    const offenders = [];
+    for (const n of list) {
+      for (const field of ['title', 'message']) {
+        const v = n[field];
+        if (typeof v !== 'string') continue;
+        for (const { re, why } of FORBIDDEN_BODY_PATTERNS) {
+          if (re.test(v)) offenders.push(`id=${n.id} ${field}=${JSON.stringify(v).slice(0, 80)} :: ${why}`);
+        }
+      }
+    }
+    expect(offenders, `#327 regression — found pen-test residue:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  test('regular user@crm.com feed contains no #327 pen-test residue', async ({ request }) => {
+    const { token } = await getUser(request);
+    if (!token) test.skip(true, 'no regular USER token available');
+    const res = await get(request, token, '/api/notifications?limit=100');
+    expect(res.status()).toBe(200);
+    const list = (await res.json()).notifications;
+    const offenders = [];
+    for (const n of list) {
+      for (const field of ['title', 'message']) {
+        const v = n[field];
+        if (typeof v !== 'string') continue;
+        for (const { re, why } of FORBIDDEN_BODY_PATTERNS) {
+          if (re.test(v)) offenders.push(`id=${n.id} ${field}=${JSON.stringify(v).slice(0, 80)} :: ${why}`);
+        }
+      }
+    }
+    expect(offenders, `#327 regression — found pen-test residue:\n${offenders.join('\n')}`).toEqual([]);
   });
 });

@@ -82,6 +82,12 @@ async function markReadHandler(req, res) {
 }
 router.put("/:id/read", markReadHandler);
 router.post("/:id/read", markReadHandler);
+// #185: PATCH /:id with `{isRead:true}` is the third API shape clients tested
+// (alongside PUT /:id/read and POST /:id/read). The bug-report repro flagged
+// all three returning 404; aliasing PATCH to the same handler closes the gap
+// without forcing the client to switch verbs. Body content is ignored — the
+// handler always sets isRead=true, matching POST /:id/read semantics.
+router.patch("/:id", markReadHandler);
 
 async function markAllReadHandler(req, res) {
   try {

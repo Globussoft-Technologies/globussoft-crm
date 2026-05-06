@@ -383,16 +383,16 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 19. Extend [notifications-api.spec.js](e2e/tests/notifications-api.spec.js)
+## ☑ 19. Extend [notifications-api.spec.js](e2e/tests/notifications-api.spec.js) ✅ shipped
 
 **Closes:** #169, #185, #327
 
 **Acceptance:**
-- [ ] PATCH /api/notifications/:id no longer 404s — works as alias for POST /:id/read (#185).
-- [ ] POST broadcast still rejects non-admin with BROADCAST_FORBIDDEN (#169 — verify existing test).
-- [ ] No notification body in any tenant feed contains `INJECT TEST` or `Targeted / just user N` (#327 — overlaps with `demo-hygiene-api.spec.js`, fine to assert here too).
+- [x] PATCH /api/notifications/:id no longer 404s — works as alias for POST /:id/read (#185). Backend handler `router.patch("/:id", markReadHandler)` added; `PATCH /:id no longer 404s` + `PATCH /:id 404 on unknown id` tests pin the contract.
+- [x] POST broadcast still rejects non-admin with BROADCAST_FORBIDDEN (#169 — verified — pre-existing `403 BROADCAST_FORBIDDEN for non-admin without userId` test was already covering this; left as-is).
+- [x] No notification body in any tenant feed contains `INJECT TEST` or `Targeted / just user N` (#327 — added `Notifications API — demo hygiene (#327)` describe with two defence-in-depth scans against admin@globussoft.com + user@crm.com feeds).
 
-**Estimated effort:** 0.25 day. Commit: ___________
+Test count delta: 35 → 39 (+4). Commit: _pending push_
 
 ---
 

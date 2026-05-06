@@ -225,6 +225,7 @@ jobs:
             tests/api-docs.spec.js \
             tests/wellness-rbac-regression-api.spec.js \
             tests/auth-security-regression-api.spec.js \
+            tests/audit-coverage-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

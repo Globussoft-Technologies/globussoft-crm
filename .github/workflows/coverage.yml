@@ -224,6 +224,7 @@ jobs:
             tests/forgot-password.spec.js \
             tests/api-docs.spec.js \
             tests/wellness-rbac-regression-api.spec.js \
+            tests/auth-security-regression-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

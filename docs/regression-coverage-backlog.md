@@ -98,6 +98,8 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 **Estimated effort:** 1 day. Commit: ___________ _(shipped — 10 API tests covering 9 of 14 issues; #192 timing/oracle, #200/#201/#211 login-page UI, and #343/#344 sessionStorage are out of scope for an API-only spec — documented in the spec header. Gated in deploy.yml + coverage.yml)_
 
+**Follow-on (2026-05-07):** ✅ shipped tighter regression companion at `e2e/tests/auth-security-regression-api.spec.js` (21 tests) — adds happy-path baselines + tightened header pins (exact values, not just truthy) + #192 small-N timing-oracle pin (N=2/side, 250ms budget — CI-stable but catches the ~115ms bcrypt-skip regression) + #343 file-grep on `frontend/src/**/*.{js,jsx,mjs,cjs}` for `localStorage.setItem('token'...)` writes + #344 file-grep on storage keys with injection chars / URL-input concatenation + cd664f9-style #292 phone-whitelist pin (1234 against non-whitelisted phone → 401, not 200). Revert-and-prove evidence: dropping `permissionsPolicyMiddleware` flips both header tests red; re-adding `otp: _generatedOtp` to `/portal/login/request-otp` flips two #300 tests red; reintroducing `localStorage.setItem('token', next)` in `App.jsx:setToken` flips the #343 file-grep red; restoring all three returns to all-green (5 of 21 demonstrably teeth-bearing). Wired into deploy.yml + coverage.yml. Worktree: agent-a4055bb2556bc9ecb.
+
 ---
 
 ## ☑ 3. New gated spec: `demo-hygiene-api.spec.js` ✓ shipped

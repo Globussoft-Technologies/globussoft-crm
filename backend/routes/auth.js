@@ -504,6 +504,20 @@ router.post("/logout", verifyToken, async (req, res) => {
         reason: "user_logout",
       },
     });
+
+    // #569: emit AuditLog 'User' 'LOGOUT' so session-end events surface in
+    // /api/audit alongside session-start events. SOC2 / DPDP audit trails
+    // require both halves. Non-fatal — the JWT revocation above is the
+    // security-critical primitive; audit-log failure must not break the
+    // response.
+    try {
+      await writeAudit('User', 'LOGOUT', req.user.userId, req.user.userId, req.user.tenantId, {
+        jti: req.user.jti || null,
+      });
+    } catch (auditErr) {
+      console.warn('[auth/logout] audit failed:', auditErr.message);
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error("[auth] logout error:", err);

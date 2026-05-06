@@ -63,14 +63,14 @@
  *     PUT    /api/tasks/:id                 → AuditLog 'Task'     'UPDATE'
  *     DELETE /api/tasks/:id (soft #167)     → AuditLog 'Task'     'SOFT_DELETE'
  *
- *   Pipeline (routes/pipelines.js — gap-tracking, NO writeAudit today):
- *     POST   /api/pipelines                 → NO AuditLog row (TODO)
- *     PUT    /api/pipelines/:id             → NO AuditLog row (TODO)
- *     DELETE /api/pipelines/:id             → NO AuditLog row (TODO)
- *     The describe block here documents the gap and skips the assertion.
- *     Pipelines is admin-config; missing audit for it is a known gap
- *     called out by #179 (entity not in the original wave). Filed as a
- *     follow-up regression on backlog when this spec ships.
+ *   Pipeline (routes/pipelines.js — closed by #568):
+ *     POST   /api/pipelines                 → AuditLog 'Pipeline' 'CREATE'
+ *     PUT    /api/pipelines/:id             → AuditLog 'Pipeline' 'UPDATE'
+ *     DELETE /api/pipelines/:id             → AuditLog 'Pipeline' 'DELETE'
+ *       (hard-delete — Pipeline has no soft-delete column. The route
+ *        already gates 400 on isDefault and 400 on non-empty pipelines,
+ *        so the audited path is the genuine "empty + non-default"
+ *        delete success.)
  *
  *   Notification (routes/notifications.js):
  *     POST   /api/notifications             → AuditLog 'Notification' 'CREATE'
@@ -78,15 +78,11 @@
  *     DELETE /api/notifications/:id         → AuditLog 'Notification' 'DELETE'
  *     (no PUT for notifications — read-state mutations don't audit)
  *
- *   Auth (routes/auth.js, tracked-not-gated):
- *     POST   /api/auth/logout               → SHOULD emit AuditLog
- *                                             'User' 'LOGOUT' (today: NO)
- *     #180 spec scope was "JWT invalidation"; the route adds a
- *     RevokedToken row but does NOT call writeAudit. The test below
- *     marks this as best-effort: it asserts the LOGOUT audit row IF
- *     present, otherwise logs a soft-fail console.warn. When the
- *     emission lands (#180 follow-up), the conditional flips to a hard
- *     assertion in a one-line edit.
+ *   Auth (routes/auth.js — closed by #569):
+ *     POST   /api/auth/logout               → AuditLog 'User' 'LOGOUT'
+ *     The handler emits the audit row alongside the RevokedToken upsert.
+ *     Both halves are now hard-asserted: JWT revocation (security
+ *     primitive) + audit emission (discoverability).
  *
  * NEGATIVE-CASE ASSERTIONS:
  *   - 400 validation-failed POST /api/contacts (missing email) → NO new
@@ -804,32 +800,26 @@ test.describe('Audit coverage — Notification', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// Pipeline — gap-tracking (NO writeAudit today; documented missing)
+// Pipeline audit emissions (closed by #568)
 // ─────────────────────────────────────────────────────────────────────
 
-test.describe('Audit coverage — Pipeline (gap-tracking)', () => {
-  test('POST /api/pipelines does NOT yet emit AuditLog (gap)', async ({ request }) => {
-    const { token } = await getGenericAdmin(request);
+test.describe('Audit coverage — Pipeline', () => {
+  test('POST /api/pipelines emits AuditLog Pipeline CREATE row', async ({ request }) => {
+    const { token, userId, tenantId } = await getGenericAdmin(request);
     const res = await post(request, token, '/api/pipelines', {
       name: `${RUN_TAG} pipeline-create`,
-      description: 'Audit-coverage gap probe',
+      description: 'Audit-coverage probe',
     });
     expect(res.status(), `pipeline create: ${await res.text()}`).toBe(201);
     const p = await res.json();
     created.generic.pipelines.push(p.id);
 
-    // Today: routes/pipelines.js has NO writeAudit calls. We assert
-    // that absence so a future regression that adds audit on Pipeline
-    // CREATE flips this test from green to red and forces the author
-    // to remove the gap-tracking guard. When that happens, replace
-    // this block with a positive expectAuditShape assertion (see the
-    // Contact CREATE pattern above).
     const row = await findAuditRow(request, token, 'Pipeline', 'CREATE', p.id);
-    expect(row, 'Pipeline CREATE has no audit row today (TODO #179 follow-up); replace with positive assertion when emission lands').toBeNull();
+    expectAuditShape(row, { entity: 'Pipeline', action: 'CREATE', entityId: p.id, userId, tenantId });
   });
 
-  test('PUT /api/pipelines/:id does NOT yet emit AuditLog (gap)', async ({ request }) => {
-    const { token } = await getGenericAdmin(request);
+  test('PUT /api/pipelines/:id emits AuditLog Pipeline UPDATE row', async ({ request }) => {
+    const { token, userId, tenantId } = await getGenericAdmin(request);
     const create = await post(request, token, '/api/pipelines', {
       name: `${RUN_TAG} pipeline-update`,
     });
@@ -843,7 +833,29 @@ test.describe('Audit coverage — Pipeline (gap-tracking)', () => {
     expect(upd.status()).toBe(200);
 
     const row = await findAuditRow(request, token, 'Pipeline', 'UPDATE', p.id);
-    expect(row, 'Pipeline UPDATE has no audit row today (TODO #179 follow-up)').toBeNull();
+    expectAuditShape(row, { entity: 'Pipeline', action: 'UPDATE', entityId: p.id, userId, tenantId });
+  });
+
+  test('DELETE /api/pipelines/:id emits AuditLog Pipeline DELETE row', async ({ request }) => {
+    const { token, userId, tenantId } = await getGenericAdmin(request);
+    // Create a fresh non-default pipeline with no deals so DELETE succeeds.
+    const create = await post(request, token, '/api/pipelines', {
+      name: `${RUN_TAG} pipeline-delete`,
+      description: 'Deletion probe',
+    });
+    expect(create.status()).toBe(201);
+    const p = await create.json();
+    // Don't push to cleanup — DELETE is the test action.
+
+    // The route blocks deleting the default pipeline (400). A fresh tenant's
+    // first pipeline becomes default; subsequent ones do not. The generic
+    // tenant already has a default seed pipeline, so this one is non-default
+    // and child-free → 200 success path.
+    const delRes = await del(request, token, `/api/pipelines/${p.id}`);
+    expect(delRes.status(), `pipeline delete: ${await delRes.text()}`).toBe(200);
+
+    const row = await findAuditRow(request, token, 'Pipeline', 'DELETE', p.id);
+    expectAuditShape(row, { entity: 'Pipeline', action: 'DELETE', entityId: p.id, userId, tenantId });
   });
 });
 
@@ -851,8 +863,8 @@ test.describe('Audit coverage — Pipeline (gap-tracking)', () => {
 // Auth logout — tracked-not-gated per #180
 // ─────────────────────────────────────────────────────────────────────
 
-test.describe('Audit coverage — Auth logout (#180 tracked, not gated)', () => {
-  test('POST /api/auth/logout MAY emit AuditLog User LOGOUT row (best-effort)', async ({ request }) => {
+test.describe('Audit coverage — Auth logout (#569)', () => {
+  test('POST /api/auth/logout emits AuditLog User LOGOUT row', async ({ request }) => {
     // Get a fresh token to revoke (don't burn the cached admin token).
     const fresh = await loginAs(request, 'admin@globussoft.com', 'password123');
     expect(fresh.token, 'fresh login for logout probe').toBeTruthy();
@@ -865,23 +877,22 @@ test.describe('Audit coverage — Auth logout (#180 tracked, not gated)', () => 
     const body = await logoutRes.json();
     expect(body.ok).toBe(true);
 
-    // Today: routes/auth.js logout handler upserts a RevokedToken row
-    // but does NOT call writeAudit (#180 spec was JWT invalidation,
-    // audit emission is a follow-up). Best-effort assertion: surface
-    // the row if present, log a warning if absent. When the emission
-    // lands, replace with a hard expectAuditShape assertion.
-    const { token } = await getGenericAdmin(request);
+    // #569: routes/auth.js logout handler now emits writeAudit('User',
+    // 'LOGOUT', ...) alongside the RevokedToken upsert. Hard-assert the
+    // row exists, scoped to this fresh-login user. Use cached admin
+    // token for the audit read (the fresh token is now revoked).
+    const { token, tenantId: adminTenantId } = await getGenericAdmin(request);
     const auditRes = await get(request, token, `/api/audit?entity=User&action=LOGOUT`);
     expect(auditRes.status()).toBe(200);
     const rows = await auditRes.json();
-    const recent = rows.find((r) => r.userId === fresh.userId);
-    if (!recent) {
-      // eslint-disable-next-line no-console
-      console.warn('[audit-coverage] LOGOUT audit row not yet emitted (#180 follow-up). Track but do not fail-closed.');
-    } else {
-      expect(recent.entity).toBe('User');
-      expect(recent.action).toBe('LOGOUT');
-    }
+    const recent = rows.find((r) => r.userId === fresh.userId && r.entityId === fresh.userId);
+    expectAuditShape(recent, {
+      entity: 'User',
+      action: 'LOGOUT',
+      entityId: fresh.userId,
+      userId: fresh.userId,
+      tenantId: adminTenantId,
+    });
   });
 
   test('POST /api/auth/logout returns 200 + revokes the JWT (#528 contract)', async ({ request }) => {

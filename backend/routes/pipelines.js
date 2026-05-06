@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { writeAudit, diffFields } = require("../lib/audit");
 // #527 (CRIT-02 hardening): admin-config writes are admin-only. GET routes
 // stay open to all authenticated tenant members (USERs need to see the
 // pipeline list to file deals against it).
@@ -62,6 +63,18 @@ router.post("/", ...adminOnly, async (req, res) => {
       });
     });
 
+    // #568: audit Pipeline CREATE — admin-config write must be discoverable
+    // via /api/audit for SOC2 / DPDP / HIPAA review. Wrapped in try/catch so
+    // an audit failure never breaks the response.
+    try {
+      await writeAudit('Pipeline', 'CREATE', pipeline.id, req.user.userId, req.user.tenantId, {
+        name: pipeline.name,
+        isDefault: pipeline.isDefault,
+      });
+    } catch (auditErr) {
+      console.warn('[pipelines][POST /] audit failed:', auditErr.message);
+    }
+
     res.status(201).json(pipeline);
   } catch (err) {
     console.error("[pipelines][POST /]", err);
@@ -85,6 +98,20 @@ router.put("/:id", ...adminOnly, async (req, res) => {
     if (description !== undefined) data.description = description || null;
 
     const updated = await prisma.pipeline.update({ where: { id }, data });
+
+    // #568: audit Pipeline UPDATE — record only the fields that actually
+    // changed. Pattern mirrors routes/contacts.js PUT (~line 183).
+    try {
+      const changes = diffFields(existing, updated, Object.keys(data));
+      if (Object.keys(changes).length > 0) {
+        await writeAudit('Pipeline', 'UPDATE', updated.id, req.user.userId, req.user.tenantId, {
+          changedFields: changes,
+        });
+      }
+    } catch (auditErr) {
+      console.warn('[pipelines][PUT /:id] audit failed:', auditErr.message);
+    }
+
     res.json(updated);
   } catch (err) {
     console.error("[pipelines][PUT /:id]", err);
@@ -111,6 +138,19 @@ router.delete("/:id", ...adminOnly, async (req, res) => {
     }
 
     await prisma.pipeline.delete({ where: { id } });
+
+    // #568: audit Pipeline DELETE — hard-delete (Pipeline has no soft-delete
+    // column today) so action verb is plain DELETE, mirroring the wellness.js
+    // patient DELETE pattern (~line 794). Pipeline name preserved in details
+    // since the row is gone after this point.
+    try {
+      await writeAudit('Pipeline', 'DELETE', id, req.user.userId, req.user.tenantId, {
+        name: existing.name,
+      });
+    } catch (auditErr) {
+      console.warn('[pipelines][DELETE /:id] audit failed:', auditErr.message);
+    }
+
     res.json({ success: true });
   } catch (err) {
     console.error("[pipelines][DELETE /:id]", err);

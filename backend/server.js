@@ -722,6 +722,13 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initSlaBreachCron } = require('./cron/slaBreachEngine');
   initSlaBreachCron();
 
+  // #541 (OPS-1): Demo Hygiene — hourly purge of `_QA_PROBE_*` /
+  // `E2E_FLOW_*` test residue from patient list + admin-config models.
+  // Set DEMO_HYGIENE_DISABLED=1 in non-demo environments (CI / local) to
+  // skip — see backend/cron/demoHygieneEngine.js.
+  const { initDemoHygieneCron } = require('./cron/demoHygieneEngine');
+  initDemoHygieneCron();
+
   // Initialize Lead-side SLA Breach Engine (every 2 min — flips Contact.slaBreached
   // + emits 'lead.sla_breached' for the PRD §6.4 lead first-response SLA)
   const { initLeadSlaCron } = require('./cron/leadSlaEngine');

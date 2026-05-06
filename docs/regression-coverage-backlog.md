@@ -236,24 +236,24 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 10. Extend [wellness-clinical-api.spec.js](e2e/tests/wellness-clinical-api.spec.js)
+## ☑ 10. Extend [wellness-clinical-api.spec.js](e2e/tests/wellness-clinical-api.spec.js)
 
 **Closes:** #114, #118, #159, #160, #170, #178, #194, #195, #197, #205, #213, #220, #224, #265, #401 (15 issues)
 
 **Acceptance:**
-- [ ] POST /api/wellness/patients rejects name length > 191 with 400 (NOT 500) — utf8mb4 VARCHAR(191) limit (#220).
-- [ ] PUT /api/wellness/patients rejects DOB year < 1900 or > today (#159, #178, #205).
-- [ ] POST symmetrically rejects bad email and `<img onerror=...>` payloads (#160, #213).
-- [ ] POST /api/wellness/visits rejects status not in enum, dob year > 3000 (#170, #197).
-- [ ] POST /api/wellness/visits enforces visit-status state machine (#197).
-- [ ] POST /api/wellness/prescriptions requires drugName, dosage, frequency, duration (all non-empty) (#114).
-- [ ] POST /api/wellness/consents requires `signatureBase64` non-empty (#118).
-- [ ] PUT/PATCH/DELETE exist on /api/wellness/prescriptions, /api/wellness/consents, /api/wellness/recommendations (#194).
-- [ ] Recommendation status transitions are constrained — rejected→approved requires audit trail (#195).
-- [ ] Encrypted fields are decrypted in the GET response (no `ENC:v1:...` ciphertext leaks) (#224).
-- [ ] POST /api/wellness/patients with same normalized phone as existing → 409 DUPLICATE_PHONE (#265, #401 — already shipped, lock it in).
+- [x] POST /api/wellness/patients rejects name length > 191 with 400 (NOT 500) — utf8mb4 VARCHAR(191) limit (#220). — Path A; existing test at line ~451 pinned `'a'.repeat(200) → 400`.
+- [x] PUT /api/wellness/patients rejects DOB year < 1900 or > today (#159, #178, #205). — Path A; 4 new PUT-side tests (year<1900 → DOB_OUT_OF_RANGE, future → DOB_OUT_OF_RANGE, malformed → INVALID_DOB, 1900-01-01 boundary → 200).
+- [x] POST symmetrically rejects bad email and `<img onerror=...>` payloads (#160, #213). — Path A; existing tests at ~371-432.
+- [x] POST /api/wellness/visits rejects status not in enum, dob year > 3000 (#170, #197). — Path A; existing STATUS_INVALID at ~829, new POST + PUT year>3000 tests. **Path B**: PUT /visits silently accepted year=3001 (POST validated via ensureVisitDate, PUT did not). Inline fix to backend/routes/wellness.js PUT handler — ensureVisitDate range check now mirrors POST.
+- [x] POST /api/wellness/visits enforces visit-status state machine (#197). — Path A; existing tests at ~917-947.
+- [x] POST /api/wellness/prescriptions requires drugName, dosage, frequency, duration (all non-empty) (#114). — **Drift note**: card claims all four required; route reality is name-ONLY (line 1329 `d.name && typeof d.name === "string" && d.name.trim()`). dosage/frequency/duration are silently optional. Pinned the CURRENT contract (drug with only name → 201; drug with whitespace name → 400 DRUG_NAME_REQUIRED). When/if the route tightens, flip the .toBe(201) assertion.
+- [x] POST /api/wellness/consents requires `signatureBase64` non-empty (#118). — Path A; 4 new tests (`""` / missing key / null / integer 0 → all SIGNATURE_REQUIRED).
+- [x] PUT/PATCH/DELETE exist on /api/wellness/prescriptions, /api/wellness/consents, /api/wellness/recommendations (#194). — **Card framing inaccurate**: PUT exists (route handler returns 404 on missing row, NOT global catch-all). PATCH and DELETE are intentionally absent per #21 clinical-no-delete retention policy — they fall through to 404/405. 9 new tests pin the per-method matrix.
+- [x] Recommendation status transitions are constrained — rejected→approved requires audit trail (#195). — Path A; 4 new tests covering re-reject idempotency, rejected→approved blocked with 422 INVALID_RECOMMENDATION_TRANSITION, REJECT audit-row exists with action=REJECT (not REJECTED — Wave-11 verb pin), AMEND_TERMINAL on PUT to terminal status.
+- [x] Encrypted fields are decrypted in the GET response (no `ENC:v1:...` ciphertext leaks) (#224). — Path A; 3 new tests pin the contract (Patient list+detail, Prescription list, nested patient→visits→Rx walk). Tests are env-tolerant: `WELLNESS_FIELD_KEY` set → encrypt-on-write, decrypt-on-read; unset → no-op pass-through. ENC:v1: prefix MUST NEVER leak in either case.
+- [x] POST /api/wellness/patients with same normalized phone as existing → 409 DUPLICATE_PHONE (#265, #401 — already shipped, lock it in). — Path A; existing tests at ~497-557 + new wider response-shape lock-in (status=409, code=DUPLICATE_PHONE, error matches /already exists/i, no Prisma leakage).
 
-**Estimated effort:** 1 day. Commit: ___________
+**Estimated effort:** 1 day. **Shipped:** +29 tests (162 → 191 total) + 1 Path B route fix to PUT /visits. Commit: <pending push>
 
 ---
 

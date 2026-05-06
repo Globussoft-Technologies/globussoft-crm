@@ -1083,8 +1083,17 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     // Agent B: added videoRoom (telehealth Jitsi room name)
     const allowed = ["status", "vitals", "notes", "photosBefore", "photosAfter", "amountCharged", "videoRoom"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
-    // #313: same datetime-local-vs-ISO sniffing as POST /visits.
-    if (req.body.visitDate !== undefined) data.visitDate = parseTenantDateInput(req.body.visitDate);
+    // #170 / #197 (PUT-side parity): visitDate must be in [now-5y, now+1y]
+    // — same range as POST /visits. Pre-fix the PUT skipped ensureVisitDate
+    // and silently accepted year=3001 / year=1800 (parseTenantDateInput
+    // only sniffs format, not range), so a UI form-fill bug or scripted
+    // caller could relocate a visit to the year 3000. Range-check FIRST,
+    // then run the format sniffer.
+    if (req.body.visitDate !== undefined) {
+      const dateErr = ensureVisitDate(req.body.visitDate);
+      if (dateErr) return res.status(dateErr.status).json(dateErr);
+      data.visitDate = parseTenantDateInput(req.body.visitDate);
+    }
 
     // #277: same per-visit cap as POST — reject overflow updates.
     if (data.amountCharged != null && data.amountCharged !== "") {

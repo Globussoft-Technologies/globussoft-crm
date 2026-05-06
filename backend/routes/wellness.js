@@ -545,6 +545,16 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   }
   const emailErr = ensureEmail(body.email);
   if (emailErr) return emailErr;
+  // #536 (PT-04): on create, phone is REQUIRED — the SPA marks it as
+  // required + downstream flows (SMS reminders, calendar T-24h/T-1h pings,
+  // dedup-by-normalizedPhone) silently no-op for phoneless rows. The
+  // backend was previously accepting null/omit silently — UI/API contract
+  // drift. On update (PUT), phone stays optional (don't force users to
+  // re-type it on every edit). isValidPhoneOrEmpty's "empty is OK" return
+  // is what we use on update; required-check fires only on create.
+  if (!isUpdate && (body.phone == null || String(body.phone).trim() === "")) {
+    return { status: 400, error: "phone is required", code: "PHONE_REQUIRED" };
+  }
   if (!isValidPhoneOrEmpty(body.phone)) {
     return { status: 400, error: "phone must contain 10–15 digits", code: "INVALID_PHONE" };
   }

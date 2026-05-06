@@ -347,21 +347,29 @@ Plus #364 ticketTier round-trip pin (low/medium/high preserved + default), full 
 
 ---
 
-## ☐ 16. New gated spec: `orchestrator-api.spec.js`
+## ☑ 16. New gated spec: `orchestrator-api.spec.js` ✅ shipped
 
 **Closes:** #261, #276, #308, #319, #321
 
 **Why:** [cron/orchestratorEngine.js](backend/cron/orchestratorEngine.js) is in TODOS as the next gate-spec candidate.
 
 **Acceptance:**
-- [ ] One day's run produces at most one row per (tenantId, recommendationType) — no duplicates (#261, #308).
-- [ ] AgentRecommendation status is exclusive — Pending OR Approved OR Rejected, never overlapping (#308).
-- [ ] Reject button writes status=REJECTED and emits AuditLog (#276).
-- [ ] Generated text never contains seed-pollution patterns `Lifecycle \d+`, `E2E_`, `Tenant B scoped` (#319).
-- [ ] Cost arithmetic doesn't overflow — totals < 1e10 ₹ (#321).
-- [ ] Wired into deploy.yml + coverage.yml.
+- [x] One day's run produces at most one row per (tenantId, recommendationType) — no duplicates (#261, #308). Path A — engine already keys dedup on (type + payloadHash) AND (type + title-prefix) scoped to today's createdAt window. Spec triggers `/orchestrator/run` 3× back-to-back and asserts `created=0` on runs 2+3, plus collapse-by-(type::lc-title) invariant on the GET response.
+- [x] AgentRecommendation status is exclusive — Pending OR Approved OR Rejected, never overlapping (#308). Path A — GET /recommendations route already collapses by (type::title.lc) with STATUS_RANK preferring terminal representatives. Spec asserts no id appears in 2 status tabs simultaneously + state-machine 422 on cross-state transitions.
+- [x] Reject button writes status=REJECTED and emits AuditLog (#276). Path A — already wired (writeAudit('AgentRecommendation', 'REJECT', …)). Spec verifies blob shape: title + priority + reason ARE present; payload + passwordHash + portalPasswordHash NOT present (PII defence-in-depth). Also verifies idempotent re-reject does NOT write a duplicate audit row.
+- [x] Generated text never contains seed-pollution patterns `Lifecycle \d+`, `E2E_`, `Tenant B scoped` (#319). Path A — spec scans every recommendation card's title/body/expectedImpact/goalContext/payload + the orchestrator's contextSummary string for the 4 pollution regexes (added `_teardown_` defence-in-depth on top of the gap-card's 3).
+- [x] Cost arithmetic doesn't overflow — totals < 1e10 ₹ (#321). Path A — recursive numeric scan over every card field + ₹-shaped figure extraction from expectedImpact/body/contextSummary + payload.suggestedDailyBudget bounds-check (engine caps at [300, 2000] ₹). NaN catch as defence-in-depth.
+- [x] Wired into deploy.yml + coverage.yml.
 
-**Estimated effort:** 1 day. Commit: ___________
+**Test count:** 29 tests (target 15-25, exceeded for the RBAC + auth defence-in-depth block). 6 sub-describe blocks: idempotency / status exclusivity / reject-emits-audit / pollution-free / cost-bounds / RBAC + auth gates. Greens locally in 21.3s on local stack.
+
+**Drift findings (gap-card vs actual code):**
+- Status enum is **lowercase** (`pending` / `approved` / `rejected` / `snoozed`), not the gap-card's mixed-case "Pending OR Approved OR Rejected". Spec uses lowercase per the actual route + Prisma defaults.
+- AuditLog action verb is **`REJECT`** / **`APPROVE`** / **`UPDATE`** (uppercase, per writeAudit calls in routes/wellness.js:1894/1948/2061), NOT the gap-card's "REJECTED" framing. Spec asserts `action === 'REJECT'`.
+- The /recommendations GET route does NOT have `verifyWellnessRole` gating — it's tenant-scoped via `tenantWhere(req)` only. So a generic-tenant ADMIN GET returns 200 + tenant-1 rows (correctly empty for that tenant). Spec asserts tenant-isolation rather than 403.
+- Manual /orchestrator/run POST DOES have `verifyWellnessRole(["admin","manager"])` (commit #216) — generic-tenant ADMIN gets 403 WELLNESS_TENANT_REQUIRED; wellness USER+doctor gets 403 WELLNESS_ROLE_FORBIDDEN.
+
+**Estimated effort:** 1 day. Commit: <see git>.
 
 ---
 

@@ -10,6 +10,7 @@ const prisma = require("../lib/prisma");
 const MS_CLIENT_ID = process.env.MS_CLIENT_ID;
 const MS_CLIENT_SECRET = process.env.MS_CLIENT_SECRET;
 const MS_REDIRECT_URI = process.env.MS_REDIRECT_URI;
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
 const TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
@@ -136,11 +137,19 @@ router.get("/callback", async (req, res) => {
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
         syncEnabled: true,
+        calendarId: "primary",
         tenantId,
       },
     });
 
-    res.redirect("/calendar-sync?connected=outlook");
+    // Use HTML redirect to preserve browser session/token
+    const redirectUrl = `${FRONTEND_URL}/calendar-sync?connected=outlook`;
+    res.send(`
+      <script>
+        window.location.href = '${redirectUrl}';
+      </script>
+      <p>Redirecting to Calendar Sync...</p>
+    `);
   } catch (err) {
     console.error("[outlook/callback] error:", err);
     res.status(500).send(`Callback error: ${err.message}`);
@@ -151,13 +160,16 @@ router.get("/callback", async (req, res) => {
 router.post("/sync", verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const tenantId = req.user.tenantId;
+    if (!userId) {
+      return res.status(401).json({ error: "User ID not found in token" });
+    }
+    const tenantId = req.user.tenantId || 1;
 
     let integration = await prisma.calendarIntegration.findUnique({
       where: { userId_provider: { userId, provider: "microsoft" } },
     });
     if (!integration) {
-      return res.status(404).json({ error: "Outlook calendar not connected" });
+      return res.status(404).json({ error: "Outlook calendar not connected. Please connect your calendar first via /api/calendar/outlook/connect" });
     }
 
     integration = await refreshTokenIfNeeded(integration);
@@ -200,7 +212,7 @@ router.post("/sync", verifyToken, async (req, res) => {
           : null;
 
         await prisma.calendarEvent.upsert({
-          where: { provider_externalId: { provider: "microsoft", externalId: ev.id } },
+          where: { tenantId_provider_externalId: { tenantId, provider: "microsoft", externalId: ev.id } },
           update: {
             title: ev.subject || "(No title)",
             description: ev.bodyPreview || null,
@@ -237,28 +249,40 @@ router.post("/sync", verifyToken, async (req, res) => {
       data: { lastSyncAt: new Date() },
     });
 
-    res.json({ synced });
+    return res.json({ synced });
   } catch (err) {
     console.error("[outlook/sync] error:", err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
 // GET /events — list synced events for current user/tenant
 router.get("/events", verifyToken, async (req, res) => {
   try {
+    const userId = req.user.userId;
+    const tenantId = req.user.tenantId || 1;
+
+    // Check if integration exists first
+    const integration = await prisma.calendarIntegration.findUnique({
+      where: { userId_provider: { userId, provider: "microsoft" } },
+    });
+
+    if (!integration) {
+      return res.status(404).json({ error: "Outlook calendar not connected" });
+    }
+
     const events = await prisma.calendarEvent.findMany({
       where: {
-        userId: req.user.userId,
+        userId,
         provider: "microsoft",
-        tenantId: req.user.tenantId,
+        tenantId,
       },
       orderBy: { startTime: "asc" },
     });
-    res.json(events);
+    return res.json(events);
   } catch (err) {
     console.error("[outlook/events GET] error:", err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
@@ -270,8 +294,42 @@ router.post("/events", verifyToken, async (req, res) => {
       return res.status(400).json({ error: "title, startTime, endTime required" });
     }
 
+    // Validate and parse dates
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return res.status(400).json({ error: "Invalid startTime or endTime format" });
+    }
+
+    // Check if start time is in the past
+    const now = new Date();
+    if (start < now) {
+      return res.status(400).json({ error: "Cannot create events in the past. Start time must be in the future." });
+    }
+
+    // Check if end time is after start time
+    if (end <= start) {
+      return res.status(400).json({ error: "End time must be after start time" });
+    }
+
     const userId = req.user.userId;
-    const tenantId = req.user.tenantId;
+    if (!userId) {
+      return res.status(401).json({ error: "User ID not found in token" });
+    }
+    const tenantId = req.user.tenantId || 1;
+
+    // Check for conflicting events (same timing)
+    const conflictingEvent = await prisma.calendarEvent.findFirst({
+      where: {
+        userId,
+        tenantId,
+        startTime: { lt: end },
+        endTime: { gt: start },
+      },
+    });
+    if (conflictingEvent) {
+      return res.status(409).json({ error: "Event time conflicts with an existing event. Please choose a different time." });
+    }
 
     let integration = await prisma.calendarIntegration.findUnique({
       where: { userId_provider: { userId, provider: "microsoft" } },
@@ -317,7 +375,7 @@ router.post("/events", verifyToken, async (req, res) => {
     const endDt = new Date(created.end?.dateTime ? `${created.end.dateTime}Z` : endTime);
 
     const saved = await prisma.calendarEvent.upsert({
-      where: { provider_externalId: { provider: "microsoft", externalId: created.id } },
+      where: { tenantId_provider_externalId: { tenantId, provider: "microsoft", externalId: created.id } },
       update: {
         title: created.subject || title,
         description: description || null,
@@ -346,10 +404,10 @@ router.post("/events", verifyToken, async (req, res) => {
       },
     });
 
-    res.status(201).json(saved);
+    return res.status(201).json(saved);
   } catch (err) {
     console.error("[outlook/events POST] error:", err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
@@ -360,10 +418,10 @@ router.delete("/disconnect", verifyToken, async (req, res) => {
     await prisma.calendarIntegration.deleteMany({
       where: { userId, provider: "microsoft" },
     });
-    res.json({ disconnected: true });
+    return res.json({ disconnected: true });
   } catch (err) {
     console.error("[outlook/disconnect] error:", err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 

@@ -47,7 +47,7 @@ async function getAuthorizedClientForUser(userId) {
     where: { userId_provider: { userId, provider: "google" } },
   });
   if (!integration) {
-    const err = new Error("Google Calendar not connected");
+    const err = new Error("Google Calendar not connected. Please connect your calendar first via /api/calendar/google/connect");
     err.status = 404;
     throw err;
   }
@@ -141,7 +141,14 @@ router.get("/callback", async (req, res) => {
       },
     });
 
-    res.redirect(`${FRONTEND_URL}/calendar-sync?connected=google`);
+    // Use HTML redirect to preserve browser session/token
+    const redirectUrl = `${FRONTEND_URL}/calendar-sync?connected=google`;
+    res.send(`
+      <script>
+        window.location.href = '${redirectUrl}';
+      </script>
+      <p>Redirecting to Calendar Sync...</p>
+    `);
   } catch (err) {
     console.error("[calendar_google] /callback error:", err);
     res.redirect(`${FRONTEND_URL}/calendar-sync?error=${encodeURIComponent("token_exchange_failed")}`);
@@ -152,6 +159,9 @@ router.get("/callback", async (req, res) => {
 router.post("/sync", verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User ID not found in token" });
+    }
     const tenantId = req.user.tenantId || 1;
     const { client, integration } = await getAuthorizedClientForUser(userId);
     const calendar = google.calendar({ version: "v3", auth: client });
@@ -189,7 +199,7 @@ router.post("/sync", verifyToken, async (req, res) => {
           null;
 
         await prisma.calendarEvent.upsert({
-          where: { provider_externalId: { provider: "google", externalId: ev.id } },
+          where: { tenantId_provider_externalId: { tenantId, provider: "google", externalId: ev.id } },
           create: {
             externalId: ev.id,
             provider: "google",
@@ -224,28 +234,40 @@ router.post("/sync", verifyToken, async (req, res) => {
       data: { lastSyncAt: new Date() },
     });
 
-    res.json({ success: true, synced });
+    return res.json({ success: true, synced });
   } catch (err) {
     console.error("[calendar_google] /sync error:", err);
-    res.status(err.status || 500).json({ error: err.message || "Sync failed" });
+    return res.status(err.status || 500).json({ error: err.message || "Sync failed" });
   }
 });
 
 // GET /events — list synced events for current user/tenant
 router.get("/events", verifyToken, async (req, res) => {
   try {
+    const userId = req.user.userId;
+    const tenantId = req.user.tenantId || 1;
+
+    // Check if integration exists first
+    const integration = await prisma.calendarIntegration.findUnique({
+      where: { userId_provider: { userId, provider: "google" } },
+    });
+
+    if (!integration) {
+      return res.status(404).json({ error: "Google Calendar not connected" });
+    }
+
     const events = await prisma.calendarEvent.findMany({
       where: {
-        userId: req.user.userId,
-        tenantId: req.user.tenantId || 1,
+        userId,
+        tenantId,
         provider: "google",
       },
       orderBy: { startTime: "asc" },
     });
-    res.json(events);
+    return res.json(events);
   } catch (err) {
     console.error("[calendar_google] /events error:", err);
-    res.status(500).json({ error: "Failed to load events" });
+    return res.status(500).json({ error: "Failed to load events" });
   }
 });
 
@@ -256,8 +278,44 @@ router.post("/events", verifyToken, async (req, res) => {
     if (!title || !startTime || !endTime) {
       return res.status(400).json({ error: "title, startTime and endTime are required" });
     }
+
+    // Validate and parse dates
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return res.status(400).json({ error: "Invalid startTime or endTime format" });
+    }
+
+    // Check if start time is in the past
+    const now = new Date();
+    if (start < now) {
+      return res.status(400).json({ error: "Cannot create events in the past. Start time must be in the future." });
+    }
+
+    // Check if end time is after start time
+    if (end <= start) {
+      return res.status(400).json({ error: "End time must be after start time" });
+    }
+
     const userId = req.user.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User ID not found in token" });
+    }
     const tenantId = req.user.tenantId || 1;
+
+    // Check for conflicting events (same timing)
+    const conflictingEvent = await prisma.calendarEvent.findFirst({
+      where: {
+        userId,
+        tenantId,
+        startTime: { lt: end },
+        endTime: { gt: start },
+      },
+    });
+    if (conflictingEvent) {
+      return res.status(409).json({ error: "Event time conflicts with an existing event. Please choose a different time." });
+    }
+
     const { client, integration } = await getAuthorizedClientForUser(userId);
     const calendar = google.calendar({ version: "v3", auth: client });
 
@@ -288,7 +346,7 @@ router.post("/events", verifyToken, async (req, res) => {
       null;
 
     const saved = await prisma.calendarEvent.upsert({
-      where: { provider_externalId: { provider: "google", externalId: ev.id } },
+      where: { tenantId_provider_externalId: { tenantId, provider: "google", externalId: ev.id } },
       create: {
         externalId: ev.id,
         provider: "google",
@@ -317,10 +375,10 @@ router.post("/events", verifyToken, async (req, res) => {
       },
     });
 
-    res.status(201).json(saved);
+    return res.status(201).json(saved);
   } catch (err) {
     console.error("[calendar_google] POST /events error:", err);
-    res.status(err.status || 500).json({ error: err.message || "Failed to create event" });
+    return res.status(err.status || 500).json({ error: err.message || "Failed to create event" });
   }
 });
 
@@ -335,10 +393,10 @@ router.delete("/disconnect", verifyToken, async (req, res) => {
         if (err && err.code === "P2025") return null; // not found is fine
         throw err;
       });
-    res.json({ success: true });
+    return res.json({ success: true });
   } catch (err) {
     console.error("[calendar_google] /disconnect error:", err);
-    res.status(500).json({ error: "Failed to disconnect" });
+    return res.status(500).json({ error: "Failed to disconnect" });
   }
 });
 

@@ -276,15 +276,17 @@ router.get("/patients", phiReadGate, async (req, res) => {
     ]);
     // PRD §11: HIPAA / DPDP Act — log every PHI read. Patient list is a
     // bulk PHI read; emit ONE row per request (not N), with no PHI values.
-    try {
-      await writeAudit('Patient', 'PATIENT_LIST_READ', null, req.user.userId, req.user.tenantId, {
-        count: patients.length,
-        query: q || null,
-        locationId: locationId ? parseInt(locationId) : null,
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget. The audit row is a regulatory log,
+    // not a response-time critical write — awaiting it added 30-100ms to
+    // every list call on a cold connection. The promise still completes
+    // (its catch logs to console); response goes out without blocking.
+    writeAudit('Patient', 'PATIENT_LIST_READ', null, req.user.userId, req.user.tenantId, {
+      count: patients.length,
+      query: q || null,
+      locationId: locationId ? parseInt(locationId) : null,
+    }).catch((auditErr) => {
       console.warn("[wellness] audit PATIENT_LIST_READ failed:", auditErr.message);
-    }
+    });
     res.json({ patients, total });
   } catch (e) {
     console.error("[wellness] list patients error:", e.message);
@@ -315,17 +317,18 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
     // PRD §11: log every patient detail read. Capture the FIELD NAMES returned
     // (so reviewers know what columns were exposed) but NEVER the values —
     // logging allergies/dob/phone here would defeat the audit-log's HIPAA role.
-    try {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    {
       const accessedFields = Object.keys(patient).filter(
         (k) => !["visits", "prescriptions", "consents", "treatmentPlans"].includes(k)
       );
-      await writeAudit('Patient', 'PATIENT_DETAIL_READ', patient.id, req.user.userId, req.user.tenantId, {
+      writeAudit('Patient', 'PATIENT_DETAIL_READ', patient.id, req.user.userId, req.user.tenantId, {
         patientId: patient.id,
         name: patient.name,
         accessedFields,
+      }).catch((auditErr) => {
+        console.warn("[wellness] audit PATIENT_DETAIL_READ failed:", auditErr.message);
       });
-    } catch (auditErr) {
-      console.warn("[wellness] audit PATIENT_DETAIL_READ failed:", auditErr.message);
     }
     res.json(patient);
   } catch (e) {
@@ -362,13 +365,12 @@ router.get("/patients/:id/visits", phiReadGate, async (req, res) => {
       },
     });
     // Audit-log the read same as the flat /visits list (PRD §11 clinical reads).
-    try {
-      await writeAudit('Patient', 'PATIENT_VISITS_READ', patientId, req.user.userId, req.user.tenantId, {
-        patientId, visitCount: visits.length,
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    writeAudit('Patient', 'PATIENT_VISITS_READ', patientId, req.user.userId, req.user.tenantId, {
+      patientId, visitCount: visits.length,
+    }).catch((auditErr) => {
       console.warn("[wellness] audit PATIENT_VISITS_READ failed:", auditErr.message);
-    }
+    });
     res.json(visits);
   } catch (e) {
     console.error("[wellness] list patient visits error:", e.message);
@@ -394,13 +396,12 @@ router.get("/patients/:id/prescriptions", phiReadGate, async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
-    try {
-      await writeAudit('Patient', 'PATIENT_RX_READ', patientId, req.user.userId, req.user.tenantId, {
-        patientId, rxCount: items.length,
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    writeAudit('Patient', 'PATIENT_RX_READ', patientId, req.user.userId, req.user.tenantId, {
+      patientId, rxCount: items.length,
+    }).catch((auditErr) => {
       console.warn("[wellness] audit PATIENT_RX_READ failed:", auditErr.message);
-    }
+    });
     res.json(items);
   } catch (e) {
     console.error("[wellness] list patient prescriptions error:", e.message);
@@ -426,13 +427,12 @@ router.get("/patients/:id/consents", phiReadGate, async (req, res) => {
         service: { select: { id: true, name: true } },
       },
     });
-    try {
-      await writeAudit('Patient', 'PATIENT_CONSENTS_READ', patientId, req.user.userId, req.user.tenantId, {
-        patientId, consentCount: items.length,
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    writeAudit('Patient', 'PATIENT_CONSENTS_READ', patientId, req.user.userId, req.user.tenantId, {
+      patientId, consentCount: items.length,
+    }).catch((auditErr) => {
       console.warn("[wellness] audit PATIENT_CONSENTS_READ failed:", auditErr.message);
-    }
+    });
     res.json(items);
   } catch (e) {
     console.error("[wellness] list patient consents error:", e.message);
@@ -458,13 +458,12 @@ router.get("/patients/:id/treatment-plans", phiReadGate, async (req, res) => {
       },
       orderBy: { startedAt: "desc" },
     });
-    try {
-      await writeAudit('Patient', 'PATIENT_TREATMENTS_READ', patientId, req.user.userId, req.user.tenantId, {
-        patientId, planCount: plans.length,
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    writeAudit('Patient', 'PATIENT_TREATMENTS_READ', patientId, req.user.userId, req.user.tenantId, {
+      patientId, planCount: plans.length,
+    }).catch((auditErr) => {
       console.warn("[wellness] audit PATIENT_TREATMENTS_READ failed:", auditErr.message);
-    }
+    });
     res.json(plans);
   } catch (e) {
     console.error("[wellness] list patient treatment plans error:", e.message);
@@ -894,20 +893,19 @@ router.get("/visits", phiReadGate, async (req, res) => {
     // PRD §11 / T2.2: staff-side cross-patient visit list is a PHI read
     // (response includes patient name + phone). One audit row per request,
     // with the filter params and result count — never the row contents.
-    try {
-      await writeAudit('Visit', 'VISIT_LIST_READ', null, req.user.userId, req.user.tenantId, {
-        count: visits.length,
-        filters: {
-          patientId: patientId ? parseInt(patientId) : null,
-          doctorId: doctorId ? parseInt(doctorId) : null,
-          status: status || null,
-          from: from || null,
-          to: to || null,
-        },
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    writeAudit('Visit', 'VISIT_LIST_READ', null, req.user.userId, req.user.tenantId, {
+      count: visits.length,
+      filters: {
+        patientId: patientId ? parseInt(patientId) : null,
+        doctorId: doctorId ? parseInt(doctorId) : null,
+        status: status || null,
+        from: from || null,
+        to: to || null,
+      },
+    }).catch((auditErr) => {
       console.warn("[wellness] audit /visits list failed:", auditErr.message);
-    }
+    });
     res.json(visits);
   } catch (e) {
     console.error("[wellness] list visits error:", e.message);
@@ -1161,14 +1159,13 @@ router.get("/visits/:id/consumptions", phiReadGate, async (req, res) => {
     });
     // PRD §11 / T2.2: consumption items reveal what was administered during a
     // visit — clinical context tied to the patient. Audit per request.
-    try {
-      await writeAudit('Visit', 'VISIT_CONSUMPTIONS_READ', id, req.user.userId, req.user.tenantId, {
-        visitId: id,
-        count: items.length,
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    writeAudit('Visit', 'VISIT_CONSUMPTIONS_READ', id, req.user.userId, req.user.tenantId, {
+      visitId: id,
+      count: items.length,
+    }).catch((auditErr) => {
       console.warn("[wellness] audit /visits/:id/consumptions failed:", auditErr.message);
-    }
+    });
     res.json(items);
   } catch (_e) {
     res.status(500).json({ error: "Failed to list consumption items" });
@@ -1257,14 +1254,13 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     });
     // PRD §11 / T2.2: staff-side prescription list is a PHI read
     // (response embeds patient name + drugs JSON). Medico-legal trail.
-    try {
-      await writeAudit('Prescription', 'PRESCRIPTION_LIST_READ', null, req.user.userId, req.user.tenantId, {
-        count: items.length,
-        filters: { patientId: patientId ? parseInt(patientId) : null },
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    writeAudit('Prescription', 'PRESCRIPTION_LIST_READ', null, req.user.userId, req.user.tenantId, {
+      count: items.length,
+      filters: { patientId: patientId ? parseInt(patientId) : null },
+    }).catch((auditErr) => {
       console.warn("[wellness] audit /prescriptions list failed:", auditErr.message);
-    }
+    });
     res.json(items);
   } catch (e) {
     console.error("[wellness] list prescriptions error:", e.message);
@@ -1383,14 +1379,13 @@ router.get("/consents", phiReadGate, async (req, res) => {
     });
     // PRD §11 / T2.2: staff-side consent list is a PHI read
     // (response embeds patient name + signed template type).
-    try {
-      await writeAudit('ConsentForm', 'CONSENT_LIST_READ', null, req.user.userId, req.user.tenantId, {
-        count: items.length,
-        filters: { patientId: patientId ? parseInt(patientId) : null },
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    writeAudit('ConsentForm', 'CONSENT_LIST_READ', null, req.user.userId, req.user.tenantId, {
+      count: items.length,
+      filters: { patientId: patientId ? parseInt(patientId) : null },
+    }).catch((auditErr) => {
       console.warn("[wellness] audit /consents list failed:", auditErr.message);
-    }
+    });
     res.json(items);
   } catch (e) {
     console.error("[wellness] list consents error:", e.message);
@@ -1506,17 +1501,16 @@ router.get("/treatment-plans", phiReadGate, async (req, res) => {
       orderBy: { startedAt: "desc" },
     });
     // PRD §11 / T2.2: treatment plans embed patient name + phone + service.
-    try {
-      await writeAudit('TreatmentPlan', 'TREATMENT_PLAN_LIST_READ', null, req.user.userId, req.user.tenantId, {
-        count: plans.length,
-        filters: {
-          patientId: patientId ? parseInt(patientId) : null,
-          status: status || null,
-        },
-      });
-    } catch (auditErr) {
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    writeAudit('TreatmentPlan', 'TREATMENT_PLAN_LIST_READ', null, req.user.userId, req.user.tenantId, {
+      count: plans.length,
+      filters: {
+        patientId: patientId ? parseInt(patientId) : null,
+        status: status || null,
+      },
+    }).catch((auditErr) => {
       console.warn("[wellness] audit /treatment-plans list failed:", auditErr.message);
-    }
+    });
     res.json(plans);
   } catch (e) {
     console.error("[wellness] list treatment-plans error:", e.message);

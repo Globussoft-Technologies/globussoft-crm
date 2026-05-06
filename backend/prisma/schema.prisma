@@ -2155,6 +2155,11 @@ model Patient {
   @@index([tenantId, phone])
   @@index([tenantId, locationId])
   @@index([contactId])
+  // #534 (PERF-1): Patient list query is `where: { tenantId } orderBy: { createdAt: desc }`.
+  // The composite (tenantId, createdAt) index lets MySQL satisfy both the
+  // tenant scope AND the orderBy from the index alone, avoiding the filesort
+  // observed on cold calls.
+  @@index([tenantId, createdAt])
 }
 
 model Service {
@@ -2301,6 +2306,10 @@ model TreatmentPlan {
 
   @@index([tenantId, status])
   @@index([patientId])
+  // #534 (PERF-1): TreatmentPlan list query is `where: { tenantId, patientId? }
+  // orderBy: { startedAt: desc }`. Same shape as Patient — composite index
+  // covers both the tenant filter and the orderBy. Saves the filesort.
+  @@index([tenantId, startedAt])
 }
 
 model ServiceConsumption {

@@ -281,7 +281,8 @@ jobs:
           #   - migration-safety.spec.js     (10 tests: backend/scripts/check-migration-safety.js fixture regression — G-23)
           #   - field-permissions-enforcement-api.spec.js (9 tests: middleware/fieldFilter.js wired into routes/deals.js + routes/contacts.js — #464)
           #   - api-docs.spec.js             ( 5 tests: /api-docs Swagger UI + /api-docs/swagger.json OpenAPI raw spec — #542)
-          # Total: ~1455 API tests run on every push.
+          #   - wellness-rbac-regression-api.spec.js (21 tests: companion to wellness-rbac-api covering #259/#280/#323/#324/#325/#326/#348 + #527/#533 PHI gates — P0 from regression-coverage-backlog)
+          # Total: ~1476 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -360,6 +361,7 @@ jobs:
             tests/whatsapp.spec.js \
             tests/forgot-password.spec.js \
             tests/api-docs.spec.js \
+            tests/wellness-rbac-regression-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

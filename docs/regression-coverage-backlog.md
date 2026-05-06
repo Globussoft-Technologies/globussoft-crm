@@ -71,6 +71,8 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 **Estimated effort:** 0.5–1 day. Commit: ___________ _(shipped — see latest commit on main; 11 API tests covering all 7 acceptance criteria; gated in deploy.yml + coverage.yml)_
 
+**Follow-on (2026-05-07):** ✅ shipped tighter regression companion at `e2e/tests/wellness-rbac-regression-api.spec.js` (21 tests) — adds happy-path baselines per role + `WELLNESS_TENANT_REQUIRED`/`WELLNESS_ROLE_FORBIDDEN` body-code pins + `#527`/`#533` helper-on-PHI regression pins for the `phiReadGate`/`phiWriteGate` introduced in `cd664f9`. Revert-and-prove: dropping `phiReadGate` from `/wellness/patients` flips test #12 from 403→200 (red); restoring it returns to green. Wired into deploy.yml + coverage.yml.
+
 ---
 
 ## ☑ 2. New gated spec: `auth-security-api.spec.js` ✓ shipped

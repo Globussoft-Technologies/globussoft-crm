@@ -412,7 +412,7 @@ Test count delta: 35 → 39 (+4). Commit: f57ed36
 
 Path A (extending existing 8-test spec) — original sanitization + auth-gate tests preserved, +11 new tests for the 4 acceptance points (4 recipient-validation + 4 enum-validation + 2 frequency-contract + 1 mixed/external PUT). Total 19 tests in the spec.
 
-**Estimated effort:** 0.25 day. Commit: <to-be-filled-after-push>
+**Estimated effort:** 0.25 day. Commit: bc838d9
 
 ---
 

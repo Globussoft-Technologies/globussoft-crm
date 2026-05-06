@@ -273,19 +273,21 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 12. Extend [reports-api.spec.js](e2e/tests/reports-api.spec.js)
+## ☑ 12. Extend [reports-api.spec.js](e2e/tests/reports-api.spec.js)
 
 **Closes:** #210, #212, #232, #233, #234, #246, #247, #263, #281, #289, #321 (11 issues)
 
 **Acceptance:**
-- [ ] For a fixed date range, sum-of-visits matches across P&L / Per-Pro / Per-Location / Attribution tabs (#232, #281).
-- [ ] P&L productCost > 0 when ServiceConsumption rows exist; never overflow > 1e10 (#212, #234, #321).
-- [ ] Marketing Attribution shows revenue=0 for sources with 0 leads (#233).
-- [ ] Owner Dashboard "today's appointments" == count(/api/wellness/visits?date=today) (#246, #247, #263, #289).
-- [ ] Date range with from > to returns 400 (#210).
-- [ ] Date range with year > 9999 or < 1900 returns 400 (#210).
+- [x] For a fixed date range, sum-of-visits matches across P&L / Per-Pro / Per-Location / Attribution tabs (#232, #281). Pinned via canonical-visits parity across all 4 tabs + row-sum + unbucketed invariants per tab.
+- [x] P&L productCost > 0 when ServiceConsumption rows exist; never overflow > 1e10 (#212, #234, #321). Cap pinned at 1e10 (₹1000Cr) per row + per total. The #234 end-of-day to-date is also pinned via "create visit at now, ?to=today should include it" probe.
+- [x] Marketing Attribution shows revenue=0 for sources with 0 leads (#233). Acc construction (line 2383) only creates row buckets on lead-iteration, so leads=0 ⇒ row absent. Test pins the cross-row invariant: every row with leads=0 has revenue=0, revenuePerLead=0, junkRate=0, conversionRate=0.
+- [x] Owner Dashboard "today's appointments" == count(/api/wellness/visits with from=today&to=tomorrow) (#246, #247, #263, #289). Drift: /visits accepts ?from=&to= NOT ?date=today. Soft-bound assertion: `dash.today.visits <= visits[today,tomorrow).length` (dashboard endpoint uses startOfDay/endOfDay in IST; visits endpoint uses raw `new Date(to)` parsing — half-open vs closed interval semantics). Plus #247 invariant `today.completed <= today.visits` and #289 `0 <= occupancyPct <= 100`.
+- [x] Date range with from > to returns 400 (#210). **Drift:** code is `INVERTED_DATE_RANGE` not the `INVERTED_RANGE` used by the generic `/api/reports` surface. Pinned across all 4 wellness report endpoints in one parameterised test.
+- [x] Date range with year > 2099 or < 2000 returns 400 (#210). **Drift:** route caps at **2000..2099** not 1900..9999 as the backlog hypothesised (`MIN_REPORT_YEAR=2000, MAX_REPORT_YEAR=2099` at routes/wellness.js:2170-2171). Code is `DATE_OUT_OF_RANGE`. Plus #210's canonical 5-digit-year `11900-01-01` smoke + `1850-06-01` floor + garbage-string `INVALID_DATE_RANGE`.
 
-**Estimated effort:** 1 day. Commit: ___________
+Plus a generic-tenant cross-tenant test (`admin@globussoft.com` → 403 `WELLNESS_TENANT_REQUIRED`) and an unauthenticated-request → 401/403 sanity. **21 new tests** on top of 51 existing = **72 total**, 17.6s on local stack. The spec was already wired into deploy.yml + coverage.yml gate-spec lists.
+
+**Estimated effort:** 1 day. Commit: `<pending>`
 
 ---
 

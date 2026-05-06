@@ -343,7 +343,7 @@ Plus #364 ticketTier round-trip pin (low/medium/high preserved + default), full 
 
 **Test count:** 23 (target was 15-25). All pass against local stack `BASE_URL=http://127.0.0.1:5000` in 16.3s.
 
-**Estimated effort:** 0.5 day. Commit: <see git>.
+**Estimated effort:** 0.5 day. Commit: ae913a9.
 
 ---
 

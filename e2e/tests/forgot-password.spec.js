@@ -7,11 +7,20 @@ const { test, expect } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 
+// #526 wire-in: this spec mixes a UI page-render test with pure-API tests.
+// The api_tests deploy gate boots only the backend (BASE_URL=127.0.0.1:5000,
+// no SPA served), so the UI test below would fail with "element not found"
+// because navigation returns the JSON root, not index.html. Same `IS_LOCAL_STACK`
+// guard pattern documented in CLAUDE.md "Local-stack-only specs must guard on
+// BASE_URL" standing rule (used by backup-engine-api + migration-safety).
+const IS_LOCAL_STACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(BASE_URL);
+
 test.describe('Forgot Password — Password reset flow', () => {
   // Run without auth since this is a public/unauthenticated flow
   test.use({ storageState: { cookies: [], origins: [] } });
 
   test('login page shows forgot password link', async ({ page }) => {
+    test.skip(IS_LOCAL_STACK, 'UI test requires SPA — runs only in e2e-full against demo');
     await page.goto('/login');
     await page.waitForLoadState('domcontentloaded');
 

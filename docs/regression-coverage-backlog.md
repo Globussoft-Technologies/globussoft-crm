@@ -392,7 +392,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 - [x] POST broadcast still rejects non-admin with BROADCAST_FORBIDDEN (#169 — verified — pre-existing `403 BROADCAST_FORBIDDEN for non-admin without userId` test was already covering this; left as-is).
 - [x] No notification body in any tenant feed contains `INJECT TEST` or `Targeted / just user N` (#327 — added `Notifications API — demo hygiene (#327)` describe with two defence-in-depth scans against admin@globussoft.com + user@crm.com feeds).
 
-Test count delta: 35 → 39 (+4). Commit: _pending push_
+Test count delta: 35 → 39 (+4). Commit: f57ed36
 
 ---
 

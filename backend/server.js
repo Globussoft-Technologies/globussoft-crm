@@ -597,17 +597,25 @@ app.use("/api", (req, res) => {
 // Catches express.json() body-parse errors, Prisma exceptions, and anything
 // uncaught downstream. Returns JSON instead of Express's default HTML page
 // so API consumers (browsers, Callified, AdsGPT) always get a parseable body.
+//
+// #544 (MED-03): canonical response envelope is { error, code } across the
+// whole API. The catch-alls below now ALL include `code` so SPA/SDK error
+// handlers can branch on stable identifiers instead of regexing the message.
+// (Per-route handlers that still return { message: ... } for delete-success
+// shapes are tracked under #549 — separate sweep, not blocking this fix.)
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (err && (err.type === "entity.parse.failed" || err instanceof SyntaxError)) {
-    return res.status(400).json({ error: "Invalid JSON body", detail: err.message });
+    return res.status(400).json({ error: "Invalid JSON body", code: "INVALID_JSON_BODY", detail: err.message });
   }
   if (err && err.type === "entity.too.large") {
-    return res.status(413).json({ error: "Payload too large" });
+    return res.status(413).json({ error: "Payload too large", code: "PAYLOAD_TOO_LARGE" });
   }
   console.error("[server] unhandled error:", err && err.stack ? err.stack : err);
-  res.status(err && err.status ? err.status : 500).json({
+  const status = err && err.status ? err.status : 500;
+  res.status(status).json({
     error: (err && err.message) || "Internal server error",
+    code: status === 500 ? "INTERNAL_ERROR" : (err && err.code) || `HTTP_${status}`,
   });
 });
 

@@ -469,6 +469,23 @@ app.get("/", (req, res) => {
   res.json({ message: "Enterprise CRM API Core Online", version: APP_VERSION });
 });
 
+// #532 / #535 (PT-03): JSON 404 for unmatched /api/* paths. Express's default
+// 404 returns text/html "Cannot GET /api/foo" which broke SPA error handling
+// and made API consumers (Callified, AdsGPT) parse HTML on a missed route.
+// The pen-test surfaced 17 of 36 detail endpoints as systemic offenders + 1
+// specific leaf (#532 /api/wellness/loyalty). One middleware closes both
+// classes by returning a stable {error, code, path} envelope that matches
+// the rest of the API's error shape. Anything outside /api/ falls through
+// to Nginx (which serves the SPA's index.html for client-side routing).
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    error: "Endpoint not found",
+    code: "API_ROUTE_NOT_FOUND",
+    path: req.originalUrl,
+    method: req.method,
+  });
+});
+
 // Global JSON error handler — must come AFTER all routes.
 // Catches express.json() body-parse errors, Prisma exceptions, and anything
 // uncaught downstream. Returns JSON instead of Express's default HTML page

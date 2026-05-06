@@ -362,7 +362,7 @@ test.describe('SLA API — DELETE /policies/:id', () => {
   test('removes the row', async ({ request }) => {
     const p = await createPolicy(request, { name: 'to-delete', priority: 'Low' });
     const del = await authDelete(request, `/api/sla/policies/${p.id}`);
-    expect(del.status()).toBe(200);
+    expect(del.status()).toBe(204); // #550: DELETE → 204
     // confirm gone — PUT after delete should 404
     const after = await authPut(request, `/api/sla/policies/${p.id}`, { name: 'gone' });
     expect(after.status()).toBe(404);

@@ -91,3 +91,4 @@ backend/.c8tmp/
 
 # Local triage scratch (gate.json dumps, agent output buffers — never commit)
 e2e/.scratch/
+.release-draft-v3.4.14.md

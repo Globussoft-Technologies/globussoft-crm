@@ -1147,9 +1147,11 @@ test.describe('Auth response shape (verticals)', () => {
     expect(d.tenant.vertical).toBe('wellness');
   });
 
-  test('99. Unauthenticated /wellness/dashboard returns 403', async ({ request }) => {
+  test('99. Unauthenticated /wellness/dashboard returns 401', async ({ request }) => {
+    // #537 (PT-05): missing Authorization → 401 per RFC 7235 (was 403
+    // pre-fix). 403 is reserved for "authenticated but not allowed".
     const r = await request.get(`${API}/wellness/dashboard`);
-    expect(r.status()).toBe(403);
+    expect(r.status()).toBe(401);
   });
 
   test('100. Bad JWT returns 401/403 on /wellness/patients', async ({ request }) => {

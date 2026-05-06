@@ -722,10 +722,12 @@ test.describe.serial('Journey F — Website visitor → lead → telecaller → 
   });
 
   test('F7. /api/health is 200 after the full run (backend is still alive)', async ({ request }) => {
+    // #543 (MED-02): /api/health is two-tier — `database` only surfaces
+    // for authed callers. The "is the backend alive" intent here only
+    // needs status:healthy; full-shape contract is api-health.spec.js.
     const res = await request.get(`${API}/health`);
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
     expect(body.status).toBe('healthy');
-    expect(body.database).toBe('connected');
   });
 });

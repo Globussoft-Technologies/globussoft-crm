@@ -16,11 +16,15 @@ test.describe.serial('Ship Readiness — Full System E2E', () => {
   // ── Auth ──────────────────────────────────────────────────────────
 
   test('1. Health check returns healthy', async ({ request }) => {
+    // #543 (MED-02): /api/health is two-tier — minimal body for unauth
+    // callers (status, timestamp ONLY) and full body (adds version /
+    // uptime / database) when an Authorization header is present. The
+    // unauth+authed shape contract lives in api-health.spec.js. Here
+    // we just confirm the route is up + reports healthy.
     const res = await request.get(`${API}/health`);
     expect(res.ok()).toBeTruthy();
     const data = await res.json();
     expect(data.status).toBe('healthy');
-    expect(data.database).toBe('connected');
   });
 
   test('2. Admin login with real credentials', async ({ request }) => {
@@ -173,8 +177,10 @@ test.describe.serial('Ship Readiness — Full System E2E', () => {
   // ── Security ──────────────────────────────────────────────────────
 
   test('63. Security: unauthenticated request rejected', async ({ request }) => {
+    // #537 (PT-05): missing Authorization → 401 per RFC 7235 (was 403
+    // pre-fix). 403 is reserved for "authenticated but not allowed".
     const res = await request.get(`${API}/contacts`);
-    expect(res.status()).toBe(403);
+    expect(res.status()).toBe(401);
   });
 
   test('64. Security: tenantId injection blocked', async ({ request }) => {

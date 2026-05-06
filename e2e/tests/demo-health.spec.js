@@ -75,11 +75,20 @@ test.describe('Demo health monitor (read-only)', () => {
   // ── Health + auth — bare minimum ────────────────────────────────────
 
   test('GET /api/health returns healthy', async ({ request }) => {
-    const res = await request.get(`${BASE_URL}/api/health`, { timeout: REQUEST_TIMEOUT });
+    // #543 (MED-02): /api/health is two-tier — `database` only surfaces
+    // for authed callers. Probe with an Authorization header so we can
+    // still pin the DB-connectivity assertion (the original intent of
+    // this demo-health monitor; an unauth probe would only get
+    // status+timestamp).
+    const tokenForFullShape = wellnessToken || genericToken;
+    const headers = tokenForFullShape ? { Authorization: `Bearer ${tokenForFullShape}` } : {};
+    const res = await request.get(`${BASE_URL}/api/health`, { headers, timeout: REQUEST_TIMEOUT });
     expect(res.status(), `health endpoint returned ${res.status()}`).toBe(200);
     const body = await res.json();
     expect(body.status).toBe('healthy');
-    expect(body.database).toBe('connected');
+    if (tokenForFullShape) {
+      expect(body.database).toBe('connected');
+    }
   });
 
   test('demo logins succeed (admin@wellness.demo + admin@globussoft.com)', () => {

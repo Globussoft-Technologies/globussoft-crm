@@ -83,6 +83,56 @@ function stripDangerous(req, res, next) {
       }
     }
   }
+
+  // #546 (MED-05): when one of the privilege-escalation extras is
+  // stripped (tenantId / userId / isAdmin / passwordHash / portalPasswordHash),
+  // emit an AuditLog entry so security teams have an early-warning signal.
+  // Required-by-the-issue contract: silent strip + log, NOT a hard 400 (a
+  // legitimate client may include the field by accident e.g. echoing back
+  // a row from a GET; the strip is the safety net, the audit is the alert).
+  //
+  // Skipped intentionally:
+  //   - When no fields were stripped → no signal to write
+  //   - When req.user is missing (open paths like /auth/login pre-token)
+  //     → no actor to attribute; would create unattributed audit noise
+  //   - When stripped field is just `id`/`createdAt`/`updatedAt` (the safe
+  //     subset — these are "this is a row, not new data" markers, not
+  //     escalation attempts). Only the privileged-extras subset
+  //     (tenantId / userId / isAdmin / passwordHash / portalPasswordHash)
+  //     warrants the alert.
+  const PRIVILEGED_EXTRAS = ['tenantId', 'userId', 'isAdmin', 'passwordHash', 'portalPasswordHash'];
+  const strippedPrivileged = Object.keys(req.strippedFields || {})
+    .filter((k) => PRIVILEGED_EXTRAS.includes(k));
+  if (strippedPrivileged.length > 0 && req.user && req.user.tenantId) {
+    // Lazy-load to avoid a circular dep at module init (audit -> prisma -> ...)
+    // and to keep this middleware cheap when nothing is stripped.
+    let writeAudit;
+    try {
+      ({ writeAudit } = require('../lib/audit'));
+    } catch (_) { writeAudit = null; }
+    if (writeAudit) {
+      // Fire-and-forget. The audit row is a security signal — a DB blip
+      // shouldn't block the request. Errors get console.error'd inside
+      // writeAudit per its own contract.
+      writeAudit(
+        'Request',
+        'PRIV_ESCALATION_STRIP',
+        null,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          path: req.originalUrl,
+          method: req.method,
+          strippedFields: strippedPrivileged,
+          // Field VALUES are deliberately omitted — they may contain a
+          // hashed password or another tenant's id (that's exactly why
+          // the strip exists). Field NAMES alone are enough for the
+          // SOC to investigate.
+        },
+      ).catch(() => { /* swallowed — see comment */ });
+    }
+  }
+
   next();
 }
 

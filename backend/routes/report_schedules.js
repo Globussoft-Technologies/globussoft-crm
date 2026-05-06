@@ -51,9 +51,14 @@ const ALLOWED_REPORT_FORMATS = new Set(["PDF", "CSV", "XLSX"]);
 const ALLOWED_FREQUENCIES = new Set(["daily", "weekly", "monthly", "quarterly"]);
 
 async function validateRecipientsAgainstTenant(recipients, tenantId) {
-  // Reuse the shape check (regex, count, etc.).
+  // Reuse the shape check (regex, count, etc.). #127: shape error must
+  // surface as 400 INVALID_RECIPIENT — the original validateRecipients
+  // helper returns `{ error, code }` without a status field, which used
+  // to cause `res.status(undefined)` to fall through to 500. Promote
+  // shape errors to a uniform 400 here so the API caller gets a clear
+  // signal instead of a server-error mask.
   const shapeErr = validateRecipients(recipients);
-  if (shapeErr) return shapeErr;
+  if (shapeErr) return { status: 400, ...shapeErr };
   // Hard constraint: every recipient must be a known user in this tenant. This
   // prevents the exfil vector flagged in #171 (attacker@evil.com was accepted).
   const list = recipients.map((r) => String(r).trim().toLowerCase());

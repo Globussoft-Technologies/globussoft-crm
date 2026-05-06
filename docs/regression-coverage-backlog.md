@@ -400,17 +400,19 @@ Test count delta: 35 → 39 (+4). Commit: f57ed36
 
 # Priority bucket P3 — backlog
 
-## ☐ 20. New gated spec: `report-schedules-api.spec.js`
+## ☑ 20. New gated spec: `report-schedules-api.spec.js`
 
 **Closes:** #127, #171
 
 **Acceptance:**
-- [ ] External recipient emails validated; arbitrary external domain → 400 with PII_EXFIL_BLOCKED code (#171).
-- [ ] reportType + format only accept known enum values (#171).
-- [ ] frequency not silently coerced (#171).
-- [ ] Invalid email in recipient list rejected on save, not silently saved as Active (#127).
+- [x] External recipient emails validated; arbitrary external domain → 400 with EXTERNAL_RECIPIENT_FORBIDDEN code (#171). Drift note: gap card said `PII_EXFIL_BLOCKED`; the route actually emits `EXTERNAL_RECIPIENT_FORBIDDEN` — same contract (400 + machine code), different code id. Pinned to the actual emitted code so future renames break this spec rather than silently drift away.
+- [x] reportType + format only accept known enum values (#171). 400 + INVALID_REPORT_TYPE / INVALID_REPORT_FORMAT for unknown values; allowlist boundary tests pin every documented value as accepted.
+- [x] frequency not silently coerced (#171). 400 + INVALID_FREQUENCY for unknown values; the `every-5-minutes` case pins the no-coercion contract — used to silently fall back to "weekly".
+- [x] Invalid email in recipient list rejected on save, not silently saved as Active (#127). 400 + INVALID_RECIPIENT for shape-bad emails like `@@@`. Surfaced + fixed a route bug along the way: the `validateRecipientsAgainstTenant` helper returned `{error, code}` without a `status` field for shape failures, so the route fell through to a generic 500 instead of clean 400 — now uniformly returns 400 INVALID_RECIPIENT for shape failures.
 
-**Estimated effort:** 0.25 day. Commit: ___________
+Path A (extending existing 8-test spec) — original sanitization + auth-gate tests preserved, +11 new tests for the 4 acceptance points (4 recipient-validation + 4 enum-validation + 2 frequency-contract + 1 mixed/external PUT). Total 19 tests in the spec.
+
+**Estimated effort:** 0.25 day. Commit: <to-be-filled-after-push>
 
 ---
 

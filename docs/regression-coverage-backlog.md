@@ -430,15 +430,15 @@ Path A (extending existing 8-test spec) — original sanitization + auth-gate te
 
 ---
 
-## ☐ 21. New gated spec: `landing-pages-api.spec.js`
+## ☑ 21. New gated spec: `landing-pages-api.spec.js` ✅ already shipped (verified 2026-05-07)
 
 **Closes:** #378
 
 **Acceptance:**
-- [ ] POST /api/landing-pages slug field accepts only `[a-z0-9-]+` (#378).
-- [ ] Wired into deploy.yml + coverage.yml.
+- [x] POST /api/landing-pages slug field accepts only `[a-z0-9-]+` (#378). **Already covered** by 4 tests in `e2e/tests/landing-pages-api.spec.js` (G-1 ship, commit `1e5bd3e`): "400 invalid slug — uppercase" (line 308), "400 invalid slug — spaces" (line 318), "400 invalid slug — over 50 chars" (line 327), "400 invalid slug on update" (line 388). Route validation lives at `backend/routes/landing_pages.js:67` (`isValidSlug` helper, `[a-z0-9-]+` cap 50 chars). Auto-generated-slug case at spec line 261 verifies the auto path also conforms.
+- [x] Wired into deploy.yml + coverage.yml. Already wired since G-1.
 
-**Estimated effort:** 0.25 day. Commit: ___________
+**Estimated effort:** 0.25 day. Commit: `1e5bd3e` (G-1 ship; this regression-coverage card was a duplicate request for an already-shipped spec — verified by Wave 12 audit).
 
 ---
 

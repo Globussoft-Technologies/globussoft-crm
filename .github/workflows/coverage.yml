@@ -228,6 +228,7 @@ jobs:
             tests/audit-coverage-api.spec.js \
             tests/public-booking-api.spec.js \
             tests/services-api.spec.js \
+            tests/sequences-authoring-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

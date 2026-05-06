@@ -424,18 +424,18 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 
 ---
 
-## ☐ 22. New unit test: `backend/test/utils/formatMoney.test.js`
+## ☑ 22. New unit test: `backend/test/utils/formatMoney.test.js`
 
 **Closes:** #189, #198, #242, #243, #256, #286, #330
 
 **Acceptance:**
-- [ ] INR formatting: `formatMoney(310, 'INR', 'en-IN')` → `'₹310.00'`.
-- [ ] USD formatting: `formatMoney(3.73, 'USD', 'en-US')` → `'$3.73'`.
-- [ ] Sub-paise rounded to 2dp: `formatMoney(123.456789, 'INR')` → `'₹123.46'`.
-- [ ] Never produces double symbols `$ ₹` or `₹ $`.
-- [ ] On wellness/INR tenant, no path produces `$` (#286, #330).
+- [x] INR formatting: `formatMoney(310, 'INR', 'en-IN')` → `'₹310.00'`.
+- [x] USD formatting: `formatMoney(3.73, 'USD', 'en-US')` → `'$3.73'`.
+- [x] Sub-paise rounded to 2dp: `formatMoney(123.456789, 'INR')` → `'₹123.46'`.
+- [x] Never produces double symbols `$ ₹` or `₹ $`.
+- [x] On wellness/INR tenant, no path produces `$` (#286, #330).
 
-**Estimated effort:** 0.25 day. Commit: ___________
+**Estimated effort:** 0.25 day. Commit: _pending_ — backend/utils/formatMoney.js newly ported from frontend/src/utils/money.js (signature widened to accept positional `(amount, currency, locale)` per gap card AND back-compat opts-object). 31 tests, 95.23% lines / 100% fn / 86.36% branches. Callsite sweep for `\$\$\{` template literals bypassing the helper is OUT-OF-SCOPE for this card; needs a separate audit pass to close #286/#330 in production.
 
 ---
 

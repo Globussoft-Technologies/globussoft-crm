@@ -487,12 +487,22 @@ function scrubPlainText(value) {
   // allowedTags=[] + allowedAttributes={} + disallowedTagsMode='discard' →
   // entire tag is dropped (text content kept). textFilter undoes the
   // library's default `&` → `&amp;` encoding so storage stays raw.
-  return sanitizeHtml(value, {
+  let scrubbed = sanitizeHtml(value, {
     allowedTags: [],
     allowedAttributes: {},
     disallowedTagsMode: "discard",
     textFilter: (text) => decodeBasicEntities(text),
   });
+  // #538 (PT-06) hardening: sanitize-html strips COMPLETE tags but leaves
+  // residual single `<` / `>` characters from unclosed/malformed shapes
+  // (e.g. `Mr. <Smith` or `Smith>` — neither parses as a tag, so the
+  // library passes them through). The pen-test flagged this as
+  // inconsistent: callers couldn't predict whether their input would be
+  // stored verbatim or mutated. Strip ALL residual angle brackets so the
+  // post-scrub contract is "no `<` or `>` ever survives", regardless of
+  // whether the input was a real tag or just stray punctuation.
+  scrubbed = scrubbed.replace(/[<>]/g, "");
+  return scrubbed;
 }
 
 // #159 #160 #165 #170 #178: shared validation for Patient create + update.
@@ -503,6 +513,16 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   // earlier 200 cap let names through that the DB then rejected with 500.
   const nameErr = ensureStringLength(body.name, { max: 191, field: "name", required: !isUpdate });
   if (nameErr) return nameErr;
+  // #538 (PT-06): control characters NEVER legitimately appear in a name
+  // (NUL, BEL, vertical-tab, DEL, etc.) — these are usually injection
+  // attempts (template-engine bypass, log-line injection, terminal
+  // sequences). Reject pre-scrub so the response is "your input is
+  // invalid", not silent mutation. Tag-shaped HTML stays as silent-scrub
+  // (preserves the long-standing #213 contract + the explicit "scrub is
+  // silent" e2e contract test).
+  if (body.name != null && /[\x00-\x1F\x7F]/.test(String(body.name))) {
+    return { status: 400, error: "name contains invalid control characters", code: "INVALID_NAME" };
+  }
   // #213: scrub HTML from free-text PHI fields. Strips ALL tags (no whitelist)
   // — patient names + notes never legitimately contain markup. Mutate the
   // body so the route's prisma.create/update sees the sanitised string.

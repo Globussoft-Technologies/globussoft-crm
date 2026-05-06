@@ -253,7 +253,7 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 \
 - [x] Encrypted fields are decrypted in the GET response (no `ENC:v1:...` ciphertext leaks) (#224). — Path A; 3 new tests pin the contract (Patient list+detail, Prescription list, nested patient→visits→Rx walk). Tests are env-tolerant: `WELLNESS_FIELD_KEY` set → encrypt-on-write, decrypt-on-read; unset → no-op pass-through. ENC:v1: prefix MUST NEVER leak in either case.
 - [x] POST /api/wellness/patients with same normalized phone as existing → 409 DUPLICATE_PHONE (#265, #401 — already shipped, lock it in). — Path A; existing tests at ~497-557 + new wider response-shape lock-in (status=409, code=DUPLICATE_PHONE, error matches /already exists/i, no Prisma leakage).
 
-**Estimated effort:** 1 day. **Shipped:** +29 tests (162 → 191 total) + 1 Path B route fix to PUT /visits. Commit: <pending push>
+**Estimated effort:** 1 day. **Shipped:** +29 tests (162 → 191 total) + 1 Path B route fix to PUT /visits. Commit: b8f6f30
 
 ---
 

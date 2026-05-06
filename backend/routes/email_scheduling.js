@@ -195,43 +195,94 @@ router.post("/:id/cancel", async (req, res) => {
 });
 
 // POST send-now — fire immediately
+//
+// #524: prior version's catch swallowed every failure into an opaque 500 with
+// no `code`, no detail, and no audit. The demo regression that opened #524
+// showed up as "POST /send-now returns 500" with literally no signal in the
+// response — required ssh + pm2 logs to diagnose. Refactor below:
+//
+//   1. Stage the work in distinct phases (record → tracking → send → mark).
+//      Each phase has a stable code (`code` in the 5xx body) so the SPA /
+//      QA can tell which phase blew up without log access.
+//   2. EmailTracking creation is best-effort. The send still proceeds (and
+//      the audit row in EmailMessage still lands) even if the tracking row
+//      fails — tracking is a nice-to-have analytics signal, not a blocker.
+//   3. ALL 5xx responses carry a stable `code` + a sanitised `detail`
+//      (truncated to 200 chars, no stack). Provider 502s on SendGrid 5xx
+//      stay separate from 500s on persistence layer (so an SLO dashboard
+//      can split "our bug" from "SendGrid is down").
+//   4. ScheduledEmail row gets marked FAILED with the underlying message
+//      regardless of whether the failure is in our prisma writes or
+//      SendGrid — UI shows the real reason instead of the previous "send
+//      failed" placeholder.
 router.post("/:id/send-now", async (req, res) => {
+  let record = null;
   try {
-    const record = await prisma.scheduledEmail.findFirst({
+    record = await prisma.scheduledEmail.findFirst({
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
     });
-    if (!record) return res.status(404).json({ error: "Not found" });
+    if (!record) return res.status(404).json({ error: "Not found", code: "SCHEDULED_EMAIL_NOT_FOUND" });
     if (record.status === "SENT") {
-      return res.status(400).json({ error: "Already sent" });
+      return res.status(400).json({ error: "Already sent", code: "ALREADY_SENT" });
     }
 
-    // Build EmailMessage row first so we can attach a tracking pixel
-    const emailRecord = await prisma.emailMessage.create({
-      data: {
-        subject: record.subject,
-        body: record.body,
-        from: FROM_EMAIL,
-        to: record.to,
-        direction: "OUTBOUND",
-        read: true,
-        contactId: record.contactId,
-        userId: record.userId,
-        tenantId: record.tenantId,
-      },
-    });
+    let emailRecord;
+    try {
+      emailRecord = await prisma.emailMessage.create({
+        data: {
+          subject: record.subject,
+          body: record.body,
+          from: FROM_EMAIL,
+          to: record.to,
+          direction: "OUTBOUND",
+          read: true,
+          contactId: record.contactId,
+          userId: record.userId,
+          tenantId: record.tenantId,
+        },
+      });
+    } catch (persistErr) {
+      console.error("[ScheduledEmail] EmailMessage persist failed:", persistErr);
+      try {
+        await prisma.scheduledEmail.update({
+          where: { id: record.id },
+          data: {
+            status: "FAILED",
+            errorMessage: `EmailMessage persist failed: ${persistErr.message || persistErr.code || "unknown"}`,
+          },
+        });
+      } catch (_) { /* swallow — already in error path */ }
+      return res.status(500).json({
+        success: false,
+        error: "Failed to record outbound email",
+        code: "EMAIL_PERSIST_FAILED",
+        detail: String(persistErr.message || persistErr.code || "unknown").slice(0, 200),
+      });
+    }
 
+    // Tracking row: best-effort. If it blows up (rare — only the @unique
+    // trackingId constraint could collide and crypto.randomUUID makes that
+    // ~impossible), the send still proceeds without a tracking pixel.
     const trackingId = crypto.randomUUID();
-    await prisma.emailTracking.create({
-      data: {
-        emailId: emailRecord.id,
-        trackingId,
-        type: "open",
-        tenantId: record.tenantId,
-      },
-    });
+    let trackingOk = false;
+    try {
+      await prisma.emailTracking.create({
+        data: {
+          emailId: emailRecord.id,
+          trackingId,
+          type: "open",
+          tenantId: record.tenantId,
+        },
+      });
+      trackingOk = true;
+    } catch (trackErr) {
+      console.warn("[ScheduledEmail] EmailTracking create failed (non-fatal):", trackErr.message || trackErr.code);
+    }
 
     const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
-    const trackedBody = `${record.body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
+    const trackedBody = trackingOk
+      ? `${record.body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`
+      : record.body;
 
     const result = await sendSendGrid(record.to, record.subject, trackedBody);
 
@@ -244,13 +295,36 @@ router.post("/:id/send-now", async (req, res) => {
     } else {
       const updated = await prisma.scheduledEmail.update({
         where: { id: record.id },
-        data: { status: "FAILED", errorMessage: result.reason || "send failed" },
+        data: { status: "FAILED", errorMessage: String(result.reason || "send failed").slice(0, 500) },
       });
-      return res.status(502).json({ success: false, delivered: false, record: updated });
+      // 502 = upstream provider rejected. Keep separate from 500 so SLO
+      // dashboards can distinguish "our bug" from "SendGrid down".
+      return res.status(502).json({
+        success: false,
+        delivered: false,
+        record: updated,
+        code: result.reason === "no_api_key" ? "SENDGRID_NOT_CONFIGURED" : "SENDGRID_REJECTED",
+        detail: String(result.reason || "send failed").slice(0, 200),
+      });
     }
   } catch (err) {
     console.error("[ScheduledEmail] Send-now error:", err);
-    res.status(500).json({ error: "Failed to send scheduled email" });
+    if (record) {
+      try {
+        await prisma.scheduledEmail.update({
+          where: { id: record.id },
+          data: {
+            status: "FAILED",
+            errorMessage: `send-now: ${err.message || err.code || "unknown"}`.slice(0, 500),
+          },
+        });
+      } catch (_) { /* already in error path */ }
+    }
+    res.status(500).json({
+      error: "Failed to send scheduled email",
+      code: "SEND_NOW_INTERNAL",
+      detail: String(err.message || err.code || "unknown").slice(0, 200),
+    });
   }
 });
 

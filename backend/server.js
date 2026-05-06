@@ -208,6 +208,44 @@ app.post("/api/auth/forgot-password", forgotPasswordIpLimiter, forgotPasswordEma
 
 app.use("/api", apiLimiter);
 
+// #545 (MED-04): reject unsupported Content-Type with 415 BEFORE the routes
+// run. Without this, a POST with text/plain (or any non-JSON/-form/-multipart
+// body) lands in the route with `req.body = {}` (because neither
+// express.json nor express.urlencoded matched), then routes typically
+// destructure missing fields and 500. Pen-test flagged the 500 as the
+// wrong contract — should be 415 (Unsupported Media Type).
+//
+// Conservative matching:
+//   - Only POST / PUT / PATCH (DELETE/GET don't carry bodies in our routes)
+//   - Only when Content-Length > 0 (some POSTs are bodyless)
+//   - Only when Content-Type is EXPLICITLY set to a non-supported value.
+//     Missing Content-Type passes through (back-compat with curl + some
+//     SDKs that omit the header on JSON bodies).
+//   - Excludes /api/marketing/submit (public form submit, intentionally
+//     accepts text/* per the embed widget contract). Add new exclusions
+//     here as needed.
+const SUPPORTED_CONTENT_TYPES = [
+  "application/json",
+  "application/x-www-form-urlencoded",
+  "multipart/form-data",
+];
+const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = ["/api/marketing/submit"];
+app.use("/api", (req, res, next) => {
+  if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
+  const lenHeader = req.headers["content-length"];
+  if (!lenHeader || lenHeader === "0") return next();
+  const ct = (req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+  if (!ct) return next(); // missing → back-compat pass-through
+  if (SUPPORTED_CONTENT_TYPES.includes(ct)) return next();
+  if (CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES.some((p) => req.originalUrl.startsWith(p))) return next();
+  return res.status(415).json({
+    error: "Unsupported Media Type",
+    code: "UNSUPPORTED_MEDIA_TYPE",
+    received: ct,
+    expected: SUPPORTED_CONTENT_TYPES,
+  });
+});
+
 const io = new Server(server, { cors: { origin: "*" } });
 const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 

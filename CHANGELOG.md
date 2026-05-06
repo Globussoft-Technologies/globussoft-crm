@@ -1,5 +1,79 @@
 # CHANGELOG
 
+## v3.4.14 — 2026-05-06 — pen-test sweep: 22 QA issues closed in one day (CRIT/HIGH/MEDIUM/LOW)
+
+Same-day pen-test response. The QA sweep against v3.4.13 filed 23 issues across CRIT/HIGH/MEDIUM/LOW; 22 shipped today across 22 commits on main, plus 3 spec alignments to keep the per-push gate green. Themes: privilege-boundary close-out across `/api/wellness/*` (the bigger half of CRIT-02), observability rebuild on the `/send-now` 500 surface, an actual root-cause for the dashboard "retry storm" (was a React context dep-cycle, not the misdiagnosed retry-on-400), perf wins on cold-call patient/visit lists, and an hourly demo hygiene cron so QA residue self-cleans between releases.
+
+### Critical / High — pen-test close-outs
+
+- **#527 + #533 (CRIT-02 + HI-04) wellness PHI gates on 21 ungated routes** (commit `cd664f9`) — pen-test reproduced full PHI exfiltration as `role=USER` against the wellness tenant. Earlier server-side fix (#539, c5332d3 partial) closed admin-config writes; this commit closes the symmetric clinical read/write surface. Hoists two named gates and applies them to every previously-ungated wellness clinical route:
+  - `phiReadGate` = `verifyWellnessRole(["doctor","professional","telecaller","admin","manager"])` on 13 GETs.
+  - `phiWriteGate` = `verifyWellnessRole(["doctor","professional","admin","manager"])` on 8 POSTs/PUTs/DELETEs.
+  Telecaller stays in reads (junk-lead disposition needs patient/visit context) but is OUT of writes; helper is OUT of both (non-clinical runner role). Cross-professional patient edits stay open by design — multi-doctor clinics share patients across providers, and the existing audit log on PUT /patients/:id captures every cross-user UPDATE.
+- **#544 (MED-03) canonical `{error, code}` envelope from server-level catch-alls** (commit `f84c2a2`) — global error handler now stamps every JSON failure with stable codes (`INVALID_JSON_BODY` 400 / `PAYLOAD_TOO_LARGE` 413 / `INTERNAL_ERROR` 500 / `HTTP_<status>`) so SPA/SDK consumers branch on identifiers instead of regexing `error` strings. Per-route `{message:}` success-shape sweep (~34 sites across 22 routes) tracked separately as #550 — single coordinated PR rather than partial state.
+- **#546 (MED-05) audit-log when `stripDangerous` strips privilege-escalation extras** (commit `9b2ebb6`) — silent strip + log (no 400) per the issue contract. Privileged subset is `tenantId / userId / isAdmin / passwordHash / portalPasswordHash`; field VALUES deliberately omitted from the audit blob (they may contain a hashed password or another tenant's id — that's exactly why the strip exists).
+- **#545 (MED-04) Content-Type guard returning 415** (commit `531cb9e`) — was 500 from downstream parser; now early-rejects with `code: "UNSUPPORTED_CONTENT_TYPE"` and a `supportedTypes` list.
+- **#543 (MED-02) /api/health two-tier response** (commit `66d614f`) — minimal body for unauth callers (status, timestamp ONLY); full body (adds version/uptime/database) requires Authorization header. Closes the v3.4.13 fingerprint-leak that let any caller probe deployed version.
+
+### Pen-test medium / low
+
+- **#526 (PT-09) password-reset token leak fix + SendGrid plumbing** — removed the dev-mode `response.resetToken = token` from the API response; `sendPasswordResetEmail()` posts to SendGrid with the curated reset URL; identical 200 body for known + unknown emails to defeat enumeration.
+- **#527 partial (admin-config writes)** earlier (c5332d3) — pipelines / currencies / territories / chatbots ADMIN-gated.
+- **#528 (PT-10) stale JWT after logout** — Layout.jsx awaits the `/api/auth/logout` server-side revoke before navigating, so the new RevokedToken row lands before the client throws away the token.
+- **#537 (PT-05) 401-on-missing-Authorization per RFC 7235** + `WWW-Authenticate: Bearer realm="api"`.
+- **#532 + #535 (PT-03) JSON 404 on unmatched /api/* routes** (commit `2bde94d`) — `{error, code: "API_ROUTE_NOT_FOUND", path, method}`.
+- **#539 (PT-02) DELETE /patients/:id ADMIN-gated** with 409 `PATIENT_HAS_CHILDREN` on FK Restrict.
+- **#531 (PT-07) forgot-password rate-limit** — 20/hr per IP + 5/hr per email.
+- **#538 (PT-06) patient-name strip residual `<>` after sanitize-html + reject control chars**.
+- **#536 (PT-04) patient phone REQUIRED on create** (was silently accepting null, broke dialer/WhatsApp/SMS).
+- **#540 (LOW) toast TTL bump** — non-error 3500→4500ms, error 6000→8000ms.
+- **#548 (LOW) one shared `SEARCH_DEBOUNCE_MS = 300`** — was 250ms (Patients) vs 300ms (Omnibar).
+
+### Observability
+
+- **#524 SendGrid `/scheduled-emails/:id/send-now` 500 → stable codes + non-blocking tracking** (commit `13edd42`) — pen-test repro showed an opaque 500 with no signal. The 4-phase send (record → email persist → tracking persist → SendGrid → mark) is now split into stable codes (`SCHEDULED_EMAIL_NOT_FOUND` 404 / `ALREADY_SENT` 400 / `EMAIL_PERSIST_FAILED` 500 / `SENDGRID_NOT_CONFIGURED` 502 / `SENDGRID_REJECTED` 502 / `SEND_NOW_INTERNAL` 500) with sanitised `detail`. Tracking row creation is best-effort (its failure no longer kills the send). ScheduledEmail row is marked FAILED with the underlying reason on every failure path. Next 500 names the failing phase in the response body — no more SSH round-trip to diagnose.
+
+### Performance
+
+- **#534 (PERF-1) wellness list latency >2s on cold call** (commit `fb719e6`) — two systemic causes:
+  1. `orderBy` filesort on indexes that don't cover (tenant, sort-key). Added `Patient @@index([tenantId, createdAt])` + `TreatmentPlan @@index([tenantId, startedAt])`. Visit / Prescription / ConsentForm already had matching composite indexes.
+  2. PRD §11 audit-log was inside the response path with `await`. Converted 11 list/detail audit calls (`PATIENT_LIST_READ`, `PATIENT_DETAIL_READ`, `PATIENT_VISITS_READ`, `PATIENT_RX_READ`, `PATIENT_CONSENTS_READ`, `PATIENT_TREATMENTS_READ`, `VISIT_LIST_READ`, `VISIT_CONSUMPTIONS_READ`, `PRESCRIPTION_LIST_READ`, `CONSENT_LIST_READ`, `TREATMENT_PLAN_LIST_READ`) from `await writeAudit` to fire-and-forget `writeAudit().catch(...)`. Write paths still serial-await — the audit row needs to be durable before responding so the trail reflects what actually persisted.
+
+### Frontend correctness
+
+- **#529 + #530 (BUG-001 + HI-01) sidebar dependency-cycle storm** (commit `8bdecbe`) — pen-test reported 390+ requests in 2 minutes against four sidebar count endpoints on an idle dashboard. Pen-test diagnosis "SPA retries on 400 validation errors" was wrong on every detail: `fetchApi` has no retry logic; the three filter values (`status=Lead/PENDING/OPEN`) are all accepted by the backend (#436 normalises `PENDING`→`Pending`; tickets ignores `?status` entirely). Real cause: AuthContext.Provider passed an inline object literal `value={{user, ..., loginWithToken}}` plus a fresh `loginWithToken` on every App render. Sidebar's `useCallback` + `useEffect` had `user` (object reference) in their dep arrays — so anything that triggered an App-tree render burned 4 extra HTTP calls + a socket reconnect. Two-part fix:
+  - Producing side (`App.jsx`): `useMemo` the AuthContext value, `useCallback` `loginWithToken`, hoisted above the `loading` early-return for rules-of-hooks consistency.
+  - Consuming side (`Sidebar.jsx`): `refreshCounts` moves into a ref so its identity is stable; `useEffect` depends only on `user?.id` (a primitive that ONLY changes on real login/logout) instead of the user object reference.
+
+### Demo hygiene
+
+- **#541 (OPS-1) hourly demoHygieneEngine** (commit `f2b9435`) — new `backend/cron/demoHygieneEngine.js` purges `_QA_PROBE_*` / `E2E_FLOW_*` / `_E2E_*` / `E2E_WC_*` test residue from Patient + Pipeline + Currency + Territory + Chatbot tables. 24h safety window so in-flight QA isn't disrupted. Patient FK Restrict (P2003) is logged + skipped (a probe that left clinical children warrants a human look, not silent cleanup). DISABLE_CRONS=1 in CI gates the engine off automatically. 9 vitest unit tests pin the WHERE-clause shape, cutoff math, and skip behaviour.
+
+### Test surface
+
+| Tier | Tool | v3.4.13 | v3.4.14 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | ~79 specs / ~2,560 tests | ~79 specs / ~2,560 tests | 0 (3 spec alignments) |
+| Per-push backend unit tests | vitest | 42 files / ~1,189 tests | **43 files** / **~1,196 tests** | +9 demoHygieneEngine tests |
+| Per-push frontend unit tests | vitest | 6 files / ~35 tests | 6 files / ~35 tests | 0 |
+| **Total per-push** |  | ~3,784 | **~3,791** | **+7 tests** |
+
+### Process / standing rules
+
+- **Local-test-before-push discipline** established mid-session after the `forgot-password` UI test in API gate + the `auth.test.js` mock res missing `.set()` cascades. New rule for middleware/auth/server.js changes: `npx vitest run` locally BEFORE pushing.
+- **Three spec alignments** to keep the per-push gate green:
+  - `ci-smoke.spec.js` dropped uptime assertion (covered by `api-health.spec.js` two-tier shape contract from #543).
+  - `wellness-clinical-api.spec.js` "201 phone optional" → "400 PHONE_REQUIRED" per #536.
+  - `teardown-completeness.spec.js` 60s grace window on residue check — Playwright runs files in parallel, so a sibling spec's in-flight row no longer reds the gate (real teardown misses still caught).
+
+### Carry-over for v3.4.15
+
+- **#550** — per-route `{message:}` → `{error, code}` envelope sweep (~34 sites across 22 routes; one coordinated PR, ~3-4h).
+- **#523** — `responsive.css` 11 brittle inline-style attribute selectors → class-based.
+- **#457** — manual-only QA umbrella, stays open.
+
+---
+
 ## v3.4.13 — 2026-05-06 — 24-issue closure arc: PR #511 SendGrid + B-01 TURNSTILE + 8 tracked follow-ups closed + #437 marketplace status chip + Call Monitor removed (Callified owns it)
 
 The largest closure arc since v3.4.0 — **24 GitHub issues + 5 PR-review carry-overs closed across two days** (yesterday evening + today). Started with the v3.4.12 release-validation green, picked up 2 open PRs (squash-merged), filed all 8 v3.4.12-wave follow-ups as tracked issues, and worked the backlog top-to-bottom until only 2 user-blocked items remain. Major themes: provider migrations live (SendGrid email + Turnstile CAPTCHA), backend gaps closed (push send-test, sms send-bulk, marketplace status), frontend dead-code cleared (Call Monitor — Callified.ai owns live-call surfaces), 4 process learnings promoted to standing rules, 1 pragmatic decision (Call Monitor removed rather than half-built).

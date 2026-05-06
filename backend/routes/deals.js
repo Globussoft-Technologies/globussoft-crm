@@ -2,6 +2,7 @@ const express = require("express");
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
+const { formatMoney } = require("../utils/formatMoney");
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed since v3.x but was never wired into any route — rules saved via
 // the FieldPermissions UI had zero effect on read/write payloads. The
@@ -436,10 +437,13 @@ router.post("/:id/won", async (req, res) => {
 
     if (deal.contactId) {
       try {
+        // #286/#330: format the won-deal amount through the tenant currency,
+        // not a hardcoded `$`, so wellness/INR activity descriptions read ₹.
+        const amountStr = formatMoney(deal.amount, deal.currency || "USD");
         await prisma.activity.create({
           data: {
             type: "Deal",
-            description: `Deal won: "${deal.title}" ($${deal.amount})`,
+            description: `Deal won: "${deal.title}" (${amountStr})`,
             contactId: deal.contactId,
             tenantId: req.user.tenantId,
             userId: req.user.userId,

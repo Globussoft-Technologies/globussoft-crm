@@ -3,6 +3,7 @@ const PDFDocument = require("pdfkit");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { formatMoney } = require("../utils/formatMoney");
 
 // All queries are scoped to req.user.tenantId
 
@@ -417,6 +418,14 @@ router.get("/export-pdf", async (req, res) => {
     const tenantId = req.user.tenantId;
     const baseWhere = buildWhere(req, startDate, endDate);
 
+    // #286/#330: tenant-aware currency on report PDF — wellness/INR shows ₹.
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { defaultCurrency: true, locale: true },
+    });
+    const currency = tenant?.defaultCurrency || "USD";
+    const locale = tenant?.locale || undefined;
+
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${type}-report.pdf`);
@@ -447,7 +456,7 @@ router.get("/export-pdf", async (req, res) => {
 
         doc.fontSize(11).fillColor('#333').text(user.name || user.email, { continued: false });
         doc.fontSize(9).fillColor('#666');
-        doc.text(`  Deals Won: ${dw}  |  Revenue: $${(rev._sum.amount || 0).toLocaleString()}  |  Total Deals: ${dt}  |  Win Rate: ${dt > 0 ? Math.round((dw / dt) * 100) : 0}%`);
+        doc.text(`  Deals Won: ${dw}  |  Revenue: ${formatMoney(rev._sum.amount || 0, currency, locale)}  |  Total Deals: ${dt}  |  Win Rate: ${dt > 0 ? Math.round((dw / dt) * 100) : 0}%`);
         doc.text(`  Tasks Completed: ${tc}  |  Calls: ${cm}  |  Emails Sent: ${es}`);
         doc.moveDown(0.5);
       }
@@ -467,7 +476,7 @@ router.get("/export-pdf", async (req, res) => {
       for (const deal of deals) {
         if (doc.y > 720) { doc.addPage(); }
         doc.fontSize(8).fillColor('#444');
-        doc.text(`${deal.title}  |  $${deal.amount.toLocaleString()}  |  ${deal.stage}  |  ${deal.owner?.name || 'N/A'}  |  ${deal.contact?.name || 'N/A'}`, 50);
+        doc.text(`${deal.title}  |  ${formatMoney(deal.amount, deal.currency || currency, locale)}  |  ${deal.stage}  |  ${deal.owner?.name || 'N/A'}  |  ${deal.contact?.name || 'N/A'}`, 50);
       }
     } else {
       const data = metric === "revenue"
@@ -479,7 +488,7 @@ router.get("/export-pdf", async (req, res) => {
 
       data.forEach(d => {
         const name = String(d[groupBy] || 'Unknown').toUpperCase();
-        const val = metric === 'revenue' ? `$${(d._sum.amount || 0).toLocaleString()}` : d._count.id;
+        const val = metric === 'revenue' ? formatMoney(d._sum.amount || 0, currency, locale) : d._count.id;
         doc.fontSize(10).fillColor('#333').text(`${name}: ${val}`);
       });
     }

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, User, Briefcase, FileText, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { SEARCH_DEBOUNCE_MS } from '../utils/timing';
+import { formatMoney } from '../utils/money';
 
 export default function Omnibar() {
   const [isOpen, setIsOpen] = useState(false);
@@ -94,7 +95,7 @@ export default function Omnibar() {
                   {results.deals.map(d => (
                     <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.75rem 1rem', cursor: 'pointer', borderRadius: '8px', transition: 'background 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--subtle-bg)'} onMouseOut={e => e.currentTarget.style.background = 'transparent'} onClick={() => setIsOpen(false)}>
                       <div style={{ background: 'rgba(16, 185, 129, 0.1)', padding: '0.5rem', borderRadius: '8px', border: '1px solid rgba(16, 185, 129, 0.2)' }}><Briefcase size={18} color="#10b981" /></div>
-                      <div><div style={{ fontWeight: '500', color: 'var(--text-primary)' }}>{d.title}</div><div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Stage Map: <span style={{color: '#10b981'}}>{d.stage}</span> • Target: ${d.amount.toLocaleString()}</div></div>
+                      <div><div style={{ fontWeight: '500', color: 'var(--text-primary)' }}>{d.title}</div><div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Stage Map: <span style={{color: '#10b981'}}>{d.stage}</span> • Target: {formatMoney(d.amount, { currency: d.currency, maximumFractionDigits: 0 })}</div></div>
                     </div>
                   ))}
                 </div>
@@ -109,7 +110,7 @@ export default function Omnibar() {
                       <div style={{ background: 'rgba(245, 158, 11, 0.1)', padding: '0.5rem', borderRadius: '8px', border: '1px solid rgba(245, 158, 11, 0.2)' }}><FileText size={18} color="#f59e0b" /></div>
                       <div>
                         <div style={{ fontWeight: '500', color: 'var(--text-primary)' }}>{i.invoiceNum} <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: i.status === 'PAID' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)', color: i.status === 'PAID' ? '#10b981' : '#ef4444', marginLeft: '0.5rem', verticalAlign: 'middle' }}>{i.status}</span></div>
-                        <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Entity: {i.contact?.name || 'Unknown'} • Value: ${i.amount.toLocaleString()}</div>
+                        <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Entity: {i.contact?.name || 'Unknown'} • Value: {formatMoney(i.amount, { maximumFractionDigits: 2 })}</div>
                       </div>
                     </div>
                   ))}

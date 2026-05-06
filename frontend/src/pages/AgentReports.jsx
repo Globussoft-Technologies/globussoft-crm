@@ -164,7 +164,7 @@ export default function AgentReports() {
                     <div style={{ fontWeight: '500' }}>{agent.name}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{agent.role}</div>
                   </td>
-                  <td style={{ padding: '0.875rem 1rem', fontWeight: '600', color: 'var(--success-color)' }}>${agent.revenue.toLocaleString()}</td>
+                  <td style={{ padding: '0.875rem 1rem', fontWeight: '600', color: 'var(--success-color)' }}>{formatMoney(agent.revenue, { maximumFractionDigits: 0 })}</td>
                   <td style={{ padding: '0.875rem 1rem' }}>{agent.dealsWon}/{agent.dealsTotal}</td>
                   <td style={{ padding: '0.875rem 1rem' }}>
                     <span style={{
@@ -240,7 +240,7 @@ export default function AgentReports() {
                   {agentDetail.deals.slice(0, 5).map(d => (
                     <div key={d.id} style={{ padding: '0.4rem 0', borderBottom: '1px solid var(--border-color)', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
                       <span>{d.title}</span>
-                      <span style={{ color: 'var(--success-color)', fontWeight: '600' }}>${d.amount.toLocaleString()}</span>
+                      <span style={{ color: 'var(--success-color)', fontWeight: '600' }}>{formatMoney(d.amount, { maximumFractionDigits: 0 })}</span>
                     </div>
                   ))}
                 </div>

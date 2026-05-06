@@ -7,6 +7,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const router = express.Router();
+const { formatMoney } = require("../utils/formatMoney");
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 let aiModel = null;
@@ -226,7 +227,7 @@ router.post("/generate/:dealId", async (req, res) => {
         const prompt = `You are a CRM sales analyst. Based on the following deal data, give EXACTLY ONE sentence (max 30 words) of actionable insight for the sales rep. No preamble, no quotes, no markdown — just one sentence.
 
 Deal: "${deal.title}"
-Amount: $${deal.amount}
+Amount: ${formatMoney(deal.amount, deal.currency || "USD")}
 Stage: ${deal.stage}
 Probability: ${deal.probability}%
 Expected close: ${deal.expectedClose || "not set"}

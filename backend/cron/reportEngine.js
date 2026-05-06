@@ -3,6 +3,7 @@ const nodemailer = require('nodemailer');
 const PDFDocument = require('pdfkit');
 
 const prisma = require("../lib/prisma");
+const { formatMoney } = require("../utils/formatMoney");
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.ethereal.email',
@@ -89,7 +90,10 @@ async function generateReportData(schedule) {
   };
 }
 
-function generatePDFBuffer(reportData, scheduleName) {
+function generatePDFBuffer(reportData, scheduleName, currencyOpts = {}) {
+  // #286/#330: tenant-aware currency rendering. currencyOpts is
+  // { currency, locale }. Falls back to USD/en-US if absent.
+  const { currency = 'USD', locale } = currencyOpts;
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const chunks = [];
@@ -110,26 +114,26 @@ function generatePDFBuffer(reportData, scheduleName) {
       reportData.data.forEach((agent, i) => {
         doc.fontSize(11).fillColor('#333').text(`${i + 1}. ${agent.name}`);
         doc.fontSize(9).fillColor('#666');
-        doc.text(`   Revenue: $${agent.revenue.toLocaleString()} | Deals Won: ${agent.dealsWon}/${agent.dealsTotal} (${agent.winRate}%) | Tasks: ${agent.tasksCompleted} | Calls: ${agent.callsMade} | Emails: ${agent.emailsSent}`);
+        doc.text(`   Revenue: ${formatMoney(agent.revenue, currency, locale)} | Deals Won: ${agent.dealsWon}/${agent.dealsTotal} (${agent.winRate}%) | Tasks: ${agent.tasksCompleted} | Calls: ${agent.callsMade} | Emails: ${agent.emailsSent}`);
         doc.moveDown(0.3);
       });
     } else if (reportData.type === 'deals') {
       doc.fontSize(14).fillColor('#000').text('Deals Summary', { underline: true });
       doc.moveDown(0.3);
       doc.fontSize(10).fillColor('#333');
-      doc.text(`Total Deals: ${reportData.total} | Won: ${reportData.won} | Revenue: $${reportData.totalRevenue.toLocaleString()}`);
+      doc.text(`Total Deals: ${reportData.total} | Won: ${reportData.won} | Revenue: ${formatMoney(reportData.totalRevenue, currency, locale)}`);
       doc.moveDown(0.5);
       reportData.data.slice(0, 50).forEach(deal => {
         if (doc.y > 720) doc.addPage();
         doc.fontSize(8).fillColor('#444');
-        doc.text(`${deal.title} | $${deal.amount.toLocaleString()} | ${deal.stage} | ${deal.owner?.name || 'N/A'}`);
+        doc.text(`${deal.title} | ${formatMoney(deal.amount, deal.currency || currency, locale)} | ${deal.stage} | ${deal.owner?.name || 'N/A'}`);
       });
     } else if (reportData.type === 'summary') {
       doc.fontSize(14).fillColor('#000').text('CRM Summary', { underline: true });
       doc.moveDown(0.5);
       doc.fontSize(11).fillColor('#333');
       doc.text(`New Deals: ${reportData.data.dealCount}`);
-      doc.text(`Revenue: $${reportData.data.revenue.toLocaleString()}`);
+      doc.text(`Revenue: ${formatMoney(reportData.data.revenue, currency, locale)}`);
       doc.text(`New Contacts: ${reportData.data.contactCount}`);
       doc.text(`Tasks Created: ${reportData.data.taskCount}`);
     }
@@ -168,9 +172,19 @@ async function processSchedule(schedule) {
       return;
     }
 
+    // #286/#330: tenant-aware currency on scheduled-report PDF + email body.
+    // Without this, a wellness/INR tenant's scheduled email shows '$' for
+    // revenue tiles. Tenant lookup runs once per schedule fire.
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: schedule.tenantId },
+      select: { defaultCurrency: true, locale: true },
+    });
+    const currency = tenant?.defaultCurrency || 'USD';
+    const locale = tenant?.locale || undefined;
+
     let attachments = [];
     if (schedule.format === 'PDF') {
-      const pdfBuffer = await generatePDFBuffer(reportData, schedule.name);
+      const pdfBuffer = await generatePDFBuffer(reportData, schedule.name, { currency, locale });
       attachments.push({ filename: `${schedule.reportType}-report.pdf`, content: pdfBuffer });
     } else {
       const csv = generateCSV(reportData);
@@ -182,11 +196,11 @@ async function processSchedule(schedule) {
     if (reportData.type === 'agent-performance') {
       htmlBody += '<table border="1" cellpadding="5" style="border-collapse:collapse;"><tr><th>Agent</th><th>Revenue</th><th>Deals Won</th><th>Win Rate</th></tr>';
       reportData.data.forEach(a => {
-        htmlBody += `<tr><td>${a.name}</td><td>$${a.revenue.toLocaleString()}</td><td>${a.dealsWon}</td><td>${a.winRate}%</td></tr>`;
+        htmlBody += `<tr><td>${a.name}</td><td>${formatMoney(a.revenue, currency, locale)}</td><td>${a.dealsWon}</td><td>${a.winRate}%</td></tr>`;
       });
       htmlBody += '</table>';
     } else if (reportData.type === 'summary') {
-      htmlBody += `<p>Deals: ${reportData.data.dealCount} | Revenue: $${reportData.data.revenue.toLocaleString()} | Contacts: ${reportData.data.contactCount} | Tasks: ${reportData.data.taskCount}</p>`;
+      htmlBody += `<p>Deals: ${reportData.data.dealCount} | Revenue: ${formatMoney(reportData.data.revenue, currency, locale)} | Contacts: ${reportData.data.contactCount} | Tasks: ${reportData.data.taskCount}</p>`;
     }
     htmlBody += `<p style="color:#999;font-size:12px;">This is an automated report from Globussoft CRM.</p>`;
 

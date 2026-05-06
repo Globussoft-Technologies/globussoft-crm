@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, FileText, User, ArrowRight, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNavigate } from 'react-router-dom';
+import { formatMoney } from '../utils/money';
 
 const CommandPalette = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -108,7 +109,7 @@ const CommandPalette = () => {
                       <FileText size={18} color="var(--text-secondary)" />
                       <div style={{ flex: 1 }}>
                         <p style={{ fontWeight: '500' }}>{deal.title}</p>
-                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{deal.company} • ${(deal.amount || 0).toLocaleString()}</p>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{deal.company} • {formatMoney(deal.amount || 0, { currency: deal.currency, maximumFractionDigits: 0 })}</p>
                       </div>
                       <span style={{ fontSize: '0.75rem', padding: '0.1rem 0.5rem', borderRadius: '8px', background: 'var(--subtle-bg-3)' }}>{deal.stage}</span>
                     </div>

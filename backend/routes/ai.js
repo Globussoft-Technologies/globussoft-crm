@@ -6,6 +6,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { formatMoney } = require("../utils/formatMoney");
 
 // Load Gemini API key from root .env or backend .env
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
@@ -39,7 +40,7 @@ router.post("/draft", verifyToken, async (req, res) => {
 - Company: ${contact.company || "Unknown"}
 - Title: ${contact.title || "Unknown"}
 - Status: ${contact.status} (Lead Score: ${contact.aiScore}/100)
-- Recent deals: ${contact.deals.map(d => `${d.title} (${d.stage}, $${d.amount})`).join("; ") || "None"}
+- Recent deals: ${contact.deals.map(d => `${d.title} (${d.stage}, ${formatMoney(d.amount, d.currency || "USD")})`).join("; ") || "None"}
 - Recent activities: ${contact.activities.map(a => `${a.type}: ${a.description.slice(0, 60)}`).join("; ") || "None"}`;
       }
     } else if (recipientEmail) {

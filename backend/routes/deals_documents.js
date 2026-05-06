@@ -6,6 +6,7 @@ const PDFDocument = require("pdfkit");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { formatMoney } = require("../utils/formatMoney");
 
 // Configure multer for file uploads
 const uploadPath = path.join(__dirname, "..", "uploads");
@@ -63,6 +64,14 @@ router.post("/:dealId/generate-quote", async (req, res) => {
     });
     if (!deal) return res.status(404).json({ error: "Deal not found" });
 
+    // #286/#330: tenant-aware currency on quote PDF — wellness/INR shows ₹.
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { defaultCurrency: true, locale: true },
+    });
+    const currency = deal.currency || tenant?.defaultCurrency || "USD";
+    const locale = tenant?.locale || undefined;
+
     const doc = new PDFDocument();
     const pdfFilename = `quote-${deal.id}-${Date.now()}.pdf`;
     const pdfPath = path.join(uploadPath, pdfFilename);
@@ -76,7 +85,7 @@ router.post("/:dealId/generate-quote", async (req, res) => {
     doc.text(`Company: ${deal.company || "N/A"}`);
     doc.moveDown();
     doc.fontSize(14).text(`Project: ${deal.title}`);
-    doc.text(`Total Amount: $${(deal.amount || 0).toLocaleString()}`);
+    doc.text(`Total Amount: ${formatMoney(deal.amount || 0, currency, locale)}`);
     doc.moveDown(2);
     doc.fontSize(10).fillColor('gray').text("This is an automatically generated legally binding quote valid for 30 days.", { align: "center" });
 

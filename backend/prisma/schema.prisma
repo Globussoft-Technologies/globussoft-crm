@@ -365,6 +365,7 @@ model Contact {
   smsMessages         SmsMessage[]
   whatsappMessages    WhatsAppMessage[]
   pushSubscriptions   PushSubscription[]
+  touchpoints         Touchpoint[]
   attachments         ContactAttachment[]
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
@@ -1640,6 +1641,10 @@ model Touchpoint {
   timestamp  DateTime @default(now())
   tenantId   Int      @default(1)
   tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // #571 follow-up: lead scoring engine includes contact.touchpoints in
+  // its scoring fan-out; the back-relation must be declared explicitly or
+  // Prisma rejects the `include: { touchpoints: ... }` validator.
+  contact    Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, contactId])
 }

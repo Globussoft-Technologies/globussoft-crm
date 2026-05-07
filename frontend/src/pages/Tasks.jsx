@@ -84,6 +84,8 @@ export default function Tasks() {
       await fetchApi('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
       setNewTask({ title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium' });
       loadData();
+      // #625: invalidate sidebar counters so the My Tasks badge bumps.
+      window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
     } catch (err) {
       notify.error('Failed to enqueue task');
     }
@@ -93,6 +95,10 @@ export default function Tasks() {
     try {
       await fetchApi(`/api/tasks/${id}/complete`, { method: 'PUT' });
       loadData();
+      // #625: invalidate sidebar counters — backend has no `task_completed`
+      // socket emit today, so the polling fallback alone left the badge
+      // stale until the next 60s tick.
+      window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
     } catch (err) {
       console.error(err);
     }

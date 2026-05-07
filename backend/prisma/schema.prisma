@@ -136,6 +136,8 @@ model Tenant {
   // Agent D: loyalty + referrals
   loyaltyTransactions  LoyaltyTransaction[]
   referrals            Referral[]
+  // #614: per-tenant earn/burn rule config (one-to-one)
+  loyaltyConfig        LoyaltyConfig?
 
   // #413 batch 1 (wave 17): financial / PHI back-relations. Required because
   // each child model now declares `tenant Tenant @relation`; Prisma rejects
@@ -2482,6 +2484,31 @@ model LoyaltyTransaction {
   createdAt DateTime @default(now())
 
   @@index([tenantId, patientId, createdAt])
+}
+
+// #614 — per-tenant Loyalty earn/burn rule config. One row per tenant. Drives:
+//   - the auto-credit-on-completed-visit hook in routes/wellness.js
+//   - the manager-facing rules card on the Loyalty page (so the rules are
+//     no longer invisible / hardcoded in JS)
+// Numeric fields are nullable + zero-defaulted; null/0 means "rule disabled".
+// All amounts are tenant-currency (formatMoney resolves the unit at render).
+model LoyaltyConfig {
+  id                       Int      @id @default(autoincrement())
+  tenantId                 Int      @unique
+  tenant                   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Earn rules
+  earnPerVisit             Int      @default(0)   // flat points per completed visit
+  earnPercentOfSpend       Float    @default(10)  // % of amountCharged → points (default 10 mirrors the historic hardcoded rule)
+  earnPerCurrencyUnit      Float    @default(0)   // points per 1 currency unit (alt to %); e.g. 0.01 = 1pt per ₹100
+  // Burn / redemption
+  redeemPointsPerUnit      Int      @default(10)  // points needed to redeem 1 currency unit (e.g. 10 pts = ₹1)
+  // Bonuses
+  welcomeBonus             Int      @default(0)   // points credited on patient signup
+  referralBonus            Int      @default(100) // default points awarded per successful referral
+  // Toggles
+  autoEarnEnabled          Boolean  @default(true)
+  updatedAt                DateTime @updatedAt
+  createdAt                DateTime @default(now())
 }
 
 model Referral {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { ClipboardList, Send, Plus, BarChart3, X, ArrowLeft, MessageSquare, Users } from 'lucide-react';
+import { ClipboardList, Send, Plus, BarChart3, X, ArrowLeft, MessageSquare, Users, Download } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
@@ -76,14 +76,45 @@ export default function Surveys() {
     setStats(null);
     setResponses([]);
     try {
-      const [st, rs] = await Promise.all([
-        fetchApi(`/api/surveys/${s.id}/stats`),
-        fetchApi(`/api/surveys/${s.id}/responses`),
-      ]);
-      setStats(st);
+      // #613: prefer the richer /aggregate (count/avg/NPS/promoter-passive-detractor
+      // split + distribution); fall back to legacy /stats if older backend.
+      let agg = null;
+      try { agg = await fetchApi(`/api/surveys/${s.id}/aggregate`); }
+      catch { agg = await fetchApi(`/api/surveys/${s.id}/stats`); }
+      const rs = await fetchApi(`/api/surveys/${s.id}/responses`);
+      // Normalize the legacy /stats shape (distribution is plain array of counts)
+      // into the /aggregate shape so the chart renderer downstream is consistent.
+      let distribution = agg?.distribution;
+      if (Array.isArray(distribution) && typeof distribution[0] === 'number') {
+        distribution = distribution.map((count, score) => ({ score, count }));
+      }
+      setStats({ ...agg, distribution });
       setResponses(Array.isArray(rs) ? rs : []);
     } catch (e) {
       console.error('Failed to load survey detail', e);
+    }
+  };
+
+  const exportCsv = async () => {
+    if (!selected) return;
+    try {
+      // The CSV endpoint returns text/csv directly. fetchApi auto-bears the JWT
+      // but expects JSON; bypass it for the file download.
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/surveys/${selected.id}/export.csv`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${selected.name.replace(/[^a-z0-9-_]+/gi, '_')}-responses.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('CSV export failed', err);
+      notify.error('Failed to export CSV');
     }
   };
 
@@ -176,7 +207,13 @@ export default function Surveys() {
 
   // ── Detail view ──────────────────────────────────────────────
   if (selected) {
-    const distData = (stats?.distribution || []).map((c, i) => ({ score: String(i), count: c }));
+    // Distribution may be either the legacy [count0..count10] array or the
+    // /aggregate-shape [{score, count}, ...]. Normalize to {score, count}.
+    const rawDist = stats?.distribution || [];
+    const distData = rawDist.map((entry, i) => {
+      if (entry && typeof entry === 'object') return { score: String(entry.score), count: entry.count };
+      return { score: String(i), count: Number(entry) || 0 };
+    });
     return (
       <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.4s ease-out' }}>
         <button
@@ -196,9 +233,14 @@ export default function Surveys() {
               <TypeBadge type={selected.type} /> &nbsp; {selected.question}
             </p>
           </div>
-          <button onClick={openSendModal} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Send size={16} /> Send Survey
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button onClick={exportCsv} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Download size={16} /> Export CSV
+            </button>
+            <button onClick={openSendModal} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Send size={16} /> Send Survey
+            </button>
+          </div>
         </header>
 
         {/* Stats summary */}
@@ -240,6 +282,35 @@ export default function Surveys() {
             </div>
           )}
         </div>
+
+        {/* NPS bucket breakdown — only shown for NPS surveys with responses.
+            Renders the promoter/passive/detractor split that drives the NPS
+            score: P 9-10, neutral 7-8, D 0-6. */}
+        {selected.type === 'NPS' && (stats?.count ?? 0) > 0 && (
+          <div className="card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+            <h3 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '1rem' }}>NPS Breakdown</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
+              {[
+                { label: 'Promoters', count: stats?.promoters ?? 0, color: '#10b981', hint: '9–10' },
+                { label: 'Passives', count: stats?.passives ?? 0, color: '#f59e0b', hint: '7–8' },
+                { label: 'Detractors', count: stats?.detractors ?? 0, color: '#ef4444', hint: '0–6' },
+              ].map(b => {
+                const total = stats?.count || 1;
+                const pct = Math.round((b.count / total) * 100);
+                return (
+                  <div key={b.label} style={{ padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{b.label}</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{b.hint}</span>
+                    </div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: b.color }}>{b.count}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{pct}% of responses</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Response form preview */}
         <div className="card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>

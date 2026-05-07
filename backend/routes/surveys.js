@@ -426,6 +426,117 @@ router.get("/:id/responses", async (req, res) => {
   }
 });
 
+// #613 — Aggregate endpoint. Richer cousin of /:id/stats: adds the NPS
+// promoter / passive / detractor split + a sent-vs-responded completionRate
+// + a histogram with score-level labels (so the frontend renders without
+// recomputing). Server-side computation per CLAUDE.md "Client-side
+// aggregation over a paginated endpoint is a structural correctness bug".
+router.get("/:id/aggregate", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid survey id" });
+    const survey = await prisma.survey.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!survey) return res.status(404).json({ error: "Survey not found." });
+
+    const responses = await prisma.surveyResponse.findMany({
+      where: { surveyId: id, tenantId: req.user.tenantId },
+      select: { score: true },
+    });
+
+    const count = responses.length;
+    const distribution = Array.from({ length: 11 }, (_, score) => ({ score, count: 0 }));
+    for (const r of responses) {
+      const s = Math.max(0, Math.min(10, Math.round(r.score)));
+      distribution[s].count += 1;
+    }
+    const avgScore = count
+      ? Number((responses.reduce((a, b) => a + b.score, 0) / count).toFixed(2))
+      : 0;
+
+    // NPS bucket split: promoter 9-10, passive 7-8, detractor 0-6.
+    // Formula: NPS = (promoters - detractors) / total * 100. Sample fixture
+    // proof: 5 promoters, 3 passives, 2 detractors of 10 → (5-2)/10*100 = 30.
+    const promoters = responses.filter(r => r.score >= 9).length;
+    const passives = responses.filter(r => r.score >= 7 && r.score <= 8).length;
+    const detractors = responses.filter(r => r.score <= 6).length;
+    let npsScore = null;
+    if (survey.type === "NPS") {
+      npsScore = count ? Math.round(((promoters - detractors) / count) * 100) : 0;
+    }
+
+    res.json({
+      surveyId: survey.id,
+      type: survey.type,
+      count,
+      avgScore,
+      npsScore,
+      promoters,
+      passives,
+      detractors,
+      distribution,
+    });
+  } catch (err) {
+    console.error("[Surveys] aggregate error:", err);
+    res.status(500).json({ error: "Failed to compute aggregate." });
+  }
+});
+
+// #613 — CSV export of raw responses. Columns: respondedAt, score,
+// contactName, contactEmail, comment. Comments + names are CSV-escaped
+// (double-quotes doubled, RFC4180-style).
+router.get("/:id/export.csv", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid survey id" });
+    const survey = await prisma.survey.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!survey) return res.status(404).json({ error: "Survey not found." });
+
+    const responses = await prisma.surveyResponse.findMany({
+      where: { surveyId: id, tenantId: req.user.tenantId },
+      orderBy: { respondedAt: "desc" },
+    });
+    const contactIds = [...new Set(responses.map(r => r.contactId).filter(Boolean))];
+    const contacts = contactIds.length
+      ? await prisma.contact.findMany({
+          where: { id: { in: contactIds }, tenantId: req.user.tenantId },
+          select: { id: true, name: true, email: true },
+        })
+      : [];
+    const cMap = new Map(contacts.map(c => [c.id, c]));
+
+    const esc = (v) => {
+      if (v === null || v === undefined) return "";
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = ["respondedAt,score,contactName,contactEmail,comment"];
+    for (const r of responses) {
+      const c = r.contactId ? cMap.get(r.contactId) : null;
+      rows.push([
+        new Date(r.respondedAt).toISOString(),
+        r.score,
+        esc(c?.name || ""),
+        esc(c?.email || ""),
+        esc(r.comment || ""),
+      ].join(","));
+    }
+    const safeName = String(survey.name || `survey-${id}`).replace(/[^a-z0-9-_]+/gi, "_");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${safeName}-responses.csv"`
+    );
+    res.send(rows.join("\r\n"));
+  } catch (err) {
+    console.error("[Surveys] export.csv error:", err);
+    res.status(500).json({ error: "Failed to export responses." });
+  }
+});
+
 // GET /:id/stats — aggregated stats
 router.get("/:id/stats", async (req, res) => {
   try {

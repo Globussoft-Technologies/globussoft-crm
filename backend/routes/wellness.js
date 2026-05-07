@@ -167,16 +167,35 @@ router.all("/staff/*", wellnessNamespacedRedirect("/api/staff"));
 router.all("/audit", wellnessNamespacedRedirect("/api/audit"));
 router.all("/audit/*", wellnessNamespacedRedirect("/api/audit"));
 
-// Gap #22: Auto-credit loyalty points on completed visits.
-// Earn rule: 10% of amountCharged (floored). Idempotent — only one 'earned'
+// Gap #22 / #614: Auto-credit loyalty points on completed visits.
+// Earn rule reads from LoyaltyConfig (per-tenant): earnPerVisit (flat) +
+// (earnPercentOfSpend × amount/100) + (earnPerCurrencyUnit × amount). Defaults
+// preserve the original "10% of amountCharged" behaviour byte-identically when
+// no LoyaltyConfig row exists. Idempotent — only one 'earned'
 // LoyaltyTransaction per visitId. Failures are swallowed so the visit save
 // is never rolled back by a loyalty issue.
 async function maybeAutoCreditLoyalty(visit, tenantId) {
   try {
     if (!visit || visit.status !== "completed") return;
-    const amt = parseFloat(visit.amountCharged);
-    if (!amt || amt <= 0) return;
-    const points = Math.floor(amt * 0.1);
+    // Load tenant's earn rules; if no row, fall back to historic 10% rule.
+    let cfg;
+    try {
+      cfg = await prisma.loyaltyConfig.findUnique({ where: { tenantId } });
+    } catch {
+      cfg = null; // schema not yet pushed — keep old behaviour
+    }
+    const autoEnabled = cfg ? cfg.autoEarnEnabled !== false : true;
+    if (!autoEnabled) return;
+    const earnPerVisit = cfg?.earnPerVisit ?? 0;
+    const earnPercent = cfg?.earnPercentOfSpend ?? 10;
+    const earnPerUnit = cfg?.earnPerCurrencyUnit ?? 0;
+
+    const amt = parseFloat(visit.amountCharged) || 0;
+    let points = earnPerVisit;
+    if (amt > 0) {
+      points += Math.floor((amt * earnPercent) / 100);
+      points += Math.floor(amt * earnPerUnit);
+    }
     if (points <= 0) return;
     // Idempotency: skip if an 'earned' row already exists for this visit
     const existing = await prisma.loyaltyTransaction.findFirst({
@@ -190,7 +209,7 @@ async function maybeAutoCreditLoyalty(visit, tenantId) {
         tenantId,
         type: "earned",
         points,
-        reason: `Visit #${visit.id} (auto 10% earn)`,
+        reason: `Visit #${visit.id} (auto earn)`,
         visitId: visit.id,
       },
     });
@@ -3936,6 +3955,79 @@ function requireManagerPlus(req, res, next) {
   if (role === "ADMIN" || role === "MANAGER") return next();
   return res.status(403).json({ error: "Manager or admin role required" });
 }
+
+// #614 — Loyalty rules (earn / burn config). Per-tenant row in LoyaltyConfig.
+// Defaults mirror the historic hardcoded rule (10% of spend) so behaviour is
+// byte-identical when no row exists. NOTE: these /loyalty/rules routes MUST
+// be registered BEFORE /loyalty/:patientId — otherwise Express's :patientId
+// path-param swallows "rules" as an integer-parse failure (400).
+const LOYALTY_DEFAULTS = {
+  earnPerVisit: 0,
+  earnPercentOfSpend: 10,
+  earnPerCurrencyUnit: 0,
+  redeemPointsPerUnit: 10,
+  welcomeBonus: 0,
+  referralBonus: 100,
+  autoEarnEnabled: true,
+};
+
+async function loadLoyaltyConfig(tenantId) {
+  const cfg = await prisma.loyaltyConfig.findUnique({ where: { tenantId } });
+  return cfg ? { ...LOYALTY_DEFAULTS, ...cfg } : { ...LOYALTY_DEFAULTS, tenantId };
+}
+
+router.get("/loyalty/rules", async (req, res) => {
+  try {
+    const cfg = await loadLoyaltyConfig(req.user.tenantId);
+    res.json(cfg);
+  } catch (e) {
+    console.error("[wellness] loyalty rules get error:", e.message);
+    res.status(500).json({ error: "Failed to load loyalty rules" });
+  }
+});
+
+router.put("/loyalty/rules", requireManagerPlus, async (req, res) => {
+  try {
+    const allowed = [
+      "earnPerVisit",
+      "earnPercentOfSpend",
+      "earnPerCurrencyUnit",
+      "redeemPointsPerUnit",
+      "welcomeBonus",
+      "referralBonus",
+      "autoEarnEnabled",
+    ];
+    const data = {};
+    for (const k of allowed) {
+      if (req.body[k] === undefined) continue;
+      if (k === "autoEarnEnabled") {
+        data[k] = !!req.body[k];
+        continue;
+      }
+      const n = Number(req.body[k]);
+      if (!Number.isFinite(n) || n < 0) {
+        return res.status(400).json({ error: `${k} must be a non-negative number` });
+      }
+      // Integers vs floats: percent + earnPerCurrencyUnit are floats; the rest are integers.
+      data[k] = ["earnPercentOfSpend", "earnPerCurrencyUnit"].includes(k) ? n : Math.floor(n);
+    }
+    if (data.earnPercentOfSpend !== undefined && data.earnPercentOfSpend > 100) {
+      return res.status(400).json({ error: "earnPercentOfSpend must be ≤ 100" });
+    }
+
+    const tenantId = req.user.tenantId;
+    const cfg = await prisma.loyaltyConfig.upsert({
+      where: { tenantId },
+      update: data,
+      create: { tenantId, ...data },
+    });
+    await writeAudit("LoyaltyConfig", "UPDATE", cfg.id, req.user.userId, tenantId, data);
+    res.json({ ...LOYALTY_DEFAULTS, ...cfg });
+  } catch (e) {
+    console.error("[wellness] loyalty rules put error:", e.message);
+    res.status(500).json({ error: "Failed to update loyalty rules" });
+  }
+});
 
 router.get("/loyalty/:patientId", async (req, res) => {
   try {

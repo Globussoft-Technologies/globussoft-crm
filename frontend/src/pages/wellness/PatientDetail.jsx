@@ -582,8 +582,73 @@ function ConsentTab({ patient, services, onSaved }) {
     } catch (_err) { /* fetchApi already toasted */ } finally { setSaving(false); }
   };
 
+  // #583: prior-consents list — clinician needs to verify whether a consent
+  // has already been captured for this patient/template/service before
+  // recapturing. patient.consents already arrives ordered desc by signedAt
+  // from the parent fetch (see routes/wellness.js GET /patients/:id include).
+  const priorConsents = Array.isArray(patient?.consents) ? patient.consents : [];
+  const formatPriorDate = (iso) => {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      });
+    } catch {
+      return iso;
+    }
+  };
+
   return (
     <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
+      {/* #583: Recent consents — visible above the capture surface so the
+          clinician can verify before re-capturing. */}
+      <section
+        data-testid="prior-consents"
+        style={{
+          marginBottom: '1.5rem',
+          padding: '1rem',
+          background: 'var(--card-bg, rgba(0,0,0,0.04))',
+          border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+          borderRadius: 8,
+        }}
+      >
+        <h3 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1rem' }}>Recent consents</h3>
+        {priorConsents.length === 0 ? (
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            No prior consents on file.
+          </p>
+        ) : (
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {priorConsents.map((c) => (
+              <li
+                key={c.id}
+                style={{
+                  padding: '0.4rem 0',
+                  borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.06))',
+                  fontSize: '0.875rem',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                  alignItems: 'baseline',
+                }}
+              >
+                <strong>{c.templateName}</strong>
+                <span style={{ color: 'var(--text-secondary)' }}>·</span>
+                <span style={{ color: 'var(--text-secondary)' }}>{formatPriorDate(c.signedAt)} IST</span>
+                {c.service?.name && (
+                  <>
+                    <span style={{ color: 'var(--text-secondary)' }}>·</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{c.service.name}</span>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <h3 style={{ marginBottom: '1rem' }}>Capture consent</h3>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>

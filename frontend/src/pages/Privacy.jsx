@@ -120,9 +120,17 @@ export default function Privacy() {
     }
   };
 
+  // #584: confirmation must match the user's actual email (anti-fat-finger,
+  // GitHub-style). The string check was previously the literal "DELETE",
+  // which is bypassable by anyone with a single misclick.
+  const confirmTarget = (user?.email || '').trim();
+  const confirmMatches =
+    confirmTarget.length > 0 &&
+    deleteConfirmText.trim().toLowerCase() === confirmTarget.toLowerCase();
+
   const handleAccountDeletion = async () => {
-    if (deleteConfirmText !== 'DELETE') {
-      notify.error('Please type DELETE to confirm');
+    if (!confirmMatches) {
+      notify.error('Please type your account email to confirm');
       return;
     }
     setDeleting(true);
@@ -357,18 +365,48 @@ export default function Privacy() {
               <AlertTriangle size={22} style={{ color: '#ef4444' }} />
               <h3 style={{ fontSize: '1.15rem', fontWeight: '700', margin: 0 }}>Confirm Account Deletion</h3>
             </div>
-            <p style={{ color: 'var(--text-secondary, #6b7280)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-              This action cannot be undone. All personal data tied to your user will be anonymized or removed within 30 days
-              of the request being approved by an administrator.
+            {/* #584: explicitly name the user being deleted so a misclick on
+                a shared workstation is visually obvious before commit. */}
+            <p
+              data-testid="delete-target"
+              style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}
+            >
+              You are about to permanently delete the account for{' '}
+              <strong>{user?.name || user?.email || 'this user'}</strong>
+              {user?.email && user?.name ? ` (${user.email})` : ''}.
+            </p>
+            <p style={{ color: '#dc2626', fontSize: '0.875rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+              This cannot be undone.
+            </p>
+            <p style={{ color: 'var(--text-secondary, #6b7280)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+              The following will be hard-deleted:
+            </p>
+            <ul
+              style={{
+                color: 'var(--text-secondary, #6b7280)',
+                fontSize: '0.85rem',
+                margin: '0 0 0.75rem 1.25rem',
+                padding: 0,
+              }}
+            >
+              <li>Personal profile data (name, email, phone, avatar)</li>
+              <li>Activities, tasks, calls, messages, and emails authored by you</li>
+              <li>Saved dashboards, reports, and notification preferences</li>
+            </ul>
+            <p style={{ color: 'var(--text-secondary, #6b7280)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+              Records required for accounting integrity (deals, invoices, signed contracts, audit log
+              entries) are retained but anonymized — they cannot be re-linked to you. A 30-day grace
+              period applies before the deletion is finalized by an administrator.
             </p>
             <p style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-              Type <strong>DELETE</strong> below to confirm:
+              Type your account email <strong>{confirmTarget || '(unknown)'}</strong> to confirm:
             </p>
             <input
               type="text"
               value={deleteConfirmText}
               onChange={(e) => setDeleteConfirmText(e.target.value)}
-              placeholder="DELETE"
+              placeholder={confirmTarget || 'your.email@example.com'}
+              aria-label="Type your account email to confirm deletion"
               style={{
                 width: '100%', padding: '0.55rem 0.75rem', borderRadius: '8px',
                 border: '1px solid var(--border-color, #d1d5db)',
@@ -389,14 +427,14 @@ export default function Privacy() {
               </button>
               <button
                 onClick={handleAccountDeletion}
-                disabled={deleting || deleteConfirmText !== 'DELETE'}
+                disabled={deleting || !confirmMatches}
                 style={{
-                  background: '#ef4444', color: '#fff', border: 'none', padding: '0.5rem 1rem',
+                  background: 'var(--danger-color, #dc2626)', color: '#fff', border: 'none', padding: '0.5rem 1rem',
                   borderRadius: '8px', cursor: deleting ? 'wait' : 'pointer',
-                  opacity: (deleteConfirmText !== 'DELETE' || deleting) ? 0.5 : 1,
+                  opacity: (!confirmMatches || deleting) ? 0.5 : 1,
                 }}
               >
-                {deleting ? 'Submitting...' : 'Confirm Deletion'}
+                {deleting ? 'Submitting...' : 'Yes, delete permanently'}
               </button>
             </div>
           </div>

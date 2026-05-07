@@ -88,4 +88,59 @@ describe('<PatientDetail />', () => {
     expect(screen.getByPlaceholderText(/Duration/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Save prescription/i })).toBeInTheDocument();
   });
+
+  // #583 — prior-consents list above the capture surface so the clinician
+  // can verify whether a consent is already on file before re-capturing.
+  describe('Consent tab — prior consents list (#583)', () => {
+    it('shows empty-state copy when patient has no prior consents', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Consent form/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Consent form/i }));
+
+      const priorSection = await screen.findByTestId('prior-consents');
+      expect(priorSection).toBeInTheDocument();
+      expect(priorSection.textContent).toMatch(/Recent consents/i);
+      expect(priorSection.textContent).toMatch(/No prior consents on file/i);
+    });
+
+    it('renders each prior consent with templateName + signedAt + service.name', async () => {
+      const patientWithConsents = {
+        ...patient,
+        consents: [
+          {
+            id: 901,
+            templateName: 'hair-transplant',
+            signedAt: '2026-04-12T08:30:00Z',
+            service: { id: 1, name: 'FUE Hair Transplant' },
+          },
+          {
+            id: 902,
+            templateName: 'botox-fillers',
+            signedAt: '2026-03-01T05:15:00Z',
+            service: null,
+          },
+        ],
+      };
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patientWithConsents);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Consent form/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Consent form/i }));
+
+      const priorSection = await screen.findByTestId('prior-consents');
+      expect(priorSection.textContent).toMatch(/hair-transplant/);
+      expect(priorSection.textContent).toMatch(/FUE Hair Transplant/);
+      expect(priorSection.textContent).toMatch(/botox-fillers/);
+      // empty-state should NOT render when there is at least one prior consent
+      expect(priorSection.textContent).not.toMatch(/No prior consents on file/i);
+    });
+  });
 });

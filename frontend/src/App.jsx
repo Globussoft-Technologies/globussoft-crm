@@ -19,6 +19,7 @@ import Signup from "./pages/Signup";
 import Landing from "./pages/Landing";
 import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
+import RoleGuard from "./components/RoleGuard";
 import { NotifyProvider } from "./utils/notify";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
 import {
@@ -577,7 +578,24 @@ export default function App() {
                     <Route path="staff" element={<Staff />} />
                     <Route path="profile" element={<Profile />} />
                     <Route path="profile/2fa" element={<Profile2FA />} />
-                    <Route path="audit-log" element={<AuditLog />} />
+                    {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
+                        adminOnly visibility + the "System Admin Required"
+                        toast text). Pre-fix, USER + MANAGER navigation to
+                        /audit-log rendered the full Audit Log shell (KPI
+                        cards, entity/action/user/date filters) before a
+                        toast surfaced — leaking the existence of the audit
+                        pipeline, tracked entities, and the role-name. The
+                        backend route at /api/audit-viewer allows MANAGER too,
+                        but the more-restrictive frontend gate prevents the
+                        info-disclosure render. */}
+                    <Route
+                      path="audit-log"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Audit Log requires admin access.">
+                          <AuditLog />
+                        </RoleGuard>
+                      }
+                    />
                     <Route path="privacy" element={<Privacy />} />
                     <Route path="calendar-sync" element={<CalendarSync />} />
                     <Route

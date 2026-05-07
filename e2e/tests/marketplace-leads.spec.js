@@ -174,6 +174,64 @@ test.describe('marketplace-leads API smoke', () => {
     expect(body.success).toBe(true);
   });
 
+  // #581 — Defensive consistency banner contract. The /marketplace-leads
+  // page renders a yellow warning when a source is badged NOT CONFIGURED
+  // but its all-time lead count is non-zero (the seeded-fixture / legacy
+  // case). The render condition is computable from /api/marketplace-leads/stats
+  // (byProvider counts) joined to /api/integrations/marketplace/status
+  // (per-provider healthHint). This test pins the data shape needed to
+  // drive the banner — both endpoints must remain joinable on `provider`.
+  test('#581 banner data — stats.byProvider + integration status are joinable on provider', async ({ request }) => {
+    const [statsRes, statusRes] = await Promise.all([
+      request.get(`${API}/marketplace-leads/stats`, { headers: auth() }),
+      request.get(`${API}/integrations/marketplace/status`, { headers: auth() }),
+    ]);
+    expect(statsRes.status()).toBe(200);
+    expect(statusRes.status()).toBe(200);
+    const stats = await statsRes.json();
+    const status = await statusRes.json();
+
+    // Status array must be the canonical 3 marketplace providers with
+    // the healthHint enum the banner switches on.
+    expect(Array.isArray(status)).toBe(true);
+    expect(status.length).toBe(3);
+    const validHints = ['connected', 'idle', 'stale', 'inactive', 'never_configured'];
+    for (const s of status) {
+      expect(s).toHaveProperty('provider');
+      expect(s).toHaveProperty('healthHint');
+      expect(validHints).toContain(s.healthHint);
+      expect(['indiamart', 'justdial', 'tradeindia']).toContain(s.provider);
+    }
+
+    // stats.byProvider items must use the SAME provider keys as status
+    // entries so the frontend's countByProvider lookup resolves. This
+    // is the load-bearing contract: if either side renames the key,
+    // the banner silently never renders.
+    expect(Array.isArray(stats.byProvider)).toBe(true);
+    for (const p of stats.byProvider) {
+      expect(p).toHaveProperty('provider');
+      expect(p).toHaveProperty('count');
+      expect(typeof p.count).toBe('number');
+      // Every byProvider key must exist in the canonical status list.
+      const matchedStatus = status.find(s => s.provider === p.provider);
+      expect(matchedStatus, `stats.byProvider[${p.provider}] has no matching /status entry`).toBeTruthy();
+    }
+
+    // Compute the banner's render condition the same way the frontend
+    // does. On the Generic CRM tenant in the issue's reproduction,
+    // 138 leads existed across 3 NOT CONFIGURED sources; the test
+    // doesn't assert that specific count (fixture state varies) but
+    // does assert the computation is well-defined when the join holds.
+    const countByProvider = {};
+    for (const p of stats.byProvider) countByProvider[p.provider] = p.count;
+    const inconsistent = status.filter(
+      s => s.healthHint === 'never_configured' && (countByProvider[s.provider] || 0) > 0
+    );
+    // The shape of the result is what matters — frontend renders the
+    // banner when this array is non-empty.
+    expect(Array.isArray(inconsistent)).toBe(true);
+  });
+
   // Cleanup: dismiss any leads we created via webhooks so they don't leak
   test('cleanup: dismiss webhook-created leads', async ({ request }) => {
     if (!createdLeadExternalIds.length) return;

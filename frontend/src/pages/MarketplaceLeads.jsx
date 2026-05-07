@@ -324,6 +324,51 @@ const MarketplaceLeads = () => {
         </div>
       )}
 
+      {/* #581: Defensive consistency banner. When ANY source is badged
+          NOT CONFIGURED but the all-time lead count for that source is
+          non-zero (typical cause: seeded fixtures or legacy data from
+          before the integration was disconnected), surface a single
+          warning so the page doesn't silently show contradictory data
+          ("138 leads from a NOT CONFIGURED integration"). Hidden when
+          the data is consistent — never_configured + 0 leads OR all
+          configured. */}
+      {(() => {
+        if (!stats || !stats.byProvider || marketplaceStatus.length === 0) return null;
+        const countByProvider = {};
+        for (const p of stats.byProvider) countByProvider[p.provider] = p.count;
+        const inconsistent = marketplaceStatus.filter(
+          s => s.healthHint === 'never_configured' && (countByProvider[s.provider] || 0) > 0
+        );
+        if (inconsistent.length === 0) return null;
+        const totalOrphanedLeads = inconsistent.reduce(
+          (sum, s) => sum + (countByProvider[s.provider] || 0),
+          0
+        );
+        const sourceList = inconsistent.map(s => s.label).join(', ');
+        return (
+          <div
+            role="alert"
+            style={{
+              padding: '0.85rem 1.1rem',
+              marginBottom: '1.5rem',
+              borderRadius: '8px',
+              background: 'rgba(245, 158, 11, 0.1)',
+              border: '1px solid rgba(245, 158, 11, 0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '0.75rem',
+            }}
+          >
+            <AlertCircle size={18} style={{ color: 'var(--warning-color)', flexShrink: 0, marginTop: '0.1rem' }} />
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+              <strong style={{ color: 'var(--warning-color)' }}>Inconsistent state:</strong>{' '}
+              {totalOrphanedLeads} lead{totalOrphanedLeads === 1 ? '' : 's'} exist from sources marked NOT CONFIGURED ({sourceList}).
+              These are likely seeded test fixtures or legacy data. Configure the integration to enable live syncs.
+            </div>
+          </div>
+        );
+      })()}
+
       {/* #437: Per-provider integration status chip row. Always visible
           (your direction) so an Owner glancing at the page can see at a
           glance whether each marketplace is connected, idle, or possibly

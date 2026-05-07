@@ -275,7 +275,7 @@ export default function Settings() {
                     </button>
                   </div>
                   <p style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    Share this with patients to let them self-book without logging in.
+                    Share this with {tenant.vertical === 'wellness' ? 'patients' : 'customers'} to let them self-book without logging in.
                   </p>
                 </div>
               )}

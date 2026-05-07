@@ -306,6 +306,17 @@ model Contact {
   // Customer portal
   portalPasswordHash String?
 
+  // #600 — wellness vertical extras. Optional + nullable so generic CRM
+  // tenants ignore them entirely. Mirrors the Patient intake form (treatment
+  // of interest + preferred clinic + preferred practitioner) so wellness
+  // marketing attribution can tie a lead to the channel/service that
+  // brought them in. preferredLocationId / preferredPractitionerId stay
+  // unwired Int columns (no FK relation) to dodge cascade-delete coupling
+  // — a deleted Location or User shouldn't tombstone a Lead's analytics row.
+  treatmentOfInterest      String?
+  preferredLocationId      Int?
+  preferredPractitionerId  Int?
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.

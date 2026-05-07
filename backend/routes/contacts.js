@@ -44,6 +44,23 @@ function validateContactInput(body, { isUpdate = false } = {}) {
     const stErr = ensureEnum(body.status, ["Lead", "Prospect", "Customer", "Churned", "Junk"], { field: "status" });
     if (stErr) return stErr;
   }
+  // #600 — wellness extras. Optional in both verticals (the Lead form gates
+  // them by tenant.vertical; this validator stays vertical-agnostic so a
+  // generic CRM contact can still receive a treatmentOfInterest from a
+  // future tooling integration without surprising 400s). Length-cap mirrors
+  // the existing 191-char Contact column convention.
+  if (body.treatmentOfInterest !== undefined && body.treatmentOfInterest !== null && body.treatmentOfInterest !== "") {
+    const tErr = ensureStringLength(body.treatmentOfInterest, { max: 191, field: "treatmentOfInterest" });
+    if (tErr) return tErr;
+  }
+  for (const idField of ["preferredLocationId", "preferredPractitionerId"]) {
+    if (body[idField] !== undefined && body[idField] !== null && body[idField] !== "") {
+      const v = Number(body[idField]);
+      if (!Number.isInteger(v) || v <= 0) {
+        return { status: 400, error: `${idField} must be a positive integer`, code: "INVALID_ID" };
+      }
+    }
+  }
   return null;
 }
 

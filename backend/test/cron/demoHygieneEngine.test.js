@@ -1,7 +1,8 @@
 /**
  * Unit tests for backend/cron/demoHygieneEngine.js — hourly cron that
  * purges QA / pen-test residue (`_QA_PROBE_*`, `E2E_FLOW_*`, `_E2E_*`,
- * `E2E_WC_*`) from the demo box's patient list + admin-config models.
+ * `E2E_WC_*`, `E2E_SLA_*`, `e2e_audit_*`, `e2e_flow_*`) from the demo
+ * box's customer-facing screens.
  *
  * Why this file exists:
  *   - The engine is a privileged-write surface (it does HARD-DELETE)
@@ -9,19 +10,22 @@
  *     (e.g. dropping the `createdAt < cutoff` predicate, or a typo in the
  *     prefix list that matched real data) would silently nuke real demo
  *     records. Cheap to pin via unit test, expensive to discover at
- *     2 AM via #541-style "rows missing" reports.
+ *     2 AM via #541 / #578-style "rows missing" reports.
  *
  *   - There is intentionally NO api-level coverage; this engine is
  *     internal infrastructure with no HTTP surface. Unit-level pinning
  *     of WHERE-clause shape + P2003-skip behavior is the only test.
  *
  * Coverage:
+ *   - Prefix contract — all seven canonical markers exported.
  *   - WHERE-clause SHAPE on every model accessor:
- *       - { AND: [{ createdAt: { lt: cutoff } }, { OR: [...prefixes] }] }
- *       - All four QA prefixes present in the OR.
- *   - cutoff math: 24h default, env override, opts override.
+ *       - { AND: [{ <dateField>: { lt: cutoff } }, { OR: [...prefixes] }] }
+ *       - All seven QA prefixes present in the OR.
+ *       - Field-by-field correctness: name vs title vs subject.
+ *   - MarketplaceLead's name-OR-email special-case shape.
+ *   - cutoff math: 24h default, opts override.
  *   - P2003 (patient FK Restrict) → skipped, sibling continues.
- *   - Summary shape + counts.
+ *   - Summary shape + counts across all 12 models.
  *
  * NOT covered (intentional):
  *   - initDemoHygieneCron — schedule shell. Mocking node-cron yields no
@@ -42,16 +46,36 @@ import {
   QA_NAME_PREFIXES,
 } from '../../cron/demoHygieneEngine.js';
 
+// All 12 models the engine sweeps. Field column tracks WHICH text field
+// the engine searches on for that model — this MUST match the
+// purgeNamedModel(...textField) call sites in the engine.
+const SWEPT_MODELS = [
+  // Original 5 (#541 / #405)
+  { model: 'patient', field: 'name' },
+  { model: 'pipeline', field: 'name' },
+  { model: 'currency', field: 'name' },
+  { model: 'territory', field: 'name' },
+  { model: 'chatbot', field: 'name' },
+  // #578 widening — 7 new customer-facing surfaces
+  { model: 'slaPolicy', field: 'name' },
+  { model: 'task', field: 'title' },
+  { model: 'agentRecommendation', field: 'title' },
+  { model: 'landingPage', field: 'title' },
+  { model: 'ticket', field: 'subject' },
+  { model: 'emailMessage', field: 'subject' },
+  // marketplaceLead has a special-case (name OR email) shape — covered
+  // separately below.
+  { model: 'marketplaceLead', field: '__special__' },
+];
+
 beforeAll(() => {
-  prisma.patient = { findMany: vi.fn(), delete: vi.fn() };
-  prisma.pipeline = { findMany: vi.fn(), delete: vi.fn() };
-  prisma.currency = { findMany: vi.fn(), delete: vi.fn() };
-  prisma.territory = { findMany: vi.fn(), delete: vi.fn() };
-  prisma.chatbot = { findMany: vi.fn(), delete: vi.fn() };
+  for (const { model } of SWEPT_MODELS) {
+    prisma[model] = { findMany: vi.fn(), delete: vi.fn() };
+  }
 });
 
 beforeEach(() => {
-  for (const model of ['patient', 'pipeline', 'currency', 'territory', 'chatbot']) {
+  for (const { model } of SWEPT_MODELS) {
     prisma[model].findMany.mockReset();
     prisma[model].delete.mockReset();
     prisma[model].findMany.mockResolvedValue([]); // empty by default
@@ -60,18 +84,28 @@ beforeEach(() => {
 });
 
 describe('cron/demoHygieneEngine — exported prefix contract', () => {
-  test('QA_NAME_PREFIXES contains the four canonical markers', () => {
+  test('QA_NAME_PREFIXES contains the seven canonical markers', () => {
+    // Anti-regression: pen-test #541 specifically named `_QA_PROBE_`.
+    // Pen-test #578 added the lowercase variants and SLA/SCREAMING_CASE
+    // ones. Any future caller that drops one breaks the original ask.
     expect(QA_NAME_PREFIXES).toEqual(
-      expect.arrayContaining(['_QA_PROBE_', 'E2E_FLOW_', '_E2E_', 'E2E_WC_']),
+      expect.arrayContaining([
+        '_QA_PROBE_',
+        'E2E_FLOW_',
+        '_E2E_',
+        'E2E_WC_',
+        'E2E_SLA_',
+        'e2e_audit_',
+        'e2e_flow_',
+      ]),
     );
-    // Anti-regression: pen-test #541 specifically named `_QA_PROBE_`. Any
-    // future caller that drops this prefix breaks the original ask.
     expect(QA_NAME_PREFIXES).toContain('_QA_PROBE_');
+    expect(QA_NAME_PREFIXES).toHaveLength(7);
   });
 });
 
-describe('cron/demoHygieneEngine — WHERE-clause shape', () => {
-  test('patient findMany passes {AND:[{createdAt:{lt}}, {OR:prefixes}]}', async () => {
+describe('cron/demoHygieneEngine — WHERE-clause shape (name field)', () => {
+  test('patient findMany passes {AND:[{createdAt:{lt}}, {OR:prefixes-on-name}]}', async () => {
     await runDemoHygiene();
     expect(prisma.patient.findMany).toHaveBeenCalledTimes(1);
     const arg = prisma.patient.findMany.mock.calls[0][0];
@@ -82,7 +116,7 @@ describe('cron/demoHygieneEngine — WHERE-clause shape', () => {
     // Cutoff predicate
     expect(arg.where.AND[0]).toEqual({ createdAt: { lt: expect.any(Date) } });
 
-    // Prefix predicate
+    // Prefix predicate on `name`
     const prefixOr = arg.where.AND[1].OR;
     expect(Array.isArray(prefixOr)).toBe(true);
     expect(prefixOr).toHaveLength(QA_NAME_PREFIXES.length);
@@ -91,13 +125,79 @@ describe('cron/demoHygieneEngine — WHERE-clause shape', () => {
     }
   });
 
-  test('pipeline / currency / territory / chatbot all use the same shape', async () => {
+  test('pipeline / currency / territory / chatbot / slaPolicy all use the name field', async () => {
     await runDemoHygiene();
-    for (const model of ['pipeline', 'currency', 'territory', 'chatbot']) {
+    for (const model of ['pipeline', 'currency', 'territory', 'chatbot', 'slaPolicy']) {
       expect(prisma[model].findMany).toHaveBeenCalledTimes(1);
       const arg = prisma[model].findMany.mock.calls[0][0];
       expect(arg.where.AND[0]).toEqual({ createdAt: { lt: expect.any(Date) } });
-      expect(arg.where.AND[1].OR).toHaveLength(QA_NAME_PREFIXES.length);
+      const orList = arg.where.AND[1].OR;
+      expect(orList).toHaveLength(QA_NAME_PREFIXES.length);
+      // Every clause keys on `name`, not title/subject
+      for (const clause of orList) {
+        expect(Object.keys(clause)).toEqual(['name']);
+      }
+    }
+  });
+});
+
+describe('cron/demoHygieneEngine — WHERE-clause shape (title field, #578)', () => {
+  test('task / agentRecommendation / landingPage all sweep on the title field', async () => {
+    await runDemoHygiene();
+    for (const model of ['task', 'agentRecommendation', 'landingPage']) {
+      expect(prisma[model].findMany).toHaveBeenCalledTimes(1);
+      const arg = prisma[model].findMany.mock.calls[0][0];
+      expect(arg.where.AND[0]).toEqual({ createdAt: { lt: expect.any(Date) } });
+      const orList = arg.where.AND[1].OR;
+      expect(orList).toHaveLength(QA_NAME_PREFIXES.length);
+      // Every clause keys on `title` — NOT name (would miss the surfaces)
+      // and NOT subject (would crash Prisma).
+      for (const clause of orList) {
+        expect(Object.keys(clause)).toEqual(['title']);
+      }
+      // Spot-check: every prefix is present
+      for (const prefix of QA_NAME_PREFIXES) {
+        expect(orList).toContainEqual({ title: { startsWith: prefix } });
+      }
+    }
+  });
+});
+
+describe('cron/demoHygieneEngine — WHERE-clause shape (subject field, #578)', () => {
+  test('ticket / emailMessage sweep on the subject field', async () => {
+    await runDemoHygiene();
+    for (const model of ['ticket', 'emailMessage']) {
+      expect(prisma[model].findMany).toHaveBeenCalledTimes(1);
+      const arg = prisma[model].findMany.mock.calls[0][0];
+      expect(arg.where.AND[0]).toEqual({ createdAt: { lt: expect.any(Date) } });
+      const orList = arg.where.AND[1].OR;
+      expect(orList).toHaveLength(QA_NAME_PREFIXES.length);
+      for (const clause of orList) {
+        expect(Object.keys(clause)).toEqual(['subject']);
+      }
+      for (const prefix of QA_NAME_PREFIXES) {
+        expect(orList).toContainEqual({ subject: { startsWith: prefix } });
+      }
+    }
+  });
+});
+
+describe('cron/demoHygieneEngine — MarketplaceLead special-case (name OR email)', () => {
+  test('marketplaceLead findMany OR-joins prefix-on-name with prefix-on-email', async () => {
+    await runDemoHygiene();
+    expect(prisma.marketplaceLead.findMany).toHaveBeenCalledTimes(1);
+    const arg = prisma.marketplaceLead.findMany.mock.calls[0][0];
+    expect(arg.where.AND[0]).toEqual({ createdAt: { lt: expect.any(Date) } });
+
+    // The OR list has 2 * QA_NAME_PREFIXES.length entries: one set for
+    // `name` and one set for `email`. Issue #578 specifically reported
+    // `e2e_audit_…@example.com` on /marketplace-leads — the email-prefix
+    // half of this filter is what catches that surface.
+    const orList = arg.where.AND[1].OR;
+    expect(orList).toHaveLength(QA_NAME_PREFIXES.length * 2);
+    for (const prefix of QA_NAME_PREFIXES) {
+      expect(orList).toContainEqual({ name: { startsWith: prefix } });
+      expect(orList).toContainEqual({ email: { startsWith: prefix } });
     }
   });
 });
@@ -158,14 +258,64 @@ describe('cron/demoHygieneEngine — purge behavior', () => {
     expect(() => new Date(summary.cutoff)).not.toThrow();
   });
 
-  test('empty candidate sets → no delete calls, summary all zero', async () => {
+  test('empty candidate sets → no delete calls, summary all zero across 12 models', async () => {
     const summary = await runDemoHygiene();
-    expect(prisma.patient.delete).not.toHaveBeenCalled();
-    expect(prisma.pipeline.delete).not.toHaveBeenCalled();
+    for (const { model } of SWEPT_MODELS) {
+      expect(prisma[model].delete).not.toHaveBeenCalled();
+    }
+    // Every keyed slot in the summary is { deleted: 0, ...candidates: 0 }
     expect(summary.patient.deleted).toBe(0);
     expect(summary.pipeline.deleted).toBe(0);
     expect(summary.currency.deleted).toBe(0);
     expect(summary.territory.deleted).toBe(0);
     expect(summary.chatbot.deleted).toBe(0);
+    expect(summary.slaPolicy.deleted).toBe(0);
+    expect(summary.ticket.deleted).toBe(0);
+    expect(summary.marketplaceLead.deleted).toBe(0);
+    expect(summary.landingPage.deleted).toBe(0);
+    expect(summary.task.deleted).toBe(0);
+    expect(summary.agentRecommendation.deleted).toBe(0);
+    expect(summary.emailMessage.deleted).toBe(0);
+  });
+
+  test('#578 — sla policy / ticket / landing page / task / recommendation / email each delete their candidates', async () => {
+    // One candidate per surface — proves the delete pipeline is wired
+    // for each of the 7 new models added in #578, not just shape-pinned.
+    prisma.slaPolicy.findMany.mockResolvedValue([{ id: 100 }]);
+    prisma.ticket.findMany.mockResolvedValue([{ id: 200 }]);
+    prisma.landingPage.findMany.mockResolvedValue([{ id: 300 }]);
+    prisma.task.findMany.mockResolvedValue([{ id: 400 }]);
+    prisma.agentRecommendation.findMany.mockResolvedValue([{ id: 500 }]);
+    prisma.emailMessage.findMany.mockResolvedValue([{ id: 600 }]);
+    prisma.marketplaceLead.findMany.mockResolvedValue([{ id: 700 }]);
+    const summary = await runDemoHygiene();
+    expect(prisma.slaPolicy.delete).toHaveBeenCalledWith({ where: { id: 100 } });
+    expect(prisma.ticket.delete).toHaveBeenCalledWith({ where: { id: 200 } });
+    expect(prisma.landingPage.delete).toHaveBeenCalledWith({ where: { id: 300 } });
+    expect(prisma.task.delete).toHaveBeenCalledWith({ where: { id: 400 } });
+    expect(prisma.agentRecommendation.delete).toHaveBeenCalledWith({ where: { id: 500 } });
+    expect(prisma.emailMessage.delete).toHaveBeenCalledWith({ where: { id: 600 } });
+    expect(prisma.marketplaceLead.delete).toHaveBeenCalledWith({ where: { id: 700 } });
+    expect(summary.slaPolicy.deleted).toBe(1);
+    expect(summary.ticket.deleted).toBe(1);
+    expect(summary.landingPage.deleted).toBe(1);
+    expect(summary.task.deleted).toBe(1);
+    expect(summary.agentRecommendation.deleted).toBe(1);
+    expect(summary.emailMessage.deleted).toBe(1);
+    expect(summary.marketplaceLead.deleted).toBe(1);
+  });
+
+  test('#578 — P2003 on a marketplaceLead → skipped, summary tracks skipped count', async () => {
+    // MarketplaceLead.contactId is SetNull on Contact delete, so a probe
+    // shouldn't normally hit P2003 — but the engine handles it
+    // gracefully if it does (e.g. an unknown FK we haven't seen).
+    prisma.marketplaceLead.findMany.mockResolvedValue([{ id: 999 }]);
+    prisma.marketplaceLead.delete.mockImplementation(async () => {
+      const err = new Error('FK restrict');
+      err.code = 'P2003';
+      throw err;
+    });
+    const summary = await runDemoHygiene();
+    expect(summary.marketplaceLead).toEqual({ deleted: 0, skipped: 1, candidates: 1 });
   });
 });

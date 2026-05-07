@@ -69,6 +69,13 @@ const Contacts = () => {
   const [dupes, setDupes] = useState([]);
   const [merging, setMerging] = useState(false);
 
+  // #607: client-side email validation for the Add Contact form. Pre-fix the
+  // form had no validator at all — invalid addresses round-tripped to the
+  // server, returned a generic 400, and the user got a toast that didn't
+  // point at the email field. We reuse the same EMAIL_RE the CSV importer
+  // uses so the two surfaces stay consistent.
+  const [emailError, setEmailError] = useState('');
+
   // #461: search + status filter inputs were rendered without value/onChange
   // and the table read straight from `contacts`, so neither one filtered.
   // Wire both to local state and derive a filtered view client-side
@@ -165,6 +172,15 @@ const Contacts = () => {
 
   const handleAddContact = async (e) => {
     e.preventDefault();
+    // #607: block submit when the email is invalid. Surface the same inline
+    // message the blur handler shows so the user sees the field-level error
+    // instead of a generic server-side toast.
+    const email = (newContact.email || '').trim();
+    if (!email || !EMAIL_RE.test(email)) {
+      setEmailError('Please enter a valid email address');
+      return;
+    }
+    setEmailError('');
     await fetchApi('/api/contacts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -536,7 +552,32 @@ const Contacts = () => {
             <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: 'bold' }}>Add New Contact</h3>
             <form onSubmit={handleAddContact} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <input type="text" placeholder="Name" required className="input-field" value={newContact.name} onChange={e => setNewContact({...newContact, name: e.target.value})} />
-              <input type="email" placeholder="Email" required className="input-field" value={newContact.email} onChange={e => setNewContact({...newContact, email: e.target.value})} />
+              <div>
+                <input
+                  type="email"
+                  placeholder="Email"
+                  required
+                  className="input-field"
+                  aria-invalid={emailError ? 'true' : 'false'}
+                  aria-describedby={emailError ? 'contact-email-error' : undefined}
+                  value={newContact.email}
+                  onChange={e => {
+                    setNewContact({ ...newContact, email: e.target.value });
+                    if (emailError) setEmailError('');
+                  }}
+                  onBlur={e => {
+                    const v = (e.target.value || '').trim();
+                    if (v && !EMAIL_RE.test(v)) setEmailError('Please enter a valid email address');
+                    else setEmailError('');
+                  }}
+                  style={emailError ? { borderColor: '#ef4444' } : undefined}
+                />
+                {emailError && (
+                  <p id="contact-email-error" role="alert" style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {emailError}
+                  </p>
+                )}
+              </div>
               <input type="tel" placeholder="Phone (e.g. +91 98765 43210)" className="input-field" value={newContact.phone} onChange={e => setNewContact({...newContact, phone: e.target.value})} />
               <input type="text" placeholder="Company" required className="input-field" value={newContact.company} onChange={e => setNewContact({...newContact, company: e.target.value})} />
               <input type="text" placeholder="Title" className="input-field" value={newContact.title} onChange={e => setNewContact({...newContact, title: e.target.value})} />
@@ -545,7 +586,7 @@ const Contacts = () => {
                 <option value="Customer">Customer</option>
               </select>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1rem' }}>
-                <button type="button" onClick={() => setShowModal(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel</button>
+                <button type="button" onClick={() => { setShowModal(false); setEmailError(''); }} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel</button>
                 <button type="submit" className="btn-primary">Save Contact</button>
               </div>
             </form>

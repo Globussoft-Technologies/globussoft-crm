@@ -49,12 +49,29 @@ const Profile = () => {
 
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
-    setSaving(true);
     setProfileMsg({ text: '', type: '' });
+
+    // #606: skip the PATCH when nothing changed. Pre-fix every Save click
+    // sent {name, email} unconditionally and the success toast fired even
+    // when the user didn't touch the form — trains users to ignore toasts
+    // and pollutes audit logs with no-op rows.
+    const trimmedName = (name || '').trim();
+    const trimmedEmail = (email || '').trim();
+    const baselineName = (profile?.name || '').trim();
+    const baselineEmail = (profile?.email || '').trim();
+    const changed = {};
+    if (trimmedName !== baselineName) changed.name = trimmedName;
+    if (trimmedEmail !== baselineEmail) changed.email = trimmedEmail;
+    if (Object.keys(changed).length === 0) {
+      setProfileMsg({ text: 'No changes to save', type: 'info' });
+      return;
+    }
+
+    setSaving(true);
     try {
       const updated = await fetchApi('/api/auth/me', {
         method: 'PUT',
-        body: JSON.stringify({ name, email })
+        body: JSON.stringify(changed)
       });
       setProfile(updated);
       if (setAuthUser && authUser) {
@@ -233,8 +250,16 @@ const Profile = () => {
           {profileMsg.text && (
             <div style={{
               padding: '0.6rem 0.75rem', borderRadius: '6px', marginBottom: '1rem', fontSize: '0.85rem',
-              background: profileMsg.type === 'success' ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
-              color: profileMsg.type === 'success' ? '#10b981' : '#ef4444'
+              background: profileMsg.type === 'success'
+                ? 'rgba(16,185,129,0.12)'
+                : profileMsg.type === 'info'
+                  ? 'rgba(59,130,246,0.12)'
+                  : 'rgba(239,68,68,0.12)',
+              color: profileMsg.type === 'success'
+                ? '#10b981'
+                : profileMsg.type === 'info'
+                  ? '#3b82f6'
+                  : '#ef4444'
             }}>
               {profileMsg.text}
             </div>

@@ -144,22 +144,49 @@ const Pipeline = () => {
     e.dataTransfer.setData('dealId', id);
   };
 
+  // #605: stage→default-probability mapping. Won/lost are absolute (server
+  // enforces the same; mirrored here for instant UI). Intermediate stages get
+  // the conventional CRM probabilities so the per-column weighted total +
+  // the forecast widget update at drop time, not on next refresh.
+  const STAGE_PROBABILITY = {
+    lead: 25,
+    contacted: 40,
+    proposal: 70,
+    negotiation: 80,
+    won: 100,
+    lost: 0,
+  };
+
   const handleDrop = async (e, stageId) => {
     e.preventDefault();
     const dealId = parseInt(e.dataTransfer.getData('dealId'));
     if (!dealId) return;
-    
-    // Optimistic UI update
-    setDeals(prev => prev.map(d => d.id === dealId ? { ...d, stage: stageId } : d));
-    
+
+    // #605: snapshot current state for rollback + optimistically update both
+    // stage AND probability so the badge / column total / forecast reflect
+    // the new stage immediately, before the network round-trip.
+    const prevDeals = deals;
+    const newProb = STAGE_PROBABILITY[stageId];
+    setDeals(prev => prev.map(d => {
+      if (d.id !== dealId) return d;
+      return newProb !== undefined ? { ...d, stage: stageId, probability: newProb } : { ...d, stage: stageId };
+    }));
+
     try {
-      await fetchApi(`/api/deals/${dealId}/stage`, {
+      const updated = await fetchApi(`/api/deals/${dealId}`, {
         method: 'PUT',
-        body: JSON.stringify({ stage: stageId })
+        body: JSON.stringify(
+          newProb !== undefined ? { stage: stageId, probability: newProb } : { stage: stageId }
+        ),
       });
+      // Reconcile with server's authoritative copy (probability may differ if
+      // the server applied terminal-stage rules or per-tenant overrides).
+      if (updated && updated.id) {
+        setDeals(prev => prev.map(d => d.id === updated.id ? { ...d, ...updated } : d));
+      }
     } catch (err) {
-      // Revert if failed
-      fetchApi('/api/deals').then(data => setDeals(Array.isArray(data) ? data : [])).catch(() => {});
+      // Roll back to the pre-drop state on failure.
+      setDeals(prevDeals);
     }
   };
 

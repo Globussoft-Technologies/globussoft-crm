@@ -57,6 +57,29 @@ const OPEN_STAGES = (deal) => {
   return s !== "won" && s !== "lost";
 };
 
+// #573 — sanitize a per-deal numeric input.
+//   - NaN / Infinity / negative → 0 (invalid amounts cannot inflate aggregates).
+//   - Returns a finite, non-negative Number.
+function sanitizeAmount(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
+// #573 — clamp probability into [0, 100]. The Deal.probability column is
+// `Int @default(50)` with NO Prisma-level upper bound, so a stray write of
+// 99999 would otherwise multiply through to a $175M Expected on a $175k
+// pipeline. Callers must clamp BEFORE multiplying, not as a post-aggregate
+// cap, so per-deal contributions stay correct (we want to know which deal
+// has the bad value, not just blunt the rollup).
+function clampProbability(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return n;
+}
+
 function bucketDealMetrics(deals) {
   // expected = sum(amount * probability/100) for OPEN deals
   // committed = sum(amount) where stage == "won" OR probability >= 90
@@ -66,16 +89,18 @@ function bucketDealMetrics(deals) {
   let committed = 0;
   let bestCase = 0;
   let closed = 0;
+  let openAmountTotal = 0; // for the defensive expected-cap invariant
 
   for (const d of deals) {
-    const amount = Number(d.amount) || 0;
-    const probability = Number(d.probability) || 0;
+    const amount = sanitizeAmount(d.amount);
+    const probability = clampProbability(d.probability);
     const stage = (d.stage || "").toLowerCase();
     const isOpen = OPEN_STAGES(d);
 
     if (isOpen) {
       expected += amount * (probability / 100);
       bestCase += amount;
+      openAmountTotal += amount;
     }
     if (stage === "won" || probability >= 90) {
       committed += amount;
@@ -84,6 +109,12 @@ function bucketDealMetrics(deals) {
       closed += amount;
     }
   }
+
+  // #573 — defensive cap. With probability ∈ [0, 100], expected can never
+  // exceed the sum of open-deal amounts. If somehow it does (rounding,
+  // future code path bypassing clampProbability), clamp to bestCase so
+  // the dashboard never renders Expected > Best Case.
+  if (expected > openAmountTotal) expected = openAmountTotal;
 
   return {
     expected: Math.round(expected * 100) / 100,
@@ -166,8 +197,9 @@ router.get("/pipeline", async (req, res) => {
         byStage.set(stage, { stage, count: 0, amount: 0, weightedAmount: 0, deals: [] });
       }
       const entry = byStage.get(stage);
-      const amount = Number(d.amount) || 0;
-      const probability = Number(d.probability) || 0;
+      // #573 — same arithmetic-blowup guard as bucketDealMetrics.
+      const amount = sanitizeAmount(d.amount);
+      const probability = clampProbability(d.probability);
       entry.count += 1;
       entry.amount += amount;
       entry.weightedAmount += amount * (probability / 100);
@@ -295,18 +327,25 @@ router.post("/snapshot/run", verifyRole(["ADMIN"]), async (req, res) => {
       let committedRevenue = 0;
       let bestCaseRevenue = 0;
       let closedRevenue = 0;
+      let openInQuarterAmount = 0;
       for (const deal of dealList) {
-        const amount = deal.amount || 0;
-        const probability = deal.probability || 0;
+        // #573 — sanitize/clamp at the per-deal multiplication step.
+        const amount = sanitizeAmount(deal.amount);
+        const probability = clampProbability(deal.probability);
         const stage = (deal.stage || "").toLowerCase();
         const isOpen = stage !== "won" && stage !== "lost";
         const expectedClose = deal.expectedClose ? new Date(deal.expectedClose) : null;
         const closesInQuarter = expectedClose && expectedClose >= qStart && expectedClose <= qEnd;
         if (isOpen) bestCaseRevenue += amount;
-        if (isOpen && closesInQuarter) expectedRevenue += amount * (probability / 100);
+        if (isOpen && closesInQuarter) {
+          expectedRevenue += amount * (probability / 100);
+          openInQuarterAmount += amount;
+        }
         if (stage === "won" || probability >= 90) committedRevenue += amount;
         if (stage === "won" && closesInQuarter) closedRevenue += amount;
       }
+      // #573 — defensive: expected cannot exceed sum of open-in-quarter amounts.
+      if (expectedRevenue > openInQuarterAmount) expectedRevenue = openInQuarterAmount;
       return { expectedRevenue, committedRevenue, bestCaseRevenue, closedRevenue };
     };
 
@@ -429,3 +468,9 @@ router.get("/history", async (req, res) => {
 });
 
 module.exports = router;
+// Internals exported for unit tests (vitest). The hot-path helpers stay
+// importable so backend/test/routes/forecasting.test.js can pin the
+// arithmetic invariants without booting the full express app.
+module.exports.bucketDealMetrics = bucketDealMetrics;
+module.exports.sanitizeAmount = sanitizeAmount;
+module.exports.clampProbability = clampProbability;

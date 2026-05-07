@@ -407,10 +407,9 @@ export default function Patients() {
               from blowing the column widths and pushing later columns offscreen.
               Combined with the ellipsis style on the name cell. */}
           <table
+            className="stable-table"
             style={{
-              width: "100%",
               borderCollapse: "collapse",
-              tableLayout: "fixed",
             }}
           >
             <thead>

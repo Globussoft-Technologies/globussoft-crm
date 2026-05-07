@@ -360,8 +360,8 @@ function ServiceCard({ service, onChanged }) {
   return (
     <div className="glass" style={{ padding: '1.25rem', position: 'relative' }}>
       <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem' }}>
-        <button onClick={() => setEditing(true)} title="Edit" style={iconBtn}><Pencil size={12} /></button>
-        <button onClick={remove} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
+        <button onClick={() => setEditing(true)} aria-label={`Edit service ${service.name}`} title="Edit" style={iconBtn}><Pencil size={12} /></button>
+        <button onClick={remove} aria-label={`Deactivate service ${service.name}`} title="Deactivate" style={{ ...iconBtn, color: 'var(--danger-color)' }}><Trash2 size={12} /></button>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', paddingRight: '3rem' }}>
         <div>

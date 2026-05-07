@@ -310,7 +310,19 @@ const Contacts = () => {
           )}
         </div>
         
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+        {/* #633: stable-table — pins tableLayout=fixed so row hover never
+            shifts column widths, plus column widths set explicitly below. */}
+        <table className="stable-table" style={{ borderCollapse: 'collapse', textAlign: 'left' }}>
+          <colgroup>
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '20%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '14%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '6%' }} />
+          </colgroup>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
@@ -400,7 +412,12 @@ const Contacts = () => {
                   </select>
                 </td>
                 <td style={{ padding: '1rem', textAlign: 'right' }}>
-                  <button onClick={() => handleDelete(contact.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}>
+                  <button
+                    onClick={() => handleDelete(contact.id)}
+                    aria-label={`Delete contact ${contact.name || contact.email || ''}`}
+                    title="Delete contact"
+                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}
+                  >
                     <Trash2 size={18} />
                   </button>
                 </td>
@@ -417,7 +434,7 @@ const Contacts = () => {
               <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <FileSpreadsheet size={20} color="var(--accent-color)" /> Import CSV
               </h3>
-              <button onClick={() => setShowImportModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={20} /></button>
+              <button onClick={() => setShowImportModal(false)} aria-label="Close import dialog" title="Close" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={20} /></button>
             </div>
 
             <div style={{ marginBottom: '1.5rem' }}>
@@ -543,7 +560,7 @@ const Contacts = () => {
               <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <GitMerge size={20} color="var(--accent-color)" /> Duplicate Contacts ({dupes.length} groups)
               </h3>
-              <button onClick={() => setShowDupes(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={20} /></button>
+              <button onClick={() => setShowDupes(false)} aria-label="Close duplicates dialog" title="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={20} /></button>
             </div>
             {dupes.length === 0 ? (
               <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No duplicate contacts found. Your database is clean!</p>

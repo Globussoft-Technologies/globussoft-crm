@@ -470,6 +470,8 @@ function Modal({ onClose, title, icon, children }) {
           </h3>
           <button
             onClick={onClose}
+            aria-label="Close dialog"
+            title="Close"
             style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
           >
             <X size={20} />

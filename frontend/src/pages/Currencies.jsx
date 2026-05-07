@@ -185,7 +185,7 @@ export default function Currencies() {
         {loading ? (
           <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading currencies...</div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table className="stable-table" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'var(--subtle-bg)', textAlign: 'left' }}>
                 <th style={th}>Code</th>
@@ -269,7 +269,7 @@ export default function Currencies() {
           <div className="card" style={{ padding: '2rem', width: 460 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h3 style={{ fontWeight: 'bold' }}>Add Currency</h3>
-              <button onClick={() => setShowAdd(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={18} /></button>
+              <button onClick={() => setShowAdd(false)} aria-label="Close add currency dialog" title="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={18} /></button>
             </div>
             <div style={{ display: 'grid', gap: '0.75rem' }}>
               <input className="input-field" placeholder="Code (e.g. JPY)" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} />

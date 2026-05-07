@@ -94,7 +94,7 @@ function CreateModal({ onClose, onCreated, campaigns }) {
       <div style={{ ...glassCard, width: 'min(760px, 100%)', maxHeight: '90vh', overflowY: 'auto', background: 'rgba(20,20,30,0.95)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h2 style={{ margin: 0, color: 'var(--text-primary)' }}>Create A/B Test</h2>
-          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <button onClick={onClose} aria-label="Close create A/B test dialog" title="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <X size={20} />
           </button>
         </div>
@@ -220,7 +220,7 @@ function DetailModal({ test, onClose, onAction }) {
               )}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <button onClick={onClose} aria-label="Close A/B test details" title="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <X size={20} />
           </button>
         </div>

@@ -345,7 +345,7 @@ export default function CustomReports() {
                   </select>
                   <input value={f.value} onChange={e => updateFilter(i, { value: e.target.value })}
                     placeholder="value" style={inputStyle} />
-                  <button onClick={() => removeFilter(i)} style={{ ...btnStyle('danger'), padding: '0.4rem' }}>
+                  <button onClick={() => removeFilter(i)} aria-label={`Remove filter ${i + 1}`} title="Remove filter" style={{ ...btnStyle('danger'), padding: '0.4rem' }}>
                     <X size={14} />
                   </button>
                 </div>
@@ -534,7 +534,7 @@ export default function CustomReports() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={{ margin: 0 }}>{editingId ? 'Update Report' : 'Save Report'}</h3>
-              <button onClick={() => setShowSaveModal(false)} style={{ ...btnStyle('secondary'), padding: '0.3rem' }}>
+              <button onClick={() => setShowSaveModal(false)} aria-label="Close save report dialog" title="Close" style={{ ...btnStyle('secondary'), padding: '0.3rem' }}>
                 <X size={16} />
               </button>
             </div>

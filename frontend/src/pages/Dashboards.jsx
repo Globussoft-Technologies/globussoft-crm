@@ -475,6 +475,7 @@ export default function Dashboards() {
                     color: '#fca5a5', borderRadius: '8px', cursor: 'pointer',
                     padding: '4px 6px', display: 'flex', alignItems: 'center',
                   }}
+                  aria-label="Remove widget"
                   title="Remove widget"
                 >
                   <X size={14} />
@@ -572,7 +573,7 @@ function Modal({ children, onClose, title, wide }) {
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ margin: 0, fontSize: '1.05rem' }}>{title}</h3>
-          <button onClick={onClose} style={{ ...button('secondary'), padding: '0.35rem' }}><X size={16} /></button>
+          <button onClick={onClose} aria-label={`Close ${title} dialog`} title="Close" style={{ ...button('secondary'), padding: '0.35rem' }}><X size={16} /></button>
         </div>
         {children}
       </div>

@@ -296,7 +296,7 @@ export default function WinLoss() {
                 style={{ flex: 1 }}
                 required
               />
-              <button type="submit" className="btn-primary"><Plus size={14} /></button>
+              <button type="submit" className="btn-primary" aria-label="Add reason" title="Add reason"><Plus size={14} /></button>
             </form>
 
             <div style={{ maxHeight: '320px', overflowY: 'auto' }}>

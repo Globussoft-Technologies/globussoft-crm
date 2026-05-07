@@ -418,7 +418,7 @@ function Modal({ title, children, onClose, wide }) {
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h3>
-          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <button onClick={onClose} aria-label={`Close ${title} dialog`} title="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <X size={20} />
           </button>
         </div>

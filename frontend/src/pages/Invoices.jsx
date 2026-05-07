@@ -525,7 +525,7 @@ export default function Invoices() {
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
                   also truncates with ellipsis (see <td> below). */}
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem', tableLayout: 'fixed' }} role="table" aria-label="Invoices table">
+              <table className="stable-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }} role="table" aria-label="Invoices table">
                 <colgroup>
                   <col style={{ width: '120px' }} />
                   <col style={{ width: '110px' }} />
@@ -789,6 +789,8 @@ export default function Invoices() {
               <button
                 onClick={() => setPaymentModal(null)}
                 disabled={processingPayment}
+                aria-label="Close payment dialog"
+                title="Close"
                 style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: processingPayment ? 'not-allowed' : 'pointer', opacity: processingPayment ? 0.5 : 1 }}
               >
                 <X size={20} />

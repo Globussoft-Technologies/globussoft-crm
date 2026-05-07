@@ -219,10 +219,10 @@ const Pipeline = () => {
                         <h4 style={{ fontWeight: '600', marginBottom: '0.5rem', paddingRight: '1rem', fontSize: '1rem' }}>{deal.title}</h4>
                         <div style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', display: 'flex', gap: '0.5rem' }}>
                           {/* #593: tooltip dropped "AI" — /api/ai_scoring is rules-based (see backend/routes/ai_scoring.js). */}
-                          <button onClick={(e) => fetchAiScore(e, deal.id)} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer' }} title="Generate Deal Score">
+                          <button onClick={(e) => fetchAiScore(e, deal.id)} aria-label={`Generate deal score for ${deal.title}`} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer' }} title="Generate Deal Score">
                             <Zap size={16} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.filter = 'drop-shadow(0 0 5px #a855f7)'} onMouseOut={e => e.currentTarget.style.filter = 'none'} />
                           </button>
-                          <button onClick={(e) => handleDelete(e, deal.id)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }} title="Delete Deal">
+                          <button onClick={(e) => handleDelete(e, deal.id)} aria-label={`Delete deal ${deal.title}`} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }} title="Delete Deal">
                             <Trash2 size={16} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'} />
                           </button>
                         </div>
@@ -297,7 +297,7 @@ const Pipeline = () => {
               <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Zap size={24} color="#a855f7" /> Deal Predictive Score
               </h3>
-              <button onClick={() => setAiScoreModal(null)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={24}/></button>
+              <button onClick={() => setAiScoreModal(null)} aria-label="Close deal score dialog" title="Close" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={24}/></button>
             </div>
             
             <div style={{ padding: '1.5rem', background: 'rgba(168, 85, 247, 0.05)', borderRadius: '12px', border: '1px solid rgba(168, 85, 247, 0.2)', marginBottom: '1.5rem' }}>

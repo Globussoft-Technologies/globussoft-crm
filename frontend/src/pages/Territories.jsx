@@ -175,7 +175,7 @@ export default function Territories() {
           ) : viewContacts.length === 0 ? (
             <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No contacts assigned to this territory yet.</div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table className="stable-table" style={{ borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'rgba(255,255,255,0.03)', textAlign: 'left' }}>
                   <th style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Name</th>
@@ -303,7 +303,7 @@ export default function Territories() {
           <div className="card" style={{ padding: '1.75rem', width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h3 style={{ fontWeight: 'bold', fontSize: '1.2rem', margin: 0 }}>{editing ? 'Edit Territory' : 'New Territory'}</h3>
-              <button onClick={() => setShowModal(false)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={22} /></button>
+              <button onClick={() => setShowModal(false)} aria-label="Close territory dialog" title="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={22} /></button>
             </div>
 
             <div style={{ marginBottom: '1rem' }}>

@@ -218,7 +218,8 @@ export default function Tickets() {
             </p>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+              {/* #633: stable-table — pins tableLayout=fixed so row hover never jumps column widths. */}
+              <table className="stable-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                     {['ID', 'Subject', 'Status', 'Priority', 'Assignee', 'Created', 'Actions'].map(h => (

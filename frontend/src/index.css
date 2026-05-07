@@ -380,3 +380,40 @@ body.body--builder-fullscreen .app-main {
 body.body--builder-fullscreen .app-main > main {
   padding: 0 !important;
 }
+
+/* ── #633 — Table hover stability ───────────────────────────────────────
+ * List tables must not horizontally jump on row hover. The bug: rows
+ * reveal action icons on hover, expanding the actions cell and
+ * shrinking earlier columns. The fix: the .stable-table utility pins
+ * tableLayout=fixed and ensures hover-state CSS only changes
+ * background/colour/box-shadow — never padding, border-width, or
+ * font-weight (each of those reflows the row).
+ *
+ * Pages opt in by adding className="stable-table" on the <table>.
+ * Existing inline tableLayout: fixed adopters (Invoices #243,
+ * wellness/Patients #229) get the same hover-stability guarantee
+ * by adding the class.
+ */
+table.stable-table {
+  table-layout: fixed;
+  width: 100%;
+}
+table.stable-table tbody tr {
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+}
+table.stable-table tbody tr:hover {
+  background-color: var(--hover-bg);
+}
+table.stable-table tbody tr:hover td {
+  /* Explicitly NOT changing padding / border-width / font-weight on
+   * hover. Listed here so a future regression edit reads "don't add
+   * those" first. */
+  padding: inherit;
+  border-width: inherit;
+  font-weight: inherit;
+}
+table.stable-table th,
+table.stable-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

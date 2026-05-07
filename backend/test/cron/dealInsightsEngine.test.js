@@ -73,7 +73,7 @@ beforeAll(() => {
   };
 });
 
-const { runHeuristicRules, attachDealContext } = require('../../routes/deal_insights');
+const { runHeuristicRules, attachDealContext, buildMissingDealContext } = require('../../routes/deal_insights');
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -297,6 +297,9 @@ describe('routes/deal_insights — attachDealContext — #572 envelope enrichmen
   });
 
   test('insights with no dealIds → all rows get dealContext: null, no DB call', async () => {
+    // dealId === null is "no deal linked" (distinct from "deal-id-set-but-
+    // missing" which now yields a sentinel envelope per #587). Null stays
+    // null so callers can distinguish.
     const insights = [{ id: 1, dealId: null, type: 'RISK' }];
     const out = await attachDealContext(insights, 1);
     expect(out).toEqual([{ id: 1, dealId: null, type: 'RISK', dealContext: null }]);
@@ -351,6 +354,10 @@ describe('routes/deal_insights — attachDealContext — #572 envelope enrichmen
     expect(out[0].dealContext.contactName).toBe('Alice');
     expect(out[0].dealContext.contactCompany).toBe('Acme');
     expect(out[0].dealContext.isArchived).toBe(false);
+    // #587: every resolved envelope carries isMissing:false explicitly so
+    // the frontend's branch is `if (ctx.isMissing)` rather than checking
+    // for an absent flag.
+    expect(out[0].dealContext.isMissing).toBe(false);
 
     expect(out[1].dealContext.id).toBe(100); // same deal — same context
     expect(out[1].dealContext.title).toBe('Big Deal');
@@ -358,6 +365,7 @@ describe('routes/deal_insights — attachDealContext — #572 envelope enrichmen
     expect(out[2].dealContext.id).toBe(200);
     expect(out[2].dealContext.contactName).toBe('Bob');
     expect(out[2].dealContext.contactCompany).toBeNull();
+    expect(out[2].dealContext.isMissing).toBe(false);
   });
 
   test('soft-deleted deal → isArchived true, deletedAt populated', async () => {
@@ -381,10 +389,78 @@ describe('routes/deal_insights — attachDealContext — #572 envelope enrichmen
     expect(out[0].dealContext.contactName).toBeNull();
   });
 
-  test('hard-deleted deal (no row in DB) → dealContext null, no crash', async () => {
-    prisma.deal.findMany.mockResolvedValue([]); // no matching rows
+  test('#587: hard-deleted deal → dealContext is the isMissing:true sentinel, NOT null', async () => {
+    // Pre-#587 the helper returned `dealContext: null` for orphan FKs.
+    // The frontend's chained fallback (server ctx → /api/deals?limit=100)
+    // missed those rows and rendered "Deal details unavailable". Post-fix
+    // the helper returns a sentinel envelope so the frontend's only branch
+    // is "isMissing? → render placeholder text 'Deal #<id> (no longer
+    // available)'" rather than handling null at every site.
+    prisma.deal.findMany.mockResolvedValue([]); // no matching rows for dealId=999
     const out = await attachDealContext([{ id: 99, dealId: 999 }], 1);
-    expect(out[0].dealContext).toBeNull();
+    expect(out[0].dealContext).not.toBeNull();
+    expect(out[0].dealContext.id).toBe(999);
+    expect(out[0].dealContext.isMissing).toBe(true);
+    expect(out[0].dealContext.isArchived).toBe(false);
+    expect(out[0].dealContext.title).toBeNull();
+    expect(out[0].dealContext.amount).toBeNull();
+    expect(out[0].dealContext.stage).toBeNull();
+    expect(out[0].dealContext.contactName).toBeNull();
+    // Same key set as a resolved envelope — every key present so the
+    // frontend never sees `undefined`.
+    expect(Object.keys(out[0].dealContext).sort()).toEqual(
+      Object.keys(buildMissingDealContext(999)).sort()
+    );
+  });
+
+  test('#587: mix of resolved + orphan dealIds in one call → each row gets the correct shape', async () => {
+    // dealId 100 resolves to a live deal; dealId 999 has no matching row
+    // (hard-deleted / cross-tenant). Both must surface in the output —
+    // resolved with isMissing:false, orphan with isMissing:true.
+    prisma.deal.findMany.mockResolvedValue([
+      {
+        id: 100,
+        title: 'Live Deal',
+        amount: 5000,
+        currency: 'USD',
+        stage: 'proposal',
+        probability: 50,
+        expectedClose: null,
+        deletedAt: null,
+        contact: { name: 'Alice', company: null },
+      },
+    ]);
+    const out = await attachDealContext(
+      [
+        { id: 1, dealId: 100, type: 'RISK' },
+        { id: 2, dealId: 999, type: 'RISK' },
+      ],
+      1
+    );
+    expect(out).toHaveLength(2);
+    expect(out[0].dealContext.isMissing).toBe(false);
+    expect(out[0].dealContext.title).toBe('Live Deal');
+    expect(out[1].dealContext.isMissing).toBe(true);
+    expect(out[1].dealContext.id).toBe(999);
+    expect(out[1].dealContext.title).toBeNull();
+  });
+
+  test('#587: buildMissingDealContext returns the canonical sentinel shape', async () => {
+    const sentinel = buildMissingDealContext(42);
+    expect(sentinel).toEqual({
+      id: 42,
+      title: null,
+      amount: null,
+      currency: null,
+      stage: null,
+      probability: null,
+      expectedClose: null,
+      deletedAt: null,
+      contactName: null,
+      contactCompany: null,
+      isArchived: false,
+      isMissing: true,
+    });
   });
 
   test('cross-tenant scope — where-clause always includes tenantId', async () => {

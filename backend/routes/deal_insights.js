@@ -109,21 +109,39 @@ router.get("/deal/:dealId", async (req, res) => {
   }
 });
 
-// ── #572: deal-context enrichment for GET / and GET /deal/:id ─────
+// ── #572 / #587: deal-context enrichment for GET / and GET /deal/:id ─────
 //
-// Hydrates each insight row with a small `dealContext` object so the
-// frontend can render the deal header without a second /api/deals fetch.
-// Tenant-checked (we only fetch deals where tenantId === insight tenantId
-// and id ∈ insight.dealIds). Soft-deleted deals ARE returned (deletedAt set
-// non-null) so the UI can show "[archived] <title>" instead of the
-// "Deal details unavailable" placeholder. If a Deal row was hard-deleted
-// (legacy data, prior to soft-delete) the dealContext is null and the
-// frontend uses its own fallback.
+// Hydrates each insight row with a `dealContext` object so the frontend can
+// render the deal header without a second /api/deals fetch. Tenant-checked
+// (we only fetch deals where tenantId === insight tenantId and id ∈
+// insight.dealIds). Soft-deleted deals surface with `deletedAt` set + the
+// derived `isArchived: true` flag so the UI can show "[archived] <title>".
+//
+// #587 hardening — `dealContext` is ALWAYS a non-null object. The prior
+// shape (`byId[i.dealId] || null`) returned `dealContext: null` when the
+// underlying Deal row was hard-deleted (legacy data, predating the #167
+// soft-delete column). The frontend's fallback chain (server dealContext →
+// /api/deals?limit=100 client-side dealById) then collapsed to the
+// "Deal details unavailable" placeholder for any insight whose dealId
+// wasn't in the newest-100 window — which is the exact regression #587
+// reopened against #572. By guaranteeing a populated envelope with an
+// explicit `isMissing: true` flag for orphan dealIds, the frontend can
+// render "Deal #<id> (no longer available)" instead of the bare
+// placeholder, and the join contract becomes "every row has dealContext"
+// rather than the brittle "if-this-then-fallback" chain.
+//
+// Insights with `dealId === null` (defensive — no current code path emits
+// these, but the column is nullable upstream of any historical schema
+// change) get `dealContext: null` so callers can distinguish "missing
+// deal" (orphan FK, isMissing=true) from "no deal linked" (no row, null).
 async function attachDealContext(insights, tenantId) {
   if (!Array.isArray(insights) || insights.length === 0) return insights;
   const dealIds = [...new Set(insights.map(i => i.dealId).filter(Boolean))];
   if (dealIds.length === 0) {
-    return insights.map(i => ({ ...i, dealContext: null }));
+    return insights.map(i => ({
+      ...i,
+      dealContext: i.dealId ? buildMissingDealContext(i.dealId) : null,
+    }));
   }
   const deals = await prisma.deal.findMany({
     where: { id: { in: dealIds }, tenantId },
@@ -153,9 +171,34 @@ async function attachDealContext(insights, tenantId) {
       contactName: d.contact ? d.contact.name : null,
       contactCompany: d.contact ? d.contact.company : null,
       isArchived: !!d.deletedAt,
+      isMissing: false,
     };
   }
-  return insights.map(i => ({ ...i, dealContext: byId[i.dealId] || null }));
+  return insights.map(i => {
+    if (!i.dealId) return { ...i, dealContext: null };
+    return { ...i, dealContext: byId[i.dealId] || buildMissingDealContext(i.dealId) };
+  });
+}
+
+// Sentinel envelope returned when a DealInsight references a dealId that no
+// longer resolves to a Deal row in the current tenant (hard-deleted, or a
+// cross-tenant id that the where-clause filters out). Same key set as a
+// resolved deal so the frontend never sees `undefined` reads.
+function buildMissingDealContext(dealId) {
+  return {
+    id: dealId,
+    title: null,
+    amount: null,
+    currency: null,
+    stage: null,
+    probability: null,
+    expectedClose: null,
+    deletedAt: null,
+    contactName: null,
+    contactCompany: null,
+    isArchived: false,
+    isMissing: true,
+  };
 }
 
 // ── Heuristic rules engine (shared with cron) ─────────────────────
@@ -454,3 +497,4 @@ module.exports = router;
 module.exports.runHeuristicRules = runHeuristicRules;
 module.exports.persistInsights = persistInsights;
 module.exports.attachDealContext = attachDealContext;
+module.exports.buildMissingDealContext = buildMissingDealContext;

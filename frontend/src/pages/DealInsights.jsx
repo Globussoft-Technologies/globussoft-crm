@@ -33,7 +33,18 @@ function timeAgo(dateStr) {
 export default function DealInsights() {
   const navigate = useNavigate();
   const [insights, setInsights] = useState([]);
-  const [deals, setDeals] = useState([]);
+  // #587: dealStats replaces the prior /api/deals?limit=100 parallel fetch.
+  // The old shape powered (a) the "Generate Insights (N open)" button count
+  // and (b) a client-side dealById fallback when ins.dealContext was missing.
+  // (a) needs a full-population aggregate, not a paginated window — /stats
+  // returns byStage so we can compute openCount accurately even on tenants
+  // with 5k+ deals. (b) is now obsolete because the server guarantees
+  // dealContext is always a non-null envelope (see attachDealContext in
+  // backend/routes/deal_insights.js — orphan FKs surface with
+  // isMissing=true). Removing the broken fallback eliminates the regression
+  // class entirely.
+  const [openDealCount, setOpenDealCount] = useState(0);
+  const [openDealIds, setOpenDealIds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [filter, setFilter] = useState('All');
@@ -41,12 +52,32 @@ export default function DealInsights() {
 
   const loadAll = async () => {
     try {
-      const [ins, dls] = await Promise.all([
+      // /api/deal-insights — server attaches dealContext (every row).
+      // /api/deals/stats — full-population stats (byStage gives openCount).
+      // /api/deals?stage=lead|contacted|proposal — only fetched to drive the
+      //   "Generate Insights" button's per-deal POST loop. Paginated, but
+      //   we cap at 50 anyway (see generateForAll) so the limit=100 window
+      //   covers it. NOT used for join/lookup — that's strictly via
+      //   dealContext now.
+      const [ins, stats, openSampleRaw] = await Promise.all([
         fetchApi('/api/deal-insights').catch(() => []),
-        fetchApi('/api/deals').catch(() => []),
+        fetchApi('/api/deals/stats').catch(() => null),
+        fetchApi('/api/deals?limit=50').catch(() => []),
       ]);
       setInsights(Array.isArray(ins) ? ins : []);
-      setDeals(Array.isArray(dls) ? dls : []);
+      // Open count = sum of stages that aren't won/lost. byStage entries
+      // shape: { stage, count, value }.
+      let count = 0;
+      if (stats && Array.isArray(stats.byStage)) {
+        for (const s of stats.byStage) {
+          if (s.stage !== 'won' && s.stage !== 'lost') count += s.count || 0;
+        }
+      }
+      setOpenDealCount(count);
+      // openDealIds is just a per-page slice for the bulk-generate button.
+      // Not authoritative — dealContext is the source of truth on the join.
+      const sample = Array.isArray(openSampleRaw) ? openSampleRaw : [];
+      setOpenDealIds(sample.filter(d => d.stage !== 'won' && d.stage !== 'lost').map(d => d.id));
     } catch (e) {
       console.error(e);
     } finally {
@@ -55,17 +86,6 @@ export default function DealInsights() {
   };
 
   useEffect(() => { loadAll(); }, []);
-
-  const dealById = useMemo(() => {
-    const m = {};
-    deals.forEach(d => { m[d.id] = d; });
-    return m;
-  }, [deals]);
-
-  const openDeals = useMemo(
-    () => deals.filter(d => d.stage !== 'won' && d.stage !== 'lost'),
-    [deals]
-  );
 
   const filtered = useMemo(() => {
     let list = insights;
@@ -96,12 +116,16 @@ export default function DealInsights() {
   const generateForAll = async () => {
     setGenerating(true);
     try {
-      const targets = openDeals.slice(0, 50); // safety cap
-      for (const d of targets) {
+      // openDealIds is a sample (newest 50) — bulk generate is best-effort
+      // for visible open deals; the cron engine handles the long tail every
+      // 6 hours. Cap honored both server-side via the engine and client-side
+      // here to avoid a 5k-request burst on large tenants.
+      const targets = openDealIds.slice(0, 50);
+      for (const id of targets) {
         try {
-          await fetchApi(`/api/deal-insights/generate/${d.id}`, { method: 'POST' });
+          await fetchApi(`/api/deal-insights/generate/${id}`, { method: 'POST' });
         } catch (e) {
-          console.warn(`Generate failed for deal ${d.id}:`, e.message);
+          console.warn(`Generate failed for deal ${id}:`, e.message);
         }
       }
       await loadAll();
@@ -140,12 +164,12 @@ export default function DealInsights() {
         </div>
         <button
           onClick={generateForAll}
-          disabled={generating || openDeals.length === 0}
+          disabled={generating || openDealIds.length === 0}
           className="btn-primary"
           style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: generating ? 0.7 : 1 }}
         >
           <RefreshCw size={16} style={{ animation: generating ? 'spin 1s linear infinite' : 'none' }} />
-          {generating ? 'Generating...' : `Generate Insights (${openDeals.length} open)`}
+          {generating ? 'Generating...' : `Generate Insights (${openDealCount} open)`}
         </button>
       </header>
 
@@ -208,31 +232,36 @@ export default function DealInsights() {
         </div>
       ) : (
         Object.entries(grouped).map(([dealId, items]) => {
-          // #572: prefer the server-side dealContext envelope over the
-          // parallel /api/deals?limit=100 fetch. The /api/deals call only
-          // returns the newest 100 rows, so on large tenants (5k+ deals)
-          // 80% of insights had no dealById match and rendered the literal
-          // "Deal details unavailable" placeholder. Server now joins the
-          // Deal row when serving GET /api/deal-insights — see
-          // backend/routes/deal_insights.js attachDealContext helper.
-          // Soft-deleted deals come through with isArchived=true so we can
-          // show "[archived]" instead of the bare placeholder.
+          // #572 / #587: dealContext is the single source of truth for the
+          // deal-header join. The server (attachDealContext in
+          // backend/routes/deal_insights.js) guarantees a non-null envelope
+          // for every insight whose dealId is set — orphan FKs surface
+          // with isMissing=true rather than dealContext=null. There is no
+          // client-side /api/deals fallback anymore (the prior
+          // ?limit=100 join only resolved ~20% of insights on demo's 5k+
+          // deal tenant — that was the original #572 bug, and the
+          // brittle fallback chain is what made #587 reproduce when the
+          // join missed for any reason). Pre-fix:
+          //   ctx = items[0]?.dealContext;
+          //   deal = ctx || dealById[dealId];
+          //   subtitle = deal ? <parts> : "Deal details unavailable";
+          // Post-fix: ctx is always present for non-null dealId; the
+          // "Deal details unavailable" placeholder is gone.
           const ctx = items[0] && items[0].dealContext;
-          const deal = ctx || dealById[dealId];
-          const dealTitle = deal
-            ? (deal.isArchived ? `[archived] ${deal.title}` : deal.title)
-            : `Deal #${dealId}`;
-          const dealStage = deal && deal.stage ? deal.stage : null;
-          const dealAmount = deal ? (deal.amount || 0) : null;
-          const dealCurrency = deal ? deal.currency : undefined;
-          const dealContactName = deal
-            ? (deal.contactName || (deal.contact && deal.contact.name) || null)
-            : null;
+          const isMissing = !ctx || ctx.isMissing === true;
+          const dealTitle = isMissing
+            ? `Deal #${dealId} (no longer available)`
+            : (ctx.isArchived ? `[archived] ${ctx.title}` : ctx.title);
           const subtitleParts = [];
-          if (dealStage) subtitleParts.push(dealStage);
-          if (dealAmount !== null) subtitleParts.push(formatMoney(dealAmount, { currency: dealCurrency }));
-          subtitleParts.push(dealContactName || 'No contact');
-          const subtitle = deal ? subtitleParts.join(' · ') : 'Deal details unavailable';
+          if (!isMissing) {
+            if (ctx.stage) subtitleParts.push(ctx.stage);
+            const amount = ctx.amount == null ? null : ctx.amount;
+            if (amount !== null) subtitleParts.push(formatMoney(amount, { currency: ctx.currency }));
+            subtitleParts.push(ctx.contactName || 'No contact');
+          }
+          const subtitle = isMissing
+            ? 'Linked deal was hard-deleted'
+            : subtitleParts.join(' · ');
           return (
             <div key={dealId} className="card" style={{ padding: '1.5rem', marginBottom: '1.25rem' }}>
               {/* #467: header used to navigate to '/pipeline' with no deal
@@ -246,7 +275,7 @@ export default function DealInsights() {
                 tabIndex={0}
                 onClick={() => navigate(`/pipeline?dealId=${dealId}`)}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/pipeline?dealId=${dealId}`); } }}
-                title={deal ? `Open ${dealTitle} in pipeline` : `Open deal #${dealId} in pipeline`}
+                title={isMissing ? `Open deal #${dealId} in pipeline` : `Open ${dealTitle} in pipeline`}
                 style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   marginBottom: '1rem', cursor: 'pointer', userSelect: 'none',

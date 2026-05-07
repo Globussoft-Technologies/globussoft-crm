@@ -211,8 +211,21 @@ describe('auth required', () => {
   });
 });
 
-describe('forbidden envelope', () => {
-  test('403 carries WELLNESS_ROLE_FORBIDDEN code and the allowed array', async () => {
+// #590 / #591: canonical RBAC denial envelope.
+//
+// Pre-fix, verifyWellnessRole emitted "Insufficient wellness role" as
+// the human-facing `error` — that string leaked the wellness role
+// taxonomy to non-privileged users (enumeration-helpful for social-
+// engineering / JWT-tampering attempts).
+//
+// Now the human-facing `error` is the SAME neutral copy emitted by
+// verifyRole's RBAC_DENIED envelope. The granular `code` stays
+// (WELLNESS_ROLE_FORBIDDEN) so SDKs / specs can still distinguish
+// wellness from generic role denials by intent. The `allowed` array
+// stays in the JSON envelope to honour the #274 contract (it's
+// technical metadata, not user-visible toast copy).
+describe('forbidden envelope (#590 / #591 canonical RBAC_DENIED copy)', () => {
+  test('403 carries WELLNESS_ROLE_FORBIDDEN code and neutral user-facing message', async () => {
     const allowed = ['doctor', 'professional'];
     const mw = verifyWellnessRole(allowed);
     const { req, res, next } = makeReqResNext({
@@ -221,10 +234,18 @@ describe('forbidden envelope', () => {
     await mw(req, res, next);
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json).toHaveBeenCalledWith({
-      error: 'Insufficient wellness role',
+      error:
+        "You don't have permission to perform this action. Contact your administrator.",
       code: 'WELLNESS_ROLE_FORBIDDEN',
       allowed,
     });
+    // No role-taxonomy leakage in the human-facing copy. Body must NOT
+    // mention internal role tokens in the `error` field — that's the
+    // string the frontend renders into the toast. "administrator" is
+    // the user-facing escalation path, not a role-token. The `allowed`
+    // array is technical metadata for the frontend mapper (#274 contract).
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).not.toMatch(/system admin|wellness role|\bADMIN\b|\bMANAGER\b|\bdoctor\b|\bprofessional\b|\btelecaller\b|\bhelper\b/i);
     expect(next).not.toHaveBeenCalled();
   });
 });
@@ -242,8 +263,12 @@ describe('tenant vertical gate (#325)', () => {
     });
     await mw(req, res, next);
     expect(res.status).toHaveBeenCalledWith(403);
+    // #590 / #591: body uses the canonical neutral RBAC copy (no
+    // "Wellness vertical required" leakage). Granular code stays so
+    // SDKs / specs can still branch on intent.
     expect(res.json).toHaveBeenCalledWith({
-      error: 'Wellness vertical required',
+      error:
+        "You don't have permission to perform this action. Contact your administrator.",
       code: 'WELLNESS_TENANT_REQUIRED',
     });
     expect(next).not.toHaveBeenCalled();

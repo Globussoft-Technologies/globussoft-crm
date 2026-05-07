@@ -292,8 +292,9 @@ function ServiceCard({ service, onChanged }) {
     }
     setSaving(true);
     try {
-      // #274 #275: fetchApi auto-toasts the server error message (e.g.
-      // "Insufficient wellness role" on 403). Page emits the success toast.
+      // #274 #275: fetchApi auto-toasts the server error message on 403
+      // (the canonical RBAC denial copy per #590/#591). Page emits the
+      // success toast.
       await fetchApi(`/api/wellness/services/${service.id}`, {
         method: 'PUT',
         body: JSON.stringify({

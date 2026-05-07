@@ -472,10 +472,16 @@ test.describe('GDPR DSAR Export — RBAC sanity', () => {
       res.status(),
       `USER must be 403 on /export/contact/:id (was ${res.status()})`
     ).toBe(403);
-    // verifyRole emits { error: 'Insufficient Role Permissions...' } —
-    // assert the canonical 403 body shape so a future middleware swap
-    // (e.g. to a code-based RBAC error) gets caught here.
+    // verifyRole emits the canonical RBAC denial envelope
+    // ({ error, code: 'RBAC_DENIED' }) per #590/#591. Pre-fix the
+    // string was "Insufficient Role Permissions. System Admin
+    // Required." which leaked role taxonomy. We assert the stable
+    // code rather than the human-facing copy so a future tweak to
+    // the toast string doesn't red this spec.
     const body = await res.json().catch(() => ({}));
     expect(typeof body.error === 'string' && body.error.length > 0).toBe(true);
+    expect(body.code).toBe('RBAC_DENIED');
+    // #591: response body must NOT leak role names to non-privileged users.
+    expect(body.error).not.toMatch(/system admin|wellness role/i);
   });
 });

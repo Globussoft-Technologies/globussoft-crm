@@ -75,13 +75,44 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
+// #590 / #591: canonical RBAC denial envelope.
+//
+// Pre-fix, three different denial strings shipped depending on which
+// middleware/route fired:
+//   - "Insufficient Role Permissions. System Admin Required." (verifyRole)
+//   - "Insufficient wellness role"                            (verifyWellnessRole)
+//   - "Failed to save"                                        (frontend swallow-and-relabel)
+//
+// Two problems with that:
+//   (a) inconsistent UX — same class of denial, three different strings;
+//   (b) information disclosure — "System Admin" / "wellness role" leak
+//       the internal role taxonomy, which is enumeration-helpful for
+//       social-engineering / JWT-tampering reconnaissance.
+//
+// Single neutral copy used everywhere now. The stable `code` ("RBAC_DENIED")
+// lets the frontend / specs distinguish RBAC from generic 403s without
+// pattern-matching the human-facing string.
+const RBAC_DENIED_MESSAGE = "You don't have permission to perform this action. Contact your administrator.";
+const RBAC_DENIED_CODE = "RBAC_DENIED";
+
 const verifyRole = (roles) => {
   return (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ error: "Insufficient Role Permissions. System Admin Required." });
+      return res.status(403).json({
+        error: RBAC_DENIED_MESSAGE,
+        code: RBAC_DENIED_CODE,
+      });
     }
     next();
   };
 };
 
-module.exports = { verifyToken, verifyRole };
+module.exports = {
+  verifyToken,
+  verifyRole,
+  // #590 / #591: exported so verifyWellnessRole (and any future RBAC
+  // gate) can emit the same canonical denial envelope without
+  // re-stating the literal string in two places.
+  RBAC_DENIED_MESSAGE,
+  RBAC_DENIED_CODE,
+};

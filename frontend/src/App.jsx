@@ -284,7 +284,11 @@ export default function App() {
   // and getting 403s. We render a splash until `loading` flips false on
   // first effect tick (synchronous-after-mount).
   const [loading, setLoading] = useState(true);
-  const [theme, setTheme] = useState(localStorage.getItem("theme") || "light");
+  const [theme, setTheme] = useState(() => {
+    const stored = localStorage.getItem("theme");
+    if (stored) return stored;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
 
   useEffect(() => {
     // Token storage is owned by setAuthToken/clearAuthToken in utils/api.js
@@ -321,8 +325,26 @@ export default function App() {
   }, [tenant]);
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
+    let effectiveTheme = theme;
+    if (theme === "system") {
+      effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    }
+    console.log('[Theme] Applying theme:', { selectedTheme: theme, effectiveTheme });
+    document.documentElement.setAttribute("data-theme", effectiveTheme);
     localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (theme !== "system") return;
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e) => {
+      const effectiveTheme = e.matches ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", effectiveTheme);
+    };
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
   }, [theme]);
 
   // Apply vertical-specific theme overrides (e.g. wellness gets Dr. Haror palette)
@@ -332,7 +354,12 @@ export default function App() {
     document.body.setAttribute("data-vertical", v);
   }, [tenant]);
 
-  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  const toggleTheme = () =>
+    setTheme((t) => {
+      if (t === "light") return "dark";
+      if (t === "dark") return "system";
+      return "light";
+    });
 
   // #529 / #530: stable callback reference. Prior shape created a new fn
   // on every App render, which (combined with the inline AuthContext

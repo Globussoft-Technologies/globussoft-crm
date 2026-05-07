@@ -76,6 +76,52 @@
   --kbd-bg: rgba(0, 0, 0, 0.08);
 }
 
+[data-theme="dark"] {
+  --bg-color: #0b0c10;
+  --surface-color: rgba(22, 24, 29, 0.6);
+  --surface-hover: rgba(35, 40, 48, 0.8);
+  --text-primary: #ffffff;
+  --text-secondary: #d1d5db;
+  --accent-color: #3b82f6;
+  --accent-glow: rgba(59, 130, 246, 0.5);
+  --accent-hover: #60a5fa;
+  --success-color: #10b981;
+  --warning-color: #f59e0b;
+  --danger-color: #ef4444;
+
+  --border-color: rgba(255, 255, 255, 0.1);
+
+  --glass-bg: rgba(20, 22, 28, 0.5);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+
+  --input-bg: rgba(15, 23, 42, 0.6);
+  --input-bg-focus: rgba(15, 23, 42, 0.8);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.15);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
+  --card-shimmer: rgba(255, 255, 255, 0.05);
+
+  --overlay-bg: rgba(0, 0, 0, 0.7);
+  --subtle-bg: rgba(255, 255, 255, 0.05);
+  --subtle-bg-2: rgba(255, 255, 255, 0.02);
+  --subtle-bg-3: rgba(255, 255, 255, 0.1);
+  --subtle-bg-4: rgba(255, 255, 255, 0.04);
+  --table-header-bg: rgba(0, 0, 0, 0.3);
+  --tooltip-bg: rgba(11, 12, 16, 0.95);
+  --hover-bg: rgba(255, 255, 255, 0.05);
+  --kbd-bg: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] body {
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] body {
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

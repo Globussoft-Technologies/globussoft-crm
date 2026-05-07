@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette } from 'lucide-react';
+import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette, Monitor } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { ThemeContext, AuthContext } from '../App';
@@ -12,7 +12,7 @@ const DEFAULT_BRAND_COLOR = '#3b82f6';
 
 export default function Settings() {
   const notify = useNotify();
-  const { theme, toggleTheme } = useContext(ThemeContext);
+  const { theme, setTheme, toggleTheme } = useContext(ThemeContext);
   const { tenant: ctxTenant, setTenant } = useContext(AuthContext);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -301,43 +301,67 @@ export default function Settings() {
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Sun size={20} color="var(--warning-color)" /> Appearance
           </h3>
-          {/* #479: flexWrap + gap so the disabled "Light mode" button drops
-              below the Theme description on narrow viewports rather than
-              squeezing the description text. */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
-            <div style={{ minWidth: 0, flex: '1 1 200px' }}>
-              <p style={{ fontWeight: '500', fontSize: '1rem' }}>Theme</p>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-                {/* #264: dark theme stylesheet not yet shipped — toggling
-                    data-theme=dark had no CSS to respond. Disable the toggle
-                    until the dark variable overrides land, rather than leave
-                    a 'visual lie' button. */}
-                Light mode (dark mode coming soon).
-              </p>
+          <div style={{ minWidth: 0 }}>
+            <p style={{ fontWeight: '500', fontSize: '1rem', marginBottom: '1rem' }}>Theme</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+              Choose how the interface should appear.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {[
+                { value: 'light', label: 'Light mode', icon: Sun },
+                { value: 'dark', label: 'Dark mode', icon: Moon },
+                { value: 'system', label: 'Based on system preference', icon: Monitor },
+              ].map(({ value, label, icon: IconComponent }) => (
+                <label
+                  key={value}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '8px',
+                    border: `2px solid ${theme === value ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                    background:
+                      theme === value
+                        ? 'rgba(59, 130, 246, 0.1)'
+                        : 'rgba(59, 130, 246, 0.02)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}
+                  className="theme-option"
+                  data-selected={theme === value}
+                  onMouseEnter={(e) => {
+                    if (theme !== value) {
+                      e.currentTarget.style.borderColor = '#3b82f6';
+                      e.currentTarget.style.background = 'rgba(59, 130, 246, 0.08)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (theme !== value) {
+                      e.currentTarget.style.borderColor = 'var(--border-color)';
+                      e.currentTarget.style.background = 'rgba(59, 130, 246, 0.02)';
+                    }
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="theme"
+                    value={value}
+                    checked={theme === value}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setTheme(value);
+                      }
+                    }}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  {IconComponent && <IconComponent size={18} />}
+                  <span style={{ fontWeight: theme === value ? '600' : '500' }}>
+                    {label}
+                  </span>
+                </label>
+              ))}
             </div>
-            <button
-              type="button"
-              disabled
-              title="Dark mode is not yet available — see issue #264"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.75rem',
-                padding: '0.6rem 1.25rem',
-                borderRadius: '10px',
-                border: '1px solid var(--border-color)',
-                background: 'rgba(0,0,0,0.03)',
-                color: 'var(--text-secondary)',
-                cursor: 'not-allowed',
-                opacity: 0.6,
-                fontFamily: 'var(--font-family)',
-                fontWeight: '500',
-                fontSize: '0.9rem',
-              }}
-            >
-              <Sun size={18} />
-              Light mode
-            </button>
           </div>
         </div>
 

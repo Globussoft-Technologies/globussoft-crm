@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, FileText, UploadCloud, Download, FileSignature } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney } from '../utils/money';
+import { formatDate } from '../utils/date';
 import CPQBuilder from './CPQBuilder';
 
 const API_BASE = "";
@@ -138,7 +139,7 @@ export default function DealModal({ deal, onClose }) {
                     </div>
                     <div>
                       <p style={{ fontWeight: '600' }}>{att.filename}</p>
-                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{new Date(att.createdAt).toLocaleDateString()}</p>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{formatDate(att.createdAt)}</p>
                     </div>
                   </div>
                   <a href={`${API_BASE}${att.fileUrl}`} target="_blank" rel="noreferrer" className="btn-secondary" style={{ padding: '0.5rem 1rem', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -177,7 +178,7 @@ export default function DealModal({ deal, onClose }) {
             </div>
             <div style={{ marginBottom: '1.5rem' }}>
               <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Close Date</p>
-              <p style={{ fontWeight: 'bold' }}>{deal.expectedClose ? new Date(deal.expectedClose).toLocaleDateString() : 'Not Set'}</p>
+              <p style={{ fontWeight: 'bold' }}>{deal.expectedClose ? formatDate(deal.expectedClose) : 'Not Set'}</p>
             </div>
           </div>
 

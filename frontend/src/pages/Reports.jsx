@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney, currencySymbol } from '../utils/money';
+import { formatDateMedium } from '../utils/date';
 import { useNotify } from '../utils/notify';
 import { PieChart as PieChartIcon, Download, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
 
@@ -549,9 +550,9 @@ const thStyle = { padding: '0.875rem 1rem', color: 'var(--text-secondary)', font
 const tdStyle = { padding: '0.875rem 1rem' };
 const labelStyle = { display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '500' };
 
+// #627: locale-aware date formatter — was hardcoded en-US.
 function fmtDate(d) {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  return formatDateMedium(d);
 }
 
 function StageBadge({ stage }) {

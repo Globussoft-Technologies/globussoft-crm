@@ -2,6 +2,7 @@ import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
 import { UserPlus, Search, Users, Filter, Undo2 } from 'lucide-react';
 import { useNotify } from '../utils/notify';
+import { formatDateMedium as formatDate } from '../utils/date';
 
 // #366: include Junk so the chip can show its count if the tenant uses it.
 const STATUSES = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
@@ -144,14 +145,6 @@ const ConvertedLeads = () => {
       (lead.company && lead.company.toLowerCase().includes(term))
     );
   });
-
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
 
   const getStaffName = (staffId) => {
     if (!staffId) return 'Unassigned';

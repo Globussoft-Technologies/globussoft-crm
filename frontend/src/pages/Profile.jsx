@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { User, Mail, Key, Save } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
+import { formatDateLong } from '../utils/date';
 
 const Profile = () => {
   const { user: authUser, setUser: setAuthUser } = useContext(AuthContext);
@@ -128,7 +129,7 @@ const Profile = () => {
 
         {profile?.createdAt && (
           <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-            Member since {new Date(profile.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+            Member since {formatDateLong(profile.createdAt)}
           </p>
         )}
       </div>

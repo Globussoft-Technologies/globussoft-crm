@@ -3,8 +3,15 @@ import { Link } from 'react-router-dom';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, User as UserIcon, Stethoscope, Plus, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { tenantLocale } from '../../utils/date';
 
-const HOURS = Array.from({ length: 11 }, (_, i) => 9 + i); // 9 AM → 7 PM
+// #615: default visible window is 9 AM → 7 PM, but visits scheduled outside
+// that window (early/late shifts, walk-ins booked for 8 AM) are NOT clamped
+// to the boundary hours — that's the bug that made every off-hours visit
+// stack at the top (or bottom) of the day. computeHours() expands the
+// visible range to include any actual visit hour on the loaded day so the
+// vertical position reflects the booked time. See `hoursForVisits()`.
+const DEFAULT_HOURS = Array.from({ length: 11 }, (_, i) => 9 + i); // 9 AM → 7 PM
 const STATUS_COLOR = {
   booked:        'rgba(59,130,246,0.18)',
   confirmed:     'rgba(99,102,241,0.20)',
@@ -147,7 +154,7 @@ export default function CalendarGrid() {
             <CalendarIcon size={24} /> Calendar
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Day view by practitioner — {date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            Day view by practitioner — {date.toLocaleDateString(tenantLocale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>

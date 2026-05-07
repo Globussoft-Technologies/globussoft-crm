@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FileSignature, Plus, Send, Eye, X, Check } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDate } from '../utils/date';
 
 const STATUS_STYLES = {
   PENDING:  { bg: 'rgba(245,158,11,0.12)', color: '#f59e0b', border: 'rgba(245,158,11,0.3)' },
@@ -209,10 +210,10 @@ export default function Signatures() {
                     <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)' }}>{r.signerEmail}</td>
                     <td style={{ padding: '0.85rem 0.5rem' }}><StatusBadge status={r.status} /></td>
                     <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                      {r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '—'}
+                      {r.createdAt ? formatDate(r.createdAt) : '—'}
                     </td>
                     <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                      {r.signedAt ? new Date(r.signedAt).toLocaleDateString() : '—'}
+                      {r.signedAt ? formatDate(r.signedAt) : '—'}
                     </td>
                     <td style={{ padding: '0.85rem 0.5rem' }}>
                       <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, User, Mail, Building, Briefcase, Phone, Clock, FileText } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDate } from '../utils/date';
 
 export default function ContactsDetail() {
   const notify = useNotify();
@@ -104,7 +105,7 @@ export default function ContactsDetail() {
               <div style={{ padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '8px', color: 'var(--text-secondary)' }}><Clock size={18}/></div>
               <div>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Record Created</p>
-                <p style={{ fontWeight: '500' }}>{contact.createdAt ? new Date(contact.createdAt).toLocaleDateString() : 'Unknown'}</p>
+                <p style={{ fontWeight: '500' }}>{contact.createdAt ? formatDate(contact.createdAt) : 'Unknown'}</p>
               </div>
             </div>
           </div>

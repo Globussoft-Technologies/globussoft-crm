@@ -4,6 +4,7 @@ import { Search, Plus, Users, Phone, Mail, Pencil } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
+import { formatDate } from "../../utils/date";
 
 export default function Patients() {
   const notify = useNotify();
@@ -462,7 +463,7 @@ export default function Patients() {
                   <td style={tdStyle}>{p.gender || "—"}</td>
                   <td style={tdStyle}>{p.source || "—"}</td>
                   <td style={tdStyle}>
-                    {new Date(p.createdAt).toLocaleDateString("en-IN")}
+                    {formatDate(p.createdAt)}
                   </td>
                   <td style={{ ...tdStyle, textAlign: "center" }}>
                     <button

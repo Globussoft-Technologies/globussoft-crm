@@ -2,6 +2,7 @@ import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
 import { Building2, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { formatDateMedium as formatDate } from '../utils/date';
 
 const Clients = () => {
   const [clients, setClients] = useState([]);
@@ -30,14 +31,6 @@ const Clients = () => {
       (client.company && client.company.toLowerCase().includes(term))
     );
   });
-
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>

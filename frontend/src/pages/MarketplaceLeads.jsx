@@ -1,4 +1,5 @@
 import { fetchApi } from '../utils/api';
+import { formatDateTime as formatDate } from '../utils/date';
 import React, { useState, useEffect } from 'react';
 import { ShoppingBag, Search, Download, RefreshCw, Settings, CheckCircle2, XCircle, AlertCircle, ExternalLink, Filter } from 'lucide-react';
 
@@ -151,8 +152,6 @@ const MarketplaceLeads = () => {
       (lead.product && lead.product.toLowerCase().includes(term))
     );
   });
-
-  const formatDate = (dateStr) => new Date(dateStr).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
   // ── Config Panel ──
   if (showConfig) {

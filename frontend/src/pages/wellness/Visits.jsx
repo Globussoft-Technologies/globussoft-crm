@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ChevronLeft, Phone, Calendar, DollarSign, Loader2, ChevronRight } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
+import { formatDate } from '../../utils/date';
 
 const isoDay = (d) => d.toISOString().slice(0, 10);
 
@@ -141,7 +142,7 @@ export default function Visits() {
               {patientDetails.data.visits.map((visit) => (
                 <tr key={visit.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                   <td style={{ ...tdStyle, textAlign: 'left' }}>
-                    {new Date(visit.visitDate).toLocaleDateString('en-IN')}
+                    {formatDate(visit.visitDate)}
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'left' }}>
                     {visit.doctor?.name || '—'}
@@ -307,7 +308,7 @@ export default function Visits() {
                       {formatMoney(patient.totalRevenue)}
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'left' }}>
-                      {patient.lastVisit ? new Date(patient.lastVisit).toLocaleDateString('en-IN') : '—'}
+                      {patient.lastVisit ? formatDate(patient.lastVisit) : '—'}
                     </td>
                   </tr>
                 ))}

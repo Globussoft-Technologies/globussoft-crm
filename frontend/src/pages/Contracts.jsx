@@ -3,6 +3,7 @@ import { FileText, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucid
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
+import { formatDate } from '../utils/date';
 
 const STATUS_STYLES = {
   Draft:      { bg: 'rgba(100,116,139,0.12)', color: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
@@ -288,10 +289,10 @@ export default function Contracts() {
                         <StatusBadge status={c.status} />
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                        {c.startDate ? new Date(c.startDate).toLocaleDateString() : '—'}
+                        {c.startDate ? formatDate(c.startDate) : '—'}
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                        {c.endDate ? new Date(c.endDate).toLocaleDateString() : '—'}
+                        {c.endDate ? formatDate(c.endDate) : '—'}
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem' }}>
                         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>

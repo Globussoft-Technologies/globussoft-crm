@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { formatMoney, currencySymbol } from '../../utils/money';
+import { formatDate } from '../../utils/date';
 // #316: NumberInput strips the `<oldValue><newTyped>` concatenation artifact
 // users hit when doing Ctrl+A → Delete → retype on number fields.
 import { NumberInput } from '../../utils/numberInput';
@@ -187,7 +189,7 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
         const onSubmit = (e) => {
           if (!valid) {
             e.preventDefault();
-            notify.error('Please enter a service name, a base price of at least ₹1, and a positive duration.');
+            notify.error(`Please enter a service name, a base price of at least ${currencySymbol()}1, and a positive duration.`);
             return;
           }
           submit(e);
@@ -213,11 +215,11 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
               </select>
               {/* #364: explain tier semantics inline so the dropdown isn't a guessing game. */}
               <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.3rem', lineHeight: 1.4 }}>
-                LOW = quick consult / under ₹2K · MED = standard treatment / ₹2K-₹10K · HIGH = procedure / ₹10K+
+                LOW = quick consult / under {currencySymbol()}2K · MED = standard treatment / {currencySymbol()}2K-{currencySymbol()}10K · HIGH = procedure / {currencySymbol()}10K+
               </div>
             </div>
             <div>
-              <label style={fieldLabel}>Base price (₹) <span style={{ color: '#ef4444' }}>*</span></label>
+              <label style={fieldLabel}>Base price ({currencySymbol()}) <span style={{ color: '#ef4444' }}>*</span></label>
               <input type="number" min="1" step="1" placeholder="e.g. 5000" value={form.basePrice} onChange={(e) => setForm({ ...form, basePrice: parseFloat(e.target.value) || 0 })} style={inputStyle} />
             </div>
             <div>
@@ -384,8 +386,8 @@ function TreatmentDetailModal({ treatment, onClose, onChanged }) {
   const notify = useNotify();
   const statusLabel = treatment.status ? treatment.status.charAt(0).toUpperCase() + treatment.status.slice(1) : 'Active';
   const progressPercent = treatment.totalSessions > 0 ? Math.round((treatment.completedSessions / treatment.totalSessions) * 100) : 0;
-  const nextDueDate = treatment.nextDueAt ? new Date(treatment.nextDueAt).toLocaleDateString('en-IN') : 'Not scheduled';
-  const startDate = new Date(treatment.startedAt).toLocaleDateString('en-IN');
+  const nextDueDate = treatment.nextDueAt ? formatDate(treatment.nextDueAt) : 'Not scheduled';
+  const startDate = formatDate(treatment.startedAt);
 
   const updateStatus = async (newStatus) => {
     try {
@@ -422,7 +424,7 @@ function TreatmentDetailModal({ treatment, onClose, onChanged }) {
           <DetailRow label="Phone" value={treatment.patient?.phone || 'N/A'} />
           <DetailRow label="Gender" value={treatment.patient?.gender || 'N/A'} />
           <DetailRow label="Blood Group" value={treatment.patient?.bloodGroup || 'N/A'} />
-          <DetailRow label="Date of Birth" value={treatment.patient?.dob ? new Date(treatment.patient.dob).toLocaleDateString('en-IN') : 'N/A'} />
+          <DetailRow label="Date of Birth" value={treatment.patient?.dob ? formatDate(treatment.patient.dob) : 'N/A'} />
           {treatment.patient?.allergies && <DetailRow label="Allergies" value={treatment.patient.allergies} />}
           {treatment.patient?.notes && <DetailRow label="Notes" value={treatment.patient.notes} />}
         </Section>
@@ -432,7 +434,7 @@ function TreatmentDetailModal({ treatment, onClose, onChanged }) {
           <Section title="Service Information">
             <DetailRow label="Service Name" value={treatment.service.name} />
             <DetailRow label="Category" value={treatment.service.category} />
-            <DetailRow label="Base Price" value={`₹${treatment.service.basePrice.toLocaleString('en-IN')}`} />
+            <DetailRow label="Base Price" value={formatMoney(treatment.service.basePrice, { maximumFractionDigits: 0 })} />
             <DetailRow label="Duration" value={`${treatment.service.durationMin} minutes`} />
             <DetailRow label="Target Radius" value={treatment.service.targetRadiusKm ? `${treatment.service.targetRadiusKm} km` : 'Unlimited'} />
             {treatment.service.description && <DetailRow label="Description" value={treatment.service.description} />}
@@ -444,7 +446,7 @@ function TreatmentDetailModal({ treatment, onClose, onChanged }) {
           <DetailRow label="Total Sessions" value={treatment.totalSessions} />
           <DetailRow label="Completed Sessions" value={treatment.completedSessions} />
           <DetailRow label="Progress" value={`${progressPercent}%`} />
-          <DetailRow label="Total Price" value={`₹${treatment.totalPrice?.toLocaleString('en-IN') || '0'}`} />
+          <DetailRow label="Total Price" value={formatMoney(treatment.totalPrice || 0, { maximumFractionDigits: 0 })} />
           <DetailRow label="Start Date" value={startDate} />
           <DetailRow label="Next Due Date" value={nextDueDate} />
         </Section>
@@ -524,7 +526,7 @@ function PackageBuilder({ services }) {
   const net = Math.round(gross - savings);
 
   const pitch = service
-    ? `${service.name} × ${sessions} sessions = ₹${net.toLocaleString('en-IN')} (${discount}% off)`
+    ? `${service.name} × ${sessions} sessions = ${formatMoney(net, { maximumFractionDigits: 0 })} (${discount}% off)`
     : '';
 
   const copyPitch = async () => {
@@ -708,8 +710,8 @@ function TreatmentCard({ treatment, onChanged, onSelect }) {
   const notify = useNotify();
   const statusLabel = treatment.status ? treatment.status.charAt(0).toUpperCase() + treatment.status.slice(1) : 'Active';
   const progressPercent = treatment.totalSessions > 0 ? Math.round((treatment.completedSessions / treatment.totalSessions) * 100) : 0;
-  const nextDueDate = treatment.nextDueAt ? new Date(treatment.nextDueAt).toLocaleDateString('en-IN') : 'Not scheduled';
-  const startDate = new Date(treatment.startedAt).toLocaleDateString('en-IN');
+  const nextDueDate = treatment.nextDueAt ? formatDate(treatment.nextDueAt) : 'Not scheduled';
+  const startDate = formatDate(treatment.startedAt);
 
   const updateStatus = async (newStatus) => {
     try {

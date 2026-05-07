@@ -5,13 +5,16 @@ import {
 } from 'recharts';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatMoney } from '../utils/money';
+import { formatDate } from '../utils/date';
 import {
   BadgePercent, Trophy, X, DollarSign, Calendar, Plus, Trash2,
 } from 'lucide-react';
 
+// #626: was hardcoded USD; formatMoney reads tenant currency+locale
 function fmtCurrency(n) {
-  if (n === null || n === undefined || Number.isNaN(n)) return '$0';
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+  if (n === null || n === undefined || Number.isNaN(n)) return formatMoney(0, { maximumFractionDigits: 0 });
+  return formatMoney(n, { maximumFractionDigits: 0 });
 }
 
 function defaultRange() {
@@ -255,7 +258,7 @@ export default function WinLoss() {
                   <td style={{ ...td, color: d.reason ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
                     {d.reason || '—'}
                   </td>
-                  <td style={td}>{d.createdAt ? new Date(d.createdAt).toLocaleDateString() : ''}</td>
+                  <td style={td}>{d.createdAt ? formatDate(d.createdAt) : ''}</td>
                 </tr>
               ))}
             </tbody>

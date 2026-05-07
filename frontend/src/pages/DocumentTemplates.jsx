@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { FileText, Plus, Edit, Eye, Send, Copy, Trash2, X, Save, Code } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDate } from '../utils/date';
 
 const TYPES = ['PROPOSAL', 'NDA', 'CONTRACT', 'EMAIL'];
 
@@ -209,7 +210,7 @@ export default function DocumentTemplates() {
                   <div style={{ minWidth: 0 }}>
                     <h3 style={{ fontSize: '1.05rem', fontWeight: 600, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</h3>
                     <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                      Updated {new Date(t.updatedAt || t.createdAt).toLocaleDateString()}
+                      Updated {formatDate(t.updatedAt || t.createdAt)}
                     </p>
                   </div>
                   <span style={{ background: tc.bg, color: tc.color, padding: '0.25rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 600 }}>

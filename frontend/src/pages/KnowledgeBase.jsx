@@ -14,6 +14,7 @@ import {
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
+import { formatDate } from "../utils/date";
 
 const EMPTY_ARTICLE = {
   title: "",
@@ -864,7 +865,7 @@ export default function KnowledgeBase() {
                               }}
                             >
                               {a.updatedAt
-                                ? new Date(a.updatedAt).toLocaleDateString()
+                                ? formatDate(a.updatedAt)
                                 : "—"}
                             </td>
                             <td style={{ padding: "0.85rem 0.5rem" }}>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Send, Calendar, AtSign, Link as LinkIcon, Settings, Hash, Globe, Share2, Trash2, Plus, RefreshCw, Check, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDate } from '../utils/date';
 
 const PLATFORMS = [
   { id: 'linkedin', name: 'LinkedIn', icon: Globe,  color: '#0a66c2', max: 2200 },
@@ -455,7 +456,7 @@ export default function Social() {
                 </div>
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
                   {acc.connected
-                    ? `Active. Last updated ${acc.updatedAt ? new Date(acc.updatedAt).toLocaleDateString() : ''}`
+                    ? `Active. Last updated ${acc.updatedAt ? formatDate(acc.updatedAt) : ''}`
                     : `Connect your ${p.name} account to publish posts and monitor mentions.`}
                 </p>
                 {acc.connected ? (

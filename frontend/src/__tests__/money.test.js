@@ -94,3 +94,53 @@ describe('utils/money — currencySymbol', () => {
     expect(currencySymbol('USD')).toBe('$');
   });
 });
+
+// #626 — cross-locale consistency: a single formatMoney call
+// renders the right symbol for IN / US / EU / GB tenants, never
+// crossing wires (e.g. $ on a wellness/INR tenant — the original
+// regression class).
+describe('utils/money — cross-locale tenant consistency (#626)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('IN tenant: rupee + lakh grouping, no $', () => {
+    setTenant({ defaultCurrency: 'INR', locale: 'en-IN' });
+    const out = formatMoney(1234567);
+    expect(out).toMatch(/₹/);
+    expect(out).not.toMatch(/\$/);
+  });
+
+  it('US tenant: dollar + US grouping, no ₹', () => {
+    setTenant({ defaultCurrency: 'USD', locale: 'en-US' });
+    const out = formatMoney(1234567);
+    expect(out).toMatch(/\$/);
+    expect(out).not.toMatch(/₹/);
+  });
+
+  it('EU tenant: euro symbol present, no $ / ₹', () => {
+    setTenant({ defaultCurrency: 'EUR', locale: 'en-IE' });
+    const out = formatMoney(1234567);
+    expect(out).toMatch(/€/);
+    expect(out).not.toMatch(/\$/);
+    expect(out).not.toMatch(/₹/);
+  });
+
+  it('GB tenant: pound symbol present, no $ / ₹', () => {
+    setTenant({ defaultCurrency: 'GBP', locale: 'en-GB' });
+    const out = formatMoney(1234567);
+    expect(out).toMatch(/£/);
+    expect(out).not.toMatch(/\$/);
+    expect(out).not.toMatch(/₹/);
+  });
+
+  it('row-currency override beats tenant default (for invoice/quote rows)', () => {
+    // Tenant is IN, but the invoice row carries currency='USD' — the
+    // helper must respect the row's currency so multi-currency
+    // tenants render each row correctly.
+    setTenant({ defaultCurrency: 'INR', locale: 'en-IN' });
+    const out = formatMoney(1000, { currency: 'USD' });
+    expect(out).toMatch(/\$/);
+    expect(out).not.toMatch(/₹/);
+  });
+});

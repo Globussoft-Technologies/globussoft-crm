@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDate } from '../utils/date';
 import { Ticket, Plus, Trash2, AlertTriangle } from 'lucide-react';
 
 const PRIORITY_CONFIG = {
@@ -261,7 +262,7 @@ export default function Tickets() {
                         {ticket.assignee ? (ticket.assignee.name || ticket.assignee.email) : '—'}
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                        {new Date(ticket.createdAt).toLocaleDateString()}
+                        {formatDate(ticket.createdAt)}
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
                         <button

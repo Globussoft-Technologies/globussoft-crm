@@ -25,6 +25,7 @@ function StatusBadge({ status }) {
 }
 
 import { formatMoney, currencySymbol } from '../utils/money';
+import { formatDate } from '../utils/date';
 const formatCurrency = (v) => formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
 // #333: every numeric field on a line item now has a sane range. The
@@ -570,7 +571,7 @@ export default function Estimates() {
                         <StatusBadge status={est.status} />
                       </td>
                       <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
-                        {est.validUntil ? new Date(est.validUntil).toLocaleDateString() : '-'}
+                        {est.validUntil ? formatDate(est.validUntil) : '-'}
                       </td>
                       <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {est.lineItems?.length || 0}

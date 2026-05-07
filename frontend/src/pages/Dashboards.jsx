@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatMoney } from '../utils/money';
+import { formatDate } from '../utils/date';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
 
@@ -68,9 +70,13 @@ const WIDGET_CATALOG = [
   { type: 'table-overdue-tasks',title: 'Overdue Tasks',     w: 6, h: 4, group: 'Tables' },
 ];
 
+// #626: tenant-aware money formatter — replaces hardcoded `$` prefix that
+// rendered $ on INR tenants. formatMoney reads the tenant's currency +
+// locale from localStorage (set at login), so a single helper covers
+// every page.
 const formatCurrency = (n) => {
-  if (n == null) return '$0';
-  return '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (n == null) return formatMoney(0, { maximumFractionDigits: 0 });
+  return formatMoney(Number(n), { maximumFractionDigits: 0 });
 };
 
 // ─── Widget Renderers ──────────────────────────────────────────────
@@ -196,13 +202,13 @@ function renderWidget(widget, data) {
         { key: 'title', label: 'Deal' },
         { key: 'stage', label: 'Stage' },
         { key: 'amount', label: 'Amount', render: (r) => formatCurrency(r.amount) },
-        { key: 'createdAt', label: 'Created', render: (r) => new Date(r.createdAt).toLocaleDateString() },
+        { key: 'createdAt', label: 'Created', render: (r) => formatDate(r.createdAt) },
       ]} />;
     case 'table-overdue-tasks':
       return <DataTable data={data} columns={[
         { key: 'title', label: 'Task' },
         { key: 'priority', label: 'Priority' },
-        { key: 'dueDate', label: 'Due', render: (r) => r.dueDate ? new Date(r.dueDate).toLocaleDateString() : '—' },
+        { key: 'dueDate', label: 'Due', render: (r) => r.dueDate ? formatDate(r.dueDate) : '—' },
       ]} />;
     default:
       return <div style={{ padding: '1rem', opacity: 0.5 }}>Unknown widget: {widget.type}</div>;

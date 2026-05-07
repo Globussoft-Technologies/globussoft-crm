@@ -24,6 +24,7 @@ function StatusBadge({ status }) {
 }
 
 import { formatMoney, currencySymbol } from '../utils/money';
+import { formatDate } from '../utils/date';
 const formatCurrency = (v) => formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
 export default function Invoices() {
@@ -573,12 +574,12 @@ export default function Invoices() {
                       <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
                         <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                           <Clock size={13} />
-                          {new Date(inv.dueDate).toLocaleDateString()}
+                          {formatDate(inv.dueDate)}
                         </span>
                       </td>
                       <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {/* #111: Invoice schema uses issuedDate, not createdAt. */}
-                        {inv.issuedDate ? new Date(inv.issuedDate).toLocaleDateString() : '—'}
+                        {inv.issuedDate ? formatDate(inv.issuedDate) : '—'}
                       </td>
                       <td
                         style={{

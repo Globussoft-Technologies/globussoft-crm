@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { CreditCard, Plus, CheckCircle2, Clock, Trash2, FileText, DollarSign } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatMoney } from '../utils/money';
+import { formatDate } from '../utils/date';
 
 export default function Billing() {
   const notify = useNotify();
@@ -86,7 +88,7 @@ export default function Billing() {
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Associate Deal Track (Optional)</label>
               <select className="input-field" value={newInvoice.dealId} onChange={e => setNewInvoice({...newInvoice, dealId: e.target.value})} style={{ background: 'var(--input-bg)' }}>
                 <option value="">-- Standalone Invoice --</option>
-                {deals.map(d => <option key={d.id} value={d.id}>{d.title} - ${d.amount.toLocaleString()}</option>)}
+                {deals.map(d => <option key={d.id} value={d.id}>{d.title} - {formatMoney(d.amount, { currency: d.currency })}</option>)}
               </select>
             </div>
 
@@ -133,7 +135,7 @@ export default function Billing() {
                   </p>
                   
                   <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <Clock size={16} color="var(--accent-color)" /> Deadline: {new Date(inv.dueDate).toLocaleDateString()}
+                    <Clock size={16} color="var(--accent-color)" /> Deadline: {formatDate(inv.dueDate)}
                   </p>
                 </div>
                 

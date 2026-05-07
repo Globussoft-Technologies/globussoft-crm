@@ -1,5 +1,6 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDateMedium as formatDate } from '../utils/date';
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-react';
@@ -255,13 +256,6 @@ const Leads = () => {
     );
   });
 
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>

@@ -3,6 +3,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { UsersRound, Trash2, Shield } from 'lucide-react';
 import { AuthContext } from '../App';
+import { formatDate } from '../utils/date';
 
 const ROLE_CONFIG = {
   ADMIN:   { color: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
@@ -242,7 +243,7 @@ export default function Staff() {
                       )}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                      {new Date(member.createdAt).toLocaleDateString()}
+                      {formatDate(member.createdAt)}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem' }}>
                       {canManageStaff && member.role !== 'ADMIN' ? (

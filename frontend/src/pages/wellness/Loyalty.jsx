@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Award, Trophy, Search, Plus, Minus, Users, Gift, CheckCircle2, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { formatMoney, currencySymbol } from '../../utils/money';
+import { formatDate } from '../../utils/date';
 
 // #298: Indian phone numbers were rendering as the raw "+919826720222" 12-digit
 // stream. Group as +91 XXXXX XXXXX. Falls back to the original string for
@@ -139,9 +141,9 @@ function OverviewTab({ leaderboard, referrals, loading }) {
           <Users size={16} /> Referral pipeline
         </h2>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
-          <Stat label="Pending" value={pendingReferrals} color="var(--warning-color)" sub={`${pending.count} referrals · ₹${pending.totalValue.toLocaleString('en-IN')} total`} />
-          <Stat label="Signed up" value={signedUp} color="var(--accent-color)" sub={`${signed.count} referrals · ₹${signed.totalValue.toLocaleString('en-IN')} total`} />
-          <Stat label="Rewarded" value={rewarded} color="var(--success-color)" sub={`${rewardedStats.count} referrals · ₹${rewardedStats.totalValue.toLocaleString('en-IN')} total`} />
+          <Stat label="Pending" value={pendingReferrals} color="var(--warning-color)" sub={`${pending.count} referrals · ${formatMoney(pending.totalValue, { maximumFractionDigits: 0 })} total`} />
+          <Stat label="Signed up" value={signedUp} color="var(--accent-color)" sub={`${signed.count} referrals · ${formatMoney(signed.totalValue, { maximumFractionDigits: 0 })} total`} />
+          <Stat label="Rewarded" value={rewarded} color="var(--success-color)" sub={`${rewardedStats.count} referrals · ${formatMoney(rewardedStats.totalValue, { maximumFractionDigits: 0 })} total`} />
         </div>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '1rem' }}>
           Switch to <strong>Referrals</strong> tab to manage individual rows.
@@ -298,7 +300,7 @@ function SearchTab({ onCreditChange }) {
                   <strong style={{ fontSize: '0.85rem' }}>Redeem</strong>
                 </div>
                 <input type="number" min={1} max={loyalty.balance} value={redeemPoints} onChange={(e) => setRedeemPoints(parseInt(e.target.value) || 0)} style={inputStyle} />
-                <input placeholder="Reason (e.g. ₹500 service discount)" value={redeemReason} onChange={(e) => setRedeemReason(e.target.value)} style={{ ...inputStyle, marginTop: '0.4rem' }} />
+                <input placeholder={`Reason (e.g. ${currencySymbol()}500 service discount)`} value={redeemReason} onChange={(e) => setRedeemReason(e.target.value)} style={{ ...inputStyle, marginTop: '0.4rem' }} />
                 <button type="submit" disabled={loyalty.balance < redeemPoints} style={{ marginTop: '0.5rem', width: '100%', padding: '0.45rem', background: loyalty.balance < redeemPoints ? 'var(--text-tertiary)' : 'var(--warning-color)', color: '#fff', border: 'none', borderRadius: 6, cursor: loyalty.balance < redeemPoints ? 'not-allowed' : 'pointer' }}>Redeem</button>
               </form>
             </div>
@@ -315,7 +317,7 @@ function SearchTab({ onCreditChange }) {
                 <tbody>
                   {loyalty.transactions.map((tx) => (
                     <tr key={tx.id} style={{ borderTop: '1px solid var(--border-color)' }}>
-                      <td style={td}>{new Date(tx.createdAt).toLocaleDateString('en-IN')}</td>
+                      <td style={td}>{formatDate(tx.createdAt)}</td>
                       <td style={td}>{tx.type}</td>
                       <td style={{ ...td, textAlign: 'right', color: tx.points >= 0 ? 'var(--success-color)' : 'var(--warning-color)', fontWeight: 600 }}>{tx.points >= 0 ? '+' : ''}{tx.points}</td>
                       <td style={{ ...td, color: 'var(--text-secondary)' }}>{tx.reason || '—'}</td>
@@ -448,7 +450,7 @@ function ReferralsTab({ referrals, onChanged }) {
                     {r.status.replace('_', ' ')}
                   </span>
                 </td>
-                <td style={{ ...td, color: 'var(--text-secondary)' }}>{new Date(r.createdAt).toLocaleDateString('en-IN')}</td>
+                <td style={{ ...td, color: 'var(--text-secondary)' }}>{formatDate(r.createdAt)}</td>
                 <td style={{ ...td, textAlign: 'right' }}>
                   {r.status === 'rewarded' ? (
                     <span style={{ color: 'var(--success-color)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>

@@ -4,6 +4,8 @@ import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardLis
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
+import { formatDate } from '../../utils/date';
+import { currencySymbol } from '../../utils/money';
 
 const tabStyle = (active) => ({
   padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
@@ -466,7 +468,7 @@ function PrescribeTab({ patient, onSaved }) {
           <option value="">— select visit —</option>
           {patient.visits.map((v) => (
             <option key={v.id} value={v.id}>
-              {new Date(v.visitDate).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} — {v.service?.name || 'Consultation'}
+              {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
             </option>
           ))}
         </select>
@@ -965,7 +967,7 @@ function PhotosTab({ patient, onSaved }) {
             <option value="">— select visit —</option>
             {patient.visits.map((v) => (
               <option key={v.id} value={v.id}>
-                {new Date(v.visitDate).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} — {v.service?.name || 'Consultation'}
+                {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
               </option>
             ))}
           </select>
@@ -1068,7 +1070,7 @@ function InventoryTab({ patient, onSaved }) {
           <option value="">— select visit —</option>
           {patient.visits.map((v) => (
             <option key={v.id} value={v.id}>
-              {new Date(v.visitDate).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} — {v.service?.name || 'Consultation'}
+              {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
             </option>
           ))}
         </select>
@@ -1288,7 +1290,7 @@ function LoyaltyModal({ patientId, data, onClose, onChange }) {
           </div>
           <div>
             <label style={labelStyle}>Reason</label>
-            <input value={redeemReason} onChange={(e) => setRedeemReason(e.target.value)} placeholder="e.g. ₹500 service discount" style={inputStyle} />
+            <input value={redeemReason} onChange={(e) => setRedeemReason(e.target.value)} placeholder={`e.g. ${currencySymbol()}500 service discount`} style={inputStyle} />
           </div>
           <button type="submit" disabled={busy || data.balance < redeemPoints} style={{ padding: '0.55rem 1rem', background: data.balance < redeemPoints ? 'var(--text-tertiary)' : 'var(--warning-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: data.balance < redeemPoints ? 'not-allowed' : 'pointer' }}>
             {busy ? '…' : 'Redeem'}
@@ -1311,7 +1313,7 @@ function LoyaltyModal({ patientId, data, onClose, onChange }) {
             <tbody>
               {data.transactions.map((tx) => (
                 <tr key={tx.id} style={{ borderTop: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '0.4rem' }}>{new Date(tx.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}</td>
+                  <td style={{ padding: '0.4rem' }}>{formatDate(tx.createdAt)}</td>
                   <td style={{ padding: '0.4rem' }}>{tx.type}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'right', color: tx.points >= 0 ? 'var(--success-color)' : 'var(--warning-color)', fontWeight: 600 }}>{tx.points >= 0 ? '+' : ''}{tx.points}</td>
                   <td style={{ padding: '0.4rem', color: 'var(--text-secondary)' }}>{tx.reason || '—'}</td>

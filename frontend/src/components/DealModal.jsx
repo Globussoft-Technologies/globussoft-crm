@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, FileText, UploadCloud, Download, FileSignature } from 'lucide-react';
+import { X, FileText, UploadCloud, Download, FileSignature, Trash2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import CPQBuilder from './CPQBuilder';
@@ -12,6 +12,7 @@ export default function DealModal({ deal, onClose }) {
   const [generating, setGenerating] = useState(false);
   const [notes, setNotes] = useState(deal?.notes || '');
   const [savingNote, setSavingNote] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   const handleSaveNote = async () => {
     setSavingNote(true);
@@ -64,12 +65,95 @@ export default function DealModal({ deal, onClose }) {
   const handleGenerateQuote = async () => {
     setGenerating(true);
     try {
-      await fetchApi(`/api/deals_documents/${deal.id}/generate-quote`, { method: 'POST' });
+      const token = getAuthToken();
+      const response = await fetch(`${API_BASE}/api/deals_documents/${deal.id}/generate-quote`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (!response.ok) {
+        console.error("Quote generation failed");
+        setGenerating(false);
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `quote-${deal.id}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      // Reload attachments to show the generated quote in the list
       await loadAttachments();
     } catch (err) {
       console.error("Quote gen failed", err);
     }
     setGenerating(false);
+  };
+
+  const handleDeleteAttachment = (attachmentId) => {
+    setDeleteConfirm(attachmentId);
+  };
+
+  const confirmDelete = async () => {
+    try {
+      await fetchApi(`/api/deals_documents/${deleteConfirm}`, { method: 'DELETE' });
+      await loadAttachments();
+      setDeleteConfirm(null);
+    } catch (err) {
+      console.error("Delete failed", err);
+      setDeleteConfirm(null);
+    }
+  };
+
+  const handleOpenAttachment = async (attachmentId, fileUrl) => {
+    try {
+      const token = getAuthToken();
+      let url;
+
+      // For generated quotes, use the fileUrl which points to on-demand generation
+      if (fileUrl && fileUrl.includes('generate-quote')) {
+        console.log("Opening generated quote:", fileUrl);
+        const response = await fetch(`${API_BASE}${fileUrl}`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        if (!response.ok) {
+          console.error("Open failed with status:", response.status, response.statusText);
+          alert(`Failed to open PDF: ${response.status} ${response.statusText}`);
+          return;
+        }
+
+        const blob = await response.blob();
+        url = window.URL.createObjectURL(blob);
+      } else {
+        // For uploaded files, use the download endpoint
+        console.log("Opening uploaded file:", attachmentId);
+        const response = await fetch(`${API_BASE}/api/deals_documents/download/${attachmentId}`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        if (!response.ok) {
+          console.error("Download failed with status:", response.status, response.statusText);
+          alert(`Failed to open PDF: ${response.status} ${response.statusText}`);
+          return;
+        }
+
+        const blob = await response.blob();
+        url = window.URL.createObjectURL(blob);
+      }
+
+      window.open(url, '_blank');
+    } catch (err) {
+      console.error("Open error:", err);
+      alert(`Error opening PDF: ${err.message}`);
+    }
   };
 
   if (!deal) return null;
@@ -122,9 +206,14 @@ export default function DealModal({ deal, onClose }) {
                       <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{new Date(att.createdAt).toLocaleDateString()}</p>
                     </div>
                   </div>
-                  <a href={`${API_BASE}${att.fileUrl}`} target="_blank" rel="noreferrer" className="btn-secondary" style={{ padding: '0.5rem 1rem', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <Download size={16} /> Open
-                  </a>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <button onClick={() => handleOpenAttachment(att.id, att.fileUrl)} className="btn-secondary" style={{ padding: '0.5rem 1rem', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', border: 'none', background: 'inherit' }}>
+                      <Download size={16} /> Open
+                    </button>
+                    <button onClick={() => handleDeleteAttachment(att.id)} style={{ padding: '0.5rem 0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'} onMouseOut={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'} title="Delete attachment">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -164,6 +253,23 @@ export default function DealModal({ deal, onClose }) {
 
         </div>
       </div>
+
+      {deleteConfirm && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, animation: 'fadeIn 0.2s ease-out' }}>
+          <div className="card" style={{ padding: '2rem', maxWidth: '400px', textAlign: 'center', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.3)' }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Delete Attachment?</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>This action cannot be undone.</p>
+            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+              <button onClick={() => setDeleteConfirm(null)} style={{ padding: '0.75rem 1.5rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-primary)', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'} onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
+                Cancel
+              </button>
+              <button onClick={confirmDelete} style={{ padding: '0.75rem 1.5rem', borderRadius: '8px', background: '#ef4444', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = '#dc2626'} onMouseOut={e => e.currentTarget.style.background = '#ef4444'}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -13,7 +13,7 @@ const SEVERITY_COLORS = {
   INFO:     { fg: '#3b82f6', bg: 'rgba(59,130,246,0.12)', border: 'rgba(59,130,246,0.35)' },
 };
 
-const TYPE_TABS = ['All', 'RISK', 'OPPORTUNITY', 'NEXT_BEST_ACTION'];
+const TYPE_TABS = ['All', 'RISK', 'OPPORTUNITY', 'NEXT_BEST_ACTION', 'OPEN_DEALS'];
 
 function TypeIcon({ type, size = 16 }) {
   if (type === 'RISK') return <AlertTriangle size={size} color="#ef4444" />;
@@ -38,6 +38,7 @@ export default function DealInsights() {
   const [generating, setGenerating] = useState(false);
   const [filter, setFilter] = useState('All');
   const [showResolved, setShowResolved] = useState(false);
+  const [selectedDealId, setSelectedDealId] = useState(null);
 
   const loadAll = async () => {
     try {
@@ -83,6 +84,18 @@ export default function DealInsights() {
     return g;
   }, [filtered]);
 
+  // For Open Deals view: all insights regardless of filter
+  const allGrouped = useMemo(() => {
+    const g = {};
+    insights.forEach(ins => {
+      if (!ins.isResolved || showResolved) {
+        if (!g[ins.dealId]) g[ins.dealId] = [];
+        g[ins.dealId].push(ins);
+      }
+    });
+    return g;
+  }, [insights, showResolved]);
+
   const stats = useMemo(() => {
     const open = insights.filter(i => !i.isResolved);
     return {
@@ -97,13 +110,19 @@ export default function DealInsights() {
     setGenerating(true);
     try {
       const targets = openDeals.slice(0, 50); // safety cap
+      let success = 0;
+      let failed = 0;
       for (const d of targets) {
         try {
-          await fetchApi(`/api/deal-insights/generate/${d.id}`, { method: 'POST' });
+          const result = await fetchApi(`/api/deal-insights/generate/${d.id}`, { method: 'POST' });
+          console.log(`✓ Generated ${result.generated} insights for deal ${d.id}: ${d.title}`);
+          success++;
         } catch (e) {
-          console.warn(`Generate failed for deal ${d.id}:`, e.message);
+          console.error(`✗ Generate failed for deal ${d.id} (${d.title}):`, e.message);
+          failed++;
         }
       }
+      console.log(`[DealInsights] Completed: ${success} success, ${failed} failed out of ${targets.length}`);
       await loadAll();
     } finally {
       setGenerating(false);
@@ -162,6 +181,7 @@ export default function DealInsights() {
         ))}
       </div>
 
+
       {/* Filter tabs */}
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
         {TYPE_TABS.map(tab => (
@@ -169,7 +189,7 @@ export default function DealInsights() {
             key={tab}
             onClick={() => setFilter(tab)}
             style={{
-              padding: '0.5rem 1rem',
+              padding: '0.5rem 1.1rem',
               borderRadius: '999px',
               fontSize: '0.85rem',
               fontWeight: 500,
@@ -193,141 +213,399 @@ export default function DealInsights() {
         </label>
       </div>
 
-      {/* Insights grouped by deal */}
+      {/* Show Open Deals list OR Insights based on filter */}
       {loading ? (
-        <div className="card" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          Loading insights...
+        <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          Loading...
         </div>
-      ) : Object.keys(grouped).length === 0 ? (
-        <div className="card" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          <Lightbulb size={32} color="var(--text-secondary)" style={{ marginBottom: '0.75rem' }} />
-          <div style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '0.4rem' }}>No insights yet</div>
-          <div style={{ fontSize: '0.85rem' }}>
-            Click "Generate Insights" to scan your open deals for risks, opportunities, and next-best-actions.
+      ) : filter === 'OPEN_DEALS' ? (
+        // OPEN DEALS view
+        openDeals.length === 0 ? (
+          <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+            <Lightbulb size={40} color="var(--text-secondary)" style={{ marginBottom: '1rem', opacity: 0.6 }} />
+            <div style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>No open deals</div>
+            <div style={{ fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+              Create deals in Pipeline to get started.
+            </div>
+            <button
+              onClick={() => navigate('/pipeline')}
+              className="btn-primary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <ArrowRight size={16} /> Go to Pipeline
+            </button>
           </div>
-        </div>
-      ) : (
-        Object.entries(grouped).map(([dealId, items]) => {
-          // #572: prefer the server-side dealContext envelope over the
-          // parallel /api/deals?limit=100 fetch. The /api/deals call only
-          // returns the newest 100 rows, so on large tenants (5k+ deals)
-          // 80% of insights had no dealById match and rendered the literal
-          // "Deal details unavailable" placeholder. Server now joins the
-          // Deal row when serving GET /api/deal-insights — see
-          // backend/routes/deal_insights.js attachDealContext helper.
-          // Soft-deleted deals come through with isArchived=true so we can
-          // show "[archived]" instead of the bare placeholder.
-          const ctx = items[0] && items[0].dealContext;
-          const deal = ctx || dealById[dealId];
-          const dealTitle = deal
-            ? (deal.isArchived ? `[archived] ${deal.title}` : deal.title)
-            : `Deal #${dealId}`;
-          const dealStage = deal && deal.stage ? deal.stage : null;
-          const dealAmount = deal ? (deal.amount || 0) : null;
-          const dealCurrency = deal ? deal.currency : undefined;
-          const dealContactName = deal
-            ? (deal.contactName || (deal.contact && deal.contact.name) || null)
-            : null;
-          const subtitleParts = [];
-          if (dealStage) subtitleParts.push(dealStage);
-          if (dealAmount !== null) subtitleParts.push(formatMoney(dealAmount, { currency: dealCurrency }));
-          subtitleParts.push(dealContactName || 'No contact');
-          const subtitle = deal ? subtitleParts.join(' · ') : 'Deal details unavailable';
-          return (
-            <div key={dealId} className="card" style={{ padding: '1.5rem', marginBottom: '1.25rem' }}>
-              {/* #467: header used to navigate to '/pipeline' with no deal
-                  context, so reporters experienced the "Deal #xxxx →" arrow
-                  as non-clickable (it landed on the kanban board with no
-                  highlight). Pass ?dealId=<id> so Pipeline can scroll/focus
-                  the right card; expose role="button" + Enter/Space keyboard
-                  for a11y. */}
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => navigate(`/pipeline?dealId=${dealId}`)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/pipeline?dealId=${dealId}`); } }}
-                title={deal ? `Open ${dealTitle} in pipeline` : `Open deal #${dealId} in pipeline`}
-                style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  marginBottom: '1rem', cursor: 'pointer', userSelect: 'none',
-                  paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-color)',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '1.05rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    {dealTitle}
-                    <ArrowRight size={14} color="var(--text-secondary)" />
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.25rem' }}>
+            {openDeals.map(deal => {
+              const hasInsight = Object.keys(allGrouped).includes(String(deal.id));
+              return (
+                <div
+                  key={deal.id}
+                  onClick={() => setFilter('All')}
+                  className="card"
+                  style={{
+                    padding: '1.5rem',
+                    cursor: 'pointer',
+                    border: hasInsight ? '2px solid #22c55e' : '1px solid var(--border-color)',
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(59,130,246,0.15)';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.boxShadow = 'none';
+                    e.currentTarget.style.transform = 'none';
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.75rem', gap: '0.5rem' }}>
+                    <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '1rem', flex: 1 }}>
+                      {deal.title}
+                    </div>
+                    <span style={{
+                      fontSize: '0.7rem',
+                      padding: '0.35rem 0.75rem',
+                      background: hasInsight ? '#22c55e' : '#f59e0b',
+                      color: '#fff',
+                      borderRadius: '6px',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                      textTransform: 'uppercase'
+                    }}>
+                      {hasInsight ? `✓ ${allGrouped[deal.id]?.length || 0}` : 'Not Scanned'}
+                    </span>
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                    {subtitle}
+                  <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div><span style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-secondary)' }}>Amount:</span> <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{formatMoney(deal.amount || 0, { currency: deal.currency })}</span></div>
+                    <div><span style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-secondary)' }}>Stage:</span> <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{deal.stage}</span></div>
+                    <div><span style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-secondary)' }}>Contact:</span> <span style={{ color: 'var(--text-primary)' }}>{deal.contact?.name || 'N/A'}</span></div>
+                  </div>
+                  <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '0.75rem' }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedDealId(deal.id);
+                      }}
+                      style={{
+                        flex: 1,
+                        fontSize: '0.8rem',
+                        padding: '0.5rem 0.8rem',
+                        background: 'var(--accent-color)',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontWeight: 500,
+                        transition: 'all 0.2s',
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.opacity = '0.9'}
+                      onMouseOut={(e) => e.currentTarget.style.opacity = '1'}
+                    >
+                      See Insights
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/pipeline?dealId=${deal.id}`);
+                      }}
+                      style={{
+                        flex: 1,
+                        fontSize: '0.8rem',
+                        padding: '0.5rem 0.8rem',
+                        background: 'transparent',
+                        color: 'var(--accent-color)',
+                        border: '1px solid var(--accent-color)',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontWeight: 500,
+                        transition: 'all 0.2s',
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.background = 'rgba(59,130,246,0.1)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.background = 'transparent';
+                      }}
+                    >
+                      View Pipeline
+                    </button>
                   </div>
                 </div>
-                <span style={{
-                  fontSize: '0.75rem', padding: '0.25rem 0.65rem',
-                  background: 'rgba(255,255,255,0.06)', borderRadius: '999px',
-                  color: 'var(--text-secondary)',
-                }}>
-                  {items.length} insight{items.length !== 1 ? 's' : ''}
-                </span>
-              </div>
+              );
+            })}
+          </div>
+        )
+      ) : Object.keys(grouped).length === 0 ? (
+        <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          <Lightbulb size={40} color="var(--text-secondary)" style={{ marginBottom: '1rem', opacity: 0.6 }} />
+          <div style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>No insights yet</div>
+          <div style={{ fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+            {openDeals.length > 0
+              ? 'Click "Generate Insights" to scan your open deals for risks, opportunities, and next-best-actions.'
+              : 'Create deals in Pipeline first, then generate insights.'}
+          </div>
+          {openDeals.length === 0 && (
+            <button
+              onClick={() => navigate('/pipeline')}
+              className="btn-primary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <ArrowRight size={16} /> Go to Pipeline
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          {Object.entries(grouped).map(([dealId, items]) => {
+            const deal = dealById[dealId];
+            return (
+              <div key={dealId} className="card" style={{ padding: '2rem', marginBottom: '1.5rem', border: '1px solid var(--border-color)' }}>
+                {/* Deal header */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/pipeline?dealId=${dealId}`)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/pipeline?dealId=${dealId}`); } }}
+                  title={deal ? `Open ${deal.title} in pipeline` : `Open deal #${dealId} in pipeline`}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+                    marginBottom: '1.5rem', cursor: 'pointer', userSelect: 'none',
+                    paddingBottom: '1rem', borderBottom: '2px solid var(--border-color)',
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                      {deal ? deal.title : `Deal #${dealId}`}
+                      <ArrowRight size={18} color="var(--accent-color)" style={{ opacity: 0.7 }} />
+                    </div>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                      {deal && (
+                        <>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Stage:</span>
+                            <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{deal.stage}</span>
+                          </span>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Amount:</span>
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{formatMoney(deal.amount || 0, { currency: deal.currency })}</span>
+                          </span>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Contact:</span>
+                            <span style={{ color: 'var(--text-primary)' }}>{deal.contact?.name || 'No contact'}</span>
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <span style={{
+                    fontSize: '0.8rem', padding: '0.4rem 0.9rem', fontWeight: 600,
+                    background: 'var(--accent-color)', color: '#fff', borderRadius: '8px',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {items.length} insight{items.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
 
-              {items.map(ins => {
-                const sev = SEVERITY_COLORS[ins.severity] || SEVERITY_COLORS.INFO;
-                return (
-                  <div
-                    key={ins.id}
-                    style={{
-                      display: 'flex', alignItems: 'flex-start', gap: '0.85rem',
-                      padding: '0.85rem 1rem', marginBottom: '0.6rem',
-                      background: sev.bg, border: `1px solid ${sev.border}`,
-                      borderRadius: '10px',
-                      opacity: ins.isResolved ? 0.55 : 1,
-                    }}
-                  >
-                    <div style={{ marginTop: '0.15rem' }}>
-                      <TypeIcon type={ins.type} size={18} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.3rem', flexWrap: 'wrap' }}>
-                        <span style={{
-                          fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.5rem',
-                          borderRadius: '4px', background: sev.fg, color: '#fff',
-                          letterSpacing: '0.04em',
-                        }}>
-                          {ins.severity}
-                        </span>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                          {ins.type.replace(/_/g, ' ')}
-                        </span>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginLeft: 'auto' }}>
-                          {timeAgo(ins.generatedAt)}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', lineHeight: 1.45 }}>
-                        {ins.insight}
-                      </div>
-                    </div>
-                    {!ins.isResolved && (
-                      <button
-                        onClick={() => resolveOne(ins.id)}
-                        title="Mark resolved"
+                {/* Insights list */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {items.map(ins => {
+                    const sev = SEVERITY_COLORS[ins.severity] || SEVERITY_COLORS.INFO;
+                    return (
+                      <div
+                        key={ins.id}
                         style={{
-                          display: 'flex', alignItems: 'center', gap: '0.3rem',
-                          padding: '0.4rem 0.7rem', fontSize: '0.75rem',
-                          background: 'rgba(34,197,94,0.12)', color: '#22c55e',
-                          border: '1px solid rgba(34,197,94,0.3)',
-                          borderRadius: '6px', cursor: 'pointer',
+                          display: 'flex', alignItems: 'flex-start', gap: '1rem',
+                          padding: '1.25rem',
+                          background: sev.bg, border: `1px solid ${sev.border}`,
+                          borderRadius: '12px',
+                          opacity: ins.isResolved ? 0.6 : 1,
+                          transition: 'all 0.2s',
                         }}
                       >
-                        <Check size={13} /> Resolve
-                      </button>
+                        <div style={{ marginTop: '0.2rem', flexShrink: 0 }}>
+                          <TypeIcon type={ins.type} size={20} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+                            <span style={{
+                              fontSize: '0.75rem', fontWeight: 700, padding: '0.35rem 0.7rem',
+                              borderRadius: '6px', background: sev.fg, color: '#fff',
+                              letterSpacing: '0.04em',
+                              textTransform: 'uppercase',
+                            }}>
+                              {ins.severity}
+                            </span>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>
+                              {ins.type.replace(/_/g, ' ')}
+                            </span>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: 'auto' }}>
+                              {timeAgo(ins.generatedAt)}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '1rem', color: 'var(--text-primary)', lineHeight: 1.6, marginBottom: '0.5rem' }}>
+                            {ins.insight}
+                          </div>
+                        </div>
+                        {!ins.isResolved && (
+                          <button
+                            onClick={() => resolveOne(ins.id)}
+                            title="Mark resolved"
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '0.5rem',
+                              padding: '0.6rem 1rem', fontSize: '0.85rem', fontWeight: 500,
+                              background: 'rgba(34,197,94,0.12)', color: '#22c55e',
+                              border: '1px solid rgba(34,197,94,0.3)',
+                              borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s',
+                              flexShrink: 0,
+                            }}
+                            onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(34,197,94,0.2)'; }}
+                            onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(34,197,94,0.12)'; }}
+                          >
+                            <Check size={16} /> Resolve
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {/* Insights Detail Modal */}
+      {selectedDealId && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setSelectedDealId(null)}>
+          <div className="card" style={{ width: '90%', maxWidth: '700px', maxHeight: '85vh', overflowY: 'auto', padding: '2rem', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+            {/* Close button */}
+            <button
+              onClick={() => setSelectedDealId(null)}
+              style={{
+                position: 'absolute',
+                top: '1.5rem',
+                right: '1.5rem',
+                background: 'none',
+                border: 'none',
+                fontSize: '1.5rem',
+                cursor: 'pointer',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              ✕
+            </button>
+
+            {/* Deal header */}
+            {(() => {
+              const deal = dealById[selectedDealId];
+              const dealInsights = allGrouped[selectedDealId] || [];
+              const isScanned = dealInsights.length > 0;
+
+              return (
+                <>
+                  <div style={{ marginBottom: '2rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem' }}>
+                      <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {deal ? deal.title : `Deal #${selectedDealId}`}
+                      </h2>
+                      <span style={{
+                        fontSize: '0.75rem',
+                        padding: '0.4rem 0.9rem',
+                        background: isScanned ? '#22c55e' : '#f59e0b',
+                        color: '#fff',
+                        borderRadius: '8px',
+                        fontWeight: 600,
+                        textTransform: 'uppercase',
+                      }}>
+                        {isScanned ? '✓ Scanned' : '○ Not Scanned'}
+                      </span>
+                    </div>
+                    {deal && (
+                      <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                        <span><strong style={{ color: 'var(--text-primary)' }}>{formatMoney(deal.amount || 0, { currency: deal.currency })}</strong> • {deal.stage}</span>
+                        <span><strong style={{ color: 'var(--text-primary)' }}>{deal.contact?.name || 'N/A'}</strong> • {deal.contact?.company || 'N/A'}</span>
+                      </div>
                     )}
                   </div>
-                );
-              })}
-            </div>
-          );
-        })
+
+                  {/* Insights list */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    {dealInsights.length === 0 ? (
+                      <div style={{ padding: '2rem', textAlign: 'center', background: 'var(--subtle-bg-2)', borderRadius: '12px', color: 'var(--text-secondary)' }}>
+                        <Lightbulb size={32} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
+                        <div style={{ fontWeight: 500 }}>No insights yet</div>
+                        <div style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>Generate insights from the main view to see analysis.</div>
+                      </div>
+                    ) : (
+                      dealInsights.map(ins => {
+                        const sev = SEVERITY_COLORS[ins.severity] || SEVERITY_COLORS.INFO;
+                        return (
+                          <div
+                            key={ins.id}
+                            style={{
+                              padding: '1.5rem',
+                              background: sev.bg,
+                              border: `1px solid ${sev.border}`,
+                              borderRadius: '12px',
+                              opacity: ins.isResolved ? 0.6 : 1,
+                            }}
+                          >
+                            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                              <span style={{
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                padding: '0.35rem 0.7rem',
+                                borderRadius: '6px',
+                                background: sev.fg,
+                                color: '#fff',
+                                textTransform: 'uppercase',
+                              }}>
+                                {ins.severity}
+                              </span>
+                              <span style={{ fontSize: '0.8rem', fontWeight: 500, textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
+                                {ins.type.replace(/_/g, ' ')}
+                              </span>
+                              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: 'auto' }}>
+                                {timeAgo(ins.generatedAt)}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '1rem', color: 'var(--text-primary)', lineHeight: 1.6, marginBottom: '1rem' }}>
+                              {ins.insight}
+                            </div>
+                            {!ins.isResolved && (
+                              <button
+                                onClick={() => resolveOne(ins.id)}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.5rem',
+                                  padding: '0.6rem 1rem',
+                                  fontSize: '0.85rem',
+                                  fontWeight: 500,
+                                  background: 'rgba(34,197,94,0.12)',
+                                  color: '#22c55e',
+                                  border: '1px solid rgba(34,197,94,0.3)',
+                                  borderRadius: '8px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s',
+                                }}
+                                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(34,197,94,0.2)'; }}
+                                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(34,197,94,0.12)'; }}
+                              >
+                                <Check size={16} /> Resolve
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
       )}
 
       <style>{`

@@ -5,50 +5,23 @@ import { useNavigate } from 'react-router-dom';
 import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-react';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
-
-// #557 (HI-08) — client-side hardening for the Create-Lead form. The backend
-// at routes/contacts.js + the global sanitizeBody middleware are the source
-// of truth; these guards exist purely so users get fast feedback (no server
-// round-trip) when they paste a 5000-char string, type `<script>…</script>`,
-// or sneak in control characters via clipboard. See the related #538 (PT-06)
-// pattern in routes/wellness.js (scrubPlainText) which this mirrors.
-//
-// Field caps line up with backend Contact column limits:
-//   • name   → VARCHAR(191) utf8mb4
-//   • email  → VARCHAR(191)
-//   • company → VARCHAR(191)
-//   • title  → VARCHAR(191) (cap UI at 200 to match the issue ask, then the
-//             backend's 191 cap will surface as the upper-bound)
-const FIELD_LIMITS = {
-  name: 191,
-  email: 191,
-  company: 191,
-  title: 200,
-};
-
-// Same shape as backend EMAIL_RE in lib/validateContactInput logic (and the
-// CSV importer in Contacts.jsx). Not RFC 5322 (no library does that
-// pragmatically) — just the "shape it must have" smoke test.
-const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
-
-// HTML/script tag pre-strip — same canonical pattern as backend's
-// sanitizeBody DANGEROUS_TAG_RE. Inner text is preserved (matching backend
-// behaviour) so the user's actual content survives even if they accidentally
-// pasted markup. We surface a notice rather than silently mutating.
-const DANGEROUS_TAG_RE = /<\/?(?:script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)[^>]*>/gi;
-
-// Control characters never legitimately appear in a name/email/company/title.
-// NUL (0x00), BEL (0x07), VT (0x0B), DEL (0x7F), etc. — usually injection
-// attempts (template-engine bypass, log-line injection, terminal sequences).
-// eslint-disable-next-line no-control-regex -- intentionally matches control chars
-const CONTROL_CHAR_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
-
-function stripDangerousTags(value) {
-  if (typeof value !== 'string') return { value, stripped: false };
-  const cleaned = value.replace(DANGEROUS_TAG_RE, '');
-  return { value: cleaned, stripped: cleaned !== value };
-}
-
+const COUNTRY_CODES = [
+  { code: '+1', country: 'USA' },
+  { code: '+44', country: 'UK' },
+  { code: '+91', country: 'India' },
+  { code: '+61', country: 'Australia' },
+  { code: '+33', country: 'France' },
+  { code: '+49', country: 'Germany' },
+  { code: '+39', country: 'Italy' },
+  { code: '+34', country: 'Spain' },
+  { code: '+81', country: 'Japan' },
+  { code: '+86', country: 'China' },
+  { code: '+55', country: 'Brazil' },
+  { code: '+27', country: 'South Africa' },
+  { code: '+971', country: 'UAE' },
+  { code: '+65', country: 'Singapore' },
+  { code: '+60', country: 'Malaysia' },
+];
 
 const Leads = () => {
   const navigate = useNavigate();
@@ -64,6 +37,8 @@ const Leads = () => {
     email: '',
     company: '',
     title: '',
+    countryCode: '+1',
+    phone: '',
     source: 'Organic',
     status: 'Lead',
   });
@@ -177,18 +152,13 @@ const Leads = () => {
     // when the row was inserted server-side. Wrap in try/finally so the
     // refresh always runs and the form is reset on success.
     try {
+      const phoneWithCode = newLead.phone ? `${newLead.countryCode} ${newLead.phone}` : '';
       await fetchApi('/api/contacts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...newLead,
-          name: finalName,
-          email,
-          company: stripped.company,
-          title: stripped.title,
-        }),
+        body: JSON.stringify({ ...newLead, name: trimmedName, phone: phoneWithCode, countryCode: undefined }),
       });
-      setNewLead({ name: '', email: '', company: '', title: '', source: 'Organic', status: 'Lead' });
+      setNewLead({ name: '', email: '', company: '', title: '', countryCode: '+1', phone: '', source: 'Organic', status: 'Lead' });
     } finally {
       fetchLeads();
     }
@@ -330,68 +300,18 @@ const Leads = () => {
         {/* Left Panel: Create Lead Form */}
         <div className="card" style={{ padding: '1.5rem' }}>
           <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1.25rem' }}>Create Lead</h3>
-          <form onSubmit={handleCreateLead} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }} noValidate>
-            {/* #557 (HI-08): explicit `name` + `maxLength` attributes prevent
-                the React-prototype-setter trick from injecting 5000-char
-                payloads (browser caps the native input value at maxLength
-                even when the value is set via the HTMLInputElement.prototype
-                setter, because the element re-validates on dispatchEvent).
-                The submit-handler still re-checks length defensively in case
-                an automated tool bypasses the DOM entirely. */}
-            <input
-              type="text"
-              name="name"
-              placeholder="Full Name"
-              required
-              maxLength={FIELD_LIMITS.name}
-              className="input-field"
-              value={newLead.name}
-              onChange={e => handleChange('name', e.target.value)}
-            />
-            <input
-              type="email"
-              name="email"
-              placeholder="Email Address"
-              required
-              maxLength={FIELD_LIMITS.email}
-              className="input-field"
-              value={newLead.email}
-              onChange={e => handleChange('email', e.target.value)}
-            />
-            <input
-              type="text"
-              name="company"
-              placeholder="Company"
-              maxLength={FIELD_LIMITS.company}
-              className="input-field"
-              value={newLead.company}
-              onChange={e => handleChange('company', e.target.value)}
-            />
-            <div>
-              <input
-                type="text"
-                name="jobTitle"
-                placeholder="Job Title"
-                maxLength={FIELD_LIMITS.title}
-                className="input-field"
-                value={newLead.title}
-                onChange={e => handleChange('title', e.target.value)}
-                style={{ width: '100%' }}
-              />
-              {/* Counter visible only when the user is approaching the cap
-                  — avoids visual noise on the empty / short-input case. */}
-              {newLead.title.length > FIELD_LIMITS.title - 50 && (
-                <div
-                  data-testid="title-char-counter"
-                  style={{
-                    fontSize: '0.75rem',
-                    color: newLead.title.length >= FIELD_LIMITS.title ? '#ef4444' : 'var(--text-secondary)',
-                    marginTop: '0.25rem',
-                  }}
-                >
-                  {newLead.title.length} / {FIELD_LIMITS.title}
-                </div>
-              )}
+          <form onSubmit={handleCreateLead} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+            <input type="text" placeholder="Full Name" required className="input-field" value={newLead.name} onChange={e => handleChange('name', e.target.value)} />
+            <input type="email" placeholder="Email Address" required className="input-field" value={newLead.email} onChange={e => handleChange('email', e.target.value)} />
+            <input type="text" placeholder="Company" className="input-field" value={newLead.company} onChange={e => handleChange('company', e.target.value)} />
+            <input type="text" placeholder="Job Title" className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
+                {COUNTRY_CODES.map(cc => (
+                  <option key={cc.code} value={cc.code}>{cc.code}</option>
+                ))}
+              </select>
+              <input type="tel" placeholder="Phone Number" className="input-field" value={newLead.phone} onChange={e => handleChange('phone', e.target.value)} style={{ flex: 1 }} />
             </div>
             <select className="input-field" value={newLead.source} onChange={e => handleChange('source', e.target.value)}>
               {SOURCE_OPTIONS.map(src => (

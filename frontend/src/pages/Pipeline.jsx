@@ -43,7 +43,11 @@ const Pipeline = () => {
       setDeals(Array.isArray(dealData) ? dealData : []);
       setContacts(Array.isArray(contactData) ? contactData : []);
       if (Array.isArray(stageData) && stageData.length > 0) {
-        // Map stage names to deal stage IDs used in the database
+        // Map stage names to deal stage IDs used in the database. Note:
+        // multiple stage names normalize to the same id (e.g. both "Lead"
+        // and "New Lead" → 'lead', "Negotiation" and "Proposal Sent" →
+        // 'proposal'). Deals' `stage` column is a slug, not a foreign key,
+        // so this lossy normalization is required to hit the right cards.
         const stageIdMap = {
           'new lead': 'lead', 'lead': 'lead',
           'contacted': 'contacted',
@@ -52,15 +56,22 @@ const Pipeline = () => {
           'closed won': 'won', 'won': 'won',
           'closed lost': 'lost', 'lost': 'lost',
         };
-        setStages(stageData
-          .filter(s => stageIdMap[s.name.toLowerCase()])
-          .map(s => ({
-            id: stageIdMap[s.name.toLowerCase()],
-            title: s.name,
-            color: s.color,
-            dbId: s.id
-          }))
-        );
+        // #575 (regression of #173): dedupe by normalized id to keep the
+        // kanban from rendering the same deal set in two columns whenever a
+        // tenant has both "Lead" and "New Lead" (or any pair that collapses
+        // to the same id). First stage wins — preserves DB position order
+        // since pipeline_stages.GET sorts by position asc. Without this, the
+        // page renders BOTH "New Lead" (99 / $90k) AND "Lead" (99 / $90k)
+        // showing identical cards, double-counting the pipeline visually.
+        const seen = new Set();
+        const dedupedStages = [];
+        for (const s of stageData) {
+          const id = stageIdMap[s.name.toLowerCase()];
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          dedupedStages.push({ id, title: s.name, color: s.color, dbId: s.id });
+        }
+        if (dedupedStages.length > 0) setStages(dedupedStages);
       }
       setLoading(false);
     }).catch(err => console.error(err));

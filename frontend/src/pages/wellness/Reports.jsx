@@ -392,7 +392,11 @@ const tierBg = (t) => ({ high: 'rgba(239,68,68,0.2)', medium: 'rgba(245,158,11,0
 const tableStyle = { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' };
 const th = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', textOverflow: 'ellipsis' };
 const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden', textOverflow: 'ellipsis', wordBreak: 'break-word' };
-const tdR = { ...td, textAlign: 'right' };
+// #602: right-aligned cells are always numeric / currency / count in this
+// page's report tables. Forbid mid-number wrap (`₹1,2\n34,567` breaks
+// copy-paste + CSV alignment) and use tabular-nums so digit columns line up.
+// wordBreak overrides the inherited break-word from `td`.
+const tdR = { ...td, textAlign: 'right', whiteSpace: 'nowrap', wordBreak: 'normal', fontVariantNumeric: 'tabular-nums' };
 const dateInput = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem' };
 // #227: export buttons sit next to the date picker — wait state shows a
 // spinner and dims the button without removing it from the layout.

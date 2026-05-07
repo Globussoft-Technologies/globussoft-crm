@@ -294,7 +294,7 @@ export default function Reports() {
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
                       <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
-                      <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
+                      <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {data.map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -308,7 +308,7 @@ export default function Reports() {
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
+                      <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                     </PieChart>
                   ) : (
                     <AreaChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
@@ -325,7 +325,7 @@ export default function Reports() {
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
                       <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
-                      <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
+                      <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
                       <Area type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorVal)" />
                     </AreaChart>
                   )}
@@ -359,23 +359,23 @@ export default function Reports() {
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                     {detailType === 'deals' && <>
-                      <th style={thStyle}>Title</th><th style={thStyle}>Amount</th><th style={thStyle}>Stage</th><th style={thStyle}>Owner</th><th style={thStyle}>Contact</th><th style={thStyle}>Created</th>
+                      <th style={thStyle}>Title</th><th style={numericThStyle}>Amount</th><th style={thStyle}>Stage</th><th style={thStyle}>Owner</th><th style={thStyle}>Contact</th><th style={numericThStyle}>Created</th>
                     </>}
                     {detailType === 'contacts' && <>
                       {/* #593: "AI Score" column → "Lead Score" — score is rules-based (leadScoringEngine.js). */}
-                      <th style={thStyle}>Name</th><th style={thStyle}>Email</th><th style={thStyle}>Company</th><th style={thStyle}>Status</th><th style={thStyle}>Source</th><th style={thStyle}>Assigned To</th><th style={thStyle}>Lead Score</th>
+                      <th style={thStyle}>Name</th><th style={thStyle}>Email</th><th style={thStyle}>Company</th><th style={thStyle}>Status</th><th style={thStyle}>Source</th><th style={thStyle}>Assigned To</th><th style={numericThStyle}>Lead Score</th>
                     </>}
                     {detailType === 'tasks' && <>
-                      <th style={thStyle}>Title</th><th style={thStyle}>Status</th><th style={thStyle}>Priority</th><th style={thStyle}>Assignee</th><th style={thStyle}>Due Date</th>
+                      <th style={thStyle}>Title</th><th style={thStyle}>Status</th><th style={thStyle}>Priority</th><th style={thStyle}>Assignee</th><th style={numericThStyle}>Due Date</th>
                     </>}
                     {detailType === 'calls' && <>
-                      <th style={thStyle}>Contact</th><th style={thStyle}>Duration</th><th style={thStyle}>Direction</th><th style={thStyle}>Agent</th><th style={thStyle}>Date</th>
+                      <th style={thStyle}>Contact</th><th style={numericThStyle}>Duration</th><th style={thStyle}>Direction</th><th style={thStyle}>Agent</th><th style={numericThStyle}>Date</th>
                     </>}
                     {detailType === 'invoices' && <>
-                      <th style={thStyle}>Invoice #</th><th style={thStyle}>Amount</th><th style={thStyle}>Status</th><th style={thStyle}>Contact</th><th style={thStyle}>Due Date</th>
+                      <th style={thStyle}>Invoice #</th><th style={numericThStyle}>Amount</th><th style={thStyle}>Status</th><th style={thStyle}>Contact</th><th style={numericThStyle}>Due Date</th>
                     </>}
                     {detailType === 'expenses' && <>
-                      <th style={thStyle}>Title</th><th style={thStyle}>Amount</th><th style={thStyle}>Category</th><th style={thStyle}>Status</th><th style={thStyle}>Submitted By</th>
+                      <th style={thStyle}>Title</th><th style={numericThStyle}>Amount</th><th style={thStyle}>Category</th><th style={thStyle}>Status</th><th style={thStyle}>Submitted By</th>
                     </>}
                   </tr>
                 </thead>
@@ -384,11 +384,11 @@ export default function Reports() {
                     <tr key={row.id || i} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                       {detailType === 'deals' && <>
                         <td style={tdStyle}>{row.title}</td>
-                        <td style={{ ...tdStyle, fontWeight: '600', color: 'var(--success-color)' }}>{formatMoney(row.amount || 0)}</td>
+                        <td style={{ ...numericTdStyle, fontWeight: '600', color: 'var(--success-color)' }}>{formatMoney(row.amount || 0)}</td>
                         <td style={tdStyle}><StageBadge stage={row.stage} /></td>
                         <td style={tdStyle}>{row.owner?.name || '—'}</td>
                         <td style={tdStyle}>{row.contact?.name || '—'}</td>
-                        <td style={tdStyle}>{fmtDate(row.createdAt)}</td>
+                        <td style={numericTdStyle}>{fmtDate(row.createdAt)}</td>
                       </>}
                       {detailType === 'contacts' && <>
                         <td style={{ ...tdStyle, fontWeight: '500' }}>{row.name}</td>
@@ -397,32 +397,32 @@ export default function Reports() {
                         <td style={tdStyle}><StatusBadge status={row.status} /></td>
                         <td style={tdStyle}>{row.source || '—'}</td>
                         <td style={tdStyle}>{row.assignedTo?.name || '—'}</td>
-                        <td style={tdStyle}>{row.aiScore}</td>
+                        <td style={numericTdStyle}>{row.aiScore}</td>
                       </>}
                       {detailType === 'tasks' && <>
                         <td style={tdStyle}>{row.title}</td>
                         <td style={tdStyle}><StatusBadge status={row.status} /></td>
                         <td style={tdStyle}>{row.priority}</td>
                         <td style={tdStyle}>{row.user?.name || '—'}</td>
-                        <td style={tdStyle}>{row.dueDate ? fmtDate(row.dueDate) : '—'}</td>
+                        <td style={numericTdStyle}>{row.dueDate ? fmtDate(row.dueDate) : '—'}</td>
                       </>}
                       {detailType === 'calls' && <>
                         <td style={tdStyle}>{row.contact?.name || '—'}</td>
-                        <td style={tdStyle}>{Math.floor(row.duration / 60)}m {row.duration % 60}s</td>
+                        <td style={numericTdStyle}>{Math.floor(row.duration / 60)}m {row.duration % 60}s</td>
                         <td style={tdStyle}>{row.direction}</td>
                         <td style={tdStyle}>{row.user?.name || '—'}</td>
-                        <td style={tdStyle}>{fmtDate(row.createdAt)}</td>
+                        <td style={numericTdStyle}>{fmtDate(row.createdAt)}</td>
                       </>}
                       {detailType === 'invoices' && <>
                         <td style={tdStyle}>{row.invoiceNum}</td>
-                        <td style={{ ...tdStyle, fontWeight: '600' }}>{formatMoney(row.amount || 0)}</td>
+                        <td style={{ ...numericTdStyle, fontWeight: '600' }}>{formatMoney(row.amount || 0)}</td>
                         <td style={tdStyle}><StatusBadge status={row.status} /></td>
                         <td style={tdStyle}>{row.contact?.name || '—'}</td>
-                        <td style={tdStyle}>{fmtDate(row.dueDate)}</td>
+                        <td style={numericTdStyle}>{fmtDate(row.dueDate)}</td>
                       </>}
                       {detailType === 'expenses' && <>
                         <td style={tdStyle}>{row.title}</td>
-                        <td style={{ ...tdStyle, fontWeight: '600' }}>{formatMoney(row.amount || 0)}</td>
+                        <td style={{ ...numericTdStyle, fontWeight: '600' }}>{formatMoney(row.amount || 0)}</td>
                         <td style={tdStyle}>{row.category}</td>
                         <td style={tdStyle}><StatusBadge status={row.status} /></td>
                         <td style={tdStyle}>{row.user?.name || '—'}</td>
@@ -451,7 +451,7 @@ export default function Reports() {
                   <th style={thStyle}>Frequency</th>
                   <th style={thStyle}>Format</th>
                   <th style={thStyle}>Recipients</th>
-                  <th style={thStyle}>Last Run</th>
+                  <th style={numericThStyle}>Last Run</th>
                   <th style={thStyle}>Status</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Actions</th>
                 </tr>
@@ -464,7 +464,7 @@ export default function Reports() {
                     <td style={tdStyle}>{s.frequency}</td>
                     <td style={tdStyle}>{s.format}</td>
                     <td style={tdStyle}>{(() => { try { return JSON.parse(s.recipients).join(', '); } catch { return s.recipients; } })()}</td>
-                    <td style={tdStyle}>{s.lastRunAt ? fmtDate(s.lastRunAt) : 'Never'}</td>
+                    <td style={numericTdStyle}>{s.lastRunAt ? fmtDate(s.lastRunAt) : 'Never'}</td>
                     <td style={tdStyle}>
                       <span style={{
                         padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 'bold',
@@ -548,6 +548,12 @@ export default function Reports() {
 
 const thStyle = { padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' };
 const tdStyle = { padding: '0.875rem 1rem' };
+// #602: numeric / currency / date cells must not wrap mid-number ("₹1,2\n34,567"
+// breaks copy-paste + CSV alignment). tabular-nums also keeps digit columns
+// vertically aligned across rows. min-width ensures a typical 7-digit currency
+// rendered with thousand separators (e.g. "₹12,34,567") always fits on one line.
+const numericTdStyle = { ...tdStyle, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', minWidth: '7.5rem' };
+const numericThStyle = { ...thStyle, whiteSpace: 'nowrap' };
 const labelStyle = { display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '500' };
 
 // #627: locale-aware date formatter — was hardcoded en-US.

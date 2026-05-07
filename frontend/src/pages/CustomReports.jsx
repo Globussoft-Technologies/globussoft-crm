@@ -463,7 +463,7 @@ export default function CustomReports() {
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                         <XAxis dataKey="name" stroke="rgba(255,255,255,0.6)" />
                         <YAxis stroke="rgba(255,255,255,0.6)" />
-                        <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
+                        <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
                         <Bar dataKey="value" fill="#3b82f6" radius={[8, 8, 0, 0]} />
                       </BarChart>
                     ) : config.chartType === 'pie' ? (
@@ -472,14 +472,14 @@ export default function CustomReports() {
                           {chartData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                         </Pie>
                         <Legend />
-                        <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
+                        <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
                       </PieChart>
                     ) : (
                       <LineChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                         <XAxis dataKey="name" stroke="rgba(255,255,255,0.6)" />
                         <YAxis stroke="rgba(255,255,255,0.6)" />
-                        <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
+                        <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)' }} />
                         <Line type="monotone" dataKey="value" stroke="#a855f7" strokeWidth={2} />
                       </LineChart>
                     )}
@@ -503,11 +503,24 @@ export default function CustomReports() {
                   <tbody>
                     {results.rows.map((row, i) => (
                       <tr key={i}>
-                        {results.columns.map(c => (
-                          <td key={c} style={{ padding: '0.6rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                            {formatCell(row[c])}
-                          </td>
-                        ))}
+                        {results.columns.map(c => {
+                          const v = row[c];
+                          // #602: numeric + ISO-date cells must not wrap mid-value
+                          // ("₹1,2\n34,567" breaks copy-paste). Detect via the same
+                          // shape `formatCell` keys on so the visual pairing stays
+                          // in sync if the formatter expands to more types.
+                          const isNumericLike = typeof v === 'number'
+                            || (v instanceof Date)
+                            || (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v));
+                          const cellStyle = isNumericLike
+                            ? { padding: '0.6rem', borderBottom: '1px solid rgba(255,255,255,0.05)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }
+                            : { padding: '0.6rem', borderBottom: '1px solid rgba(255,255,255,0.05)' };
+                          return (
+                            <td key={c} style={cellStyle} data-cell-type={isNumericLike ? 'number' : 'text'}>
+                              {formatCell(v)}
+                            </td>
+                          );
+                        })}
                       </tr>
                     ))}
                     {results.rows.length === 0 && (

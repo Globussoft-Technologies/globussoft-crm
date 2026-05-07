@@ -151,7 +151,9 @@ export default function Visits() {
                     {visit.service?.name || '—'}
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'right' }}>
-                    {formatMoney(visit.amountCharged || 0)}
+                    {formatMoney(
+                      visit.revenue != null ? visit.revenue : (visit.amountCharged || 0)
+                    )}
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'left' }}>
                     <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', padding: '0.2rem 0.5rem', borderRadius: 4, background: statusBg(visit.status) }}>
@@ -259,6 +261,12 @@ export default function Visits() {
             <div style={{ padding: '0.75rem' }}>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Patients with Visits</div>
               <div style={{ fontSize: '1.5rem', fontWeight: 600, marginTop: '0.25rem' }}>{data.count.toLocaleString('en-IN')}</div>
+            </div>
+            <div style={{ padding: '0.75rem' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Revenue</div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 600, marginTop: '0.25rem', color: 'var(--success-color)' }}>
+                {formatMoney(data.totalRevenue || 0)}
+              </div>
             </div>
           </div>
 

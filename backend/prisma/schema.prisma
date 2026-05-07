@@ -629,8 +629,15 @@ model Invoice {
   contactId Int
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
+  // #601 — wellness visit linkage. Optional so generic CRM invoices don't
+  // need it. SetNull on visit delete; Invoice itself stays Restrict-on-tenant.
+  // Drives the per-visit revenue rollup on /api/wellness/reports/visit.
+  visitId   Int?
+  visit     Visit?  @relation(fields: [visitId], references: [id], onDelete: SetNull)
+
   @@index([tenantId, status])
   @@index([tenantId, contactId])
+  @@index([visitId, status])
 }
 
 model Integration {
@@ -2257,6 +2264,11 @@ model Visit {
 
   prescriptions Prescription[]
   consumptions  ServiceConsumption[]
+
+  // #601 — invoices linked to this visit. Per-visit revenue rollup sums
+  // amount across rows where status='PAID'. amountCharged on the visit row
+  // is the inline fallback when no invoice has been raised yet.
+  invoices Invoice[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

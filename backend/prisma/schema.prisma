@@ -211,6 +211,10 @@ model Tenant {
   documentViews        DocumentView[]
   socialPosts          SocialPost[]
   socialMentions       SocialMention[]
+
+  // #592 — Find Duplicates dismiss persistence (DismissedDuplicateGroup model
+  // at the bottom of this file). Per-tenant scoped.
+  dismissedDuplicateGroups DismissedDuplicateGroup[]
 }
 
 model User {
@@ -2512,4 +2516,33 @@ model RevokedToken {
   @@index([jti])
   @@index([userId, tenantId])
   @@index([expiresAt])
+}
+
+// #592 — Dismiss persistence for Contacts → Find Duplicates. The duplicate
+// detector at GET /api/contacts/duplicates/find is purely structural (re-runs
+// on every call), so without a persisted "the operator already reviewed this
+// group and decided it's NOT a duplicate" signal, dismissed pairs would
+// re-surface on every refresh. groupKey is a stable hash of the sorted
+// contact IDs in the group (primary + duplicates) — re-deriving the same
+// group from the same contacts produces the same key, so the dismiss is
+// sticky. Soft-deleting any member of a dismissed group invalidates that
+// group naturally (the detector won't see the deleted contact), which is
+// the desired UX. Per-tenant scoped.
+model DismissedDuplicateGroup {
+  id          Int      @id @default(autoincrement())
+  // SHA-256 hex of the sorted contact-id list, comma-joined. Stable across
+  // calls; re-creates that hit the same key are idempotent.
+  groupKey    String
+  // The sorted contact IDs that made up the group at dismiss time, stored
+  // as a comma-separated string. Used for audit/debug only — the dedup
+  // check goes through groupKey.
+  contactIds  String   @db.Text
+  reason      String?
+  dismissedBy Int?
+  tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, groupKey])
+  @@index([tenantId])
 }

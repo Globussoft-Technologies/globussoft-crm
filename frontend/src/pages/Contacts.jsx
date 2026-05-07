@@ -1,7 +1,7 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge } from 'lucide-react';
+import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 const parseCSV = (text) => {
@@ -84,7 +84,17 @@ const Contacts = () => {
     } catch { setDupes([]); }
   };
 
+  // #592 — Merge is destructive (irreversible from the UI; the soft-deleted
+  // siblings can only be restored via the ADMIN restore endpoint). Confirm
+  // before firing.
   const handleMerge = async (primaryId, secondaryIds) => {
+    const ok = await notify.confirm({
+      title: 'Merge duplicate contacts?',
+      message: `${secondaryIds.length} duplicate contact(s) will be merged into the primary record. Activities, deals, tasks, emails and other history will be folded into the primary. The duplicate records will be removed from the list. This is irreversible from this UI.`,
+      confirmText: 'Merge',
+      destructive: true,
+    });
+    if (!ok) return;
     setMerging(true);
     try {
       await fetchApi('/api/contacts/merge', {
@@ -95,6 +105,29 @@ const Contacts = () => {
       fetchContacts();
     } catch { notify.error('Merge failed'); }
     setMerging(false);
+  };
+
+  // #592 — Dismiss a "false positive" duplicate group. The group key is a
+  // stable hash of the sorted contact-id list (server-derived), so the
+  // dismiss survives across re-runs of the detector. Optimistically removes
+  // the group from the local list so the UI updates immediately.
+  const handleDismiss = async (group) => {
+    const ok = await notify.confirm({
+      title: 'Dismiss this duplicate group?',
+      message: 'These contacts will no longer appear in the duplicates list. You can still edit or delete them individually from the contacts table.',
+      confirmText: 'Dismiss',
+    });
+    if (!ok) return;
+    try {
+      await fetchApi('/api/contacts/duplicates/dismiss', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          primaryId: group.primary.id,
+          secondaryIds: group.duplicates.map(d => d.id),
+        })
+      });
+      setDupes(prev => prev.filter(g => g !== group));
+    } catch { notify.error('Dismiss failed'); }
   };
 
   const fetchContacts = () => {
@@ -519,14 +552,24 @@ const Contacts = () => {
                   <div key={gi} className="card" style={{ padding: '1rem', border: '1px solid rgba(245,158,11,0.3)', background: 'rgba(245,158,11,0.03)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                       <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: '600' }}>Match: {group.reason}</span>
-                      <button
-                        onClick={() => handleMerge(group.primary.id, group.duplicates.map(d => d.id))}
-                        disabled={merging}
-                        className="btn-primary"
-                        style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
-                      >
-                        <GitMerge size={12} /> Merge into Primary
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          onClick={() => handleDismiss(group)}
+                          aria-label="Dismiss duplicate group"
+                          title="Mark as not a duplicate — will not re-appear"
+                          style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-color, rgba(0,0,0,0.1))', borderRadius: '4px', cursor: 'pointer' }}
+                        >
+                          <EyeOff size={12} /> Dismiss
+                        </button>
+                        <button
+                          onClick={() => handleMerge(group.primary.id, group.duplicates.map(d => d.id))}
+                          disabled={merging}
+                          className="btn-primary"
+                          style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                        >
+                          <GitMerge size={12} /> Merge into Primary
+                        </button>
+                      </div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>

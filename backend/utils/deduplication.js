@@ -70,4 +70,41 @@ async function findDuplicateMarketplaceLead(provider, externalLeadId, tenantId =
   });
 }
 
-module.exports = { normalizePhone, findDuplicateContact, findDuplicateMarketplaceLead };
+/**
+ * #592 — Compute a stable group key for a duplicate set.
+ *
+ * The Find Duplicates UI lets the operator dismiss a group ("not actually
+ * duplicates"). For the dismiss to be sticky across re-runs of the detector,
+ * the same group of contacts must always hash to the same key — regardless of
+ * which contact the detector picked as `primary` on a given pass.
+ *
+ * Implementation: union the primary id with every duplicate id, sort
+ * numerically ascending, comma-join, SHA-256 it, return the hex digest.
+ *
+ * Soft-deleting any member of a dismissed group naturally invalidates the
+ * group (the detector no longer sees that contact, so the surviving members
+ * may not even form a group anymore — and if they do, the new key differs
+ * from the dismissed one). That's the desired UX.
+ */
+const crypto = require('crypto');
+function computeDuplicateGroupKey(primaryId, duplicateIds) {
+  // Reject null/undefined explicitly — Number(null) is 0 which would
+  // otherwise produce a non-empty key for an empty group. Strings are coerced.
+  const coerce = (v) => {
+    if (v === null || v === undefined || v === '') return NaN;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : NaN;
+  };
+  const ids = [coerce(primaryId), ...(duplicateIds || []).map(coerce)]
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b);
+  if (ids.length === 0) return null;
+  return crypto.createHash('sha256').update(ids.join(',')).digest('hex');
+}
+
+module.exports = {
+  normalizePhone,
+  findDuplicateContact,
+  findDuplicateMarketplaceLead,
+  computeDuplicateGroupKey,
+};

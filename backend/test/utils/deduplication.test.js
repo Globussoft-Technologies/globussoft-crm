@@ -41,7 +41,7 @@ const fakePrisma = vi.hoisted(() => {
 });
 
 import dedup from '../../utils/deduplication.js';
-const { normalizePhone, findDuplicateContact, findDuplicateMarketplaceLead } = dedup;
+const { normalizePhone, findDuplicateContact, findDuplicateMarketplaceLead, computeDuplicateGroupKey } = dedup;
 
 beforeEach(() => {
   // Reset to vi.fn() per test so we can assert call shapes.
@@ -55,6 +55,43 @@ describe('deduplication — module shape', () => {
     expect(typeof normalizePhone).toBe('function');
     expect(typeof findDuplicateContact).toBe('function');
     expect(typeof findDuplicateMarketplaceLead).toBe('function');
+    expect(typeof computeDuplicateGroupKey).toBe('function');
+  });
+});
+
+// #592 — computeDuplicateGroupKey backs the dismiss-persistence story.
+// Stable hash of the sorted contact-id list lets the dismiss survive across
+// re-runs of the detector regardless of which row the detector picked as
+// the primary on a given pass.
+describe('deduplication — computeDuplicateGroupKey (#592)', () => {
+  test('returns null on empty input', () => {
+    expect(computeDuplicateGroupKey(null, [])).toBeNull();
+    expect(computeDuplicateGroupKey(undefined, undefined)).toBeNull();
+  });
+
+  test('returns a 64-char hex (sha256) digest', () => {
+    const k = computeDuplicateGroupKey(1, [2]);
+    expect(k).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('is stable across primary/duplicate role swaps (sort-invariant)', () => {
+    // Same group of contacts {1, 2, 3}; two different framings of who's
+    // "primary" must hash to the same key.
+    expect(computeDuplicateGroupKey(1, [2, 3])).toBe(computeDuplicateGroupKey(2, [1, 3]));
+    expect(computeDuplicateGroupKey(1, [2, 3])).toBe(computeDuplicateGroupKey(3, [2, 1]));
+  });
+
+  test('different id sets produce different keys', () => {
+    expect(computeDuplicateGroupKey(1, [2])).not.toBe(computeDuplicateGroupKey(1, [3]));
+    expect(computeDuplicateGroupKey(1, [2, 3])).not.toBe(computeDuplicateGroupKey(1, [2]));
+  });
+
+  test('coerces string ids to numbers', () => {
+    expect(computeDuplicateGroupKey('1', ['2'])).toBe(computeDuplicateGroupKey(1, [2]));
+  });
+
+  test('drops non-finite ids defensively', () => {
+    expect(computeDuplicateGroupKey(1, [2, NaN, undefined, 'x'])).toBe(computeDuplicateGroupKey(1, [2]));
   });
 });
 

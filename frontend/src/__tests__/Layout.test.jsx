@@ -83,4 +83,19 @@ describe('Layout', () => {
     fireEvent.click(btn);
     expect(localStorage.getItem('token')).toBeNull();
   });
+
+  // #642: header avatar renders a role pip so the signed-in operator can
+  // tell at a glance whether they're Owner / Admin / Manager / User.
+  it('renders the role badge on the header avatar when authenticated', () => {
+    renderLayout({ user: { name: 'Rishu', email: 'rishu@x.test', role: 'ADMIN' } });
+    const pip = screen.getByTestId('avatar-role-badge');
+    expect(pip).toBeInTheDocument();
+    expect(pip).toHaveTextContent('A');
+    expect(pip).toHaveAttribute('aria-label', 'Role: ADMIN');
+  });
+
+  it('renders OWNER role pip distinct from ADMIN', () => {
+    renderLayout({ user: { name: 'Owner', email: 'o@x.test', role: 'OWNER' } });
+    expect(screen.getByTestId('avatar-role-badge')).toHaveTextContent('O');
+  });
 });

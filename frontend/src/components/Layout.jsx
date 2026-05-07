@@ -11,6 +11,7 @@ import Omnibar from './Omnibar';
 import Presence from './Presence';
 import Softphone from './Softphone';
 import NotificationBell from './NotificationBell';
+import Avatar from './Avatar';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
@@ -191,14 +192,14 @@ const Layout = () => {
             onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
             onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
           >
-            <div style={{
-              width: 28, height: 28, borderRadius: '50%',
-              background: 'linear-gradient(135deg, var(--accent-color), var(--primary-color))',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '0.75rem', fontWeight: 'bold', color: '#fff',
-            }}>
-              {(user?.name || user?.email || '?').charAt(0).toUpperCase()}
-            </div>
+            {/* #642: shared Avatar primitive renders a deterministic-coloured
+                circle + role pip so signed-in operators can tell at a glance
+                whether they're Owner / Admin / Manager / User. */}
+            <Avatar
+              name={user?.name || user?.email || 'User'}
+              size={28}
+              roleBadge={user?.role || undefined}
+            />
             <span>{user?.name || user?.email || 'User'}</span>
           </button>
           <button

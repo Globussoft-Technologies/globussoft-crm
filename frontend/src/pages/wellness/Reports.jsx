@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { BarChart3, TrendingUp, Stethoscope, MapPin, IndianRupee, Download, Loader2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
+import Avatar from '../../components/Avatar';
 
 const TABS = [
   { key: 'pnl', label: 'P&L by Service', icon: BarChart3 },
@@ -261,9 +262,17 @@ function ProTable({ data }) {
               "Role" instead — that's the meaningful one for clinics. */}
           <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: i > 1 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
           <tbody>
+            {/* #637: per-practitioner avatar with hashed colour so each name
+                is visually distinct in the staff column. The colour is
+                deterministic — same name → same swatch across pages. */}
             {rows.map((r) => (
               <tr key={r.id}>
-                <td style={{ ...td, width: colWidths[0] }}>{r.name}</td>
+                <td style={{ ...td, width: colWidths[0] }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <Avatar name={r.name || ''} size={28} />
+                    <span>{r.name}</span>
+                  </span>
+                </td>
                 <td style={{ ...td, width: colWidths[1], textTransform: 'capitalize' }}>{r.wellnessRole || r.role || '—'}</td>
                 <td style={{ ...tdR, width: colWidths[2] }}>{r.visits}</td>
                 <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(r.revenue)}</td>

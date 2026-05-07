@@ -326,6 +326,11 @@ router.get("/patients", phiReadGate, async (req, res) => {
       ];
     }
     if (locationId) where.locationId = parseInt(locationId);
+    // #628: hide soft-deleted patients from default list. Admin/manager
+    // can opt in via ?includeDeleted=1 for compliance / restore views.
+    if (req.query.includeDeleted !== '1' && req.query.includeDeleted !== 'true') {
+      where.deletedAt = null;
+    }
     const [patients, total] = await Promise.all([
       prisma.patient.findMany({
         where,

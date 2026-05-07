@@ -16,11 +16,11 @@ export async function registerPWA() {
   }
   try {
     const reg = await navigator.serviceWorker.register('/sw-pwa.js', { scope: '/' });
-    // eslint-disable-next-line no-console
+     
     console.log('[PWA] Registered:', reg.scope);
     return true;
   } catch (e) {
-    // eslint-disable-next-line no-console
+     
     console.warn('[PWA] Registration failed:', e && e.message);
     return false;
   }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
@@ -29,7 +29,7 @@ export default function PatientDetail() {
   const isSafeId = typeof id === 'string' && /^\d+$/.test(id);
   const tabStorageKey = isSafeId ? `gbs.tab.patient.${encodeURIComponent(id)}` : null;
   if (!isSafeId && id != null) {
-    // eslint-disable-next-line no-console
+     
     console.warn('[PatientDetail] refusing to persist tab state for non-numeric id:', id);
   }
   const [tab, setTab] = useState(() => {

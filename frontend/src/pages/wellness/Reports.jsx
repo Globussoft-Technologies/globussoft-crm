@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, TrendingUp, Stethoscope, MapPin, IndianRupee, Download, Loader2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';

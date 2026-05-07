@@ -221,6 +221,29 @@ const Layout = () => {
         <main className="animate-fade-in" style={{ flex: 1, overflowY: 'auto', padding: '0', backgroundColor: 'transparent' }}>
           <Outlet />
         </main>
+        {/* #634: build identifier — small, low-contrast, app-shell footer.
+            Version is sourced from backend/package.json at build time (see
+            vite.config.js define block) so it stays aligned with /api/health.
+            Git SHA is git rev-parse --short HEAD at build time, omitted in
+            environments where git isn't available. */}
+        <footer
+          data-testid="app-build-footer"
+          style={{
+            flexShrink: 0,
+            padding: '4px 16px',
+            textAlign: 'right',
+            borderTop: '1px solid var(--border-color)',
+            background: 'var(--surface-color)',
+            color: 'var(--text-secondary)',
+            fontSize: '0.7rem',
+            opacity: 0.7,
+          }}
+        >
+          <small>
+            v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0'}
+            {typeof __APP_GIT_SHA__ !== 'undefined' && __APP_GIT_SHA__ ? ` · ${__APP_GIT_SHA__}` : ''}
+          </small>
+        </footer>
       </div>
       <Omnibar />
       {!isWellness && <Softphone />}

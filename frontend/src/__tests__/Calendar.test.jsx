@@ -83,9 +83,14 @@ function renderCalendar() {
 
 describe('hoursForVisits() — #615 dynamic hour expansion', () => {
   it('returns the default 9..19 window when no visits are off-hours', () => {
+    // Use setHours() so the test is portable across CI timezones — a literal
+    // `+05:30` ISO string parses to a different .getHours() value depending
+    // on the runtime TZ (CI=UTC, local-dev=IST).
+    const v1 = new Date(today); v1.setHours(10, 0, 0, 0);
+    const v2 = new Date(today); v2.setHours(15, 0, 0, 0);
     const hrs = hoursForVisits([
-      { visitDate: `${isoDay}T10:00:00+05:30` },
-      { visitDate: `${isoDay}T15:00:00+05:30` },
+      { visitDate: v1.toISOString() },
+      { visitDate: v2.toISOString() },
     ]);
     expect(hrs[0]).toBe(9);
     expect(hrs[hrs.length - 1]).toBe(19);

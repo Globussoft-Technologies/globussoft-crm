@@ -55,7 +55,22 @@ router.post("/:dealId/upload", upload.single("file"), async (req, res) => {
   }
 });
 
-// Generate dynamic PDF Quote
+// Generate dynamic PDF Quote.
+//
+// #585: prior to this fix, the route piped the PDF to disk asynchronously
+// then returned a JSON envelope referencing /uploads/<file>.pdf. The user-
+// observed effect was that clicking "Generate Quote" never delivered a
+// downloadable PDF inline — the customer-facing artifact was effectively
+// invisible until they discovered it in the attachments list, and the
+// async write-then-respond ordering risked serving 0-byte / partial
+// content if the static handler raced the doc.end() flush.
+//
+// The route now buffers the PDF in memory (mirrors the streamToBuffer
+// pattern in services/pdfRenderer.js for the wellness vertical), persists
+// the same buffer to disk for the attachment row (so the existing
+// "see it in attachments" UX still works after a refresh), and responds
+// with binary PDF bytes + Content-Type: application/pdf +
+// Content-Disposition: attachment; filename="quote-<id>.pdf".
 router.post("/:dealId/generate-quote", async (req, res) => {
   try {
     const deal = await prisma.deal.findFirst({
@@ -73,10 +88,12 @@ router.post("/:dealId/generate-quote", async (req, res) => {
     const locale = tenant?.locale || undefined;
 
     const doc = new PDFDocument();
-    const pdfFilename = `quote-${deal.id}-${Date.now()}.pdf`;
-    const pdfPath = path.join(uploadPath, pdfFilename);
-
-    doc.pipe(fs.createWriteStream(pdfPath));
+    const chunks = [];
+    doc.on("data", (c) => chunks.push(c));
+    const bufferPromise = new Promise((resolve, reject) => {
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+    });
 
     // PDF Styling
     doc.fontSize(24).text("Enterprise CRM Quote", { align: "center" });
@@ -90,18 +107,36 @@ router.post("/:dealId/generate-quote", async (req, res) => {
     doc.fontSize(10).fillColor('gray').text("This is an automatically generated legally binding quote valid for 30 days.", { align: "center" });
 
     doc.end();
+    const pdfBuffer = await bufferPromise;
 
-    // Attach to deal
-    const attachment = await prisma.attachment.create({
-      data: {
-        filename: "System Generated Quote.pdf",
-        fileUrl: `/uploads/${pdfFilename}`,
-        dealId: deal.id,
-        tenantId: req.user.tenantId,
-      }
-    });
+    // Persist alongside the attachment row so the existing
+    // "view in attachments → /uploads/..." flow still resolves to the
+    // same bytes. Failures here are logged but don't block the inline
+    // response — the user still receives their PDF.
+    const pdfFilename = `quote-${deal.id}-${Date.now()}.pdf`;
+    const pdfPath = path.join(uploadPath, pdfFilename);
+    try {
+      fs.writeFileSync(pdfPath, pdfBuffer);
+      await prisma.attachment.create({
+        data: {
+          filename: `quote-${deal.id}.pdf`,
+          fileUrl: `/uploads/${pdfFilename}`,
+          dealId: deal.id,
+          tenantId: req.user.tenantId,
+        }
+      });
+    } catch (persistErr) {
+      console.error("[generate-quote] attachment persist failed:", persistErr);
+    }
 
-    res.status(201).json(attachment);
+    res.status(200);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="quote-${deal.id}.pdf"`,
+    );
+    res.setHeader("Content-Length", pdfBuffer.length);
+    res.end(pdfBuffer);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "PDF generation failed" });

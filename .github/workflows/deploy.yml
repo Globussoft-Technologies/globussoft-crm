@@ -286,7 +286,8 @@ jobs:
           #   - audit-coverage-api.spec.js   (30 tests: AuditLog emission per mutating endpoint across Contact/Deal/Patient/Invoice/Estimate/Task/Pipeline/Notification — closes #134/#167/#179/#180 from regression-coverage-backlog item #5)
           #   - public-booking-api.spec.js   (24 tests: regression pin for #208/#218/#219/#279/#283/#291/#297/#378 — public booking + embed widget gate, P1 from regression-coverage-backlog item #14)
           #   - services-api.spec.js         (33 tests: regression pin for #115/#161/#209/#274/#364 — wellness service catalog validation + RBAC + structured-error contract, P2 from regression-coverage-backlog item #13)
-          # Total: ~1584 API tests run on every push.
+          #   - deals_documents.spec.js      (10 tests: routes/deals_documents.js — upload + list + #585 binary-PDF generate-quote contract)
+          # Total: ~1594 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -373,6 +374,7 @@ jobs:
             tests/services-api.spec.js \
             tests/sequences-authoring-api.spec.js \
             tests/orchestrator-api.spec.js \
+            tests/deals_documents.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

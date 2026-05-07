@@ -231,6 +231,7 @@ jobs:
             tests/services-api.spec.js \
             tests/sequences-authoring-api.spec.js \
             tests/orchestrator-api.spec.js \
+            tests/deals_documents.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

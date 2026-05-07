@@ -208,7 +208,31 @@ export default function DealInsights() {
         </div>
       ) : (
         Object.entries(grouped).map(([dealId, items]) => {
-          const deal = dealById[dealId];
+          // #572: prefer the server-side dealContext envelope over the
+          // parallel /api/deals?limit=100 fetch. The /api/deals call only
+          // returns the newest 100 rows, so on large tenants (5k+ deals)
+          // 80% of insights had no dealById match and rendered the literal
+          // "Deal details unavailable" placeholder. Server now joins the
+          // Deal row when serving GET /api/deal-insights — see
+          // backend/routes/deal_insights.js attachDealContext helper.
+          // Soft-deleted deals come through with isArchived=true so we can
+          // show "[archived]" instead of the bare placeholder.
+          const ctx = items[0] && items[0].dealContext;
+          const deal = ctx || dealById[dealId];
+          const dealTitle = deal
+            ? (deal.isArchived ? `[archived] ${deal.title}` : deal.title)
+            : `Deal #${dealId}`;
+          const dealStage = deal && deal.stage ? deal.stage : null;
+          const dealAmount = deal ? (deal.amount || 0) : null;
+          const dealCurrency = deal ? deal.currency : undefined;
+          const dealContactName = deal
+            ? (deal.contactName || (deal.contact && deal.contact.name) || null)
+            : null;
+          const subtitleParts = [];
+          if (dealStage) subtitleParts.push(dealStage);
+          if (dealAmount !== null) subtitleParts.push(formatMoney(dealAmount, { currency: dealCurrency }));
+          subtitleParts.push(dealContactName || 'No contact');
+          const subtitle = deal ? subtitleParts.join(' · ') : 'Deal details unavailable';
           return (
             <div key={dealId} className="card" style={{ padding: '1.5rem', marginBottom: '1.25rem' }}>
               {/* #467: header used to navigate to '/pipeline' with no deal
@@ -222,7 +246,7 @@ export default function DealInsights() {
                 tabIndex={0}
                 onClick={() => navigate(`/pipeline?dealId=${dealId}`)}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/pipeline?dealId=${dealId}`); } }}
-                title={deal ? `Open ${deal.title} in pipeline` : `Open deal #${dealId} in pipeline`}
+                title={deal ? `Open ${dealTitle} in pipeline` : `Open deal #${dealId} in pipeline`}
                 style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   marginBottom: '1rem', cursor: 'pointer', userSelect: 'none',
@@ -231,11 +255,11 @@ export default function DealInsights() {
               >
                 <div>
                   <div style={{ fontSize: '1.05rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    {deal ? deal.title : `Deal #${dealId}`}
+                    {dealTitle}
                     <ArrowRight size={14} color="var(--text-secondary)" />
                   </div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                    {deal ? `${deal.stage} · ${formatMoney(deal.amount || 0, { currency: deal.currency })} · ${deal.contact?.name || 'No contact'}` : 'Deal details unavailable'}
+                    {subtitle}
                   </div>
                 </div>
                 <span style={{

@@ -26,6 +26,21 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 router.use(verifyToken);
 
 // ── GET / : list insights for tenant (filter by severity, dealId, isResolved) ─
+//
+// #572: prior shape returned bare DealInsight rows. Frontend at /deal-insights
+// then fetched /api/deals?limit=100 in parallel and built a dealById lookup
+// to resolve `Deal #1600` → `<title> · <stage> · <amount>`. On large tenants
+// (5,381 demo deals, 498 insights) the newest-100 window only resolved ~20%
+// of insights → 80% rendered the literal placeholder "Deal details unavailable".
+//
+// Fix: attach `dealContext` (title, amount, currency, stage, contactName,
+// expectedClose, deletedAt) to every insight server-side via a single
+// `findMany({ where: { id: { in: dealIds } } })` join. Soft-deleted deals
+// are still returned (with `deletedAt` set) so the frontend can render
+// "[archived] <title>" instead of the bare placeholder. Pure additive
+// envelope change — existing top-level fields (id, dealId, type, severity,
+// insight, isResolved, generatedAt, tenantId) preserved for legacy callers
+// (specs, mobile, third-party integrations).
 router.get("/", async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
@@ -39,7 +54,8 @@ router.get("/", async (req, res) => {
       orderBy: { generatedAt: "desc" },
       take: 500,
     });
-    res.json(insights);
+    const enriched = await attachDealContext(insights, req.user.tenantId);
+    res.json(enriched);
   } catch (err) {
     console.error("[DealInsights GET /] ", err);
     res.status(500).json({ error: "Failed to fetch insights" });
@@ -83,12 +99,64 @@ router.get("/deal/:dealId", async (req, res) => {
       where: { dealId, tenantId: req.user.tenantId },
       orderBy: { generatedAt: "desc" },
     });
-    res.json(insights);
+    // #572: same dealContext enrichment as GET /. Cheap when scoped to a
+    // single deal — one extra findMany to attach context across all rows.
+    const enriched = await attachDealContext(insights, req.user.tenantId);
+    res.json(enriched);
   } catch (err) {
     console.error("[DealInsights GET /deal/:id] ", err);
     res.status(500).json({ error: "Failed to fetch deal insights" });
   }
 });
+
+// ── #572: deal-context enrichment for GET / and GET /deal/:id ─────
+//
+// Hydrates each insight row with a small `dealContext` object so the
+// frontend can render the deal header without a second /api/deals fetch.
+// Tenant-checked (we only fetch deals where tenantId === insight tenantId
+// and id ∈ insight.dealIds). Soft-deleted deals ARE returned (deletedAt set
+// non-null) so the UI can show "[archived] <title>" instead of the
+// "Deal details unavailable" placeholder. If a Deal row was hard-deleted
+// (legacy data, prior to soft-delete) the dealContext is null and the
+// frontend uses its own fallback.
+async function attachDealContext(insights, tenantId) {
+  if (!Array.isArray(insights) || insights.length === 0) return insights;
+  const dealIds = [...new Set(insights.map(i => i.dealId).filter(Boolean))];
+  if (dealIds.length === 0) {
+    return insights.map(i => ({ ...i, dealContext: null }));
+  }
+  const deals = await prisma.deal.findMany({
+    where: { id: { in: dealIds }, tenantId },
+    select: {
+      id: true,
+      title: true,
+      amount: true,
+      currency: true,
+      stage: true,
+      probability: true,
+      expectedClose: true,
+      deletedAt: true,
+      contact: { select: { name: true, company: true } },
+    },
+  });
+  const byId = Object.create(null);
+  for (const d of deals) {
+    byId[d.id] = {
+      id: d.id,
+      title: d.title,
+      amount: d.amount,
+      currency: d.currency,
+      stage: d.stage,
+      probability: d.probability,
+      expectedClose: d.expectedClose,
+      deletedAt: d.deletedAt,
+      contactName: d.contact ? d.contact.name : null,
+      contactCompany: d.contact ? d.contact.company : null,
+      isArchived: !!d.deletedAt,
+    };
+  }
+  return insights.map(i => ({ ...i, dealContext: byId[i.dealId] || null }));
+}
 
 // ── Heuristic rules engine (shared with cron) ─────────────────────
 async function runHeuristicRules(deal) {
@@ -121,13 +189,33 @@ async function runHeuristicRules(deal) {
   }
 
   // RISK: Past expected close date
-  if (deal.expectedClose && new Date(deal.expectedClose) < now && stage !== "won" && stage !== "lost") {
-    const daysOverdue = Math.floor((now - new Date(deal.expectedClose)) / MS_PER_DAY);
-    insights.push({
-      type: "RISK",
-      severity: "CRITICAL",
-      insight: `Deal is ${daysOverdue} day(s) past expected close date and still in "${deal.stage}" stage.`,
-    });
+  // #582: prior implementation fired CRITICAL whenever expectedClose < now,
+  // including the (now − expectedClose) < 24h case where Math.floor → 0 ("Deal
+  // is 0 day(s) past expected close"). That was noise — half the demo's 22
+  // CRITICAL alerts were 0-day or null-derived, eroding trust in the badge.
+  // Fix: explicit null guard + minimum-days threshold + severity split:
+  //   - daysOverdue < 1   → no insight (closes today / not yet due / null)
+  //   - daysOverdue 1-6   → WARNING (modestly late; rep should follow up)
+  //   - daysOverdue >= 7  → CRITICAL (materially late; needs intervention)
+  if (deal.expectedClose && stage !== "won" && stage !== "lost") {
+    const expectedCloseTs = new Date(deal.expectedClose).getTime();
+    if (Number.isFinite(expectedCloseTs)) {
+      const daysOverdue = Math.floor((now.getTime() - expectedCloseTs) / MS_PER_DAY);
+      if (daysOverdue >= 7) {
+        insights.push({
+          type: "RISK",
+          severity: "CRITICAL",
+          insight: `Deal is ${daysOverdue} day(s) past expected close date and still in "${deal.stage}" stage.`,
+        });
+      } else if (daysOverdue >= 1) {
+        insights.push({
+          type: "RISK",
+          severity: "WARNING",
+          insight: `Deal is ${daysOverdue} day(s) past expected close date and still in "${deal.stage}" stage.`,
+        });
+      }
+      // daysOverdue <= 0: closes today or in the future → emit nothing.
+    }
   }
 
   // RISK: Low engagement
@@ -365,3 +453,4 @@ router.post("/run", verifyRole(["ADMIN"]), async (req, res) => {
 module.exports = router;
 module.exports.runHeuristicRules = runHeuristicRules;
 module.exports.persistInsights = persistInsights;
+module.exports.attachDealContext = attachDealContext;

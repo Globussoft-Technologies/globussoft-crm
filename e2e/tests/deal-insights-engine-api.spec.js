@@ -530,3 +530,239 @@ test.describe('Deal Insights — POST /generate/:dealId AI failure tolerance', (
     expect(r.status()).toBe(404);
   });
 });
+
+// ─── #582: past-expected-close severity threshold + null-date guard ──────
+//
+// Regression coverage for the "Deal is 0 day(s) past expected close" CRITICAL
+// noise alert filed as #582 (sub-finding of #572). Pre-fix the rule fired
+// CRITICAL on ANY (now − expectedClose) > 0 (Math.floor of < 24h yields 0).
+// Post-fix:
+//   - daysOverdue < 1   → no insight emitted at all (closes today / future / null)
+//   - daysOverdue 1-6   → WARNING severity
+//   - daysOverdue >= 7  → CRITICAL severity
+// Null expectedClose is handled by the `deal.expectedClose && …` guard at
+// runHeuristicRules (skipped entirely; no insight). These tests pin all 3
+// branches against POST /generate/:dealId (synchronous, deterministic) since
+// /run aggregates all open deals and would mix in unrelated heuristic rows.
+
+test.describe('#582 past-expected-close severity threshold', () => {
+  // Helper: create a deal with a specific expectedClose offset (in days) from now.
+  // Negative offset = N days in the past (overdue). Positive = future. 0 = today.
+  async function seedDealWithExpectedClose(request, token, contactId, label, daysFromNow, stage = 'proposal') {
+    const dt = new Date();
+    dt.setUTCDate(dt.getUTCDate() + daysFromNow);
+    const r = await authPost(request, token, '/deals', {
+      title: `${RUN_TAG} ${label}`,
+      amount: 30000,
+      probability: 50,
+      stage,
+      contactId,
+      expectedClose: dt.toISOString(),
+    });
+    if (r.status() !== 201) throw new Error(`seedDealWithExpectedClose: ${r.status()} ${await r.text()}`);
+    const d = await r.json();
+    createdDealIds.push(d.id);
+    return d;
+  }
+
+  // Reach into POST /generate which evaluates synchronously and returns
+  // candidate count. Fetch the resulting rows to inspect severity.
+  async function generateAndList(request, token, dealId) {
+    const g = await authPost(request, token, `/deal-insights/generate/${dealId}`, {});
+    expect(g.status(), `body: ${await g.text()}`).toBe(200);
+    const items = await listInsightsForDeal(request, token, dealId);
+    return items.filter(i => /past expected close/i.test(i.insight));
+  }
+
+  test('expectedClose = today → NO past-expected-close insight (was 0-day CRITICAL noise pre-fix)', async ({ request }) => {
+    const contact = await seedContact(request, tokens.admin, 'today-close', createdContactIds);
+    const deal = await seedDealWithExpectedClose(request, tokens.admin, contact.id, 'today-close', 0, 'proposal');
+    const overdueRows = await generateAndList(request, tokens.admin, deal.id);
+    expect(
+      overdueRows,
+      'daysOverdue < 1 must NOT emit any past-expected-close row (pre-#582 fix this fired CRITICAL "0 day(s) past")'
+    ).toHaveLength(0);
+  });
+
+  test('expectedClose in the future → NO past-expected-close insight', async ({ request }) => {
+    const contact = await seedContact(request, tokens.admin, 'future-close', createdContactIds);
+    const deal = await seedDealWithExpectedClose(request, tokens.admin, contact.id, 'future-close', 14, 'proposal');
+    const overdueRows = await generateAndList(request, tokens.admin, deal.id);
+    expect(overdueRows, 'future expectedClose must not emit overdue insight').toHaveLength(0);
+  });
+
+  test('expectedClose 3 days past → WARNING (not CRITICAL — modestly late)', async ({ request }) => {
+    const contact = await seedContact(request, tokens.admin, '3d-past', createdContactIds);
+    const deal = await seedDealWithExpectedClose(request, tokens.admin, contact.id, '3d-past', -3, 'proposal');
+    const overdueRows = await generateAndList(request, tokens.admin, deal.id);
+    expect(overdueRows.length, 'modest lateness should still emit a row').toBeGreaterThan(0);
+    for (const ins of overdueRows) {
+      expect(
+        ins.severity,
+        `daysOverdue 1-6 must be WARNING, not CRITICAL (#582). Got: ${JSON.stringify(ins)}`
+      ).toBe('WARNING');
+      // Also confirm the body's day-count is 3, not 0.
+      expect(ins.insight).toMatch(/3 day\(s\)/);
+    }
+  });
+
+  test('expectedClose 14 days past → CRITICAL (materially late)', async ({ request }) => {
+    const contact = await seedContact(request, tokens.admin, '14d-past', createdContactIds);
+    const deal = await seedDealWithExpectedClose(request, tokens.admin, contact.id, '14d-past', -14, 'proposal');
+    const overdueRows = await generateAndList(request, tokens.admin, deal.id);
+    expect(overdueRows.length).toBeGreaterThan(0);
+    for (const ins of overdueRows) {
+      expect(
+        ins.severity,
+        `daysOverdue >= 7 must remain CRITICAL. Got: ${JSON.stringify(ins)}`
+      ).toBe('CRITICAL');
+      expect(ins.insight).toMatch(/14 day\(s\)/);
+    }
+  });
+
+  test('expectedClose = null → NO past-expected-close insight (null is missing data, not 0-day)', async ({ request }) => {
+    // Default seedDeal omits expectedClose → null on the row.
+    const contact = await seedContact(request, tokens.admin, 'null-close', createdContactIds);
+    const deal = await seedDeal(request, tokens.admin, contact.id, { label: 'null-close', stage: 'proposal' }, createdDealIds);
+    const overdueRows = await generateAndList(request, tokens.admin, deal.id);
+    expect(
+      overdueRows,
+      'null expectedClose must NOT emit overdue insight (the rule guard requires deal.expectedClose truthy)'
+    ).toHaveLength(0);
+  });
+});
+
+// ─── #572: GET /api/deal-insights envelope includes dealContext ──────────
+//
+// Regression coverage for "Deal details unavailable" rendering. Pre-fix the
+// route returned bare DealInsight rows; the frontend joined client-side via
+// /api/deals?limit=100 and missed any insight whose deal wasn't in the
+// newest-100 window. Post-fix the route eager-loads a `dealContext` object
+// per insight server-side. This pins:
+//   1. dealContext is present and non-null for active deals
+//   2. dealContext.title, .amount, .stage, .contactName are populated
+//   3. dealContext.isArchived === false for active deals
+//   4. Soft-deleted deals still surface dealContext with isArchived=true
+//      (so the UI can render "[archived] <title>" instead of placeholder)
+//   5. Tenant scoping — the join's where-clause includes tenantId so a
+//      cross-tenant data leak through the join is impossible
+
+test.describe('#572 GET /api/deal-insights envelope includes dealContext', () => {
+  test('GET / response rows carry dealContext.title/amount/stage/contactName for active deal', async ({ request }) => {
+    const contact = await seedContact(request, tokens.admin, 'ctx-active', createdContactIds);
+    const deal = await seedDeal(
+      request,
+      tokens.admin,
+      contact.id,
+      { label: 'ctx-active', stage: 'proposal', amount: 87654 },
+      createdDealIds
+    );
+    // Generate at least one insight so the row exists.
+    await runEngine(request, tokens.admin);
+
+    const r = await authGet(request, tokens.admin, `/deal-insights?dealId=${deal.id}`);
+    expect(r.ok()).toBe(true);
+    const body = await r.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length, 'should have at least one insight for the seeded open deal').toBeGreaterThan(0);
+
+    for (const ins of body) {
+      expect(ins.dealContext, 'every insight must carry dealContext (#572)').toBeTruthy();
+      expect(ins.dealContext.id).toBe(deal.id);
+      // Title carries RUN_TAG so we know the join hit the right row.
+      expect(ins.dealContext.title).toContain(RUN_TAG);
+      expect(ins.dealContext.amount).toBe(87654);
+      expect(ins.dealContext.stage).toBe('proposal');
+      expect(ins.dealContext.isArchived).toBe(false);
+      expect(ins.dealContext.deletedAt).toBeNull();
+      expect(ins.dealContext.contactName).toBe(contact.name);
+    }
+  });
+
+  test('GET /deal/:id response carries dealContext (same shape as GET /)', async ({ request }) => {
+    const contact = await seedContact(request, tokens.admin, 'ctx-by-deal', createdContactIds);
+    const deal = await seedDeal(
+      request,
+      tokens.admin,
+      contact.id,
+      { label: 'ctx-by-deal', stage: 'lead' },
+      createdDealIds
+    );
+    await runEngine(request, tokens.admin);
+
+    const r = await authGet(request, tokens.admin, `/deal-insights/deal/${deal.id}`);
+    expect(r.ok()).toBe(true);
+    const body = await r.json();
+    expect(body.length).toBeGreaterThan(0);
+    for (const ins of body) {
+      expect(ins.dealContext).toBeTruthy();
+      expect(ins.dealContext.id).toBe(deal.id);
+      expect(ins.dealContext.title).toContain(RUN_TAG);
+    }
+  });
+
+  test('soft-deleted deal still surfaces dealContext with isArchived=true (so UI shows [archived])', async ({ request }) => {
+    const contact = await seedContact(request, tokens.admin, 'ctx-archived', createdContactIds);
+    const deal = await seedDeal(
+      request,
+      tokens.admin,
+      contact.id,
+      { label: 'ctx-archived', stage: 'contacted' },
+      createdDealIds
+    );
+    await runEngine(request, tokens.admin);
+
+    // Soft-delete the deal (DELETE /api/deals/:id flips deletedAt; row stays).
+    const del = await authDelete(request, tokens.admin, `/deals/${deal.id}`);
+    expect(del.ok()).toBe(true);
+
+    // Insight rows still reference the dealId. The join must surface the
+    // deal (deletedAt set), and isArchived=true so the UI can label it.
+    const r = await authGet(request, tokens.admin, `/deal-insights?dealId=${deal.id}`);
+    expect(r.ok()).toBe(true);
+    const body = await r.json();
+    expect(body.length, 'soft-deleted deal still has its insights').toBeGreaterThan(0);
+    for (const ins of body) {
+      expect(
+        ins.dealContext,
+        'soft-deleted deal still surfaces dealContext (#572 — pre-fix would have rendered "Deal details unavailable")'
+      ).toBeTruthy();
+      expect(ins.dealContext.isArchived).toBe(true);
+      expect(ins.dealContext.deletedAt).not.toBeNull();
+      expect(ins.dealContext.title).toContain(RUN_TAG);
+    }
+  });
+
+  test('dealContext.id always matches dealId (no cross-row join leak)', async ({ request }) => {
+    // Multi-deal fixture — generate insights on three separate deals and
+    // assert that each insight's dealContext.id matches the row's dealId.
+    // Catches a regression where attachDealContext could attach the wrong
+    // deal's data due to a bad lookup.
+    const ids = [];
+    for (let i = 0; i < 3; i++) {
+      const c = await seedContact(request, tokens.admin, `mux-${i}`, createdContactIds);
+      const d = await seedDeal(
+        request,
+        tokens.admin,
+        c.id,
+        { label: `mux-${i}`, stage: 'lead', amount: 1000 + i },
+        createdDealIds
+      );
+      ids.push(d.id);
+    }
+    await runEngine(request, tokens.admin);
+
+    const r = await authGet(request, tokens.admin, `/deal-insights`);
+    expect(r.ok()).toBe(true);
+    const body = await r.json();
+    // Filter to rows we just created (RUN_TAG in title).
+    const ours = body.filter(i => i.dealContext && i.dealContext.title && i.dealContext.title.includes(RUN_TAG) && ids.includes(i.dealId));
+    expect(ours.length, 'should have at least 3 rows tagged + matching').toBeGreaterThanOrEqual(3);
+    for (const ins of ours) {
+      expect(
+        ins.dealContext.id,
+        `dealContext.id must equal dealId — got ctx.id=${ins.dealContext.id} for dealId=${ins.dealId}`
+      ).toBe(ins.dealId);
+    }
+  });
+});

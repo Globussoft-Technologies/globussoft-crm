@@ -122,8 +122,71 @@ The PR review failure mode: PR #566 came in mid-2026-05-06 with an `email_schedu
 
 Defence: when reviewing PRs that touch a route which had recent class-fix work, **always `git diff main..pr_head -- <file>`** — diff against current main, not against the PR's base. The reverse-diff exposes silent reverts that pre-PR review tools can miss.
 
+## Helper-port → callsite-sweep two-wave pattern (added 2026-05-07)
+
+A common shape: a backlog card asks for "unit test on `<helper>`" but the helper either doesn't exist backend-side OR exists but has many bypassing callsites. This expands to a two-wave shape:
+
+**Wave 1 — Helper-port + contract test**
+- Create the helper at the right layer (typically `backend/lib/<helper>.js` or `backend/utils/<helper>.js`)
+- Port logic from frontend if it already exists frontend-side; OR build from scratch using already-imported deps (e.g. `date-fns-tz`, `Intl.NumberFormat`)
+- Pin the helper's contract with vitest cases — every input shape, edge case, boundary value
+- Ship as a single commit closing the backlog card. Note in commit body: "callsite migration filed as separate follow-up — this commit pins the helper's contract, NOT every callsite."
+- File the callsite sweep as a TODOS user-attention row.
+
+**Wave 2 — Callsite sweep**
+- Grep all bypass callsites (see "Why callsite-sweeps need ALL render layers" below for which layers to grep)
+- Migrate each callsite to use the helper
+- Per-callsite test if cheap (e.g. existing route spec extension); skip if expensive (e.g. would require new fixture stand-up)
+- Single coordinated commit per the executing-cross-route-shape-sweep main flow
+
+Confirmed instances of this two-wave pattern:
+- `formatMoney` — Wave 5 helper-port (`backend/utils/formatMoney.js` + 31 tests, commit `8fd3283`) → Wave 6 callsite-sweep (16 callsites across 11 files, commit `437614f`)
+- `datetime` — Wave 6 helper-port (`backend/lib/datetime.js` + 36 tests, commit `663bd7c`) → Wave 7 callsite-sweep (3 classes migrated, commit `bfb098d`)
+
+When you see a backlog card that asks for "unit test on X" but X doesn't exist backend-side, **don't force-fit tests into a sibling helper that doesn't have X's responsibility** (Wave 7 Agent P's lesson with `leadJunkFilter` vs the new `junkSourceFilter`). Create the right helper at the right layer.
+
+## Why callsite-sweeps need ALL render layers (added 2026-05-07)
+
+When sweeping callsites, the grep needs to span more than user-facing UI. Agent M's #286/#330 sweep (16 callsites) hit:
+
+- **Backend PDF rendering** (`routes/billing.js`, `routes/deals_documents.js`, `routes/reports.js`, `cron/reportEngine.js`) — invoice PDFs, quote PDFs, scheduled-report PDFs
+- **Backend email/SMS templates** — including HTML email body emitters in `cron/reportEngine.js`
+- **Backend AI-prompt context strings** — `routes/ai.js`, `routes/deal_insights.js` interpolate deal/customer context into Gemini prompts. When the prompt contains `Won Revenue: $${rev}`, the model sees a literal `$` regardless of tenant currency, biasing its responses for non-USD tenants
+- **Backend route-side activity strings** — `routes/deals.js` won-deal activity log
+- **Frontend UI components** — CommandPalette, CPQBuilder, Omnibar, AgentReports
+
+The non-obvious one is AI-prompt context. Don't miss it. Grep template:
+
+```bash
+# Currency-shape ${X} interpolation (replace pattern as needed):
+grep -rEn '\$\$\{[^}]+\}' backend/services backend/routes backend/lib backend/cron
+grep -rEn '\$\$\{[a-zA-Z_][^}]*\.(amount|total|value|price|cost|fee|sum|revenue|balance|currency)' frontend/src
+
+# AI-prompt builders (often `prompt = `...`` or `messages: [...]`):
+grep -rEn 'role:\s*"user"|prompt:|systemPrompt' backend/routes backend/lib backend/cron backend/services
+```
+
+## "Intentionally NOT migrated" listings preserve product-anchored constants (added 2026-05-07)
+
+Mid-sweep, you'll find callsites that LOOK like candidates but are product-anchored. Two categories:
+
+**Category 1 — Product-anchored constants**
+
+Some constants are intentional and not user-locale-dynamic. Example: wellness clinics are India-only; the daily 07:00 IST orchestrator cron is a product fixture. Migrating `IST_OFFSET_MS` to `parseDateTimeLocalInTZ(input, tenant.timezone)` would WRONGLY make the cron user-locale-dependent. Keep it pinned to `'Asia/Kolkata'` literally.
+
+**Category 2 — Wrong-tool-for-the-job callsites**
+
+Some callsites use a different shape than what the new helper accepts. Example (Wave 7 Agent O, commit `bfb098d`): `email_scheduling.js`, `booking_pages.js`, `marketing.js`, `billing.js`, `estimates.js` accept full ISO timestamp inputs (`'2026-05-15T10:30:00.000Z'`) per their route validation. Native `new Date()` handles these correctly; running them through `parseDateTimeLocalInTZ` (whose job is to disambiguate datetime-local FORM input) would be wrong.
+
+**Pattern:** every callsite-sweep commit body should ship an explicit "Intentionally NOT migrated" section listing skip-cases + reasons. Implicit "we got everything" is wrong; explicit "we got X, intentionally skipped Y for reason Z" is right. The next maintainer benefits from seeing the holdout list — they don't re-investigate "did this get missed?"
+
+Confirmed instances:
+- Wave 1 Agent C (#523 selectors) — 6/14 selectors migrated, 8 retained as documented safety nets
+- Wave 7 Agent O (datetime sweep) — 3 classes migrated, 5+ classes intentionally NOT migrated with per-callsite reason
+
 ## Related
 
 - `auditing-cross-cutting-spec-impact` — the spec-side audit that runs alongside this skill (step 5)
 - `triaging-stuck-deploy-gate` — what to do when this sweep was done piecemeal and the gate is now stuck on inconsistent state
-- Reference commit: `8853546` (`fix(#550): per-route response shape sweep`) is the canonical example. Read its commit body for shape.
+- `verifying-gap-card-claims` — runs BEFORE this skill when the sweep is being driven from a gap card
+- Reference commits: `8853546` (#550 sweep — canonical), `8fd3283` + `437614f` (formatMoney two-wave), `663bd7c` + `bfb098d` (datetime two-wave). Read commit bodies for shape.

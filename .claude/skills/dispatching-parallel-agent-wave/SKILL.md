@@ -265,6 +265,69 @@ cd e2e && BASE_URL=http://127.0.0.1:5000 npx playwright test --project=chromium 
 
 For spec EDITS (not new files), running locally is recommended but not mandatory — the diff is small and easier to reason about statically.
 
+## Graceful concurrent recovery (added 2026-05-07 after 6+ instances)
+
+The "disjoint files" invariant is necessary but NOT sufficient. Even when no two agents touch the same file, they share a working directory and a remote `main` branch. Three recovery sub-patterns have been observed working cleanly when sibling-collision arises mid-flight; encode all three into agent prompts so the agent recovers without parent intervention.
+
+### Sub-pattern (a) — Detect dirty state at start, refuse to commit
+
+When an agent starts and finds the working tree dirty (someone else's WIP files), it must NOT commit anything until the tree is clean. Canonical instance: Wave 2 Agent D (dashboard discovery) inherited Agent E's revert-and-prove dirty state. D ran read-only investigation, intentionally did not commit any of its own TODOS edits, and completed cleanly. Without this discipline D would have shipped Agent E's half-done revert as part of D's commit.
+
+```
+# Agent prompt addition for shared-CWD waves:
+"At task start, run `git status --short`. If the tree has uncommitted
+changes that you didn't make, do NOT commit anything yourself
+unless your work is purely read-only investigation. Restore working
+state on exit (git checkout -- <files> any changes you made)."
+```
+
+### Sub-pattern (b) — Detect file-collision mid-task, back off + file follow-up TODOS
+
+When an agent realizes it needs to edit a file a sibling is currently editing (shared CWD has the sibling's mid-flight changes), it should NOT block waiting and NOT commit on top. Instead: revert its own changes to the contended file, file a TODOS user-attention follow-up describing the specific edit needed, and ship the rest of its work.
+
+Canonical instance: Wave 7 Agent P needed to wire `junkSourceFilter` into `routes/wellness.js` `computeAttribution()` but Agent O was mid-flight on the datetime sweep in the same file. Agent P reverted its wellness.js change, filed a 5-min wire-in as a TODOS row, and shipped the rest. Parent picked up the deferred wire-in inline once O released the file (commit `4e8e45f`).
+
+```
+# Agent prompt addition:
+"If you mid-task discover that a file you need to edit is being
+edited by a sibling (look for unstaged changes you didn't make),
+revert your own edits to that file (`git checkout -- <file>`),
+file a TODOS user-attention follow-up describing the exact section
++ edit needed, and ship the rest of your task. The parent picks up
+the follow-up after siblings release the file."
+```
+
+### Sub-pattern (c) — Stash → pull → pop on push collision
+
+When an agent is ready to push but a sibling pushed first, the rebase will fail if the agent's tree has unstaged changes from its own concurrent work. Standard recovery:
+
+```bash
+git stash push -m "agent-pre-push-stash"
+git pull --rebase origin main
+git stash pop
+# Resolve any conflicts on YOUR files only; sibling's files are now in HEAD
+git push origin main
+```
+
+Confirmed working across multiple waves today: Wave 9 Agent T past Agent S's WIP; Wave 10 Agent V; Wave 14 Agents A + B + C (multiple stash/pop cycles when 5 agents shipped within ~25 min wall time). Push went through clean on first or second attempt in every case.
+
+```
+# Agent prompt addition:
+"If `git push origin main` fails with non-fast-forward, recover
+via: `git stash push -m agent-pre-push` → `git pull --rebase
+origin main` → `git stash pop` → resolve conflicts on YOUR files
+only → push again. If the conflict is on a sibling's file
+(unexpected — disjoint-files invariant should prevent this),
+STOP and report — do not commit a merged version of someone
+else's file."
+```
+
+### When NONE of these recover cleanly
+
+If you've tried (a) → (b) → (c) and the work still won't ship, the dispatch was probably mis-scoped (sibling DID need to touch the same file). Recovery: stash your work, post a comment on the wave-orchestrator side describing the contended file + the specific edit you couldn't ship, and exit. The parent re-dispatches your work as a follow-up after the original sibling completes.
+
+This has happened 0 times in the 14-wave session on 2026-05-07; all collisions resolved via (a)–(c).
+
 ## Templates
 
 See `AGENT_PROMPT_TEMPLATE.md` for the full per-agent prompt skeleton with placeholder slots.

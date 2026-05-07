@@ -21,7 +21,7 @@ function escapeHtml(text) {
   return text.replace(/[&<>"']/g, m => map[m]);
 }
 
-async function sendSendGrid(to, subject, body) {
+async function sendSendGrid(to, subject, body, opts = {}) {
   if (!SENDGRID_API_KEY) {
     console.log(`[Email] SendGrid not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
@@ -37,8 +37,19 @@ async function sendSendGrid(to, subject, body) {
   }
 
   const htmlBody = escapeHtml(body).replace(/\n/g, "<br>");
+  const personalization = { to: [{ email: to }] };
+  // #623 — propagate cc/bcc through SendGrid personalization. Each recipient
+  // here is a string; SendGrid wants {email}-shaped objects.
+  if (Array.isArray(opts.cc) && opts.cc.length > 0) {
+    personalization.cc = opts.cc.filter(isValidEmail).map((email) => ({ email }));
+    if (personalization.cc.length === 0) delete personalization.cc;
+  }
+  if (Array.isArray(opts.bcc) && opts.bcc.length > 0) {
+    personalization.bcc = opts.bcc.filter(isValidEmail).map((email) => ({ email }));
+    if (personalization.bcc.length === 0) delete personalization.bcc;
+  }
   const payload = {
-    personalizations: [{ to: [{ email: to }] }],
+    personalizations: [personalization],
     from: { email: FROM_EMAIL },
     subject: subject,
     content: [
@@ -78,11 +89,23 @@ if (SENDGRID_API_KEY) {
   console.warn("[Email] SENDGRID_API_KEY not set — emails will be logged but not delivered");
 }
 
-// GET all communications (Unified Inbox) — scoped to current tenant
+// GET all communications (Unified Inbox) — scoped to current tenant.
+//
+// #624 — supports an optional `folder` query param so the Inbox UI can
+// segregate inbound vs outbound mail without a second route:
+//   ?folder=inbox  → direction='INBOUND' only
+//   ?folder=sent   → direction='OUTBOUND' only
+//   (omitted)      → both, original behaviour preserved for back-compat
+// Pre-this-change the Sent folder UI had nothing to query against — the
+// only filtering surface was GET /api/email?folder=sent which returns a
+// `{total}` count for the sidebar, not the row list.
 router.get("/inbox", async (req, res) => {
   try {
+    const where = { tenantId: req.user.tenantId };
+    if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
+    else if (req.query.folder === 'inbox') where.direction = 'INBOUND';
     const emails = await prisma.emailMessage.findMany({
-      where: { tenantId: req.user.tenantId },
+      where,
       include: { contact: true },
       orderBy: { createdAt: 'desc' },
       take: 50
@@ -131,7 +154,7 @@ function parseRecipients(toField) {
 // per-recipient tracking pixels distinct).
 router.post("/send-email", async (req, res) => {
   try {
-    const { to, subject, body, contactId } = req.body;
+    const { to, cc, bcc, subject, body, contactId } = req.body;
     if (!to || !subject) return res.status(400).json({ error: "Recipient and subject required" });
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
 
@@ -157,6 +180,24 @@ router.post("/send-email", async (req, res) => {
       });
     }
 
+    // #623 — cc/bcc accepted as either comma-separated string OR array.
+    // Invalid cc/bcc addresses are surfaced in `failures` but do NOT block
+    // the send (To-line is the only required recipient).
+    const ccList = parseRecipients(typeof cc === 'string' ? cc : Array.isArray(cc) ? cc.join(',') : '');
+    const bccList = parseRecipients(typeof bcc === 'string' ? bcc : Array.isArray(bcc) ? bcc.join(',') : '');
+    const ccDeliverable = [];
+    for (const r of ccList) {
+      if (isValidEmail(r)) ccDeliverable.push(r);
+      else failures.push({ to: r, reason: "invalid_cc_email" });
+    }
+    const bccDeliverable = [];
+    for (const r of bccList) {
+      if (isValidEmail(r)) bccDeliverable.push(r);
+      else failures.push({ to: r, reason: "invalid_bcc_email" });
+    }
+    const ccPersist = ccDeliverable.length > 0 ? ccDeliverable.join(', ') : null;
+    const bccPersist = bccDeliverable.length > 0 ? bccDeliverable.join(', ') : null;
+
     const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
     const results = [];
 
@@ -167,6 +208,8 @@ router.post("/send-email", async (req, res) => {
           body,
           from: FROM_EMAIL,
           to: recipient,
+          cc: ccPersist,
+          bcc: bccPersist,
           direction: "OUTBOUND",
           read: true,
           contactId: contactId ? parseInt(contactId) : null,
@@ -191,7 +234,13 @@ router.post("/send-email", async (req, res) => {
       // (outer comma-separated string). v3.4.12 #435 fix introduced the
       // per-recipient loop; passing `to` here would send every iteration to
       // ALL recipients, undoing #435.
-      const mailResult = await sendSendGrid(recipient, subject, trackedBody);
+      // #623 — cc/bcc are propagated identically across the per-recipient
+      // loop. The SendGrid carbon-copy semantics fan to every cc/bcc per
+      // primary-recipient send (mirrors stock email-client behaviour).
+      const mailResult = await sendSendGrid(recipient, subject, trackedBody, {
+        cc: ccDeliverable,
+        bcc: bccDeliverable,
+      });
 
       // Per-recipient Activity on the linked contact (if any). Same pattern as
       // single-recipient: best-effort, non-critical.
@@ -328,4 +377,7 @@ router.get("/tracking/:emailId", async (req, res) => {
   } catch (_err) { res.status(500).json({ error: "Failed to fetch tracking data" }); }
 });
 
+// Helpers exported for vitest unit coverage (see test/routes/communications.test.js)
 module.exports = router;
+module.exports.parseRecipients = parseRecipients;
+module.exports.isValidEmail = isValidEmail;

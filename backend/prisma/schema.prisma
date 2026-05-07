@@ -490,6 +490,11 @@ model EmailMessage {
   body                 String    @db.Text
   from                 String
   to                   String
+  // #623 — cc/bcc are comma-separated lists, persisted exactly as the
+  // composer's parseRecipients() returns them (deduped, lowercase-keyed).
+  // Null when no carbon-copy / blind-carbon-copy recipients were attached.
+  cc                   String?   @db.Text
+  bcc                  String?   @db.Text
   direction            String    @default("INBOUND") // INBOUND, OUTBOUND
   read                 Boolean   @default(false)
   sentiment            String? // positive, neutral, negative

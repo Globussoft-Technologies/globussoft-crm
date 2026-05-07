@@ -16,7 +16,15 @@ export default function Inbox() {
 
   // Compose modal state
   const [showCompose, setShowCompose] = useState(false);
-  const [composeData, setComposeData] = useState({ to: '', subject: '', body: '' });
+  // #623 — cc / bcc default empty + collapsed; toggle reveals the inputs.
+  // Mirrors Gmail / Outlook behaviour where Cc/Bcc are an opt-in surface
+  // rather than always-visible chrome.
+  const [composeData, setComposeData] = useState({ to: '', cc: '', bcc: '', subject: '', body: '' });
+  const [showCcBcc, setShowCcBcc] = useState(false);
+
+  // #624 — Sent folder UI: a sub-tab on the Emails tab toggles the
+  // backend folder filter (?folder=sent | ?folder=inbox | omitted=all).
+  const [emailFolder, setEmailFolder] = useState('all'); // 'all' | 'inbox' | 'sent'
 
   // SMS Compose modal state
   const [showComposeSms, setShowComposeSms] = useState(false);
@@ -58,9 +66,16 @@ export default function Inbox() {
   const [playingCallId, setPlayingCallId] = useState(null);
   const [playerErrors, setPlayerErrors] = useState({});
 
+  // #624 — re-fetch emails when the folder sub-tab changes so the Sent
+  // folder query lands the OUTBOUND-only set, the Inbox the INBOUND-only
+  // set, and All keeps the original combined behaviour.
+  const inboxPath = emailFolder === 'all'
+    ? '/api/communications/inbox'
+    : `/api/communications/inbox?folder=${emailFolder}`;
+
   useEffect(() => {
     Promise.all([
-      fetchApi('/api/communications/inbox'),
+      fetchApi(inboxPath),
       fetchApi('/api/communications/calls'),
       fetchApi('/api/contacts'),
       fetchApi('/api/sms/messages').catch(() => []),
@@ -76,7 +91,7 @@ export default function Inbox() {
       console.error(err);
       setLoading(false);
     });
-  }, []);
+  }, [inboxPath]);
 
   const handleSendEmail = async (e) => {
     e.preventDefault();
@@ -85,9 +100,10 @@ export default function Inbox() {
     notify.success(`Email Sent Successfully!\n\n[Epic #104] Tracking Pixel Active: You will be notified the instant ${composeData.to} opens or clicks links in this message.`);
 
     setShowCompose(false);
-    setComposeData({ to: '', subject: '', body: '' });
+    setComposeData({ to: '', cc: '', bcc: '', subject: '', body: '' });
+    setShowCcBcc(false);
     // Refresh
-    const data = await fetchApi('/api/communications/inbox');
+    const data = await fetchApi(inboxPath);
     setEmails(Array.isArray(data) ? data : []);
   };
 
@@ -355,6 +371,37 @@ export default function Inbox() {
           </div>
         ) : activeTab === 'emails' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {/* #624 — folder sub-tabs (All / Inbox / Sent). Backend filter
+                is applied via /api/communications/inbox?folder=<v>. The
+                Sent folder was the bug surface in #624: pre-fix there was
+                no UI to view OUTBOUND-only mail; the backend has always
+                stored direction='OUTBOUND' on every send-email call. */}
+            <div role="tablist" aria-label="Email folder" style={{ display: 'flex', gap: '0.25rem', padding: '0.25rem', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', alignSelf: 'flex-start' }}>
+              {[
+                { id: 'all', label: 'All' },
+                { id: 'inbox', label: 'Inbox' },
+                { id: 'sent', label: 'Sent' },
+              ].map(f => (
+                <button
+                  key={f.id}
+                  role="tab"
+                  aria-selected={emailFolder === f.id}
+                  onClick={() => setEmailFolder(f.id)}
+                  style={{
+                    padding: '0.4rem 1rem',
+                    border: 'none',
+                    background: emailFolder === f.id ? 'var(--accent-color)' : 'transparent',
+                    color: emailFolder === f.id ? '#fff' : 'var(--text-secondary)',
+                    fontWeight: emailFolder === f.id ? 600 : 500,
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                  }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
             {/* #252: scope empty state to the active tab. Calls/SMS/WhatsApp
                 may still have data; the previous global "Inbox is empty"
                 message read like the whole CRM had no activity. */}
@@ -454,12 +501,38 @@ export default function Inbox() {
             </h3>
             <form onSubmit={handleSendEmail} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>To:</label>
-                <input type="email" list="contacts-list" required className="input-field" value={composeData.to} onChange={e => setComposeData({...composeData, to: e.target.value})} placeholder="client@company.com" />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <label style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>To:</label>
+                  {/* #623 — Cc/Bcc toggle. Hidden by default to keep the
+                      composer minimal; clicking expands the two fields below. */}
+                  {!showCcBcc && (
+                    <button
+                      type="button"
+                      onClick={() => setShowCcBcc(true)}
+                      aria-label="Show Cc and Bcc"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--accent-color)', fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}
+                    >
+                      Cc / Bcc
+                    </button>
+                  )}
+                </div>
+                <input type="text" list="contacts-list" required className="input-field" value={composeData.to} onChange={e => setComposeData({...composeData, to: e.target.value})} placeholder="client@company.com (comma-separated for multiple)" />
                 <datalist id="contacts-list">
                   {contacts.map(c => <option key={c.id} value={c.email}>{c.name}</option>)}
                 </datalist>
               </div>
+              {showCcBcc && (
+                <>
+                  <div>
+                    <label htmlFor="compose-cc" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Cc:</label>
+                    <input id="compose-cc" type="text" className="input-field" value={composeData.cc} onChange={e => setComposeData({...composeData, cc: e.target.value})} placeholder="cc@company.com (comma-separated)" />
+                  </div>
+                  <div>
+                    <label htmlFor="compose-bcc" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Bcc:</label>
+                    <input id="compose-bcc" type="text" className="input-field" value={composeData.bcc} onChange={e => setComposeData({...composeData, bcc: e.target.value})} placeholder="bcc@company.com (comma-separated)" />
+                  </div>
+                </>
+              )}
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Subject:</label>
                 <input type="text" required className="input-field" value={composeData.subject} onChange={e => setComposeData({...composeData, subject: e.target.value})} placeholder="Following up" />
@@ -499,7 +572,7 @@ export default function Inbox() {
                   </button>
                 </div>
                 <div style={{ display: 'flex', gap: '1rem' }}>
-                  <button type="button" onClick={() => setShowCompose(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
+                  <button type="button" onClick={() => { setShowCompose(false); setShowCcBcc(false); setComposeData({ to: '', cc: '', bcc: '', subject: '', body: '' }); }} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
                   <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <Send size={16} /> Send Email
                   </button>

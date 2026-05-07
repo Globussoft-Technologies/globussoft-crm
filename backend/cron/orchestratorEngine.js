@@ -278,7 +278,7 @@ async function readContext(tenantId) {
   const slaCutoff  = new Date(Date.now() - DEFAULT_LEAD_SLA_MINUTES * 60 * 1000);
 
   const [
-    todayVisits, weekVisits, openLeads, oldLeads, services, locationsList, lowOccupancyServices, slaBreachLeads, telecallers,
+    todayVisits, weekVisits, openLeads, oldLeads, oldLeadsList, services, locationsList, lowOccupancyServices, slaBreachLeads, telecallers,
   ] = await Promise.all([
     prisma.visit.findMany({
       where: { tenantId, visitDate: { gte: todayStart, lte: todayEnd } },
@@ -290,6 +290,18 @@ async function readContext(tenantId) {
     }),
     prisma.contact.count({ where: { tenantId, status: "Lead" } }),
     prisma.contact.count({ where: { tenantId, status: "Lead", createdAt: { lte: dayAgo } } }),
+    // #579: stale-lead aging card was rendering an identical templated body
+    // ("Industry data shows first-contact within 5 minutes lifts conversion
+    // 9x. {N} leads from yesterday or earlier are still un-touched.") on
+    // every cron run, varying only in N. Pulling the actual lead rows here
+    // lets the rule emit specific names + a per-day breakdown so the All-tab
+    // shows differentiated cards instead of 30+ verbatim sentences.
+    prisma.contact.findMany({
+      where: { tenantId, status: "Lead", createdAt: { lte: dayAgo } },
+      select: { id: true, name: true, source: true, assignedToId: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: 50,
+    }),
     prisma.service.findMany({ where: { tenantId, isActive: true }, select: { id: true, name: true, category: true, ticketTier: true, basePrice: true, durationMin: true, targetRadiusKm: true } }),
     prisma.location.findMany({ where: { tenantId, isActive: true }, select: { id: true, name: true, hours: true } }),
     prisma.visit.groupBy({
@@ -371,7 +383,8 @@ async function readContext(tenantId) {
     capacityMinutes,
     usedMinutes,
     openLeads,
-    oldLeads, // leads aging > 24h
+    oldLeads, // leads aging > 24h (count)
+    oldLeadsList, // up to 50 stale-lead rows: { id, name, source, assignedToId, createdAt } — used by rule #1 for per-card differentiation (#579)
     locations,
     topServices,
     highTickerCold, // high-ticket services with NO visits this week
@@ -421,26 +434,75 @@ Return ONLY the JSON array, no commentary.`;
 function ruleBasedProposals(ctx) {
   const out = [];
 
-  // 1. Old leads aging
+  // 1. Old leads aging (#579)
+  // Pre-#579 this rule emitted an identical templated body on every run
+  // varying only in count — so the All-tab accumulated 30+ verbatim cards.
+  // Build a specific body that names actual leads (up to 3, then "and N
+  // others"), shows the creation-day distribution (yesterday vs older), and
+  // proposes a concrete assignee — same producer shape rule #5 (sla_breach)
+  // already uses for the Owner Dashboard top-recommendation surface.
   if (ctx.oldLeads >= 5) {
+    const leadsList = Array.isArray(ctx.oldLeadsList) ? ctx.oldLeadsList : [];
+    const sample = leadsList.slice(0, 3);
+    const sampleNames = sample.map((l) => l.name || `lead #${l.id}`);
+    const remaining = Math.max(0, ctx.oldLeads - sampleNames.length);
+    // Day-bucket so cards from successive cron runs differ even when the
+    // same lead pool is aging — yesterday vs 2-3 days vs >3 days.
+    const now = Date.now();
+    const buckets = { d1: 0, d2_3: 0, d3plus: 0 };
+    for (const l of leadsList) {
+      const ageH = (now - new Date(l.createdAt).getTime()) / 3600000;
+      if (ageH < 48) buckets.d1++;
+      else if (ageH < 96) buckets.d2_3++;
+      else buckets.d3plus++;
+    }
+    const ageBreakdown = [
+      buckets.d1 ? `${buckets.d1} from yesterday` : null,
+      buckets.d2_3 ? `${buckets.d2_3} from 2-3 days ago` : null,
+      buckets.d3plus ? `${buckets.d3plus} older than 3 days` : null,
+    ].filter(Boolean).join(", ");
+    const namesPhrase = sampleNames.length > 0
+      ? (remaining > 0 ? `${sampleNames.join(", ")} and ${remaining} others` : sampleNames.join(", "))
+      : "the queued leads";
+    const assignee = ctx.suggestedAssignee;
+    const assigneeLabel = assignee ? (assignee.name || assignee.email) : "the on-duty telecaller";
+    const ids = leadsList.slice(0, 10).map((l) => l.id);
     out.push({
       type: "lead_followup",
       title: `${ctx.oldLeads} leads aging > 24h without first-call`,
-      body: `Industry data shows first-contact within 5 minutes lifts conversion 9x. ${ctx.oldLeads} leads from yesterday or earlier are still un-touched.`,
+      body: `${namesPhrase} have had no first contact in over 24h (${ageBreakdown || "all from yesterday or earlier"}). Industry data shows first-contact within 5 minutes lifts conversion 9x. Suggest reassigning to ${assigneeLabel} for a same-hour call-down.`,
       priority: "high",
       expectedImpact: `Recovers ~${Math.max(2, Math.floor(ctx.oldLeads * 0.15))} conversions that would otherwise drop off`,
-      payload: { ageHours: 24 },
+      payload: {
+        ageHours: 24,
+        leadIds: ids,
+        reassignToUserId: assignee ? assignee.id : null,
+        reassignToName: assigneeLabel,
+        ageBuckets: buckets,
+      },
     });
   }
 
-  // 2. Low occupancy
+  // 2. Low occupancy (#579 — body now includes today's booked-count and a
+  // specific top-performing service to anchor the same-day promo, instead
+  // of the prior generic "slots are sitting empty" template).
   if (ctx.occupancyPct < 30 && ctx.todayBooked < 10) {
+    const topName = (ctx.topServices && ctx.topServices[0] && ctx.topServices[0].name) || null;
+    const anchor = topName
+      ? `Lead with ${topName} — your top-performing service this week — in the same-day blast.`
+      : `Pick a fast-turn service from the catalog to anchor the offer.`;
     out.push({
       type: "occupancy_alert",
       title: `Today's occupancy only ${ctx.occupancyPct}%`,
-      body: `Slots are sitting empty. Send a same-day promo WhatsApp/SMS blast to recent inquirers, or boost ad budget on a fast-turn service.`,
+      body: `Only ${ctx.todayBooked} bookings on the calendar today (occupancy ${ctx.occupancyPct}%). ${anchor} A WhatsApp/SMS blast to recent inquirers typically pulls in 3–5 same-day appointments.`,
       priority: "medium",
       expectedImpact: `Could fill 3–5 same-day slots`,
+      payload: {
+        occupancyPct: ctx.occupancyPct,
+        todayBooked: ctx.todayBooked,
+        anchorServiceId: (ctx.topServices && ctx.topServices[0]) ? ctx.topServices[0].id : null,
+        anchorServiceName: topName,
+      },
     });
   }
 
@@ -612,4 +674,4 @@ function initOrchestratorCron() {
   console.log("[Orchestrator] cron initialized (daily 07:00 IST)");
 }
 
-module.exports = { initOrchestratorCron, runForTenant, runForAllWellnessTenants, executeApproved, cleanupExistingDupes };
+module.exports = { initOrchestratorCron, runForTenant, runForAllWellnessTenants, executeApproved, cleanupExistingDupes, ruleBasedProposals };

@@ -1,15 +1,23 @@
 // @ts-check
 /**
  * /api/field-permissions — smoke spec covering 7 handlers in
- * backend/routes/field_permissions.js. ADMIN-only for write paths.
+ * backend/routes/field_permissions.js. ADMIN-only on every route (#574).
  *
- *   GET    /entities
- *   GET    /effective?role=&entity=
- *   GET    /
- *   POST   /                       (ADMIN)
- *   POST   /bulk-update            (ADMIN)
- *   PUT    /:id                    (ADMIN)
- *   DELETE /:id                    (ADMIN)
+ *   GET    /entities                (ADMIN — #574)
+ *   GET    /effective?role=&entity= (ADMIN — #574)
+ *   GET    /                        (ADMIN — #574)
+ *   POST   /                        (ADMIN)
+ *   POST   /bulk-update             (ADMIN)
+ *   PUT    /:id                     (ADMIN)
+ *   DELETE /:id                     (ADMIN)
+ *
+ * #574 (CRIT-10) — privilege-escalation hardening. Pre-fix, a generic-CRM
+ * USER could navigate to /field-permissions and see the full per-role
+ * canRead/canWrite matrix (ADMIN/MANAGER/USER × Deal/Contact/Invoice/Quote
+ * × every field). That's recon for an attacker even when writes are gated.
+ * The fix flipped /entities, /effective, and / from `verifyToken` to
+ * `verifyRole(["ADMIN"])`. This spec now asserts USER → 403 on EVERY
+ * handler in the route file, plus retains the ADMIN happy-path coverage.
  */
 const { test, expect } = require('@playwright/test');
 
@@ -53,6 +61,58 @@ test.describe('field-permissions API smoke', () => {
   test('GET /entities requires auth', async ({ request }) => {
     const res = await request.get(`${API}/field-permissions/entities`);
     expect([401, 403]).toContain(res.status());
+  });
+
+  // ── #574 USER-role privilege-escalation gates ──────────────────────
+  // Every route must 403 for a USER token. Pre-fix, GET /, GET /effective,
+  // and GET /entities only required `verifyToken` and leaked the per-role
+  // permission topology to any authenticated tenant member.
+  test('#574 GET /entities as USER → 403', async ({ request }) => {
+    test.skip(!userToken, 'no USER token available');
+    const res = await request.get(`${API}/field-permissions/entities`, { headers: userAuth() });
+    expect(res.status()).toBe(403);
+  });
+
+  test('#574 GET /effective as USER → 403', async ({ request }) => {
+    test.skip(!userToken, 'no USER token available');
+    const res = await request.get(`${API}/field-permissions/effective?role=USER&entity=Deal`, {
+      headers: userAuth(),
+    });
+    expect(res.status()).toBe(403);
+  });
+
+  test('#574 GET / as USER → 403', async ({ request }) => {
+    test.skip(!userToken, 'no USER token available');
+    const res = await request.get(`${API}/field-permissions`, { headers: userAuth() });
+    expect(res.status()).toBe(403);
+  });
+
+  test('#574 PUT /:id as USER → 403', async ({ request }) => {
+    test.skip(!userToken, 'no USER token available');
+    const res = await request.put(`${API}/field-permissions/1`, {
+      headers: userAuth(),
+      data: { canRead: false },
+    });
+    expect(res.status()).toBe(403);
+  });
+
+  test('#574 DELETE /:id as USER → 403', async ({ request }) => {
+    test.skip(!userToken, 'no USER token available');
+    const res = await request.delete(`${API}/field-permissions/1`, { headers: userAuth() });
+    expect(res.status()).toBe(403);
+  });
+
+  test('#574 POST /bulk-update as USER → 403', async ({ request }) => {
+    test.skip(!userToken, 'no USER token available');
+    const res = await request.post(`${API}/field-permissions/bulk-update`, {
+      headers: userAuth(),
+      data: {
+        rules: [
+          { role: 'ADMIN', entity: 'Deal', field: 'amount', canRead: false, canWrite: false },
+        ],
+      },
+    });
+    expect(res.status()).toBe(403);
   });
 
   test('GET /entities returns the supported registry', async ({ request }) => {

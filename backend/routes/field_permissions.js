@@ -21,14 +21,20 @@ const ENTITY_FIELDS = {
 
 const SUPPORTED_ROLES = ["ADMIN", "MANAGER", "USER"];
 
+// #574 (CRIT-10): admin-only across the board. The matrix lets a USER read
+// the per-role permission topology (canRead/canWrite for ADMIN/MANAGER/USER
+// across every entity+field) — that's privilege-escalation reconnaissance
+// even when writes are gated. Mirror routes/pipelines.js post-#527.
+const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
+
 // GET /api/field-permissions/entities — registry of supported entities + fields
-router.get("/entities", verifyToken, async (_req, res) => {
+router.get("/entities", ...adminOnly, async (_req, res) => {
   res.json(ENTITY_FIELDS);
 });
 
 // GET /api/field-permissions/effective?role=USER&entity=Deal
 // Returns { field: { canRead, canWrite } } — defaults to full access when no rule exists
-router.get("/effective", verifyToken, async (req, res) => {
+router.get("/effective", ...adminOnly, async (req, res) => {
   try {
     const role = String(req.query.role || "").toUpperCase();
     const entity = String(req.query.entity || "");
@@ -57,7 +63,7 @@ router.get("/effective", verifyToken, async (req, res) => {
 });
 
 // GET /api/field-permissions — list all rules for tenant, grouped by entity
-router.get("/", verifyToken, async (req, res) => {
+router.get("/", ...adminOnly, async (req, res) => {
   try {
     const rules = await prisma.fieldPermission.findMany({
       where: { tenantId: tenantId(req) },

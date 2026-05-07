@@ -362,6 +362,7 @@ jobs:
             tests/report-schedules-api.spec.js \
             tests/landing-page-upload-api.spec.js \
             tests/field-permissions-enforcement-api.spec.js \
+            tests/field-permissions.spec.js \
             tests/whatsapp.spec.js \
             tests/forgot-password.spec.js \
             tests/api-docs.spec.js \

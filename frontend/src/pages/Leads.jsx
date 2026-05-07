@@ -5,6 +5,15 @@ import { useNavigate } from 'react-router-dom';
 import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-react';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
+const FIELD_LIMITS = { name: 191, email: 191, company: 191, title: 200, phone: 20 };
+const CONTROL_CHAR_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+const stripDangerousTags = (str) => {
+  const DANGEROUS_TAG_RE = /<(script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)[^>]*>/gi;
+  const stripped = str.replace(DANGEROUS_TAG_RE, '');
+  return { value: stripped, stripped: stripped !== str };
+};
+
 const COUNTRY_CODES = [
   { code: '+1', country: 'USA' },
   { code: '+44', country: 'UK' },

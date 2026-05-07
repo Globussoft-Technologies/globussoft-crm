@@ -219,3 +219,80 @@ describe('<Inbox /> — #624 Sent folder sub-tab', () => {
     expect(await screen.findByText('sample sent')).toBeInTheDocument();
   });
 });
+
+// #594 — Compose WhatsApp affordance + send flow. Pre-fix the WhatsApp
+// tab could only render inbound threads; there was no way to start a new
+// outbound conversation. Fix added a header button that opens a channel-
+// specific composer (phone + body, no subject/cc/bcc) which POSTs to
+// /api/whatsapp/send.
+describe('<Inbox /> — #594 Compose WhatsApp', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (!opts || !opts.method || opts.method === 'GET') {
+        if (url === '/api/communications/inbox' || url.startsWith('/api/communications/inbox?')) return Promise.resolve([]);
+        if (url === '/api/communications/calls') return Promise.resolve([]);
+        if (url === '/api/contacts') return Promise.resolve([
+          { id: 1, name: 'Rishu Goyal', email: 'rishu@x.in', phone: '+919876543210' },
+        ]);
+        if (url === '/api/sms/messages') return Promise.resolve([]);
+        if (url === '/api/whatsapp/messages') return Promise.resolve({ messages: [] });
+      }
+      if (opts?.method === 'POST' && url === '/api/whatsapp/send') {
+        return Promise.resolve({ success: true, messageId: 42 });
+      }
+      return Promise.resolve([]);
+    });
+  });
+
+  it('renders a "Compose WhatsApp" button in the Inbox header', async () => {
+    renderInbox();
+    expect(await screen.findByRole('button', { name: /compose whatsapp/i })).toBeInTheDocument();
+  });
+
+  it('clicking Compose WhatsApp opens a channel-specific modal (phone + body, no subject/cc/bcc)', async () => {
+    const user = userEvent.setup();
+    renderInbox();
+    const btn = await screen.findByRole('button', { name: /compose whatsapp/i });
+    await user.click(btn);
+
+    // Phone + body fields exist.
+    expect(await screen.findByLabelText(/Phone Number \(E\.164\)/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Message:$/i)).toBeInTheDocument();
+
+    // Email-specific surfaces are NOT in the WhatsApp composer.
+    // (The Cc/Bcc toggle belongs to the email composer, which isn't open.)
+    expect(screen.queryByRole('button', { name: /show cc and bcc/i })).not.toBeInTheDocument();
+    // The send button is WhatsApp-flavoured, not "Send Email".
+    expect(screen.getByRole('button', { name: /send whatsapp/i })).toBeInTheDocument();
+  });
+
+  it('submitting the WhatsApp composer POSTs { to, body } to /api/whatsapp/send', async () => {
+    const user = userEvent.setup();
+    renderInbox();
+    await user.click(await screen.findByRole('button', { name: /compose whatsapp/i }));
+
+    const phoneInput = await screen.findByLabelText(/Phone Number \(E\.164\)/i);
+    const bodyInput = screen.getByLabelText(/^Message:$/i);
+    await user.type(phoneInput, '+919876543210');
+    await user.type(bodyInput, 'Hello from the WhatsApp composer');
+
+    await user.click(screen.getByRole('button', { name: /send whatsapp/i }));
+
+    await waitFor(() => {
+      const sendCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/whatsapp/send' && opts?.method === 'POST'
+      );
+      expect(sendCall).toBeTruthy();
+      const sentBody = JSON.parse(sendCall[1].body);
+      expect(sentBody.to).toBe('+919876543210');
+      expect(sentBody.body).toBe('Hello from the WhatsApp composer');
+      // Email-specific keys must not be in the WhatsApp request body.
+      expect(sentBody.subject).toBeUndefined();
+      expect(sentBody.cc).toBeUndefined();
+      expect(sentBody.bcc).toBeUndefined();
+    });
+  });
+});

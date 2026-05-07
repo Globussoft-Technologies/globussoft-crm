@@ -66,6 +66,81 @@ function sanitizeText(input) {
   }).trim();
 }
 
+// #596 — Safe-list HTML sanitiser for marketing-email body content.
+//
+// The Campaign body field is labelled "Body (HTML)" in the UI but pre-fix
+// flowed through sanitizeText (allowedTags=[]) which stripped every tag,
+// silently dropping <p>, <br>, <a>, <strong>, etc. into plain text. This
+// helper preserves a documented allow-list so marketers can author real
+// HTML emails (paragraphs, formatting, links, lists, simple tables) while
+// keeping XSS surface closed (no <script> / <iframe> / on*= handlers).
+//
+// Allowed tag set mirrors the common ESP defaults (Mailchimp, SendGrid,
+// Brevo): block-level (h1–h6, p, blockquote, ul/ol/li, table/tr/td/th),
+// inline formatting (strong, em, u, b, i, br, span, a), images, hr, code.
+// Allowed attributes intentionally narrow:
+//   - href / target / rel on <a>
+//   - src / alt / width / height on <img>
+//   - style on every tag (so inline colour/font passes through; the list of
+//     allowed CSS properties is locked down so url() loaders and expression()
+//     can't smuggle execution)
+//   - class on every tag (ESPs lean on classes for templated styling)
+const HTML_BODY_ALLOWED_TAGS = [
+  "p", "br", "hr", "div", "span",
+  "h1", "h2", "h3", "h4", "h5", "h6",
+  "strong", "b", "em", "i", "u", "small", "sub", "sup", "mark",
+  "ul", "ol", "li",
+  "blockquote", "pre", "code",
+  "a",
+  "img",
+  "table", "thead", "tbody", "tr", "th", "td",
+];
+
+function sanitizeHtmlBody(input) {
+  if (typeof input !== "string") return input;
+  if (!input) return "";
+  return sanitizeHtml(input, {
+    allowedTags: HTML_BODY_ALLOWED_TAGS,
+    allowedAttributes: {
+      a: ["href", "name", "target", "rel", "title", "style", "class"],
+      img: ["src", "alt", "title", "width", "height", "style", "class"],
+      "*": ["style", "class"],
+    },
+    allowedSchemes: ["http", "https", "mailto", "tel"],
+    allowedSchemesByTag: { img: ["http", "https", "data"] },
+    allowedStyles: {
+      "*": {
+        color: [/^#(0x)?[0-9a-f]+$/i, /^rgb\(/, /^[a-z-]+$/i],
+        "background-color": [/^#(0x)?[0-9a-f]+$/i, /^rgb\(/, /^[a-z-]+$/i],
+        "text-align": [/^left$/, /^right$/, /^center$/, /^justify$/],
+        "font-size": [/^\d+(\.\d+)?(px|pt|em|rem|%)$/],
+        "font-weight": [/^(bold|bolder|lighter|normal|\d{3})$/i],
+        "font-style": [/^(italic|normal)$/i],
+        "text-decoration": [/^(underline|none|line-through)$/i],
+        margin: [/^\d+(\.\d+)?(px|pt|em|rem|%)?(\s+\d+(\.\d+)?(px|pt|em|rem|%)?){0,3}$/],
+        padding: [/^\d+(\.\d+)?(px|pt|em|rem|%)?(\s+\d+(\.\d+)?(px|pt|em|rem|%)?){0,3}$/],
+        width: [/^\d+(\.\d+)?(px|pt|em|rem|%)$/],
+        height: [/^\d+(\.\d+)?(px|pt|em|rem|%)$/],
+        border: [/^\d+px\s+(solid|dashed|dotted)\s+#?[0-9a-fA-F]+$/, /^none$/],
+      },
+    },
+    transformTags: {
+      // Force a safe rel on every anchor that opens a new tab.
+      a: (tagName, attribs) => {
+        const out = { ...attribs };
+        if (out.target === "_blank") {
+          const existingRel = (out.rel || "").split(/\s+/);
+          if (!existingRel.includes("noopener")) existingRel.push("noopener");
+          if (!existingRel.includes("noreferrer")) existingRel.push("noreferrer");
+          out.rel = existingRel.filter(Boolean).join(" ");
+        }
+        return { tagName, attribs: out };
+      },
+    },
+    textFilter: (text) => text.replace(ENTITY_DECODE_RE, (_, e) => ENTITY_DECODE_MAP[e] || _),
+  });
+}
+
 // Internal recursive walker. Strings → sanitizeText; arrays + objects
 // → recurse; primitives + null → pass through.
 function _walkSanitize(value) {
@@ -117,6 +192,7 @@ function sanitizeJsonForStringColumn(input) {
 
 module.exports = {
   sanitizeText,
+  sanitizeHtmlBody,
   sanitizeJson,
   sanitizeJsonForStringColumn,
 };

@@ -699,13 +699,18 @@ router.post("/patients", phiWriteGate, async (req, res) => {
     // #401: compute normalizedPhone for the @@unique(tenantId,
     // normalizedPhone) gate. Reuses the existing helper so dedup
     // semantics match contacts + marketplace leads.
-    const { normalizePhone } = require("../utils/deduplication");
+    // #595: canonicalise the stored display `phone` to E.164
+    // (`+919876543210`). Auto-dialer / SMS / WhatsApp keys all
+    // require E.164; falling back to the raw value on un-formattable
+    // input keeps non-IN demo data un-broken.
+    const { normalizePhone, toE164 } = require("../utils/deduplication");
     const normalizedPhone = phone ? normalizePhone(phone) : null;
+    const e164Phone = phone ? toE164(phone) || phone : null;
     const patient = await prisma.patient.create({
       data: {
         name: normalisedName,
         email,
-        phone,
+        phone: e164Phone,
         normalizedPhone,
         dob: dob ? new Date(dob) : null,
         gender,
@@ -792,9 +797,11 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
     // touches phone. Without this, an edit-phone flow would leave the
     // dedup gate's index pointing at the OLD phone — second create
     // attempt with the new phone would slip past the constraint.
+    // #595: also canonicalise the stored display value to E.164.
     if (req.body.phone !== undefined) {
-      const { normalizePhone } = require("../utils/deduplication");
+      const { normalizePhone, toE164 } = require("../utils/deduplication");
       data.normalizedPhone = req.body.phone ? normalizePhone(req.body.phone) : null;
+      data.phone = req.body.phone ? toE164(req.body.phone) || req.body.phone : null;
     }
 
     const updated = await prisma.patient.update({ where: { id }, data });

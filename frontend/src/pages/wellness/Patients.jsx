@@ -130,6 +130,20 @@ export default function Patients() {
   const INDIAN_MOBILE_RE = /^(\+91)?[6-9]\d{9}$/;
   const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+  // #595 — visual canonicalisation on blur. Returns the input as E.164
+  // (`+919876543210`) when it parses as a valid Indian mobile; otherwise
+  // returns the input unchanged so the user can see and correct what they
+  // typed. Backend also runs toE164() so the stored value is canonical
+  // even if the user submits before blurring.
+  const toE164OnBlur = (raw) => {
+    if (!raw) return raw;
+    const cleaned = String(raw).replace(/[\s\-()]/g, "");
+    if (cleaned.startsWith("+91") && /^\+91[6-9]\d{9}$/.test(cleaned)) return cleaned;
+    if (/^91[6-9]\d{9}$/.test(cleaned)) return "+" + cleaned;
+    if (/^[6-9]\d{9}$/.test(cleaned)) return "+91" + cleaned;
+    return raw;
+  };
+
   const startEdit = (patient) => {
     setForm({
       name: patient.name || "",
@@ -286,15 +300,19 @@ export default function Patients() {
           {/* #205: phone required (Indian mobile). Add inputMode + pattern so
               mobile keyboards default numeric and HTML5 native validation
               catches the obvious cases. JS-side check still runs on submit. */}
+          {/* #595: onBlur canonicalises the visible value to E.164 so the
+              user sees the form actually being saved (`+919876543210`) and
+              spots a typo before submit. */}
           <input
             placeholder="Phone *"
             required
             type="tel"
             inputMode="tel"
-            pattern="(\+91)?[6-9]\d{9}"
-            title="Indian mobile: 10 digits, starting 6-9, optional +91 prefix"
+            pattern="\+?[0-9]{10,15}"
+            title="Indian mobile: 10 digits, starting 6-9 (auto-prefixed with +91 on blur)"
             value={form.phone}
             onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            onBlur={(e) => setForm({ ...form, phone: toE164OnBlur(e.target.value) })}
             style={inputStyle}
           />
           <input

@@ -10,7 +10,7 @@ const { computeFirstResponseDueAt } = require("../lib/leadSla");
 // admin view. Both surface admin-side; HTML payloads here would land
 // as stored XSS when admins open the marketing page or schedule list.
 // Same #398/#447 class as lead_routing.js (097ef5a) + ab_tests.js (6a9e450).
-const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
+const { sanitizeText, sanitizeHtmlBody, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 
 const router = express.Router();
 
@@ -436,7 +436,25 @@ router.post("/campaigns/:id/schedule", verifyToken, async (req, res) => {
     // walks every string value in the filter JSON before storage so an
     // HTML payload in (e.g.) a city/segment filter can't surface as
     // stored XSS in the scheduled-campaigns admin view.
-    const scheduleFilters = req.body.filters ? sanitizeJsonForStringColumn(req.body.filters) : null;
+    //
+    // #596: the campaign body is intentionally HTML (the editor's label is
+    // "Body (HTML)"). sanitizeJsonForStringColumn would strip every tag
+    // because it routes through sanitizeText (allowedTags=[]); we extract
+    // body, sanitise it via the safe-list HTML helper, then merge back so
+    // the surrounding subject/preheader/audienceFilter still get the strict
+    // text-only sanitiser they need.
+    let scheduleFilters = null;
+    if (req.body.filters && typeof req.body.filters === "object" && !Array.isArray(req.body.filters)) {
+      const { body: htmlBody, ...rest } = req.body.filters;
+      const cleanedRest = sanitizeJsonForStringColumn(rest) || "{}";
+      const merged = JSON.parse(cleanedRest);
+      if (htmlBody !== undefined && htmlBody !== null) {
+        merged.body = typeof htmlBody === "string" ? sanitizeHtmlBody(htmlBody) : htmlBody;
+      }
+      scheduleFilters = JSON.stringify(merged);
+    } else if (req.body.filters) {
+      scheduleFilters = sanitizeJsonForStringColumn(req.body.filters);
+    }
 
     await prisma.campaign.update({
       where: { id: campaign.id },

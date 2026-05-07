@@ -41,7 +41,7 @@ const fakePrisma = vi.hoisted(() => {
 });
 
 import dedup from '../../utils/deduplication.js';
-const { normalizePhone, findDuplicateContact, findDuplicateMarketplaceLead, computeDuplicateGroupKey } = dedup;
+const { normalizePhone, toE164, findDuplicateContact, findDuplicateMarketplaceLead, computeDuplicateGroupKey } = dedup;
 
 beforeEach(() => {
   // Reset to vi.fn() per test so we can assert call shapes.
@@ -122,6 +122,58 @@ describe('deduplication — normalizePhone', () => {
 
   test('non-10-digit short numbers pass through as digits', () => {
     expect(normalizePhone('12345')).toBe('12345');
+  });
+});
+
+// #595 — toE164 canonicalises the *display* phone form (with `+` prefix) for
+// storage on Patient.phone and downstream auto-dialer / SMS / WhatsApp keys.
+// Distinct from normalizePhone which returns the digits-only dedup key.
+describe('deduplication — toE164 (#595)', () => {
+  test('returns null on null/undefined/empty/non-string', () => {
+    expect(toE164(null)).toBeNull();
+    expect(toE164(undefined)).toBeNull();
+    expect(toE164('')).toBeNull();
+    expect(toE164('   ')).toBeNull();
+    expect(toE164(9876543210)).toBeNull(); // numeric input rejected — caller must stringify
+  });
+
+  test('formats a 10-digit Indian mobile as +91XXXXXXXXXX', () => {
+    expect(toE164('9876543210')).toBe('+919876543210');
+    expect(toE164('6123456789')).toBe('+916123456789');
+    expect(toE164('7000000000')).toBe('+917000000000');
+    expect(toE164('8888888888')).toBe('+918888888888');
+  });
+
+  test('strips spaces / dashes / parens from a 10-digit input', () => {
+    expect(toE164('98765 43210')).toBe('+919876543210');
+    expect(toE164('98765-43210')).toBe('+919876543210');
+    expect(toE164('(987) 654-3210')).toBe('+919876543210');
+  });
+
+  test('formats a 12-digit input starting with 91 + Indian mobile prefix', () => {
+    expect(toE164('919876543210')).toBe('+919876543210');
+    expect(toE164('91 98765 43210')).toBe('+919876543210');
+  });
+
+  test('rejects 10-digit numbers that do not start 6-9 (not a real Indian mobile)', () => {
+    expect(toE164('1234567890')).toBeNull();
+    expect(toE164('5876543210')).toBeNull();
+  });
+
+  test('rejects 12-digit 91-prefixed numbers whose mobile portion is invalid', () => {
+    expect(toE164('911234567890')).toBeNull();
+  });
+
+  test('passes through an already-E.164 number unchanged (after stripping cosmetics)', () => {
+    expect(toE164('+919876543210')).toBe('+919876543210');
+    expect(toE164('+91 98765 43210')).toBe('+919876543210');
+    expect(toE164('+1 (415) 555-1234')).toBe('+14155551234');
+  });
+
+  test('rejects too-short or too-long inputs', () => {
+    expect(toE164('98765')).toBeNull();
+    expect(toE164('1234567890123456')).toBeNull(); // 16 digits, over E.164 max
+    expect(toE164('+1234567')).toBeNull();
   });
 });
 

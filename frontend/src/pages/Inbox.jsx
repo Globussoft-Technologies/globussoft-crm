@@ -30,6 +30,14 @@ export default function Inbox() {
   const [showComposeSms, setShowComposeSms] = useState(false);
   const [composeSmsData, setComposeSmsData] = useState({ to: '', body: '' });
 
+  // #594 — WhatsApp Compose modal state. Mirrors the SMS composer (phone +
+  // body) but POSTs to /api/whatsapp/send. Pre-fix the WhatsApp tab could
+  // only render inbound threads — there was no affordance to start a new
+  // conversation.
+  const [showComposeWa, setShowComposeWa] = useState(false);
+  const [composeWaData, setComposeWaData] = useState({ to: '', body: '' });
+  const [waSending, setWaSending] = useState(false);
+
   // Meeting modal state
   const [showMeet, setShowMeet] = useState(false);
   const [meetData, setMeetData] = useState({ contactId: '', date: '', time: '', description: '' });
@@ -122,6 +130,41 @@ export default function Inbox() {
     } catch (err) {
       notify.error('Failed to send SMS. Please check the phone number and try again.');
       console.error(err);
+    }
+  };
+
+  // #594 — Send a new WhatsApp message via /api/whatsapp/send. The route
+  // requires { to, body } at minimum (templateName is optional for richer
+  // template flows; for the in-thread quick-compose we use plain text).
+  const handleSendWa = async (e) => {
+    e.preventDefault();
+    const to = composeWaData.to.trim();
+    const body = composeWaData.body.trim();
+    if (!to || !body) {
+      notify.error('Phone number and message body are required');
+      return;
+    }
+    setWaSending(true);
+    try {
+      await fetchApi('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to, body }),
+      });
+      notify.success(`WhatsApp message queued for ${to}.`);
+      setShowComposeWa(false);
+      setComposeWaData({ to: '', body: '' });
+      const data = await fetchApi('/api/whatsapp/messages').catch(() => ({}));
+      setWaMessages(Array.isArray(data?.messages || data) ? (data?.messages || data) : []);
+    } catch (err) {
+      const msg = err?.message || 'Unable to send WhatsApp message';
+      if (/no active whatsapp/i.test(msg)) {
+        notify.error('No active WhatsApp provider configured. Open Settings > Channels to add credentials.');
+      } else {
+        notify.error(`WhatsApp send failed: ${msg}`);
+      }
+    } finally {
+      setWaSending(false);
     }
   };
 
@@ -287,6 +330,11 @@ export default function Inbox() {
           </button>
           <button onClick={() => setShowComposeSms(true)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <MessageSquare size={18} /> Compose SMS
+          </button>
+          {/* #594 — Compose WhatsApp affordance. Pre-fix the WhatsApp tab
+              had no way to start a new outbound thread. */}
+          <button onClick={() => setShowComposeWa(true)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(37, 211, 102, 0.15)', border: '1px solid #25D366', color: '#25D366' }}>
+            <MessageCircle size={18} /> Compose WhatsApp
           </button>
           <button onClick={() => setShowCompose(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Mail size={18} /> Compose Email
@@ -758,6 +806,59 @@ export default function Inbox() {
                 <button type="button" onClick={() => setShowComposeSms(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
                 <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#10b981', borderColor: '#10b981' }}>
                   <Send size={16} /> Send SMS
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* #594 — Compose WhatsApp modal. Channel-specific entry: To field is
+          a phone number (E.164 expected by Meta Cloud API), body is plain
+          text, POST to /api/whatsapp/send. Email-specific fields (subject,
+          cc/bcc) are intentionally absent. */}
+      {showComposeWa && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}>
+          <div className="card" style={{ padding: '2.5rem', width: '600px', border: '1px solid rgba(37, 211, 102, 0.3)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
+            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <MessageCircle size={24} color="#25D366" /> New WhatsApp Message
+            </h3>
+            <form onSubmit={handleSendWa} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label htmlFor="compose-wa-to" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Phone Number (E.164):</label>
+                <input
+                  id="compose-wa-to"
+                  type="tel"
+                  required
+                  list="contacts-phone-list"
+                  className="input-field"
+                  value={composeWaData.to}
+                  onChange={e => setComposeWaData({ ...composeWaData, to: e.target.value })}
+                  placeholder="+919876543210"
+                />
+                <datalist id="contacts-phone-list">
+                  {contacts.filter(c => c.phone).map(c => (
+                    <option key={c.id} value={c.phone}>{c.name}</option>
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <label htmlFor="compose-wa-body" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Message:</label>
+                <textarea
+                  id="compose-wa-body"
+                  required
+                  className="input-field"
+                  value={composeWaData.body}
+                  onChange={e => setComposeWaData({ ...composeWaData, body: e.target.value })}
+                  placeholder="Type your WhatsApp message here..."
+                  rows={5}
+                  style={{ resize: 'vertical' }}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', gap: '1rem' }}>
+                <button type="button" onClick={() => { setShowComposeWa(false); setComposeWaData({ to: '', body: '' }); }} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
+                <button type="submit" disabled={waSending} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#25D366', borderColor: '#25D366' }}>
+                  <Send size={16} /> {waSending ? 'Sending…' : 'Send WhatsApp'}
                 </button>
               </div>
             </form>

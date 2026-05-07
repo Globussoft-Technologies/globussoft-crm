@@ -121,6 +121,11 @@ router.post('/', async (req, res) => {
     // leading/trailing whitespace into search indexes, exports, etc. The
     // validator already verified there's at least one non-whitespace char.
     const normalised = { ...req.body, name: typeof req.body.name === "string" ? req.body.name.trim() : req.body.name };
+    // #588: default assignedToId to the creator so USER-role list scoping
+    // (which filters by assignedToId = req.user.userId) actually surfaces
+    // the contact they just created. Mirrors POST /api/deals which sets
+    // ownerId = req.user.userId. Explicit body.assignedToId still wins.
+    if (normalised.assignedToId == null) normalised.assignedToId = req.user.userId;
     const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
     try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
     // #179: audit row for new contact.

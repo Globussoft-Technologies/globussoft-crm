@@ -220,6 +220,42 @@ describe('<Inbox /> — #624 Sent folder sub-tab', () => {
   });
 });
 
+// #580 — Sentiment indicators were referenced in the Section 7 test plan
+// but the AI/Gemini backend that would compute them is not planned (#563
+// closed as Not planned). De-scope: the Inbox UI must NOT surface sentiment
+// columns / dots / "AI sentiment coming soon" hints, since shipping a stub
+// for a feature that won't be wired is dishonest. This regression pin keeps
+// the surface honest — if a future patch reintroduces a sentiment hint
+// without the backend, this test will catch it.
+describe('<Inbox /> — #580 no sentiment surface', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    fetchApiMock.mockImplementation(defaultFetch);
+  });
+
+  it('does NOT render any sentiment column / badge / hint', async () => {
+    renderInbox();
+    await waitFor(() => expect(screen.getByText(/Emails \(/i)).toBeInTheDocument());
+    // No sentiment-named UI surfaces anywhere on the page.
+    expect(screen.queryByText(/sentiment/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/AI tone/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/sentiment/i)).not.toBeInTheDocument();
+  });
+
+  it('opening an email row does NOT render a sentiment score in the detail modal', async () => {
+    const user = userEvent.setup();
+    renderInbox();
+    await waitFor(() => expect(screen.getByText('sample sent')).toBeInTheDocument());
+    await user.click(screen.getByText('sample sent'));
+    // No sentiment surface in the detail modal either.
+    expect(screen.queryByText(/sentiment/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/positive|neutral|negative/i)).not.toBeInTheDocument();
+  });
+});
+
 // #594 — Compose WhatsApp affordance + send flow. Pre-fix the WhatsApp
 // tab could only render inbound threads; there was no way to start a new
 // outbound conversation. Fix added a header button that opens a channel-

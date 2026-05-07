@@ -6,8 +6,10 @@
  *  - GET /entity/:entity/:id  (single-record trail)
  *  - GET /export.csv  (CSV blob)
  *
- * The whole router is gated by ADMIN+MANAGER (verifyToken + verifyRole) so we
- * also assert the auth gate.
+ * The whole router is gated by ADMIN-only (verifyToken + verifyRole(['ADMIN']))
+ * per #621 — Manager + User receive 403 with the canonical RBAC_DENIED
+ * envelope from #590/#591. We assert both the unauthenticated and the
+ * MANAGER-denied paths alongside the happy-path shape pins.
  */
 const { test, expect } = require('@playwright/test');
 
@@ -16,8 +18,11 @@ const API = `${BASE_URL}/api`;
 
 const ADMIN_EMAIL = 'admin@globussoft.com';
 const ADMIN_PASSWORD = 'password123';
+const MANAGER_EMAIL = 'manager@crm.com';
+const MANAGER_PASSWORD = 'password123';
 
 let adminToken = '';
+let managerToken = '';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -29,13 +34,47 @@ test.describe('Audit log viewer — /api/audit-viewer', () => {
     expect(login.ok(), 'admin login must succeed').toBeTruthy();
     const body = await login.json();
     adminToken = body.token;
+
+    const mgrLogin = await request.post(`${API}/auth/login`, {
+      data: { email: MANAGER_EMAIL, password: MANAGER_PASSWORD },
+    });
+    expect(mgrLogin.ok(), 'manager login must succeed').toBeTruthy();
+    const mgrBody = await mgrLogin.json();
+    managerToken = mgrBody.token;
   });
 
   const auth = () => ({ Authorization: `Bearer ${adminToken}` });
+  const mgrAuth = () => ({ Authorization: `Bearer ${managerToken}` });
 
   test('auth gate — GET / without token returns 401/403', async ({ request }) => {
     const res = await request.get(`${API}/audit-viewer`);
     expect([401, 403]).toContain(res.status());
+  });
+
+  // #621: MANAGER role MUST be denied. Pre-fix the route allowed
+  // ['ADMIN', 'MANAGER']; tightened to ['ADMIN'] only so the role
+  // contract is consistent with the sidebar adminOnly flag and the
+  // RoleGuard redirect on /audit-log.
+  test('auth gate — MANAGER token returns 403 with RBAC_DENIED code', async ({ request }) => {
+    const res = await request.get(`${API}/audit-viewer`, { headers: mgrAuth() });
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('RBAC_DENIED');
+    expect(typeof body.error).toBe('string');
+  });
+
+  test('auth gate — MANAGER blocked from /stats', async ({ request }) => {
+    const res = await request.get(`${API}/audit-viewer/stats`, { headers: mgrAuth() });
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('RBAC_DENIED');
+  });
+
+  test('auth gate — MANAGER blocked from /export.csv', async ({ request }) => {
+    const res = await request.get(`${API}/audit-viewer/export.csv`, { headers: mgrAuth() });
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('RBAC_DENIED');
   });
 
   test('GET / returns paginated shape', async ({ request }) => {

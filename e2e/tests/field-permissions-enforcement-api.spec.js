@@ -144,8 +144,13 @@ async function createDeal(request, overrides = {}) {
   return r.json();
 }
 
+// #588: USER role's GET /api/contacts scopes to assignedToId = req.user.userId.
+// Same fix shape as createDeal above — POST as USER so the contact's
+// assignedToId is set to USER's userId by the route's default (added to
+// routes/contacts.js in the same commit). ADMIN tests still pass because
+// ADMIN is unscoped and sees all tenant contacts including USER-owned ones.
 async function createContact(request, overrides = {}) {
-  const r = await adminPost(request, '/api/contacts', {
+  const r = await userPost(request, '/api/contacts', {
     name: `${RUN_TAG} ${overrides.name || 'Anjali Field'}`,
     email: overrides.email || `${RUN_TAG.toLowerCase()}.anjali.${Date.now()}@example.test`,
   });

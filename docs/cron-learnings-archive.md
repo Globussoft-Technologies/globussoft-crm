@@ -101,3 +101,93 @@ Agent F's first commit attempt (`cfb9973`) captured 7 of Agent J's files via the
 Both Agent G's `a2895d8` (`Closes #462 + #463` shortform) and Agent J's `ecb4ae0` (7 separate `Closes #N` lines) had trailers that DIDN'T fire. The shortform-vs-separate-line distinction matters somewhat (`Closes #N + #M` only auto-closes the first per GitHub's grammar), but the per-commit cap is real too.
 
 **Disposition:** archived — `dispatching-parallel-agent-wave` skill extended with "Verify each issue's auto-close after multi-issue commits" section, including the bash one-liner to verify each issue and the manual close pattern for any that didn't fire.
+
+---
+
+## 2026-05-07 batch (14 entries promoted in commit `c3f84e2`)
+
+The marathon 14-wave 2026-05-07 cron-loop session generated 25 cron-learnings; the user dispositioned all-of-them in one review pass. 14 entries promoted (below); 9 single-instance entries kept in CLAUDE.md awaiting more instances.
+
+### 2026-05-07 wave-1 — `f2275e5` — selective migration is the right call when a class fix has long-tail "no clean replacement" sites
+
+Agent C's #523 issue title said "11 brittle attribute selectors" but only 6 had a single-site target with a clean class hook. The other 8 were broad multi-site selectors pattern-matching 13-888 separate JSX sites each. Migration would have been multi-day, outside the issue's `~2-3h` scope. Agent retained them with inline comments documenting why each is kept + the page list it targets.
+
+**Disposition:** archived — `executing-cross-route-shape-sweep` skill extended with "Intentionally NOT migrated" listings section.
+
+### 2026-05-07 wave-2 — `83d2a88` — concurrent agents in the SAME working directory can collide via git state, even on disjoint files
+
+Agent E (P0 wellness-RBAC regression spec) ran a revert-and-prove cycle which created throwaway branch `throwaway-revert-prove`, modified `wellness.js` mid-cycle, then restored both. Agent D (dashboard discovery) was dispatched in parallel and inherited the dirty state mid-cycle — they correctly detected it and refused to commit anything.
+
+**Disposition:** archived — `dispatching-parallel-agent-wave` skill extended with "Graceful concurrent recovery" section sub-pattern (a) "Detect dirty state at start, refuse to commit."
+
+### 2026-05-07 wave-3 — `db543af` (Agent G) — `isolation: "worktree"` is leaky when the agent needs a running backend OR file-system-grep against frontend source
+
+Agent G's revert-and-prove cycle for the auth-security regression spec (P1) needed two things the worktree alone couldn't provide: (1) a running backend with `node_modules`, and (2) the file-grep tests pointing at `frontend/src/App.jsx` resolved that path through the running stack which read from main-repo not the worktree. Pattern reproduced in wave-4 by Agent I (audit-coverage spec, also worktree-isolated).
+
+**Disposition:** archived — promoted to a new CLAUDE.md standing rule: "isolation: 'worktree' is leaky when the agent needs a running backend or file-grep against frontend source."
+
+### 2026-05-07 wave-4 — `fef51a6` (Agent I) — gap cards drift from reality on action-verb naming and entity-coverage scope
+
+The regression-coverage-backlog item #5 said "hard DELETE on Contact/Deal/Estimate/Task emits a `*_DELETED` AuditLog row". Spec implementation found the actual emissions are `SOFT_DELETE`; INVOICE PATCH emits `INVOICE_UPDATE`. Pipeline CRUD has zero `writeAudit` calls — gap card assumed coverage that never existed. Filed as #568 + #569.
+
+**Disposition:** archived — promoted to new skill `verifying-gap-card-claims` (the action-verb section). Standing rule also added to CLAUDE.md.
+
+### 2026-05-07 wave-4 — `c1c6075` (Agent J) — regression-coverage spec writing surfaces real backend gaps that ship inline with the spec
+
+Agent J's #14 spec for /public/book + /public/tenant/:slug + /embed/lead-form.html exposed three real backend gaps that needed code, not just test pins. P1+ regression-coverage agents that ship "the spec for what we wish were true" naturally drift into shipping the missing code too.
+
+**Disposition:** archived — promoted to new skill `sizing-regression-coverage-dispatch` (the Path-A-vs-Path-B sizing heuristic + 50-100% buffer guidance).
+
+### 2026-05-07 wave-5 — `8fd3283` (Agent L) — unit tests can pin a helper's contract but cannot enforce that all callsites use the helper
+
+Agent L shipped 31 vitest cases for `formatMoney` covering all 5 acceptance points from regression-coverage-backlog #22. The test suite locks in the helper's CONTRACT but bugs the gap card cited (#286/#330) were callsite drift. Confirmed by wave-6 (Agent N for datetime, regression-23, Path B): same shape — helper-port + tests pin contract, callsite-migration filed as a follow-up.
+
+**Disposition:** archived — `executing-cross-route-shape-sweep` skill extended with "Helper-port → callsite-sweep two-wave pattern" section.
+
+### 2026-05-07 wave-6 — `437614f` (Agent M) — callsite-sweeps are deterministically scoped by a fixed grep, but the grep itself needs to span ALL render layers, not just code
+
+Agent M's #286/#330 sweep covered 16 callsites across 11 files: 8 backend (PDF rendering, AI-prompt strings, won-deal activity) and 8 frontend (CommandPalette, CPQBuilder, Omnibar, AgentReports). The non-obvious one: AI-prompt context strings ALSO drift — when the system prompt for Gemini contains `Won Revenue: $${rev}`, the model sees a literal `$` symbol regardless of tenant currency.
+
+**Disposition:** archived — `executing-cross-route-shape-sweep` skill extended with "Why callsite-sweeps need ALL render layers" section, including the AI-prompt-builder grep template.
+
+### 2026-05-07 wave-7 — `bfb098d` (Agent O) — explicit "do NOT migrate" listings preserve product-anchored constants
+
+Agent O's datetime callsite-sweep was scoped to 3 classes; mid-sweep they identified callsites that LOOKED like candidates but were product-anchored. Class (a) wellness `IST_OFFSET_MS` got migrated but with `Asia/Kolkata` literally pinned as `WELLNESS_TZ` const. Several other route handlers were intentionally NOT migrated because their route validation explicitly requires "must be a valid ISO date".
+
+**Disposition:** archived — folded with wave-1 selective migration entry into `executing-cross-route-shape-sweep` skill's "Intentionally NOT migrated" section.
+
+### 2026-05-07 wave-7 — `bf7bbe1` + `bfb098d` (Agents P + O) — concurrent agents can detect file-collision and gracefully back off
+
+Agent P's junkSourceFilter wire-in needed to extend into `routes/wellness.js` `computeAttribution()`. But Agent O was mid-flight on `routes/wellness.js` (datetime sweep). Agent P detected the in-flight edit, reverted their wellness.js changes, filed a 5-min wire-in as a TODOS user-attention follow-up, and shipped the rest of their work clean.
+
+**Disposition:** archived — `dispatching-parallel-agent-wave` skill extended with "Graceful concurrent recovery" section sub-pattern (b) "Detect file-collision mid-task, back off + file follow-up TODOS."
+
+### 2026-05-07 wave-8 — `5ebcbdb` (Agent Q) — gap-card numerical bounds can drift from actual route caps; spec authoring should send BOTH the tighter and looser bound to be robust
+
+Agent Q's #13 services-api spec hit a gap-card-vs-reality drift: backlog said "price > 1e7" and "duration > 1440 (24h)" but actual route caps in `routes/wellness.js` are tighter (`5_000_000`, `720`). The spec sends BOTH the just-over-tighter-cap values AND the backlog acceptance values.
+
+**Disposition:** archived — folded with wave-4 + wave-10 entries into `verifying-gap-card-claims` skill's "Numerical bound claims" section.
+
+### 2026-05-07 wave-9 — `30f46b6` (Agent T) — concurrent stash/pop recovery now confirmed across THREE instances
+
+Agent T mid-flight encountered a sibling commit (Agent S's WIP on estimates-api). Stashed during rebase, popped after — push went through clean. Three different sub-patterns of the same "graceful concurrent recovery" meta-pattern, all of which avoided the dispatching-parallel-agent-wave skill's documented merge-collision class.
+
+**Disposition:** archived — `dispatching-parallel-agent-wave` skill extended with "Graceful concurrent recovery" section sub-pattern (c) "Stash → pull → pop on push collision."
+
+### 2026-05-07 wave-10 update to wave-8 — gap-card-vs-reality drift now FIVE instances today; pattern is overwhelmingly skill-worthy
+
+Wave 10 Agent U found `tasks.js`'s `ensureDateInRange` window is `[2000, 2100]` not `[1990, 2100]` as the card claimed (4th instance); Wave 10 Agent V found `routes/report_schedules.js` emits `EXTERNAL_RECIPIENT_FORBIDDEN` not `PII_EXFIL_BLOCKED` as the card claimed (5th instance). Five-of-five regression-coverage agents this session surfaced some flavor of drift.
+
+**Disposition:** archived — folded with wave-4 + wave-8 + wave-11 entries into `verifying-gap-card-claims` skill (the master gap-card-drift skill).
+
+### 2026-05-07 wave-10 — `bc838d9` (Agent V) — backend bug surfaced inline with regression spec is now the DEFAULT outcome, not the exception
+
+Six waves shipped backend gap fixes inline with the spec by this point: Wave 4 Agent J's 3 fixes, Wave 5 Agent L's formatMoney port, Wave 7 Agent O datetime migration, Wave 7 Agent P junkSourceFilter helper, Wave 8 Agent R PATCH /:id alias, Wave 10 Agent V status:400 fix. The "spec ships missing code alongside" pattern is the rule, not the exception.
+
+**Disposition:** archived — folded with wave-4 entry into `sizing-regression-coverage-dispatch` skill's "Why this matters — the inline-backend-gap pattern" section, with the +50-100% buffer guidance.
+
+### 2026-05-07 wave-11 — `3d5bbc6` + `ae913a9` (Agents X + W) — well-implemented engines flip the "backend-fix-inline = default" pattern; Path A goes 100%, BOTH SIBLINGS independently
+
+Agent X's orchestrator-api spec (#16 — 29 tests) found ALL 5 acceptance points were already implemented; Agent W's sequences-authoring-api (#15 — 23 tests) ALSO found ALL 6 acceptance points Path A. Both engines are wellness-vertical surfaces built ground-up. Refinement of the wave-10 sizing guidance: read the route's commit history with `git log --oneline -- backend/routes/<file>` for a sniff test before sizing.
+
+**Disposition:** archived — folded with wave-10 entry into `sizing-regression-coverage-dispatch` skill, providing the engine-maturity-vs-Path-B correlation + the git log probe heuristic.

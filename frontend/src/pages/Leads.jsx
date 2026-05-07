@@ -6,7 +6,7 @@ import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-rea
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
 const FIELD_LIMITS = { name: 191, email: 191, company: 191, title: 200, phone: 20 };
-const CONTROL_CHAR_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
+const CONTROL_CHAR_RE = /[\t\n\r\f\v]/;
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
 const stripDangerousTags = (str) => {
   const DANGEROUS_TAG_RE = /<(script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)[^>]*>/gi;

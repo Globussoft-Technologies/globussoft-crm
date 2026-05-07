@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
@@ -129,7 +129,7 @@ export default function DealInsights() {
   const generateForAll = async () => {
     setGenerating(true);
     try {
-      const targets = openDeals.slice(0, 50); // safety cap
+      const targets = openDealIds.slice(0, 50); // safety cap
       let success = 0;
       let failed = 0;
       for (const d of targets) {

@@ -107,6 +107,16 @@ export default function DealInsights() {
     return g;
   }, [filtered]);
 
+  const dealById = useMemo(() => {
+    const m = {};
+    insights.forEach(ins => {
+      if (ins.dealContext && !m[ins.dealId]) {
+        m[ins.dealId] = ins.dealContext;
+      }
+    });
+    return m;
+  }, [insights]);
+
   // For Open Deals view: all insights regardless of filter
   const allGrouped = useMemo(() => {
     const g = {};

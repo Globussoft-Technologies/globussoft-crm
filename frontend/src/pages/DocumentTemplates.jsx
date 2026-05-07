@@ -189,14 +189,14 @@ export default function DocumentTemplates() {
       {loading ? (
         <p style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading templates...</p>
       ) : filteredTemplates.length === 0 ? (
-        <div className="card" style={{ padding: '4rem', textAlign: 'center' }}>
+        <div className="card" data-testid="document-templates-empty-state" style={{ padding: '4rem', textAlign: 'center' }}>
           <FileText size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
           <h3 style={{ marginBottom: '0.5rem' }}>No templates yet</h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
-            Create reusable proposal, NDA, contract, or email templates with merge variables.
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem', maxWidth: '460px', margin: '0 auto 1.5rem' }}>
+            Document templates let you reuse content for quotes, invoices, NDAs, contracts, and email — with merge variables like <code>{'{{contact.name}}'}</code> and <code>{'{{deal.title}}'}</code>.
           </p>
-          <button className="btn-primary" onClick={openCreate}>
-            <Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Create Template
+          <button className="btn-primary" onClick={openCreate} data-testid="empty-state-create-cta">
+            <Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Create your first template
           </button>
         </div>
       ) : (

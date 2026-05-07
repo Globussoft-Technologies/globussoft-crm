@@ -48,6 +48,17 @@ function isOverdue(task) {
   return task.dueDate && task.status === 'Pending' && new Date(task.dueDate) < new Date();
 }
 
+// #608: warn when the user is creating a task with a due date that is already
+// in the past. We don't block — some workflows legitimately back-fill a task
+// to record it after the fact — but the form should make it loud so the user
+// doesn't accidentally inflate the Overdue counter on the dashboard.
+function isPastDate(localDateTimeStr) {
+  if (!localDateTimeStr) return false;
+  const picked = new Date(localDateTimeStr);
+  if (Number.isNaN(picked.getTime())) return false;
+  return picked.getTime() < Date.now();
+}
+
 export default function Tasks() {
   const notify = useNotify();
   const [tasks, setTasks] = useState([]);
@@ -187,8 +198,23 @@ export default function Tasks() {
 
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Execution Deadline</label>
-              <input type="datetime-local" className="input-field" value={newTask.dueDate}
-                onChange={e => setNewTask({ ...newTask, dueDate: e.target.value })} />
+              <input
+                type="datetime-local"
+                className="input-field"
+                value={newTask.dueDate}
+                onChange={e => setNewTask({ ...newTask, dueDate: e.target.value })}
+                aria-describedby={isPastDate(newTask.dueDate) ? 'task-duedate-warning' : undefined}
+                style={isPastDate(newTask.dueDate) ? { borderColor: '#f59e0b' } : undefined}
+              />
+              {isPastDate(newTask.dueDate) && (
+                <p
+                  id="task-duedate-warning"
+                  data-testid="task-past-date-warning"
+                  style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                >
+                  <AlertTriangle size={12} /> This task will be created already overdue.
+                </p>
+              )}
             </div>
 
             <div>

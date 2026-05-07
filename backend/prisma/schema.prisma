@@ -245,6 +245,11 @@ model User {
   // Wellness sub-role (orthogonal to RBAC role)
   wellnessRole String? // doctor, professional, telecaller, helper
 
+  // #618 — soft-deactivation. Set to now() when an admin clicks Deactivate
+  // in the Staff Directory; cleared back to null on Reactivate. Reversible
+  // alternative to DELETE so the row stays in the directory + audit trail.
+  deactivatedAt DateTime?
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

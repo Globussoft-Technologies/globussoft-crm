@@ -175,7 +175,11 @@ const services = [
 const staffSeed = [
   // Demo accounts — easy to remember for live demos
   { email: "admin@wellness.demo", name: "Demo Admin", role: "ADMIN", wellnessRole: null },
-  { email: "user@wellness.demo", name: "Demo User", role: "USER", wellnessRole: "professional" },
+  // #641: Demo User is a generic walkthrough account, NOT a practitioner.
+  // Pre-fix this row was seeded with wellnessRole='professional', causing
+  // the My Profile page to render a phantom "Practitioner" badge + section
+  // even though the account had no practitioner privileges or fields.
+  { email: "user@wellness.demo", name: "Demo User", role: "USER", wellnessRole: null },
   // Doctors
   { email: "rishu@enhancedwellness.in", name: "Rishu Agarwal (Owner)", role: "ADMIN", wellnessRole: null },
   { email: "drharsh@enhancedwellness.in", name: "Dr. Harsh Kumar", role: "USER", wellnessRole: "doctor" },

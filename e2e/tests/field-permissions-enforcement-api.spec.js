@@ -341,6 +341,124 @@ test.describe('Field-Level Permissions — write enforcement on /api/contacts', 
   });
 });
 
+// ── #577 — Invoice + Quote enforcement (extends to the 4-entity matrix shown on /field-permissions). ──
+
+async function createInvoiceContact(request) {
+  const r = await adminPost(request, '/api/contacts', {
+    name: `${RUN_TAG} Invoice Contact`,
+    email: `${RUN_TAG.toLowerCase()}.inv.${Date.now()}@example.test`,
+  });
+  expect(r.status(), `create invoice contact: ${await r.text()}`).toBe(201);
+  return r.json();
+}
+
+async function createInvoice(request, contactId) {
+  // ADMIN-only POST — invoice creation is gated to ADMIN/MANAGER.
+  const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+  const r = await adminPost(request, '/api/billing', {
+    amount: 4242.00,
+    dueDate: tomorrow,
+    contactId,
+  });
+  expect(r.status(), `create invoice: ${await r.text()}`).toBe(201);
+  return r.json();
+}
+
+test.describe('Field-Level Permissions — Invoice read enforcement (#577)', () => {
+  test('USER list strips Invoice.amount when canRead=false', async ({ request }) => {
+    const contact = await createInvoiceContact(request);
+    const inv = await createInvoice(request, contact.id);
+    const rule = await createRule(request, {
+      role: 'USER', entity: 'Invoice', field: 'amount', canRead: false, canWrite: false,
+    });
+    try {
+      const r = await userGet(request, '/api/billing');
+      expect(r.status()).toBe(200);
+      const list = await r.json();
+      const me = list.find((i) => i.id === inv.id);
+      expect(me, 'created invoice must appear in USER list').toBeTruthy();
+      expect(me).not.toHaveProperty('amount');
+      expect(me).toHaveProperty('invoiceNum');
+    } finally {
+      await deleteRule(request, rule.id);
+      await adminDelete(request, `/api/contacts/${contact.id}`).catch(() => {});
+    }
+  });
+
+  test('USER GET /api/billing/:id strips Invoice.amount when canRead=false', async ({ request }) => {
+    const contact = await createInvoiceContact(request);
+    const inv = await createInvoice(request, contact.id);
+    const rule = await createRule(request, {
+      role: 'USER', entity: 'Invoice', field: 'amount', canRead: false, canWrite: false,
+    });
+    try {
+      const r = await userGet(request, `/api/billing/${inv.id}`);
+      expect(r.status()).toBe(200);
+      const body = await r.json();
+      expect(body).not.toHaveProperty('amount');
+      expect(body).toHaveProperty('invoiceNum');
+    } finally {
+      await deleteRule(request, rule.id);
+      await adminDelete(request, `/api/contacts/${contact.id}`).catch(() => {});
+    }
+  });
+});
+
+test.describe('Field-Level Permissions — Invoice write enforcement (#577)', () => {
+  test('ADMIN POST /api/billing silently drops dueDate when ADMIN canWrite=false', async ({ request }) => {
+    const contact = await createInvoiceContact(request);
+    // Apply rule to ADMIN role (the create endpoint requires ADMIN/MANAGER).
+    const rule = await createRule(request, {
+      role: 'ADMIN', entity: 'Invoice', field: 'dueDate', canRead: true, canWrite: false,
+    });
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+    try {
+      // dueDate stripped pre-validation → handler errors with INVALID_DUE_DATE.
+      const r = await adminPost(request, '/api/billing', {
+        amount: 100,
+        dueDate: tomorrow,
+        contactId: contact.id,
+      });
+      expect(r.status()).toBe(400);
+      const body = await r.json();
+      expect(body.code).toBe('INVALID_DUE_DATE');
+    } finally {
+      await deleteRule(request, rule.id);
+      await adminDelete(request, `/api/contacts/${contact.id}`).catch(() => {});
+    }
+  });
+});
+
+test.describe('Field-Level Permissions — Quote read enforcement (#577)', () => {
+  test('USER GET /api/cpq/quotes/:dealId strips Quote.totalAmount when canRead=false', async ({ request }) => {
+    // Need a deal first.
+    const deal = await createDeal(request, { title: 'quote-fixture' });
+    // Create the quote via admin.
+    const qRes = await adminPost(request, '/api/cpq/quotes', {
+      dealId: deal.id,
+      title: `${RUN_TAG} fp-quote`,
+      lineItems: [{ productName: 'Item', quantity: 1, unitPrice: 99, isRecurring: false }],
+    });
+    expect(qRes.status(), `create quote: ${await qRes.text()}`).toBe(201);
+    const quote = await qRes.json();
+    const rule = await createRule(request, {
+      role: 'USER', entity: 'Quote', field: 'totalAmount', canRead: false, canWrite: false,
+    });
+    try {
+      const r = await userGet(request, `/api/cpq/quotes/${deal.id}`);
+      expect(r.status()).toBe(200);
+      const list = await r.json();
+      const me = list.find((q) => q.id === quote.id);
+      expect(me, 'created quote must appear in USER list').toBeTruthy();
+      expect(me).not.toHaveProperty('totalAmount');
+      expect(me).toHaveProperty('title');
+    } finally {
+      await deleteRule(request, rule.id);
+      await adminDelete(request, `/api/deals/${deal.id}`).catch(() => {});
+    }
+  });
+});
+
 // Belt-and-braces afterAll cleanup in case any rule above leaked due to a
 // failed assertion. Best-effort — we don't assert these succeed.
 test.afterAll(async ({ request }) => {

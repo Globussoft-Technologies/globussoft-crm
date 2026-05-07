@@ -53,9 +53,9 @@ const TEST_USER = {
   role: 'ADMIN',
 };
 
-function renderPrivacy(user = TEST_USER) {
+function renderPrivacy(user = TEST_USER, tenant = { id: 1 }) {
   return render(
-    <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1 }, loading: false }}>
+    <AuthContext.Provider value={{ user, token: 'tk', tenant, loading: false }}>
       <Privacy />
     </AuthContext.Provider>,
   );
@@ -165,5 +165,63 @@ describe('<Privacy /> — Account Deletion confirmation modal (#584)', () => {
       '/api/gdpr/consent',
       expect.anything(),
     );
+  });
+});
+
+// ── #576 — Clinical / Medical Records retention sub-section ──
+describe('<Privacy /> — Clinical / Medical Records retention (#576)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    // /api/gdpr/retention-policies returns [] for a fresh tenant.
+    fetchApiMock.mockResolvedValue([]);
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+  });
+
+  it('generic tenant: clinical sub-section + DPDP bullet are NOT rendered', async () => {
+    renderPrivacy(TEST_USER, { id: 1, vertical: 'generic' });
+    // Wait for retention-policies fetch to resolve before asserting absence.
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    expect(screen.queryByTestId('clinical-retention-table')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dpdp-compliance-bullet')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Clinical \/ Medical Records/i)).not.toBeInTheDocument();
+  });
+
+  it('wellness tenant: renders the Clinical / Medical Records table with all 6 entities', async () => {
+    renderPrivacy(TEST_USER, { id: 7, vertical: 'wellness' });
+    await waitFor(() => {
+      expect(screen.getByTestId('clinical-retention-table')).toBeInTheDocument();
+    });
+    // The 6 medical entities are present as table rows.
+    const table = screen.getByTestId('clinical-retention-table');
+    expect(table).toHaveTextContent('Patients');
+    expect(table).toHaveTextContent('Visits');
+    expect(table).toHaveTextContent('Prescriptions');
+    expect(table).toHaveTextContent('Consent Forms');
+    expect(table).toHaveTextContent('Treatment Plans');
+    expect(table).toHaveTextContent('Medical Attachments');
+  });
+
+  it('wellness tenant: defaults are 7y for clinical entities, 10y for Patient', async () => {
+    renderPrivacy(TEST_USER, { id: 7, vertical: 'wellness' });
+    await waitFor(() => {
+      expect(screen.getByTestId('clinical-retention-table')).toBeInTheDocument();
+    });
+    // Patients default = 3650, Visits/etc = 2555. The number inputs are
+    // rendered with `value={p.retainDays}` — find them by row label.
+    const inputs = screen
+      .getByTestId('clinical-retention-table')
+      .querySelectorAll('input[type="number"]');
+    const values = Array.from(inputs).map((i) => Number(i.value)).sort((a, b) => a - b);
+    expect(values).toEqual([2555, 2555, 2555, 2555, 2555, 3650]);
+  });
+
+  it('wellness tenant: DPDP (India) compliance bullet is rendered', async () => {
+    renderPrivacy(TEST_USER, { id: 7, vertical: 'wellness' });
+    await waitFor(() => {
+      expect(screen.getByTestId('dpdp-compliance-bullet')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/DPDP \(India\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Digital Personal Data Protection Act 2023/i)).toBeInTheDocument();
   });
 });

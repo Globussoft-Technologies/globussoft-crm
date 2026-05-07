@@ -3,6 +3,10 @@ const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+// #577 — wire fieldFilter into Quote routes so FieldPermissions UI rules
+// are actually enforced. Mirrors deals.js + contacts.js + billing.js
+// adoption pattern from #464.
+const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
 
 // Get Product Catalog Master Array
 router.get("/products", verifyToken, async (req, res) => {
@@ -35,7 +39,9 @@ router.get("/quotes/:dealId", verifyToken, async (req, res) => {
       include: { lineItems: true },
       orderBy: { createdAt: 'desc' }
     });
-    res.json(quotes);
+    // #577: strip read-restricted fields per the caller's role.
+    const filtered = await filterReadFields(quotes, req.user.role, "Quote", req.user.tenantId);
+    res.json(filtered);
   } catch(_err) {
     res.status(500).json({ error: "Fetching CPQ arrays failed." });
   }
@@ -44,6 +50,8 @@ router.get("/quotes/:dealId", verifyToken, async (req, res) => {
 // Compile a new CPQ Quote schema mapping multiple SaaS line items
 router.post("/quotes", verifyToken, async (req, res) => {
   try {
+    // #577: strip write-restricted fields before destructuring the body.
+    req.body = await filterWriteFields(req.body, req.user.role, "Quote", req.user.tenantId);
     const { dealId, title, lineItems } = req.body;
 
     let computedTotal = 0;

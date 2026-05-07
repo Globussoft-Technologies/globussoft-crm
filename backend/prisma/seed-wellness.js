@@ -245,6 +245,21 @@ async function main() {
   });
   console.log(`[seed-wellness] tenant id=${tenant.id} slug=${tenant.slug} currency=${tenant.defaultCurrency}`);
 
+  // #576 — default Clinical/Medical retention policies (idempotent).
+  // Wellness tenants need RetentionPolicy rows for Patient / Visit /
+  // Prescription / ConsentForm / TreatmentPlan / MedicalAttachment so
+  // /privacy can render + admins can configure DPDP-compliant windows.
+  // isActive=false by default — admins must explicitly enable purge.
+  try {
+    const { seedWellnessRetentionPolicies } = require("../cron/retentionEngine");
+    const created = await seedWellnessRetentionPolicies(tenant.id);
+    if (created.length) {
+      console.log(`[seed-wellness] retention policies seeded: ${created.map(r => r.entity).join(", ")}`);
+    }
+  } catch (e) {
+    console.warn(`[seed-wellness] retention-policy seed skipped: ${e.message}`);
+  }
+
   // Backfill any pre-existing Deal/Payment rows for this tenant that were created
   // before defaultCurrency rolled out — they default to USD which is wrong for India.
   const dealsBackfilled = await prisma.deal.updateMany({

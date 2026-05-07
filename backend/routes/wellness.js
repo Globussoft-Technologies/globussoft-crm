@@ -855,28 +855,69 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
     }
     const existing = await prisma.patient.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Patient not found" });
-
-    await prisma.patient.delete({ where: { id } });
-
-    // #179 audit pattern — patient name only, no email/phone PII in the blob.
-    await writeAudit('Patient', 'DELETE', id, req.user.userId, req.user.tenantId, {
-      patientName: existing.name,
-    });
-
-    res.json({ success: true, id });
-  } catch (e) {
-    // Prisma FK Restrict — patient has clinical children that would be orphaned.
-    if (e && e.code === "P2003") {
+    // #628 — soft-delete: set deletedAt instead of cascade-orphaning
+    // visits/Rx/consents. Already-soft-deleted rows return 409.
+    if (existing.deletedAt) {
       return res.status(409).json({
-        error: "Patient has visits / prescriptions / consents / treatment plans on file. Resolve those first or use the GDPR retention flow.",
-        code: "PATIENT_HAS_CHILDREN",
+        error: "Patient is already soft-deleted",
+        code: "PATIENT_ALREADY_DELETED",
       });
     }
+
+    const updated = await prisma.patient.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+
+    // #179 audit pattern — patient name only, no email/phone PII in the blob.
+    await writeAudit('Patient', 'SOFT_DELETE', id, req.user.userId, req.user.tenantId, {
+      patientName: existing.name,
+      deletedAt: updated.deletedAt,
+    });
+
+    res.json({ success: true, id, deletedAt: updated.deletedAt });
+  } catch (e) {
     if (e && e.code === "P2025") {
       return res.status(404).json({ error: "Patient not found" });
     }
     console.error("[wellness] delete patient error:", e.message);
     res.status(500).json({ error: "Failed to delete patient" });
+  }
+});
+
+// #628 — Restore a soft-deleted patient. Admin-only; clears deletedAt so
+// the row reappears in default lists. No-op (200 idempotent) if already
+// restored. Pairs with the soft-delete handler above; hard-purge runs
+// through the /privacy retention engine (#576) after the tombstone window.
+router.post("/patients/:id/restore", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ error: "Invalid patient id", code: "INVALID_ID" });
+    }
+    const existing = await prisma.patient.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Patient not found" });
+    if (!existing.deletedAt) {
+      return res.status(200).json({ success: true, id, idempotent: true });
+    }
+
+    const updated = await prisma.patient.update({
+      where: { id },
+      data: { deletedAt: null },
+    });
+
+    await writeAudit('Patient', 'RESTORE', id, req.user.userId, req.user.tenantId, {
+      patientName: existing.name,
+      restoredFrom: existing.deletedAt,
+    });
+
+    res.json({ success: true, id, patient: updated });
+  } catch (e) {
+    if (e && e.code === "P2025") {
+      return res.status(404).json({ error: "Patient not found" });
+    }
+    console.error("[wellness] restore patient error:", e.message);
+    res.status(500).json({ error: "Failed to restore patient" });
   }
 });
 

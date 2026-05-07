@@ -12,11 +12,28 @@ const ENTITY_MAP = {
   Activity: 'activity',
   SmsMessage: 'smsMessage',
   WhatsAppMessage: 'whatsAppMessage',
+  // #576 — clinical / medical records (wellness vertical). DPDP /
+  // clinical-records norm in India is 7 years (consents must outlive
+  // the engagement); Patient is 10 years for conservativeness.
+  Patient: 'patient',
+  Visit: 'visit',
+  Prescription: 'prescription',
+  ConsentForm: 'consentForm',
+  TreatmentPlan: 'treatmentPlan',
+  MedicalAttachment: 'attachment',
 };
+
+// #628 + #576 — entities that support soft-delete (have a `deletedAt`
+// column). The retention engine's first pass on these entities sets
+// deletedAt; the second pass (after `retainDays * 1.5` — the tombstone
+// window) does the actual hard-delete. Entities NOT in this set are
+// hard-deleted directly on the configured retainDays cutoff.
+const SOFT_DELETE_ENTITIES = new Set(['Patient']);
+const TOMBSTONE_MULTIPLIER = 1.5;
 
 /**
  * Core retention sweep — purges records older than each tenant's policy.
- * Returns a summary array: [{ tenantId, entity, deleted, cutoff }]
+ * Returns a summary array: [{ tenantId, entity, deleted, softDeleted, cutoff }]
  *
  * Why we always write the AuditLog row (even on deleted=0): GDPR Art. 30
  * + SOC-2 require a complete trail of when retention was *attempted*, not
@@ -46,13 +63,43 @@ async function runRetentionSweep() {
       }
       const cutoff = new Date(Date.now() - policy.retainDays * 24 * 60 * 60 * 1000);
       try {
-        const result = await model.deleteMany({
-          where: { tenantId: policy.tenantId, createdAt: { lt: cutoff } },
-        });
-        const deleted = result?.count || 0;
-        summary.push({ tenantId: policy.tenantId, entity: policy.entity, deleted, cutoff });
-        if (deleted > 0) {
-          console.log(`[Retention] Tenant ${policy.tenantId} — ${policy.entity}: deleted ${deleted} records older than ${policy.retainDays}d (cutoff ${cutoff.toISOString()}).`);
+        let deleted = 0;
+        let softDeleted = 0;
+        const isSoftDelete = SOFT_DELETE_ENTITIES.has(policy.entity);
+        if (isSoftDelete) {
+          // Two-phase purge for soft-delete-aware entities (#628 + #576).
+          // Phase 1: rows older than `cutoff` AND not already soft-deleted
+          //          → set deletedAt = now (tombstone).
+          // Phase 2: rows whose deletedAt < (now - retainDays * 1.5)
+          //          → hard-delete.
+          const tombstoneCutoff = new Date(
+            Date.now() - policy.retainDays * TOMBSTONE_MULTIPLIER * 24 * 60 * 60 * 1000
+          );
+          const softResult = await model.updateMany({
+            where: {
+              tenantId: policy.tenantId,
+              createdAt: { lt: cutoff },
+              deletedAt: null,
+            },
+            data: { deletedAt: new Date() },
+          });
+          softDeleted = softResult?.count || 0;
+          const hardResult = await model.deleteMany({
+            where: {
+              tenantId: policy.tenantId,
+              deletedAt: { lt: tombstoneCutoff, not: null },
+            },
+          });
+          deleted = hardResult?.count || 0;
+        } else {
+          const result = await model.deleteMany({
+            where: { tenantId: policy.tenantId, createdAt: { lt: cutoff } },
+          });
+          deleted = result?.count || 0;
+        }
+        summary.push({ tenantId: policy.tenantId, entity: policy.entity, deleted, softDeleted, cutoff });
+        if (deleted > 0 || softDeleted > 0) {
+          console.log(`[Retention] Tenant ${policy.tenantId} — ${policy.entity}: deleted ${deleted}, soft-deleted ${softDeleted} (cutoff ${cutoff.toISOString()}, retainDays=${policy.retainDays}).`);
         }
         // Always write an AuditLog row — even when deleted=0 — so the
         // sweep attempt is captured for GDPR/SOC-2 trail compliance. The
@@ -65,6 +112,7 @@ async function runRetentionSweep() {
             details: JSON.stringify({
               source: 'RetentionEngine',
               deleted,
+              softDeleted,
               retainDays: policy.retainDays,
               cutoff: cutoff.toISOString(),
               via: 'cron',
@@ -73,7 +121,7 @@ async function runRetentionSweep() {
           },
         }).catch(() => { /* best-effort */ });
       } catch (err) {
-        console.error(`[Retention] Tenant ${policy.tenantId} — ${policy.entity}: deleteMany failed:`, err.message);
+        console.error(`[Retention] Tenant ${policy.tenantId} — ${policy.entity}: sweep failed:`, err.message);
       }
     }
   } catch (err) {
@@ -94,4 +142,48 @@ function initRetentionCron() {
   console.log('[Retention] Cron scheduled: daily at 03:00.');
 }
 
-module.exports = { initRetentionCron, runRetentionSweep };
+// #576 — default retention windows for new wellness tenants. Matches
+// the issue's product call: 7y for clinical records, 10y for Patient
+// (slightly more conservative — patient-identity outlives the chart).
+// 2555 days = ~7y; 3650 days = ~10y. isActive=false by default — admins
+// must explicitly enable purge from /privacy.
+const WELLNESS_DEFAULT_POLICIES = [
+  { entity: 'Patient', retainDays: 3650, isActive: false },
+  { entity: 'Visit', retainDays: 2555, isActive: false },
+  { entity: 'Prescription', retainDays: 2555, isActive: false },
+  { entity: 'ConsentForm', retainDays: 2555, isActive: false },
+  { entity: 'TreatmentPlan', retainDays: 2555, isActive: false },
+  { entity: 'MedicalAttachment', retainDays: 2555, isActive: false },
+];
+
+/**
+ * Idempotent seed — for a given wellness tenantId, ensure the 6 medical
+ * RetentionPolicy rows exist. Re-runnable; existing rows are left alone
+ * so admins keep their tweaks. Used by:
+ *   - prisma/seed-wellness.js on tenant create
+ *   - one-time migration callable for existing wellness tenants
+ */
+async function seedWellnessRetentionPolicies(tenantId) {
+  if (!tenantId) return [];
+  const created = [];
+  for (const p of WELLNESS_DEFAULT_POLICIES) {
+    const existing = await prisma.retentionPolicy.findUnique({
+      where: { tenantId_entity: { tenantId, entity: p.entity } },
+    }).catch(() => null);
+    if (existing) continue;
+    const row = await prisma.retentionPolicy.create({
+      data: { tenantId, entity: p.entity, retainDays: p.retainDays, isActive: p.isActive },
+    }).catch(() => null);
+    if (row) created.push(row);
+  }
+  return created;
+}
+
+module.exports = {
+  initRetentionCron,
+  runRetentionSweep,
+  ENTITY_MAP,
+  SOFT_DELETE_ENTITIES,
+  WELLNESS_DEFAULT_POLICIES,
+  seedWellnessRetentionPolicies,
+};

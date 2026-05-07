@@ -324,9 +324,9 @@ model Contact {
   // brought them in. preferredLocationId / preferredPractitionerId stay
   // unwired Int columns (no FK relation) to dodge cascade-delete coupling
   // — a deleted Location or User shouldn't tombstone a Lead's analytics row.
-  treatmentOfInterest      String?
-  preferredLocationId      Int?
-  preferredPractitionerId  Int?
+  treatmentOfInterest     String?
+  preferredLocationId     Int?
+  preferredPractitionerId Int?
 
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
@@ -638,8 +638,8 @@ model Invoice {
   // #601 — wellness visit linkage. Optional so generic CRM invoices don't
   // need it. SetNull on visit delete; Invoice itself stays Restrict-on-tenant.
   // Drives the per-visit revenue rollup on /api/wellness/reports/visit.
-  visitId   Int?
-  visit     Visit?  @relation(fields: [visitId], references: [id], onDelete: SetNull)
+  visitId Int?
+  visit   Visit? @relation(fields: [visitId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, status])
   @@index([tenantId, contactId])
@@ -2185,8 +2185,15 @@ model Patient {
   loyaltyTransactions LoyaltyTransaction[]
   referrals           Referral[]           @relation("ReferrerOf")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  // #628 — soft-delete column (mirrors Contact / Deal pattern from #167).
+  // Default lists filter `deletedAt: null`; restore endpoint clears it.
+  // Cascading rows (Visit / Prescription / ConsentForm / TreatmentPlan)
+  // are NOT cascade-deleted on soft-delete — they remain queryable for
+  // audit + clinical-history retention. Hard purge runs through the
+  // /privacy retention engine after the configured tombstone window (#576).
+  deletedAt DateTime?
 
   /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
   // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
@@ -2206,6 +2213,7 @@ model Patient {
   // tenant scope AND the orderBy from the index alone, avoiding the filesort
   // observed on cold calls.
   @@index([tenantId, createdAt])
+  @@index([tenantId, deletedAt])
 }
 
 model Service {
@@ -2342,15 +2350,15 @@ model ConsentForm {
 /// continues to reference the chosen template by string key (immutable
 /// once signed — that's the whole point).
 model ConsentTemplate {
-  id          Int      @id @default(autoincrement())
-  key         String // stable identifier used by ConsentForm.templateName
-  label       String // human-readable name shown in dropdown
-  body        String?  @db.LongText // optional HTML body for the consent form
-  language    String   @default("en")
-  isActive    Boolean  @default(true)
-  isSeed      Boolean  @default(false) // true for the 5 seeded starter rows
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        Int      @id @default(autoincrement())
+  key       String // stable identifier used by ConsentForm.templateName
+  label     String // human-readable name shown in dropdown
+  body      String?  @db.LongText // optional HTML body for the consent form
+  language  String   @default("en")
+  isActive  Boolean  @default(true)
+  isSeed    Boolean  @default(false) // true for the 5 seeded starter rows
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   tenantId Int
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2552,22 +2560,22 @@ model LoyaltyTransaction {
 // Numeric fields are nullable + zero-defaulted; null/0 means "rule disabled".
 // All amounts are tenant-currency (formatMoney resolves the unit at render).
 model LoyaltyConfig {
-  id                       Int      @id @default(autoincrement())
-  tenantId                 Int      @unique
-  tenant                   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int      @unique
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Earn rules
-  earnPerVisit             Int      @default(0)   // flat points per completed visit
-  earnPercentOfSpend       Float    @default(10)  // % of amountCharged → points (default 10 mirrors the historic hardcoded rule)
-  earnPerCurrencyUnit      Float    @default(0)   // points per 1 currency unit (alt to %); e.g. 0.01 = 1pt per ₹100
+  earnPerVisit        Int      @default(0) // flat points per completed visit
+  earnPercentOfSpend  Float    @default(10) // % of amountCharged → points (default 10 mirrors the historic hardcoded rule)
+  earnPerCurrencyUnit Float    @default(0) // points per 1 currency unit (alt to %); e.g. 0.01 = 1pt per ₹100
   // Burn / redemption
-  redeemPointsPerUnit      Int      @default(10)  // points needed to redeem 1 currency unit (e.g. 10 pts = ₹1)
+  redeemPointsPerUnit Int      @default(10) // points needed to redeem 1 currency unit (e.g. 10 pts = ₹1)
   // Bonuses
-  welcomeBonus             Int      @default(0)   // points credited on patient signup
-  referralBonus            Int      @default(100) // default points awarded per successful referral
+  welcomeBonus        Int      @default(0) // points credited on patient signup
+  referralBonus       Int      @default(100) // default points awarded per successful referral
   // Toggles
-  autoEarnEnabled          Boolean  @default(true)
-  updatedAt                DateTime @updatedAt
-  createdAt                DateTime @default(now())
+  autoEarnEnabled     Boolean  @default(true)
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
 }
 
 model Referral {

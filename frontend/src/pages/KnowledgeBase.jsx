@@ -244,6 +244,12 @@ export default function KnowledgeBase() {
             alignItems: "center",
             gap: "0.5rem",
             padding: "0.7rem 1.2rem",
+            whiteSpace: "nowrap",
+            flex: "0 0 max-content",
+            minWidth: "max-content",
+            width: "max-content",
+            maxWidth: "none",
+            overflow: "visible",
           }}
         >
           <Plus size={16} /> New Article

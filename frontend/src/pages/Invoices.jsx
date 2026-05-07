@@ -544,7 +544,7 @@ export default function Invoices() {
                     <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Contact</th>
                     {/* #119 polish: sticky right-edge so action buttons are always
                         visible regardless of horizontal scroll position. */}
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right', position: 'sticky', right: 0, background: 'var(--surface-bg, #ffffff)', boxShadow: '-4px 0 8px -4px rgba(0,0,0,0.15)', zIndex: 2 }}>Actions</th>
+                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -591,10 +591,6 @@ export default function Invoices() {
                       </td>
                       <td style={{
                         padding: '1rem 0.5rem', textAlign: 'right',
-                        position: 'sticky', right: 0,
-                        background: 'var(--surface-bg, #ffffff)',
-                        boxShadow: '-4px 0 8px -4px rgba(0,0,0,0.15)',
-                        zIndex: 1,
                       }}>
                         {/* #119 sub-issue: action buttons could overflow the
                             260px Actions column on narrow viewports. flexWrap
@@ -703,7 +699,7 @@ export default function Invoices() {
           <div
             onClick={(e) => e.stopPropagation()}
             className="card"
-            style={{ background: 'var(--surface-bg)', padding: '1.5rem', borderRadius: '12px', minWidth: '380px', maxWidth: '460px' }}
+            style={{ background: 'var(--surface-color)', color: 'var(--text-primary)', padding: '1.5rem', borderRadius: '12px', minWidth: '380px', maxWidth: '460px', border: '1px solid var(--border-color)', backdropFilter: 'blur(12px)' }}
           >
             <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem' }}>
               {recurInvoice.isRecurring ? 'Stop recurring billing' : 'Set up recurring billing'}
@@ -782,7 +778,7 @@ export default function Invoices() {
           <div
             onClick={(e) => e.stopPropagation()}
             className="card"
-            style={{ background: 'var(--surface-bg)', padding: '2rem', borderRadius: '12px', minWidth: '420px', maxWidth: '500px' }}
+            style={{ background: 'var(--surface-color)', color: 'var(--text-primary)', padding: '2rem', borderRadius: '12px', minWidth: '420px', maxWidth: '500px', border: '1px solid var(--border-color)', backdropFilter: 'blur(12px)' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ fontSize: '1.2rem', fontWeight: 600, margin: 0 }}>

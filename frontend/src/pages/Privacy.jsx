@@ -157,13 +157,14 @@ export default function Privacy() {
   };
 
   const card = {
-    background: 'var(--bg-secondary, rgba(255,255,255,0.6))',
+    background: 'var(--surface-color, rgba(255,255,255,0.6))',
     backdropFilter: 'blur(12px)',
     border: '1px solid var(--border-color, rgba(255,255,255,0.18))',
     borderRadius: '14px',
     padding: '1.5rem',
     marginBottom: '1.5rem',
     boxShadow: '0 4px 24px rgba(0,0,0,0.04)',
+    color: 'var(--text-primary)',
   };
 
   return (
@@ -249,7 +250,7 @@ export default function Privacy() {
                         onChange={(e) => updatePolicy(p.entity, 'retainDays', e.target.value)}
                         style={{
                           width: '110px', padding: '0.4rem 0.6rem', borderRadius: '6px',
-                          border: '1px solid var(--border-color, #d1d5db)', background: 'var(--bg-primary, #fff)',
+                          border: '1px solid var(--border-color, #d1d5db)', background: 'var(--input-bg, #fff)',
                           color: 'var(--text-primary, #111827)',
                         }}
                       />
@@ -357,8 +358,11 @@ export default function Privacy() {
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: 'var(--bg-primary, #fff)', borderRadius: '12px', padding: '1.75rem',
+              background: 'var(--surface-color, #fff)', borderRadius: '12px', padding: '1.75rem',
               maxWidth: '480px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+              color: 'var(--text-primary)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid var(--border-color)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
@@ -410,6 +414,8 @@ export default function Privacy() {
               style={{
                 width: '100%', padding: '0.55rem 0.75rem', borderRadius: '8px',
                 border: '1px solid var(--border-color, #d1d5db)',
+                background: 'var(--input-bg, #fff)',
+                color: 'var(--text-primary)',
                 marginBottom: '1rem', boxSizing: 'border-box',
               }}
             />

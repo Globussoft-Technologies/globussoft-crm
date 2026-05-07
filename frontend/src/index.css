@@ -207,7 +207,15 @@ button {
   transition: var(--transition);
   box-shadow: 0 4px 15px var(--accent-glow);
   position: relative;
-  overflow: hidden;
+  /* clip-path replaces overflow: hidden so flex `min-width: auto` resolves
+     to content size (not 0) — keeps the :after shimmer visually contained
+     while letting the button grow to fit its label. Fixes #619. */
+  overflow: visible;
+  clip-path: inset(0 round 10px);
+  white-space: nowrap;
+  flex: 0 0 max-content;
+  flex-shrink: 0;
+  min-width: max-content;
 }
 
 .btn-primary:after {
@@ -237,7 +245,22 @@ button {
   font-weight: 500;
   transition: var(--transition);
   position: relative;
-  overflow: hidden;
+  overflow: visible;
+  clip-path: inset(0 round 10px);
+  white-space: nowrap;
+  flex: 0 0 max-content;
+  flex-shrink: 0;
+  min-width: max-content;
+}
+
+/* SVG icons inside primary/secondary buttons should never shrink — keeps
+   the icon at its declared size and prevents flex from squeezing it,
+   which can otherwise contribute to the parent button being computed
+   smaller than its label. Fixes #619. */
+.btn-primary > svg,
+.btn-secondary > svg {
+  flex-shrink: 0;
+  width: auto;
 }
 
 .btn-secondary:hover {

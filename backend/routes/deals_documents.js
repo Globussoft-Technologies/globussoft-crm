@@ -56,32 +56,23 @@ router.post("/:dealId/upload", upload.single("file"), async (req, res) => {
   }
 });
 
-// Delete attachment
-router.delete("/:attachmentId", verifyToken, async (req, res) => {
-  try {
-    const attachment = await prisma.attachment.findFirst({
-      where: {
-        id: parseInt(req.params.attachmentId),
-        tenantId: req.user.tenantId
-      }
-    });
-
-    if (!attachment) {
-      return res.status(404).json({ error: "Attachment not found" });
-    }
-
-    await prisma.attachment.delete({
-      where: { id: attachment.id }
-    });
-
-    res.json({ success: true });
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to delete attachment" });
-  }
-});
-
-// Generate and track PDF Quote (created on-demand, no disk storage)
-router.post("/:dealId/generate-quote", verifyToken, async (req, res) => {
+// Generate dynamic PDF Quote.
+//
+// #585: prior to this fix, the route piped the PDF to disk asynchronously
+// then returned a JSON envelope referencing /uploads/<file>.pdf. The user-
+// observed effect was that clicking "Generate Quote" never delivered a
+// downloadable PDF inline — the customer-facing artifact was effectively
+// invisible until they discovered it in the attachments list, and the
+// async write-then-respond ordering risked serving 0-byte / partial
+// content if the static handler raced the doc.end() flush.
+//
+// The route now buffers the PDF in memory (mirrors the streamToBuffer
+// pattern in services/pdfRenderer.js for the wellness vertical), persists
+// the same buffer to disk for the attachment row (so the existing
+// "see it in attachments" UX still works after a refresh), and responds
+// with binary PDF bytes + Content-Type: application/pdf +
+// Content-Disposition: attachment; filename="quote-<id>.pdf".
+router.post("/:dealId/generate-quote", async (req, res) => {
   try {
     const deal = await prisma.deal.findFirst({
       where: { id: parseInt(req.params.dealId), tenantId: req.user.tenantId },
@@ -99,25 +90,10 @@ router.post("/:dealId/generate-quote", verifyToken, async (req, res) => {
 
     const doc = new PDFDocument();
     const chunks = [];
-
-    doc.on('data', chunk => chunks.push(chunk));
-    doc.on('end', async () => {
-      const pdfBuffer = Buffer.concat(chunks);
-
-      // Create attachment record (marks it as system-generated, no file on disk)
-      const attachment = await prisma.attachment.create({
-        data: {
-          filename: "System Generated Quote.pdf",
-          fileUrl: `/api/deals_documents/generate-quote/${deal.id}`, // Points to on-demand endpoint
-          dealId: deal.id,
-          tenantId: req.user.tenantId,
-        }
-      });
-
-      // Send as download without saving to disk
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="quote-${deal.id}.pdf"`);
-      res.send(pdfBuffer);
+    doc.on("data", (c) => chunks.push(c));
+    const bufferPromise = new Promise((resolve, reject) => {
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
     });
 
     // PDF Content
@@ -132,44 +108,36 @@ router.post("/:dealId/generate-quote", verifyToken, async (req, res) => {
     doc.fontSize(10).fillColor('gray').text("This is an automatically generated legally binding quote valid for 30 days.", { align: "center" });
 
     doc.end();
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "PDF generation failed" });
-  }
-});
+    const pdfBuffer = await bufferPromise;
 
-// Download on-demand generated quote (no disk file, generated fresh each time)
-router.get("/generate-quote/:dealId", verifyToken, async (req, res) => {
-  try {
-    const deal = await prisma.deal.findFirst({
-      where: { id: parseInt(req.params.dealId), tenantId: req.user.tenantId },
-      include: { contact: true, owner: true }
-    });
-    if (!deal) return res.status(404).json({ error: "Deal not found" });
+    // Persist alongside the attachment row so the existing
+    // "view in attachments → /uploads/..." flow still resolves to the
+    // same bytes. Failures here are logged but don't block the inline
+    // response — the user still receives their PDF.
+    const pdfFilename = `quote-${deal.id}-${Date.now()}.pdf`;
+    const pdfPath = path.join(uploadPath, pdfFilename);
+    try {
+      fs.writeFileSync(pdfPath, pdfBuffer);
+      await prisma.attachment.create({
+        data: {
+          filename: `quote-${deal.id}.pdf`,
+          fileUrl: `/uploads/${pdfFilename}`,
+          dealId: deal.id,
+          tenantId: req.user.tenantId,
+        }
+      });
+    } catch (persistErr) {
+      console.error("[generate-quote] attachment persist failed:", persistErr);
+    }
 
-    const doc = new PDFDocument();
-    const chunks = [];
-
-    doc.on('data', chunk => chunks.push(chunk));
-    doc.on('end', () => {
-      const pdfBuffer = Buffer.concat(chunks);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="quote-${deal.id}.pdf"`);
-      res.send(pdfBuffer);
-    });
-
-    // PDF Content
-    doc.fontSize(24).text("Enterprise CRM Quote", { align: "center" });
-    doc.moveDown();
-    doc.fontSize(16).text(`Prepared For: ${deal.contact?.name || deal.company || "Valued Client"}`);
-    doc.text(`Company: ${deal.company || "N/A"}`);
-    doc.moveDown();
-    doc.fontSize(14).text(`Project: ${deal.title}`);
-    doc.text(`Total Amount: $${(deal.amount || 0).toLocaleString()}`);
-    doc.moveDown(2);
-    doc.fontSize(10).fillColor('gray').text("This is an automatically generated legally binding quote valid for 30 days.", { align: "center" });
-
-    doc.end();
+    res.status(200);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="quote-${deal.id}.pdf"`,
+    );
+    res.setHeader("Content-Length", pdfBuffer.length);
+    res.end(pdfBuffer);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "PDF generation failed" });

@@ -168,12 +168,20 @@ async function main() {
     { title: 'Milan Design Studio Proposal', amount: 15000, probability: 0, stage: 'lost', ci: 21, ui: 5, close: daysAgo(25) },
   ];
 
+  // #573 — distribute deal ownership round-robin across the 6 reps so
+  // /forecasting's per-rep breakdown reflects realistic population
+  // behaviour. Pre-fix, every dealsData entry pinned ui:0 (Rajesh) for
+  // ~31 of 24+ deals, making one rep appear to own >99% of the pipeline.
+  // Round-robin by deal index keeps the demo balanced; individual `ui`
+  // values on dealsData are intentionally ignored here.
   const deals = [];
-  for (const d of dealsData) {
+  const ownerCount = users.length; // 6 reps: Rajesh/Priya/Amit/Sneha/Vikram/Anita
+  for (let i = 0; i < dealsData.length; i++) {
+    const d = dealsData[i];
     deals.push(await prisma.deal.create({
       data: {
         title: d.title, amount: d.amount, probability: d.probability, stage: d.stage,
-        contactId: contacts[d.ci].id, ownerId: users[d.ui].id, expectedClose: d.close,
+        contactId: contacts[d.ci].id, ownerId: users[i % ownerCount].id, expectedClose: d.close,
       },
     }));
   }

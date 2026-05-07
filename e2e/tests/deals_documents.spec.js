@@ -136,17 +136,42 @@ test.describe('deals_documents routes', () => {
     expect(body.dealId).toBe(dealId);
   });
 
-  test('POST /api/deals_documents/:dealId/generate-quote produces a PDF attachment', async ({ request }) => {
+  // #585: the route returns binary PDF bytes inline so the customer-facing
+  // download is a real PDF, not an HTML page renamed to *.pdf. We pin the
+  // three acceptance points from the issue: Content-Type starts with
+  // application/pdf, the response body's first 4 bytes are "%PDF" (the PDF
+  // magic header), and Content-Disposition's filename ends in .pdf.
+  test('POST /api/deals_documents/:dealId/generate-quote returns binary PDF bytes (#585)', async ({ request }) => {
     test.skip(!dealId, 'no deal available');
     const res = await request.post(`${API}/deals_documents/${dealId}/generate-quote`, {
       headers: auth(),
       data: {},
     });
-    expect(res.status()).toBe(201);
-    const body = await res.json();
-    expect(body.id).toBeTruthy();
-    expect(body.filename).toMatch(/Quote/i);
-    expect(body.fileUrl).toMatch(/\.pdf$/);
+    expect(res.status()).toBe(200);
+
+    const contentType = res.headers()['content-type'] || '';
+    expect(contentType.startsWith('application/pdf')).toBe(true);
+
+    const disposition = res.headers()['content-disposition'] || '';
+    expect(disposition).toMatch(/filename="?[^"]*\.pdf"?/i);
+
+    const body = await res.body();
+    // PDF magic header — every valid PDF starts with the ASCII bytes "%PDF".
+    expect(body.slice(0, 4).toString('ascii')).toBe('%PDF');
+    expect(body.length).toBeGreaterThan(100);
+  });
+
+  test('POST /api/deals_documents/:dealId/generate-quote also persists an attachment row (#585)', async ({ request }) => {
+    test.skip(!dealId, 'no deal available');
+    // Side-effect contract: even though the inline response is binary,
+    // the route still persists the same PDF bytes to disk + creates an
+    // Attachment row so the existing "see it later in attachments" UX
+    // keeps working after a refresh.
+    const list = await request.get(`${API}/deals_documents/${dealId}/attachments`, { headers: auth() });
+    expect(list.status()).toBe(200);
+    const items = await list.json();
+    const hasQuote = items.some((a) => /quote.*\.pdf$/i.test(a.filename) || /quote.*\.pdf$/i.test(a.fileUrl || ''));
+    expect(hasQuote).toBe(true);
   });
 
   test('POST /api/deals_documents/9999999/generate-quote returns 404', async ({ request }) => {

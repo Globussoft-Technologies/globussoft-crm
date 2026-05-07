@@ -4,7 +4,10 @@ import React from 'react';
 import DealModal from '../components/DealModal';
 
 const fetchApiMock = vi.fn();
-vi.mock('../utils/api', () => ({ fetchApi: (...args) => fetchApiMock(...args) }));
+vi.mock('../utils/api', () => ({
+  fetchApi: (...args) => fetchApiMock(...args),
+  getAuthToken: () => 'test-token',
+}));
 
 // Replace the nested CPQBuilder with a stub so we isolate DealModal
 vi.mock('../components/CPQBuilder', () => ({
@@ -76,20 +79,30 @@ describe('DealModal', () => {
   });
 
   it('generate-quote button triggers POST to generate-quote endpoint', async () => {
-    let callCount = 0;
-    fetchApiMock.mockImplementation((url, opts) => {
-      callCount++;
-      if (opts?.method === 'POST') return Promise.resolve({});
-      return Promise.resolve([]);
+    // #585: the route now returns binary PDF bytes inline (Content-Type
+    // application/pdf), so the frontend uses raw fetch to grab a blob and
+    // trigger a real download — fetchApi (which forces JSON parsing) is
+    // bypassed for this one call. Mock global.fetch + URL.createObjectURL
+    // so the click still drives a single POST against /generate-quote.
+    fetchApiMock.mockResolvedValue([]);
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob([new Uint8Array([0x25, 0x50, 0x44, 0x46])], { type: 'application/pdf' })),
     });
+    const createObjectURL = vi.fn(() => 'blob:fake');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(global.URL, 'createObjectURL', { value: createObjectURL, configurable: true });
+    Object.defineProperty(global.URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true });
     render(<DealModal deal={deal} onClose={() => {}} />);
     fireEvent.click(await screen.findByText(/Generate Quote/i));
     await waitFor(() => {
-      const postCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url.includes('/generate-quote') && opts?.method === 'POST',
+      const postCall = fetchSpy.mock.calls.find(
+        ([url, opts]) => typeof url === 'string' && url.includes('/generate-quote') && opts?.method === 'POST',
       );
       expect(postCall).toBeDefined();
     });
+    fetchSpy.mockRestore();
   });
 
   it('saving a note PUTs to /api/deals/:id', async () => {

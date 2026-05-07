@@ -62,32 +62,29 @@ export default function DealModal({ deal, onClose }) {
     setUploading(false);
   };
 
+  // #585: the backend now returns binary PDF bytes inline (Content-Type
+  // application/pdf, Content-Disposition attachment). Use raw fetch
+  // instead of fetchApi (which forces JSON parsing) so we can grab the
+  // blob, trigger a real download in the browser, and still refresh
+  // the attachments list (the route also persists a copy to disk).
   const handleGenerateQuote = async () => {
     setGenerating(true);
     try {
       const token = getAuthToken();
-      const response = await fetch(`${API_BASE}/api/deals_documents/${deal.id}/generate-quote`, {
+      const res = await fetch(`${API_BASE}/api/deals_documents/${deal.id}/generate-quote`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/pdf' },
       });
-
-      if (!response.ok) {
-        console.error("Quote generation failed");
-        setGenerating(false);
-        return;
-      }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `quote-${deal.id}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-
-      // Reload attachments to show the generated quote in the list
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `quote-${deal.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
       await loadAttachments();
     } catch (err) {
       console.error("Quote gen failed", err);

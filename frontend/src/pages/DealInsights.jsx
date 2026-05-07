@@ -45,6 +45,7 @@ export default function DealInsights() {
   // class entirely.
   const [openDealCount, setOpenDealCount] = useState(0);
   const [openDealIds, setOpenDealIds] = useState([]);
+  const [openDeals, setOpenDeals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [filter, setFilter] = useState('All');
@@ -75,10 +76,12 @@ export default function DealInsights() {
         }
       }
       setOpenDealCount(count);
-      // openDealIds is just a per-page slice for the bulk-generate button.
-      // Not authoritative — dealContext is the source of truth on the join.
+      // openDeals stores the full deal objects for the OPEN_DEALS view.
+      // openDealIds is just the IDs for the bulk-generate button.
       const sample = Array.isArray(openSampleRaw) ? openSampleRaw : [];
-      setOpenDealIds(sample.filter(d => d.stage !== 'won' && d.stage !== 'lost').map(d => d.id));
+      const openOnly = sample.filter(d => d.stage !== 'won' && d.stage !== 'lost');
+      setOpenDeals(openOnly);
+      setOpenDealIds(openOnly.map(d => d.id));
     } catch (e) {
       console.error(e);
     } finally {

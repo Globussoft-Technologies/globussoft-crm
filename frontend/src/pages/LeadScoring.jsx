@@ -88,7 +88,7 @@ export default function LeadScoring() {
             <Target size={28} color="var(--accent-color)" /> Lead Intelligence
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            AI-powered contact scoring — updated every 10 minutes via cron engine.
+            Rules-based contact scoring — updated every 10 minutes via cron engine.
           </p>
         </div>
         <button

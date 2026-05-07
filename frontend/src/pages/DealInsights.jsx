@@ -155,11 +155,16 @@ export default function DealInsights() {
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.75rem', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
+          {/* #593: dropped "AI" prefix — output is rules-based heuristics
+              (see runHeuristicRules in backend/routes/deal_insights.js).
+              The optional Gemini-prefixed `[AI]` insight only runs when
+              GEMINI_API_KEY is set; demo + most tenants don't set it, so
+              the user-facing surface is overwhelmingly heuristic. */}
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <Eye size={28} color="var(--accent-color)" /> AI Deal Insights
+            <Eye size={28} color="var(--accent-color)" /> Deal Insights
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Risk detection, opportunities, and next-best-actions across your open pipeline.
+            Rules-based risk detection, opportunities, and next-best-actions across your open pipeline.
           </p>
         </div>
         <button

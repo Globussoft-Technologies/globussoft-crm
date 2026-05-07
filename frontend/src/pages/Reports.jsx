@@ -361,7 +361,8 @@ export default function Reports() {
                       <th style={thStyle}>Title</th><th style={thStyle}>Amount</th><th style={thStyle}>Stage</th><th style={thStyle}>Owner</th><th style={thStyle}>Contact</th><th style={thStyle}>Created</th>
                     </>}
                     {detailType === 'contacts' && <>
-                      <th style={thStyle}>Name</th><th style={thStyle}>Email</th><th style={thStyle}>Company</th><th style={thStyle}>Status</th><th style={thStyle}>Source</th><th style={thStyle}>Assigned To</th><th style={thStyle}>AI Score</th>
+                      {/* #593: "AI Score" column → "Lead Score" — score is rules-based (leadScoringEngine.js). */}
+                      <th style={thStyle}>Name</th><th style={thStyle}>Email</th><th style={thStyle}>Company</th><th style={thStyle}>Status</th><th style={thStyle}>Source</th><th style={thStyle}>Assigned To</th><th style={thStyle}>Lead Score</th>
                     </>}
                     {detailType === 'tasks' && <>
                       <th style={thStyle}>Title</th><th style={thStyle}>Status</th><th style={thStyle}>Priority</th><th style={thStyle}>Assignee</th><th style={thStyle}>Due Date</th>

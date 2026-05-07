@@ -218,7 +218,8 @@ const Pipeline = () => {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <h4 style={{ fontWeight: '600', marginBottom: '0.5rem', paddingRight: '1rem', fontSize: '1rem' }}>{deal.title}</h4>
                         <div style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-                          <button onClick={(e) => fetchAiScore(e, deal.id)} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer' }} title="Generate AI Insights">
+                          {/* #593: tooltip dropped "AI" — /api/ai_scoring is rules-based (see backend/routes/ai_scoring.js). */}
+                          <button onClick={(e) => fetchAiScore(e, deal.id)} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer' }} title="Generate Deal Score">
                             <Zap size={16} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.filter = 'drop-shadow(0 0 5px #a855f7)'} onMouseOut={e => e.currentTarget.style.filter = 'none'} />
                           </button>
                           <button onClick={(e) => handleDelete(e, deal.id)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }} title="Delete Deal">
@@ -291,8 +292,10 @@ const Pipeline = () => {
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 150, animation: 'fadeIn 0.3s ease-out' }}>
           <div className="card" style={{ padding: '2.5rem', width: '500px', border: '1px solid #a855f7', boxShadow: '0 10px 40px rgba(168, 85, 247, 0.2)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              {/* #593: rebranded — backend/routes/ai_scoring.js is a rules engine
+                  (stage weights + budget multiplier + activity bucket). No LLM. */}
               <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Zap size={24} color="#a855f7" /> AI Predictive Insights
+                <Zap size={24} color="#a855f7" /> Deal Predictive Score
               </h3>
               <button onClick={() => setAiScoreModal(null)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={24}/></button>
             </div>
@@ -309,7 +312,7 @@ const Pipeline = () => {
               </div>
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>AI Confidence Level:</span>
+                <span style={{ color: 'var(--text-secondary)' }}>Confidence Level:</span>
                 <span style={{ padding: '0.25rem 0.75rem', borderRadius: '12px', backgroundColor: 'var(--subtle-bg-3)', fontSize: '0.875rem' }}>
                   {aiScoreModal.confidence}
                 </span>

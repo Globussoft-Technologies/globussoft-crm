@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
+import { formatPercent } from '../utils/percent';
 import { BarChart3, TrendingDown, Filter, Calendar, DollarSign, Users, Award, X } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
@@ -20,7 +21,9 @@ const cardStyle = {
 };
 
 const fmtMoney = (n) => formatMoney(Number(n || 0), { maximumFractionDigits: 0 });
-const fmtPct = (n) => (n == null || isNaN(n) ? '—' : `${Number(n).toFixed(1)}%`);
+// #639 — delegate to the shared formatPercent helper so list / detail / CSV
+// renderings stay locked to a single canonical format ("0.0%").
+const fmtPct = (n) => formatPercent(n);
 
 export default function FunnelPage() {
   const [from, setFrom] = useState('');

@@ -166,6 +166,59 @@ describe('<NotificationBell />', () => {
     });
   });
 
+  it('#622: opening the panel recomputes the badge count from the panel payload (single source of truth)', async () => {
+    // Stale /unread-count says 7 (from a previous role / impersonation
+    // context); the real panel only carries 2 unread + 1 read. The bell
+    // shows 7 on first paint, but recomputes to 2 once the dropdown opens
+    // and the panel payload arrives.
+    const user = userEvent.setup();
+    fetchApi
+      .mockResolvedValueOnce({ count: 7 }) // stale unread-count on mount
+      .mockResolvedValueOnce({
+        notifications: [
+          { id: 1, title: 'a', message: 'x', type: 'info', isRead: false, createdAt: new Date().toISOString() },
+          { id: 2, title: 'b', message: 'y', type: 'info', isRead: false, createdAt: new Date().toISOString() },
+          { id: 3, title: 'c', message: 'z', type: 'info', isRead: true, createdAt: new Date().toISOString() },
+        ],
+      });
+
+    renderWithAuth(<NotificationBell />);
+
+    const stale = await screen.findByRole('button', { name: /Notifications \(7 unread\)/ });
+    expect(stale).toBeInTheDocument();
+
+    await user.click(stale);
+
+    // After the panel fetch lands, the badge updates to the real count (2).
+    const refreshed = await screen.findByRole('button', { name: /Notifications \(2 unread\)/ });
+    expect(refreshed).toBeInTheDocument();
+    expect(refreshed.textContent).toContain('2');
+  });
+
+  it('#622: invalidates panel + badge when user identity changes (role switch)', async () => {
+    fetchApi
+      .mockResolvedValueOnce({ count: 5 }) // unread-count for user 1
+      .mockResolvedValueOnce({ count: 0 }); // unread-count for user 2 after switch
+
+    const { rerender } = renderWithAuth(<NotificationBell />, {
+      user: { id: 1, name: 'Alice' },
+    });
+
+    await screen.findByRole('button', { name: /Notifications \(5 unread\)/ });
+
+    // Simulate role switch / re-login as a different user.
+    rerender(
+      <AuthContext.Provider value={{ user: { id: 2, name: 'Bob' }, setUser: () => {}, loading: false }}>
+        <NotificationBell />
+      </AuthContext.Provider>,
+    );
+
+    // Badge must reset (no carry-over of "5" from user 1) and re-render
+    // without the unread suffix once the new identity's count lands.
+    const btn = await screen.findByRole('button', { name: /^Notifications$/ });
+    expect(btn).toBeInTheDocument();
+  });
+
   it('tolerates legacy array-shape notifications response (#113 regression guard)', async () => {
     const user = userEvent.setup();
     fetchApi

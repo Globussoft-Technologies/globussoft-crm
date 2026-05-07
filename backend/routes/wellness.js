@@ -1600,6 +1600,122 @@ router.put("/consents/:id", verifyWellnessRole(["admin"]), async (req, res) => {
   }
 });
 
+// ── #612: Consent templates CRUD ───────────────────────────────────
+//
+// Pre-fix the consent-capture dropdown rendered 5 hardcoded options
+// (hair-transplant / botox-fillers / laser / chemical-peel / general)
+// inside PatientDetail.jsx. Clinics with paediatric / procedure-specific
+// flows could not customise. These endpoints expose ConsentTemplate as a
+// per-tenant CRUD resource. Already-signed ConsentForm rows reference the
+// template by string `key` so historical signatures stay immutable when
+// templates are renamed or deleted.
+
+const SEED_CONSENT_TEMPLATES = [
+  { key: "hair-transplant", label: "Hair Transplant" },
+  { key: "botox-fillers", label: "Botox / Fillers" },
+  { key: "laser", label: "Laser Treatment" },
+  { key: "chemical-peel", label: "Chemical Peel" },
+  { key: "general", label: "General Procedure" },
+];
+
+// Auto-seed the 5 starter templates the first time a tenant lists them.
+// isSeed=true marks them so the UI can hint they're tenant-overridable.
+async function ensureSeedConsentTemplates(tenantId) {
+  const existing = await prisma.consentTemplate.count({ where: { tenantId } });
+  if (existing > 0) return;
+  for (const t of SEED_CONSENT_TEMPLATES) {
+    await prisma.consentTemplate.create({
+      data: { ...t, tenantId, isSeed: true, isActive: true },
+    }).catch(() => { /* race-safe; @@unique([tenantId,key]) blocks dup */ });
+  }
+}
+
+router.get("/consent-templates", async (req, res) => {
+  try {
+    await ensureSeedConsentTemplates(req.user.tenantId);
+    const items = await prisma.consentTemplate.findMany({
+      where: { tenantId: req.user.tenantId },
+      orderBy: [{ isActive: "desc" }, { label: "asc" }],
+    });
+    res.json(items);
+  } catch (e) {
+    console.error("[wellness] list consent-templates:", e.message);
+    res.status(500).json({ error: "Failed to list consent templates" });
+  }
+});
+
+router.post("/consent-templates", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { key, label, body, language, isActive } = req.body;
+    if (!key || !String(key).trim()) {
+      return res.status(400).json({ error: "key is required", code: "KEY_REQUIRED" });
+    }
+    if (!label || !String(label).trim()) {
+      return res.status(400).json({ error: "label is required", code: "LABEL_REQUIRED" });
+    }
+    const normalisedKey = String(key).trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+    const dup = await prisma.consentTemplate.findFirst({
+      where: { tenantId: req.user.tenantId, key: normalisedKey },
+    });
+    if (dup) {
+      return res.status(409).json({ error: "Template key already exists", code: "DUPLICATE_KEY" });
+    }
+    const created = await prisma.consentTemplate.create({
+      data: {
+        key: normalisedKey,
+        label: String(label).trim(),
+        body: body || null,
+        language: language || "en",
+        isActive: isActive === undefined ? true : !!isActive,
+        isSeed: false,
+        tenantId: req.user.tenantId,
+      },
+    });
+    res.status(201).json(created);
+  } catch (e) {
+    console.error("[wellness] create consent-template:", e.message);
+    res.status(500).json({ error: "Failed to create consent template" });
+  }
+});
+
+router.put("/consent-templates/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid template id" });
+    const existing = await prisma.consentTemplate.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
+    const data = {};
+    if (req.body.label !== undefined) data.label = String(req.body.label).trim();
+    if (req.body.body !== undefined) data.body = req.body.body || null;
+    if (req.body.language !== undefined) data.language = req.body.language || "en";
+    if (req.body.isActive !== undefined) data.isActive = !!req.body.isActive;
+    // key is immutable post-create — historical ConsentForm rows reference it.
+    const updated = await prisma.consentTemplate.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] update consent-template:", e.message);
+    res.status(500).json({ error: "Failed to update consent template" });
+  }
+});
+
+router.delete("/consent-templates/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid template id" });
+    const existing = await prisma.consentTemplate.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
+    await prisma.consentTemplate.delete({ where: { id } });
+    res.json({ success: true, deleted: true, id });
+  } catch (e) {
+    console.error("[wellness] delete consent-template:", e.message);
+    res.status(500).json({ error: "Failed to delete consent template" });
+  }
+});
+
 // ── Treatment plans ────────────────────────────────────────────────
 //
 // #420: Path consolidation. Pre-fix this resource straddled two paths —

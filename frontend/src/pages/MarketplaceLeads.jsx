@@ -1,5 +1,6 @@
 import { fetchApi } from '../utils/api';
 import { formatDateTime as formatDate } from '../utils/date';
+import { formatPercent } from '../utils/percent';
 import React, { useState, useEffect } from 'react';
 import { ShoppingBag, Search, Download, RefreshCw, Settings, CheckCircle2, XCircle, AlertCircle, ExternalLink, Filter } from 'lucide-react';
 
@@ -310,7 +311,7 @@ const MarketplaceLeads = () => {
           </div>
           <div className="card" style={{ padding: '1.25rem' }}>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Conversion Rate</p>
-            <p style={{ fontSize: '1.75rem', fontWeight: 'bold', color: '#10b981' }}>{stats.conversionRate}%</p>
+            <p style={{ fontSize: '1.75rem', fontWeight: 'bold', color: '#10b981' }}>{formatPercent(stats.conversionRate)}</p>
           </div>
           {stats.byProvider.map(p => (
             <div key={p.provider} className="card" style={{ padding: '1.25rem' }}>

@@ -52,6 +52,16 @@ async function sendMailgun(to, subject, html) {
 }
 
 // ── Audience query builder ────────────────────────────────────────
+//
+// Closes #598 — wellness vertical accepts additional segmentation keys:
+//   - patientCategory: 'new' | 'active' | 'churned'
+//       new      → createdAt within the last 30 days
+//       active   → createdAt within the last 90 days, status != 'Churned'
+//       churned  → createdAt older than 90 days OR status == 'Churned'
+//   - treatmentOfInterest: string (Contact.treatmentOfInterest column #600)
+//   - preferredPractitionerId: int (Contact.preferredPractitionerId)
+//   - preferredLocationId: int (Contact.preferredLocationId)
+// Generic filters (status / source / aiScore / tags) keep working unchanged.
 
 function buildContactWhere(tenantId, filters) {
   const where = { tenantId };
@@ -71,6 +81,38 @@ function buildContactWhere(tenantId, filters) {
         { source: { contains: t } },
       ]
     }));
+  }
+  // Wellness-vertical keys (#598). Each is independent + AND-combined.
+  if (filters.treatmentOfInterest) {
+    where.treatmentOfInterest = String(filters.treatmentOfInterest);
+  }
+  if (filters.preferredPractitionerId != null) {
+    const id = Number(filters.preferredPractitionerId);
+    if (!Number.isNaN(id)) where.preferredPractitionerId = id;
+  }
+  if (filters.preferredLocationId != null) {
+    const id = Number(filters.preferredLocationId);
+    if (!Number.isNaN(id)) where.preferredLocationId = id;
+  }
+  if (filters.patientCategory) {
+    // Contact has no updatedAt column; use createdAt windows + status as a
+    // best-effort proxy. "active" excludes the explicit Churned status; the
+    // 90-day cutoff approximates dormancy without a "lastSeen" column.
+    const cat = String(filters.patientCategory).toLowerCase();
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    if (cat === "new") {
+      where.createdAt = { gte: new Date(now - 30 * day) };
+    } else if (cat === "active") {
+      where.createdAt = { gte: new Date(now - 90 * day) };
+      if (!where.status) where.status = { not: "Churned" };
+    } else if (cat === "churned") {
+      where.OR = [
+        ...(where.OR || []),
+        { createdAt: { lt: new Date(now - 90 * day) } },
+        { status: "Churned" },
+      ];
+    }
   }
   return where;
 }
@@ -230,8 +272,9 @@ async function sendCampaign(campaign, io) {
   return { sent: sentCount, failed: failedCount };
 }
 
-// Export for cron engine
-module.exports.sendCampaign = sendCampaign;
+// (sendCampaign + helpers are re-exported via the bottom of the file — the
+// downstream `module.exports = router` clobbers any property attached above
+// it.)
 
 // ── Campaign CRUD ─────────────────────────────────────────────────
 
@@ -678,3 +721,11 @@ router.post("/submit", async (req, res) => {
 });
 
 module.exports = router;
+// Re-attach the named exports AFTER `module.exports = router` so the route
+// loader keeps getting the Express router as default, while unit tests can
+// reach helpers via `require('routes/marketing').<name>`. Express routers
+// are callable functions so attaching properties is safe.
+module.exports.sendCampaign = sendCampaign;
+// #598 — exposed for unit tests so the wellness audience-filter contract
+// can be pinned without standing up a full Express + Prisma stack.
+module.exports.__buildContactWhere = buildContactWhere;

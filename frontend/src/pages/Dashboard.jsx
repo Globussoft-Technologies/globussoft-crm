@@ -17,6 +17,7 @@ import React, { useState, useEffect } from 'react';
 import { Users, DollarSign, Activity, Calendar, TrendingUp } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatMoney, formatMoneyCompact } from '../utils/money';
+import { formatPercent } from '../utils/percent';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 
@@ -56,8 +57,11 @@ export default function Dashboard() {
   const totalRevenue = stats.wonValue || 0;
   const expectedRevenue = stats.expectedValue || 0;
   const activeLeads = contacts.length;
+  // #639 — keep the raw numeric so formatPercent renders a 1-decimal "0.0%"
+  // consistently. Pre-fix this was Math.round-d to an integer and rendered
+  // as bare "0%" / "12%", out of sync with Funnel + Reports which used 1dp.
   const conversionRate = stats.totalDeals
-    ? Math.round(((stats.wonCount || 0) / stats.totalDeals) * 100)
+    ? ((stats.wonCount || 0) / stats.totalDeals) * 100
     : 0;
   const dealCount = stats.totalDeals || 0;
 
@@ -79,7 +83,7 @@ export default function Dashboard() {
     { label: 'Closed Revenue',  value: formatMoney(totalRevenue),    icon: <DollarSign size={24} />, color: 'var(--accent-color)' },
     { label: 'Expected Revenue',value: formatMoney(expectedRevenue), icon: <Activity size={24} />,   color: 'var(--success-color)' },
     { label: 'Total Contacts',  value: activeLeads.toString(),       icon: <Users size={24} />,      color: '#3b82f6' },
-    { label: 'Conversion Rate', value: `${conversionRate}%`,         icon: <TrendingUp size={24} />, color: 'var(--warning-color)' },
+    { label: 'Conversion Rate', value: formatPercent(conversionRate),  icon: <TrendingUp size={24} />, color: 'var(--warning-color)' },
     { label: 'Total Deals',     value: dealCount.toString(),         icon: <Calendar size={24} />,   color: '#a855f7' }
   ];
 

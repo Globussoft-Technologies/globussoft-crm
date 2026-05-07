@@ -29,6 +29,12 @@ const NotificationBell = () => {
 
   const fetchNotifications = useCallback(async () => {
     try {
+      // #622 — read both the unread-count and the panel list from a single
+      // endpoint so the bell badge can never disagree with what the panel
+      // actually shows. Pre-fix the badge polled /unread-count separately
+      // and the panel pulled /api/notifications, drifting after role-switch
+      // / soft-deletes / cross-tab clears. We compute the unread count
+      // directly from the same payload that fills the panel.
       const data = await fetchApi("/api/notifications");
       // Backend returns { notifications, total, page, limit, pages }; tolerate the
       // older array shape too in case any other consumer is still on it. Crashed the
@@ -39,6 +45,11 @@ const NotificationBell = () => {
           ? data.notifications
           : [];
       setNotifications(list);
+      // Recompute the unread count from the panel payload itself — single
+      // source of truth. If the panel shows 4 items and 2 are unread, the
+      // badge reflects 2 (not 7 from a stale role's /unread-count).
+      const unread = list.filter((n) => !n.isRead).length;
+      setUnreadCount(unread);
     } catch (err) {
       // silently fail
     }
@@ -56,6 +67,18 @@ const NotificationBell = () => {
   // the socket fails to connect (nginx not proxying /socket.io, etc.), the
   // count stays accurate on the next page load — acceptable degradation
   // and still vastly better than 1.5x/sec polling.
+  // #622 — invalidate the panel + badge whenever the auth user changes
+  // (role switch, impersonation, logout/login). Pre-fix the previous
+  // identity's notifications + count hung around until the dropdown was
+  // opened, so a manager-role bell could briefly show a user-role's
+  // unread items. The next mount-effect / dropdown-open will repopulate
+  // from the correct identity.
+  const userId = user?.id;
+  useEffect(() => {
+    setNotifications([]);
+    setUnreadCount(0);
+  }, [userId]);
+
   useEffect(() => {
     fetchUnreadCount();
 

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { BarChart3, TrendingUp, Stethoscope, MapPin, IndianRupee, Download, Loader2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
+import { formatPercent } from '../../utils/percent';
 import Avatar from '../../components/Avatar';
 
 const TABS = [
@@ -374,8 +375,8 @@ function AttTable({ data }) {
               <tr key={r.source}>
                 <td style={{ ...td, width: colWidths[0] }}><strong>{r.source}</strong></td>
                 <td style={{ ...tdR, width: colWidths[1] }}>{r.leads}</td>
-                <td style={{ ...tdR, width: colWidths[2], color: r.junkRate > 70 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>{r.junkRate}%</td>
-                <td style={{ ...tdR, width: colWidths[3], color: r.conversionRate > 10 ? 'var(--success-color)' : 'var(--text-secondary)', fontWeight: r.conversionRate > 10 ? 600 : 400 }}>{r.conversionRate}%</td>
+                <td style={{ ...tdR, width: colWidths[2], color: r.junkRate > 70 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>{formatPercent(r.junkRate)}</td>
+                <td style={{ ...tdR, width: colWidths[3], color: r.conversionRate > 10 ? 'var(--success-color)' : 'var(--text-secondary)', fontWeight: r.conversionRate > 10 ? 600 : 400 }}>{formatPercent(r.conversionRate)}</td>
                 <td style={{ ...tdR, width: colWidths[4] }}>{formatMoney(r.revenue)}</td>
                 <td style={{ ...tdR, width: colWidths[5] }}>{formatMoney(r.revenuePerLead)}</td>
               </tr>

@@ -37,6 +37,13 @@ export default function OwnerDashboard() {
   const { user, tenant } = useContext(AuthContext);
   const navigate = useNavigate();
   const [data, setData] = useState(null);
+  // #565 (HI-16): canonical revenue figure for the displayed window comes
+  // from /api/wellness/reports/pnl-by-service so the Owner Dashboard's
+  // headline KPI agrees with the /wellness/reports P&L tab. Pre-fix the
+  // dashboard surfaced data.today.expectedRevenue (a different scope —
+  // scheduled-not-yet-completed) which never reconciled with the P&L
+  // page's realised-revenue total.
+  const [pnl, setPnl] = useState(null);
   const [loading, setLoading] = useState(true);
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState('');
@@ -89,6 +96,25 @@ export default function OwnerDashboard() {
       .finally(() => setLoading(false));
   }, [locationId]);
 
+  // #565: fetch the canonical P&L total for "this month so far" so the
+  // headline revenue KPI matches /wellness/reports. Window: from the 1st
+  // of the current month to today (inclusive). YYYY-MM-DD on both ends
+  // — the route's reportRange helper widens DATE_ONLY values to the full
+  // day so we get realised revenue through end-of-today.
+  useEffect(() => {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const today = String(now.getDate()).padStart(2, '0');
+    const from = `${yyyy}-${mm}-01`;
+    const to = `${yyyy}-${mm}-${today}`;
+    const qs = new URLSearchParams({ from, to });
+    if (locationId) qs.set('locationId', String(locationId));
+    fetchApi(`/api/wellness/reports/pnl-by-service?${qs.toString()}`, { silent: true })
+      .then(setPnl)
+      .catch(() => setPnl(null));
+  }, [locationId]);
+
   if (loading) return <div style={{ padding: '2rem' }}>Loading owner dashboard…</div>;
   if (!data) return <div style={{ padding: '2rem' }}>Could not load dashboard. Make sure your tenant has the Wellness vertical enabled.</div>;
 
@@ -120,6 +146,16 @@ export default function OwnerDashboard() {
       {/* KPI grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard icon={Calendar} label="Today's appointments" value={data.today.visits} sub={`${data.today.completed} completed so far`} color="var(--accent-color)" onClick={() => navigate('/wellness/calendar')} />
+        {/* #565: month-to-date realised revenue from the canonical P&L
+            endpoint, matching the figure on /wellness/reports. */}
+        <StatCard
+          icon={IndianRupee}
+          label="Revenue this month"
+          value={formatRupees(pnl?.totalRevenue)}
+          sub="from completed visits (P&L canonical)"
+          color="var(--success-color)"
+          onClick={() => navigate('/wellness/reports')}
+        />
         <StatCard icon={IndianRupee} label="Today's expected revenue" value={formatRupees(data.today.expectedRevenue)} sub="based on scheduled services" color="var(--success-color)" />
         <StatCard icon={Activity} label="Occupancy" value={`${data.today.occupancyPct}%`} sub="vs target 100%" color={data.today.occupancyPct >= 60 ? 'var(--success-color)' : 'var(--warning-color)'} />
         <StatCard icon={Users} label="New leads today" value={data.today.newLeads} sub="across all channels" color="#3b82f6" />

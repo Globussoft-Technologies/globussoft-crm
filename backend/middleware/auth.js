@@ -65,6 +65,23 @@ const verifyToken = async (req, res, next) => {
       }
     }
 
+    // #555 (HI-06): explicit tenant switching via X-Active-Tenant header.
+    // Today every user belongs to exactly one tenant (User.tenantId is an
+    // Int, no UserTenant join table) so the only legal value is the JWT's
+    // own tenantId — a no-op affirmation that lets the SPA's tenant
+    // switcher round-trip without breaking. Cross-tenant values are
+    // silently ignored (no error: a stale localStorage value from a
+    // previous session shouldn't 401 the user). When a UserTenant join
+    // table lands, this guard widens to "header value must be in the
+    // user's accessible-tenants set."
+    const activeTenantHeader = req.headers["x-active-tenant"];
+    if (activeTenantHeader) {
+      const requested = parseInt(activeTenantHeader, 10);
+      if (Number.isFinite(requested) && requested === verified.tenantId) {
+        verified.activeTenantId = requested;
+      }
+    }
+
     req.user = verified;
     next();
   } catch (err) {

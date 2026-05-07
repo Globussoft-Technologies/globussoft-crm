@@ -182,6 +182,32 @@ describe('verifyToken', () => {
     expect(req.user.tenantId).toBe(1);
   });
 
+  // #555 (HI-06): the SPA's tenant switcher mirrors the chosen tenantId
+  // into the X-Active-Tenant header on every API call. Today the only
+  // legal value is the JWT's own tenantId (single-tenant data model);
+  // cross-tenant values are silently ignored so a stale localStorage
+  // value from a previous session can't 401 the user.
+  test('X-Active-Tenant matching the JWT tenantId is mirrored into req.user.activeTenantId', async () => {
+    const token = jwt.sign({ userId: 7, role: 'USER', tenantId: 3 }, SECRET);
+    const { req, res, next } = makeReqResNext({
+      headers: { authorization: `Bearer ${token}`, 'x-active-tenant': '3' },
+    });
+    await verifyToken(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user.activeTenantId).toBe(3);
+  });
+
+  test('X-Active-Tenant NOT matching the JWT tenantId is silently ignored', async () => {
+    const token = jwt.sign({ userId: 7, role: 'USER', tenantId: 3 }, SECRET);
+    const { req, res, next } = makeReqResNext({
+      headers: { authorization: `Bearer ${token}`, 'x-active-tenant': '99' },
+    });
+    await verifyToken(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user.activeTenantId).toBeUndefined();
+    expect(req.user.tenantId).toBe(3);
+  });
+
   test('returns 401 Session revoked when jti is in RevokedToken', async () => {
     findUniqueMock.mockResolvedValueOnce({ id: 42 });
     const token = jwt.sign(

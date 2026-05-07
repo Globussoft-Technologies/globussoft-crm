@@ -2514,6 +2514,14 @@ async function computePnlByService(req) {
       visits: canonical.visits,
       revenue: canonical.revenue,
     },
+    // #565 (HI-16): canonical revenue scalar surfaced at the top level so
+    // OwnerDashboard's "today's revenue" KPI and /wellness/reports's P&L
+    // tab read from the same field. Equals sum(rows[].revenue) — the
+    // bucketed-by-service total, which is what the report's Revenue
+    // column displays. Pre-fix, OwnerDashboard pulled its revenue from
+    // /api/wellness/dashboard's own client-side aggregation, producing
+    // a different figure than the P&L page for the same window.
+    totalRevenue: bucketedRevenue,
     servicesSummary,
     rows,
   };

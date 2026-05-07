@@ -61,6 +61,12 @@ router.get('/', async (req, res) => {
     if (req.query.unassigned === 'true') where.assignedToId = null;
     // #167: hide soft-deleted rows by default; admin views can opt in.
     applyDeletedAtFilter(where, req.query.includeDeleted === 'true');
+    // #588: USER role sees only contacts assigned to them; ADMIN/MANAGER see
+    // full tenant. Mirrors the deals-list scoping. An explicit ?assignedToId
+    // from a USER is overridden by their own userId — a sales rep cannot
+    // probe a colleague's book of business by URL. Total Contacts KPI on
+    // /dashboard now reflects own-book size for sales reps.
+    if (req.user.role === 'USER') where.assignedToId = req.user.userId;
     // #172: honor limit / offset query params with sensible defaults + a hard cap.
     // Pre-fix the API silently returned the entire dataset, breaking pagination
     // and exposing a perf/DoS surface.

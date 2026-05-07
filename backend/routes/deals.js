@@ -51,6 +51,10 @@ router.get("/", async (req, res) => {
       if (to) where.createdAt.lte = new Date(to);
     }
     if (req.query.includeDeleted !== "true") where.deletedAt = null;
+    // #588: USER role sees only their own deals; ADMIN/MANAGER see full
+    // tenant. An explicit ?ownerId= from a USER is overridden by their own
+    // userId — a sales rep cannot probe a colleague's pipeline by URL.
+    if (req.user.role === "USER") where.ownerId = req.user.userId;
 
     // #172: pagination support (was ignored entirely pre-fix).
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
@@ -80,10 +84,19 @@ router.get("/", async (req, res) => {
 // deleted rows excluded (dashboard never shows them). Existing fields
 // (totalDeals, totalValue, avgDealSize, winRate, byStage, closedThisMonth)
 // preserved — additive change, doesn't break existing /stats consumers.
+//
+// #588: USER role gets own-deal scope (ownerId = req.user.userId);
+// ADMIN/MANAGER continue to see full-tenant aggregates because they manage
+// the org. Pre-fix, a sales rep saw the same $1.55M closed / 551 deals as
+// the Admin — information disclosure that mirrored the wellness-tenant gap
+// in #207. Mirrors the per-rep filter pattern already documented in the
+// list endpoint's `?ownerId=` query support.
 router.get("/stats", async (req, res) => {
   try {
     const tid = req.user.tenantId;
-    const deals = await prisma.deal.findMany({ where: { tenantId: tid, deletedAt: null } });
+    const where = { tenantId: tid, deletedAt: null };
+    if (req.user.role === "USER") where.ownerId = req.user.userId;
+    const deals = await prisma.deal.findMany({ where });
 
     const totalDeals = deals.length;
     const totalValue = deals.reduce((s, d) => s + (d.amount || 0), 0);

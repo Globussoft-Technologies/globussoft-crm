@@ -350,6 +350,107 @@ test.describe('Deals API — GET /stats', () => {
       expect(typeof row.value).toBe('number');
     }
   });
+
+  // #588: regression — USER role hitting /api/deals/stats must see only
+  // their own deals; ADMIN/MANAGER see the full-tenant aggregate. Pre-fix,
+  // user@crm.com saw the same $1.55M closed / 551 deals as admin —
+  // information disclosure (closed revenue, count of colleagues' deals,
+  // total contacts) on the dashboard's Enterprise Overview tiles.
+  test('#588 — USER /stats is scoped to ownerId, ADMIN sees full tenant', async ({ request }) => {
+    const { token: aToken } = await getAdmin(request);
+    const { token: uToken, userId: userIdU } = await getUser(request);
+    test.skip(!aToken || !uToken, 'admin or user token unavailable');
+
+    // Three deals owned by Admin (default ownerId = creator on POST).
+    const adminDeals = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await post(request, aToken, '/api/deals', {
+        title: `${RUN_TAG} #588-admin-${i}`,
+        amount: 1000 + i,
+        stage: 'lead',
+      });
+      expect(r.status()).toBe(201);
+      const d = await r.json();
+      createdDealIds.push(d.id);
+      adminDeals.push(d);
+    }
+    // Two deals owned by USER.
+    const userDeals = [];
+    for (let i = 0; i < 2; i++) {
+      const r = await post(request, uToken, '/api/deals', {
+        title: `${RUN_TAG} #588-user-${i}`,
+        amount: 2000 + i,
+        stage: 'lead',
+      });
+      expect(r.status()).toBe(201);
+      const d = await r.json();
+      createdDealIds.push(d.id);
+      expect(d.ownerId).toBe(userIdU);
+      userDeals.push(d);
+    }
+
+    // ADMIN-token /stats: full-tenant counts. Since other tests + seed deals
+    // exist, assert that all 5 created deals are reflected (totalDeals >=
+    // adminBefore + 5) and that totalValue >= sum of the new amounts.
+    const adminStats = await (await get(request, aToken, '/api/deals/stats')).json();
+    const newAmountSum = [...adminDeals, ...userDeals].reduce((s, d) => s + d.amount, 0);
+    expect(adminStats.totalDeals).toBeGreaterThanOrEqual(5);
+    expect(adminStats.totalValue).toBeGreaterThanOrEqual(newAmountSum);
+
+    // USER-token /stats: own-scope counts. Created exactly 2 USER-owned
+    // deals in this test, with summed amount = 4001. Other tests in the
+    // file may also create USER-owned rows via getUser, so assert >= 2 and
+    // exclude the 3 admin-owned deals from the user's totalValue.
+    const userStats = await (await get(request, uToken, '/api/deals/stats')).json();
+    expect(userStats.totalDeals).toBeGreaterThanOrEqual(2);
+    expect(userStats.totalDeals).toBeLessThan(adminStats.totalDeals);
+    // The user's 2 new deals contribute exactly 4001; admin's 3 contribute
+    // 3003. The user must not see admin's 3003 in their aggregate.
+    const userOwnedSum = userDeals.reduce((s, d) => s + d.amount, 0);
+    const adminOwnedSum = adminDeals.reduce((s, d) => s + d.amount, 0);
+    expect(userStats.totalValue).toBeGreaterThanOrEqual(userOwnedSum);
+    // Bound: user can't see admin's $3003 contribution. If userStats.totalValue
+    // included admin deals, it would be >= adminOwnedSum + userOwnedSum.
+    // We assert it stays below that threshold (other USER-owned rows in
+    // the tenant may push it above userOwnedSum but never include the
+    // admin-owned $3003 unless scoping is broken).
+    const wouldBeIfLeaked = adminStats.totalValue;
+    expect(userStats.totalValue).toBeLessThan(wouldBeIfLeaked);
+  });
+
+  // #588: regression — USER /api/deals (list) must also be ownerId-scoped.
+  // Dashboard.jsx pulls /api/deals?limit=10 for "Recent Deals" alongside
+  // /stats; both must respect the role boundary or the tile shows other
+  // reps' deal titles.
+  test('#588 — USER /api/deals list is scoped to ownerId', async ({ request }) => {
+    const { token: aToken, userId: adminId } = await getAdmin(request);
+    const { token: uToken, userId: userIdU } = await getUser(request);
+    test.skip(!aToken || !uToken, 'admin or user token unavailable');
+
+    const r = await post(request, aToken, '/api/deals', {
+      title: `${RUN_TAG} #588-list-admin-only`,
+      amount: 99,
+      stage: 'lead',
+    });
+    expect(r.status()).toBe(201);
+    const adminOnlyDeal = await r.json();
+    createdDealIds.push(adminOnlyDeal.id);
+
+    const userList = await (await get(request, uToken, '/api/deals?limit=500')).json();
+    expect(Array.isArray(userList)).toBe(true);
+    // Every row visible to the USER must be owned by them.
+    for (const row of userList) {
+      expect(row.ownerId).toBe(userIdU);
+    }
+    // The admin-owned deal must NOT appear in the USER's list.
+    expect(userList.find((d) => d.id === adminOnlyDeal.id)).toBeFalsy();
+
+    // Sanity: ADMIN's list does include the admin-owned deal.
+    const adminList = await (await get(request, aToken, '/api/deals?limit=500')).json();
+    expect(adminList.find((d) => d.id === adminOnlyDeal.id)).toBeTruthy();
+    // Use adminId to avoid unused-var lint flag.
+    expect(typeof adminId === 'number' || adminId === null).toBe(true);
+  });
 });
 
 // ─── GET /api/deals/:id ──────────────────────────────────────────────

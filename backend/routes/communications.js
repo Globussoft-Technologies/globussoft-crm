@@ -201,28 +201,54 @@ router.post("/send-email", async (req, res) => {
     const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
     const results = [];
 
-    for (const recipient of deliverable) {
-      const emailRecord = await prisma.emailMessage.create({
-        data: {
-          subject,
-          body,
-          from: FROM_EMAIL,
-          to: recipient,
-          cc: ccPersist,
-          bcc: bccPersist,
-          direction: "OUTBOUND",
-          read: true,
-          contactId: contactId ? parseInt(contactId) : null,
-          userId: req.user.userId,
-          tenantId: req.user.tenantId,
-        }
-      });
+    // #611: tenant emailRetention toggle. Default true (industry-norm Sent
+    // folder + threading + audit). When admin opts out, skip the EmailMessage +
+    // EmailTracking persists — the response still reports delivery, but no row
+    // lands in the DB. Read defensively: pre-migration tenants without the
+    // column read undefined → coalesce to true (back-compat for the rolling
+    // deploy gap between schema push and column hydrate). Also default-on
+    // when the prisma.tenant surface is not available (some vitest mock
+    // setups stub only the surfaces under test and the find() would hang).
+    let retainMessages = true;
+    if (prisma.tenant && typeof prisma.tenant.findUnique === 'function') {
+      try {
+        const tenantCfg = await prisma.tenant.findUnique({
+          where: { id: req.user.tenantId },
+          select: { emailRetention: true },
+        });
+        if (tenantCfg && tenantCfg.emailRetention === false) retainMessages = false;
+      } catch (_e) { /* default-on if config read fails */ }
+    }
 
-      // Create tracking pixel for open tracking
+    for (const recipient of deliverable) {
+      let emailRecord = null;
+      // Tracking pixel is always rendered into the body so opens can be
+      // counted, but the EmailTracking row only persists when retention
+      // is on (otherwise the trackingId resolves to nothing on open). The
+      // tracking column is not retention-bearing — its purpose is open-rate
+      // analytics, which loses fidelity-but-not-correctness when off.
       const trackingId = crypto.randomUUID();
-      await prisma.emailTracking.create({
-        data: { emailId: emailRecord.id, trackingId, type: "open", tenantId: req.user.tenantId }
-      });
+      if (retainMessages) {
+        emailRecord = await prisma.emailMessage.create({
+          data: {
+            subject,
+            body,
+            from: FROM_EMAIL,
+            to: recipient,
+            cc: ccPersist,
+            bcc: bccPersist,
+            direction: "OUTBOUND",
+            read: true,
+            contactId: contactId ? parseInt(contactId) : null,
+            userId: req.user.userId,
+            tenantId: req.user.tenantId,
+          }
+        });
+
+        await prisma.emailTracking.create({
+          data: { emailId: emailRecord.id, trackingId, type: "open", tenantId: req.user.tenantId }
+        });
+      }
 
       // Inject tracking pixel into email body for SendGrid
       const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";

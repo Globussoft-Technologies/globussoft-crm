@@ -1,10 +1,27 @@
 const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
+const PDFDocument = require("pdfkit");
 const prisma = require("../lib/prisma");
 const { verifyRole } = require("../middleware/auth");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { httpFromPrismaError } = require("../lib/validators");
+
+// Lightweight currency formatter for inline PDF rendering. Mirrors the
+// pattern at backend/routes/billing.js (invoice PDF) — Intl.NumberFormat
+// with the tenant's currency + locale; fall through to USD on missing.
+function fmtMoney(amount, currency = "USD", locale) {
+  try {
+    return new Intl.NumberFormat(locale || "en-US", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 2,
+    }).format(Number(amount) || 0);
+  } catch (_e) {
+    return `${currency} ${(Number(amount) || 0).toFixed(2)}`;
+  }
+}
 
 // #168: shared validators so PUT mirrors POST. POST already inlines these
 // checks; PUT historically skipped them and returned 500 on bad input.
@@ -350,6 +367,219 @@ router.post("/:id/restore", verifyRole(["ADMIN"]), async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to restore estimate" });
+  }
+});
+
+// #603: per-row PDF + Email actions for the Estimates list. Pre-fix the
+// Estimates list only had Open/Edit; users had to navigate into the row
+// detail to download a PDF or email a customer. Mirrors the per-row
+// PDF/email pattern already in billing.js (Invoices).
+
+// GET /api/estimates/:id/pdf — stream a PDF rendering of the estimate.
+router.get("/:id/pdf", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid estimate ID" });
+    const estimate = await prisma.estimate.findFirst({
+      where: { id, tenantId: req.user.tenantId, deletedAt: null },
+      include: { contact: true, lineItems: true, deal: true },
+    });
+    if (!estimate) return res.status(404).json({ error: "Estimate not found" });
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { name: true, defaultCurrency: true, locale: true },
+    });
+    const currency = tenant?.defaultCurrency || "USD";
+    const locale = tenant?.locale || undefined;
+
+    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    const filename = `${estimate.estimateNum || "EST-" + estimate.id}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+    doc.pipe(res);
+
+    doc.fontSize(22).font("Helvetica-Bold").text(tenant?.name || "Globussoft CRM", 50, 50);
+    doc.fontSize(10).font("Helvetica").fillColor("#666666").text("Estimate", 50, 78);
+
+    doc.fillColor("#000000").fontSize(14).font("Helvetica-Bold")
+      .text(`Estimate: ${estimate.estimateNum || "N/A"}`, 50, 120);
+    doc.fontSize(10).font("Helvetica").fillColor("#333333");
+    doc.text(`Title: ${estimate.title || ""}`, 50, 145);
+    doc.text(`Status: ${estimate.status || "Draft"}`, 50, 162);
+    doc.text(`Issued: ${new Date(estimate.createdAt).toLocaleDateString()}`, 50, 179);
+    if (estimate.validUntil) {
+      doc.text(`Valid until: ${new Date(estimate.validUntil).toLocaleDateString()}`, 50, 196);
+    }
+
+    doc.fontSize(12).font("Helvetica-Bold").fillColor("#000000")
+      .text("Bill To:", 50, 230);
+    doc.fontSize(10).font("Helvetica").fillColor("#333333")
+      .text(estimate.contact?.name || "(no contact)", 50, 248)
+      .text(estimate.contact?.email || "", 50, 263)
+      .text(estimate.contact?.company || "", 50, 278);
+
+    doc.moveTo(50, 310).lineTo(545, 310).strokeColor("#cccccc").stroke();
+
+    doc.fillColor("#ffffff").rect(50, 325, 495, 28).fill("#3b82f6");
+    doc.fillColor("#ffffff").fontSize(10).font("Helvetica-Bold")
+      .text("Description", 60, 333)
+      .text("Qty", 340, 333)
+      .text("Unit", 400, 333, { width: 60, align: "right" })
+      .text("Total", 470, 333, { width: 70, align: "right" });
+
+    let y = 365;
+    doc.fillColor("#333333").font("Helvetica").fontSize(10);
+    for (const li of estimate.lineItems || []) {
+      const lineTotal = (Number(li.quantity) || 0) * (Number(li.unitPrice) || 0);
+      doc.text(li.description || "", 60, y, { width: 270 })
+        .text(String(li.quantity || 0), 340, y)
+        .text(fmtMoney(li.unitPrice, currency, locale), 400, y, { width: 60, align: "right" })
+        .text(fmtMoney(lineTotal, currency, locale), 470, y, { width: 70, align: "right" });
+      y += 22;
+    }
+
+    y += 10;
+    doc.moveTo(50, y).lineTo(545, y).strokeColor("#cccccc").stroke();
+    y += 10;
+    doc.fontSize(12).font("Helvetica-Bold").fillColor("#000000")
+      .text("Total:", 380, y, { width: 80, align: "right" })
+      .text(fmtMoney(estimate.totalAmount, currency, locale), 470, y, { width: 70, align: "right" });
+
+    if (estimate.notes) {
+      y += 50;
+      doc.fontSize(10).font("Helvetica").fillColor("#555555")
+        .text("Notes:", 50, y).text(estimate.notes, 50, y + 16, { width: 495 });
+    }
+
+    doc.end();
+  } catch (err) {
+    console.error("[estimates] pdf error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to generate estimate PDF" });
+    }
+  }
+});
+
+// POST /api/estimates/:id/email — email the estimate (with PDF link) to its
+// linked contact. Records an EmailMessage row + Activity. The actual SendGrid
+// dispatch reuses the same env var as routes/communications.js.
+router.post("/:id/email", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid estimate ID" });
+    const estimate = await prisma.estimate.findFirst({
+      where: { id, tenantId: req.user.tenantId, deletedAt: null },
+      include: { contact: true, lineItems: true },
+    });
+    if (!estimate) return res.status(404).json({ error: "Estimate not found" });
+
+    // Allow override via body.to; default to the linked contact.
+    const to = (req.body && req.body.to) || estimate.contact?.email;
+    if (!to) {
+      return res.status(400).json({
+        error: "Estimate has no contact email; pass `to` in the request body.",
+        code: "NO_RECIPIENT",
+      });
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { name: true, defaultCurrency: true, locale: true, emailRetention: true },
+    });
+    const currency = tenant?.defaultCurrency || "USD";
+    const locale = tenant?.locale || undefined;
+    const senderName = tenant?.name || "Globussoft CRM";
+
+    const subject = req.body?.subject || `Estimate ${estimate.estimateNum} from ${senderName}`;
+    const body = req.body?.body || (
+      `Hello ${estimate.contact?.name || "there"},\n\n` +
+      `Please find your estimate "${estimate.title}" for a total of ` +
+      `${fmtMoney(estimate.totalAmount, currency, locale)}.\n\n` +
+      (estimate.validUntil
+        ? `Valid until: ${new Date(estimate.validUntil).toLocaleDateString()}\n\n`
+        : "") +
+      `Thanks,\n${senderName}`
+    );
+
+    // Persist the EmailMessage row when retention is on (#611).
+    let emailRecord = null;
+    const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
+    if (tenant?.emailRetention !== false) {
+      emailRecord = await prisma.emailMessage.create({
+        data: {
+          subject,
+          body,
+          from: FROM_EMAIL,
+          to,
+          direction: "OUTBOUND",
+          read: true,
+          contactId: estimate.contactId || null,
+          userId: req.user.userId,
+          tenantId: req.user.tenantId,
+        },
+      });
+    }
+
+    // Best-effort SendGrid dispatch. If the key isn't configured (CI / local
+    // dev), the row still lands but `delivered` is false.
+    let delivered = false;
+    let reason = "no_api_key";
+    if (process.env.SENDGRID_API_KEY) {
+      try {
+        const r = await fetch("https://api.sendgrid.com/v3/mail/send", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env.SENDGRID_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            personalizations: [{ to: [{ email: to }] }],
+            from: { email: FROM_EMAIL, name: senderName },
+            subject,
+            content: [{ type: "text/plain", value: body }],
+          }),
+        });
+        delivered = r.ok;
+        if (!r.ok) reason = `sendgrid_${r.status}`;
+      } catch (err) {
+        reason = err.message || "send_error";
+      }
+    }
+
+    if (estimate.contactId) {
+      await prisma.activity.create({
+        data: {
+          type: "Email",
+          description: `Sent estimate ${estimate.estimateNum}: "${estimate.title}"`,
+          contactId: estimate.contactId,
+          userId: req.user.userId,
+          tenantId: req.user.tenantId,
+        },
+      }).catch(() => { /* non-critical */ });
+    }
+
+    // Flip status from Draft → Sent on first email so the ledger reflects it.
+    if (estimate.status === "Draft") {
+      try {
+        await prisma.estimate.update({ where: { id: estimate.id }, data: { status: "Sent" } });
+      } catch (_e) { /* ignore */ }
+    }
+
+    await writeAudit('Estimate', 'EMAIL', estimate.id, req.user.userId, req.user.tenantId, {
+      to, delivered, retainedMessage: !!emailRecord,
+    }).catch(() => { /* audit non-critical */ });
+
+    res.json({
+      success: true,
+      delivered,
+      to,
+      email: emailRecord,
+      ...(delivered ? {} : { reason }),
+    });
+  } catch (err) {
+    console.error("[estimates] email error:", err);
+    res.status(500).json({ error: "Failed to email estimate" });
   }
 });
 

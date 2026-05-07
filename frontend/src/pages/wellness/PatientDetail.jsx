@@ -543,6 +543,22 @@ function ConsentTab({ patient, services, onSaved }) {
   const [serviceId, setServiceId] = useState('');
   const [saving, setSaving] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
+  // #612: tenant-configurable consent templates. Pre-fix the dropdown was
+  // hardcoded to 5 options; now it loads from /api/wellness/consent-templates
+  // and falls back to the seeded list if the endpoint is unreachable.
+  const [templates, setTemplates] = useState([]);
+  useEffect(() => {
+    fetchApi('/api/wellness/consent-templates')
+      .then((res) => {
+        const list = Array.isArray(res) ? res.filter((t) => t.isActive !== false) : [];
+        setTemplates(list);
+        if (list.length > 0 && !list.some((t) => t.key === templateName)) {
+          setTemplateName(list[0].key);
+        }
+      })
+      .catch(() => { /* fall back to legacy hardcoded options below */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Track whether the patient has actually drawn anything on the canvas. Without
   // this guard, canvas.toDataURL() always returns a valid (but empty) PNG and the
   // server stores a blank "signature" — a legal/compliance issue (#118).
@@ -681,11 +697,20 @@ function ConsentTab({ patient, services, onSaved }) {
         <div>
           <label style={labelStyle}>Template</label>
           <select value={templateName} onChange={(e) => setTemplateName(e.target.value)} style={inputStyle}>
-            <option value="hair-transplant">Hair Transplant</option>
-            <option value="botox-fillers">Botox / Fillers</option>
-            <option value="laser">Laser Treatment</option>
-            <option value="chemical-peel">Chemical Peel</option>
-            <option value="general">General Procedure</option>
+            {/* #612: tenant-configurable templates from /api/wellness/consent-templates.
+                Falls back to the legacy hardcoded 5 when the endpoint returns nothing
+                (e.g. pre-seed call on a brand-new tenant before the GET fires). */}
+            {templates.length > 0 ? (
+              templates.map((t) => <option key={t.id} value={t.key}>{t.label}</option>)
+            ) : (
+              <>
+                <option value="hair-transplant">Hair Transplant</option>
+                <option value="botox-fillers">Botox / Fillers</option>
+                <option value="laser">Laser Treatment</option>
+                <option value="chemical-peel">Chemical Peel</option>
+                <option value="general">General Procedure</option>
+              </>
+            )}
           </select>
         </div>
         <div>

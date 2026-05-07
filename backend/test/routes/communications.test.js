@@ -84,6 +84,10 @@ prisma.emailTracking = {
 prisma.activity = {
   create: vi.fn(),
 };
+// #611: send-email reads tenant.emailRetention to decide whether to persist.
+// Stub the surface so the route doesn't try to hit a real DB.
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn().mockResolvedValue({ emailRetention: true });
 
 import express from 'express';
 import request from 'supertest';

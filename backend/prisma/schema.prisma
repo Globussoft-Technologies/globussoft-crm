@@ -69,6 +69,11 @@ model Tenant {
   // Agent C: white-label branding
   logoUrl         String? // path to uploaded logo, e.g. /uploads/branding/tenant-2/logo.png
   brandColor      String? // hex like #265855, overrides theme accent when set
+  // #611: when true, OUTBOUND EmailMessage rows are persisted on send
+  // (industry default — Sent folder, threading, audit trail). Admins
+  // may opt out for storage / compliance reasons; existing tenants
+  // pre-flag default to true at first read of the column.
+  emailRetention  Boolean  @default(true)
   isActive        Boolean  @default(true)
   ownerEmail      String?
   createdAt       DateTime @default(now())
@@ -127,6 +132,7 @@ model Tenant {
   visits               Visit[]
   prescriptions        Prescription[]
   consentForms         ConsentForm[]
+  consentTemplates     ConsentTemplate[]
   treatmentPlans       TreatmentPlan[]
   serviceConsumptions  ServiceConsumption[]
   agentRecommendations AgentRecommendation[]
@@ -2326,6 +2332,31 @@ model ConsentForm {
 
   @@index([tenantId, signedAt])
   @@index([patientId])
+}
+
+/// #612: per-tenant consent template catalogue. Pre-fix the consent
+/// dropdown rendered 5 hardcoded options (hair-transplant / botox-fillers
+/// / laser / chemical-peel / general). Clinics with paediatric or
+/// procedure-specific flows had no way to add their own legally-vetted
+/// wording. This row stores the editable catalogue; ConsentForm.templateName
+/// continues to reference the chosen template by string key (immutable
+/// once signed — that's the whole point).
+model ConsentTemplate {
+  id          Int      @id @default(autoincrement())
+  key         String // stable identifier used by ConsentForm.templateName
+  label       String // human-readable name shown in dropdown
+  body        String?  @db.LongText // optional HTML body for the consent form
+  language    String   @default("en")
+  isActive    Boolean  @default(true)
+  isSeed      Boolean  @default(false) // true for the 5 seeded starter rows
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, key])
+  @@index([tenantId, isActive])
 }
 
 model TreatmentPlan {

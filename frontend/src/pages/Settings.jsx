@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette, Monitor } from 'lucide-react';
+import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette, Monitor, Mail, FileSignature } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { ThemeContext, AuthContext } from '../App';
@@ -22,6 +22,10 @@ export default function Settings() {
   const [stagesLoading, setStagesLoading] = useState(true);
   const [tenant, setTenantState] = useState(ctxTenant || null);
   const [tenantSaving, setTenantSaving] = useState(false);
+  // #611: email-message retention toggle. Industry-default ON for any CRM
+  // that claims to track customer comms. Pre-fix the default was OFF, sent
+  // emails vanished, Sent folder stayed empty, threading broke.
+  const [emailRetentionSaving, setEmailRetentionSaving] = useState(false);
   // Branding (logo + brand color) — backed by /api/wellness/branding
   const [branding, setBranding] = useState({ logoUrl: null, brandColor: '' });
   const [brandingSaving, setBrandingSaving] = useState(false);
@@ -102,6 +106,32 @@ export default function Settings() {
       notify.error('Failed to update organization');
     }
     setTenantSaving(false);
+  };
+
+  // #611: toggle EmailMessage retention. Optimistic UI — we flip first, then
+  // PUT; revert on failure so the toggle always matches what's persisted.
+  const handleToggleEmailRetention = async (next) => {
+    if (!tenant) return;
+    const prevValue = tenant.emailRetention !== false; // default true
+    setTenantState({ ...tenant, emailRetention: next });
+    setEmailRetentionSaving(true);
+    try {
+      const updated = await fetchApi('/api/tenants/current', {
+        method: 'PUT',
+        body: JSON.stringify({ emailRetention: next }),
+      });
+      setTenantState(updated);
+      if (setTenant) setTenant(updated);
+      notify.success(next
+        ? 'Sent emails will now be stored (Sent folder + audit trail).'
+        : 'Sent emails will not be stored. Threading will be limited.');
+    } catch (err) {
+      // Revert optimistic flip
+      setTenantState({ ...tenant, emailRetention: prevValue });
+      notify.error('Failed to update email retention');
+    } finally {
+      setEmailRetentionSaving(false);
+    }
   };
 
   const fetchStages = () => {
@@ -365,6 +395,47 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* Email Messages Card — #611 retention toggle */}
+        {tenant && (
+          <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }} data-testid="email-retention-card">
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Mail size={20} color="var(--accent-color)" /> Email Messages
+            </h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+              Store sent messages so they appear in the Sent folder, the contact's
+              activity timeline, and so reply threading works. Recommended for
+              any team that needs an audit trail of customer comms.
+            </p>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={tenant.emailRetention !== false}
+                disabled={emailRetentionSaving}
+                onChange={(e) => handleToggleEmailRetention(e.target.checked)}
+                aria-label="Store sent email messages"
+                data-testid="email-retention-toggle"
+                style={{ width: 18, height: 18, cursor: 'pointer' }}
+              />
+              <span style={{ fontWeight: 500 }}>
+                Store sent messages
+                {emailRetentionSaving && <span style={{ marginLeft: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>(saving…)</span>}
+              </span>
+            </label>
+            {tenant.emailRetention === false && (
+              <p style={{ marginTop: '0.75rem', padding: '0.6rem 0.85rem', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, color: '#d97706', fontSize: '0.8rem' }}>
+                Retention is OFF. Sent emails won't appear in the Sent folder, the
+                contact timeline body will be blank, and reply threading will not
+                link replies to their parent.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Consent Templates — wellness only (#612) */}
+        {tenant && tenant.vertical === 'wellness' && (
+          <ConsentTemplatesCard notify={notify} />
+        )}
+
         {/* Branding Card */}
         <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -562,6 +633,111 @@ export default function Settings() {
         </div>
 
       </div>
+    </div>
+  );
+}
+
+// #612: per-tenant consent template CRUD. Wellness-only — gated by
+// tenant.vertical === 'wellness' at the call site. Pre-fix the consent
+// dropdown was hardcoded to 5 procedure types; clinics with paediatric or
+// procedure-specific flows had no way to add their own legally-vetted
+// wording. The first GET auto-seeds the 5 starter rows server-side.
+function ConsentTemplatesCard({ notify }) {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [newTemplate, setNewTemplate] = useState({ key: '', label: '', body: '' });
+
+  const load = () => {
+    fetchApi('/api/wellness/consent-templates')
+      .then((res) => { setTemplates(Array.isArray(res) ? res : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const create = async (e) => {
+    e.preventDefault();
+    if (!newTemplate.key.trim() || !newTemplate.label.trim()) return;
+    setCreating(true);
+    try {
+      await fetchApi('/api/wellness/consent-templates', {
+        method: 'POST',
+        body: JSON.stringify(newTemplate),
+      });
+      setNewTemplate({ key: '', label: '', body: '' });
+      load();
+      notify.success('Consent template created');
+    } catch (err) {
+      notify.error(err?.message || 'Failed to create template');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const toggleActive = async (t) => {
+    try {
+      await fetchApi(`/api/wellness/consent-templates/${t.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ isActive: !t.isActive }),
+      });
+      load();
+    } catch {
+      notify.error('Failed to update template');
+    }
+  };
+
+  const remove = async (t) => {
+    if (!await notify.confirm({
+      title: 'Delete consent template?',
+      message: `"${t.label}" will be removed from the dropdown. Already-signed forms keep their original template name.`,
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
+    try {
+      await fetchApi(`/api/wellness/consent-templates/${t.id}`, { method: 'DELETE' });
+      load();
+    } catch {
+      notify.error('Failed to delete template');
+    }
+  };
+
+  return (
+    <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }} data-testid="consent-templates-card">
+      <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <FileSignature size={20} color="var(--accent-color)" /> Consent Templates
+      </h3>
+      <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+        Manage the consent forms shown when capturing patient signatures. Add
+        procedure-specific or paediatric variants. Templates are tenant-scoped.
+      </p>
+      {loading ? <p>Loading…</p> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
+          {templates.length === 0 && (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No templates yet.</p>
+          )}
+          {templates.map((t) => (
+            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.75rem 1rem', background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: 8, opacity: t.isActive ? 1 : 0.55 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontWeight: 500 }}>{t.label} {t.isSeed && <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>(starter)</span>}</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>key: {t.key}</div>
+              </div>
+              <button type="button" onClick={() => toggleActive(t)} style={{ background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', padding: '0.3rem 0.65rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.75rem' }}>
+                {t.isActive ? 'Disable' : 'Enable'}
+              </button>
+              <button type="button" onClick={() => remove(t)} aria-label={`Delete template ${t.label}`} style={{ background: 'transparent', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', padding: '0.25rem' }}>
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <form onSubmit={create} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.75rem' }}>
+        <input type="text" placeholder="Key (e.g. paediatric)" required className="input-field" value={newTemplate.key} onChange={(e) => setNewTemplate({ ...newTemplate, key: e.target.value })} />
+        <input type="text" placeholder="Label (e.g. Paediatric Consent)" required className="input-field" value={newTemplate.label} onChange={(e) => setNewTemplate({ ...newTemplate, label: e.target.value })} />
+        <button type="submit" className="btn-primary" disabled={creating} style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', whiteSpace: 'nowrap' }}>
+          <Plus size={16} /> {creating ? 'Adding…' : 'Add Template'}
+        </button>
+      </form>
     </div>
   );
 }

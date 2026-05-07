@@ -133,12 +133,20 @@ export default function Channels() {
   const [showEditor, setShowEditor] = useState(false);
   const [editorMode, setEditorMode] = useState('create'); // 'create' | 'edit'
   const [form, setForm] = useState({});
-  const [configForm, setConfigForm] = useState({});
+  // #586: per-provider config state, keyed by provider name (msg91, twilio,
+  // meta_cloud, myoperator, knowlarity). Pre-fix this was a single shared
+  // `configForm` object → (a) typing in MSG91 + then Twilio cards collided
+  // because both share field keys (apiKey, senderId, etc.); (b) inputs were
+  // uncontrolled and there was no useEffect to load existing rows back, so
+  // after a successful save + page refresh, every input rendered empty and
+  // the Enable checkbox unchecked — operators perceived this as "save did
+  // not persist" even though the backend upsert worked correctly.
+  const [configsByProvider, setConfigsByProvider] = useState({});
   const [copied, setCopied] = useState('');
   const [showSend, setShowSend] = useState(null); // template object when sending
   const [showPreview, setShowPreview] = useState(null); // template object when previewing
 
-  useEffect(() => { loadTemplates(); }, [activeTab]);
+  useEffect(() => { loadTemplates(); loadConfigs(); }, [activeTab]);
 
   const loadTemplates = async () => {
     try {
@@ -149,10 +157,56 @@ export default function Channels() {
     } catch { setTemplates([]); }
   };
 
-  const handleSaveConfig = async (provider, endpoint) => {
+  // #586: fetch the saved config rows for the active tab and populate the
+  // per-provider state map so inputs render the persisted values on mount /
+  // after a refresh. The GET endpoints return masked secrets (apiKey trimmed
+  // to 6 chars + "****", accessToken/authToken/apiSecret similarly masked) —
+  // the masked value is fine for display; if the user wants to rotate the
+  // credential they retype the field, otherwise the masked value passes
+  // through on save and the upsert leaves the column untouched (the route's
+  // `apiKey !== undefined` guard handles partial updates).
+  const loadConfigs = async () => {
     try {
-      await fetchApi(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...configForm, isActive: configForm.isActive ?? false }) });
+      let endpoint = null;
+      if (activeTab === 'sms') endpoint = '/api/sms/config';
+      else if (activeTab === 'whatsapp') endpoint = '/api/whatsapp/config';
+      else if (activeTab === 'telephony') endpoint = '/api/telephony/config';
+      if (!endpoint) { setConfigsByProvider({}); return; }
+      const rows = await fetchApi(endpoint);
+      const next = {};
+      for (const r of (Array.isArray(rows) ? rows : [])) {
+        if (r && r.provider) next[r.provider] = r;
+      }
+      setConfigsByProvider(next);
+    } catch { setConfigsByProvider({}); }
+  };
+
+  const updateProviderField = (providerKey, field, value) => {
+    setConfigsByProvider(prev => ({
+      ...prev,
+      [providerKey]: { ...(prev[providerKey] || { provider: providerKey }), [field]: value },
+    }));
+  };
+
+  const handleSaveConfig = async (providerKey, endpoint) => {
+    try {
+      const cfg = configsByProvider[providerKey] || {};
+      // Strip masked-secret sentinels: GET masks apiKey to "TEST-A****", so
+      // if the user didn't retype the field we shouldn't echo the masked
+      // value back as the new credential. The route's `apiKey !== undefined`
+      // guard means dropping the key from the body leaves the DB column
+      // untouched.
+      const { id: _id, createdAt: _c, updatedAt: _u, tenantId: _t, ...rest } = cfg;
+      const payload = {};
+      for (const [k, v] of Object.entries(rest)) {
+        if (typeof v === 'string' && v.endsWith('****')) continue;
+        payload[k] = v;
+      }
+      payload.provider = providerKey;
+      payload.isActive = cfg.isActive ?? false;
+      await fetchApi(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       notify.success('Configuration saved!');
+      await loadConfigs(); // round-trip: re-read so the UI reflects what's in the DB
     } catch { notify.error('Failed to save'); }
   };
 
@@ -240,7 +294,13 @@ export default function Channels() {
             {[{ provider: 'msg91', label: 'MSG91', fields: [{ key: 'apiKey', label: 'API Key' }, { key: 'senderId', label: 'Sender ID (6 chars)' }, { key: 'dltEntityId', label: 'DLT Entity ID' }] },
               { provider: 'twilio', label: 'Twilio', fields: [{ key: 'apiKey', label: 'Account SID' }, { key: 'authToken', label: 'Auth Token', type: 'password' }, { key: 'senderId', label: 'Phone Number' }] }
             ].map(p => (
-              <ConfigCard key={p.provider} provider={p} configForm={configForm} setConfigForm={setConfigForm} onSave={() => handleSaveConfig(p.provider, `/api/sms/config/${p.provider}`)} />
+              <ConfigCard
+                key={p.provider}
+                provider={p}
+                config={configsByProvider[p.provider] || {}}
+                onChangeField={(field, value) => updateProviderField(p.provider, field, value)}
+                onSave={() => handleSaveConfig(p.provider, `/api/sms/config/${p.provider}`)}
+              />
             ))}
           </div>
           <WebhookInfo label="SMS Delivery" url={`${webhookBase}/api/sms/webhook/msg91`} copied={copied} copyText={copyText} />
@@ -261,7 +321,12 @@ export default function Channels() {
       {/* WhatsApp Config */}
       {activeTab === 'whatsapp' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <ConfigCard provider={{ provider: 'meta_cloud', label: 'Meta Cloud API', fields: [{ key: 'phoneNumberId', label: 'Phone Number ID' }, { key: 'accessToken', label: 'Access Token', type: 'password' }, { key: 'businessAccountId', label: 'Business Account ID' }, { key: 'webhookVerifyToken', label: 'Webhook Verify Token' }] }} configForm={configForm} setConfigForm={setConfigForm} onSave={() => handleSaveConfig('meta_cloud', '/api/whatsapp/config/meta_cloud')} />
+          <ConfigCard
+            provider={{ provider: 'meta_cloud', label: 'Meta Cloud API', fields: [{ key: 'phoneNumberId', label: 'Phone Number ID' }, { key: 'accessToken', label: 'Access Token', type: 'password' }, { key: 'businessAccountId', label: 'Business Account ID' }, { key: 'webhookVerifyToken', label: 'Webhook Verify Token' }] }}
+            config={configsByProvider['meta_cloud'] || {}}
+            onChangeField={(field, value) => updateProviderField('meta_cloud', field, value)}
+            onSave={() => handleSaveConfig('meta_cloud', '/api/whatsapp/config/meta_cloud')}
+          />
           <WebhookInfo label="WhatsApp Webhook" url={`${webhookBase}/api/whatsapp/webhook`} copied={copied} copyText={copyText} />
           <TemplateSection
             kind="whatsapp"
@@ -283,7 +348,13 @@ export default function Channels() {
           {[{ provider: 'myoperator', label: 'MyOperator', fields: [{ key: 'apiKey', label: 'API Token' }, { key: 'virtualNumber', label: 'Virtual Number' }] },
             { provider: 'knowlarity', label: 'Knowlarity', fields: [{ key: 'apiKey', label: 'API Key' }, { key: 'apiSecret', label: 'SR Number' }, { key: 'virtualNumber', label: 'Virtual Number' }] }
           ].map(p => (
-            <ConfigCard key={p.provider} provider={p} configForm={configForm} setConfigForm={setConfigForm} onSave={() => handleSaveConfig(p.provider, `/api/telephony/config/${p.provider}`)} />
+            <ConfigCard
+              key={p.provider}
+              provider={p}
+              config={configsByProvider[p.provider] || {}}
+              onChangeField={(field, value) => updateProviderField(p.provider, field, value)}
+              onSave={() => handleSaveConfig(p.provider, `/api/telephony/config/${p.provider}`)}
+            />
           ))}
           <div style={{ gridColumn: '1 / -1' }}>
             <WebhookInfo label="MyOperator CDR" url={`${webhookBase}/api/telephony/webhook/myoperator`} copied={copied} copyText={copyText} />
@@ -365,7 +436,20 @@ function stripIds(obj) {
   return out;
 }
 
-function ConfigCard({ provider, configForm, setConfigForm, onSave }) {
+/**
+ * ConfigCard — controlled per-provider config editor.
+ *
+ * #586: pre-fix this card was uncontrolled (inputs had only `placeholder` +
+ * `onChange`, no `value`) and shared a single `configForm` state across every
+ * provider on the tab — so (a) typing into MSG91 then Twilio collided on
+ * shared field keys (apiKey, senderId, etc.); (b) on mount / refresh the
+ * inputs rendered empty regardless of what was persisted in the DB. The
+ * "Save" path called the backend correctly and the upsert succeeded — but
+ * the next page load showed empty fields, which operators (legitimately)
+ * read as "save did not persist." Now value-driven from the per-provider
+ * config object loaded by `loadConfigs()`.
+ */
+function ConfigCard({ provider, config, onChangeField, onSave }) {
   return (
     <div className="card" style={{ padding: '1.5rem' }}>
       <h3 style={{ fontWeight: '600', marginBottom: '1rem' }}>{provider.label}</h3>
@@ -373,11 +457,22 @@ function ConfigCard({ provider, configForm, setConfigForm, onSave }) {
         {provider.fields.map(f => (
           <div key={f.key}>
             <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>{f.label}</label>
-            <input className="input-field" type={f.type || 'text'} placeholder={f.label} onChange={e => setConfigForm(prev => ({ ...prev, provider: provider.provider, [f.key]: e.target.value }))} style={{ width: '100%', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }} />
+            <input
+              className="input-field"
+              type={f.type || 'text'}
+              placeholder={f.label}
+              value={config[f.key] ?? ''}
+              onChange={e => onChangeField(f.key, e.target.value)}
+              style={{ width: '100%', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
+            />
           </div>
         ))}
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '0.25rem' }}>
-          <input type="checkbox" onChange={e => setConfigForm(prev => ({ ...prev, isActive: e.target.checked }))} />
+          <input
+            type="checkbox"
+            checked={config.isActive ?? false}
+            onChange={e => onChangeField('isActive', e.target.checked)}
+          />
           <span style={{ fontSize: '0.85rem' }}>Enable</span>
         </label>
         <button className="btn-primary" onClick={onSave} style={{ padding: '0.5rem 1rem', fontSize: '0.85rem', marginTop: '0.25rem', width: 'fit-content' }}>

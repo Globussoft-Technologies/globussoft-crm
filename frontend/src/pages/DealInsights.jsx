@@ -33,7 +33,18 @@ function timeAgo(dateStr) {
 export default function DealInsights() {
   const navigate = useNavigate();
   const [insights, setInsights] = useState([]);
-  const [deals, setDeals] = useState([]);
+  // #587: dealStats replaces the prior /api/deals?limit=100 parallel fetch.
+  // The old shape powered (a) the "Generate Insights (N open)" button count
+  // and (b) a client-side dealById fallback when ins.dealContext was missing.
+  // (a) needs a full-population aggregate, not a paginated window — /stats
+  // returns byStage so we can compute openCount accurately even on tenants
+  // with 5k+ deals. (b) is now obsolete because the server guarantees
+  // dealContext is always a non-null envelope (see attachDealContext in
+  // backend/routes/deal_insights.js — orphan FKs surface with
+  // isMissing=true). Removing the broken fallback eliminates the regression
+  // class entirely.
+  const [openDealCount, setOpenDealCount] = useState(0);
+  const [openDealIds, setOpenDealIds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [filter, setFilter] = useState('All');
@@ -42,12 +53,32 @@ export default function DealInsights() {
 
   const loadAll = async () => {
     try {
-      const [ins, dls] = await Promise.all([
+      // /api/deal-insights — server attaches dealContext (every row).
+      // /api/deals/stats — full-population stats (byStage gives openCount).
+      // /api/deals?stage=lead|contacted|proposal — only fetched to drive the
+      //   "Generate Insights" button's per-deal POST loop. Paginated, but
+      //   we cap at 50 anyway (see generateForAll) so the limit=100 window
+      //   covers it. NOT used for join/lookup — that's strictly via
+      //   dealContext now.
+      const [ins, stats, openSampleRaw] = await Promise.all([
         fetchApi('/api/deal-insights').catch(() => []),
-        fetchApi('/api/deals').catch(() => []),
+        fetchApi('/api/deals/stats').catch(() => null),
+        fetchApi('/api/deals?limit=50').catch(() => []),
       ]);
       setInsights(Array.isArray(ins) ? ins : []);
-      setDeals(Array.isArray(dls) ? dls : []);
+      // Open count = sum of stages that aren't won/lost. byStage entries
+      // shape: { stage, count, value }.
+      let count = 0;
+      if (stats && Array.isArray(stats.byStage)) {
+        for (const s of stats.byStage) {
+          if (s.stage !== 'won' && s.stage !== 'lost') count += s.count || 0;
+        }
+      }
+      setOpenDealCount(count);
+      // openDealIds is just a per-page slice for the bulk-generate button.
+      // Not authoritative — dealContext is the source of truth on the join.
+      const sample = Array.isArray(openSampleRaw) ? openSampleRaw : [];
+      setOpenDealIds(sample.filter(d => d.stage !== 'won' && d.stage !== 'lost').map(d => d.id));
     } catch (e) {
       console.error(e);
     } finally {
@@ -56,17 +87,6 @@ export default function DealInsights() {
   };
 
   useEffect(() => { loadAll(); }, []);
-
-  const dealById = useMemo(() => {
-    const m = {};
-    deals.forEach(d => { m[d.id] = d; });
-    return m;
-  }, [deals]);
-
-  const openDeals = useMemo(
-    () => deals.filter(d => d.stage !== 'won' && d.stage !== 'lost'),
-    [deals]
-  );
 
   const filtered = useMemo(() => {
     let list = insights;
@@ -159,12 +179,12 @@ export default function DealInsights() {
         </div>
         <button
           onClick={generateForAll}
-          disabled={generating || openDeals.length === 0}
+          disabled={generating || openDealIds.length === 0}
           className="btn-primary"
           style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: generating ? 0.7 : 1 }}
         >
           <RefreshCw size={16} style={{ animation: generating ? 'spin 1s linear infinite' : 'none' }} />
-          {generating ? 'Generating...' : `Generate Insights (${openDeals.length} open)`}
+          {generating ? 'Generating...' : `Generate Insights (${openDealCount} open)`}
         </button>
       </header>
 

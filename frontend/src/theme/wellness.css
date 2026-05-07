@@ -45,6 +45,77 @@
   --shadow-lg:       0 12px 40px rgba(38, 88, 85, 0.12);
 }
 
+/* Dark mode override for wellness vertical — preserves wellness brand
+ * (teal primary, blush accent) but uses dark backgrounds + light text */
+html[data-theme="dark"][data-vertical="wellness"],
+[data-theme="dark"] [data-vertical="wellness"] {
+  --bg-color:        #14181A;        /* dark teal-tinted background */
+  --surface-color:   rgba(30, 38, 40, 0.6);
+  --subtle-bg:       rgba(205, 148, 129, 0.06);
+  --subtle-bg-3:     rgba(205, 148, 129, 0.12);
+
+  --primary-color:   #3D9690;        /* lighter teal — readable on dark */
+  --primary-hover:   #4FB0A8;
+  --accent-color:    #E0A68B;        /* lighter blush for dark mode */
+  --accent-hover:    #ECBBA3;
+  --accent-glow:     rgba(224, 166, 139, 0.4);
+  --accent-bg:       var(--primary-color);
+  --accent-text:     #FFFFFF;
+
+  --text-primary:    #F5EFE6;        /* warm cream */
+  --text-secondary:  #C4BAB0;        /* warm taupe */
+  --text-tertiary:   #948980;        /* dimmer warm taupe */
+
+  --border-color:    rgba(245, 239, 230, 0.1);
+  --border-light:    rgba(245, 239, 230, 0.05);
+
+  --shadow-sm:       0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md:       0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg:       0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* Dark wellness — glass cards on dark background */
+[data-theme="dark"][data-vertical="wellness"] .glass,
+[data-theme="dark"] [data-vertical="wellness"] .glass {
+  background: rgba(30, 38, 40, 0.7);
+  border: 1px solid var(--border-color);
+}
+
+/* Dark wellness — header bar */
+[data-theme="dark"][data-vertical="wellness"] header,
+[data-theme="dark"] [data-vertical="wellness"] header {
+  background: rgba(20, 24, 26, 0.95) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+}
+
+/* Dark wellness — main content background */
+[data-theme="dark"][data-vertical="wellness"] main,
+[data-theme="dark"] [data-vertical="wellness"] main {
+  background: linear-gradient(180deg, #14181A 0%, #1A2022 100%);
+}
+
+/* Dark wellness — inputs */
+[data-theme="dark"][data-vertical="wellness"] input,
+[data-theme="dark"][data-vertical="wellness"] select,
+[data-theme="dark"][data-vertical="wellness"] textarea,
+[data-theme="dark"] [data-vertical="wellness"] input,
+[data-theme="dark"] [data-vertical="wellness"] select,
+[data-theme="dark"] [data-vertical="wellness"] textarea {
+  background: rgba(30, 38, 40, 0.6) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Dark wellness — tables */
+[data-theme="dark"][data-vertical="wellness"] table tbody tr:nth-child(even),
+[data-theme="dark"] [data-vertical="wellness"] table tbody tr:nth-child(even) {
+  background: rgba(245, 239, 230, 0.03);
+}
+[data-theme="dark"][data-vertical="wellness"] table th,
+[data-theme="dark"] [data-vertical="wellness"] table th {
+  background: rgba(245, 239, 230, 0.05);
+}
+
 /* Glass cards on the warm cream background — subtle, not stark */
 [data-vertical="wellness"] .glass {
   background: rgba(255, 255, 255, 0.85);

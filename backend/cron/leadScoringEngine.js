@@ -34,6 +34,28 @@ function computeScore(contact) {
   else if (contact.status === 'Lead') score += 5;
   // Churned: no bonus
 
+  // ── #571 — Static-feature signals (so contacts with sparse engagement
+  //          events still produce variation; previously every contact
+  //          with no activities collapsed to score 7).
+  // Profile-completeness: explicit identity fields beyond enrichment.
+  // Each +3 (capped together at +9) so a fully-identified prospect with
+  // no engagement events still differentiates from a name-only stub.
+  let identityBonus = 0;
+  if (contact.name) identityBonus += 3;
+  if (contact.email) identityBonus += 3;
+  if (contact.phone) identityBonus += 3;
+  score += identityBonus;
+
+  // Email quality: corporate-domain inbox is a much stronger B2B
+  // intent signal than a personal-domain inbox (gmail/yahoo/etc.).
+  // Non-obvious why +10: most lead-scoring vendors weight this 8-12 —
+  // the highest-confidence single static feature for B2B fit.
+  if (typeof contact.email === 'string' && contact.email.includes('@')) {
+    const domain = contact.email.split('@')[1].toLowerCase();
+    const isPersonal = /^(gmail|yahoo|hotmail|outlook|icloud|aol|protonmail|live|msn|me|mail|ymail)\./.test(domain);
+    if (!isPersonal) score += 10;
+  }
+
   // ── Deal factors ─────────────────────────────────────────────────
   const deals = contact.deals || [];
   const activeDeals = deals.filter(d => d.stage !== 'lost' && d.stage !== 'won');
@@ -77,9 +99,15 @@ function computeScore(contact) {
   }
   // Cap the cumulative bump but spread it over many integer values
   score += Math.min(Math.round(activityWeight * 2), 14);
-  // Cold-lead decay: nothing in 90d
-  if (mostRecentDays > 90) score -= 8;
-  else if (mostRecentDays > 60) score -= 4;
+  // Cold-lead decay: nothing in 90d. #571 — only apply when there ARE
+  // activities; an empty activities array is "no signal", not "cold".
+  // Brand-new leads with no events should not be penalised — the
+  // status/source/identity branches drive their score until the first
+  // touch lands.
+  if (activities.length > 0) {
+    if (mostRecentDays > 90) score -= 8;
+    else if (mostRecentDays > 60) score -= 4;
+  }
 
   // Activity-type variety (calls + meetings are higher intent than notes)
   const callCount = activities.filter(a => a.type === 'Call').length;
@@ -166,6 +194,18 @@ function computeScore(contact) {
   if (contact.createdAt) {
     const ageDays = (now - new Date(contact.createdAt).getTime()) / 86400000;
     if (ageDays > 180 && contact.status !== 'Churned') score += 2;
+
+    // ── #571 — Lead-funnel age decay. Applies only to contacts still
+    // sitting in 'Lead' status — they're rotting in the funnel. Skipped
+    // once a Lead is promoted to Prospect/Customer, and skipped past
+    // 180d to avoid double-counting with the survival-tenure bonus
+    // above. Brief asked for −5/−10 but those values risk pushing
+    // identified-but-unengaged leads to the score-1 floor; lighter
+    // values still produce visible decay across buckets.
+    if (contact.status === 'Lead' && ageDays <= 180) {
+      if (ageDays > 30) score -= 6;
+      else if (ageDays > 7) score -= 3;
+    }
   }
 
   // SLA-breached leads are less likely to close — small drag.
@@ -232,6 +272,10 @@ async function tickLeadScoringEngine(io) {
           // 1-99 range instead of clustering on 3 status-based buckets.
           emails: { select: { direction: true, sentimentScore: true, createdAt: true } },
           callLogs: { select: { createdAt: true } },
+          // #571 — load touchpoints so multi-channel-engagement signal
+          // contributes to the cron-scoring path (was only loaded by the
+          // /api/ai/score-now route via include, never by the 10-min cron).
+          touchpoints: { select: { channel: true } },
         },
       });
 

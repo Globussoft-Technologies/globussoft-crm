@@ -26,7 +26,7 @@ async function main() {
     'Attachment', 'CallLog', 'EmailMessage',
     'Activity', 'Task', 'Expense', 'Invoice', 'Contract', 'Project',
     'Deal', 'Ticket', 'Campaign', 'AutomationRule', 'Integration',
-    'Webhook', 'ApiKey', 'Contact', 'User',
+    'Webhook', 'ApiKey', 'Touchpoint', 'Contact', 'User',
     'Tenant',
   ];
   for (const table of tables) {
@@ -223,6 +223,120 @@ async function main() {
     }
   }
   console.log(`Activities: ${activityCount} created`);
+
+  // ══════════════════════════════════════════════════════════════
+  // STEP 6b: #571 — ENRICHMENT + DIFFERENTIATED ENGAGEMENT EVENTS
+  // ══════════════════════════════════════════════════════════════
+  // Hydrate seeded contacts with realistic profile fields + add ~80
+  // EmailTracking and Touchpoint rows so the Lead Scoring engine
+  // produces variation across the 5 score buckets instead of
+  // collapsing every cold lead to ~7/100.
+  const industries = ['SaaS', 'Fintech', 'Healthcare', 'EdTech', 'E-commerce', 'Manufacturing', 'Logistics', 'Media', 'Energy', 'Cybersecurity'];
+  const companySizes = ['11-50', '51-200', '201-500', '501-1000', '1000+'];
+  const phonePrefixes = ['+1-415-', '+1-650-', '+44-20-', '+91-80-', '+49-30-', '+971-4-', '+86-755-', '+81-3-'];
+
+  let enrichedCount = 0;
+  for (let i = 0; i < contacts.length; i++) {
+    const contact = contacts[i];
+    // Spread enrichment so ~80% are well-populated (corporate, identified)
+    // and ~20% are intentionally sparse (cold-list-style stubs) — gives
+    // the scorer something to differentiate against.
+    const isSparse = i % 5 === 0;
+    const updateData = {
+      phone: isSparse ? null : `${pick(phonePrefixes)}${between(1000000, 9999999)}`,
+      industry: isSparse ? null : pick(industries),
+      companySize: isSparse ? null : pick(companySizes),
+      linkedin: isSparse ? null : `https://linkedin.com/in/${contact.name.toLowerCase().replace(/[^a-z]/g, '-')}`,
+      website: isSparse ? null : `https://${(contact.company || 'example').toLowerCase().replace(/[^a-z0-9]/g, '')}.com`,
+    };
+    try {
+      await prisma.contact.update({ where: { id: contact.id }, data: updateData });
+      enrichedCount++;
+    } catch (_e) { /* ignore */ }
+  }
+  console.log(`Contact enrichment: ${enrichedCount} contacts hydrated`);
+
+  // Differentiated engagement events — drives the 5-bucket score spread.
+  // The cron's tickLeadScoringEngine includes touchpoints + emails +
+  // callLogs on each contact's findMany, so seeding those tables (rather
+  // than EmailTracking which has no Contact relation) is what produces
+  // visible variation in the histogram.
+  let touchpointCount = 0;
+  let inboundReplyCount = 0;
+  let recentCallCount = 0;
+
+  // Tier 1 — Hot prospects (top 10): recent touches across 3+ channels +
+  // multiple inbound replies + recent calls. These should land 70-99.
+  const hotChannels = ['email', 'social', 'search', 'referral', 'direct'];
+  for (let i = 0; i < Math.min(10, contacts.length); i++) {
+    const contact = contacts[i];
+    const numChannels = between(3, 5);
+    for (let k = 0; k < numChannels; k++) {
+      await prisma.touchpoint.create({
+        data: { contactId: contact.id, channel: hotChannels[k], source: hotChannels[k] === 'email' ? 'newsletter' : 'organic', timestamp: daysAgo(between(1, 14)) },
+      });
+      touchpointCount++;
+    }
+    // 3-5 positive-sentiment inbound replies in the last 7d.
+    for (let k = 0; k < between(3, 5); k++) {
+      await prisma.emailMessage.create({
+        data: {
+          subject: `Re: Proposal follow-up #${k + 1}`,
+          body: 'Yes, looks great — let’s set up next steps.',
+          from: contact.email, to: 'team@globussoft.com',
+          direction: 'INBOUND', sentiment: 'positive', sentimentScore: 0.6 + Math.random() * 0.4,
+          contactId: contact.id, userId: pick(users).id, createdAt: daysAgo(between(1, 7)),
+        },
+      });
+      inboundReplyCount++;
+    }
+    // 2-4 recent calls (last 30d).
+    for (let k = 0; k < between(2, 4); k++) {
+      await prisma.callLog.create({
+        data: {
+          duration: between(180, 1800), direction: 'OUTBOUND', status: 'COMPLETED',
+          contactId: contact.id, userId: pick(users).id, createdAt: daysAgo(between(2, 30)),
+        },
+      });
+      recentCallCount++;
+    }
+  }
+
+  // Tier 2 — Warm middle (next 10): some touches across 1-2 channels +
+  // a stale-but-present reply. Lands these in the 40-70 range.
+  for (let i = 10; i < Math.min(20, contacts.length); i++) {
+    const contact = contacts[i];
+    await prisma.touchpoint.create({
+      data: { contactId: contact.id, channel: pick(['email', 'social']), source: 'organic', timestamp: daysAgo(between(15, 45)) },
+    });
+    touchpointCount++;
+    if (i % 2 === 0) {
+      await prisma.emailMessage.create({
+        data: {
+          subject: 'Re: Initial enquiry', body: 'Thanks, will review and revert.',
+          from: contact.email, to: 'team@globussoft.com',
+          direction: 'INBOUND', sentiment: 'neutral', sentimentScore: 0.1,
+          contactId: contact.id, userId: pick(users).id, createdAt: daysAgo(between(20, 50)),
+        },
+      });
+      inboundReplyCount++;
+    }
+  }
+
+  // Tier 3 — Cold tail (remaining): sparse or no engagement; the static
+  // signals (corp domain, identity completeness, source quality) carry
+  // these through the lower buckets so the Cold/Decaying panel actually
+  // shows differentiated scores instead of every entry == 7.
+  for (let i = 20; i < contacts.length; i++) {
+    const contact = contacts[i];
+    if (i % 3 === 0) {
+      await prisma.touchpoint.create({
+        data: { contactId: contact.id, channel: 'email', source: 'cold-outreach', timestamp: daysAgo(between(60, 120)) },
+      });
+      touchpointCount++;
+    }
+  }
+  console.log(`Engagement events: ${touchpointCount} Touchpoint + ${inboundReplyCount} inbound reply + ${recentCallCount} recent call rows`);
 
   // ══════════════════════════════════════════════════════════════
   // STEP 7: TASKS — 20 actionable tasks

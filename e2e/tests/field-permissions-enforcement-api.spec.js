@@ -128,8 +128,14 @@ async function deleteRule(request, ruleId) {
   await adminDelete(request, `/api/field-permissions/${ruleId}`).catch(() => {});
 }
 
+// #588: USER role's GET /api/deals scopes to ownerId = req.user.userId. The
+// field-permissions tests assert that USER sees the test deal in their list
+// (with stripped fields), which requires the deal to be USER-OWNED. Routes
+// set ownerId = req.user.userId on POST regardless of body, so creating the
+// deal as USER ties ownership correctly. ADMIN tests still pass because ADMIN
+// is unscoped and sees all tenant deals including USER-owned ones.
 async function createDeal(request, overrides = {}) {
-  const r = await adminPost(request, '/api/deals', {
+  const r = await userPost(request, '/api/deals', {
     title: `${RUN_TAG} ${overrides.title || 'enf-deal'}`,
     amount: overrides.amount ?? 12345,
     stage: overrides.stage || 'lead',

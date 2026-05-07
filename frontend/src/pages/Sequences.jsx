@@ -17,6 +17,39 @@ const initialNodes = [
 const DRAFT_KEY = 'sequences:draft';
 const ACTIVE_SEQ_KEY = 'sequences:activeSeqId';
 
+// #640: status-badge palette. Pre-fix, ACTIVE and PAUSED both rendered in
+// the green family (ACTIVE = #10b981, PAUSED = white/transparent on a dark
+// surface) so they were hard to distinguish at a glance for marketers and
+// indistinguishable for colour-blind users. Map status → semantic CSS var:
+//   ACTIVE  → success-green (running)
+//   PAUSED  → warning-amber (neutral pause; needs attention to resume)
+//   DRAFT   → muted text-secondary (not yet shipped)
+// The Sequence schema only has `isActive: Boolean` today, so we render
+// ACTIVE / PAUSED. DRAFT branch is exposed for forward-compat when an
+// explicit status enum lands (regression-coverage-friendly default).
+export const sequenceStatusBadgeStyle = (status) => {
+  if (status === 'ACTIVE') {
+    return {
+      bg: 'rgba(16, 185, 129, 0.18)',
+      fg: 'var(--success-color, #10b981)',
+      cls: 'badge-active',
+    };
+  }
+  if (status === 'PAUSED') {
+    return {
+      bg: 'rgba(245, 158, 11, 0.20)',
+      fg: 'var(--warning-color, #f59e0b)',
+      cls: 'badge-paused',
+    };
+  }
+  // DRAFT / unknown — neutral grey
+  return {
+    bg: 'rgba(255, 255, 255, 0.10)',
+    fg: 'var(--text-secondary)',
+    cls: 'badge-draft',
+  };
+};
+
 const loadDraft = () => {
   try {
     const raw = sessionStorage.getItem(DRAFT_KEY);
@@ -298,14 +331,25 @@ export default function Sequences() {
                   <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                     <Network size={12}/> {JSON.parse(seq.nodes || '[]').length} nodes
                   </span>
-                  <span style={{
-                    fontSize: '0.65rem', padding: '0.15rem 0.5rem',
-                    background: seq.isActive ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.1)',
-                    color: seq.isActive ? '#10b981' : 'var(--text-secondary)',
-                    borderRadius: '12px', fontWeight: 'bold'
-                  }}>
-                    {seq.isActive ? 'ACTIVE' : 'PAUSED'}
-                  </span>
+                  {(() => {
+                    const status = seq.isActive ? 'ACTIVE' : 'PAUSED';
+                    const palette = sequenceStatusBadgeStyle(status);
+                    return (
+                      <span
+                        data-testid={`sequence-status-${seq.id}`}
+                        data-status={status}
+                        className={palette.cls}
+                        style={{
+                          fontSize: '0.65rem', padding: '0.15rem 0.5rem',
+                          background: palette.bg,
+                          color: palette.fg,
+                          borderRadius: '12px', fontWeight: 'bold'
+                        }}
+                      >
+                        {status}
+                      </span>
+                    );
+                  })()}
                 </div>
               </div>
             ))}

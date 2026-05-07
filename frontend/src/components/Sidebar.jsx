@@ -295,6 +295,20 @@ const Sidebar = ({
     ? { ...sectionLabel, color: brandColor }
     : sectionLabel;
 
+  // #631: defensive active-state. Some users reported /deal-insights,
+  // /document-templates, /reports rendering without the active highlight
+  // even though NavLink's isActive should catch them. We OR the NavLink
+  // signal with an explicit segment-boundary startsWith check on the
+  // current pathname so any future NavLink behavior shift (e.g. someone
+  // adding `end` for a sibling) can't silently regress these top-level
+  // entries. The segment boundary (next char is `/` or end-of-string)
+  // prevents `/reports` from incorrectly matching `/reports-foo`.
+  const segmentMatches = (current, target) => {
+    if (current === target) return true;
+    if (!current.startsWith(target)) return false;
+    const tail = current[target.length];
+    return tail === "/" || tail === undefined;
+  };
   const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, count, matchPaths = [] }) => {
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
@@ -303,7 +317,8 @@ const Sidebar = ({
         to={to}
         className={({ isActive }) => {
           const isPathMatch = matchPaths.some(path => location.pathname === path);
-          const active = isActive || isPathMatch;
+          const isSegmentMatch = segmentMatches(location.pathname, to);
+          const active = isActive || isPathMatch || isSegmentMatch;
           return `nav-link ${active ? "active" : ""}`;
         }}
         style={navStyle}

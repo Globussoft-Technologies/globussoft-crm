@@ -10,6 +10,15 @@ const initialNodes = [
   { id: '1', type: 'input', data: { label: 'TRIGGER: Contact Subscribed' }, position: { x: 250, y: 50 }, style: { background: '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 'bold', width: 220, textAlign: 'center' } },
 ];
 
+// #616: vertical-aware fallback list. The backend GET /api/sequences/triggers
+// is authoritative; this fallback only fires if the call errors so the
+// trigger picker still works offline / on a transient 5xx.
+const FALLBACK_TRIGGERS = [
+  { value: 'contact.created', label: 'Contact Created', vertical: 'generic' },
+  { value: 'lead.converted', label: 'Lead Converted', vertical: 'generic' },
+  { value: 'deal.won', label: 'Deal Won', vertical: 'generic' },
+];
+
 // #394: sessionStorage keys for draft persistence. We persist the canvas
 // (nodes + edges) and the activeSeqId across hard refreshes so a user who
 // refreshes mid-build doesn't lose the work, and a user who refreshes after
@@ -98,8 +107,12 @@ export default function Sequences() {
   });
   const [seqName, setSeqName] = useState('');
   const [showNameModal, setShowNameModal] = useState(false);
+  // #616: vertical-aware trigger catalog from GET /api/sequences/triggers.
+  // Wellness tenants get visit/treatment/consent triggers in addition to
+  // generic contact/lead/deal events; the picker hydrates on mount.
+  const [triggers, setTriggers] = useState(FALLBACK_TRIGGERS);
 
-  useEffect(() => { loadSequences(); }, []);
+  useEffect(() => { loadSequences(); loadTriggers(); }, []);
 
   // #394: autosave the canvas to sessionStorage on every change so a hard
   // refresh / accidental tab close doesn't drop work the user hasn't yet
@@ -115,6 +128,28 @@ export default function Sequences() {
       const data = await fetchApi('/api/sequences', { silent: true });
       setSequences(Array.isArray(data) ? data : []);
     } catch(err) {}
+  };
+
+  // #616: wellness-aware trigger catalog. Silent on failure so the picker
+  // falls back to the generic-only FALLBACK_TRIGGERS list.
+  const loadTriggers = async () => {
+    try {
+      const data = await fetchApi('/api/sequences/triggers', { silent: true });
+      if (Array.isArray(data) && data.length > 0) setTriggers(data);
+    } catch(err) {}
+  };
+
+  // #616: append a TRIGGER node to the canvas (lets the marketer pick a
+  // wellness event like visit.completed as the entry point).
+  const addTriggerNode = (trig) => {
+    const newNode = {
+      id: `${Date.now()}`,
+      type: 'input',
+      data: { label: `TRIGGER: ${trig.label || trig.value}` },
+      position: { x: Math.random() * 200 + 100, y: Math.random() * 100 + 30 },
+      style: { background: trig.vertical === 'wellness' ? '#265855' : '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 'bold', width: 240, textAlign: 'center' },
+    };
+    setNodes((nds) => nds.concat(newNode));
   };
 
   const onNodesChange = useCallback((changes) => setNodes((nds) => applyNodeChanges(changes, nds)), []);
@@ -283,6 +318,27 @@ export default function Sequences() {
               <button onClick={() => addLogicNode('default', 'ACTION: Send Push', '#a855f7')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderColor: 'rgba(168,85,247,0.4)' }}>
                 <Bell size={16} color="#a855f7"/> Push
               </button>
+              {/* #616: trigger picker — vertical-aware. Wellness tenants see
+                  visit / treatment / consent triggers alongside generic ones. */}
+              <select
+                data-testid="trigger-picker"
+                aria-label="Add trigger node"
+                defaultValue=""
+                onChange={(e) => {
+                  const t = triggers.find((x) => x.value === e.target.value);
+                  if (t) addTriggerNode(t);
+                  e.target.value = '';
+                }}
+                className="btn-secondary"
+                style={{ fontSize: '0.85rem', padding: '0.5rem 0.75rem', borderColor: 'rgba(16,185,129,0.4)', cursor: 'pointer' }}
+              >
+                <option value="" disabled>+ Add Trigger</option>
+                {triggers.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.vertical === 'wellness' ? 'Wellness · ' : ''}{t.label || t.value}
+                  </option>
+                ))}
+              </select>
             </Panel>
             <Background color="#1e293b" gap={24} size={2} />
             <Controls style={{ background: 'var(--surface-color)', fill: '#ec4899', border: '1px solid var(--border-color)' }} />

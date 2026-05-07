@@ -13,6 +13,14 @@ const tabStyle = (active) => ({
   display: 'flex', alignItems: 'center', gap: '0.35rem',
 });
 
+// #638: schema stores M/F/Other; expand to a clinician-friendly label.
+function genderLabel(g) {
+  if (!g) return '';
+  if (g === 'M') return 'Male';
+  if (g === 'F') return 'Female';
+  return g;
+}
+
 export default function PatientDetail() {
   const { id } = useParams();
   const [patient, setPatient] = useState(null);
@@ -77,17 +85,33 @@ export default function PatientDetail() {
         <ArrowLeft size={14} /> Back to patients
       </Link>
 
-      {/* Patient header */}
+      {/* Patient header — #638: surface DOB + computed age + gender + phone
+          inline so clinically-relevant identifiers are visible without
+          digging into the Profile tab. Age is computed client-side because
+          the tenant timezone matters (an Asia/Kolkata patient born just past
+          midnight IST should not appear a day younger to a UTC test clock). */}
       <div className="glass" style={{ padding: '1.5rem', marginBottom: '1rem', display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 600, color: '#fff' }}>
           {patient.name[0]}
         </div>
         <div style={{ flex: 1, minWidth: 200 }}>
           <h1 style={{ fontSize: '1.5rem', fontWeight: 600 }}>{patient.name}</h1>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-            {patient.phone && <>📞 {patient.phone}</>} {patient.email && <> • {patient.email}</>}
-            {patient.gender && <> • {patient.gender}</>}
-            {patient.bloodGroup && <> • Blood group {patient.bloodGroup}</>}
+          <div data-testid="patient-header-subline" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+            {(() => {
+              const parts = [];
+              if (patient.dob) {
+                const dobDate = new Date(patient.dob);
+                if (!Number.isNaN(dobDate.getTime())) {
+                  const age = Math.floor((Date.now() - dobDate.getTime()) / (365.25 * 86400000));
+                  parts.push(`${formatDate(patient.dob)} (${age}y)`);
+                }
+              }
+              if (patient.gender) parts.push(genderLabel(patient.gender));
+              if (patient.phone) parts.push(patient.phone);
+              if (patient.email) parts.push(patient.email);
+              if (patient.bloodGroup) parts.push(`Blood ${patient.bloodGroup}`);
+              return parts.length ? parts.join(' · ') : '—';
+            })()}
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>

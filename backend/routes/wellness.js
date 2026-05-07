@@ -1053,6 +1053,28 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     // by (visitId, type='earned'). Failures must not roll back the visit.
     await maybeAutoCreditLoyalty(visit, req.user.tenantId);
 
+    // #616: emit wellness sequence triggers. visit.scheduled fires on every
+    // create (covers booking-confirmation drips); visit.completed also fires
+    // when a same-row create lands as status='completed' (the default). Failure
+    // here MUST NOT fail the visit-create response.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      emitEvent(
+        "visit.scheduled",
+        { visitId: visit.id, patientId: visit.patientId, serviceId: visit.serviceId, doctorId: visit.doctorId, status: visit.status, visitDate: visit.visitDate },
+        req.user.tenantId,
+        req.io
+      );
+      if (visit.status === "completed") {
+        emitEvent(
+          "visit.completed",
+          { visitId: visit.id, patientId: visit.patientId, serviceId: visit.serviceId, doctorId: visit.doctorId, amountCharged: visit.amountCharged },
+          req.user.tenantId,
+          req.io
+        );
+      }
+    } catch (_e) { /* event bus optional */ }
+
     // #179: audit Visit creation.
     await writeAudit('Visit', 'CREATE', visit.id, req.user.userId, req.user.tenantId, {
       patientId: visit.patientId,
@@ -1136,6 +1158,21 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
       } catch (hookErr) {
         console.error("[wellness] waitlist auto-offer hook failed:", hookErr.message);
       }
+    }
+
+    // #616: emit visit.completed when this update transitions the row INTO
+    // completed (not on a re-save of an already-completed visit). Failure
+    // here MUST NOT fail the user-facing response.
+    if (data.status === "completed" && existing.status !== "completed") {
+      try {
+        const { emitEvent } = require("../lib/eventBus");
+        emitEvent(
+          "visit.completed",
+          { visitId: updated.id, patientId: updated.patientId, serviceId: updated.serviceId, doctorId: updated.doctorId, amountCharged: updated.amountCharged },
+          req.user.tenantId,
+          req.io
+        );
+      } catch (_e) { /* event bus optional */ }
     }
 
     // #179: audit visit update. Status transitions (booked → in-treatment →
@@ -1480,6 +1517,18 @@ router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"])
       templateName: consent.templateName,
       signatureLength: signatureSvg.length,
     });
+
+    // #616: emit consent.signed. Failure here MUST NOT fail the response.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      emitEvent(
+        "consent.signed",
+        { consentId: consent.id, patientId: consent.patientId, serviceId: consent.serviceId, templateName: consent.templateName },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) { /* event bus optional */ }
+
     res.status(201).json(consent);
   } catch (e) {
     console.error("[wellness] create consent error:", e.message);
@@ -1630,6 +1679,18 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
         totalPrice: plan.totalPrice,
       });
     } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+
+    // #616: emit treatment.started. Failure here MUST NOT fail the response.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      emitEvent(
+        "treatment.started",
+        { treatmentPlanId: plan.id, patientId: plan.patientId, serviceId: plan.serviceId, name: plan.name, totalSessions: plan.totalSessions },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) { /* event bus optional */ }
+
     res.status(201).json(plan);
   } catch (e) {
     console.error("[wellness] create treatment-plan error:", e.message);

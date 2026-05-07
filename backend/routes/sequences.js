@@ -4,6 +4,41 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 
+// #616: drip-sequence trigger catalog. Generic triggers are always
+// available; wellness triggers are surfaced only when the caller's tenant
+// is `vertical='wellness'`. The sequence engine itself is timer-based —
+// these triggers are emitted on the eventBus and consumed via
+// AutomationRule rows (sequence enrolment is one possible action). The
+// catalog is the user-facing UI surface that lets a marketer pick a
+// wellness event when authoring a drip.
+const GENERIC_SEQUENCE_TRIGGERS = [
+  { value: "contact.created", label: "Contact Created", description: "Fires when a new contact is added", vertical: "generic" },
+  { value: "contact.updated", label: "Contact Updated", description: "Fires when a contact is modified", vertical: "generic" },
+  { value: "lead.converted", label: "Lead Converted", description: "Fires when a lead becomes a customer", vertical: "generic" },
+  { value: "deal.won", label: "Deal Won", description: "Fires when a deal is marked as won", vertical: "generic" },
+  { value: "deal.lost", label: "Deal Lost", description: "Fires when a deal is marked as lost", vertical: "generic" },
+];
+
+const WELLNESS_SEQUENCE_TRIGGERS = [
+  { value: "visit.scheduled", label: "Visit Scheduled", description: "Fires when a Visit is created (booked appointment) — useful for confirmation drips", vertical: "wellness" },
+  { value: "visit.completed", label: "Visit Completed", description: "Fires when a Visit transitions to status='completed' — useful for aftercare drips", vertical: "wellness" },
+  { value: "treatment.started", label: "Treatment Plan Started", description: "Fires when a TreatmentPlan is created — useful for plan onboarding drips", vertical: "wellness" },
+  { value: "consent.signed", label: "Consent Signed", description: "Fires when a ConsentForm is captured — useful for pre-procedure prep drips", vertical: "wellness" },
+];
+
+function listTriggersForVertical(vertical) {
+  const list = [...GENERIC_SEQUENCE_TRIGGERS];
+  if (vertical === "wellness") list.push(...WELLNESS_SEQUENCE_TRIGGERS);
+  return list;
+}
+
+// GET /triggers — vertical-aware trigger catalog for the Sequences UI
+// (Marketing → Sequences → trigger picker, #616).
+router.get("/triggers", verifyToken, (req, res) => {
+  const vertical = req.user?.vertical || "generic";
+  res.json(listTriggersForVertical(vertical));
+});
+
 // v3.4.11: sanitization helpers moved to backend/lib/sanitizeJson.js so the
 // 4 routes identified by the v3.4.10 audit (lead_routing, ab_tests, marketing,
 // report_schedules) can adopt the same toolkit. sanitizeText handles
@@ -512,3 +547,7 @@ module.exports = router;
 module.exports.sanitizeText = sanitizeText;
 module.exports.sanitizeJson = sanitizeJson;
 module.exports.sanitizeNodes = sanitizeNodes;
+// #616: expose the trigger catalog + helper for unit tests.
+module.exports.GENERIC_SEQUENCE_TRIGGERS = GENERIC_SEQUENCE_TRIGGERS;
+module.exports.WELLNESS_SEQUENCE_TRIGGERS = WELLNESS_SEQUENCE_TRIGGERS;
+module.exports.listTriggersForVertical = listTriggersForVertical;

@@ -233,6 +233,9 @@ jobs:
             tests/orchestrator-api.spec.js \
             tests/deals_documents.spec.js \
             tests/wellness-patient-soft-delete-api.spec.js \
+            tests/wallet-giftcard-coupon-api.spec.js \
+            tests/memberships-api.spec.js \
+            tests/inventory-extension-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

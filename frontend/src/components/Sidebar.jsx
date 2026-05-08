@@ -58,7 +58,17 @@ import {
   HeartPulse,
   Bell,
   Clock,
+  Crown,
+  Wallet as WalletIcon,
+  Gift,
+  TicketPercent,
+  Coins,
   Loader2,
+  // Wave 11 Agent HH — Inventory backbone admin entries
+  Layers,
+  Truck,
+  ArrowDownToLine,
+  Recycle,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -639,6 +649,13 @@ function renderWellnessNav({
         label="Service Catalog"
         managerOnly
       />
+      {/* Wave 11 Agent EE: Memberships catalog — manager+ only (mirrors Service Catalog) */}
+      <Link
+        to="/wellness/memberships"
+        icon={Crown}
+        label="Memberships"
+        managerOnly
+      />
       <Link
         to="/wellness/visits"
         icon={HeartPulse}
@@ -687,6 +704,11 @@ function renderWellnessNav({
       <Link to="/invoices" icon={Receipt} label="Invoices" />
       <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
+      {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (manager+) */}
+      <Link to="/wellness/wallet" icon={WalletIcon} label="Patient Wallets" managerOnly />
+      <Link to="/wellness/giftcards" icon={Gift} label="Gift Cards" managerOnly />
+      <Link to="/wellness/coupons" icon={TicketPercent} label="Coupons" managerOnly />
+      <Link to="/wellness/cashback-rules" icon={Coins} label="Cashback Rules" managerOnly />
 
       {/* Marketing — clinic-side comms (ad campaigns live in AdsGPT). All items are
           managerOnly, so the whole section is hidden for plain users — otherwise the
@@ -763,6 +785,15 @@ function renderWellnessNav({
             label="Locations"
             adminOnly
           />
+          {/* Wave 11 Agent HH — Inventory backbone admin entries.
+              Categories + Vendors are config; Receipts/Adjustments are the
+              operational ledger surfaces; Auto-consumption is the rules engine. */}
+          <div style={labelStyle}>Inventory</div>
+          <Link to="/wellness/product-categories" icon={Layers} label="Categories" managerOnly />
+          <Link to="/wellness/vendors" icon={Truck} label="Vendors" managerOnly />
+          <Link to="/wellness/inventory-receipts" icon={ArrowDownToLine} label="Receipts" managerOnly />
+          <Link to="/wellness/inventory-adjustments" icon={Receipt} label="Adjustments" managerOnly />
+          <Link to="/wellness/auto-consumption-rules" icon={Recycle} label="Auto-consumption" managerOnly />
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
           <Link to="/channels" icon={Radio} label="Channels" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />

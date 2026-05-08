@@ -117,6 +117,13 @@ const WellnessPatientDetail = lazy(
 );
 const WellnessServices = lazy(() => import("./pages/wellness/Services"));
 const WellnessLocations = lazy(() => import("./pages/wellness/Locations"));
+const WellnessMemberships = lazy(() => import("./pages/wellness/Memberships"));
+// Wave 11 Agent FF — Wallet + Gift Cards + Coupons + Cashback rules
+// (4 admin/manager-gated pages under /wellness/* — see RoleGuard wrap below).
+const WellnessWallet = lazy(() => import("./pages/wellness/Wallet"));
+const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
+const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
+const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
 const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
@@ -138,6 +145,13 @@ const WellnessWaitlist = lazy(() => import("./pages/wellness/Waitlist"));
 // Inventory is implemented as a tab inside PatientDetail; this stub explains
 // that and links to the patient list.
 const WellnessInventory = lazy(() => import("./pages/wellness/Inventory"));
+// Wave 11 Agent HH — Inventory backbone admin pages (categories, vendors,
+// receipts, adjustments, auto-consumption rules). All ADMIN/MANAGER-only.
+const WellnessProductCategories = lazy(() => import("./pages/wellness/ProductCategories"));
+const WellnessVendors = lazy(() => import("./pages/wellness/Vendors"));
+const WellnessInventoryReceipts = lazy(() => import("./pages/wellness/InventoryReceipts"));
+const WellnessInventoryAdjustments = lazy(() => import("./pages/wellness/InventoryAdjustments"));
+const WellnessAutoConsumptionRules = lazy(() => import("./pages/wellness/AutoConsumptionRules"));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
 // #341: global catch-all 404. Previously unmapped or wrong-prefix URLs
@@ -731,6 +745,43 @@ export default function App() {
               <Route path="wellness/services" element={<WellnessOnly><WellnessServices /></WellnessOnly>} />
               <Route path="wellness/visits" element={<WellnessOnly><WellnessVisits /></WellnessOnly>} />
               <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
+              {/* Wave 11 Agent EE: Memberships catalog — admin/manager only */}
+              <Route path="wellness/memberships" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Memberships requires manager access.">
+                    <WellnessMemberships />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (admin/manager) */}
+              <Route path="wellness/wallet" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Wallet ledger requires manager access.">
+                    <WellnessWallet />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/giftcards" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Gift cards require manager access.">
+                    <WellnessGiftCards />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/coupons" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Coupons require manager access.">
+                    <WellnessCoupons />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/cashback-rules" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Cashback rules require manager access.">
+                    <WellnessCashbackRules />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
               <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
               <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
@@ -747,6 +798,43 @@ export default function App() {
               <Route path="wellness/loyalty" element={<WellnessOnly><WellnessLoyalty /></WellnessOnly>} />
               <Route path="wellness/waitlist" element={<WellnessOnly><WellnessWaitlist /></WellnessOnly>} />
               <Route path="wellness/inventory" element={<WellnessOnly><WellnessInventory /></WellnessOnly>} />
+              {/* Wave 11 Agent HH — Inventory backbone admin pages (5 routes).
+                  All ADMIN/MANAGER-only via RoleGuard wrap. */}
+              <Route path="wellness/product-categories" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Product categories require manager access.">
+                    <WellnessProductCategories />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/vendors" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Vendors require manager access.">
+                    <WellnessVendors />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/inventory-receipts" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Inventory receipts require manager access.">
+                    <WellnessInventoryReceipts />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/inventory-adjustments" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Inventory adjustments require manager access.">
+                    <WellnessInventoryAdjustments />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/auto-consumption-rules" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Auto-consumption rules require manager access.">
+                    <WellnessAutoConsumptionRules />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               {/* #309: /wellness/invoices used to render a blank page (no
                   route binding). Wellness shares the generic CRM Invoices
                   UI — alias the prefixed URL to the canonical /invoices

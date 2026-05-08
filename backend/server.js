@@ -377,6 +377,11 @@ const voiceTranscriptionRoutes = require("./routes/voice_transcription");
 const emailThreadingRoutes = require("./routes/email_threading");
 // Wellness vertical (Enhanced Wellness, future clinic clients)
 const wellnessRoutes = require("./routes/wellness");
+// Wave 11 Agent HH — Inventory backbone (categories, vendors, receipts,
+// adjustments, auto-consumption rules). Mounted under /api/wellness so URLs
+// stay uniform; routes/inventory.js declares only paths that wellness.js does
+// not own.
+const inventoryRoutes = require("./routes/inventory");
 // External partner API v1 (Callified.ai, Globus Phone, etc. — API key auth)
 const externalRoutes = require("./routes/external");
 // Admin tooling — manual triggers + read APIs for ops actions (G-15 backup)
@@ -527,6 +532,11 @@ app.use("/api/voice-transcription", voiceTranscriptionRoutes);
 app.use("/api/email-threading", emailThreadingRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
+// Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths
+// like /api/wellness/inventory/receipts work; declares only paths wellness.js
+// does NOT own (product-categories, vendors, inventory/receipts,
+// inventory/adjustments, inventory/movements, auto-consumption-rules).
+app.use("/api/wellness", inventoryRoutes);
 // External partner API (API key auth, versioned)
 app.use("/api/v1/external", externalRoutes);
 // Admin tooling (ADMIN-only ops triggers + read APIs)
@@ -777,6 +787,14 @@ if (process.env.DISABLE_CRONS === '1') {
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require('./cron/lowStockEngine');
   initLowStockCron();
+
+  // Wave 11 Agent HH — Auto-consumption listener. Subscribes to 'visit.completed'
+  // events and applies all active AutoConsumptionRule rows for the visit's
+  // service: writes ServiceConsumption rows + decrements Product.currentStock.
+  // Idempotent boot; failures are logged and never propagate to the visit
+  // response (clinical record stays intact).
+  const { start: startAutoConsumption } = require('./lib/autoConsumptionApplier');
+  startAutoConsumption();
 
   // Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
   const { initSlaBreachCron } = require('./cron/slaBreachEngine');

@@ -223,6 +223,32 @@ model Tenant {
   // #592 — Find Duplicates dismiss persistence (DismissedDuplicateGroup model
   // at the bottom of this file). Per-tenant scoped.
   dismissedDuplicateGroups DismissedDuplicateGroup[]
+
+  // Wave 11 Agent EE — Memberships (time-bound packages of services).
+  // Per-tenant scoped; rows cascade-delete with the tenant.
+  membershipPlans       MembershipPlan[]
+  memberships           Membership[]
+  membershipRedemptions MembershipRedemption[]
+
+  // Wave 11 Agent HH — Inventory backbone (Google Doc audit, 8 May 2026).
+  productCategories    ProductCategory[]
+  vendors              Vendor[]
+  inventoryReceipts    InventoryReceipt[]
+  inventoryAdjustments InventoryAdjustment[]
+  autoConsumptionRules AutoConsumptionRule[]
+
+  // Wave 11 Agent FF — Composite ledger system: Wallet + WalletTransaction
+  // (per-Patient append-only ledger), GiftCard (purchasable codes that
+  // credit a wallet on redeem), Coupon (percent/flat discount applied at
+  // checkout), CashbackRule (% of paid amount → wallet credit on visit
+  // completion). Per-tenant scoped; cascade-delete on tenant removal so
+  // the demo box / sandbox snapshots stay clean. See models at the bottom
+  // of this file.
+  wallets            Wallet[]
+  walletTransactions WalletTransaction[]
+  giftCards          GiftCard[]
+  coupons            Coupon[]
+  cashbackRules      CashbackRule[]
 }
 
 model User {
@@ -799,6 +825,15 @@ model Product {
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Wave 11 Agent HH — optional taxonomy + inventory back-relations.
+  // SetNull on category delete keeps the product visible (uncategorised)
+  // rather than cascading the delete.
+  categoryId           Int?
+  category             ProductCategory?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  receipts             InventoryReceipt[]
+  adjustments          InventoryAdjustment[]
+  autoConsumptionRules AutoConsumptionRule[]
 }
 
 model Quote {
@@ -968,8 +1003,8 @@ model AuditLog {
   // The integrity verifier walks the chain and recomputes each hash;
   // any tampering with details / userId / etc. breaks the chain at
   // the tampered row. See backend/lib/audit.js + GET /api/audit/verify.
-  prevHash String?  @db.Text
-  hash     String?  @db.Text
+  prevHash String? @db.Text
+  hash     String? @db.Text
 
   // #413 — Restrict (not Cascade) on Tenant deletion. AuditLog is the
   // forensic / compliance record-of-record (GDPR access logs, who-changed-
@@ -2201,6 +2236,12 @@ model Patient {
   // Agent D: loyalty + referrals back-relations
   loyaltyTransactions LoyaltyTransaction[]
   referrals           Referral[]           @relation("ReferrerOf")
+  // Wave 11 Agent EE: memberships (time-bound prepaid service bundles)
+  memberships         Membership[]
+  // Wave 11 Agent FF: per-patient wallet (one-to-one). Holds running balance
+  // + ledger of credits (gift cards, cashback, manual refunds) and debits
+  // (purchase, manual reversal). Created lazily on first /wallet read.
+  wallet              Wallet?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -2247,9 +2288,11 @@ model Service {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  visits         Visit[]
-  treatmentPlans TreatmentPlan[]
-  consents       ConsentForm[]
+  visits               Visit[]
+  treatmentPlans       TreatmentPlan[]
+  consents             ConsentForm[]
+  // Wave 11 Agent HH — auto-consumption rules per service (back-relation).
+  autoConsumptionRules AutoConsumptionRule[]
 
   createdAt DateTime @default(now())
 
@@ -2339,10 +2382,10 @@ model Prescription {
 }
 
 model ConsentForm {
-  id           Int     @id @default(autoincrement())
-  templateName String // "hair-transplant", "botox", "fillers", "general"
-  signedPdfUrl String?
-  signatureSvg String? @db.LongText // captured signature SVG/dataURL
+  id              Int     @id @default(autoincrement())
+  templateName    String // "hair-transplant", "botox", "fillers", "general"
+  signedPdfUrl    String?
+  signatureSvg    String? @db.LongText // captured signature SVG/dataURL
   // #564 — immutable snapshot of the consent template body the patient
   // agreed to AT SIGN TIME. Captured server-side in POST /consents from
   // the matching ConsentTemplate.body so future template edits cannot
@@ -2669,4 +2712,213 @@ model DismissedDuplicateGroup {
 
   @@unique([tenantId, groupKey])
   @@index([tenantId])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Wave 11 Agent EE — Memberships (Google Doc audit, 8 May 2026)
+//
+// Wellness clinics sell time-bound packages of services ("Gold Facial Pack:
+// 10 facials over 6 months for ₹15,000"). Three models:
+//
+//   MembershipPlan         — the catalog row (price, validity, entitlements)
+//   Membership             — a patient's purchased instance (with balance)
+//   MembershipRedemption   — append-only log of each redemption event
+//
+// Why entitlements / balance are JSON-stringified Text columns (not relational
+// rows): each plan's entitlements are { serviceId, quantity }[] and each
+// membership's running balance is { serviceId, remaining }[]. Modelling this
+// as a relational table (MembershipPlanEntitlement, MembershipBalanceLine)
+// would add 2 extra tables + 4 extra queries per redemption, when in practice
+// (a) entitlement counts are 1-5 services per plan and (b) the balance is
+// always read+written as a unit during a redemption transaction. JSON-string
+// columns mirror the existing pattern for SequenceStep.conditionJson, AbTest
+// variantA/B, etc. Decoded shape is documented above each field.
+// ─────────────────────────────────────────────────────────────────────
+model MembershipPlan {
+  id           Int      @id @default(autoincrement())
+  tenantId     Int      @default(1)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String
+  description  String?  @db.Text
+  durationDays Int
+  price        Float
+  currency     String   @default("INR")
+  // JSON array of { serviceId: Int, quantity: Int } stamped onto each
+  // Membership.balance at purchase. Stored as String so older MySQL
+  // installs without native JSON aren't required.
+  entitlements String   @db.Text
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships Membership[]
+
+  @@index([tenantId, isActive])
+}
+
+model Membership {
+  id           Int            @id @default(autoincrement())
+  tenantId     Int            @default(1)
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  patientId    Int
+  patient      Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  planId       Int
+  plan         MembershipPlan @relation(fields: [planId], references: [id])
+  startDate    DateTime
+  endDate      DateTime
+  // JSON array of { serviceId: Int, remaining: Int } — decremented on each
+  // redemption. Stamped from plan.entitlements at purchase. Hits 0 → 409
+  // MEMBERSHIP_BALANCE_EXHAUSTED on next redeem for that service.
+  balance      String         @db.Text
+  status       String         @default("active")
+  invoiceId    Int?
+  cancelledAt  DateTime?
+  cancelReason String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  redemptions MembershipRedemption[]
+
+  @@index([tenantId, patientId, status])
+  @@index([tenantId, endDate])
+}
+
+model MembershipRedemption {
+  id           Int        @id @default(autoincrement())
+  tenantId     Int        @default(1)
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membershipId Int
+  membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  visitId      Int?
+  serviceId    Int
+  redeemedAt   DateTime   @default(now())
+  redeemedBy   Int
+
+  @@index([tenantId, membershipId])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Wave 11 Agent HH — Inventory backbone (Google Doc audit, 8 May 2026)
+//
+// Closes 4 explicit gaps + 1 derived: ProductCategory (taxonomy), Vendor
+// (supplier master), InventoryReceipt (incoming stock — increments
+// Product.currentStock; tenant-scoped human-readable RCP-YYYY-NNNN id),
+// InventoryAdjustment (signed quantityDelta for shrinkage/damage/expiry/
+// recount/transfer; mirrors QuickBooks' debit-credit semantics where a
+// positive delta credits stock and a negative delta debits it),
+// AutoConsumptionRule (per-service-per-product quantityPerVisit applied
+// on visit-create → decrements Product.currentStock + creates a
+// ServiceConsumption row, so reports stay accurate even when staff
+// forget to record consumption manually).
+//
+// Why no Purchase Order model: PO workflow (vendor RFQ → order → partial
+// receipts) is intentionally out of scope here. Receipts can be created
+// directly without a parent PO; if a clinic needs PO ↔ receipt linkage,
+// that's a v3.5+ extension. Documented in TODOS as a follow-up.
+// ─────────────────────────────────────────────────────────────────────
+
+model ProductCategory {
+  id        Int               @id @default(autoincrement())
+  tenantId  Int               @default(1)
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  // Self-referential hierarchy for sub-categories ("Consumables > Sterile >
+  // Needles"). SetNull so deleting a parent doesn't cascade-delete children;
+  // they bubble up to the root and the admin can re-nest manually.
+  parentId  Int?
+  parent    ProductCategory?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children  ProductCategory[] @relation("CategoryHierarchy")
+  isActive  Boolean           @default(true)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  products Product[]
+
+  @@index([tenantId, parentId])
+}
+
+model Vendor {
+  id            Int      @id @default(autoincrement())
+  tenantId      Int      @default(1)
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  contactPerson String?
+  phone         String?
+  email         String?
+  gstin         String? // Indian GST ID (15 chars). Optional — non-GST vendors exist.
+  addressLine   String?  @db.Text
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  receipts InventoryReceipt[]
+
+  @@index([tenantId, isActive])
+}
+
+model InventoryReceipt {
+  id            Int       @id @default(autoincrement())
+  tenantId      Int       @default(1)
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Tenant-scoped human-readable id ("RCP-2026-0001"). Generated server-side
+  // per tenant — do NOT use the autoincrement id in customer-facing artefacts.
+  receiptNumber String
+  vendorId      Int?
+  vendor        Vendor?   @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  productId     Int
+  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity      Float // received units (Float so we can support fractional mL/g)
+  unitCost      Float
+  totalCost     Float // computed = quantity * unitCost; stored for fast P&L rollups
+  // Optional batch / expiry tracking — wellness clinical inventory needs this
+  // for FIFO consumption + expiry alerts.
+  batchNumber   String?
+  expiryDate    DateTime?
+  receivedAt    DateTime  @default(now())
+  receivedBy    Int // userId
+  notes         String?   @db.Text
+  createdAt     DateTime  @default(now())
+
+  @@unique([tenantId, receiptNumber])
+  @@index([tenantId, productId, receivedAt])
+}
+
+model InventoryAdjustment {
+  id            Int      @id @default(autoincrement())
+  tenantId      Int      @default(1)
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  productId     Int
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  // Signed delta — POSITIVE credits stock (e.g. recount surplus, transfer-in),
+  // NEGATIVE debits stock (shrinkage, damage, expiry, transfer-out). Mirrors
+  // QuickBooks' debit/credit ledger: every audit-traceable stock change
+  // outside of receipts/auto-consumption goes through this row.
+  quantityDelta Float
+  reason        String // SHRINKAGE | DAMAGE | EXPIRY | RECOUNT | TRANSFER_OUT | TRANSFER_IN | MANUAL
+  notes         String?  @db.Text
+  performedBy   Int // userId
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, productId, createdAt])
+}
+
+model AutoConsumptionRule {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @default(1)
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  serviceId        Int
+  service          Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  productId        Int
+  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  // Units of `product` consumed per `service` visit (e.g. 3.5 for 3.5 mL of
+  // saline per facial). Float so fractional mL/g/cc are representable.
+  quantityPerVisit Float
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // One rule per (service, product) pair within a tenant. Editing the
+  // quantity is an UPDATE, not a duplicate insert.
+  @@unique([tenantId, serviceId, productId])
+  @@index([tenantId, serviceId, isActive])
 }

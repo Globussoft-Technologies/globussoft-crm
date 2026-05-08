@@ -49,9 +49,15 @@ function validateEstimateInput(body, { isUpdate = false } = {}) {
       };
     }
   }
-  // validUntil — must parse, must not be in the past. POST inlined this; PUT
-  // didn't, so a stale "2010-01-01" could land via update and the estimate
-  // looked permanently expired in the UI.
+  // validUntil — must parse, must not be in the past, must not be more than
+  // 10 years in the future. POST inlined this; PUT didn't, so a stale
+  // "2010-01-01" could land via update and the estimate looked permanently
+  // expired in the UI.
+  //
+  // Upper-bound cap (#178/#322 closure): a 10-year sliding window is wide
+  // enough for multi-year service plans / typical contract retention but
+  // tight enough to reject nonsense like 2150-06-01 (which previously
+  // succeeded — surfaced 2026-05-07 by regression-coverage-backlog #11).
   if (body.validUntil !== undefined && body.validUntil !== null && body.validUntil !== "") {
     const vu = new Date(body.validUntil);
     if (Number.isNaN(vu.getTime())) {
@@ -60,6 +66,15 @@ function validateEstimateInput(body, { isUpdate = false } = {}) {
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
     if (vu < todayStart) {
       return { status: 400, error: "validUntil cannot be in the past", code: "VALID_UNTIL_IN_PAST" };
+    }
+    const maxFuture = new Date(todayStart);
+    maxFuture.setFullYear(maxFuture.getFullYear() + 10);
+    if (vu > maxFuture) {
+      return {
+        status: 400,
+        error: "validUntil cannot be more than 10 years in the future",
+        code: "INVALID_VALID_UNTIL_FUTURE",
+      };
     }
   }
   return null;

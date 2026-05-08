@@ -223,9 +223,14 @@ test.describe('Estimates API — POST /', () => {
   });
 
   test('201 with future validUntil', async ({ request }) => {
-    const e = await createEstimate(request, { validUntil: '2099-12-31' });
+    // +5y is unambiguously inside the +10y cap regardless of when the test
+    // runs. (Pre-cap this used 2099-12-31; that's now > +10y from today.)
+    const t = new Date();
+    t.setFullYear(t.getFullYear() + 5);
+    const isoDate = t.toISOString().slice(0, 10);
+    const e = await createEstimate(request, { validUntil: isoDate });
     expect(e.validUntil).toBeTruthy();
-    expect(new Date(e.validUntil).getFullYear()).toBe(2099);
+    expect(new Date(e.validUntil).getFullYear()).toBe(t.getFullYear());
   });
 
   test('totalAmount calculated as sum(qty * unitPrice)', async ({ request }) => {
@@ -280,13 +285,13 @@ test.describe('Estimates API — POST /', () => {
 //     boundary-just-inside case (200 → 201) so the cap can't drift up.
 //
 //   #178 / #322 — validUntil year range: gap card says "2026..2100".
-//     Backend currently caps the LOWER bound (rejects past dates) but
-//     has NO upper-bound cap — year 2150 is accepted. Path B.2 per
-//     CLAUDE.md "gap-card claims as hypotheses": pin the actual
-//     behaviour today (any date ≥ today is accepted) and file the
-//     upper-bound-cap discussion as a TODOS follow-up. Tests assert
-//     reachable boundaries (today, 2099, 2150 all accepted; yesterday
-//     and historical past rejected).
+//     Backend caps the LOWER bound (rejects past dates with
+//     VALID_UNTIL_IN_PAST) AND the UPPER bound at +10 years from today
+//     (sliding window, INVALID_VALID_UNTIL_FUTURE). The +10y choice is
+//     wide enough for multi-year service plans / contract retention but
+//     tight enough to reject nonsense like 2150. Tests assert reachable
+//     boundaries (tomorrow accepted; +9y accepted; +11y rejected;
+//     yesterday rejected; 2150 rejected).
 //
 //   #255 — totalAmount = sum(qty * unitPrice): existing test (line
 //     231) covers a simple 2-line case; this block adds a single-line
@@ -371,15 +376,45 @@ test.describe('Estimates API — regression-coverage-backlog #11', () => {
     expect((await res.json()).code).toBe('VALID_UNTIL_IN_PAST');
   });
 
-  test('validUntil far future (year 2150) currently accepted — pins absent upper-bound cap (#178/#322 TODOS)', async ({ request }) => {
-    // Gap card says range should be 2026..2100. Backend has no upper-bound
-    // cap today; this test pins that fact. When the cap lands, flip this
-    // assertion to expect 400 with a new INVALID_VALID_UNTIL_FUTURE code.
-    const e = await createEstimate(request, {
-      title: 'vu-far-future',
+  test('validUntil far future (year 2150) rejected with INVALID_VALID_UNTIL_FUTURE (#178/#322)', async ({ request }) => {
+    // Backend caps validUntil at +10 years from today (sliding window).
+    // 2150 is far outside that window — must reject with the dedicated
+    // future-cap code.
+    const res = await authPost(request, '/api/estimates', {
+      title: `${RUN_TAG} vu-far-future`,
       validUntil: '2150-06-01',
+      lineItems: [{ description: 'x', quantity: 1, unitPrice: 1 }],
     });
-    expect(new Date(e.validUntil).getFullYear()).toBe(2150);
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_VALID_UNTIL_FUTURE');
+  });
+
+  test('validUntil at +9 years (within +10y cap) accepted (#178/#322)', async ({ request }) => {
+    // Boundary: anything strictly within the +10y window passes. +9y is
+    // a comfortable in-window choice that won't drift past the cap if the
+    // test runs near year-end.
+    const t = new Date();
+    t.setFullYear(t.getFullYear() + 9);
+    const e = await createEstimate(request, {
+      title: 'vu-9y',
+      validUntil: t.toISOString().slice(0, 10),
+    });
+    expect(e.validUntil).toBeTruthy();
+    expect(new Date(e.validUntil).getFullYear()).toBe(t.getFullYear());
+  });
+
+  test('validUntil at +11 years (beyond +10y cap) rejected (#178/#322)', async ({ request }) => {
+    // Boundary on the rejection side: +11y is unambiguously outside the
+    // cap regardless of intra-year drift.
+    const t = new Date();
+    t.setFullYear(t.getFullYear() + 11);
+    const res = await authPost(request, '/api/estimates', {
+      title: `${RUN_TAG} vu-11y`,
+      validUntil: t.toISOString().slice(0, 10),
+      lineItems: [{ description: 'x', quantity: 1, unitPrice: 1 }],
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_VALID_UNTIL_FUTURE');
   });
 
   // #255 — totalAmount = sum(qty * unitPrice)
@@ -640,7 +675,10 @@ test.describe('Estimates API — PUT /:id', () => {
   });
 
   test('PUT clears validUntil when set to null', async ({ request }) => {
-    const e = await createEstimate(request, { title: 'clear-vu', validUntil: '2099-01-01' });
+    // +3y stays inside the +10y cap regardless of when the test runs.
+    const t = new Date();
+    t.setFullYear(t.getFullYear() + 3);
+    const e = await createEstimate(request, { title: 'clear-vu', validUntil: t.toISOString().slice(0, 10) });
     const res = await authPut(request, `/api/estimates/${e.id}`, { validUntil: null });
     expect(res.status()).toBe(200);
     expect((await res.json()).validUntil).toBeNull();

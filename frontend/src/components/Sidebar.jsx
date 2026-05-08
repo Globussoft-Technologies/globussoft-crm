@@ -662,6 +662,26 @@ function renderWellnessNav({
         label="Visits"
         managerOnly
       />
+      {/* Wave 11 Agent GG — Resource availability (rooms / holidays /
+          working hours). Manager+ only. */}
+      <Link
+        to="/wellness/resources"
+        icon={Building2}
+        label="Resources"
+        managerOnly
+      />
+      <Link
+        to="/wellness/holidays"
+        icon={Calendar}
+        label="Holidays"
+        managerOnly
+      />
+      <Link
+        to="/wellness/working-hours"
+        icon={Clock}
+        label="Working Hours"
+        managerOnly
+      />
 
       {/* Lead-to-revenue */}
       <div style={labelStyle}>Leads & Revenue</div>

@@ -85,6 +85,9 @@ export default function CalendarGrid() {
   // booked → fallback +24h slot, losing the explicit time the receptionist
   // wanted to give the slot.
   const [waitlist, setWaitlist] = useState([]);
+  // Wave 11 Agent GG: resource list (for the New Visit modal) + same-day holidays banner.
+  const [resources, setResources] = useState([]);
+  const [holidays, setHolidays] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(true);
   // #270: empty-slot click opens a "New visit" modal seeded with the chosen
@@ -104,7 +107,7 @@ export default function CalendarGrid() {
       // calendar appeared empty even though the dashboard showed the correct counts.
       const fromQ = `${dStr}T00:00:00+05:30`;
       const toQ = `${dStr}T23:59:59+05:30`;
-      const [staff, vs, svc, pts, wl] = await Promise.all([
+      const [staff, vs, svc, pts, wl, rs, hs] = await Promise.all([
         fetchApi('/api/staff').catch(() => []),
         fetchApi(`/api/wellness/visits?from=${encodeURIComponent(fromQ)}&to=${encodeURIComponent(toQ)}&limit=500`),
         fetchApi('/api/wellness/services').catch(() => []),
@@ -113,6 +116,8 @@ export default function CalendarGrid() {
         // surface promote-to-slot options. The list endpoint returns a
         // bare array; defensive Array.isArray check matches patients above.
         fetchApi('/api/wellness/waitlist?status=waiting').catch(() => []),
+        fetchApi('/api/wellness/resources?activeOnly=1').catch(() => []),
+        fetchApi(`/api/wellness/holidays?from=${dStr}&to=${dStr}`).catch(() => []),
       ]);
       setAllStaff(Array.isArray(staff) ? staff : []);
       setVisits(Array.isArray(vs) ? vs : []);
@@ -127,7 +132,9 @@ export default function CalendarGrid() {
         : [];
       setPatients(patientsArr);
       setWaitlist(Array.isArray(wl) ? wl : Array.isArray(wl?.items) ? wl.items : []);
-    } catch (_e) { setVisits([]); setAllStaff([]); setWaitlist([]); }
+      setResources(Array.isArray(rs) ? rs : []);
+      setHolidays(Array.isArray(hs) ? hs : []);
+    } catch (_e) { setVisits([]); setAllStaff([]); setWaitlist([]); setResources([]); setHolidays([]); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [date]);
@@ -239,6 +246,25 @@ export default function CalendarGrid() {
       </header>
 
       {loading && <div>Loading…</div>}
+
+      {/* Wave 11 Agent GG: red banner when the selected day has any holidays. */}
+      {!loading && holidays.length > 0 && (
+        <div
+          className="glass"
+          style={{
+            padding: '0.85rem 1rem',
+            marginBottom: '1rem',
+            borderLeft: '4px solid #ef4444',
+            background: 'rgba(239,68,68,0.08)',
+            color: 'var(--text-primary)',
+            fontSize: '0.85rem',
+          }}
+          role="alert"
+        >
+          <strong style={{ color: '#ef4444' }}>Holiday today:</strong>{' '}
+          {holidays.map((h) => h.name).join(', ')}
+        </div>
+      )}
 
       {!loading && columns.length === 0 && (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
@@ -371,6 +397,8 @@ export default function CalendarGrid() {
           patients={patients}
           services={services}
           waitlist={waitlist}
+          /* Wave 11 Agent GG: pass resources for the dropdown. */
+          resources={resources}
           notify={notify}
           onClose={() => setNewVisit(null)}
           onCreated={() => { setNewVisit(null); load(); }}
@@ -384,10 +412,12 @@ export default function CalendarGrid() {
 // Only required field is patientId (per the visit POST validator at
 // routes/wellness.js:472). status defaults to 'booked' so the receptionist
 // doesn't trip the "completed visits need serviceId + doctorId" gate.
-function NewVisitModal({ column, hour, date, patients, services, waitlist, notify, onClose, onCreated }) {
+function NewVisitModal({ column, hour, date, patients, services, waitlist, resources = [], notify, onClose, onCreated }) {
   const [patientId, setPatientId] = useState('');
   const [serviceId, setServiceId] = useState('');
   const [notes, setNotes] = useState('');
+  // Wave 11 Agent GG: optional resource selection. Filtered by service compatibility.
+  const [resourceId, setResourceId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   // #629: source flag tracks whether this booking is a fresh visit (default)
   // or a promotion from a waitlist entry. When 'waitlist', we PUT
@@ -444,6 +474,8 @@ function NewVisitModal({ column, hour, date, patients, services, waitlist, notif
           patientId: parseInt(patientId, 10),
           serviceId: serviceId ? parseInt(serviceId, 10) : null,
           doctorId: column.id,
+          // Wave 11 Agent GG: pin resource if selected (gate raises 409 RESOURCE_DOUBLE_BOOKED on overlap).
+          resourceId: resourceId ? parseInt(resourceId, 10) : null,
           visitDate: istIso,
           status: 'booked',
           notes: notes || null,
@@ -562,6 +594,28 @@ function NewVisitModal({ column, hour, date, patients, services, waitlist, notif
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
+
+            {/* Wave 11 Agent GG: optional resource selection (room/machine). */}
+            {resources.length > 0 && (
+              <>
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Resource (optional)</label>
+                <select value={resourceId} onChange={(e) => setResourceId(e.target.value)} style={modalInput}>
+                  <option value="">— no resource pinned —</option>
+                  {resources
+                    .filter((r) => {
+                      if (!serviceId) return true;
+                      if (!r.serviceIds) return true;
+                      try {
+                        const allowed = JSON.parse(r.serviceIds);
+                        return Array.isArray(allowed) && allowed.includes(parseInt(serviceId, 10));
+                      } catch (_e) { return true; }
+                    })
+                    .map((r) => (
+                      <option key={r.id} value={r.id}>{r.name} · {r.type}</option>
+                    ))}
+                </select>
+              </>
+            )}
 
             <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Notes (optional)</label>
             <textarea

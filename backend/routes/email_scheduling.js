@@ -308,9 +308,20 @@ router.post("/:id/send-now", async (req, res) => {
           errorMessage: String(result.reason || "send failed").slice(0, 4000),
         },
       });
-      // 502 = upstream provider rejected. Keep separate from 500 so SLO
-      // dashboards can distinguish "our bug" from "SendGrid down".
-      return res.status(502).json({
+      // Upstream provider rejected. Returns 200 (NOT 502) with
+      // `success: false` body so the JSON envelope reaches the client —
+      // Cloudflare/Nginx swallow backend 5xx bodies and substitute their
+      // own HTML error page, leaving the client with `error code: 502`
+      // and no machine-readable code/detail. The {success, code, detail}
+      // envelope is the contract; status code can no longer be the
+      // discriminator. SLO dashboards should split provider-down from
+      // our-bug via the `code` field, not the HTTP status.
+      //
+      // Truly-internal failure modes (DB write fail, code bugs) stay at
+      // 5xx — see EMAIL_PERSIST_FAILED and SEND_NOW_INTERNAL above/below.
+      // The proxy will swallow those bodies too, but those are genuine
+      // server-error signals where loud HTTP-status failure is correct.
+      return res.status(200).json({
         success: false,
         delivered: false,
         record: updated,

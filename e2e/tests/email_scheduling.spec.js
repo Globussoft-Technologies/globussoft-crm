@@ -10,7 +10,11 @@
  *   GET    /:id                 — read
  *   DELETE /:id                 — delete
  *   POST   /:id/cancel          — cancel pending
- *   POST   /:id/send-now        — fire now (Mailgun) — we test 502/200 either way
+ *   POST   /:id/send-now        — fire now (SendGrid) — upstream-rejected
+ *                                  paths return 200 with `success: false`
+ *                                  envelope (Cloudflare/Nginx swallow 5xx
+ *                                  bodies; status code is no longer the
+ *                                  discriminator — see body.code instead).
  *
  * Hits BASE_URL (default https://crm.globusdemos.com) using the generic-tenant
  * admin. Each test seeds + cleans its own data so rows don't leak.
@@ -219,38 +223,41 @@ test.describe('email-scheduling routes', () => {
     createdScheduledIds.push(created.id);
 
     const res = await request.post(`${API}/email-scheduling/${created.id}/send-now`, { headers: auth() });
-    // Four valid outcomes:
-    //   - 200 with JSON {record: {status:'SENT'}} (SendGrid keys configured + working)
-    //   - 502 with JSON {record: {status:'FAILED'}} (route reached, SendGrid threw)
-    //   - 502 with HTML body (upstream proxy / Cloudflare returned a 502 page
-    //     before the route's 502 handler ran — typical on demo when SendGrid
-    //     is timing out at the network edge). On HTML 502 we can't inspect
-    //     `record`, but the row exists and the assertion that send-now was
-    //     reachable + non-2xx-on-no-keys is preserved.
-    //   - 500 with JSON {error: "Failed to send scheduled email"} — route's
-    //     catch-all on an UNHANDLED exception inside the try block (one of
-    //     four prisma calls throws OR an upstream issue not handled by
-    //     sendSendGrid's internal try/catch). Tracked under #524 as a real
-    //     regression introduced by the PR #511 Mailgun→SendGrid migration
-    //     (f489df1) — the exact throw source needs demo `pm2 logs` to
-    //     diagnose. Widening to accept 500 here unblocks the v3.4.13 release
-    //     validation; the fix lives in the route, not the spec.
-    expect([200, 500, 502]).toContain(res.status());
-    const ctype = res.headers()['content-type'] || '';
-    if (ctype.includes('application/json')) {
-      const body = await res.json();
-      // Accept BOTH the success/failed-record envelope (200/502 success path
-      // OR sendSendGrid-handled provider error) AND the catch-block error
-      // shape (500 unhandled exception — see #524).
-      if (body.record) {
-        expect(['SENT', 'FAILED']).toContain(body.record.status);
+    // Three valid outcomes after the proxy-body-swallow fix:
+    //   - 200 with JSON {success:true, record: {status:'SENT'}} — SendGrid
+    //     configured + accepted the message.
+    //   - 200 with JSON {success:false, record: {status:'FAILED'},
+    //     code: 'SENDGRID_REJECTED'|'SENDGRID_NOT_CONFIGURED', detail:...} —
+    //     route reached SendGrid which rejected (or no API key configured).
+    //     Was 502 pre-fix; flipped to 200 because Cloudflare/Nginx swallow
+    //     5xx bodies and substitute their own HTML page, so the JSON
+    //     envelope (with the diagnostic `code`) never reached the client.
+    //     The body's `success` field — not the status code — is now the
+    //     discriminator.
+    //   - 500 with JSON {error, code:'EMAIL_PERSIST_FAILED'|'SEND_NOW_INTERNAL'}
+    //     — truly-internal failure (DB write fail, unhandled exception).
+    //     Stays 5xx by design; the proxy will swallow this body too but
+    //     these are genuine server errors that should fail loudly.
+    expect([200, 500]).toContain(res.status());
+    const body = await res.json();
+    if (res.status() === 200) {
+      expect(body).toHaveProperty('success');
+      if (body.success === true) {
+        expect(body.record.status).toBe('SENT');
       } else {
-        expect(body).toHaveProperty('error');
+        // Upstream-rejected path — the regression case that motivated the
+        // 502→200 flip. Body MUST carry a stable code so the SPA can
+        // surface a useful error to the user.
+        expect(body.success).toBe(false);
+        expect(body.record.status).toBe('FAILED');
+        expect(['SENDGRID_REJECTED', 'SENDGRID_NOT_CONFIGURED']).toContain(body.code);
+        expect(typeof body.detail).toBe('string');
       }
     } else {
-      // HTML 502 from Nginx/Cloudflare upstream — SendGrid unreachable above
-      // the route. Status code is the load-bearing assertion.
-      expect(res.status()).toBe(502);
+      // 500 internal error — DB write fail / unhandled exception. Body
+      // carries the same stable-code envelope.
+      expect(body).toHaveProperty('error');
+      expect(['EMAIL_PERSIST_FAILED', 'SEND_NOW_INTERNAL']).toContain(body.code);
     }
   });
 

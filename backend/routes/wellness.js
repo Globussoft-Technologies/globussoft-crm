@@ -1572,22 +1572,41 @@ router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"])
     if (!signatureSvg || typeof signatureSvg !== "string" || signatureSvg.length < 500) {
       return res.status(400).json({ error: "Patient signature is required and cannot be blank", code: "SIGNATURE_REQUIRED" });
     }
+    // #564 — DPDP §15 / CONSENT_CAPTURE. Snapshot the matching
+    // ConsentTemplate.body server-side so the immutable record reflects the
+    // wording shown to the patient at sign time, even if the template body
+    // is later edited or the template row is deleted. We deliberately
+    // resolve by (tenantId, key=templateName) rather than trusting client
+    // input — a tampered request body cannot inject arbitrary contentSnapshot.
+    let contentSnapshot = null;
+    try {
+      const tpl = await prisma.consentTemplate.findFirst({
+        where: { tenantId: req.user.tenantId, key: templateName },
+        select: { body: true },
+      });
+      contentSnapshot = tpl?.body || null;
+    } catch (_e) { /* schema/migration race; leave snapshot null */ }
+
     const consent = await prisma.consentForm.create({
       data: {
         patientId: parseInt(patientId),
         serviceId: serviceId ? parseInt(serviceId) : null,
         templateName,
         signatureSvg,
+        contentSnapshot,
         tenantId: req.user.tenantId,
       },
     });
     // #179: audit consent creation. Don't store the signatureSvg in the
     // audit blob — it's a few KB, and the row itself holds the canonical copy.
-    await writeAudit('ConsentForm', 'CREATE', consent.id, req.user.userId, req.user.tenantId, {
+    // #564: emit CONSENT_CAPTURE alongside the legacy CREATE so DPDP / clinical
+    // audit reviewers can grep one canonical action verb across the audit log.
+    await writeAudit('ConsentForm', 'CONSENT_CAPTURE', consent.id, req.user.userId, req.user.tenantId, {
       patientId: consent.patientId,
       serviceId: consent.serviceId,
       templateName: consent.templateName,
       signatureLength: signatureSvg.length,
+      hasContentSnapshot: !!contentSnapshot,
     });
 
     // #616: emit consent.signed. Failure here MUST NOT fail the response.

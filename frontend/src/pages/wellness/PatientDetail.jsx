@@ -559,6 +559,12 @@ function ConsentTab({ patient, services, onSaved }) {
       .catch(() => { /* fall back to legacy hardcoded options below */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // #564: DPDP §15 — surface the template body to the signer AT POINT OF
+  // CAPTURE so the patient sees the wording they're agreeing to. Pre-fix
+  // the page rendered only the dropdown + signature canvas; the QA retest
+  // 2026-05-07 flagged this as the residual gap. The body is also what gets
+  // server-snapshot'd into ConsentForm.contentSnapshot at POST time.
+  const selectedTemplate = templates.find((t) => t.key === templateName) || null;
   // Track whether the patient has actually drawn anything on the canvas. Without
   // this guard, canvas.toDataURL() always returns a valid (but empty) PNG and the
   // server stores a blank "signature" — a legal/compliance issue (#118).
@@ -721,6 +727,39 @@ function ConsentTab({ patient, services, onSaved }) {
           </select>
         </div>
       </div>
+
+      {/* #564: DPDP §15 — render the selected template's body inline so the
+          signer can read what they're agreeing to before signing. Falls back
+          to a notice if the template carries no body (legacy seed rows had
+          empty bodies; admin can add wording via /api/wellness/consent-templates). */}
+      <section
+        data-testid="consent-template-body"
+        style={{
+          marginBottom: '1rem',
+          padding: '0.85rem 1rem',
+          maxHeight: 240,
+          overflowY: 'auto',
+          background: 'var(--card-bg, rgba(0,0,0,0.04))',
+          border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+          borderRadius: 8,
+          fontSize: '0.85rem',
+          lineHeight: 1.5,
+          whiteSpace: 'pre-wrap',
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: '0.4rem' }}>
+          {selectedTemplate?.label || templateName}
+        </div>
+        {selectedTemplate?.body ? (
+          <div>{selectedTemplate.body}</div>
+        ) : (
+          <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+            This template has no body text on file. Ask your administrator to
+            add the consent wording (purpose, data categories, retention, jurisdiction)
+            via Settings → Consent templates so DPDP §15 disclosures appear here.
+          </div>
+        )}
+      </section>
 
       <div style={{ marginBottom: '1rem' }}>
         <label style={labelStyle}>Patient signature (sign below)</label>

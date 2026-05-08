@@ -40,7 +40,18 @@ prisma.consentTemplate = {
   update: vi.fn(),
   delete: vi.fn(),
 };
-prisma.consentForm = prisma.consentForm || {};
+prisma.consentForm = {
+  ...(prisma.consentForm || {}),
+  create: vi.fn(),
+  findMany: vi.fn(),
+  findFirst: vi.fn(),
+  update: vi.fn(),
+};
+prisma.auditLog = {
+  ...(prisma.auditLog || {}),
+  create: vi.fn().mockResolvedValue({ id: 1 }),
+  findFirst: vi.fn().mockResolvedValue(null),
+};
 prisma.patient = prisma.patient || {};
 prisma.visit = prisma.visit || {};
 prisma.prescription = prisma.prescription || {};
@@ -58,7 +69,11 @@ function makeApp({ role = 'ADMIN', tenantId = 1, userId = 7, wellnessRole = 'adm
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId, role, wellnessRole };
+    // #564: pre-resolve `vertical` on req.user so the verifyWellnessRole
+    // middleware skips its prisma.tenant.findUnique lookup (the test stub
+    // doesn't surface it; without this the gate falls into the catch arm
+    // and returns 403 / WELLNESS_TENANT_REQUIRED for every protected route).
+    req.user = { userId, tenantId, role, wellnessRole, vertical: 'wellness' };
     next();
   });
   app.use('/api/wellness', wellnessRouter);
@@ -72,6 +87,8 @@ beforeEach(() => {
   prisma.consentTemplate.create.mockReset();
   prisma.consentTemplate.update.mockReset();
   prisma.consentTemplate.delete.mockReset();
+  prisma.consentForm.create.mockReset?.();
+  prisma.auditLog.create?.mockReset?.();
 });
 
 describe('GET /api/wellness/consent-templates', () => {
@@ -230,5 +247,105 @@ describe('DELETE /api/wellness/consent-templates/:id', () => {
     const app = makeApp({ role: 'USER' });
     const res = await request(app).delete('/api/wellness/consent-templates/5');
     expect(res.status).toBe(403);
+  });
+});
+
+// #564 — DPDP §15 / consent capture. Pre-fix the POST /consents endpoint
+// stored only the signature + templateName — the wording the patient agreed
+// to lived in a separate ConsentTemplate row that admins could later edit
+// or delete, retroactively altering "what the patient signed". This block
+// pins the snapshot behaviour: server-side body resolution by
+// (tenantId, key=templateName), persisted into ConsentForm.contentSnapshot,
+// audited as CONSENT_CAPTURE.
+describe('POST /api/wellness/consents — #564 contentSnapshot', () => {
+  // Realistic 600x180 PNG-ish data URL well over the 500-char floor.
+  const BIG_SIG = 'data:image/png;base64,' + 'A'.repeat(900);
+
+  test('snapshots ConsentTemplate.body into ConsentForm.contentSnapshot at sign time', async () => {
+    const TEMPLATE_BODY = 'You consent to the following procedure: PRP scalp injection. Your data will be retained for 7 years per DPDP §15.';
+    prisma.consentTemplate.findFirst.mockResolvedValue({ body: TEMPLATE_BODY });
+    prisma.consentForm.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 101, signedAt: new Date(), ...data })
+    );
+
+    const app = makeApp({ wellnessRole: 'doctor' });
+    const res = await request(app)
+      .post('/api/wellness/consents')
+      .send({ patientId: 42, templateName: 'prp-scalp', signatureSvg: BIG_SIG });
+
+    expect(res.status).toBe(201);
+    expect(prisma.consentTemplate.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { tenantId: 1, key: 'prp-scalp' } })
+    );
+    const created = prisma.consentForm.create.mock.calls[0][0].data;
+    expect(created.contentSnapshot).toBe(TEMPLATE_BODY);
+    expect(created.templateName).toBe('prp-scalp');
+    expect(created.tenantId).toBe(1);
+    expect(created.signatureSvg).toBe(BIG_SIG);
+  });
+
+  test('persists null contentSnapshot when no template body is on file (legacy seed rows)', async () => {
+    prisma.consentTemplate.findFirst.mockResolvedValue({ body: null });
+    prisma.consentForm.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 102, signedAt: new Date(), ...data })
+    );
+
+    const app = makeApp({ wellnessRole: 'professional' });
+    const res = await request(app)
+      .post('/api/wellness/consents')
+      .send({ patientId: 7, templateName: 'general', signatureSvg: BIG_SIG });
+
+    expect(res.status).toBe(201);
+    const created = prisma.consentForm.create.mock.calls[0][0].data;
+    expect(created.contentSnapshot).toBeNull();
+  });
+
+  test('client-supplied contentSnapshot in body is ignored — server resolves from template', async () => {
+    const TRUE_BODY = 'CANONICAL: real consent text.';
+    prisma.consentTemplate.findFirst.mockResolvedValue({ body: TRUE_BODY });
+    prisma.consentForm.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 103, signedAt: new Date(), ...data })
+    );
+
+    const app = makeApp({ wellnessRole: 'doctor' });
+    await request(app)
+      .post('/api/wellness/consents')
+      .send({
+        patientId: 1, templateName: 'general', signatureSvg: BIG_SIG,
+        contentSnapshot: 'TAMPERED: I agreed to nothing.',
+      });
+
+    const created = prisma.consentForm.create.mock.calls[0][0].data;
+    expect(created.contentSnapshot).toBe(TRUE_BODY);
+    expect(created.contentSnapshot).not.toMatch(/TAMPERED/);
+  });
+
+  test('400 when signature is missing or blank', async () => {
+    const app = makeApp({ wellnessRole: 'doctor' });
+    const res = await request(app)
+      .post('/api/wellness/consents')
+      .send({ patientId: 1, templateName: 'general', signatureSvg: 'data:image/png;base64,short' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('SIGNATURE_REQUIRED');
+    expect(prisma.consentForm.create).not.toHaveBeenCalled();
+  });
+
+  test('400 when patientId or templateName is missing', async () => {
+    const app = makeApp({ wellnessRole: 'doctor' });
+    const res = await request(app)
+      .post('/api/wellness/consents')
+      .send({ patientId: 1, signatureSvg: BIG_SIG });
+    expect(res.status).toBe(400);
+  });
+
+  test('telecaller role cannot capture consent', async () => {
+    // role=USER closes the admin / manager override paths so the gate
+    // falls through to the wellnessRole check.
+    const app = makeApp({ role: 'USER', wellnessRole: 'telecaller' });
+    const res = await request(app)
+      .post('/api/wellness/consents')
+      .send({ patientId: 1, templateName: 'general', signatureSvg: BIG_SIG });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('WELLNESS_ROLE_FORBIDDEN');
   });
 });

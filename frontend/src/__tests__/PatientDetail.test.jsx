@@ -190,4 +190,61 @@ describe('<PatientDetail />', () => {
       expect(priorSection.textContent).not.toMatch(/No prior consents on file/i);
     });
   });
+
+  // #564 — DPDP §15 plain-language clauses must be visible to the patient
+  // AT POINT OF CAPTURE. Pre-fix the tab rendered only the dropdown +
+  // signature canvas; the QA retest 2026-05-07 flagged that the patient
+  // had no surface showing the wording they were agreeing to.
+  describe('Consent tab — template body at point of capture (#564)', () => {
+    it('renders the selected template body inline so the signer can read it before signing', async () => {
+      const TPL_BODY = 'You are consenting to PRP scalp injection. Data retained 7 years. Jurisdiction: DPDP 2023, India.';
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        if (url === '/api/wellness/consent-templates') {
+          return Promise.resolve([
+            { id: 11, key: 'prp-scalp', label: 'PRP Scalp', body: TPL_BODY, isActive: true },
+            { id: 12, key: 'general', label: 'General', body: null, isActive: true },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Consent form/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Consent form/i }));
+
+      const body = await screen.findByTestId('consent-template-body');
+      // The default-selected template's full body is visible verbatim.
+      await waitFor(() => expect(body.textContent).toContain(TPL_BODY));
+      expect(body.textContent).toMatch(/PRP Scalp/);
+    });
+
+    it('shows fallback notice when the selected template has no body', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        if (url === '/api/wellness/consent-templates') {
+          return Promise.resolve([
+            { id: 12, key: 'general', label: 'General', body: null, isActive: true },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Consent form/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Consent form/i }));
+
+      const body = await screen.findByTestId('consent-template-body');
+      await waitFor(() => expect(body.textContent).toMatch(/no body text on file/i));
+      expect(body.textContent).toMatch(/DPDP/);
+    });
+  });
 });

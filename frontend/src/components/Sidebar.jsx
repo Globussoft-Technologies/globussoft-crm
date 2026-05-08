@@ -683,6 +683,11 @@ function renderWellnessNav({
         managerOnly
       />
 
+      {/* Wave 2 Agent JJ — Staff Attendance + Leave Management. */}
+      <div style={labelStyle}>Staff</div>
+      <Link to="/wellness/attendance" icon={Clock} label="Attendance" />
+      <Link to="/wellness/leave" icon={Calendar} label="Leave" />
+
       {/* Lead-to-revenue */}
       <div style={labelStyle}>Leads & Revenue</div>
       <Link

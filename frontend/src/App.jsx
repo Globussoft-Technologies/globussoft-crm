@@ -873,6 +873,9 @@ export default function App() {
                   </RoleGuard>
                 </WellnessOnly>
               } />
+              {/* Wave 2 Agent JJ — Staff Attendance + Leave Management. */}
+              <Route path="wellness/attendance" element={<WellnessOnly><WellnessAttendance /></WellnessOnly>} />
+              <Route path="wellness/leave" element={<WellnessOnly><WellnessLeave /></WellnessOnly>} />
               {/* #309: /wellness/invoices used to render a blank page (no
                   route binding). Wellness shares the generic CRM Invoices
                   UI — alias the prefixed URL to the canonical /invoices

@@ -382,6 +382,9 @@ const wellnessRoutes = require("./routes/wellness");
 // stay uniform; routes/inventory.js declares only paths that wellness.js does
 // not own.
 const inventoryRoutes = require("./routes/inventory");
+// Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.
+const attendanceRoutes = require("./routes/attendance");
+const leaveRoutes = require("./routes/leave");
 // External partner API v1 (Callified.ai, Globus Phone, etc. — API key auth)
 const externalRoutes = require("./routes/external");
 // Admin tooling — manual triggers + read APIs for ops actions (G-15 backup)
@@ -413,7 +416,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, next);
 });
@@ -537,6 +540,12 @@ app.use("/api/wellness", wellnessRoutes);
 // does NOT own (product-categories, vendors, inventory/receipts,
 // inventory/adjustments, inventory/movements, auto-consumption-rules).
 app.use("/api/wellness", inventoryRoutes);
+// Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.
+// Cross-vertical (wellness AND generic). Mounted top-level. The biometric
+// webhook (POST /api/attendance/biometric/webhook) is in openPaths and
+// authenticates via X-API-Key against BiometricDevice.apiKey.
+app.use("/api/attendance", attendanceRoutes);
+app.use("/api/leave", leaveRoutes);
 // External partner API (API key auth, versioned)
 app.use("/api/v1/external", externalRoutes);
 // Admin tooling (ADMIN-only ops triggers + read APIs)

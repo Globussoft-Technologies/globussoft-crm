@@ -257,6 +257,19 @@ model Tenant {
   resources    Resource[]
   holidays     Holiday[]
   workingHours WorkingHours[]
+
+  // Wave 2 Agent JJ — Staff Attendance + Biometric stub + Leave Management.
+  attendances      Attendance[]
+  biometricDevices BiometricDevice[]
+  leavePolicies    LeavePolicy[]
+  leaveBalances    LeaveBalance[]
+  leaveRequests    LeaveRequest[]
+
+  // Wave 2 Agent II — POS / cash register / shift / sale backbone.
+  registers     Register[]
+  shifts        Shift[]
+  sales         Sale[]
+  saleLineItems SaleLineItem[]
 }
 
 model User {
@@ -320,6 +333,15 @@ model User {
   // Wave 11 Agent GG — per-practitioner availability.
   doctorHolidays     Holiday[]      @relation("DoctorHolidays")
   doctorWorkingHours WorkingHours[] @relation("DoctorWorkingHours")
+
+  // Wave 2 Agent JJ — Attendance + Leave back-relations.
+  attendances    Attendance[]
+  leaveRequests  LeaveRequest[] @relation("LeaveRequester")
+  leaveApprovals LeaveRequest[] @relation("LeaveApprover")
+  leaveBalances  LeaveBalance[]
+
+  // Wave 2 Agent II — POS cashier shifts.
+  cashierShifts Shift[] @relation("CashierShifts")
 }
 
 model Contact {
@@ -2340,6 +2362,8 @@ model Patient {
   // observed on cold calls.
   @@index([tenantId, createdAt])
   @@index([tenantId, deletedAt])
+  // Wave 2 Agent II — POS sales rung up against this patient.
+  sales               Sale[]
 }
 
 model Service {
@@ -2675,6 +2699,8 @@ model Location {
 
   @@index([tenantId, isActive])
   @@index([tenantId, city])
+  // Wave 2 Agent II — physical/virtual cash registers.
+  registers Register[]
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -3222,4 +3248,271 @@ model WorkingHours {
   updatedAt DateTime @updatedAt
 
   @@index([tenantId, doctorId, dayOfWeek])
+}
+
+// -----------------------------------------------------------------------
+// Wave 2 Agent JJ -- Staff Attendance + Biometric stub + Leave Management
+// -----------------------------------------------------------------------
+
+model Attendance {
+  id       Int    @id @default(autoincrement())
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  date DateTime
+
+  clockInAt          DateTime?
+  clockOutAt         DateTime?
+  clockInLocationId  Int?
+  clockOutLocationId Int?
+
+  source            String  @default("MANUAL")
+  biometricDeviceId Int?
+
+  totalMinutes Int?
+
+  status String  @default("PRESENT")
+  notes  String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, userId, date])
+  @@index([tenantId, date])
+  @@index([tenantId, userId, date])
+}
+
+model BiometricDevice {
+  id       Int    @id @default(autoincrement())
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  locationId Int?
+
+  deviceId String
+  vendor   String
+
+  apiKey String
+
+  lastSyncAt DateTime?
+  isActive   Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, deviceId])
+  @@unique([apiKey])
+  @@index([tenantId, isActive])
+}
+
+model LeavePolicy {
+  id       Int    @id @default(autoincrement())
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name String
+
+  leaveType String
+
+  annualEntitlement Int
+
+  accrualPattern String @default("UPFRONT")
+
+  carryForwardCap Int?
+  encashable      Boolean @default(false)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  balances LeaveBalance[]
+  requests LeaveRequest[]
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, leaveType])
+}
+
+model LeaveBalance {
+  id       Int    @id @default(autoincrement())
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  policyId Int
+  policy   LeavePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  periodStart DateTime
+  periodEnd   DateTime
+
+  entitled Int @default(0)
+  accrued  Int @default(0)
+  used     Int @default(0)
+  pending  Int @default(0)
+  available Int @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, userId, policyId, periodStart])
+  @@index([tenantId, userId])
+}
+
+model LeaveRequest {
+  id       Int    @id @default(autoincrement())
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  userId Int
+  user   User @relation("LeaveRequester", fields: [userId], references: [id], onDelete: Cascade)
+
+  policyId Int
+  policy   LeavePolicy @relation(fields: [policyId], references: [id], onDelete: Restrict)
+
+  startDate DateTime
+  endDate   DateTime
+
+  days Int
+
+  reason String? @db.Text
+
+  status String @default("PENDING")
+
+  approverId    Int?
+  approver      User?   @relation("LeaveApprover", fields: [approverId], references: [id], onDelete: SetNull)
+  approverNotes String? @db.Text
+
+  submittedAt DateTime  @default(now())
+  decidedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, userId, status])
+  @@index([tenantId, status])
+  @@index([tenantId, startDate])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Wave 2 Agent II — POS / cash-register / shift / sale backbone (Google
+// Doc audit, 8 May 2026 — "Confirmed-missing entirely" row 1).
+//
+// Closes the wellness-vertical POS / "New Sale" gap. Sale is the cash-and-
+// carry sibling of Invoice; differs in that it's settled at checkout with
+// no due-date / dunning workflow, tied to a Register + Shift + Cashier,
+// has a sequential per-tenant invoiceNumber (POS-YYYY-NNNN), and uses a
+// polymorphic SaleLineItem (lineType + refId) so future line-types
+// (PACKAGE / BUNDLE / RETAIL_PRODUCT / EVENT_TICKET / DEPOSIT) slot in
+// without a schema migration.
+// ─────────────────────────────────────────────────────────────────────
+
+model Register {
+  id           Int      @id @default(autoincrement())
+  tenantId     Int      @default(1)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  locationId   Int
+  location     Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  name         String
+  openingFloat Float    @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shifts Shift[]
+  sales  Sale[]
+
+  @@index([tenantId, locationId])
+  @@index([tenantId, isActive])
+}
+
+model Shift {
+  id           Int       @id @default(autoincrement())
+  tenantId     Int       @default(1)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  registerId   Int
+  register     Register  @relation(fields: [registerId], references: [id], onDelete: Cascade)
+  userId       Int
+  user         User      @relation("CashierShifts", fields: [userId], references: [id], onDelete: Cascade)
+  openedAt     DateTime  @default(now())
+  closedAt     DateTime?
+  openingFloat Float     @default(0)
+  closingTotal Float?
+  expectedCash Float?
+  variance     Float?
+  notes        String?   @db.Text
+  // OPEN | CLOSED. A Register may have at most one OPEN shift at a time
+  // (route-layer findFirst+409, not a DB unique constraint).
+  status       String    @default("OPEN")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sales Sale[]
+
+  @@index([tenantId, registerId, status])
+  @@index([tenantId, userId, status])
+  @@index([tenantId, openedAt])
+}
+
+model Sale {
+  id                   Int       @id @default(autoincrement())
+  tenantId             Int       @default(1)
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  registerId           Int
+  register             Register  @relation(fields: [registerId], references: [id], onDelete: Cascade)
+  shiftId              Int
+  shift                Shift     @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  // Cashier id recorded but not relationally bound — preserves audit
+  // trail of who rang the sale even if the User row is later removed.
+  cashierId            Int
+  patientId            Int?
+  patient              Patient?  @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  invoiceNumber        String
+  subtotal             Float     @default(0)
+  taxTotal             Float     @default(0)
+  discountTotal        Float     @default(0)
+  total                Float     @default(0)
+  paidAmount           Float     @default(0)
+  // DRAFT | COMPLETED | REFUNDED | CANCELLED.
+  status               String    @default("COMPLETED")
+  // CASH | CARD | UPI | WALLET | GIFTCARD | COMBINED.
+  paymentMethod        String    @default("CASH")
+  paymentBreakdownJson String?   @db.Text
+  refundedAt           DateTime?
+  refundReason         String?   @db.Text
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  lineItems SaleLineItem[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId, shiftId])
+  @@index([tenantId, registerId, createdAt])
+  @@index([tenantId, patientId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+model SaleLineItem {
+  id           Int      @id @default(autoincrement())
+  tenantId     Int      @default(1)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  saleId       Int
+  sale         Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  // Polymorphic line type. refId references the row in the table named
+  // by lineType. Allowed: SERVICE | PRODUCT | MEMBERSHIP | GIFTCARD | PACKAGE
+  lineType     String
+  refId        Int
+  // Denormalised display name frozen at sale time.
+  name         String
+  quantity     Int      @default(1)
+  unitPrice    Float    @default(0)
+  lineDiscount Float    @default(0)
+  // = quantity * unitPrice - lineDiscount. Computed server-side on create.
+  lineTotal    Float    @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, saleId])
+  @@index([tenantId, lineType, refId])
 }

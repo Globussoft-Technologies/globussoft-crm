@@ -9,15 +9,19 @@ import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import audit from '../../lib/audit.js';
 
-const { writeAudit, diffFields } = audit;
+const { writeAudit, diffFields, canonicalize, computeHash } = audit;
 
 beforeAll(() => {
-  prisma.auditLog = { create: vi.fn() };
+  // #558 — writeAudit now also calls prisma.auditLog.findFirst() to look up
+  // the previous row's hash; mock it alongside .create.
+  prisma.auditLog = { create: vi.fn(), findFirst: vi.fn() };
 });
 
 beforeEach(() => {
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
+  prisma.auditLog.findFirst.mockReset();
+  prisma.auditLog.findFirst.mockResolvedValue(null); // default: empty chain
 });
 
 describe('lib/audit — module shape', () => {
@@ -226,3 +230,125 @@ describe('lib/audit — diffFields (pure)', () => {
     expect(out.a).toEqual({ from: null, to: 'x' });
   });
 });
+
+// #558 — Tamper-evidence hash chain.
+describe('lib/audit — canonicalize (deterministic key sort)', () => {
+  test('returns same string for object regardless of key order', () => {
+    expect(canonicalize({ a: 1, b: 2 })).toBe(canonicalize({ b: 2, a: 1 }));
+  });
+
+  test('preserves array order', () => {
+    expect(canonicalize([1, 2, 3])).toBe('[1,2,3]');
+    expect(canonicalize([3, 1, 2])).toBe('[3,1,2]');
+  });
+
+  test('handles nested objects deterministically', () => {
+    const a = canonicalize({ outer: { z: 1, a: 2 }, key: 'v' });
+    const b = canonicalize({ key: 'v', outer: { a: 2, z: 1 } });
+    expect(a).toBe(b);
+  });
+
+  test('null and primitives serialise via JSON.stringify', () => {
+    expect(canonicalize(null)).toBe('null');
+    expect(canonicalize(42)).toBe('42');
+    expect(canonicalize('s')).toBe('"s"');
+  });
+});
+
+describe('lib/audit — computeHash', () => {
+  test('returns stable 64-char hex sha256', () => {
+    const h = computeHash('PREV', { a: 1 });
+    expect(h).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('changing prevHash changes the hash', () => {
+    const h1 = computeHash('PREV1', { a: 1 });
+    const h2 = computeHash('PREV2', { a: 1 });
+    expect(h1).not.toBe(h2);
+  });
+
+  test('changing payload changes the hash', () => {
+    const h1 = computeHash('PREV', { a: 1 });
+    const h2 = computeHash('PREV', { a: 2 });
+    expect(h1).not.toBe(h2);
+  });
+
+  test('null prevHash hashes to a stable value', () => {
+    expect(computeHash(null, { a: 1 })).toBe(computeHash(null, { a: 1 }));
+  });
+});
+
+describe('lib/audit — writeAudit hash chain', () => {
+  test('first row uses GENESIS_<tenantId> as prevHash', async () => {
+    prisma.auditLog.findFirst.mockResolvedValue(null); // empty chain
+    await writeAudit('Contact', 'CREATE', 1, 7, 9, { name: 'Alice' });
+    const arg = prisma.auditLog.create.mock.calls[0][0];
+    expect(arg.data.prevHash).toBe('GENESIS_9');
+    expect(arg.data.hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('second row chains off the first row hash', async () => {
+    // Row 1: empty chain → GENESIS prev.
+    prisma.auditLog.findFirst.mockResolvedValueOnce(null);
+    await writeAudit('Contact', 'CREATE', 1, 7, 9, { name: 'Alice' });
+    const row1 = prisma.auditLog.create.mock.calls[0][0].data;
+    expect(row1.prevHash).toBe('GENESIS_9');
+
+    // Row 2: prior row returns the row1 hash → row2.prevHash === row1.hash.
+    prisma.auditLog.findFirst.mockResolvedValueOnce({ hash: row1.hash });
+    await writeAudit('Contact', 'UPDATE', 1, 7, 9, { name: 'Bob' });
+    const row2 = prisma.auditLog.create.mock.calls[1][0].data;
+    expect(row2.prevHash).toBe(row1.hash);
+    expect(row2.hash).not.toBe(row1.hash);
+  });
+
+  test('hash matches independent computeHash recomputation', async () => {
+    const fixedDate = new Date('2026-05-08T12:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedDate);
+    prisma.auditLog.findFirst.mockResolvedValue(null);
+    await writeAudit('Contact', 'CREATE', 1, 7, 9, { name: 'Alice' });
+    const row = prisma.auditLog.create.mock.calls[0][0].data;
+    const expected = computeHash('GENESIS_9', {
+      tenantId: 9, entity: 'Contact', action: 'CREATE',
+      entityId: 1, userId: 7,
+      details: JSON.stringify({ name: 'Alice' }),
+      createdAt: fixedDate.toISOString(),
+    });
+    expect(row.hash).toBe(expected);
+    vi.useRealTimers();
+  });
+
+  test('fail-soft: prevHash lookup error → prevHash=null, still inserts', async () => {
+    prisma.auditLog.findFirst.mockRejectedValue(new Error('db transient'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await writeAudit('Contact', 'CREATE', 1, 7, 9, null);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    const row = prisma.auditLog.create.mock.calls[0][0].data;
+    expect(row.prevHash).toBeNull();
+    expect(row.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test('chain detects tampering: recomputed hash differs when payload edited', async () => {
+    prisma.auditLog.findFirst.mockResolvedValue(null);
+    const createdAt = new Date('2026-05-08T10:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(createdAt);
+    await writeAudit('Contact', 'CREATE', 1, 7, 9, { name: 'Alice' });
+    const stored = prisma.auditLog.create.mock.calls[0][0].data;
+    vi.useRealTimers();
+
+    // Tamper: replace details in the stored row's payload.
+    const tamperedDetails = JSON.stringify({ name: 'Mallory' });
+    const recomputed = computeHash(stored.prevHash, {
+      tenantId: 9, entity: 'Contact', action: 'CREATE',
+      entityId: 1, userId: 7,
+      details: tamperedDetails,
+      createdAt: createdAt.toISOString(),
+    });
+    expect(recomputed).not.toBe(stored.hash);
+  });
+});
+

@@ -959,6 +959,18 @@ model AuditLog {
   details   String?  @db.Text // JSON diff or description
   createdAt DateTime @default(now())
 
+  // #558 — Hash-chain tamper-evidence. Each row's `hash` =
+  // sha256(prevHash + canonicalize({tenantId, entity, action, entityId,
+  // userId, details, createdAt})). `prevHash` points at the previous
+  // row's `hash` for the same tenant (or "GENESIS_<tenantId>" for the
+  // first row). Both columns are nullable so legacy pre-#558 rows
+  // survive the migration; new rows are always populated by writeAudit.
+  // The integrity verifier walks the chain and recomputes each hash;
+  // any tampering with details / userId / etc. breaks the chain at
+  // the tampered row. See backend/lib/audit.js + GET /api/audit/verify.
+  prevHash String?  @db.Text
+  hash     String?  @db.Text
+
   // #413 — Restrict (not Cascade) on Tenant deletion. AuditLog is the
   // forensic / compliance record-of-record (GDPR access logs, who-changed-
   // what, security events). A misclick on tenant.delete() must NOT silently
@@ -2331,6 +2343,14 @@ model ConsentForm {
   templateName String // "hair-transplant", "botox", "fillers", "general"
   signedPdfUrl String?
   signatureSvg String? @db.LongText // captured signature SVG/dataURL
+  // #564 — immutable snapshot of the consent template body the patient
+  // agreed to AT SIGN TIME. Captured server-side in POST /consents from
+  // the matching ConsentTemplate.body so future template edits cannot
+  // retroactively alter what the patient signed. Required by DPDP §15
+  // (the data-fiduciary must produce the exact wording shown to the
+  // patient on demand) and by clinical-audit reviewers. Nullable for
+  // back-compat with rows captured before the field shipped.
+  contentSnapshot String? @db.LongText
 
   patientId Int
   patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)

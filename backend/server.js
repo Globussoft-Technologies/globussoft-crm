@@ -795,6 +795,10 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initLeadSlaCron } = require('./cron/leadSlaEngine');
   initLeadSlaCron();
 
+  // #558 — AuditLog hash-chain integrity sweep (daily 04:00, after retention).
+  const { initAuditIntegrityCron } = require('./cron/auditIntegrityEngine');
+  initAuditIntegrityCron();
+
 } // end DISABLE_CRONS guard
 
 // nodemon restart trigger

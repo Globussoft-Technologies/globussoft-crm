@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { ScrollText, Filter, Download, ChevronDown, User } from 'lucide-react';
+import { AuthContext } from '../App';
+import { ScrollText, Filter, Download, ChevronDown, User, ShieldCheck, ShieldAlert } from 'lucide-react';
 
 const ACTION_COLOR = {
   CREATE: '#10b981',
@@ -70,6 +71,8 @@ function prettyDetails(raw) {
 
 export default function AuditLog() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const isAdmin = user?.role === 'ADMIN';
   const [logs, setLogs] = useState([]);
   const [stats, setStats] = useState(null);
   const [page, setPage] = useState(1);
@@ -85,6 +88,30 @@ export default function AuditLog() {
 
   const [expanded, setExpanded] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // #558 — Audit chain integrity. integrity={ chainLength, brokenAt,
+  // integrityVerified, lastVerifiedAt } once /api/audit/verify has run.
+  // Auto-verify on mount for admins so the chip shows the current state
+  // without requiring the operator to click.
+  const [integrity, setIntegrity] = useState(null);
+  const [verifying, setVerifying] = useState(false);
+
+  const verifyChain = useCallback(async () => {
+    if (!isAdmin) return;
+    setVerifying(true);
+    try {
+      const data = await fetchApi('/api/audit/verify');
+      setIntegrity(data);
+    } catch (err) {
+      console.error('[AuditLog] verify failed', err);
+      setIntegrity({ integrityVerified: false, brokenAt: null, chainLength: 0, error: true });
+      notify.error('Failed to verify audit chain');
+    } finally {
+      setVerifying(false);
+    }
+  }, [isAdmin, notify]);
+
+  useEffect(() => { verifyChain(); }, [verifyChain]);
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
@@ -260,6 +287,84 @@ export default function AuditLog() {
             </button>
           )}
         </div>
+
+        {/* #558 — Hash-chain integrity chip + Verify button. ADMIN-only:
+            verifying walks the entire audit chain and recomputes hashes.
+            Chip is green when the last walk succeeded, red when a row's
+            hash doesn't match the recomputed sha256 (= the row was
+            tampered with). */}
+        {isAdmin && (
+          <div
+            data-testid="integrity-row"
+            style={{
+              display: 'flex',
+              gap: '0.75rem',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              marginTop: '0.85rem',
+              paddingTop: '0.85rem',
+              borderTop: '1px solid var(--border-color)',
+              fontSize: '0.85rem',
+            }}
+          >
+            {integrity?.integrityVerified ? (
+              <span
+                data-testid="integrity-chip-ok"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.3rem 0.7rem',
+                  borderRadius: 999,
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  color: '#10b981',
+                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                  fontWeight: 600,
+                }}
+              >
+                <ShieldCheck size={14} />
+                {`Integrity verified at ${new Date(integrity.lastVerifiedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`}
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
+                  ({integrity.chainLength} rows)
+                </span>
+              </span>
+            ) : integrity ? (
+              <span
+                data-testid="integrity-chip-broken"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.3rem 0.7rem',
+                  borderRadius: 999,
+                  background: 'rgba(239, 68, 68, 0.12)',
+                  color: '#ef4444',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  fontWeight: 600,
+                }}
+              >
+                <ShieldAlert size={14} />
+                Chain broken — please contact support
+                {integrity.brokenAt != null && (
+                  <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
+                    (row #{integrity.brokenAt})
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span style={{ color: 'var(--text-secondary)' }}>Verifying chain...</span>
+            )}
+            <button
+              data-testid="verify-chain-btn"
+              onClick={verifyChain}
+              disabled={verifying}
+              className="btn-secondary"
+              style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', opacity: verifying ? 0.5 : 1 }}
+            >
+              {verifying ? 'Verifying...' : 'Verify chain'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Table */}

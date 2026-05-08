@@ -9,6 +9,16 @@
 // rides inside the JSON `details` blob (no schema migration needed): the
 // helper merges `_actorType` and `_patientActorId` into details automatically.
 //
+// #558 — Tamper-evidence hash chain. Every row carries `prevHash` (the
+// previous row's hash for the same tenant, or "GENESIS_<tenantId>" for the
+// first row) and `hash` (sha256 of prevHash + canonicalised row data).
+// canonicalize() sorts object keys before JSON.stringify so the hash is
+// deterministic across Node versions. Lookup of the previous row is best-
+// effort: if it fails (DB transient, etc.) writeAudit logs a warning and
+// persists with prevHash=null. The integrity cron (auditIntegrityEngine)
+// catches the gap on its next run; writeAudit never blocks the user-facing
+// mutation. See GET /api/audit/verify for chain-walk verification.
+//
 // Schema (see prisma/schema.prisma → model AuditLog):
 //   action    String   — e.g. CREATE, UPDATE, SOFT_DELETE, RESTORE, MARK_PAID,
 //                        PATIENT_DETAIL_READ, VISIT_READ, PRESCRIPTION_READ, …
@@ -18,8 +28,34 @@
 //   userId    Int?     — actor; null for system / cron-driven changes,
 //                        or for patient-portal self-access (use opts.patientId)
 //   tenantId  Int      — required, tenant scope
+//   prevHash  String?  — previous row's hash (#558)
+//   hash      String?  — sha256 of canonicalised payload (#558)
 
+const crypto = require('crypto');
 const prisma = require('./prisma');
+
+// canonicalize(obj) — sort object keys recursively before JSON.stringify so
+// the resulting string is byte-identical across Node versions. The hash
+// formula depends on this being deterministic; key-order changes would
+// produce a different hash and break chain verification. Arrays are NOT
+// re-ordered (their order is semantically meaningful). #558.
+function canonicalize(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(canonicalize).join(',') + ']';
+  const keys = Object.keys(value).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalize(value[k])).join(',') + '}';
+}
+
+// computeHash(prevHash, payload) — sha256 hex digest of prevHash concatenated
+// with the canonicalised payload. Exported for the verifier endpoint to
+// recompute each row's expected hash. #558.
+function computeHash(prevHash, payload) {
+  const safePrev = prevHash == null ? '' : String(prevHash);
+  return crypto
+    .createHash('sha256')
+    .update(safePrev + canonicalize(payload))
+    .digest('hex');
+}
 
 // writeAudit(entity, action, entityId, userId, tenantId, details, opts?)
 //
@@ -49,16 +85,61 @@ async function writeAudit(entity, action, entityId, userId, tenantId, details, o
       if (o.patientId != null) mergedDetails._patientActorId = Number(o.patientId);
     }
 
+    const detailsStr = mergedDetails == null
+      ? null
+      : (typeof mergedDetails === 'string' ? mergedDetails : JSON.stringify(mergedDetails));
+
+    // #558 — Look up the latest audit row for this tenant to chain off its
+    // hash. Fail-soft: a transient DB error here must not block the audit
+    // emission, so we fall back to prevHash=null (the integrity cron will
+    // detect the broken link on its next run). The GENESIS sentinel is used
+    // when no prior row exists for this tenant — encodes "this is the head
+    // of a fresh chain" without leaking a real-looking hash that could
+    // collide with a future one.
+    const tenantIdNum = Number(tenantId);
+    let prevHash;
+    try {
+      const prev = await prisma.auditLog.findFirst({
+        where: { tenantId: tenantIdNum },
+        orderBy: { createdAt: 'desc' },
+        select: { hash: true },
+      });
+      prevHash = prev && prev.hash ? prev.hash : `GENESIS_${tenantIdNum}`;
+    } catch (lookupErr) {
+      console.warn(`[audit] prev-hash lookup failed for tenant ${tenantIdNum}: ${lookupErr.message}`);
+      prevHash = null;
+    }
+
+    const entityIdNum = entityId != null ? Number(entityId) : null;
+    const userIdNum = userId != null ? Number(userId) : null;
+    const createdAt = new Date();
+
+    // The hash payload INTENTIONALLY excludes id (autoincrement, not known
+    // pre-insert) and prevHash (carried separately in the chain link). Any
+    // future field addition must be reflected in BOTH writeAudit and the
+    // verifier's recompute call in routes/audit.js — otherwise verify
+    // returns integrityVerified=false on a clean chain. #558.
+    const hash = computeHash(prevHash, {
+      tenantId: tenantIdNum,
+      entity,
+      action,
+      entityId: entityIdNum,
+      userId: userIdNum,
+      details: detailsStr,
+      createdAt: createdAt.toISOString(),
+    });
+
     await prisma.auditLog.create({
       data: {
         action,
         entity,
-        entityId: entityId != null ? Number(entityId) : null,
-        userId: userId != null ? Number(userId) : null,
-        tenantId: Number(tenantId),
-        details: mergedDetails == null
-          ? null
-          : (typeof mergedDetails === 'string' ? mergedDetails : JSON.stringify(mergedDetails)),
+        entityId: entityIdNum,
+        userId: userIdNum,
+        tenantId: tenantIdNum,
+        details: detailsStr,
+        createdAt,
+        prevHash,
+        hash,
       },
     });
   } catch (e) {
@@ -87,4 +168,4 @@ function diffFields(before, after, keys) {
   return out;
 }
 
-module.exports = { writeAudit, diffFields };
+module.exports = { writeAudit, diffFields, canonicalize, computeHash };

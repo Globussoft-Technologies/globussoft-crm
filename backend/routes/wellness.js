@@ -363,8 +363,15 @@ router.get("/patients", phiReadGate, async (req, res) => {
 router.get("/patients/:id", phiReadGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    const where = tenantWhere(req, { id });
+    // #628: 404 soft-deleted patients unless ?includeDeleted=1 is passed.
+    // Mirrors the contacts.js #167 pattern + the list-endpoint filter
+    // already added above.
+    if (req.query.includeDeleted !== '1' && req.query.includeDeleted !== 'true') {
+      where.deletedAt = null;
+    }
     const patient = await prisma.patient.findFirst({
-      where: tenantWhere(req, { id }),
+      where,
       include: {
         visits: {
           orderBy: { visitDate: "desc" },

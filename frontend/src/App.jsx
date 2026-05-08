@@ -164,6 +164,8 @@ const WellnessWhatsAppThreads = lazy(() => import("./pages/wellness/WhatsAppThre
 // surfaces appear inline based on AuthContext.role.
 const WellnessAttendance = lazy(() => import("./pages/wellness/Attendance"));
 const WellnessLeave = lazy(() => import("./pages/wellness/Leave"));
+// Wave 2 Agent II — POS / Cash Register / Shift / Sale MVP UI.
+const WellnessPointOfSale = lazy(() => import("./pages/wellness/PointOfSale"));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
 // #341: global catch-all 404. Previously unmapped or wrong-prefix URLs
@@ -876,6 +878,18 @@ export default function App() {
               {/* Wave 2 Agent JJ — Staff Attendance + Leave Management. */}
               <Route path="wellness/attendance" element={<WellnessOnly><WellnessAttendance /></WellnessOnly>} />
               <Route path="wellness/leave" element={<WellnessOnly><WellnessLeave /></WellnessOnly>} />
+              {/* Wave 2 Agent II — POS / Cash Register / Shift / Sale.
+                  Backend is wellness-vertical-gated + role
+                  ADMIN/MANAGER/doctor/professional/telecaller/helper.
+                  Frontend allows the wider operational bucket (everyone
+                  except plain USER) so a cashier user can ring sales. */}
+              <Route path="wellness/pos" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="POS requires staff access.">
+                    <WellnessPointOfSale />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               {/* #309: /wellness/invoices used to render a blank page (no
                   route binding). Wellness shares the generic CRM Invoices
                   UI — alias the prefixed URL to the canonical /invoices

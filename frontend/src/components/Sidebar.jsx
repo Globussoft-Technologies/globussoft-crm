@@ -69,6 +69,8 @@ import {
   Truck,
   ArrowDownToLine,
   Recycle,
+  // Wave 2 Agent II — POS / Cash Register / Shift / Sale
+  Calculator,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -732,6 +734,10 @@ function renderWellnessNav({
 
       {/* Money — clinic-side, in INR for Indian wellness tenants */}
       <div style={labelStyle}>Finance</div>
+      {/* Wave 2 Agent II: POS / "New Sale" — open shifts, ring up cash-and-
+          carry sales, close shifts. All staff can use it (backend gates
+          to wellnessRole admin/manager/doctor/professional/telecaller/helper). */}
+      <Link to="/wellness/pos" icon={Calculator} label="Point of Sale" />
       <Link to="/invoices" icon={Receipt} label="Invoices" />
       <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />

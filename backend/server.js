@@ -382,6 +382,8 @@ const wellnessRoutes = require("./routes/wellness");
 // stay uniform; routes/inventory.js declares only paths that wellness.js does
 // not own.
 const inventoryRoutes = require("./routes/inventory");
+// Wave 2 Agent II — POS / cash register / shift / sale backbone.
+const posRoutes = require("./routes/pos");
 // Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.
 const attendanceRoutes = require("./routes/attendance");
 const leaveRoutes = require("./routes/leave");
@@ -540,6 +542,9 @@ app.use("/api/wellness", wellnessRoutes);
 // does NOT own (product-categories, vendors, inventory/receipts,
 // inventory/adjustments, inventory/movements, auto-consumption-rules).
 app.use("/api/wellness", inventoryRoutes);
+// Wave 2 Agent II — POS / cash register / shift / sale backbone. Mounted at
+// /api/pos. Wellness-vertical-gated; generic tenants get a clean 403.
+app.use("/api/pos", posRoutes);
 // Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.
 // Cross-vertical (wellness AND generic). Mounted top-level. The biometric
 // webhook (POST /api/attendance/biometric/webhook) is in openPaths and

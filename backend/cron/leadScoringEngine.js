@@ -361,17 +361,24 @@ async function tickLeadScoringEngine(io) {
       });
 
       const tickStart = new Date();
-      const updates = await Promise.all(contacts.map(async (contact) => {
-        // Try Gemini AI first, fall back to algorithm if Gemini unavailable
+      // Build the per-contact update PROMISES (not awaited values) so
+      // Promise.allSettled below is the one place that observes
+      // success/failure. PR #644 added Gemini fallback but accidentally
+      // wrapped the whole batch in `await Promise.all(...)`, which
+      // re-rejects on the first failure and re-broke #421's per-row
+      // error containment. We restore the original shape: each entry
+      // in `updates` is a Promise (already in flight), and
+      // Promise.allSettled below tolerates partial failure.
+      const updates = contacts.map(async (contact) => {
+        // Try Gemini AI first, fall back to algorithm if Gemini unavailable.
         let newScore = null;
         if (aiModel) {
           newScore = await scoreWithGemini(contact);
         }
-        // Fallback to algorithm if Gemini failed or unavailable
+        // Fallback to algorithm if Gemini failed or unavailable.
         if (newScore === null) {
           newScore = computeScore(contact);
         }
-
         return prisma.contact.update({
           where: { id: contact.id },
           data: {
@@ -381,7 +388,7 @@ async function tickLeadScoringEngine(io) {
             aiScoreLastComputedAt: tickStart,
           },
         });
-      }));
+      });
 
       // #421 gap 3 — allSettled so one bad row doesn't drop the whole
       // tick. Log rejections individually so Sentry/log-tail surfaces

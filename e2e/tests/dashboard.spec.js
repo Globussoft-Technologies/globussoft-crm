@@ -34,14 +34,13 @@ test.describe('Dashboard', () => {
     await expect(conversionCard).toBeVisible({ timeout: 10000 });
   });
 
-  test('percentage increase badges are visible on metric cards', async ({ page }) => {
-    await page.waitForTimeout(2000);
-    // #128 made deltas period-over-period, so when there's no prior baseline
-    // (range = "all" or prior = 0) the cards render an em-dash instead of "+22%".
-    // Either trend percentage badges OR em-dash placeholders are valid output.
-    const trendBadges = page.locator('span').filter({ hasText: /[+\-]\d|—/ });
-    const count = await trendBadges.count();
-    expect(count).toBeGreaterThanOrEqual(1);
+  test.skip('percentage increase badges are visible on metric cards', async () => {
+    // #567 (commit b232110) reshaped Dashboard.jsx KPIs to read from the
+    // server-side /api/deals/stats endpoint. The previous client-side
+    // period-over-period delta calculation (which rendered "+22%" / em-dash
+    // trend badges) was removed because the new stats endpoint returns
+    // full-population aggregates without a comparable prior window.
+    // Re-enable this test only if a "trend vs prior period" feature lands.
   });
 
   test('revenue chart is rendered', async ({ page }) => {

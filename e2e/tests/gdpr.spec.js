@@ -83,7 +83,17 @@ test.describe('gdpr API smoke', () => {
   });
 
   test('POST /export/me returns user data export', async ({ request }) => {
-    const res = await request.post(`${API}/gdpr/export/me`, { headers: auth() });
+    // Admin's full export on demo is ~11 MB (5,381 deals + 90+ days of
+    // activities/audit logs). The default Playwright actionTimeout in
+    // playwright.config.js is 15000ms, which the body transfer regularly
+    // exceeds against demo's Cloudflare-fronted backend. Bump to 60s for
+    // this single request — the route itself responds in <2s; the wire
+    // transfer is what eats the budget.
+    test.setTimeout(90_000);
+    const res = await request.post(`${API}/gdpr/export/me`, {
+      headers: auth(),
+      timeout: 60000,
+    });
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('exportedAt');

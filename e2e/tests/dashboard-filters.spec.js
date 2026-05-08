@@ -2,10 +2,20 @@
 /**
  * Dashboard Filters spec — covers the date range filter dropdown
  * on the main dashboard page and verifies interactivity.
+ *
+ * SKIPPED 2026-05-08: #567 (commit b232110) rewrote Dashboard.jsx to read
+ * KPIs from /api/deals/stats (server-side full-population aggregates).
+ * The client-side date-range <select> dropdown was removed because the
+ * new stats endpoint returns the full picture without needing a window
+ * filter. This whole describe block tests UI that no longer exists.
+ *
+ * Re-enable only if a "stats vs date-range" feature lands — at which
+ * point the dropdown would re-appear and the existing assertions would
+ * be valid again.
  */
 const { test, expect } = require('@playwright/test');
 
-test.describe('Dashboard — Date range filters', () => {
+test.describe.skip('Dashboard — Date range filters', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('domcontentloaded');

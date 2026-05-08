@@ -188,21 +188,33 @@ async function scrubAgentRecommendations() {
   // once a day. Trim historical occupancy rows older than today; the
   // current day's row stays so the Owner Dashboard renders correctly.
   // (The orchestrator regenerates today's row on next run anyway.)
+  //
+  // 2026-05-08: also sweep rows whose title or body contains a test
+  // marker (`E2E_FLOW_`, `E2E_AUDIT`, `_amended_title_`, `Tenant B scoped`,
+  // `Lifecycle <n>`). The wellness-dashboard-api spec amends a real card
+  // via PUT to set title=`E2E_FLOW_DASHBOARD_<ts>_amended_title_<id>`,
+  // and its afterAll renames it to `_teardown_dashboard_<id>` — but if
+  // the test is interrupted before afterAll runs, the polluted title
+  // sticks around in demo's recommendation backlog. The orchestrator
+  // pollution gate spec then flags it on next release.
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
   const all = await prisma.agentRecommendation.findMany({
-    select: { id: true, title: true, tenantId: true, createdAt: true, type: true },
+    select: { id: true, title: true, body: true, tenantId: true, createdAt: true, type: true },
   });
-  const bad = all.filter((r) =>
-    r.type === "occupancy_alert" &&
-    r.createdAt < startOfToday
-  );
-  console.log(`AgentRecommendations (occupancy_alert, pre-today): ${bad.length} of ${all.length}`);
+  const POLLUTED_RE = /(E2E_FLOW_|E2E_AUDIT|_amended_title_|Tenant B scoped|\bLifecycle \d+\b)/;
+  const bad = all.filter((r) => {
+    if (r.type === "occupancy_alert" && r.createdAt < startOfToday) return true;
+    if (POLLUTED_RE.test(r.title || "")) return true;
+    if (POLLUTED_RE.test(r.body || "")) return true;
+    return false;
+  });
+  console.log(`AgentRecommendations (historical occupancy + polluted titles): ${bad.length} of ${all.length}`);
   if (bad.length) {
     previewRows(bad, (r) => `rec ${r.id} (tenant ${r.tenantId}): "${r.title}" @ ${r.createdAt.toISOString().slice(0, 10)}`);
     if (APPLY) {
       const r = await prisma.agentRecommendation.deleteMany({ where: { id: { in: bad.map((x) => x.id) } } });
-      console.log(`     → DELETED ${r.count} historical occupancy_alert rows`);
+      console.log(`     → DELETED ${r.count} stale/polluted recommendation rows`);
     }
   }
   return bad.length;

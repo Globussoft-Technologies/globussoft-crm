@@ -6,6 +6,21 @@
 
 ---
 
+## 📝 SESSION CONTINUATION (2026-05-08 evening — PR #644 merged + Google Doc audit)
+
+Brief office→home handoff covering today's additions on top of the Wave 10 AA + BB handoff (further down in the doc).
+
+- **PR #644 merged** at [`3114b8a`](https://github.com/Globussoft-Technologies/globussoft-crm/commit/3114b8a) (Feat/gemini, @mohitkumardas-cloud). Author addressed all 3 review blockers in commit `42883e34`: `/uploads` `verifyToken` removed; duplicate `/embed/lead-form.html` handler dropped (surviving line-548 handler now carries the #297 ApiKey shape-check + DB lookup); `leadScoringEngine` `activities.length > 0` guard restored per #571. Lands Gemini AI lead scoring + DealInsights rewrite + Leads cleanup + 17 wellness React-import drops. CI 6/6 green. Worth a smoke-test of /lead-scoring + DealInsights post-deploy — same author had post-merge surprises on PR #511 (multi-recipient regression caught inline) and PR #512 (silent modal drop).
+- **Google Doc audit** — "CRM Wellness — Developer Implementation List" (8 May 2026), Zylu vs CRM Wellness gap PRD, ~80 bullets across 12 sections. Verdict: ~25-30 features genuinely shipped, 50-55 are real gaps. **"Completed" markers misleading on 2 of 3** sections claiming done:
+  - **Notification Center (Mohit completed)**: ✅ genuinely done — model + bell + routes + push all present
+  - **Calendar / Resource Availability (Mohit completed)**: 🟡 calendar SYNC done (CalendarEvent + CalendarIntegration + Google/Outlook), resource AVAILABILITY missing (Resource model for rooms/machines, Holiday model, `Visit.resourceId` all absent)
+  - **Inventory Backbone (SHIKSHA completed)**: 🟡 Product + ServiceConsumption + low-stock cron exist; ProductCategory + InventoryReceipt + InventoryAdjustment + Vendor models missing; auto-consumption rules engine missing
+  - **Confirmed-missing entirely**: POS/New Sale shape (polymorphic invoice lines, registerId/cashierId/invoiceNumber), Cash Register/Shift, Memberships, Wallet/Cashback/GiftCard/Coupon, Attendance/Biometric, Leave Management
+  - **Confirmed-partial**: WhatsApp 2-way (msg/template/config + Channels/Inbox/SharedInbox/LiveChat pages exist; WhatsAppThread + agent assignment + opt-out missing), Mini Website + Booking Widget (~70% done — bookingType enum + At-Home address+travel-time + UTM-into-booking missing)
+- **Open PRs**: 0. **Open operator-blockers**: B-03 (SendGrid Sender Identity — verify `noreply@crm.globusdemos.com` in dashboard, ~2 min).
+
+---
+
 ## ⚠️ TASKS NEEDING USER ATTENTION (pen-test 2026-05-07 wave)
 
 These open issues from the 2026-05-07 QA pass need a design / product call before code work makes sense. Logged here by the autonomous-loop cron so the user can disposition them at their cadence (the cron fires every 15 min and parks user-input items here instead of guessing).

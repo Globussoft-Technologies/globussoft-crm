@@ -215,6 +215,22 @@ test.afterAll(async ({ request }) => {
       // Best-effort; global-teardown sweeps by RUN_TAG name match anyway.
     }
   }
+  // Wave 2 Agent LL — restore the test service's supportedBookingTypes to
+  // the legacy default (null = back-compat CLINIC_VISIT-only) so the next
+  // test run starts from a clean catalog state. Best-effort; if this fails
+  // the tests still re-set the column at the start of every test that
+  // depends on it via setSupportedTypes.
+  if (wellnessServiceId) {
+    try {
+      await request.put(`${API}/wellness/services/${wellnessServiceId}`, {
+        headers: authHdr(tokens.wellnessAdmin),
+        data: { supportedBookingTypes: null },
+        timeout: REQUEST_TIMEOUT,
+      });
+    } catch (_e) {
+      // Best-effort.
+    }
+  }
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -668,5 +684,410 @@ test.describe('#208 — /api/portal/me is the customer-portal endpoint', () => {
     expect(r.status()).toBe(200);
     const body = await r.json();
     expect(body).toHaveProperty('smsConfigured');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Wave 2 Agent LL — bookingType + at-home address + UTM capture
+// ──────────────────────────────────────────────────────────────────────
+//
+// Closes the booking-widget completion gap from the 2026-05-08 Google Doc
+// audit (TODOS.md:19 — "bookingType enum + At-Home address+travel-time +
+// UTM-into-booking missing"). Pins the new contract on the public booking
+// route so any future refactor that drops a field, swaps a status code, or
+// regresses validation goes RED at gate.
+//
+// Contract pinned by these tests:
+//   • POST /public/book accepts an optional bookingType in
+//     {CLINIC_VISIT, IN_HOME, VIDEO, PHONE}; default is CLINIC_VISIT.
+//   • IN_HOME requires atHomeAddress (5–500 chars) + atHomePincode (6 digits).
+//   • IN_HOME response carries travelTimeMinutes (default 30).
+//   • VIDEO response carries an auto-generated videoCallUrl.
+//   • Service.supportedBookingTypes (JSON-string column) gates the chosen
+//     bookingType — mismatch returns 422 BOOKING_TYPE_NOT_SUPPORTED.
+//   • UTM payload (utm_*, referrer) persists on the Visit row and is
+//     readable via the wellness-admin's /wellness/visits view.
+//   • Backwards-compat: payloads without bookingType still 201 (no
+//     "bookingType required" regression).
+//
+// New service rows created here for the supported-list test are torn down
+// in afterAll via DELETE /wellness/services/:id (the wellness route exposes
+// soft-delete via `isActive=false` — see existing #218 spec) so they don't
+// pollute the catalog across runs.
+test.describe('Wave 2 Agent LL — bookingType + at-home + UTM capture', () => {
+  // Helper: discover a service id that supports IN_HOME on the catalog.
+  // Pre-seed services don't have supportedBookingTypes set (legacy default
+  // is CLINIC_VISIT-only), so each test mutates a service via PUT then
+  // restores it. Mutation is scoped by the wellness-admin token.
+  async function setSupportedTypes(request, serviceId, types) {
+    return request.put(`${API}/wellness/services/${serviceId}`, {
+      headers: authHdr(tokens.wellnessAdmin),
+      data: { supportedBookingTypes: types },
+      timeout: REQUEST_TIMEOUT,
+    });
+  }
+
+  test('GET /public/tenant/:slug exposes supportedBookingTypes per service (back-compat default)', async ({ request }) => {
+    // Legacy services with null column should expose ["CLINIC_VISIT"] —
+    // the widget never sees an empty list, so it always has SOMETHING to
+    // render in the booking-type picker.
+    const r = await request.get(`${API}/wellness/public/tenant/enhanced-wellness`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    const services = Array.isArray(body.services) ? body.services : [];
+    expect(services.length).toBeGreaterThan(0);
+    for (const s of services) {
+      expect(
+        Array.isArray(s.supportedBookingTypes),
+        `service ${s.id} (${s.name}) — supportedBookingTypes must be an array on the public response`
+      ).toBe(true);
+      expect(s.supportedBookingTypes.length).toBeGreaterThan(0);
+      // Every value must be one of the enum members.
+      for (const t of s.supportedBookingTypes) {
+        expect(['CLINIC_VISIT', 'IN_HOME', 'VIDEO', 'PHONE']).toContain(t);
+      }
+    }
+  });
+
+  test('backwards-compat: POST /public/book without bookingType defaults to CLINIC_VISIT', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    // Ensure the test service supports CLINIC_VISIT (the default).
+    await setSupportedTypes(request, wellnessServiceId, ['CLINIC_VISIT']);
+    const phone = randomTestPhone();
+    createdPatientPhones.push(phone);
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} BackCompat`,
+        phone,
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status(), `body: ${(await r.text()).slice(0, 200)}`).toBe(201);
+    const body = await r.json();
+    expect(body.visit.bookingType).toBe('CLINIC_VISIT');
+    // No at-home / video fields populated for the legacy path.
+    expect(body.visit.atHomeAddress).toBeNull();
+    expect(body.visit.travelTimeMinutes).toBeNull();
+    expect(body.visit.videoCallUrl).toBeNull();
+    createdVisitIds.push(body.visit.id);
+  });
+
+  test('IN_HOME with valid address + pincode → 201 with travelTimeMinutes default', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    // Allow IN_HOME on the test service.
+    const setup = await setSupportedTypes(request, wellnessServiceId, ['CLINIC_VISIT', 'IN_HOME']);
+    expect(setup.status()).toBe(200);
+    const phone = randomTestPhone();
+    createdPatientPhones.push(phone);
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} AtHome`,
+        phone,
+        bookingType: 'IN_HOME',
+        atHomeAddress: 'Flat 4B, Springwood Apartments, Sector 51',
+        atHomeCity: 'Gurgaon',
+        atHomePincode: '122001',
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status(), `body: ${(await r.text()).slice(0, 300)}`).toBe(201);
+    const body = await r.json();
+    expect(body.visit.bookingType).toBe('IN_HOME');
+    expect(body.visit.atHomeAddress).toContain('Springwood');
+    expect(body.visit.atHomeCity).toBe('Gurgaon');
+    expect(body.visit.atHomePincode).toBe('122001');
+    expect(body.visit.travelTimeMinutes).toBe(30); // MVP default
+    expect(body.visit.videoCallUrl).toBeNull();
+    createdVisitIds.push(body.visit.id);
+  });
+
+  test('IN_HOME without atHomeAddress → 400 INVALID_INPUT', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    await setSupportedTypes(request, wellnessServiceId, ['CLINIC_VISIT', 'IN_HOME']);
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} NoAddr`,
+        phone: randomTestPhone(),
+        bookingType: 'IN_HOME',
+        atHomePincode: '122001',
+        // atHomeAddress missing
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe('INVALID_INPUT');
+    expect(String(body.error)).toMatch(/atHomeAddress/i);
+  });
+
+  test('IN_HOME with malformed pincode → 400 INVALID_INPUT', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    await setSupportedTypes(request, wellnessServiceId, ['CLINIC_VISIT', 'IN_HOME']);
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} BadPin`,
+        phone: randomTestPhone(),
+        bookingType: 'IN_HOME',
+        atHomeAddress: 'Some real address that is long enough to pass length check',
+        atHomePincode: 'ABC123', // not 6 digits
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe('INVALID_INPUT');
+    expect(String(body.error)).toMatch(/pincode/i);
+  });
+
+  test('VIDEO booking → 201 with auto-generated videoCallUrl', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    await setSupportedTypes(request, wellnessServiceId, ['CLINIC_VISIT', 'VIDEO']);
+    const phone = randomTestPhone();
+    createdPatientPhones.push(phone);
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} Video`,
+        phone,
+        bookingType: 'VIDEO',
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status(), `body: ${(await r.text()).slice(0, 200)}`).toBe(201);
+    const body = await r.json();
+    expect(body.visit.bookingType).toBe('VIDEO');
+    expect(body.visit.videoCallUrl).toBeTruthy();
+    expect(String(body.visit.videoCallUrl)).toMatch(/^https?:\/\//);
+    // No at-home fields on a VIDEO booking.
+    expect(body.visit.atHomeAddress).toBeNull();
+    expect(body.visit.travelTimeMinutes).toBeNull();
+    createdVisitIds.push(body.visit.id);
+  });
+
+  test('PHONE booking → 201 (voice-only, no at-home / video link)', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    await setSupportedTypes(request, wellnessServiceId, ['CLINIC_VISIT', 'PHONE']);
+    const phone = randomTestPhone();
+    createdPatientPhones.push(phone);
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} Phone`,
+        phone,
+        bookingType: 'PHONE',
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(201);
+    const body = await r.json();
+    expect(body.visit.bookingType).toBe('PHONE');
+    expect(body.visit.atHomeAddress).toBeNull();
+    expect(body.visit.travelTimeMinutes).toBeNull();
+    expect(body.visit.videoCallUrl).toBeNull();
+    createdVisitIds.push(body.visit.id);
+  });
+
+  test('unknown bookingType (e.g. TELEPATHY) → 400 INVALID_INPUT', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} Bogus`,
+        phone: randomTestPhone(),
+        bookingType: 'TELEPATHY',
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe('INVALID_INPUT');
+    expect(String(body.error)).toMatch(/bookingType/i);
+  });
+
+  test('IN_HOME on a CLINIC_VISIT-only service → 422 BOOKING_TYPE_NOT_SUPPORTED', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    // Lock the service down to CLINIC_VISIT only.
+    await setSupportedTypes(request, wellnessServiceId, ['CLINIC_VISIT']);
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} NoIH`,
+        phone: randomTestPhone(),
+        bookingType: 'IN_HOME',
+        atHomeAddress: 'Some long enough address text',
+        atHomePincode: '122001',
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(422);
+    const body = await r.json();
+    expect(body.code).toBe('BOOKING_TYPE_NOT_SUPPORTED');
+    // The response also returns the actual supported list so the widget can
+    // show an explanatory banner without re-fetching the catalog.
+    expect(Array.isArray(body.supportedBookingTypes)).toBe(true);
+    expect(body.supportedBookingTypes).toEqual(['CLINIC_VISIT']);
+  });
+
+  test('UTM payload + referrer persist on the Visit row', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    await setSupportedTypes(request, wellnessServiceId, ['CLINIC_VISIT']);
+    const phone = randomTestPhone();
+    createdPatientPhones.push(phone);
+    const utm = {
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      utmCampaign: 'summer-skin-2026',
+      utmTerm: 'aesthetics gurgaon',
+      utmContent: 'banner-top-a',
+    };
+    const referrer = 'https://www.google.com/search?q=enhanced+wellness';
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} UTM`,
+        phone,
+        utm,
+        referrer,
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status(), `body: ${(await r.text()).slice(0, 300)}`).toBe(201);
+    const body = await r.json();
+    createdVisitIds.push(body.visit.id);
+
+    // Read back via wellness-admin to confirm the UTM fields landed on the row.
+    const lookup = await request.get(`${API}/wellness/visits?phone=${encodeURIComponent(phone)}`, {
+      headers: authHdr(tokens.wellnessAdmin),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(lookup.status()).toBe(200);
+    const visits = (await lookup.json());
+    const arr = Array.isArray(visits) ? visits : (visits.visits || visits.data || []);
+    const found = arr.find((v) => v.id === body.visit.id);
+    expect(found, 'visit not reachable in admin view').toBeTruthy();
+    expect(found.utmSource).toBe(utm.utmSource);
+    expect(found.utmMedium).toBe(utm.utmMedium);
+    expect(found.utmCampaign).toBe(utm.utmCampaign);
+    expect(found.utmTerm).toBe(utm.utmTerm);
+    expect(found.utmContent).toBe(utm.utmContent);
+    expect(found.referrer).toBe(referrer);
+  });
+
+  test('bookingType lowercases tolerated (case-insensitive)', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    await setSupportedTypes(request, wellnessServiceId, ['CLINIC_VISIT', 'VIDEO']);
+    const phone = randomTestPhone();
+    createdPatientPhones.push(phone);
+    const r = await request.post(`${API}/wellness/public/book`, {
+      data: {
+        tenantSlug: 'enhanced-wellness',
+        serviceId: wellnessServiceId,
+        locationId: wellnessLocationId,
+        name: `${RUN_TAG} LowerCase`,
+        phone,
+        bookingType: 'video', // lowercased
+      },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(201);
+    const body = await r.json();
+    // Server normalizes to upper.
+    expect(body.visit.bookingType).toBe('VIDEO');
+    createdVisitIds.push(body.visit.id);
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Service catalog admin: supportedBookingTypes accept/reject
+  // ──────────────────────────────────────────────────────────────────
+
+  test('PUT /wellness/services accepts supportedBookingTypes JSON array', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    const r = await request.put(`${API}/wellness/services/${wellnessServiceId}`, {
+      headers: authHdr(tokens.wellnessAdmin),
+      data: { supportedBookingTypes: ['CLINIC_VISIT', 'IN_HOME', 'VIDEO'] },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    // Read back via the public catalog (parses the JSON-string column).
+    const profile = await request.get(`${API}/wellness/public/tenant/enhanced-wellness`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    const body = await profile.json();
+    const svc = (body.services || []).find((s) => s.id === wellnessServiceId);
+    expect(svc, 'updated service should be visible on public catalog').toBeTruthy();
+    expect(svc.supportedBookingTypes).toEqual(
+      expect.arrayContaining(['CLINIC_VISIT', 'IN_HOME', 'VIDEO'])
+    );
+  });
+
+  test('PUT /wellness/services rejects unknown bookingType in supportedBookingTypes', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    const r = await request.put(`${API}/wellness/services/${wellnessServiceId}`, {
+      headers: authHdr(tokens.wellnessAdmin),
+      data: { supportedBookingTypes: ['CLINIC_VISIT', 'CARRIER_PIGEON'] },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe('INVALID_INPUT');
+    expect(String(body.error)).toMatch(/CARRIER_PIGEON/);
+  });
+
+  test('PUT /wellness/services rejects non-array supportedBookingTypes', async ({ request }) => {
+    test.skip(!wellnessServiceId, 'wellness service not seeded');
+    test.skip(!tokens.wellnessAdmin, 'wellness admin login unavailable');
+    const r = await request.put(`${API}/wellness/services/${wellnessServiceId}`, {
+      headers: authHdr(tokens.wellnessAdmin),
+      data: { supportedBookingTypes: 'CLINIC_VISIT' }, // string, not array
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe('INVALID_INPUT');
   });
 });

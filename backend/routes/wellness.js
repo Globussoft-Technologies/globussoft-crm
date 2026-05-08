@@ -1989,9 +1989,38 @@ router.get("/services", async (req, res) => {
 // #216: service-catalog mutations are operational, not clinical. Lock to
 // admin/manager — clinical staff (doctors/professionals) read the catalog
 // but don't define pricing or duration.
+// Wave 2 Agent LL — validate + normalize the supportedBookingTypes input
+// for service create/update endpoints. Returns either an error envelope
+// (suitable for res.status/json) or a JSON-stringified payload ready for
+// the Prisma `data:` field. Empty/omitted input returns null (column
+// default → widget falls back to CLINIC_VISIT-only).
+function normalizeSupportedBookingTypesInput(raw) {
+  if (raw == null || raw === "") return { value: null };
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try { parsed = JSON.parse(raw); } catch {
+      return { error: { status: 400, error: "supportedBookingTypes must be a JSON array", code: "INVALID_INPUT" } };
+    }
+  }
+  if (!Array.isArray(parsed)) {
+    return { error: { status: 400, error: "supportedBookingTypes must be a JSON array", code: "INVALID_INPUT" } };
+  }
+  // De-dup + uppercase + reject unknowns. Matches the BOOKING_TYPES vocabulary
+  // pinned at file-top so the catalog can never persist an enum value the
+  // public booking handler doesn't recognize.
+  const normalized = Array.from(new Set(parsed.map((v) => String(v).trim().toUpperCase()).filter(Boolean)));
+  for (const v of normalized) {
+    if (!BOOKING_TYPES.includes(v)) {
+      return { error: { status: 400, error: `supportedBookingTypes contains unknown value: ${v}`, code: "INVALID_INPUT" } };
+    }
+  }
+  if (normalized.length === 0) return { value: null };
+  return { value: JSON.stringify(normalized) };
+}
+
 router.post("/services", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
-    const { name, category, ticketTier, basePrice, durationMin, targetRadiusKm, description } = req.body;
+    const { name, category, ticketTier, basePrice, durationMin, targetRadiusKm, description, supportedBookingTypes } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
     // #115: refuse zero-priced services from the catalog. Existing ₹0 rows
     // (e.g. seed-only "spa") stay visible until manually corrected — only
@@ -2027,6 +2056,11 @@ router.post("/services", verifyWellnessRole(["admin", "manager"]), async (req, r
         return res.status(400).json({ error: "targetRadiusKm cannot be negative", code: "RADIUS_INVALID" });
       }
     }
+    // Wave 2 Agent LL — validate supportedBookingTypes before write.
+    const sbtResult = normalizeSupportedBookingTypesInput(supportedBookingTypes);
+    if (sbtResult.error) {
+      return res.status(sbtResult.error.status).json({ error: sbtResult.error.error, code: sbtResult.error.code });
+    }
     const svc = await prisma.service.create({
       data: {
         name,
@@ -2036,6 +2070,7 @@ router.post("/services", verifyWellnessRole(["admin", "manager"]), async (req, r
         durationMin: durationMin ? parseInt(durationMin) : 30,
         targetRadiusKm: targetRadiusKm !== undefined && targetRadiusKm !== null ? parseInt(targetRadiusKm) : null,
         description,
+        supportedBookingTypes: sbtResult.value,
         tenantId: req.user.tenantId,
       },
     });
@@ -2067,6 +2102,16 @@ router.put("/services/:id", verifyWellnessRole(["admin", "manager"]), async (req
     const data = {};
     const allowed = ["name", "category", "ticketTier", "basePrice", "durationMin", "targetRadiusKm", "description", "isActive"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    // Wave 2 Agent LL — supportedBookingTypes is handled separately because
+    // it requires JSON-stringification + vocabulary validation, NOT a raw
+    // copy of req.body[k] like the other allowed fields.
+    if (req.body.supportedBookingTypes !== undefined) {
+      const sbtResult = normalizeSupportedBookingTypesInput(req.body.supportedBookingTypes);
+      if (sbtResult.error) {
+        return res.status(sbtResult.error.status).json({ error: sbtResult.error.error, code: sbtResult.error.code });
+      }
+      data.supportedBookingTypes = sbtResult.value;
+    }
     // #115: same price guard on edit — can't update a service to ₹0.
     if (data.basePrice !== undefined) {
       const price = Number(data.basePrice);
@@ -4060,10 +4105,15 @@ router.get("/public/tenant/:slug", async (req, res) => {
     });
     if (!tenant || tenant.vertical !== "wellness") return res.status(404).json({ error: "Clinic not found" });
 
-    const [services, allLocations] = await Promise.all([
+    const [rawServices, allLocations] = await Promise.all([
       prisma.service.findMany({
         where: { tenantId: tenant.id, isActive: true },
-        select: { id: true, name: true, category: true, basePrice: true, durationMin: true, description: true, ticketTier: true },
+        // Wave 2 Agent LL — include supportedBookingTypes so the public
+        // widget can filter the bookingType picker per-service.
+        select: {
+          id: true, name: true, category: true, basePrice: true, durationMin: true,
+          description: true, ticketTier: true, supportedBookingTypes: true,
+        },
         orderBy: [{ category: "asc" }, { name: "asc" }],
       }),
       prisma.location.findMany({
@@ -4071,6 +4121,14 @@ router.get("/public/tenant/:slug", async (req, res) => {
         select: { id: true, name: true, addressLine: true, city: true, state: true, pincode: true, phone: true, hours: true },
       }),
     ]);
+    // Wave 2 Agent LL — parse the JSON-string column into a real array on the
+    // wire. Legacy services with null column expose ["CLINIC_VISIT"] (the
+    // back-compat default) so the widget always has a non-empty supported
+    // list — never has to special-case "no field set".
+    const services = rawServices.map((s) => ({
+      ...s,
+      supportedBookingTypes: parseSupportedBookingTypes(s.supportedBookingTypes),
+    }));
     // #291: never expose internal/dev location names ("smoke-test", "e2e-…",
     // "test-…", "qa-…") on the customer-facing booking page. The seed and
     // E2E test suites both create such rows, and they leak into the public
@@ -4082,6 +4140,62 @@ router.get("/public/tenant/:slug", async (req, res) => {
     res.status(500).json({ error: "Failed to load clinic profile" });
   }
 });
+
+// Wave 2 Agent LL — booking-type vocabulary (2026-05-08 Google Doc audit).
+// String-enum (not Prisma enum) per the codebase's soft-enum convention
+// — matches Visit.status / Service.ticketTier / Patient.source.
+//   CLINIC_VISIT — patient comes to the clinic (legacy default)
+//   IN_HOME      — staff travels to the patient's address
+//   VIDEO        — telehealth call (Jitsi-style URL)
+//   PHONE        — voice-only consult (no address, no link)
+const BOOKING_TYPES = ["CLINIC_VISIT", "IN_HOME", "VIDEO", "PHONE"];
+const DEFAULT_TRAVEL_TIME_MIN = 30; // MVP default; future: pincode-distance-based
+
+// Parse the JSON-string column `Service.supportedBookingTypes` into a JS array.
+// Returns the legacy default (`["CLINIC_VISIT"]`) when the column is null/empty
+// or contains unparseable JSON — back-compat for services that pre-date the
+// column. Filters out any unknown enum values silently.
+function parseSupportedBookingTypes(raw) {
+  if (raw == null || raw === "") return ["CLINIC_VISIT"];
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try { parsed = JSON.parse(raw); } catch { return ["CLINIC_VISIT"]; }
+  }
+  if (!Array.isArray(parsed)) return ["CLINIC_VISIT"];
+  const filtered = parsed.filter((v) => BOOKING_TYPES.includes(v));
+  return filtered.length > 0 ? filtered : ["CLINIC_VISIT"];
+}
+
+// Build a Jitsi-style room URL for a VIDEO booking. Per-room slug includes
+// the visit ID (filled in post-create) so each session is unique. MVP uses
+// the public meet.jit.si server; future: per-tenant configured provider.
+function buildVideoCallUrl(tenantSlug, patientId) {
+  const slug = `${tenantSlug || "clinic"}-p${patientId}-${Date.now().toString(36)}`;
+  return `https://meet.jit.si/gbs-${slug.replace(/[^a-z0-9-]/gi, "")}`;
+}
+
+// Sanitize + validate UTM input from the public widget. Each field is capped
+// at 191 chars (MySQL VARCHAR default) and stripped of control characters.
+// Unknown fields are dropped silently. Returns an object the route handler
+// can spread into the Visit create payload — null when input is empty.
+function sanitizeUtmInput(utm, referrer) {
+  const out = {
+    utmSource: null, utmMedium: null, utmCampaign: null,
+    utmTerm: null, utmContent: null, referrer: null,
+  };
+  if (utm && typeof utm === "object") {
+    const trim = (v) => (v == null ? null : String(v).replace(/[\x00-\x1f\x7f]/g, "").slice(0, 191).trim() || null);
+    out.utmSource   = trim(utm.utmSource   ?? utm.source);
+    out.utmMedium   = trim(utm.utmMedium   ?? utm.medium);
+    out.utmCampaign = trim(utm.utmCampaign ?? utm.campaign);
+    out.utmTerm     = trim(utm.utmTerm     ?? utm.term);
+    out.utmContent  = trim(utm.utmContent  ?? utm.content);
+  }
+  if (referrer != null) {
+    out.referrer = String(referrer).replace(/[\x00-\x1f\x7f]/g, "").slice(0, 2000).trim() || null;
+  }
+  return out;
+}
 
 // #219: rate-limit /public/book per IP. The endpoint is unauthenticated
 // and creates Patient + Visit rows on every 201, so it's the trivial
@@ -4105,7 +4219,16 @@ const publicBookLimiter = rateLimit({
 
 router.post("/public/book", publicBookLimiter, async (req, res) => {
   try {
-    const { tenantSlug, serviceId, locationId, name, phone, email, preferredSlot, notes } = req.body;
+    const {
+      tenantSlug, serviceId, locationId, name, phone, email, preferredSlot, notes,
+      // Wave 2 Agent LL — booking-widget completion fields. All optional;
+      // bookingType defaults to CLINIC_VISIT for backwards-compat with old
+      // payloads (the field-by-field default lives next to the validation
+      // block below so the legacy "no bookingType" flow stays visible).
+      bookingType: rawBookingType,
+      atHomeAddress, atHomeCity, atHomePincode,
+      utm, referrer,
+    } = req.body;
     if (!tenantSlug || !serviceId || !name || !phone) {
       return res.status(400).json({ error: "tenantSlug, serviceId, name, phone required" });
     }
@@ -4140,12 +4263,68 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
         return res.status(400).json({ error: "preferredSlot cannot be more than 90 days out", code: "SLOT_TOO_FAR" });
       }
     }
+
+    // Wave 2 Agent LL — bookingType validation. Default to CLINIC_VISIT when
+    // omitted (back-compat for widget payloads from before this column shipped).
+    // Reject unknown values with INVALID_INPUT 400 — the widget should never
+    // send anything outside the BOOKING_TYPES vocabulary; receiving one means
+    // the client is broken or the user is hand-crafting requests.
+    const bookingType = rawBookingType
+      ? String(rawBookingType).trim().toUpperCase()
+      : "CLINIC_VISIT";
+    if (!BOOKING_TYPES.includes(bookingType)) {
+      return res.status(400).json({
+        error: `bookingType must be one of: ${BOOKING_TYPES.join(", ")}`,
+        code: "INVALID_INPUT",
+      });
+    }
+    // IN_HOME visits: address + pincode are mandatory. Without them the
+    // dispatch system has nowhere to send the staff member, and the visit
+    // row would be incomplete in a way that's invisible to the operator.
+    // Trim + length-check before the more expensive tenant/service round-trips.
+    let normalizedAddress = null;
+    let normalizedCity = null;
+    let normalizedPincode = null;
+    if (bookingType === "IN_HOME") {
+      const addr = atHomeAddress != null ? String(atHomeAddress).trim() : "";
+      if (addr.length < 5 || addr.length > 500) {
+        return res.status(400).json({
+          error: "atHomeAddress is required for IN_HOME bookings (5–500 chars)",
+          code: "INVALID_INPUT",
+        });
+      }
+      const pin = atHomePincode != null ? String(atHomePincode).trim() : "";
+      if (!/^\d{6}$/.test(pin)) {
+        return res.status(400).json({
+          error: "atHomePincode must be a 6-digit Indian pincode for IN_HOME bookings",
+          code: "INVALID_INPUT",
+        });
+      }
+      normalizedAddress = addr;
+      normalizedCity = atHomeCity != null ? String(atHomeCity).trim().slice(0, 100) || null : null;
+      normalizedPincode = pin;
+    }
+
     const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
     if (!tenant || tenant.vertical !== "wellness") return res.status(404).json({ error: "Clinic not found" });
     const parsedServiceId = parseInt(serviceId);
     if (!Number.isFinite(parsedServiceId)) return res.status(400).json({ error: "Invalid service", code: "INVALID_SERVICE" });
     const service = await prisma.service.findFirst({ where: { id: parsedServiceId, tenantId: tenant.id } });
     if (!service) return res.status(400).json({ error: "Invalid service", code: "INVALID_SERVICE" });
+
+    // Wave 2 Agent LL — cross-check chosen bookingType against the service's
+    // supported list. Returns 422 (semantic conflict) rather than 400 because
+    // the input shape is valid; the issue is the SERVICE doesn't offer that
+    // channel. Lets the widget render an explanatory banner ("This service
+    // is in-clinic only") without re-validating the full form.
+    const supported = parseSupportedBookingTypes(service.supportedBookingTypes);
+    if (!supported.includes(bookingType)) {
+      return res.status(422).json({
+        error: `Service "${service.name}" does not support bookingType=${bookingType}. Supported: ${supported.join(", ")}`,
+        code: "BOOKING_TYPE_NOT_SUPPORTED",
+        supportedBookingTypes: supported,
+      });
+    }
 
     // #279 fix: previous version had two failure modes that could silently
     // 201 with no side-effects:
@@ -4178,6 +4357,19 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
       if (!exists) return res.status(400).json({ error: "Invalid location", code: "INVALID_LOCATION" });
     }
 
+    // Wave 2 Agent LL — sanitize UTM + referrer once, outside the transaction
+    // so the cleanup work doesn't hold the DB connection. The HTTP Referer
+    // header is read both from the JSON body (when the widget passes it
+    // explicitly) and from the request headers (fallback when the widget
+    // didn't capture document.referrer client-side).
+    const utmFields = sanitizeUtmInput(utm, referrer ?? req.get("referer") ?? null);
+
+    // Wave 2 Agent LL — travel-time + video-link defaults per bookingType.
+    //   IN_HOME → travelTimeMinutes defaults to 30 (TODO: pincode-distance-based)
+    //   VIDEO   → videoCallUrl auto-generated as a Jitsi-style room URL
+    //   CLINIC_VISIT / PHONE → both stay null (legacy shape)
+    const travelTimeMinutes = bookingType === "IN_HOME" ? DEFAULT_TRAVEL_TIME_MIN : null;
+
     const result = await prisma.$transaction(async (tx) => {
       let patient = await tx.patient.findFirst({
         where: { tenantId: tenant.id, phone: { contains: last10 } },
@@ -4192,6 +4384,12 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
           },
         });
       }
+      // Build the videoCallUrl post-patient-resolve so the slug references
+      // a stable patientId (visit ID isn't known yet — Date.now toString
+      // gives us per-room uniqueness). Only populated for VIDEO bookings.
+      const videoCallUrl = bookingType === "VIDEO"
+        ? buildVideoCallUrl(tenant.slug, patient.id)
+        : null;
       const visit = await tx.visit.create({
         data: {
           visitDate: preferredSlot ? new Date(preferredSlot) : new Date(Date.now() + 24 * 3600000),
@@ -4202,6 +4400,19 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
           locationId: resolvedLocationId,
           amountCharged: service.basePrice,
           tenantId: tenant.id,
+          // Wave 2 Agent LL — booking-widget completion fields
+          bookingType,
+          atHomeAddress: normalizedAddress,
+          atHomeCity: normalizedCity,
+          atHomePincode: normalizedPincode,
+          travelTimeMinutes,
+          videoCallUrl,
+          utmSource: utmFields.utmSource,
+          utmMedium: utmFields.utmMedium,
+          utmCampaign: utmFields.utmCampaign,
+          utmTerm: utmFields.utmTerm,
+          utmContent: utmFields.utmContent,
+          referrer: utmFields.referrer,
         },
       });
       return { patient, visit };

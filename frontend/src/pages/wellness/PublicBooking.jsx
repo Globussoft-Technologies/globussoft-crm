@@ -1,9 +1,26 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Sparkles, Clock, MapPin, IndianRupee, CheckCircle2 } from 'lucide-react';
+import { Sparkles, Clock, MapPin, IndianRupee, CheckCircle2, Home, Video, Phone, Building2 } from 'lucide-react';
 import { useFormAutosave } from '../../utils/useFormAutosave';
 
-const INITIAL_FORM = { name: '', phone: '', email: '', notes: '', preferredSlot: '' };
+const INITIAL_FORM = {
+  name: '', phone: '', email: '', notes: '', preferredSlot: '',
+  // Wave 2 Agent LL — booking-widget completion (2026-05-08 Google Doc audit).
+  // bookingType selector + at-home address fields. Default to CLINIC_VISIT
+  // so legacy "just submit the form" flow still works on existing services
+  // whose supportedBookingTypes is null.
+  bookingType: 'CLINIC_VISIT',
+  atHomeAddress: '', atHomeCity: '', atHomePincode: '',
+};
+
+// Booking-type metadata (icon + label + description) — kept here next to the
+// initial form so adding a new variant is a single-file edit.
+const BOOKING_TYPE_META = {
+  CLINIC_VISIT: { label: 'Clinic visit',  icon: Building2, hint: 'Visit our clinic at the chosen location' },
+  IN_HOME:      { label: 'At home',       icon: Home,      hint: 'Our staff travels to your address' },
+  VIDEO:        { label: 'Video consult', icon: Video,     hint: "We'll send you a video link" },
+  PHONE:        { label: 'Phone consult', icon: Phone,     hint: "We'll call you on the number above" },
+};
 
 export default function PublicBooking() {
   const { slug } = useParams();
@@ -17,6 +34,15 @@ export default function PublicBooking() {
   const [form, setForm, , clearDraft] = useFormAutosave(`public-booking.${slug || 'default'}`, INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(null);
+  // Wave 2 Agent LL — UTM capture from the URL on mount. Hidden form fields,
+  // no UI surface (the patient doesn't need to know we're capturing them).
+  // Each utm_* search-param maps 1:1 onto the API's utm.* object key. The
+  // HTTP Referer header is captured server-side as a fallback; capturing
+  // document.referrer here lets us pin the original referring page even
+  // when the user navigated via a multi-hop redirect (server-side Referer
+  // would be the last hop, not the original campaign source).
+  const [utm, setUtm] = useState({});
+  const [referrer, setReferrer] = useState('');
 
   useEffect(() => {
     fetch(`/api/wellness/public/tenant/${slug}`)
@@ -26,20 +52,68 @@ export default function PublicBooking() {
       .finally(() => setLoading(false));
   }, [slug]);
 
+  // Wave 2 Agent LL — capture UTM + referrer once on mount. Runs in a
+  // separate effect from the catalog fetch so an autosaved-draft hydration
+  // doesn't blow away the captured UTM. URL params win even on refresh
+  // (the click-through campaign carries them on every page hit).
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const next = {
+        utmSource:   params.get('utm_source')   || null,
+        utmMedium:   params.get('utm_medium')   || null,
+        utmCampaign: params.get('utm_campaign') || null,
+        utmTerm:     params.get('utm_term')     || null,
+        utmContent:  params.get('utm_content')  || null,
+      };
+      // Only persist into state if at least one field is populated — keeps
+      // the JSON payload tidy for organic visits (no utm fields = no key
+      // sent server-side, server handles the empty case).
+      const hasAny = Object.values(next).some(Boolean);
+      if (hasAny) setUtm(next);
+      if (typeof document !== 'undefined' && document.referrer) {
+        setReferrer(document.referrer);
+      }
+    } catch (_e) {
+      // No URLSearchParams in some legacy environments — skip silently.
+    }
+  }, []);
+
   const submit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
     setError('');
     try {
+      // Wave 2 Agent LL — build the request body with bookingType + at-home
+      // fields gated on the chosen channel. Sending atHomeAddress on a
+      // CLINIC_VISIT booking is harmless (the server just ignores it
+      // outside IN_HOME), but keeping the payload tight makes the network
+      // tab easier to debug and shrinks the rate-limited body size.
+      const payload = {
+        tenantSlug: slug,
+        serviceId: picked.service.id,
+        locationId: picked.location?.id || null,
+        name: form.name,
+        phone: form.phone,
+        email: form.email,
+        notes: form.notes,
+        preferredSlot: form.preferredSlot,
+        bookingType: form.bookingType || 'CLINIC_VISIT',
+      };
+      if (form.bookingType === 'IN_HOME') {
+        payload.atHomeAddress = form.atHomeAddress;
+        payload.atHomeCity = form.atHomeCity;
+        payload.atHomePincode = form.atHomePincode;
+      }
+      // Attach UTM only when at least one field is populated — keeps the
+      // organic-traffic payload identical to pre-Wave-2 shape.
+      if (Object.values(utm).some(Boolean)) payload.utm = utm;
+      if (referrer) payload.referrer = referrer;
+
       const res = await fetch('/api/wellness/public/book', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tenantSlug: slug,
-          serviceId: picked.service.id,
-          locationId: picked.location?.id || null,
-          ...form,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (res.ok) {
@@ -133,21 +207,122 @@ export default function PublicBooking() {
           <h3 style={sectionH}>3. Your details</h3>
           <div style={{ background: 'rgba(168,85,247,0.08)', border: '1px solid rgba(168,85,247,0.3)', padding: '0.75rem', borderRadius: 8, marginBottom: '1rem', fontSize: '0.85rem' }}>
             <Sparkles size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem' }} />
-            <strong>{picked.service.name}</strong> at <strong>{picked.location?.name}</strong> — ₹{picked.service.basePrice.toLocaleString('en-IN')} · {picked.service.durationMin} min
+            <strong>{picked.service.name}</strong> at <strong>{picked.location?.name}</strong> — &#8377;{picked.service.basePrice.toLocaleString('en-IN')} &middot; {picked.service.durationMin} min
           </div>
+
+          {/* Wave 2 Agent LL — booking-type chip group. Filtered by the chosen
+              service's supportedBookingTypes (legacy services with null column
+              fall back to CLINIC_VISIT-only via the public/tenant endpoint).
+              Only renders the chip group when there's MORE than one option —
+              if the service supports only CLINIC_VISIT, we just lock the
+              choice silently to keep the form short. */}
+          {(() => {
+            const supported = Array.isArray(picked.service?.supportedBookingTypes) && picked.service.supportedBookingTypes.length > 0
+              ? picked.service.supportedBookingTypes
+              : ['CLINIC_VISIT'];
+            // If the autosaved bookingType is no longer supported (e.g. user
+            // picked a different service after re-opening the page), reset
+            // it to the first supported option silently.
+            const current = supported.includes(form.bookingType) ? form.bookingType : supported[0];
+            if (current !== form.bookingType) {
+              // Defer the state update to avoid setState-during-render.
+              setTimeout(() => setForm({ ...form, bookingType: current }), 0);
+            }
+            if (supported.length === 1) return null;
+            return (
+              <div style={{ marginBottom: '0.75rem' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>How would you like the appointment?</div>
+                <div role="radiogroup" aria-label="Appointment type" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                  {supported.map((bt) => {
+                    const meta = BOOKING_TYPE_META[bt] || { label: bt, icon: Building2, hint: '' };
+                    const Icon = meta.icon;
+                    const active = current === bt;
+                    return (
+                      <button
+                        key={bt}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        onClick={() => setForm({ ...form, bookingType: bt })}
+                        style={{
+                          padding: '0.5rem 0.85rem', borderRadius: 999,
+                          border: `1px solid ${active ? 'var(--primary-color, var(--accent-color))' : PUB_BORDER}`,
+                          background: active ? 'rgba(38, 88, 85, 0.1)' : PUB_CARD_BG,
+                          color: PUB_TEXT, fontSize: '0.85rem', cursor: 'pointer',
+                          display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                        }}
+                      >
+                        <Icon size={14} aria-hidden="true" /> {meta.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'rgba(17,24,39,0.6)', marginTop: '0.3rem' }}>
+                  {(BOOKING_TYPE_META[current] || {}).hint || ''}
+                </div>
+              </div>
+            );
+          })()}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
-            <input placeholder="Your name *" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={input} />
-            <input placeholder="Phone (10 digits) *" required value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={input} />
+            <input placeholder="Your name *" aria-label="Your name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={input} />
+            <input placeholder="Phone (10 digits) *" aria-label="Phone number" required value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={input} />
           </div>
-          <input placeholder="Email (optional)" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={{ ...input, marginBottom: '0.5rem' }} />
+          <input placeholder="Email (optional)" aria-label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={{ ...input, marginBottom: '0.5rem' }} />
+
+          {/* Wave 2 Agent LL — at-home address fields. Required when
+              bookingType=IN_HOME; hidden otherwise. The browser's native
+              `required` attribute gives free client-side validation matching
+              the server's IN_HOME rules. */}
+          {form.bookingType === 'IN_HOME' && (
+            <div style={{ marginBottom: '0.5rem', padding: '0.6rem', background: 'rgba(38,88,85,0.06)', borderRadius: 8, border: `1px solid ${PUB_BORDER}` }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.4rem' }}>Where should our staff travel to?</div>
+              <textarea
+                placeholder="Address line *"
+                aria-label="Address line"
+                required
+                value={form.atHomeAddress}
+                onChange={(e) => setForm({ ...form, atHomeAddress: e.target.value })}
+                rows={2}
+                style={{ ...input, marginBottom: '0.4rem', resize: 'vertical' }}
+              />
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.4rem' }}>
+                <input
+                  placeholder="City"
+                  aria-label="City"
+                  value={form.atHomeCity}
+                  onChange={(e) => setForm({ ...form, atHomeCity: e.target.value })}
+                  style={input}
+                />
+                <input
+                  placeholder="6-digit pincode *"
+                  aria-label="Pincode"
+                  required
+                  pattern="\d{6}"
+                  inputMode="numeric"
+                  value={form.atHomePincode}
+                  onChange={(e) => setForm({ ...form, atHomePincode: e.target.value })}
+                  style={input}
+                />
+              </div>
+            </div>
+          )}
+
+          {form.bookingType === 'VIDEO' && (
+            <div style={{ marginBottom: '0.5rem', padding: '0.6rem 0.75rem', background: 'rgba(38,88,85,0.06)', borderRadius: 8, fontSize: '0.85rem' }}>
+              <Video size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem' }} aria-hidden="true" />
+              You&apos;ll receive a video call link by SMS once we confirm the slot.
+            </div>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.5rem', marginBottom: '0.75rem' }}>
-            <input type="datetime-local" value={form.preferredSlot} onChange={(e) => setForm({ ...form, preferredSlot: e.target.value })} style={input} />
-            <input placeholder="Anything we should know? (optional)" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={input} />
+            <input type="datetime-local" aria-label="Preferred slot" value={form.preferredSlot} onChange={(e) => setForm({ ...form, preferredSlot: e.target.value })} style={input} />
+            <input placeholder="Anything we should know? (optional)" aria-label="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={input} />
           </div>
           {error && <div style={{ color: 'var(--danger-color)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>{error}</div>}
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'space-between' }}>
-            <button type="button" onClick={() => setStep('location')} style={{ padding: '0.55rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer' }}>← Back</button>
-            <button type="submit" disabled={submitting} style={{ padding: '0.55rem 1.5rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 500 }}>
+            <button type="button" onClick={() => setStep('location')} style={{ padding: '0.55rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer' }}>&larr; Back</button>
+            <button type="submit" disabled={submitting} style={{ padding: '0.55rem 1.5rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 500 }}>
               {submitting ? 'Booking…' : 'Confirm booking'}
             </button>
           </div>

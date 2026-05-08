@@ -47,6 +47,55 @@ When you've decided on a direction for any of these, drop a comment on the linke
 
 ---
 
+## 📋 PRD 14.3/14.4 verification findings (2026-05-09)
+
+Investigation pass on the two PRD §14 demo gaps (parked in TODOS.md PRD analysis lines 3323-3324) by Wave 1 Agent D. **READ-ONLY audit; no code changes shipped.** Findings below are pinned to file:line evidence so the next reader can verify without re-grepping.
+
+### PRD 14.3 — AdsGPT push to Meta — **⚠️ partial, demo-able as-is**
+
+**Status:** ⚠️ partial. The CRM's AdsGPT-side surface is a **launcher only**, not a "generate creative + push to Meta" stub. By PRD §6.6 design (`docs/wellness-client/PRD.md:124-132`) this is **correct** — AdsGPT is a separate product with no data integration, and the CRM is explicitly NOT supposed to generate creatives or render ad performance.
+
+**Evidence of what ships:**
+- [`frontend/src/pages/wellness/OwnerDashboard.jsx:7,64-72,216-273`](frontend/src/pages/wellness/OwnerDashboard.jsx) — "Open AdsGPT" card with one-click SSO impersonation. Shows linked-account name + a status banner (idle/loading/ok/error).
+- [`frontend/src/components/Sidebar.jsx:75,381-405,635,850`](frontend/src/components/Sidebar.jsx) — `AdsGptLink` rendered in BOTH wellness and generic sidebars, both nav surfaces.
+- [`frontend/src/utils/adsgpt.js`](frontend/src/utils/adsgpt.js) — 3-leg SSO helper (`launchAdsGptAs()`): GET `/adsgpt/check-access/by-login/<login>` → POST `/adsgpt/backup/save` → `window.open(dashboard/?forword=<key>)`. Real socket.adsgpt.io flow; `frontend/src/__tests__/adsgpt.test.js` exercises 7 paths.
+- [`backend/scripts/sandbox/adsgpt-mock.js`](backend/scripts/sandbox/adsgpt-mock.js) — sandbox mock with `/api/campaigns` + `/api/campaigns/:id/creatives` + `/api/sso/impersonate` endpoints, listens on :5102. **NOT auto-started**; requires `ADSGPT_BASE_URL=http://localhost:5102` + manual `node` invocation.
+- [`backend/cron/orchestratorEngine.js:148-162`](backend/cron/orchestratorEngine.js) — `campaign_boost` recommendation type creates a Task ("Marketer: <title>") + log note `"Awaiting AdsGPT/Callified handshake for direct budget API"`. No auto-push to AdsGPT.
+- [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma) — `AdsGptCampaign` / `AdsGptCreative` / `AdsGptCreativeStub` models **deliberately not built** (TODOS.md:3314 confirms PRD §6.6 scope clarification superseded the original §9 model list).
+
+**Demo readiness:** ✅ tester can click "Open AdsGPT" on `/wellness` → SSO into dashboard.adsgpt.io → generate creatives + push to Meta **inside AdsGPT itself**. The CRM does not render a creative card — by design. PRD §14.3's "mocked OK" qualifier applies to the AdsGPT push API, not to a CRM-rendered stub. The orchestrator's `campaign_boost` recommendation is the only CRM-side surface that could be confused with a "creative stub"; it's a Task, not a creative.
+
+**Recommended next action:** **no-op.** PRD goal is met by the launcher + by AdsGPT being a separate product. Close PRD 14.3 line in TODOS.md:3323 as `✅ verified — launcher live, creative-rendering correctly out-of-scope per §6.6`. The remaining external-team deliverable (silent SSO provisioning + back-link from AdsGPT) is correctly tracked under "Pending external/client deliverables" (TODOS.md:3328) and is not a CRM engineering task.
+
+### PRD 14.4 — WhatsApp chatbot booking → real appointment — **⚠️ partial (CRM contract ready; chatbot routing absent)**
+
+**Status:** ⚠️ partial — the CRM-side ingest contract is fully built and tested, BUT there is **no chatbot intent routing inside the CRM** that converts an inbound WhatsApp message into a Visit row. Per PRD §6.5 (`docs/wellness-client/PRD.md:96,112`), this is by design: the chatbot booking flow lives in **Callified.ai**, not in the CRM. Callified is responsible for parsing the conversation, picking a slot, and posting the confirmed appointment back via the external API. The contract Callified would call is shipped:
+
+**Evidence of CRM-side ingest contract:**
+- [`backend/routes/external.js:533-556`](backend/routes/external.js) — `POST /api/v1/external/appointments` accepts `{patientId, serviceId, doctorId, locationId, slotStart, notes, status}` → creates `prisma.visit.create(...)` row. Returns 201 with the Visit.
+- [`backend/routes/external.js:399-445`](backend/routes/external.js) — `POST /api/v1/external/messages` logs WhatsApp/SMS conversation rows scoped to the partner's tenant.
+- [`backend/routes/external.js:210-325`](backend/routes/external.js) — `POST /api/v1/external/leads` runs junk filter + auto-router + SLA timer. Source defaults to `"callified"`.
+- [`backend/middleware/externalAuth.js`](backend/middleware/externalAuth.js) — `X-API-Key: glbs_<32-hex>` validation, tenant-scoped via `req.tenantId`. Demo key seeded as "Callified.ai (demo key)" (`backend/prisma/seed-wellness.js`).
+- [`e2e/tests/external-api.spec.js`](e2e/tests/external-api.spec.js) — full Callified flow exercised (lead push → contact lookup → call recording → message log) under `Wellness — External Partner API (Callified flow)` describe block.
+- [`e2e/tests/wellness.spec.js:303-435`](e2e/tests/wellness.spec.js) — `tests 21-33` simulate the same flow against the deployed wellness tenant.
+
+**Evidence the chain is NOT wired end-to-end:**
+- [`backend/routes/whatsapp.js:363-452`](backend/routes/whatsapp.js) — Meta WhatsApp webhook `POST /webhook` creates a `WhatsAppMessage` row + emits a Socket.io `whatsapp:received` event but **does NOT** parse `/book` intent, look up an available slot, or create a Visit. There is no chatbot router in the CRM at all (`grep "intent.*book\|chatbot.*appointment"` returns zero matches).
+- [`backend/routes/chatbots.js:273`](backend/routes/chatbots.js) — `POST /chat/:botId` is a generic chatbot conversation endpoint scoped to `Chatbot` model; it does not route to wellness Visit creation.
+- The Callified.ai webhook contract (Callified → CRM on confirmed booking) is documented as "pending contract" in [`docs/wellness-client/STATUS.md:260`](docs/wellness-client/STATUS.md). The CRM has the receiver; Callified has not yet shipped the sender.
+
+**Demo readiness:** ⚠️ a tester CAN demonstrate the flow by manually calling `POST /api/v1/external/appointments` with `X-API-Key: glbs_…` and seeing the new Visit appear on `/wellness/calendar`. They CANNOT demonstrate "user sent a WhatsApp message and a Visit was created automatically" — the chatbot half doesn't run inside the CRM and Callified hasn't shipped the auto-post yet. The demo path Rishu was promised in PRD §14.4 needs a **scripted curl call** as a stand-in for Callified, OR it needs to wait on the partner's webhook.
+
+**Recommended next action:** file a fresh GitHub issue **"PRD 14.4 — Demo script for WhatsApp → Appointment flow (Callified webhook stand-in)"** capturing a 5-line `curl POST /api/v1/external/appointments` script + a 1-page docs/wellness-client/DEMO_14_4.md showing tester steps. ~30 min. Keeps the demo green while the Callified team finishes their side. The CRM engineering side has nothing more to build — the receiver contract is shipped, tested, and proven by the e2e Callified-flow describe block.
+
+### Follow-up TODOS row to add
+
+| # | Task | Estimate |
+|---|---|---|
+| **PRD 14.4 demo script** | Author `docs/wellness-client/DEMO_14_4.md` + a `scripts/demo-callified-booking.sh` curl wrapper that tester can run live during the demo to simulate Callified posting a confirmed booking. ~30 min, autonomous-fixable. Closes PRD 14.4 from a demo-readiness perspective without waiting on Callified. PRD 14.3 closes as `✅ verified — out-of-scope per §6.6` with no further action. | 0.25 day |
+
+---
+
 ## 🚧 OPERATOR-BLOCKER TASKS — need a human (programmer / ops) to act
 
 These are NOT autonomous-fixable. They need a real person with credentials, infrastructure access, or a product-design call. Auto-loops should NOT try to close these.

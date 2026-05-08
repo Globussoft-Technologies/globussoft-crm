@@ -243,10 +243,10 @@ const Pipeline = () => {
                       style={{ padding: '1.2rem', cursor: 'pointer', position: 'relative', display: 'flex', flexDirection: 'column', gap: '0.8rem', minWidth: 0, flexShrink: 0 }}
                     >
                       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', position: 'absolute', top: '0.75rem', right: '0.75rem' }}>
-                        <button onClick={(e) => fetchAiScore(e, deal.id)} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Generate AI Insights">
+                        <button onClick={(e) => fetchAiScore(e, deal.id)} aria-label={`Generate deal score for ${deal.title}`} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Generate AI Insights">
                           <Zap size={14} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.filter = 'drop-shadow(0 0 5px #a855f7)'} onMouseOut={e => e.currentTarget.style.filter = 'none'} />
                         </button>
-                        <button onClick={(e) => handleDelete(e, deal.id)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Delete Deal">
+                        <button onClick={(e) => handleDelete(e, deal.id)} aria-label={`Delete deal ${deal.title}`} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Delete Deal">
                           <Trash2 size={14} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'} />
                         </button>
                       </div>

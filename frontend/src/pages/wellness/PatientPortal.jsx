@@ -11,6 +11,7 @@ import {
   Calendar as CalendarIcon,
 } from 'lucide-react';
 import { useNotify } from '../../utils/notify';
+import { formatDate } from '../../utils/date';
 
 const PORTAL_TOKEN_KEY = 'patientPortalToken';
 const PORTAL_NAME_KEY = 'patientPortalName';
@@ -485,7 +486,7 @@ function Dashboard({ token, onLogout }) {
                         <Pill size={15} /> Prescription #{rx.id}
                       </div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                        {new Date(rx.createdAt).toLocaleDateString('en-IN')}
+                        {formatDate(rx.createdAt)}
                         {rx.doctor?.name && ` · Dr ${rx.doctor.name}`}
                         {rx.visit?.service?.name && ` · ${rx.visit.service.name}`}
                       </div>

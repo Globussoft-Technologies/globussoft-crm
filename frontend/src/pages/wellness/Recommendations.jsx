@@ -20,6 +20,30 @@ export default function Recommendations() {
   // The list endpoint applies its own filter when status≠'all', so a separate
   // status='all' fetch is the source of truth for the counters at the top.
   const [allItems, setAllItems] = useState([]);
+  const [running, setRunning] = useState(false);
+
+  // Manually trigger the orchestrator. Same endpoint the daily 07:00 IST
+  // cron uses — gives admin/manager a way to populate the page without
+  // waiting for tomorrow's scheduled run. Backend gates this to admin/manager
+  // and dedup-suppresses re-emits for cards already created today, so a
+  // double-click here cannot duplicate the queue.
+  const runOrchestrator = async () => {
+    setRunning(true);
+    try {
+      const result = await fetchApi('/api/wellness/orchestrator/run', { method: 'POST', silent: true });
+      const count = (result && typeof result.created === 'number') ? result.created : 0;
+      if (count > 0) {
+        notify.success(`Generated ${count} new recommendation${count === 1 ? '' : 's'}.`);
+      } else {
+        notify.info('Orchestrator ran — no new recommendations (today\'s queue is up-to-date).');
+      }
+      load();
+    } catch (err) {
+      if (err.status === 403) notify.info('Running the orchestrator requires admin or manager.');
+      else notify.error(`Orchestrator failed: ${err?.message || 'unknown error'}`);
+    }
+    setRunning(false);
+  };
 
   const load = () => {
     setLoading(true);
@@ -49,11 +73,12 @@ export default function Recommendations() {
   };
 
   const handleAction = async (id, action) => {
+    const rec = items.find(r => r.id === id);
+    const title = rec?.title || `recommendation #${id}`;
+
     // #129: confirm before reject — recommendations feed campaign-spend decisions,
     // a misclick should never silently drop a proposal from the queue.
     if (action === 'reject') {
-      const rec = items.find(r => r.id === id);
-      const title = rec?.title || `recommendation #${id}`;
       const ok = await notify.confirm({
         message: `Reject "${title}"?\n\nIt will move to the rejected list and stop influencing the queue.`,
         destructive: true,
@@ -61,12 +86,58 @@ export default function Recommendations() {
       });
       if (!ok) return;
     }
+
+    // High-stakes approve confirm — these dispatcher types fan out to many
+    // downstream rows (SMS queued / leads flagged) which take more than one
+    // click to undo. Mirrors the reject confirmation pattern so the
+    // destructive-side and the bulk-fanout side are symmetric. Lower-impact
+    // types (occupancy_alert / schedule_gap / campaign_boost just create a
+    // single Task) approve immediately as before.
+    if (action === 'approve' && rec) {
+      const HIGH_STAKES = {
+        send_sms_blast: 'This will queue SMS messages to up to 200 lead-status contacts.',
+        mark_leads_for_callback: 'This will flag matching leads for telecaller follow-up (up to 50 leads).',
+        lead_followup: 'This will flag matching leads for follow-up activity, and may reassign them to a telecaller.',
+      };
+      const desc = HIGH_STAKES[rec.type];
+      if (desc) {
+        const ok = await notify.confirm({
+          message: `Approve "${title}"?\n\n${desc}\n\nThis is hard to undo in one click.`,
+          confirmText: 'Approve',
+        });
+        if (!ok) return;
+      }
+    }
+
     try {
       // #275 + #276: success path was silent — added explicit confirmation
       // toast. fetchApi auto-toasts errors with the server message; this catch
       // exists only to keep the page from logging an unhandled rejection.
-      await fetchApi(`/api/wellness/recommendations/${id}/${action}`, { method: 'POST', silent: true });
-      notify.success(action === 'approve' ? 'Recommendation approved' : 'Recommendation rejected');
+      const result = await fetchApi(`/api/wellness/recommendations/${id}/${action}`, { method: 'POST', silent: true });
+
+      if (action === 'approve') {
+        // Surface what the dispatcher actually did, instead of a generic
+        // "Recommendation approved". The backend returns `_actionResult`
+        // shaped { ok, action, count?, deduped?, reassigned?, note?, reason? }
+        // per dispatcher branch in cron/orchestratorEngine.js — was previously
+        // discarded by the UI.
+        const ar = result && result._actionResult;
+        let detail = '';
+        if (ar) {
+          if (ar.action === 'sms_queued') detail = ` — ${ar.count || 0} SMS queued`;
+          else if (ar.action === 'task_created') detail = ' — task created';
+          else if (ar.action === 'task_deduped') detail = ' — matching task already exists';
+          else if (ar.action === 'leads_flagged') {
+            detail = ` — ${ar.count || 0} lead${ar.count === 1 ? '' : 's'} flagged`;
+            if (ar.reassigned) detail += `, ${ar.reassigned} reassigned`;
+          } else if (ar.ok === false) {
+            detail = ` — no action taken (${ar.reason || 'unknown'})`;
+          }
+        }
+        notify.success(`Approved${detail}`);
+      } else {
+        notify.success('Recommendation rejected');
+      }
       load();
     } catch (err) {
       // fetchApi already toasted the underlying message. Page-specific hint:
@@ -76,13 +147,23 @@ export default function Recommendations() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontFamily: 'var(--font-family)', fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Sparkles size={24} color="#a855f7" /> Agent Recommendations
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Proposals from the orchestration agent. Review, approve, or reject.
-        </p>
+      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontFamily: 'var(--font-family)', fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Sparkles size={24} color="#a855f7" /> Agent Recommendations
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Proposals from the orchestration agent. Review, approve, or reject.
+          </p>
+        </div>
+        <button
+          onClick={runOrchestrator}
+          disabled={running}
+          title="Manually trigger the orchestrator (admin/manager only). Same engine the daily 07:00 IST cron uses."
+          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.55rem 1.05rem', background: running ? 'rgba(168, 85, 247, 0.18)' : 'rgba(168, 85, 247, 0.1)', color: '#a855f7', border: '1px solid rgba(168, 85, 247, 0.35)', borderRadius: 8, cursor: running ? 'wait' : 'pointer', fontSize: '0.85rem', fontWeight: 500, whiteSpace: 'nowrap' }}
+        >
+          <Play size={14} /> {running ? 'Running…' : 'Run now'}
+        </button>
       </header>
 
       <div style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem' }}>

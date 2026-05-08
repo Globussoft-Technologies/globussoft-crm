@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatMoney } from '../utils/money';
+import { formatDate } from '../utils/date';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
 
@@ -68,9 +70,13 @@ const WIDGET_CATALOG = [
   { type: 'table-overdue-tasks',title: 'Overdue Tasks',     w: 6, h: 4, group: 'Tables' },
 ];
 
+// #626: tenant-aware money formatter — replaces hardcoded `$` prefix that
+// rendered $ on INR tenants. formatMoney reads the tenant's currency +
+// locale from localStorage (set at login), so a single helper covers
+// every page.
 const formatCurrency = (n) => {
-  if (n == null) return '$0';
-  return '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (n == null) return formatMoney(0, { maximumFractionDigits: 0 });
+  return formatMoney(Number(n), { maximumFractionDigits: 0 });
 };
 
 // ─── Widget Renderers ──────────────────────────────────────────────
@@ -196,13 +202,13 @@ function renderWidget(widget, data) {
         { key: 'title', label: 'Deal' },
         { key: 'stage', label: 'Stage' },
         { key: 'amount', label: 'Amount', render: (r) => formatCurrency(r.amount) },
-        { key: 'createdAt', label: 'Created', render: (r) => new Date(r.createdAt).toLocaleDateString() },
+        { key: 'createdAt', label: 'Created', render: (r) => formatDate(r.createdAt) },
       ]} />;
     case 'table-overdue-tasks':
       return <DataTable data={data} columns={[
         { key: 'title', label: 'Task' },
         { key: 'priority', label: 'Priority' },
-        { key: 'dueDate', label: 'Due', render: (r) => r.dueDate ? new Date(r.dueDate).toLocaleDateString() : '—' },
+        { key: 'dueDate', label: 'Due', render: (r) => r.dueDate ? formatDate(r.dueDate) : '—' },
       ]} />;
     default:
       return <div style={{ padding: '1rem', opacity: 0.5 }}>Unknown widget: {widget.type}</div>;
@@ -469,6 +475,7 @@ export default function Dashboards() {
                     color: '#fca5a5', borderRadius: '8px', cursor: 'pointer',
                     padding: '4px 6px', display: 'flex', alignItems: 'center',
                   }}
+                  aria-label="Remove widget"
                   title="Remove widget"
                 >
                   <X size={14} />
@@ -566,7 +573,7 @@ function Modal({ children, onClose, title, wide }) {
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ margin: 0, fontSize: '1.05rem' }}>{title}</h3>
-          <button onClick={onClose} style={{ ...button('secondary'), padding: '0.35rem' }}><X size={16} /></button>
+          <button onClick={onClose} aria-label={`Close ${title} dialog`} title="Close" style={{ ...button('secondary'), padding: '0.35rem' }}><X size={16} /></button>
         </div>
         {children}
       </div>

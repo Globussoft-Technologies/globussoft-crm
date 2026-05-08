@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ChevronLeft, Phone, Calendar, ChevronRight } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
+import { formatDate } from '../../utils/date';
 
 const isoDay = (d) => d.toISOString().slice(0, 10);
 
@@ -141,7 +142,7 @@ export default function Visits() {
               {patientDetails.data.visits.map((visit) => (
                 <tr key={visit.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                   <td style={{ ...tdStyle, textAlign: 'left' }}>
-                    {new Date(visit.visitDate).toLocaleDateString('en-IN')}
+                    {formatDate(visit.visitDate)}
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'left' }}>
                     {visit.doctor?.name || '—'}
@@ -150,7 +151,9 @@ export default function Visits() {
                     {visit.service?.name || '—'}
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'right' }}>
-                    {formatMoney(visit.amountCharged || 0)}
+                    {formatMoney(
+                      visit.revenue != null ? visit.revenue : (visit.amountCharged || 0)
+                    )}
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'left' }}>
                     <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', padding: '0.2rem 0.5rem', borderRadius: 4, background: statusBg(visit.status) }}>
@@ -259,6 +262,12 @@ export default function Visits() {
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Patients with Visits</div>
               <div style={{ fontSize: '1.5rem', fontWeight: 600, marginTop: '0.25rem' }}>{data.count.toLocaleString('en-IN')}</div>
             </div>
+            <div style={{ padding: '0.75rem' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Revenue</div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 600, marginTop: '0.25rem', color: 'var(--success-color)' }}>
+                {formatMoney(data.totalRevenue || 0)}
+              </div>
+            </div>
           </div>
 
           <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
@@ -307,7 +316,7 @@ export default function Visits() {
                       {formatMoney(patient.totalRevenue)}
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'left' }}>
-                      {patient.lastVisit ? new Date(patient.lastVisit).toLocaleDateString('en-IN') : '—'}
+                      {patient.lastVisit ? formatDate(patient.lastVisit) : '—'}
                     </td>
                   </tr>
                 ))}

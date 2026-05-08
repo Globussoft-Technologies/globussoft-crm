@@ -2,6 +2,7 @@ import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
 import { Building2, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { formatDateMedium as formatDate } from '../utils/date';
 
 const Clients = () => {
   const [clients, setClients] = useState([]);
@@ -30,14 +31,6 @@ const Clients = () => {
       (client.company && client.company.toLowerCase().includes(term))
     );
   });
-
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
@@ -75,7 +68,8 @@ const Clients = () => {
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Company</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Title</th>
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>AI Score</th>
+              {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
+              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Since</th>
             </tr>
           </thead>

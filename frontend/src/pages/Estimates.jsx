@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { FileSpreadsheet, Plus, Trash2, DollarSign, ArrowRightLeft, X } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { FileSpreadsheet, Plus, Trash2, DollarSign, ArrowRightLeft, X, Download, Mail } from 'lucide-react';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
 const STATUS_CONFIG = {
@@ -25,6 +25,7 @@ function StatusBadge({ status }) {
 }
 
 import { formatMoney, currencySymbol } from '../utils/money';
+import { formatDate } from '../utils/date';
 const formatCurrency = (v) => formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
 // #333: every numeric field on a line item now has a sane range. The
@@ -212,6 +213,58 @@ export default function Estimates() {
       if (err.status === 400) {
         notify.info('Tip: make sure the estimate has a contact and at least one line item.');
       }
+    }
+  };
+
+  // #603: per-row PDF download. Mirrors the Invoices.jsx pattern — fetch
+  // with auth header, download blob, trigger anchor click. Pre-fix the
+  // user had to navigate into the row to reach the PDF action.
+  const downloadPdf = (id, estimateNum) => {
+    const token = getAuthToken();
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    fetch(`${baseUrl}/api/estimates/${id}/pdf`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('PDF generation failed');
+        return res.blob();
+      })
+      .then((blob) => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${estimateNum || 'estimate'}.pdf`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      })
+      .catch(() => notify.error('Failed to download PDF'));
+  };
+
+  // #603: per-row email send. Hits the new POST /:id/email endpoint which
+  // emails the estimate to its linked contact, persists an EmailMessage
+  // (when retention is on per #611) and flips status from Draft → Sent.
+  const emailEstimate = async (est) => {
+    const num = est.estimateNum || `#${est.id}`;
+    const recipient = est.contact?.email;
+    if (!recipient) {
+      notify.error('Cannot email — link a contact with an email address first.');
+      return;
+    }
+    if (!await notify.confirm({
+      title: `Email estimate ${num}?`,
+      message: `Send "${est.title}" to ${recipient}?`,
+      confirmText: 'Send',
+    })) return;
+    try {
+      const r = await fetchApi(`/api/estimates/${est.id}/email`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        silent: true,
+      });
+      if (r?.delivered) notify.success(`Estimate emailed to ${recipient}`);
+      else notify.info(`Estimate logged but delivery is pending (no SMTP configured).`);
+      loadData();
+    } catch {
+      notify.error('Failed to email estimate');
     }
   };
 
@@ -570,13 +623,43 @@ export default function Estimates() {
                         <StatusBadge status={est.status} />
                       </td>
                       <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
-                        {est.validUntil ? new Date(est.validUntil).toLocaleDateString() : '-'}
+                        {est.validUntil ? formatDate(est.validUntil) : '-'}
                       </td>
                       <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {est.lineItems?.length || 0}
                       </td>
                       <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                        {/* #603: per-row PDF / Email / Convert / Delete actions.
+                            Mirrors the row-action set already in Invoices.jsx
+                            so estimates work matches user expectation. */}
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <button
+                            onClick={() => downloadPdf(est.id, est.estimateNum)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '0.3rem',
+                              background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
+                              padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
+                              cursor: 'pointer',
+                            }}
+                            aria-label={`Download PDF for estimate ${est.estimateNum}`}
+                          >
+                            <Download size={14} /> PDF
+                          </button>
+                          <button
+                            onClick={() => emailEstimate(est)}
+                            disabled={!est.contact?.email}
+                            title={est.contact?.email ? `Email to ${est.contact.email}` : 'Link a contact with an email address first'}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '0.3rem',
+                              background: 'rgba(16,185,129,0.12)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
+                              padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
+                              cursor: est.contact?.email ? 'pointer' : 'not-allowed',
+                              opacity: est.contact?.email ? 1 : 0.5,
+                            }}
+                            aria-label={`Email estimate ${est.estimateNum}`}
+                          >
+                            <Mail size={14} /> Email
+                          </button>
                           {est.status !== 'Converted' && (
                             <button
                               onClick={() => convertToInvoice(est.id)}

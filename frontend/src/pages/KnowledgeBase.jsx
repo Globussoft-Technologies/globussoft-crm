@@ -14,6 +14,7 @@ import {
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
+import { formatDate } from "../utils/date";
 
 const EMPTY_ARTICLE = {
   title: "",
@@ -244,6 +245,12 @@ export default function KnowledgeBase() {
             alignItems: "center",
             gap: "0.5rem",
             padding: "0.7rem 1.2rem",
+            whiteSpace: "nowrap",
+            flex: "0 0 max-content",
+            minWidth: "max-content",
+            width: "max-content",
+            maxWidth: "none",
+            overflow: "visible",
           }}
         >
           <Plus size={16} /> New Article
@@ -858,7 +865,7 @@ export default function KnowledgeBase() {
                               }}
                             >
                               {a.updatedAt
-                                ? new Date(a.updatedAt).toLocaleDateString()
+                                ? formatDate(a.updatedAt)
                                 : "—"}
                             </td>
                             <td style={{ padding: "0.85rem 0.5rem" }}>

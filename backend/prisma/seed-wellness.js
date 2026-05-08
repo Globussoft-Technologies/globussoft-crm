@@ -175,7 +175,11 @@ const services = [
 const staffSeed = [
   // Demo accounts — easy to remember for live demos
   { email: "admin@wellness.demo", name: "Demo Admin", role: "ADMIN", wellnessRole: null },
-  { email: "user@wellness.demo", name: "Demo User", role: "USER", wellnessRole: "professional" },
+  // #641: Demo User is a generic walkthrough account, NOT a practitioner.
+  // Pre-fix this row was seeded with wellnessRole='professional', causing
+  // the My Profile page to render a phantom "Practitioner" badge + section
+  // even though the account had no practitioner privileges or fields.
+  { email: "user@wellness.demo", name: "Demo User", role: "USER", wellnessRole: null },
   // Doctors
   { email: "rishu@enhancedwellness.in", name: "Rishu Agarwal (Owner)", role: "ADMIN", wellnessRole: null },
   { email: "drharsh@enhancedwellness.in", name: "Dr. Harsh Kumar", role: "USER", wellnessRole: "doctor" },
@@ -240,6 +244,21 @@ async function main() {
     },
   });
   console.log(`[seed-wellness] tenant id=${tenant.id} slug=${tenant.slug} currency=${tenant.defaultCurrency}`);
+
+  // #576 — default Clinical/Medical retention policies (idempotent).
+  // Wellness tenants need RetentionPolicy rows for Patient / Visit /
+  // Prescription / ConsentForm / TreatmentPlan / MedicalAttachment so
+  // /privacy can render + admins can configure DPDP-compliant windows.
+  // isActive=false by default — admins must explicitly enable purge.
+  try {
+    const { seedWellnessRetentionPolicies } = require("../cron/retentionEngine");
+    const created = await seedWellnessRetentionPolicies(tenant.id);
+    if (created.length) {
+      console.log(`[seed-wellness] retention policies seeded: ${created.map(r => r.entity).join(", ")}`);
+    }
+  } catch (e) {
+    console.warn(`[seed-wellness] retention-policy seed skipped: ${e.message}`);
+  }
 
   // Backfill any pre-existing Deal/Payment rows for this tenant that were created
   // before defaultCurrency rolled out — they default to USD which is wrong for India.

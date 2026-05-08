@@ -19,8 +19,20 @@
  * unless the caller is ADMIN or MANAGER. That is the correct behavior —
  * a USER with no wellnessRole has no clinical mandate, so 403 is right.
  *
- * On reject we surface a stable code (`WELLNESS_ROLE_FORBIDDEN`) so the
- * frontend / tests can distinguish this from generic 403s.
+ * On reject we surface a stable code so the frontend / tests can
+ * distinguish role denials from generic 403s. As of #590 / #591, the
+ * human-facing `error` is the SAME neutral copy emitted by verifyRole's
+ * RBAC_DENIED envelope (no role-taxonomy leakage in the toast string).
+ * Two stable codes remain to differentiate WHY the denial fired so SDKs
+ * / specs / audit trails can branch on intent without parsing the
+ * user-facing text:
+ *   - `WELLNESS_TENANT_REQUIRED` — caller is on a non-wellness tenant
+ *   - `WELLNESS_ROLE_FORBIDDEN`  — caller's wellnessRole isn't in the
+ *                                  allowed list for this route
+ * The `allowed` array continues to ship in the WELLNESS_ROLE_FORBIDDEN
+ * envelope (per #274's structured-403 contract pinned by services-api).
+ * That's technical metadata for the frontend toast mapper, NOT a
+ * user-visible string.
  */
 // #325: tenant.vertical gate. Pre-this-fix, an ADMIN from the GENERIC
 // tenant (admin@globussoft.com) could call /api/wellness/dashboard
@@ -34,6 +46,11 @@
 // the lifetime of the request to avoid repeat hits when the same
 // request flows through multiple gated middlewares.
 const prisma = require("../lib/prisma");
+// #590 / #591: share the canonical RBAC denial copy so wellness role
+// denials surface the same neutral string as generic verifyRole denials.
+// We keep the granular `code` (WELLNESS_TENANT_REQUIRED /
+// WELLNESS_ROLE_FORBIDDEN) so SDKs / specs can branch on intent.
+const { RBAC_DENIED_MESSAGE } = require("./auth");
 
 async function resolveTenantVertical(req) {
   if (req.user?.vertical) return req.user.vertical;
@@ -62,10 +79,14 @@ function verifyWellnessRole(allowed) {
     // #325: tenant vertical gate. Wellness gated routes must reject
     // non-wellness tenants no matter how high their role is. Anything
     // other than "wellness" → 403. Unknown/null → fail closed.
+    //
+    // #590 / #591: human-facing `error` message is the canonical neutral
+    // RBAC copy (no taxonomy leakage). `code` is still the granular
+    // identifier so SDKs / specs can branch on the precise reason.
     const vertical = await resolveTenantVertical(req);
     if (vertical !== "wellness") {
       return res.status(403).json({
-        error: "Wellness vertical required",
+        error: RBAC_DENIED_MESSAGE,
         code: "WELLNESS_TENANT_REQUIRED",
       });
     }
@@ -74,8 +95,13 @@ function verifyWellnessRole(allowed) {
     if (req.user.wellnessRole && allowed.includes(req.user.wellnessRole)) {
       return next();
     }
+    // `allowed` stays in the envelope to honour the #274 contract
+    // (services-api spec pins it; frontend toast mapper keys off the
+    // structured 403 shape). #591's concern is the human-facing
+    // `error` MESSAGE — that's neutral now. The `allowed` array is
+    // technical metadata, not user-visible toast copy.
     return res.status(403).json({
-      error: "Insufficient wellness role",
+      error: RBAC_DENIED_MESSAGE,
       code: "WELLNESS_ROLE_FORBIDDEN",
       allowed,
     });

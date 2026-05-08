@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Award, Trophy, Search, Plus, Minus, Users, Gift, CheckCircle2, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { formatMoney, currencySymbol } from '../../utils/money';
+import { formatDate } from '../../utils/date';
 
 // #298: Indian phone numbers were rendering as the raw "+919826720222" 12-digit
 // stream. Group as +91 XXXXX XXXXX. Falls back to the original string for
@@ -61,6 +63,7 @@ export default function Loyalty() {
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)' }}>
         <TabBtn active={tab === 'overview'} onClick={() => setTab('overview')} icon={Trophy} label="Overview" />
+        <TabBtn active={tab === 'rules'} onClick={() => setTab('rules')} icon={Settings} label="Rules" />
         <TabBtn active={tab === 'search'} onClick={() => setTab('search')} icon={Search} label="Patient lookup" />
         <TabBtn active={tab === 'referrals'} onClick={() => setTab('referrals')} icon={Users} label="Referrals" />
       </div>
@@ -68,6 +71,7 @@ export default function Loyalty() {
       {tab === 'overview' && (
         <OverviewTab leaderboard={leaderboard} referrals={referrals} loading={loadingTop} />
       )}
+      {tab === 'rules' && <RulesTab />}
       {tab === 'search' && <SearchTab onCreditChange={refresh} />}
       {tab === 'referrals' && <ReferralsTab referrals={referrals} onChanged={refresh} />}
     </div>
@@ -139,9 +143,9 @@ function OverviewTab({ leaderboard, referrals, loading }) {
           <Users size={16} /> Referral pipeline
         </h2>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
-          <Stat label="Pending" value={pendingReferrals} color="var(--warning-color)" sub={`${pending.count} referrals · ₹${pending.totalValue.toLocaleString('en-IN')} total`} />
-          <Stat label="Signed up" value={signedUp} color="var(--accent-color)" sub={`${signed.count} referrals · ₹${signed.totalValue.toLocaleString('en-IN')} total`} />
-          <Stat label="Rewarded" value={rewarded} color="var(--success-color)" sub={`${rewardedStats.count} referrals · ₹${rewardedStats.totalValue.toLocaleString('en-IN')} total`} />
+          <Stat label="Pending" value={pendingReferrals} color="var(--warning-color)" sub={`${pending.count} referrals · ${formatMoney(pending.totalValue, { maximumFractionDigits: 0 })} total`} />
+          <Stat label="Signed up" value={signedUp} color="var(--accent-color)" sub={`${signed.count} referrals · ${formatMoney(signed.totalValue, { maximumFractionDigits: 0 })} total`} />
+          <Stat label="Rewarded" value={rewarded} color="var(--success-color)" sub={`${rewardedStats.count} referrals · ${formatMoney(rewardedStats.totalValue, { maximumFractionDigits: 0 })} total`} />
         </div>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '1rem' }}>
           Switch to <strong>Referrals</strong> tab to manage individual rows.
@@ -298,7 +302,7 @@ function SearchTab({ onCreditChange }) {
                   <strong style={{ fontSize: '0.85rem' }}>Redeem</strong>
                 </div>
                 <input type="number" min={1} max={loyalty.balance} value={redeemPoints} onChange={(e) => setRedeemPoints(parseInt(e.target.value) || 0)} style={inputStyle} />
-                <input placeholder="Reason (e.g. ₹500 service discount)" value={redeemReason} onChange={(e) => setRedeemReason(e.target.value)} style={{ ...inputStyle, marginTop: '0.4rem' }} />
+                <input placeholder={`Reason (e.g. ${currencySymbol()}500 service discount)`} value={redeemReason} onChange={(e) => setRedeemReason(e.target.value)} style={{ ...inputStyle, marginTop: '0.4rem' }} />
                 <button type="submit" disabled={loyalty.balance < redeemPoints} style={{ marginTop: '0.5rem', width: '100%', padding: '0.45rem', background: loyalty.balance < redeemPoints ? 'var(--text-tertiary)' : 'var(--warning-color)', color: '#fff', border: 'none', borderRadius: 6, cursor: loyalty.balance < redeemPoints ? 'not-allowed' : 'pointer' }}>Redeem</button>
               </form>
             </div>
@@ -315,7 +319,7 @@ function SearchTab({ onCreditChange }) {
                 <tbody>
                   {loyalty.transactions.map((tx) => (
                     <tr key={tx.id} style={{ borderTop: '1px solid var(--border-color)' }}>
-                      <td style={td}>{new Date(tx.createdAt).toLocaleDateString('en-IN')}</td>
+                      <td style={td}>{formatDate(tx.createdAt)}</td>
                       <td style={td}>{tx.type}</td>
                       <td style={{ ...td, textAlign: 'right', color: tx.points >= 0 ? 'var(--success-color)' : 'var(--warning-color)', fontWeight: 600 }}>{tx.points >= 0 ? '+' : ''}{tx.points}</td>
                       <td style={{ ...td, color: 'var(--text-secondary)' }}>{tx.reason || '—'}</td>
@@ -448,7 +452,7 @@ function ReferralsTab({ referrals, onChanged }) {
                     {r.status.replace('_', ' ')}
                   </span>
                 </td>
-                <td style={{ ...td, color: 'var(--text-secondary)' }}>{new Date(r.createdAt).toLocaleDateString('en-IN')}</td>
+                <td style={{ ...td, color: 'var(--text-secondary)' }}>{formatDate(r.createdAt)}</td>
                 <td style={{ ...td, textAlign: 'right' }}>
                   {r.status === 'rewarded' ? (
                     <span style={{ color: 'var(--success-color)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -465,6 +469,141 @@ function ReferralsTab({ referrals, onChanged }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ── Rules tab ─────────────────────────────────────────────────────
+//
+// #614: surfaces per-tenant earn / burn config so admins can self-serve
+// instead of editing the DB. Read-only for non-admin/manager roles (the
+// PUT /rules endpoint enforces this server-side too).
+
+function RulesTab() {
+  const notify = useNotify();
+  const [, setRules] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = () => {
+    fetchApi('/api/wellness/loyalty/rules')
+      .then((r) => { setRules(r); setDraft(r); })
+      .catch(() => setError('Failed to load loyalty rules'));
+  };
+  useEffect(load, []);
+
+  const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+
+  const save = async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      const updated = await fetchApi('/api/wellness/loyalty/rules', {
+        method: 'PUT',
+        body: JSON.stringify({
+          earnPerVisit: Number(draft.earnPerVisit) || 0,
+          earnPercentOfSpend: Number(draft.earnPercentOfSpend) || 0,
+          earnPerCurrencyUnit: Number(draft.earnPerCurrencyUnit) || 0,
+          redeemPointsPerUnit: Number(draft.redeemPointsPerUnit) || 1,
+          welcomeBonus: Number(draft.welcomeBonus) || 0,
+          referralBonus: Number(draft.referralBonus) || 0,
+          autoEarnEnabled: !!draft.autoEarnEnabled,
+        }),
+      });
+      setRules(updated);
+      setDraft(updated);
+      notify.success('Loyalty rules saved');
+    } catch (err) {
+      notify.error(`Save failed: ${err.message}`);
+    }
+    setSaving(false);
+  };
+
+  if (error) return <div style={{ color: 'var(--warning-color)' }}>{error}</div>;
+  if (!draft) return <div style={{ color: 'var(--text-secondary)' }}>Loading rules…</div>;
+
+  const sym = currencySymbol();
+  // Human-readable summary of each active rule. Falls back to "Disabled" when
+  // the value is 0 / null so the admin sees what's NOT in effect too.
+  const lines = [
+    draft.earnPerVisit > 0
+      ? `Earn ${draft.earnPerVisit} points per completed visit`
+      : 'Per-visit flat earn: disabled',
+    draft.earnPercentOfSpend > 0
+      ? `Earn ${draft.earnPercentOfSpend}% of every visit's amount as points (e.g. ${sym}1000 spent → ${Math.floor((1000 * draft.earnPercentOfSpend) / 100)} pts)`
+      : 'Percent-of-spend earn: disabled',
+    draft.earnPerCurrencyUnit > 0
+      ? `Earn ${draft.earnPerCurrencyUnit} points per ${sym}1 spent`
+      : null,
+    draft.redeemPointsPerUnit > 0
+      ? `Redeem ${draft.redeemPointsPerUnit} points = ${sym}1 off`
+      : null,
+    draft.welcomeBonus > 0 ? `Welcome bonus: ${draft.welcomeBonus} points on signup` : null,
+    draft.referralBonus > 0 ? `Referral bonus: ${draft.referralBonus} points per successful referral` : null,
+  ].filter(Boolean);
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))', gap: '1.25rem' }}>
+      <div className="glass" style={{ padding: '1.5rem' }}>
+        <h2 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <Settings size={16} /> Earn rules
+        </h2>
+        <RuleField label="Auto-earn on completed visits" hint="Toggle off to disable all auto-credits">
+          <input type="checkbox" checked={!!draft.autoEarnEnabled} onChange={(e) => set('autoEarnEnabled', e.target.checked)} />
+        </RuleField>
+        <RuleField label="Flat points per visit" hint="Awarded on every completed visit (regardless of spend)">
+          <input type="number" min={0} value={draft.earnPerVisit} onChange={(e) => set('earnPerVisit', e.target.value)} style={inputStyle} />
+        </RuleField>
+        <RuleField label={`Percent of spend (%)`} hint={`E.g. 10 = 10% → ${sym}1000 spent earns 100 pts`}>
+          <input type="number" min={0} max={100} step={0.1} value={draft.earnPercentOfSpend} onChange={(e) => set('earnPercentOfSpend', e.target.value)} style={inputStyle} />
+        </RuleField>
+        <RuleField label={`Points per ${sym}1 spent`} hint="Alternative to percent-of-spend; both stack if both set">
+          <input type="number" min={0} step={0.01} value={draft.earnPerCurrencyUnit} onChange={(e) => set('earnPerCurrencyUnit', e.target.value)} style={inputStyle} />
+        </RuleField>
+        <RuleField label="Welcome bonus" hint="One-time credit when a patient registers">
+          <input type="number" min={0} value={draft.welcomeBonus} onChange={(e) => set('welcomeBonus', e.target.value)} style={inputStyle} />
+        </RuleField>
+        <RuleField label="Referral bonus" hint="Credited to referrer when referral completes first visit">
+          <input type="number" min={0} value={draft.referralBonus} onChange={(e) => set('referralBonus', e.target.value)} style={inputStyle} />
+        </RuleField>
+      </div>
+
+      <div className="glass" style={{ padding: '1.5rem' }}>
+        <h2 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <Gift size={16} /> Burn (redemption)
+        </h2>
+        <RuleField label={`Points per ${sym}1 redemption`} hint={`E.g. 10 means 10 pts = ${sym}1 off`}>
+          <input type="number" min={1} value={draft.redeemPointsPerUnit} onChange={(e) => set('redeemPointsPerUnit', e.target.value)} style={inputStyle} />
+        </RuleField>
+        <div style={{ marginTop: '1rem', padding: '0.85rem', background: 'rgba(38,88,85,0.05)', borderRadius: 8 }}>
+          <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Active rules</h3>
+          {lines.length === 0 ? (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No rules configured.</div>
+          ) : (
+            <ul style={{ listStyle: 'disc', paddingLeft: '1.25rem', margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              {lines.map((line, i) => (<li key={i} style={{ marginBottom: '0.25rem' }}>{line}</li>))}
+            </ul>
+          )}
+        </div>
+        <button
+          onClick={save}
+          disabled={saving}
+          style={{ marginTop: '1rem', width: '100%', padding: '0.6rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: saving ? 'wait' : 'pointer', fontWeight: 600 }}
+        >
+          {saving ? 'Saving…' : 'Save rules'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RuleField({ label, hint, children }) {
+  return (
+    <div style={{ marginBottom: '0.85rem' }}>
+      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, marginBottom: '0.25rem' }}>{label}</label>
+      {hint && <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>{hint}</div>}
+      {children}
     </div>
   );
 }

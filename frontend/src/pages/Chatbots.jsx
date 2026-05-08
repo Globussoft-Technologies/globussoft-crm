@@ -302,9 +302,9 @@ function FlowEditor({ bot, tenantId, onClose, onSaved }) {
                   {NODE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
                 <div style={{ flex: 1 }} />
-                <button className="btn-secondary" style={btnIcon} onClick={() => moveNode(n.id, -1)} disabled={idx === 0}><ChevronUp size={14} /></button>
-                <button className="btn-secondary" style={btnIcon} onClick={() => moveNode(n.id, 1)} disabled={idx === nodes.length - 1}><ChevronDown size={14} /></button>
-                <button className="btn-secondary" style={{ ...btnIcon, color: '#ef4444' }} onClick={() => removeNode(n.id)}><X size={14} /></button>
+                <button className="btn-secondary" style={btnIcon} onClick={() => moveNode(n.id, -1)} disabled={idx === 0} aria-label={`Move node ${idx + 1} up`} title="Move up"><ChevronUp size={14} /></button>
+                <button className="btn-secondary" style={btnIcon} onClick={() => moveNode(n.id, 1)} disabled={idx === nodes.length - 1} aria-label={`Move node ${idx + 1} down`} title="Move down"><ChevronDown size={14} /></button>
+                <button className="btn-secondary" style={{ ...btnIcon, color: '#ef4444' }} onClick={() => removeNode(n.id)} aria-label={`Remove node ${idx + 1}`} title="Remove node"><X size={14} /></button>
               </div>
               <textarea
                 value={n.content || ''}
@@ -451,7 +451,7 @@ function Modal({ title, children, onClose, maxWidth = 520 }) {
         style={{ width: '100%', maxWidth, padding: '1.25rem', backdropFilter: 'blur(16px)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
           <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h3>
-          <button onClick={onClose} className="btn-secondary" style={btnIcon}><X size={16} /></button>
+          <button onClick={onClose} className="btn-secondary" style={btnIcon} aria-label={`Close ${title} dialog`} title="Close"><X size={16} /></button>
         </div>
         {children}
       </div>

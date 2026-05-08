@@ -104,6 +104,32 @@ export function whenAuthReady() {
   return _tokenReady;
 }
 
+// #555 (HI-06): the explicit tenant switcher writes the chosen tenantId
+// into localStorage.activeTenantId. Every API call mirrors it into the
+// X-Active-Tenant header so the backend can disambiguate cross-tenant
+// requests once a UserTenant join table lands. Today (single-tenant per
+// user) the backend ignores values that don't match the JWT's tenantId,
+// so a stale value won't break anything.
+export function getActiveTenantId() {
+  try {
+    const raw = localStorage.getItem('activeTenantId');
+    if (!raw) return null;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setActiveTenantId(id) {
+  try {
+    if (id == null) localStorage.removeItem('activeTenantId');
+    else localStorage.setItem('activeTenantId', String(id));
+  } catch {
+    /* ignore */
+  }
+}
+
 // Pages can opt OUT of the auto-toast by passing { silent: true }. Useful for
 // background polls and probe requests where a transient failure shouldn't
 // bother the user.
@@ -116,6 +142,12 @@ export const fetchApi = async (url, options = {}) => {
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  // Attach the active tenant header on every authed request.
+  const activeTenantId = getActiveTenantId();
+  if (activeTenantId != null && !headers['X-Active-Tenant']) {
+    headers['X-Active-Tenant'] = String(activeTenantId);
   }
 
   const { silent, ...fetchOpts } = options;

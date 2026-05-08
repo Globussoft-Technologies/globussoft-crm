@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
+import { formatDate } from '../utils/date';
 import { Receipt, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucide-react';
 
 const CATEGORY_OPTIONS = ['General', 'Travel', 'Software', 'Office', 'Marketing', 'Other'];
@@ -263,7 +264,7 @@ export default function Expenses() {
                         {exp.user ? exp.user.name || exp.user.email : '—'}
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>
-                        {new Date(exp.expenseDate).toLocaleDateString()}
+                        {formatDate(exp.expenseDate)}
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
                         <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>

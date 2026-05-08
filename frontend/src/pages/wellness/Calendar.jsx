@@ -4,8 +4,15 @@ import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, User as UserIcon, 
 import React from 'react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { tenantLocale } from '../../utils/date';
 
-const HOURS = Array.from({ length: 11 }, (_, i) => 9 + i); // 9 AM → 7 PM
+// #615: default visible window is 9 AM → 7 PM, but visits scheduled outside
+// that window (early/late shifts, walk-ins booked for 8 AM) are NOT clamped
+// to the boundary hours — that's the bug that made every off-hours visit
+// stack at the top (or bottom) of the day. computeHours() expands the
+// visible range to include any actual visit hour on the loaded day so the
+// vertical position reflects the booked time. See `hoursForVisits()`.
+const DEFAULT_HOURS = Array.from({ length: 11 }, (_, i) => 9 + i); // 9 AM → 7 PM
 const STATUS_COLOR = {
   booked:        'rgba(59,130,246,0.18)',
   confirmed:     'rgba(99,102,241,0.20)',
@@ -39,6 +46,31 @@ const isoDay = (d) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(
 const fmtHour = (h) => `${String(h).padStart(2, '0')}:00`;
 const UNASSIGNED_KEY = '__unassigned__';
 
+// #615: dynamic hour range — start with the default 9..19, then expand to
+// include the earliest and latest actual visit on the loaded day. Without
+// this every visit at 7 AM clamped to 9 AM and every visit at 8 PM clamped
+// to 7 PM, so off-hours visits stacked at the boundary cells with no way to
+// distinguish them from on-hours visits. Returns a contiguous integer
+// range so the grid stays readable (no gappy hour columns).
+export function hoursForVisits(visits) {
+  let lo = DEFAULT_HOURS[0];
+  let hi = DEFAULT_HOURS[DEFAULT_HOURS.length - 1];
+  for (const v of visits || []) {
+    if (!v?.visitDate) continue;
+    const h = new Date(v.visitDate).getHours();
+    if (Number.isFinite(h)) {
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+  }
+  // Clamp to a sane 0..23 floor/ceiling — getHours() can't return outside
+  // that anyway but defensive in case a malformed string slips in.
+  lo = Math.max(0, Math.min(23, lo));
+  hi = Math.max(0, Math.min(23, hi));
+  if (hi < lo) hi = lo;
+  return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+}
+
 export default function CalendarGrid() {
   const notify = useNotify();
   const [date, setDate] = useState(() => new Date());
@@ -46,6 +78,13 @@ export default function CalendarGrid() {
   const [allStaff, setAllStaff] = useState([]);
   const [services, setServices] = useState([]);
   const [patients, setPatients] = useState([]);
+  // #629: waitlist entries with status='waiting' surface as quick-pick
+  // options in the New Visit modal so a receptionist can promote a
+  // waitlisted patient straight into a freed slot. Pre-fix the calendar
+  // had no waitlist hook at all — the only path was Waitlist page → Mark
+  // booked → fallback +24h slot, losing the explicit time the receptionist
+  // wanted to give the slot.
+  const [waitlist, setWaitlist] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(true);
   // #270: empty-slot click opens a "New visit" modal seeded with the chosen
@@ -65,11 +104,15 @@ export default function CalendarGrid() {
       // calendar appeared empty even though the dashboard showed the correct counts.
       const fromQ = `${dStr}T00:00:00+05:30`;
       const toQ = `${dStr}T23:59:59+05:30`;
-      const [staff, vs, svc, pts] = await Promise.all([
+      const [staff, vs, svc, pts, wl] = await Promise.all([
         fetchApi('/api/staff').catch(() => []),
         fetchApi(`/api/wellness/visits?from=${encodeURIComponent(fromQ)}&to=${encodeURIComponent(toQ)}&limit=500`),
         fetchApi('/api/wellness/services').catch(() => []),
         fetchApi('/api/wellness/patients').catch(() => []),
+        // #629: pull waiting waitlist entries so the New Visit modal can
+        // surface promote-to-slot options. The list endpoint returns a
+        // bare array; defensive Array.isArray check matches patients above.
+        fetchApi('/api/wellness/waitlist?status=waiting').catch(() => []),
       ]);
       setAllStaff(Array.isArray(staff) ? staff : []);
       setVisits(Array.isArray(vs) ? vs : []);
@@ -83,7 +126,8 @@ export default function CalendarGrid() {
         : Array.isArray(pts?.data) ? pts.data
         : [];
       setPatients(patientsArr);
-    } catch (_e) { setVisits([]); setAllStaff([]); }
+      setWaitlist(Array.isArray(wl) ? wl : Array.isArray(wl?.items) ? wl.items : []);
+    } catch (_e) { setVisits([]); setAllStaff([]); setWaitlist([]); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [date]);
@@ -118,14 +162,25 @@ export default function CalendarGrid() {
     return cols;
   }, [visits, practitioners]);
 
+  // #615: hours dynamically expand to cover every booked visit on the loaded
+  // day. Pre-fix the vertical position was clamped to the 9..19 window, so
+  // an 8 AM walk-in stacked on top of every other 9 AM visit (and an 8 PM
+  // late-shift visit stacked on top of every other 7 PM visit) — the
+  // receptionist couldn't tell whether two visits were back-to-back or
+  // 5 hours apart. See hoursForVisits() above for the contiguous-range
+  // expansion logic.
+  const HOURS = useMemo(() => hoursForVisits(visits), [visits]);
+
   const grid = useMemo(() => {
     const out = {};
     for (const c of columns) out[c.id] = {};
     for (const v of visits) {
       const colId = v.doctorId || UNASSIGNED_KEY;
       if (!out[colId]) out[colId] = {};
-      const rawHour = new Date(v.visitDate).getHours();
-      const h = Math.max(HOURS[0], Math.min(HOURS[HOURS.length - 1], rawHour));
+      // #615: bucket by the visit's actual hour. The HOURS array now spans
+      // the full data range so no clamping is needed; visits land in the
+      // hour cell that matches their booked time.
+      const h = new Date(v.visitDate).getHours();
       if (!out[colId][h]) out[colId][h] = [];
       out[colId][h].push(v);
     }
@@ -148,7 +203,7 @@ export default function CalendarGrid() {
             <CalendarIcon size={24} /> Calendar
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Day view by practitioner — {date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            Day view by practitioner — {date.toLocaleDateString(tenantLocale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -193,7 +248,13 @@ export default function CalendarGrid() {
 
       {!loading && columns.length > 0 && (
         <div className="glass calendar-scroll" style={{ padding: '1rem', overflow: 'auto' }}>
-          <div className="calendar-grid" style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(120px, 1fr))`, gap: '4px' }}>
+          {/* #615: use minmax(0, 1fr) per the CLAUDE.md ellipsis-on-grid-children
+              standing rule. Hard 120px floor at the minmax min would have
+              prevented columns from collapsing past 120px and forced the
+              whole grid to overflow horizontally instead of letting the
+              ellipsis chain on each cell clip — see line 199 column header
+              and line 230 hour cell, both have minWidth:0. */}
+          <div className="calendar-grid" style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(0, 1fr))`, gap: '4px', minWidth: `${80 + columns.length * 120}px` }}>
             <div style={{ ...colHead, background: 'transparent' }}></div>
             {columns.map((c) => (
               <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1, minWidth: 0, overflow: 'hidden' }} title={c.role ? `${c.name} · ${c.role}` : c.name}>
@@ -309,6 +370,7 @@ export default function CalendarGrid() {
           date={date}
           patients={patients}
           services={services}
+          waitlist={waitlist}
           notify={notify}
           onClose={() => setNewVisit(null)}
           onCreated={() => { setNewVisit(null); load(); }}
@@ -322,25 +384,60 @@ export default function CalendarGrid() {
 // Only required field is patientId (per the visit POST validator at
 // routes/wellness.js:472). status defaults to 'booked' so the receptionist
 // doesn't trip the "completed visits need serviceId + doctorId" gate.
-function NewVisitModal({ column, hour, date, patients, services, notify, onClose, onCreated }) {
+function NewVisitModal({ column, hour, date, patients, services, waitlist, notify, onClose, onCreated }) {
   const [patientId, setPatientId] = useState('');
   const [serviceId, setServiceId] = useState('');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // #629: source flag tracks whether this booking is a fresh visit (default)
+  // or a promotion from a waitlist entry. When 'waitlist', we PUT
+  // /api/wellness/waitlist/:id with status='booked' + visitDate (the backend
+  // materialises a Visit row at that slot — see routes/wellness.js:4298+).
+  const [source, setSource] = useState('new'); // 'new' | 'waitlist'
+  const [waitlistId, setWaitlistId] = useState('');
 
   const localDate = new Date(date);
   localDate.setHours(hour, 0, 0, 0);
 
+  // #629: only show waitlist entries with status='waiting' (the parent
+  // already filters by status, but defensive in case the prop changes).
+  // The list is empty array fallback so the dropdown still renders even
+  // with no waitlist entries — see test "renders waitlist dropdown options".
+  const waitingEntries = Array.isArray(waitlist) ? waitlist.filter((w) => w.status === 'waiting') : [];
+
   const submit = async (e) => {
     e.preventDefault();
-    if (!patientId) return;
     if (submitting) return;
+
+    // #629: visitDate built as IST wall time; backend stores as UTC, dashboard
+    // applies the same +05:30 offset on read so the slot lands at the
+    // intended hour for the receptionist's column.
+    const istIso = `${date.toISOString().slice(0, 10)}T${String(hour).padStart(2, '0')}:00:00+05:30`;
+
+    if (source === 'waitlist') {
+      if (!waitlistId) return;
+      setSubmitting(true);
+      try {
+        // PUT status='booked' triggers Visit creation in the backend handler
+        // (see routes/wellness.js:4298) tied to the waitlist entry's
+        // patient + service. The visitDate ensures the slot lands where the
+        // receptionist clicked, not the +24h fallback.
+        await fetchApi(`/api/wellness/waitlist/${parseInt(waitlistId, 10)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ status: 'booked', visitDate: istIso }),
+        });
+        const entry = waitingEntries.find((w) => w.id === parseInt(waitlistId, 10));
+        const name = entry?.patient?.name || 'patient';
+        notify.success(`Promoted ${name} from waitlist to ${String(hour).padStart(2, '0')}:00`);
+        onCreated();
+      } catch (_err) { /* fetchApi already toasted */ }
+      setSubmitting(false);
+      return;
+    }
+
+    if (!patientId) return;
     setSubmitting(true);
     try {
-      // visitDate built as IST wall time; backend stores as UTC, dashboard
-      // applies the same +05:30 offset on read so the slot lands at the
-      // intended hour for the receptionist's column.
-      const istIso = `${date.toISOString().slice(0, 10)}T${String(hour).padStart(2, '0')}:00:00+05:30`;
       await fetchApi('/api/wellness/visits', {
         method: 'POST',
         body: JSON.stringify({
@@ -396,30 +493,86 @@ function NewVisitModal({ column, hour, date, patients, services, notify, onClose
           {column.name} • {localDate.toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })}
         </p>
 
-        <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Patient *</label>
-        <select required value={patientId} onChange={(e) => setPatientId(e.target.value)} style={modalInput}>
-          <option value="">— select patient —</option>
-          {patients.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}{p.phone ? ` · ${p.phone}` : ''}</option>
-          ))}
-        </select>
+        {/* #629: source toggle — pick "Promote from waitlist" when there are
+            waiting entries, otherwise stays on the default new-visit path. */}
+        {waitingEntries.length > 0 && (
+          <div role="radiogroup" aria-label="Booking source" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={source === 'new'}
+              onClick={() => setSource('new')}
+              style={sourceBtn(source === 'new')}
+            >
+              New patient
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={source === 'waitlist'}
+              onClick={() => setSource('waitlist')}
+              style={sourceBtn(source === 'waitlist')}
+            >
+              Promote from waitlist ({waitingEntries.length})
+            </button>
+          </div>
+        )}
 
-        <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Service (optional)</label>
-        <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={modalInput}>
-          <option value="">— pick later —</option>
-          {services.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
-          ))}
-        </select>
+        {source === 'waitlist' ? (
+          <>
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Waitlisted patient *</label>
+            <select
+              required
+              value={waitlistId}
+              onChange={(e) => setWaitlistId(e.target.value)}
+              style={modalInput}
+              aria-label="Waitlisted patient"
+            >
+              <option value="">— select from waitlist —</option>
+              {waitingEntries.map((w) => {
+                const svcName = w.serviceId
+                  ? (services.find((s) => s.id === w.serviceId)?.name || `service #${w.serviceId}`)
+                  : 'any service';
+                const phone = w.patient?.phone ? ` · ${w.patient.phone}` : '';
+                return (
+                  <option key={w.id} value={w.id}>
+                    {w.patient?.name || `#${w.patientId}`}{phone} — {svcName}
+                  </option>
+                );
+              })}
+            </select>
+            <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              Promoting will create a booked visit at this slot and remove the patient from the waiting list.
+            </p>
+          </>
+        ) : (
+          <>
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Patient *</label>
+            <select required value={patientId} onChange={(e) => setPatientId(e.target.value)} style={modalInput}>
+              <option value="">— select patient —</option>
+              {patients.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}{p.phone ? ` · ${p.phone}` : ''}</option>
+              ))}
+            </select>
 
-        <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Notes (optional)</label>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          rows={2}
-          style={{ ...modalInput, resize: 'vertical', fontFamily: 'inherit' }}
-          placeholder="Walk-in confirmed, follow-up consult, etc."
-        />
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Service (optional)</label>
+            <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={modalInput}>
+              <option value="">— pick later —</option>
+              {services.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Notes (optional)</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              style={{ ...modalInput, resize: 'vertical', fontFamily: 'inherit' }}
+              placeholder="Walk-in confirmed, follow-up consult, etc."
+            />
+          </>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
           <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', background: 'transparent', border: '1px solid var(--border-color, rgba(0,0,0,0.15))', borderRadius: 8, cursor: 'pointer', color: 'var(--text-primary)' }}>
@@ -427,16 +580,16 @@ function NewVisitModal({ column, hour, date, patients, services, notify, onClose
           </button>
           <button
             type="submit"
-            disabled={!patientId || submitting}
+            disabled={(source === 'waitlist' ? !waitlistId : !patientId) || submitting}
             style={{
               padding: '0.5rem 1.25rem',
-              background: !patientId || submitting ? 'rgba(99,102,241,0.4)' : 'var(--accent-color, #6366f1)',
+              background: ((source === 'waitlist' ? !waitlistId : !patientId) || submitting) ? 'rgba(99,102,241,0.4)' : 'var(--primary-color, var(--accent-color, #6366f1))',
               border: 'none', color: '#fff', borderRadius: 8,
-              cursor: !patientId || submitting ? 'not-allowed' : 'pointer',
+              cursor: ((source === 'waitlist' ? !waitlistId : !patientId) || submitting) ? 'not-allowed' : 'pointer',
               fontWeight: 600,
             }}
           >
-            {submitting ? 'Booking…' : 'Book visit'}
+            {submitting ? 'Booking…' : source === 'waitlist' ? 'Promote from waitlist' : 'Book visit'}
           </button>
         </div>
       </form>
@@ -449,3 +602,15 @@ const colHead = { padding: '0.5rem 0.75rem', fontWeight: 600, fontSize: '0.8rem'
 const hourLabel = { padding: '0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)', textAlign: 'right', borderRight: '1px solid rgba(255,255,255,0.05)' };
 const hourCell = { padding: '0.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', minHeight: '60px', borderBottom: '1px solid rgba(255,255,255,0.04)' };
 const modalInput = { padding: '0.5rem 0.7rem', borderRadius: 8, border: '1px solid var(--border-color, rgba(0,0,0,0.15))', background: 'var(--input-bg, rgba(0,0,0,0.03))', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };
+// #629: source-toggle pill — primary brand color when active so it reads
+// the same on wellness teal (#265855) as on generic blue.
+const sourceBtn = (active) => ({
+  padding: '0.4rem 0.85rem',
+  background: active ? 'var(--primary-color, var(--accent-color, #6366f1))' : 'transparent',
+  color: active ? '#fff' : 'var(--text-primary)',
+  border: `1px solid ${active ? 'transparent' : 'var(--border-color, rgba(0,0,0,0.15))'}`,
+  borderRadius: 999,
+  cursor: 'pointer',
+  fontSize: '0.8rem',
+  fontWeight: active ? 600 : 400,
+});

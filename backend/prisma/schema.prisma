@@ -69,6 +69,11 @@ model Tenant {
   // Agent C: white-label branding
   logoUrl         String? // path to uploaded logo, e.g. /uploads/branding/tenant-2/logo.png
   brandColor      String? // hex like #265855, overrides theme accent when set
+  // #611: when true, OUTBOUND EmailMessage rows are persisted on send
+  // (industry default — Sent folder, threading, audit trail). Admins
+  // may opt out for storage / compliance reasons; existing tenants
+  // pre-flag default to true at first read of the column.
+  emailRetention  Boolean  @default(true)
   isActive        Boolean  @default(true)
   ownerEmail      String?
   createdAt       DateTime @default(now())
@@ -127,6 +132,7 @@ model Tenant {
   visits               Visit[]
   prescriptions        Prescription[]
   consentForms         ConsentForm[]
+  consentTemplates     ConsentTemplate[]
   treatmentPlans       TreatmentPlan[]
   serviceConsumptions  ServiceConsumption[]
   agentRecommendations AgentRecommendation[]
@@ -136,6 +142,8 @@ model Tenant {
   // Agent D: loyalty + referrals
   loyaltyTransactions  LoyaltyTransaction[]
   referrals            Referral[]
+  // #614: per-tenant earn/burn rule config (one-to-one)
+  loyaltyConfig        LoyaltyConfig?
 
   // #413 batch 1 (wave 17): financial / PHI back-relations. Required because
   // each child model now declares `tenant Tenant @relation`; Prisma rejects
@@ -211,6 +219,10 @@ model Tenant {
   documentViews        DocumentView[]
   socialPosts          SocialPost[]
   socialMentions       SocialMention[]
+
+  // #592 — Find Duplicates dismiss persistence (DismissedDuplicateGroup model
+  // at the bottom of this file). Per-tenant scoped.
+  dismissedDuplicateGroups DismissedDuplicateGroup[]
 }
 
 model User {
@@ -238,6 +250,11 @@ model User {
 
   // Wellness sub-role (orthogonal to RBAC role)
   wellnessRole String? // doctor, professional, telecaller, helper
+
+  // #618 — soft-deactivation. Set to now() when an admin clicks Deactivate
+  // in the Staff Directory; cleared back to null on Reactivate. Reversible
+  // alternative to DELETE so the row stays in the directory + audit trail.
+  deactivatedAt DateTime?
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -300,6 +317,17 @@ model Contact {
   // Customer portal
   portalPasswordHash String?
 
+  // #600 — wellness vertical extras. Optional + nullable so generic CRM
+  // tenants ignore them entirely. Mirrors the Patient intake form (treatment
+  // of interest + preferred clinic + preferred practitioner) so wellness
+  // marketing attribution can tie a lead to the channel/service that
+  // brought them in. preferredLocationId / preferredPractitionerId stay
+  // unwired Int columns (no FK relation) to dodge cascade-delete coupling
+  // — a deleted Location or User shouldn't tombstone a Lead's analytics row.
+  treatmentOfInterest     String?
+  preferredLocationId     Int?
+  preferredPractitionerId Int?
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
@@ -337,6 +365,7 @@ model Contact {
   smsMessages         SmsMessage[]
   whatsappMessages    WhatsAppMessage[]
   pushSubscriptions   PushSubscription[]
+  touchpoints         Touchpoint[]
   attachments         ContactAttachment[]
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
@@ -486,6 +515,11 @@ model EmailMessage {
   body                 String    @db.Text
   from                 String
   to                   String
+  // #623 — cc/bcc are comma-separated lists, persisted exactly as the
+  // composer's parseRecipients() returns them (deduped, lowercase-keyed).
+  // Null when no carbon-copy / blind-carbon-copy recipients were attached.
+  cc                   String?   @db.Text
+  bcc                  String?   @db.Text
   direction            String    @default("INBOUND") // INBOUND, OUTBOUND
   read                 Boolean   @default(false)
   sentiment            String? // positive, neutral, negative
@@ -602,8 +636,15 @@ model Invoice {
   contactId Int
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
+  // #601 — wellness visit linkage. Optional so generic CRM invoices don't
+  // need it. SetNull on visit delete; Invoice itself stays Restrict-on-tenant.
+  // Drives the per-visit revenue rollup on /api/wellness/reports/visit.
+  visitId Int?
+  visit   Visit? @relation(fields: [visitId], references: [id], onDelete: SetNull)
+
   @@index([tenantId, status])
   @@index([tenantId, contactId])
+  @@index([visitId, status])
 }
 
 model Integration {
@@ -1600,6 +1641,10 @@ model Touchpoint {
   timestamp  DateTime @default(now())
   tenantId   Int      @default(1)
   tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // #571 follow-up: lead scoring engine includes contact.touchpoints in
+  // its scoring fan-out; the back-relation must be declared explicitly or
+  // Prisma rejects the `include: { touchpoints: ... }` validator.
+  contact    Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, contactId])
 }
@@ -2145,8 +2190,15 @@ model Patient {
   loyaltyTransactions LoyaltyTransaction[]
   referrals           Referral[]           @relation("ReferrerOf")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  // #628 — soft-delete column (mirrors Contact / Deal pattern from #167).
+  // Default lists filter `deletedAt: null`; restore endpoint clears it.
+  // Cascading rows (Visit / Prescription / ConsentForm / TreatmentPlan)
+  // are NOT cascade-deleted on soft-delete — they remain queryable for
+  // audit + clinical-history retention. Hard purge runs through the
+  // /privacy retention engine after the configured tombstone window (#576).
+  deletedAt DateTime?
 
   /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
   // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
@@ -2166,6 +2218,7 @@ model Patient {
   // tenant scope AND the orderBy from the index alone, avoiding the filesort
   // observed on cold calls.
   @@index([tenantId, createdAt])
+  @@index([tenantId, deletedAt])
 }
 
 model Service {
@@ -2231,6 +2284,11 @@ model Visit {
   prescriptions Prescription[]
   consumptions  ServiceConsumption[]
 
+  // #601 — invoices linked to this visit. Per-visit revenue rollup sums
+  // amount across rows where status='PAID'. amountCharged on the visit row
+  // is the inline fallback when no invoice has been raised yet.
+  invoices Invoice[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2287,6 +2345,31 @@ model ConsentForm {
 
   @@index([tenantId, signedAt])
   @@index([patientId])
+}
+
+/// #612: per-tenant consent template catalogue. Pre-fix the consent
+/// dropdown rendered 5 hardcoded options (hair-transplant / botox-fillers
+/// / laser / chemical-peel / general). Clinics with paediatric or
+/// procedure-specific flows had no way to add their own legally-vetted
+/// wording. This row stores the editable catalogue; ConsentForm.templateName
+/// continues to reference the chosen template by string key (immutable
+/// once signed — that's the whole point).
+model ConsentTemplate {
+  id        Int      @id @default(autoincrement())
+  key       String // stable identifier used by ConsentForm.templateName
+  label     String // human-readable name shown in dropdown
+  body      String?  @db.LongText // optional HTML body for the consent form
+  language  String   @default("en")
+  isActive  Boolean  @default(true)
+  isSeed    Boolean  @default(false) // true for the 5 seeded starter rows
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, key])
+  @@index([tenantId, isActive])
 }
 
 model TreatmentPlan {
@@ -2475,6 +2558,31 @@ model LoyaltyTransaction {
   @@index([tenantId, patientId, createdAt])
 }
 
+// #614 — per-tenant Loyalty earn/burn rule config. One row per tenant. Drives:
+//   - the auto-credit-on-completed-visit hook in routes/wellness.js
+//   - the manager-facing rules card on the Loyalty page (so the rules are
+//     no longer invisible / hardcoded in JS)
+// Numeric fields are nullable + zero-defaulted; null/0 means "rule disabled".
+// All amounts are tenant-currency (formatMoney resolves the unit at render).
+model LoyaltyConfig {
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int      @unique
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Earn rules
+  earnPerVisit        Int      @default(0) // flat points per completed visit
+  earnPercentOfSpend  Float    @default(10) // % of amountCharged → points (default 10 mirrors the historic hardcoded rule)
+  earnPerCurrencyUnit Float    @default(0) // points per 1 currency unit (alt to %); e.g. 0.01 = 1pt per ₹100
+  // Burn / redemption
+  redeemPointsPerUnit Int      @default(10) // points needed to redeem 1 currency unit (e.g. 10 pts = ₹1)
+  // Bonuses
+  welcomeBonus        Int      @default(0) // points credited on patient signup
+  referralBonus       Int      @default(100) // default points awarded per successful referral
+  // Toggles
+  autoEarnEnabled     Boolean  @default(true)
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
+}
+
 model Referral {
   id                Int       @id @default(autoincrement())
   referrerPatientId Int
@@ -2512,4 +2620,33 @@ model RevokedToken {
   @@index([jti])
   @@index([userId, tenantId])
   @@index([expiresAt])
+}
+
+// #592 — Dismiss persistence for Contacts → Find Duplicates. The duplicate
+// detector at GET /api/contacts/duplicates/find is purely structural (re-runs
+// on every call), so without a persisted "the operator already reviewed this
+// group and decided it's NOT a duplicate" signal, dismissed pairs would
+// re-surface on every refresh. groupKey is a stable hash of the sorted
+// contact IDs in the group (primary + duplicates) — re-deriving the same
+// group from the same contacts produces the same key, so the dismiss is
+// sticky. Soft-deleting any member of a dismissed group invalidates that
+// group naturally (the detector won't see the deleted contact), which is
+// the desired UX. Per-tenant scoped.
+model DismissedDuplicateGroup {
+  id          Int      @id @default(autoincrement())
+  // SHA-256 hex of the sorted contact-id list, comma-joined. Stable across
+  // calls; re-creates that hit the same key are idempotent.
+  groupKey    String
+  // The sorted contact IDs that made up the group at dismiss time, stored
+  // as a comma-separated string. Used for audit/debug only — the dedup
+  // check goes through groupKey.
+  contactIds  String   @db.Text
+  reason      String?
+  dismissedBy Int?
+  tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, groupKey])
+  @@index([tenantId])
 }

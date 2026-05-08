@@ -16,6 +16,9 @@ const patient = {
   name: 'Ananya Singh',
   phone: '+919876543210',
   email: 'ananya@test.in',
+  // #638: dob + gender drive the at-a-glance subline. Stored on the
+  // Prisma Patient model as `dob` (DateTime?) + `gender` (M/F/Other).
+  dob: '1990-08-12T00:00:00Z',
   gender: 'F',
   bloodGroup: 'O+',
   source: 'walk-in',
@@ -57,6 +60,50 @@ describe('<PatientDetail />', () => {
     for (const label of ['Case history', 'New prescription', 'Consent form', 'Treatment plans', 'Log visit', 'Photos', 'Inventory used']) {
       expect(screen.getByRole('button', { name: new RegExp(label, 'i') })).toBeInTheDocument();
     }
+  });
+
+  // #638 — patient header subline must surface DOB + computed age + gender
+  // + phone at-a-glance, not buried in the Profile tab. Pre-fix the header
+  // showed only Name + Contact phone.
+  describe('Patient header subline (#638)', () => {
+    it('renders DOB (formatted) + computed age + gender label + phone', async () => {
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('patient-header-subline')).toBeInTheDocument());
+      const subline = screen.getByTestId('patient-header-subline').textContent;
+
+      // Computed age: born 1990-08-12; expected 35y as of 2026-05-08 — but
+      // because tests can run on/around the birthday, allow 35y or 36y.
+      expect(subline).toMatch(/\b3[56]y\b/);
+
+      // Gender label: schema stores 'F' → header expands to 'Female'.
+      expect(subline).toMatch(/Female/);
+
+      // Phone surfaces inline.
+      expect(subline).toContain('+919876543210');
+
+      // Year of the DOB is rendered (2-digit / 4-digit locale-canonical short
+      // — both en-IN DD/MM/YYYY and en-US MM/DD/YYYY share the year token).
+      expect(subline).toMatch(/1990/);
+    });
+
+    it('falls back gracefully when dob is missing', async () => {
+      const noDob = { ...patient, dob: null };
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(noDob);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('patient-header-subline')).toBeInTheDocument());
+      const subline = screen.getByTestId('patient-header-subline').textContent;
+      // No age token when dob is null.
+      expect(subline).not.toMatch(/\d+y/);
+      // Other identifiers still render.
+      expect(subline).toMatch(/Female/);
+      expect(subline).toContain('+919876543210');
+    });
   });
 
   it('switching tabs shows the right content (history → prescribe → consent)', async () => {

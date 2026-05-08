@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Building2, Calendar, IndianRupee, Activity, Users, UsersRound, Stethoscope } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import { formatMoney } from '../../utils/money';
 
-const formatRupees = (n) => `\u20B9${Math.round(n || 0).toLocaleString('en-IN')}`;
+// #626: was hardcoded \u20B9 + en-IN \u2014 now pulls tenant currency+locale.
+const formatRupees = (n) => formatMoney(n || 0, { maximumFractionDigits: 0 });
 
 // One column = one location. Pulls /api/wellness/dashboard?locationId=X for
 // most KPIs and /api/wellness/reports/pnl-by-service?locationId=X for top

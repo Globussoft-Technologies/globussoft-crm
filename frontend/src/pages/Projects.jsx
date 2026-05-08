@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { FolderKanban, Plus, Trash2, DollarSign, CheckCircle2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatMoney } from '../utils/money';
+import { formatDate } from '../utils/date';
 
 const STATUS_CONFIG = {
   Planning:   { color: '#94a3b8', bg: 'rgba(148,163,184,0.15)' },
@@ -46,8 +48,12 @@ function PriorityBadge({ priority }) {
   );
 }
 
+// #626: was a bare `Number().toLocaleString()` (no symbol) called from a
+// JSX expression that hardcoded `$` outside the call — rendered "$ 1,000.00"
+// on USD tenants and lost the rupee on INR tenants. formatMoney handles
+// both the symbol and the locale-grouping in one call.
 function formatCurrency(value) {
-  return Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatMoney(value || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 const INITIAL_FORM = {
@@ -175,7 +181,7 @@ export default function Projects() {
           background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={14} /> Total Budget: ${formatCurrency(stats.totalBudget)}
+          <DollarSign size={14} /> Total Budget: {formatCurrency(stats.totalBudget)}
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem',
@@ -376,9 +382,9 @@ export default function Projects() {
                           </span>
                         </td>
                         <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                          {proj.startDate ? new Date(proj.startDate).toLocaleDateString() : '?'}
+                          {proj.startDate ? formatDate(proj.startDate) : '?'}
                           {' - '}
-                          {proj.endDate ? new Date(proj.endDate).toLocaleDateString() : '?'}
+                          {proj.endDate ? formatDate(proj.endDate) : '?'}
                         </td>
                         <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
                           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', alignItems: 'center' }}>

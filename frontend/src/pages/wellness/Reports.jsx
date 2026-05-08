@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { BarChart3, TrendingUp, Stethoscope, MapPin, IndianRupee, Download, Loader2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
+import { formatPercent } from '../../utils/percent';
+import Avatar from '../../components/Avatar';
 
 const TABS = [
   { key: 'pnl', label: 'P&L by Service', icon: BarChart3 },
@@ -261,9 +263,17 @@ function ProTable({ data }) {
               "Role" instead — that's the meaningful one for clinics. */}
           <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: i > 1 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
           <tbody>
+            {/* #637: per-practitioner avatar with hashed colour so each name
+                is visually distinct in the staff column. The colour is
+                deterministic — same name → same swatch across pages. */}
             {rows.map((r) => (
               <tr key={r.id}>
-                <td style={{ ...td, width: colWidths[0] }}>{r.name}</td>
+                <td style={{ ...td, width: colWidths[0] }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <Avatar name={r.name || ''} size={28} />
+                    <span>{r.name}</span>
+                  </span>
+                </td>
                 <td style={{ ...td, width: colWidths[1], textTransform: 'capitalize' }}>{r.wellnessRole || r.role || '—'}</td>
                 <td style={{ ...tdR, width: colWidths[2] }}>{r.visits}</td>
                 <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(r.revenue)}</td>
@@ -365,8 +375,8 @@ function AttTable({ data }) {
               <tr key={r.source}>
                 <td style={{ ...td, width: colWidths[0] }}><strong>{r.source}</strong></td>
                 <td style={{ ...tdR, width: colWidths[1] }}>{r.leads}</td>
-                <td style={{ ...tdR, width: colWidths[2], color: r.junkRate > 70 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>{r.junkRate}%</td>
-                <td style={{ ...tdR, width: colWidths[3], color: r.conversionRate > 10 ? 'var(--success-color)' : 'var(--text-secondary)', fontWeight: r.conversionRate > 10 ? 600 : 400 }}>{r.conversionRate}%</td>
+                <td style={{ ...tdR, width: colWidths[2], color: r.junkRate > 70 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>{formatPercent(r.junkRate)}</td>
+                <td style={{ ...tdR, width: colWidths[3], color: r.conversionRate > 10 ? 'var(--success-color)' : 'var(--text-secondary)', fontWeight: r.conversionRate > 10 ? 600 : 400 }}>{formatPercent(r.conversionRate)}</td>
                 <td style={{ ...tdR, width: colWidths[4] }}>{formatMoney(r.revenue)}</td>
                 <td style={{ ...tdR, width: colWidths[5] }}>{formatMoney(r.revenuePerLead)}</td>
               </tr>
@@ -383,7 +393,11 @@ const tierBg = (t) => ({ high: 'rgba(239,68,68,0.2)', medium: 'rgba(245,158,11,0
 const tableStyle = { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' };
 const th = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', textOverflow: 'ellipsis' };
 const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden', textOverflow: 'ellipsis', wordBreak: 'break-word' };
-const tdR = { ...td, textAlign: 'right' };
+// #602: right-aligned cells are always numeric / currency / count in this
+// page's report tables. Forbid mid-number wrap (`₹1,2\n34,567` breaks
+// copy-paste + CSV alignment) and use tabular-nums so digit columns line up.
+// wordBreak overrides the inherited break-word from `td`.
+const tdR = { ...td, textAlign: 'right', whiteSpace: 'nowrap', wordBreak: 'normal', fontVariantNumeric: 'tabular-nums' };
 const dateInput = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem' };
 // #227: export buttons sit next to the date picker — wait state shows a
 // spinner and dims the button without removing it from the layout.

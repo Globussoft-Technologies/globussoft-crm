@@ -463,6 +463,82 @@ router.put("/me", verifyToken, async (req, res) => {
   }
 });
 
+// ---------- Issue #555 (HI-06): explicit tenant switcher ----------
+//
+// Pre-fix, the SPA's tenant context flipped silently based purely on URL
+// pathname (/dashboard vs /wellness) — no switcher in the chrome, no
+// audit entry on the flip, localStorage.tenant could disagree with the
+// rendered shell. The frontend now renders an explicit switcher in the
+// header dropdown; these endpoints back it.
+//
+// DATA MODEL CAVEAT: today every user has exactly one tenantId
+// (User.tenantId is an Int @default(1), no UserTenant join table). So
+// /tenants returns a single-element list and /tenant-switch only accepts
+// a no-op switch back to the user's own tenant. The endpoints + the
+// header dropdown are wired so a future UserTenant join table just
+// needs the Prisma query swapped to .findMany — the frontend doesn't
+// have to change.
+
+// GET /api/auth/tenants — list of tenants the caller can switch into.
+// Today: always [currentTenant]. Documented future-proofing point.
+router.get("/tenants", verifyToken, async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { id: true, name: true, slug: true, vertical: true, plan: true, defaultCurrency: true, locale: true, country: true },
+    });
+    if (!tenant) return res.json({ tenants: [], activeTenantId: req.user.tenantId });
+    return res.json({ tenants: [tenant], activeTenantId: req.user.tenantId });
+  } catch (_e) {
+    return res.status(500).json({ error: "Failed to load tenants" });
+  }
+});
+
+// POST /api/auth/tenant-switch — explicit switch + audit entry. Body:
+// { toTenantId }. Returns a re-issued JWT with the new tenantId so the
+// SPA can update AuthContext + redirect to the destination's landing.
+//
+// Today the only legal toTenantId is the caller's own tenantId (single-
+// tenant data model). When a UserTenant join table lands, this gate
+// widens to "toTenantId must be in the user's accessible-tenants set."
+router.post("/tenant-switch", verifyToken, async (req, res) => {
+  try {
+    const toTenantId = parseInt(req.body && req.body.toTenantId, 10);
+    if (!Number.isFinite(toTenantId)) {
+      return res.status(400).json({ error: "toTenantId is required", code: "MISSING_TARGET_TENANT" });
+    }
+    const fromTenantId = req.user.tenantId;
+    if (toTenantId !== fromTenantId) {
+      return res.status(403).json({
+        error: "Cross-tenant switch not permitted for this account",
+        code: "TENANT_NOT_ACCESSIBLE",
+      });
+    }
+
+    const target = await prisma.tenant.findUnique({
+      where: { id: toTenantId },
+      select: { id: true, name: true, slug: true, vertical: true, plan: true, defaultCurrency: true, locale: true, country: true, logoUrl: true, brandColor: true },
+    });
+    if (!target) return res.status(404).json({ error: "Tenant not found" });
+
+    await writeAudit("User", "TENANT_SWITCH", req.user.userId, req.user.userId, fromTenantId, {
+      fromTenantId,
+      toTenantId,
+    });
+
+    const token = signSessionToken({
+      userId: req.user.userId,
+      role: req.user.role,
+      wellnessRole: req.user.wellnessRole || null,
+      tenantId: target.id,
+      vertical: target.vertical || "generic",
+    });
+    return res.json({ ok: true, token, tenant: target });
+  } catch (_e) {
+    return res.status(500).json({ error: "Failed to switch tenant" });
+  }
+});
+
 // ---------- Issue #180: session revocation ----------
 //
 // Pre-#180 the system had no way to invalidate a JWT before its 7-day TTL —

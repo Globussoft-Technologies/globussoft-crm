@@ -1,5 +1,6 @@
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
+import { formatDate, formatDateTime } from '../utils/date';
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Phone, Mail, Calendar, Paperclip, Upload, Trash2, FileText, Download, Target } from 'lucide-react';
@@ -126,7 +127,7 @@ const ContactDetail = () => {
                       <a href={a.fileUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.8rem', fontWeight: '500', color: 'var(--text-primary)', textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {a.filename}
                       </a>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{new Date(a.createdAt).toLocaleDateString()}</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{formatDate(a.createdAt)}</span>
                     </div>
                     <button onClick={() => handleDeleteAttachment(a.id)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><Trash2 size={12} /></button>
                   </div>
@@ -161,7 +162,7 @@ const ContactDetail = () => {
                   <div key={act.id} style={{ position: 'relative' }}>
                     <div style={{ position: 'absolute', left: '-1.85rem', top: '0.25rem', width: '12px', height: '12px', borderRadius: '50%', backgroundColor: dotColor }} />
                     <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                      {new Date(act.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      {formatDateTime(act.createdAt)}
                       <span style={{ marginLeft: '0.5rem', padding: '0.1rem 0.4rem', borderRadius: '4px', fontSize: '0.65rem', background: `${dotColor}22`, color: dotColor }}>{act.type}</span>
                     </p>
                     <p style={{ fontWeight: '500', fontSize: '0.9rem', marginTop: '0.25rem' }}>{act.description}</p>

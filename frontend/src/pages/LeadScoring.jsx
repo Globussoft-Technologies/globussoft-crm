@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
+import { useNotify } from '../utils/notify';
 import { TrendingUp, TrendingDown, Zap, Users, Target, RefreshCw, AlertCircle } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
@@ -35,6 +36,7 @@ export default function LeadScoring() {
   const [triggering, setTriggering] = useState(false);
   const [lastRun, setLastRun] = useState(null);
   const { token } = useContext(AuthContext);
+  const notify = useNotify();
 
   const loadContacts = async () => {
     try {
@@ -49,16 +51,29 @@ export default function LeadScoring() {
 
   useEffect(() => { loadContacts(); }, []);
 
+  // #630: pre-fix the click was silently swallowed on failure (only `console.error`).
+  // The button DID set `triggering=true` so the spinner already span — the real
+  // bug was zero feedback when the rescore landed (or failed). Now: success toast
+  // includes the count of rescored contacts; error toast surfaces the server msg.
   const triggerRescore = async () => {
     setTriggering(true);
     try {
       const res = await fetchApi('/api/ai_scoring/trigger', { method: 'POST' });
-      if (res.success) {
+      if (res?.success) {
         setLastRun(new Date().toLocaleTimeString());
         await loadContacts();
+        const count = typeof res.scored === 'number' ? res.scored : null;
+        notify.success(
+          count !== null
+            ? `Re-scored ${count} contact${count === 1 ? '' : 's'}.`
+            : 'Lead scores recalculated.',
+        );
+      } else {
+        notify.error('Re-score did not complete — try again.');
       }
     } catch (e) {
       console.error(e);
+      notify.error(e?.message || 'Re-score failed — try again.');
     } finally {
       setTriggering(false);
     }
@@ -88,7 +103,7 @@ export default function LeadScoring() {
             <Target size={28} color="var(--accent-color)" /> Lead Intelligence
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            AI-powered contact scoring — updated every 10 minutes via cron engine.
+            Rules-based contact scoring — updated every 10 minutes via cron engine.
           </p>
         </div>
         <button

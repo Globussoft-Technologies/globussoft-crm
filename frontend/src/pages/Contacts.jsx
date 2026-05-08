@@ -1,7 +1,7 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge } from 'lucide-react';
+import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 const parseCSV = (text) => {
@@ -69,6 +69,13 @@ const Contacts = () => {
   const [dupes, setDupes] = useState([]);
   const [merging, setMerging] = useState(false);
 
+  // #607: client-side email validation for the Add Contact form. Pre-fix the
+  // form had no validator at all — invalid addresses round-tripped to the
+  // server, returned a generic 400, and the user got a toast that didn't
+  // point at the email field. We reuse the same EMAIL_RE the CSV importer
+  // uses so the two surfaces stay consistent.
+  const [emailError, setEmailError] = useState('');
+
   // #461: search + status filter inputs were rendered without value/onChange
   // and the table read straight from `contacts`, so neither one filtered.
   // Wire both to local state and derive a filtered view client-side
@@ -84,7 +91,17 @@ const Contacts = () => {
     } catch { setDupes([]); }
   };
 
+  // #592 — Merge is destructive (irreversible from the UI; the soft-deleted
+  // siblings can only be restored via the ADMIN restore endpoint). Confirm
+  // before firing.
   const handleMerge = async (primaryId, secondaryIds) => {
+    const ok = await notify.confirm({
+      title: 'Merge duplicate contacts?',
+      message: `${secondaryIds.length} duplicate contact(s) will be merged into the primary record. Activities, deals, tasks, emails and other history will be folded into the primary. The duplicate records will be removed from the list. This is irreversible from this UI.`,
+      confirmText: 'Merge',
+      destructive: true,
+    });
+    if (!ok) return;
     setMerging(true);
     try {
       await fetchApi('/api/contacts/merge', {
@@ -95,6 +112,29 @@ const Contacts = () => {
       fetchContacts();
     } catch { notify.error('Merge failed'); }
     setMerging(false);
+  };
+
+  // #592 — Dismiss a "false positive" duplicate group. The group key is a
+  // stable hash of the sorted contact-id list (server-derived), so the
+  // dismiss survives across re-runs of the detector. Optimistically removes
+  // the group from the local list so the UI updates immediately.
+  const handleDismiss = async (group) => {
+    const ok = await notify.confirm({
+      title: 'Dismiss this duplicate group?',
+      message: 'These contacts will no longer appear in the duplicates list. You can still edit or delete them individually from the contacts table.',
+      confirmText: 'Dismiss',
+    });
+    if (!ok) return;
+    try {
+      await fetchApi('/api/contacts/duplicates/dismiss', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          primaryId: group.primary.id,
+          secondaryIds: group.duplicates.map(d => d.id),
+        })
+      });
+      setDupes(prev => prev.filter(g => g !== group));
+    } catch { notify.error('Dismiss failed'); }
   };
 
   const fetchContacts = () => {
@@ -132,6 +172,15 @@ const Contacts = () => {
 
   const handleAddContact = async (e) => {
     e.preventDefault();
+    // #607: block submit when the email is invalid. Surface the same inline
+    // message the blur handler shows so the user sees the field-level error
+    // instead of a generic server-side toast.
+    const email = (newContact.email || '').trim();
+    if (!email || !EMAIL_RE.test(email)) {
+      setEmailError('Please enter a valid email address');
+      return;
+    }
+    setEmailError('');
     await fetchApi('/api/contacts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -277,14 +326,27 @@ const Contacts = () => {
           )}
         </div>
         
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+        {/* #633: stable-table — pins tableLayout=fixed so row hover never
+            shifts column widths, plus column widths set explicitly below. */}
+        <table className="stable-table" style={{ borderCollapse: 'collapse', textAlign: 'left' }}>
+          <colgroup>
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '20%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '14%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '6%' }} />
+          </colgroup>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Company</th>
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>AI Score</th>
+              {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
+              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Status</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
               <th style={{ padding: '1rem', textAlign: 'right' }}>Actions</th>
@@ -366,7 +428,12 @@ const Contacts = () => {
                   </select>
                 </td>
                 <td style={{ padding: '1rem', textAlign: 'right' }}>
-                  <button onClick={() => handleDelete(contact.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}>
+                  <button
+                    onClick={() => handleDelete(contact.id)}
+                    aria-label={`Delete contact ${contact.name || contact.email || ''}`}
+                    title="Delete contact"
+                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}
+                  >
                     <Trash2 size={18} />
                   </button>
                 </td>
@@ -383,7 +450,7 @@ const Contacts = () => {
               <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <FileSpreadsheet size={20} color="var(--accent-color)" /> Import CSV
               </h3>
-              <button onClick={() => setShowImportModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={20} /></button>
+              <button onClick={() => setShowImportModal(false)} aria-label="Close import dialog" title="Close" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={20} /></button>
             </div>
 
             <div style={{ marginBottom: '1.5rem' }}>
@@ -485,7 +552,32 @@ const Contacts = () => {
             <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: 'bold' }}>Add New Contact</h3>
             <form onSubmit={handleAddContact} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <input type="text" placeholder="Name" required className="input-field" value={newContact.name} onChange={e => setNewContact({...newContact, name: e.target.value})} />
-              <input type="email" placeholder="Email" required className="input-field" value={newContact.email} onChange={e => setNewContact({...newContact, email: e.target.value})} />
+              <div>
+                <input
+                  type="email"
+                  placeholder="Email"
+                  required
+                  className="input-field"
+                  aria-invalid={emailError ? 'true' : 'false'}
+                  aria-describedby={emailError ? 'contact-email-error' : undefined}
+                  value={newContact.email}
+                  onChange={e => {
+                    setNewContact({ ...newContact, email: e.target.value });
+                    if (emailError) setEmailError('');
+                  }}
+                  onBlur={e => {
+                    const v = (e.target.value || '').trim();
+                    if (v && !EMAIL_RE.test(v)) setEmailError('Please enter a valid email address');
+                    else setEmailError('');
+                  }}
+                  style={emailError ? { borderColor: '#ef4444' } : undefined}
+                />
+                {emailError && (
+                  <p id="contact-email-error" role="alert" style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {emailError}
+                  </p>
+                )}
+              </div>
               <input type="tel" placeholder="Phone (e.g. +91 98765 43210)" className="input-field" value={newContact.phone} onChange={e => setNewContact({...newContact, phone: e.target.value})} />
               <input type="text" placeholder="Company" required className="input-field" value={newContact.company} onChange={e => setNewContact({...newContact, company: e.target.value})} />
               <input type="text" placeholder="Title" className="input-field" value={newContact.title} onChange={e => setNewContact({...newContact, title: e.target.value})} />
@@ -494,7 +586,7 @@ const Contacts = () => {
                 <option value="Customer">Customer</option>
               </select>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1rem' }}>
-                <button type="button" onClick={() => setShowModal(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel</button>
+                <button type="button" onClick={() => { setShowModal(false); setEmailError(''); }} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel</button>
                 <button type="submit" className="btn-primary">Save Contact</button>
               </div>
             </form>
@@ -509,7 +601,7 @@ const Contacts = () => {
               <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <GitMerge size={20} color="var(--accent-color)" /> Duplicate Contacts ({dupes.length} groups)
               </h3>
-              <button onClick={() => setShowDupes(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={20} /></button>
+              <button onClick={() => setShowDupes(false)} aria-label="Close duplicates dialog" title="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={20} /></button>
             </div>
             {dupes.length === 0 ? (
               <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No duplicate contacts found. Your database is clean!</p>
@@ -519,14 +611,24 @@ const Contacts = () => {
                   <div key={gi} className="card" style={{ padding: '1rem', border: '1px solid rgba(245,158,11,0.3)', background: 'rgba(245,158,11,0.03)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                       <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: '600' }}>Match: {group.reason}</span>
-                      <button
-                        onClick={() => handleMerge(group.primary.id, group.duplicates.map(d => d.id))}
-                        disabled={merging}
-                        className="btn-primary"
-                        style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
-                      >
-                        <GitMerge size={12} /> Merge into Primary
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          onClick={() => handleDismiss(group)}
+                          aria-label="Dismiss duplicate group"
+                          title="Mark as not a duplicate — will not re-appear"
+                          style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-color, rgba(0,0,0,0.1))', borderRadius: '4px', cursor: 'pointer' }}
+                        >
+                          <EyeOff size={12} /> Dismiss
+                        </button>
+                        <button
+                          onClick={() => handleMerge(group.primary.id, group.duplicates.map(d => d.id))}
+                          disabled={merging}
+                          className="btn-primary"
+                          style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                        >
+                          <GitMerge size={12} /> Merge into Primary
+                        </button>
+                      </div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>

@@ -1,8 +1,10 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import React, { useState, useEffect } from 'react';
+import { formatDateMedium as formatDate } from '../utils/date';
+import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-react';
+import { AuthContext } from '../App';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
 const FIELD_LIMITS = { name: 191, email: 191, company: 191, title: 200, phone: 20 };
@@ -35,8 +37,15 @@ const COUNTRY_CODES = [
 const Leads = () => {
   const navigate = useNavigate();
   const notify = useNotify();
+  // #600 — vertical-aware Lead form. Wellness tenants get the Patient-intake
+  // field set (Phone required, wellness sources, treatment of interest,
+  // preferred location/practitioner); generic CRM keeps the original fields.
+  const auth = useContext(AuthContext);
+  const isWellness = auth?.tenant?.vertical === 'wellness';
   const [leads, setLeads] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [services, setServices] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedLeads, setSelectedLeads] = useState([]);
@@ -44,12 +53,16 @@ const Leads = () => {
   const [newLead, setNewLead] = useState({
     name: '',
     email: '',
+    phone: '',
     company: '',
     title: '',
     countryCode: '+1',
     phone: '',
     source: 'Organic',
     status: 'Lead',
+    treatmentOfInterest: '',
+    preferredLocationId: '',
+    preferredPractitionerId: '',
   });
 
   const fetchLeads = () => {
@@ -72,6 +85,19 @@ const Leads = () => {
     fetchLeads();
     fetchStaff();
   }, []);
+
+  // #600 — load wellness service catalogue + clinic locations only when the
+  // current tenant is the wellness vertical. Avoids 401 / empty-response
+  // chatter from the generic tenant hitting wellness-only endpoints.
+  useEffect(() => {
+    if (!isWellness) return;
+    fetchApi('/api/wellness/services')
+      .then(d => setServices(Array.isArray(d) ? d : (d?.services || [])))
+      .catch(() => setServices([]));
+    fetchApi('/api/wellness/locations')
+      .then(d => setLocations(Array.isArray(d) ? d : (d?.locations || [])))
+      .catch(() => setLocations([]));
+  }, [isWellness]);
 
   const handleCreateLead = async (e) => {
     e.preventDefault();
@@ -148,10 +174,34 @@ const Leads = () => {
 
     // 5. Email shape — basic regex (matches backend lib/validateContactInput
     //    + CSV importer). The backend rejects with 400 either way.
+    //    #600: under wellness, email is OPTIONAL (Patient intake mirrors this);
+    //    phone becomes the required identifier instead.
     const email = String(newLead.email || '').trim();
-    if (!email || !EMAIL_RE.test(email)) {
+    if (isWellness) {
+      if (email && !EMAIL_RE.test(email)) {
+        notify.error('Please enter a valid email address');
+        return;
+      }
+    } else if (!email || !EMAIL_RE.test(email)) {
       notify.error('Please enter a valid email address');
       return;
+    }
+
+    // #600 — phone is REQUIRED on wellness leads (mirrors Patients.jsx
+    // intake), shape-checked against the Indian-mobile pattern. Generic
+    // tenants pass through whatever the user typed (free-form, optional).
+    let phone = String(newLead.phone || '').trim();
+    if (isWellness) {
+      const phoneClean = phone.replace(/[\s\-()]/g, '');
+      if (!phoneClean) {
+        notify.error('Phone is required');
+        return;
+      }
+      if (!INDIAN_MOBILE_RE.test(phoneClean)) {
+        notify.error('Enter a valid mobile number (10 digits, starting 6-9; +91 prefix optional).');
+        return;
+      }
+      phone = phoneClean;
     }
 
     // #315: refetch leads after a successful create so the "All Leads" pipeline
@@ -234,13 +284,6 @@ const Leads = () => {
     );
   });
 
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
@@ -322,11 +365,84 @@ const Leads = () => {
               </select>
               <input type="tel" placeholder="Phone Number" className="input-field" value={newLead.phone} onChange={e => handleChange('phone', e.target.value)} style={{ flex: 1 }} />
             </div>
-            <select className="input-field" value={newLead.source} onChange={e => handleChange('source', e.target.value)}>
-              {SOURCE_OPTIONS.map(src => (
-                <option key={src} value={src}>{src}</option>
-              ))}
+            <select
+              className="input-field"
+              name="source"
+              value={newLead.source}
+              onChange={e => handleChange('source', e.target.value)}
+            >
+              {isWellness
+                ? WELLNESS_SOURCE_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))
+                : SOURCE_OPTIONS.map(src => (
+                    <option key={src} value={src}>{src}</option>
+                  ))}
             </select>
+
+            {/* #600 — wellness extras: treatment of interest (dropdown of
+                catalog services + a free-text "Other" fallback if the
+                catalogue is empty), preferred clinic, preferred
+                practitioner. All three persist on Contact and feed
+                marketing-attribution + lead-routing downstream. */}
+            {isWellness && (
+              <>
+                {services.length > 0 ? (
+                  <select
+                    className="input-field"
+                    name="treatmentOfInterest"
+                    value={newLead.treatmentOfInterest}
+                    onChange={e => handleChange('treatmentOfInterest', e.target.value)}
+                  >
+                    <option value="">Treatment of interest (optional)</option>
+                    {services.map(svc => (
+                      <option key={svc.id} value={svc.name || svc.title}>
+                        {svc.name || svc.title}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    name="treatmentOfInterest"
+                    placeholder="Treatment of interest (optional)"
+                    maxLength={191}
+                    className="input-field"
+                    value={newLead.treatmentOfInterest}
+                    onChange={e => handleChange('treatmentOfInterest', e.target.value)}
+                  />
+                )}
+                {locations.length > 0 && (
+                  <select
+                    className="input-field"
+                    name="preferredLocationId"
+                    value={newLead.preferredLocationId}
+                    onChange={e => handleChange('preferredLocationId', e.target.value)}
+                  >
+                    <option value="">Preferred clinic (optional)</option>
+                    {locations.map(loc => (
+                      <option key={loc.id} value={loc.id}>{loc.name}</option>
+                    ))}
+                  </select>
+                )}
+                {staff.filter(s => (s.wellnessRole || '').toLowerCase() === 'doctor').length > 0 && (
+                  <select
+                    className="input-field"
+                    name="preferredPractitionerId"
+                    value={newLead.preferredPractitionerId}
+                    onChange={e => handleChange('preferredPractitionerId', e.target.value)}
+                  >
+                    <option value="">Preferred practitioner (optional)</option>
+                    {staff
+                      .filter(s => (s.wellnessRole || '').toLowerCase() === 'doctor')
+                      .map(doc => (
+                        <option key={doc.id} value={doc.id}>{doc.name || doc.email}</option>
+                      ))}
+                  </select>
+                )}
+              </>
+            )}
+
             <button type="submit" className="btn-primary" style={{ marginTop: '0.5rem' }}>
               Add Lead
             </button>
@@ -358,7 +474,8 @@ const Leads = () => {
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Company</th>
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>AI Score</th>
+                {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
+                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>

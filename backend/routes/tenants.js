@@ -20,12 +20,15 @@ router.get("/current", verifyToken, async (req, res) => {
 // PUT /api/tenants/current — update tenant settings (ADMIN only)
 router.put("/current", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    const { name, plan, ownerEmail, isActive } = req.body;
+    const { name, plan, ownerEmail, isActive, emailRetention } = req.body;
     const data = {};
     if (name !== undefined) data.name = name;
     if (plan !== undefined) data.plan = plan;
     if (ownerEmail !== undefined) data.ownerEmail = ownerEmail;
     if (isActive !== undefined) data.isActive = isActive;
+    // #611: emailRetention boolean — controls whether OUTBOUND email sends
+    // persist EmailMessage rows (Sent folder + audit trail) or fire-and-forget.
+    if (emailRetention !== undefined) data.emailRetention = !!emailRetention;
 
     const tenant = await prisma.tenant.update({ where: { id: req.user.tenantId }, data });
     res.json(tenant);

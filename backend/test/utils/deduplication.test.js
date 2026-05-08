@@ -41,7 +41,7 @@ const fakePrisma = vi.hoisted(() => {
 });
 
 import dedup from '../../utils/deduplication.js';
-const { normalizePhone, findDuplicateContact, findDuplicateMarketplaceLead } = dedup;
+const { normalizePhone, toE164, findDuplicateContact, findDuplicateMarketplaceLead, computeDuplicateGroupKey } = dedup;
 
 beforeEach(() => {
   // Reset to vi.fn() per test so we can assert call shapes.
@@ -55,6 +55,43 @@ describe('deduplication — module shape', () => {
     expect(typeof normalizePhone).toBe('function');
     expect(typeof findDuplicateContact).toBe('function');
     expect(typeof findDuplicateMarketplaceLead).toBe('function');
+    expect(typeof computeDuplicateGroupKey).toBe('function');
+  });
+});
+
+// #592 — computeDuplicateGroupKey backs the dismiss-persistence story.
+// Stable hash of the sorted contact-id list lets the dismiss survive across
+// re-runs of the detector regardless of which row the detector picked as
+// the primary on a given pass.
+describe('deduplication — computeDuplicateGroupKey (#592)', () => {
+  test('returns null on empty input', () => {
+    expect(computeDuplicateGroupKey(null, [])).toBeNull();
+    expect(computeDuplicateGroupKey(undefined, undefined)).toBeNull();
+  });
+
+  test('returns a 64-char hex (sha256) digest', () => {
+    const k = computeDuplicateGroupKey(1, [2]);
+    expect(k).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('is stable across primary/duplicate role swaps (sort-invariant)', () => {
+    // Same group of contacts {1, 2, 3}; two different framings of who's
+    // "primary" must hash to the same key.
+    expect(computeDuplicateGroupKey(1, [2, 3])).toBe(computeDuplicateGroupKey(2, [1, 3]));
+    expect(computeDuplicateGroupKey(1, [2, 3])).toBe(computeDuplicateGroupKey(3, [2, 1]));
+  });
+
+  test('different id sets produce different keys', () => {
+    expect(computeDuplicateGroupKey(1, [2])).not.toBe(computeDuplicateGroupKey(1, [3]));
+    expect(computeDuplicateGroupKey(1, [2, 3])).not.toBe(computeDuplicateGroupKey(1, [2]));
+  });
+
+  test('coerces string ids to numbers', () => {
+    expect(computeDuplicateGroupKey('1', ['2'])).toBe(computeDuplicateGroupKey(1, [2]));
+  });
+
+  test('drops non-finite ids defensively', () => {
+    expect(computeDuplicateGroupKey(1, [2, NaN, undefined, 'x'])).toBe(computeDuplicateGroupKey(1, [2]));
   });
 });
 
@@ -85,6 +122,58 @@ describe('deduplication — normalizePhone', () => {
 
   test('non-10-digit short numbers pass through as digits', () => {
     expect(normalizePhone('12345')).toBe('12345');
+  });
+});
+
+// #595 — toE164 canonicalises the *display* phone form (with `+` prefix) for
+// storage on Patient.phone and downstream auto-dialer / SMS / WhatsApp keys.
+// Distinct from normalizePhone which returns the digits-only dedup key.
+describe('deduplication — toE164 (#595)', () => {
+  test('returns null on null/undefined/empty/non-string', () => {
+    expect(toE164(null)).toBeNull();
+    expect(toE164(undefined)).toBeNull();
+    expect(toE164('')).toBeNull();
+    expect(toE164('   ')).toBeNull();
+    expect(toE164(9876543210)).toBeNull(); // numeric input rejected — caller must stringify
+  });
+
+  test('formats a 10-digit Indian mobile as +91XXXXXXXXXX', () => {
+    expect(toE164('9876543210')).toBe('+919876543210');
+    expect(toE164('6123456789')).toBe('+916123456789');
+    expect(toE164('7000000000')).toBe('+917000000000');
+    expect(toE164('8888888888')).toBe('+918888888888');
+  });
+
+  test('strips spaces / dashes / parens from a 10-digit input', () => {
+    expect(toE164('98765 43210')).toBe('+919876543210');
+    expect(toE164('98765-43210')).toBe('+919876543210');
+    expect(toE164('(987) 654-3210')).toBe('+919876543210');
+  });
+
+  test('formats a 12-digit input starting with 91 + Indian mobile prefix', () => {
+    expect(toE164('919876543210')).toBe('+919876543210');
+    expect(toE164('91 98765 43210')).toBe('+919876543210');
+  });
+
+  test('rejects 10-digit numbers that do not start 6-9 (not a real Indian mobile)', () => {
+    expect(toE164('1234567890')).toBeNull();
+    expect(toE164('5876543210')).toBeNull();
+  });
+
+  test('rejects 12-digit 91-prefixed numbers whose mobile portion is invalid', () => {
+    expect(toE164('911234567890')).toBeNull();
+  });
+
+  test('passes through an already-E.164 number unchanged (after stripping cosmetics)', () => {
+    expect(toE164('+919876543210')).toBe('+919876543210');
+    expect(toE164('+91 98765 43210')).toBe('+919876543210');
+    expect(toE164('+1 (415) 555-1234')).toBe('+14155551234');
+  });
+
+  test('rejects too-short or too-long inputs', () => {
+    expect(toE164('98765')).toBeNull();
+    expect(toE164('1234567890123456')).toBeNull(); // 16 digits, over E.164 max
+    expect(toE164('+1234567')).toBeNull();
   });
 });
 

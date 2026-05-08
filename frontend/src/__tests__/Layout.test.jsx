@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import React from 'react';
 import Layout from '../components/Layout';
@@ -11,6 +11,17 @@ vi.mock('../components/Omnibar', () => ({ default: () => <div data-testid="omnib
 vi.mock('../components/Presence', () => ({ default: () => <div data-testid="presence-stub" /> }));
 vi.mock('../components/Softphone', () => ({ default: () => <div data-testid="softphone-stub" /> }));
 vi.mock('../components/NotificationBell', () => ({ default: () => <div data-testid="bell-stub" /> }));
+
+// #555: mock fetchApi so the TenantSwitcher's GET /api/auth/tenants
+// resolves predictably. The two helpers (getActiveTenantId,
+// setActiveTenantId) are pass-through no-ops in tests.
+const fetchApiMock = vi.fn();
+const setActiveTenantIdMock = vi.fn();
+vi.mock('../utils/api', () => ({
+  fetchApi: (...args) => fetchApiMock(...args),
+  setActiveTenantId: (...args) => setActiveTenantIdMock(...args),
+  getActiveTenantId: () => null,
+}));
 
 const setupPushMock = vi.fn(() => Promise.resolve(true));
 vi.mock('../utils/pushSetup', () => ({ setupPush: (...args) => setupPushMock(...args) }));
@@ -39,6 +50,13 @@ function renderLayout({ user, tenant, initialRoute = '/' } = {}) {
 describe('Layout', () => {
   beforeEach(() => {
     setupPushMock.mockClear();
+    fetchApiMock.mockReset();
+    setActiveTenantIdMock.mockReset();
+    // Default: single-tenant — switcher should NOT render.
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/auth/tenants') return Promise.resolve({ tenants: [{ id: 1, name: 'Default Org', vertical: 'generic' }], activeTenantId: 1 });
+      return Promise.resolve({});
+    });
   });
 
   it('renders Sidebar + Omnibar + Presence + NotificationBell + outlet', () => {
@@ -82,5 +100,78 @@ describe('Layout', () => {
     // Clicking should not crash — side effects (navigate, token clear) happen
     fireEvent.click(btn);
     expect(localStorage.getItem('token')).toBeNull();
+  });
+
+  // #642: header avatar renders a role pip so the signed-in operator can
+  // tell at a glance whether they're Owner / Admin / Manager / User.
+  it('renders the role badge on the header avatar when authenticated', () => {
+    renderLayout({ user: { name: 'Rishu', email: 'rishu@x.test', role: 'ADMIN' } });
+    const pip = screen.getByTestId('avatar-role-badge');
+    expect(pip).toBeInTheDocument();
+    expect(pip).toHaveTextContent('A');
+    expect(pip).toHaveAttribute('aria-label', 'Role: ADMIN');
+  });
+
+  it('renders OWNER role pip distinct from ADMIN', () => {
+    renderLayout({ user: { name: 'Owner', email: 'o@x.test', role: 'OWNER' } });
+    expect(screen.getByTestId('avatar-role-badge')).toHaveTextContent('O');
+  });
+
+  // #555 (HI-06): explicit tenant switcher — silent no-op when only one
+  // tenant is accessible (today's data model is single-tenant per user
+  // so this is the default branch).
+  it('does NOT render the tenant switcher when only 1 tenant is accessible', async () => {
+    renderLayout();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/auth/tenants', expect.any(Object)));
+    expect(screen.queryByTestId('tenant-switcher')).not.toBeInTheDocument();
+  });
+
+  it('renders the tenant switcher dropdown when 2+ tenants are accessible', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/auth/tenants') return Promise.resolve({
+        tenants: [
+          { id: 1, name: 'Default Org', vertical: 'generic' },
+          { id: 2, name: 'Enhanced Wellness', vertical: 'wellness' },
+        ],
+        activeTenantId: 1,
+      });
+      return Promise.resolve({});
+    });
+    renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
+    await waitFor(() => expect(screen.getByTestId('tenant-switcher')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /switch tenant/i }));
+    expect(screen.getByRole('listbox', { name: /available tenants/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Enhanced Wellness/i })).toBeInTheDocument();
+  });
+
+  it('switching dispatches POST /api/auth/tenant-switch and updates active tenant id', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/auth/tenants') return Promise.resolve({
+        tenants: [
+          { id: 1, name: 'Default Org', vertical: 'generic' },
+          { id: 2, name: 'Enhanced Wellness', vertical: 'wellness' },
+        ],
+        activeTenantId: 1,
+      });
+      if (url === '/api/auth/tenant-switch' && opts?.method === 'POST') {
+        return Promise.resolve({ ok: true, token: 'new-token-xyz', tenant: { id: 2, name: 'Enhanced Wellness', vertical: 'wellness' } });
+      }
+      if (url === '/api/auth/me') return Promise.resolve({ id: 1, name: 'Alice', role: 'ADMIN' });
+      return Promise.resolve({});
+    });
+    renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
+    await waitFor(() => expect(screen.getByTestId('tenant-switcher')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /switch tenant/i }));
+    // Find the inner <button> for the wellness option (the listbox <li>
+    // wraps a button that dispatches the switch).
+    const wellnessButton = screen.getAllByRole('button').find((b) => /Enhanced Wellness/i.test(b.textContent || ''));
+    expect(wellnessButton).toBeTruthy();
+    await act(async () => { fireEvent.click(wellnessButton); });
+    await waitFor(() => expect(setActiveTenantIdMock).toHaveBeenCalledWith(2));
+    const calls = fetchApiMock.mock.calls;
+    const switchCall = calls.find((c) => c[0] === '/api/auth/tenant-switch');
+    expect(switchCall).toBeTruthy();
+    expect(switchCall[1].method).toBe('POST');
+    expect(JSON.parse(switchCall[1].body)).toEqual({ toTenantId: 2 });
   });
 });

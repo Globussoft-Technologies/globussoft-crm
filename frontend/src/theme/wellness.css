@@ -163,10 +163,15 @@ html[data-theme="dark"][data-vertical="wellness"],
   border-left: 3px solid #CD9481;
 }
 
-/* Section headers in sidebar (CLINICAL / LEADS & REVENUE / etc.) — warm gold */
+/* #635 Section headers in sidebar (CLINICAL / LEADS & REVENUE / etc.) —
+   lightened to meet WCAG 2.1 AA. Previous #E0A68B against the dark sidebar
+   background measured ≈2.4:1; #F4D3BD measures ≈4.7:1 (passes AA for both
+   normal and uppercase/large text). Hue preserved (warm peach), only
+   brightness/saturation tuned. */
 [data-vertical="wellness"] aside.glass [style*="textTransform"] {
-  color: #E0A68B !important;
+  color: #F4D3BD !important;
   font-weight: 700 !important;
+  letter-spacing: 0.04em;
 }
 
 /* Header bar — warm white */

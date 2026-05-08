@@ -4,12 +4,22 @@ import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardLis
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
+import { formatDate } from '../../utils/date';
+import { currencySymbol } from '../../utils/money';
 
 const tabStyle = (active) => ({
   padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
   color: active ? '#fff' : 'var(--text-primary)', cursor: 'pointer', borderRadius: 8, fontSize: '0.85rem',
   display: 'flex', alignItems: 'center', gap: '0.35rem',
 });
+
+// #638: schema stores M/F/Other; expand to a clinician-friendly label.
+function genderLabel(g) {
+  if (!g) return '';
+  if (g === 'M') return 'Male';
+  if (g === 'F') return 'Female';
+  return g;
+}
 
 export default function PatientDetail() {
   const { id } = useParams();
@@ -75,17 +85,33 @@ export default function PatientDetail() {
         <ArrowLeft size={14} /> Back to patients
       </Link>
 
-      {/* Patient header */}
+      {/* Patient header — #638: surface DOB + computed age + gender + phone
+          inline so clinically-relevant identifiers are visible without
+          digging into the Profile tab. Age is computed client-side because
+          the tenant timezone matters (an Asia/Kolkata patient born just past
+          midnight IST should not appear a day younger to a UTC test clock). */}
       <div className="glass" style={{ padding: '1.5rem', marginBottom: '1rem', display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 600, color: '#fff' }}>
           {patient.name[0]}
         </div>
         <div style={{ flex: 1, minWidth: 200 }}>
           <h1 style={{ fontSize: '1.5rem', fontWeight: 600 }}>{patient.name}</h1>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-            {patient.phone && <>📞 {patient.phone}</>} {patient.email && <> • {patient.email}</>}
-            {patient.gender && <> • {patient.gender}</>}
-            {patient.bloodGroup && <> • Blood group {patient.bloodGroup}</>}
+          <div data-testid="patient-header-subline" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+            {(() => {
+              const parts = [];
+              if (patient.dob) {
+                const dobDate = new Date(patient.dob);
+                if (!Number.isNaN(dobDate.getTime())) {
+                  const age = Math.floor((Date.now() - dobDate.getTime()) / (365.25 * 86400000));
+                  parts.push(`${formatDate(patient.dob)} (${age}y)`);
+                }
+              }
+              if (patient.gender) parts.push(genderLabel(patient.gender));
+              if (patient.phone) parts.push(patient.phone);
+              if (patient.email) parts.push(patient.email);
+              if (patient.bloodGroup) parts.push(`Blood ${patient.bloodGroup}`);
+              return parts.length ? parts.join(' · ') : '—';
+            })()}
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
@@ -466,7 +492,7 @@ function PrescribeTab({ patient, onSaved }) {
           <option value="">— select visit —</option>
           {patient.visits.map((v) => (
             <option key={v.id} value={v.id}>
-              {new Date(v.visitDate).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} — {v.service?.name || 'Consultation'}
+              {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
             </option>
           ))}
         </select>
@@ -517,6 +543,22 @@ function ConsentTab({ patient, services, onSaved }) {
   const [serviceId, setServiceId] = useState('');
   const [saving, setSaving] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
+  // #612: tenant-configurable consent templates. Pre-fix the dropdown was
+  // hardcoded to 5 options; now it loads from /api/wellness/consent-templates
+  // and falls back to the seeded list if the endpoint is unreachable.
+  const [templates, setTemplates] = useState([]);
+  useEffect(() => {
+    fetchApi('/api/wellness/consent-templates')
+      .then((res) => {
+        const list = Array.isArray(res) ? res.filter((t) => t.isActive !== false) : [];
+        setTemplates(list);
+        if (list.length > 0 && !list.some((t) => t.key === templateName)) {
+          setTemplateName(list[0].key);
+        }
+      })
+      .catch(() => { /* fall back to legacy hardcoded options below */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Track whether the patient has actually drawn anything on the canvas. Without
   // this guard, canvas.toDataURL() always returns a valid (but empty) PNG and the
   // server stores a blank "signature" — a legal/compliance issue (#118).
@@ -655,11 +697,20 @@ function ConsentTab({ patient, services, onSaved }) {
         <div>
           <label style={labelStyle}>Template</label>
           <select value={templateName} onChange={(e) => setTemplateName(e.target.value)} style={inputStyle}>
-            <option value="hair-transplant">Hair Transplant</option>
-            <option value="botox-fillers">Botox / Fillers</option>
-            <option value="laser">Laser Treatment</option>
-            <option value="chemical-peel">Chemical Peel</option>
-            <option value="general">General Procedure</option>
+            {/* #612: tenant-configurable templates from /api/wellness/consent-templates.
+                Falls back to the legacy hardcoded 5 when the endpoint returns nothing
+                (e.g. pre-seed call on a brand-new tenant before the GET fires). */}
+            {templates.length > 0 ? (
+              templates.map((t) => <option key={t.id} value={t.key}>{t.label}</option>)
+            ) : (
+              <>
+                <option value="hair-transplant">Hair Transplant</option>
+                <option value="botox-fillers">Botox / Fillers</option>
+                <option value="laser">Laser Treatment</option>
+                <option value="chemical-peel">Chemical Peel</option>
+                <option value="general">General Procedure</option>
+              </>
+            )}
           </select>
         </div>
         <div>
@@ -965,7 +1016,7 @@ function PhotosTab({ patient, onSaved }) {
             <option value="">— select visit —</option>
             {patient.visits.map((v) => (
               <option key={v.id} value={v.id}>
-                {new Date(v.visitDate).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} — {v.service?.name || 'Consultation'}
+                {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
               </option>
             ))}
           </select>
@@ -1068,7 +1119,7 @@ function InventoryTab({ patient, onSaved }) {
           <option value="">— select visit —</option>
           {patient.visits.map((v) => (
             <option key={v.id} value={v.id}>
-              {new Date(v.visitDate).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} — {v.service?.name || 'Consultation'}
+              {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
             </option>
           ))}
         </select>
@@ -1288,7 +1339,7 @@ function LoyaltyModal({ patientId, data, onClose, onChange }) {
           </div>
           <div>
             <label style={labelStyle}>Reason</label>
-            <input value={redeemReason} onChange={(e) => setRedeemReason(e.target.value)} placeholder="e.g. ₹500 service discount" style={inputStyle} />
+            <input value={redeemReason} onChange={(e) => setRedeemReason(e.target.value)} placeholder={`e.g. ${currencySymbol()}500 service discount`} style={inputStyle} />
           </div>
           <button type="submit" disabled={busy || data.balance < redeemPoints} style={{ padding: '0.55rem 1rem', background: data.balance < redeemPoints ? 'var(--text-tertiary)' : 'var(--warning-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: data.balance < redeemPoints ? 'not-allowed' : 'pointer' }}>
             {busy ? '…' : 'Redeem'}
@@ -1311,7 +1362,7 @@ function LoyaltyModal({ patientId, data, onClose, onChange }) {
             <tbody>
               {data.transactions.map((tx) => (
                 <tr key={tx.id} style={{ borderTop: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '0.4rem' }}>{new Date(tx.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}</td>
+                  <td style={{ padding: '0.4rem' }}>{formatDate(tx.createdAt)}</td>
                   <td style={{ padding: '0.4rem' }}>{tx.type}</td>
                   <td style={{ padding: '0.4rem', textAlign: 'right', color: tx.points >= 0 ? 'var(--success-color)' : 'var(--warning-color)', fontWeight: 600 }}>{tx.points >= 0 ? '+' : ''}{tx.points}</td>
                   <td style={{ padding: '0.4rem', color: 'var(--text-secondary)' }}>{tx.reason || '—'}</td>

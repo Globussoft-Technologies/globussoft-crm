@@ -312,7 +312,11 @@ router.get("/:id/analytics", verifyToken, async (req, res) => {
     });
     const visits = events.filter(e => e.eventType === "VISIT").length;
     const submissions = events.filter(e => e.eventType === "FORM_SUBMIT").length;
-    res.json({ events, visits, submissions, conversionRate: visits > 0 ? ((submissions / visits) * 100).toFixed(1) : 0 });
+    // #639 — return raw numeric so frontend's formatPercent can render
+    // consistently. Pre-fix this returned a string ("12.3") which the FE then
+    // appended "%" to without re-formatting → list/detail/CSV diverged.
+    const conversionRate = visits > 0 ? Math.round((submissions / visits) * 1000) / 10 : 0;
+    res.json({ events, visits, submissions, conversionRate });
   } catch (_err) { res.status(500).json({ error: "Failed to fetch analytics" }); }
 });
 

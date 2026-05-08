@@ -382,7 +382,7 @@ export default function LeadRouting() {
           <div className="card" style={{ padding: '1.75rem', width: '100%', maxWidth: 640, maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h3 style={{ fontWeight: 'bold', fontSize: '1.2rem', margin: 0 }}>{editing ? 'Edit Rule' : 'New Routing Rule'}</h3>
-              <button onClick={() => setShowModal(false)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={22} /></button>
+              <button onClick={() => setShowModal(false)} aria-label="Close routing rule dialog" title="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={22} /></button>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: '0.85rem', marginBottom: '1rem' }}>

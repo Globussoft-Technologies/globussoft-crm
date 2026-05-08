@@ -1,7 +1,21 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { User, Mail, Key, Save } from 'lucide-react';
+import { User, Mail, Key, Save, Stethoscope } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
+import { formatDateLong } from '../utils/date';
+
+// #641 — practitioner-specific profile sections (specialty, license, etc.)
+// must ONLY render for users whose wellnessRole identifies them as a
+// clinical practitioner. Pre-fix the Wellness Demo User saw a phantom
+// "Practitioner" profile row because the seed had quietly assigned
+// wellnessRole='professional' AND the page rendered the practitioner
+// section unconditionally. The seed fix (seed-wellness.js Demo User
+// wellnessRole=null) closes the data-side; this guard closes the
+// render-side so a future seed regression can't reintroduce the bit.
+const PRACTITIONER_WELLNESS_ROLES = new Set(['doctor', 'professional']);
+function isPractitioner(profile) {
+  return !!profile && PRACTITIONER_WELLNESS_ROLES.has(profile.wellnessRole);
+}
 
 const Profile = () => {
   const { user: authUser, setUser: setAuthUser } = useContext(AuthContext);
@@ -35,12 +49,29 @@ const Profile = () => {
 
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
-    setSaving(true);
     setProfileMsg({ text: '', type: '' });
+
+    // #606: skip the PATCH when nothing changed. Pre-fix every Save click
+    // sent {name, email} unconditionally and the success toast fired even
+    // when the user didn't touch the form — trains users to ignore toasts
+    // and pollutes audit logs with no-op rows.
+    const trimmedName = (name || '').trim();
+    const trimmedEmail = (email || '').trim();
+    const baselineName = (profile?.name || '').trim();
+    const baselineEmail = (profile?.email || '').trim();
+    const changed = {};
+    if (trimmedName !== baselineName) changed.name = trimmedName;
+    if (trimmedEmail !== baselineEmail) changed.email = trimmedEmail;
+    if (Object.keys(changed).length === 0) {
+      setProfileMsg({ text: 'No changes to save', type: 'info' });
+      return;
+    }
+
+    setSaving(true);
     try {
       const updated = await fetchApi('/api/auth/me', {
         method: 'PUT',
-        body: JSON.stringify({ name, email })
+        body: JSON.stringify(changed)
       });
       setProfile(updated);
       if (setAuthUser && authUser) {
@@ -115,23 +146,63 @@ const Profile = () => {
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0.15rem 0 0' }}>
               {profile?.email}
             </p>
-            <span style={{
-              display: 'inline-block', marginTop: '0.35rem',
-              padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '600',
-              background: profile?.role === 'ADMIN' ? 'rgba(239,68,68,0.15)' : profile?.role === 'MANAGER' ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.15)',
-              color: profile?.role === 'ADMIN' ? '#ef4444' : profile?.role === 'MANAGER' ? '#f59e0b' : '#3b82f6'
-            }}>
-              {profile?.role}
-            </span>
+            <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
+              <span style={{
+                display: 'inline-block',
+                padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '600',
+                background: profile?.role === 'ADMIN' ? 'rgba(239,68,68,0.15)' : profile?.role === 'MANAGER' ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.15)',
+                color: profile?.role === 'ADMIN' ? '#ef4444' : profile?.role === 'MANAGER' ? '#f59e0b' : '#3b82f6'
+              }}>
+                {profile?.role}
+              </span>
+              {/* #641: only show the wellnessRole pill when one is actually
+                  set. Demo User has wellnessRole=null and previously the
+                  seed had this as 'professional' — the badge would
+                  mislabel them as a practitioner. Now hidden when null/empty. */}
+              {profile?.wellnessRole && (
+                <span
+                  data-testid="profile-wellness-role-badge"
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '600',
+                    background: 'rgba(38,88,85,0.15)', color: 'var(--primary-color, #265855)',
+                    textTransform: 'capitalize',
+                  }}
+                >
+                  {profile.wellnessRole}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
         {profile?.createdAt && (
           <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-            Member since {new Date(profile.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+            Member since {formatDateLong(profile.createdAt)}
           </p>
         )}
       </div>
+
+      {/* #641: practitioner-specific section only rendered for users with
+          wellnessRole === 'doctor' or 'professional'. Pre-fix this section
+          (or its seed-data equivalent) appeared for the Demo User because
+          their wellnessRole was 'professional' in the seed. Both sides now
+          fixed: (a) seed sets wellnessRole=null for Demo User; (b) this
+          guard ensures even if a future seed regression flips it, only
+          actual clinical staff see the practitioner block. */}
+      {isPractitioner(profile) && (
+        <div className="card glass" data-testid="profile-practitioner-section" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+          <h3 style={{ fontSize: '1rem', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Stethoscope size={18} /> Practitioner Profile
+          </h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+            Your clinical role: <strong style={{ color: 'var(--text-primary)', textTransform: 'capitalize' }}>{profile.wellnessRole}</strong>
+          </p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0 }}>
+            Practitioner-specific fields (specialty, license number, signature image) are managed by your clinic admin under Settings → Staff.
+          </p>
+        </div>
+      )}
 
       {/* Edit Profile */}
       <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
@@ -179,8 +250,16 @@ const Profile = () => {
           {profileMsg.text && (
             <div style={{
               padding: '0.6rem 0.75rem', borderRadius: '6px', marginBottom: '1rem', fontSize: '0.85rem',
-              background: profileMsg.type === 'success' ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
-              color: profileMsg.type === 'success' ? '#10b981' : '#ef4444'
+              background: profileMsg.type === 'success'
+                ? 'rgba(16,185,129,0.12)'
+                : profileMsg.type === 'info'
+                  ? 'rgba(59,130,246,0.12)'
+                  : 'rgba(239,68,68,0.12)',
+              color: profileMsg.type === 'success'
+                ? '#10b981'
+                : profileMsg.type === 'info'
+                  ? '#3b82f6'
+                  : '#ef4444'
             }}>
               {profileMsg.text}
             </div>

@@ -28,6 +28,7 @@
  *                                           CSV-injection sanitiser
  *   GET    /api/contacts/duplicates/find  — email / phone / name+company match
  *   POST   /api/contacts/merge            — primaryId + secondaryIds[] merge
+ *   POST   /api/contacts/duplicates/dismiss — #592: persist "not a duplicate"
  *   GET    /api/contacts/:id/attachments  — list
  *   POST   /api/contacts/:id/attachments  — JSON-shape only (#176): rejects
  *                                           multipart/form-data with 400
@@ -54,9 +55,15 @@
  *   • Phone fields: kept clean Indian-style numbers like `+91 98765 12345`
  *     with unique suffixes per test so dedup logic in /duplicates/find is
  *     deterministic.
- *   • The merge endpoint hard-deletes secondaries (prisma.contact.delete) —
- *     no soft-delete branch — so a merged-secondary id will 404 afterwards,
- *     not return a soft-deleted row.
+ *   • #592 — merge now soft-deletes secondaries (deletedAt = now()) inside a
+ *     prisma.$transaction, folds 27 contactId-bearing FK relations into the
+ *     primary, and emits a writeAudit('Contact','MERGE',…) row. GET /:id
+ *     defaults to 404 on soft-deleted rows; ?includeDeleted=true surfaces them.
+ *     Pre-#592 the route hard-deleted; the 404-after-merge assertion still
+ *     holds because of the default GET filter.
+ *   • #592 — POST /duplicates/dismiss persists a SHA-256 group-key derived
+ *     from the sorted contact-id list. Subsequent /duplicates/find calls
+ *     filter out dismissed groups. Idempotent on re-dismiss.
  *   • The route does NOT have an Authorization header check at the file level
  *     beyond router.use(verifyToken); auth-gate tests assert 401/403 from the
  *     global guard.
@@ -741,10 +748,13 @@ test.describe('Contacts API — POST /merge', () => {
     expect(res.status()).toBe(404);
   });
 
-  test('200 merges secondary into primary; secondary is hard-deleted afterwards', async ({ request }) => {
+  test('200 merges secondary into primary; secondary is soft-deleted afterwards (#592)', async ({ request }) => {
     // Primary has no phone; secondary has phone — merge should backfill
     // primary.phone from secondary per the route's "fill in missing fields"
-    // logic.
+    // logic. Per #592 the route now soft-deletes secondaries (deletedAt=now)
+    // instead of hard-deleting; GET /:id still 404s soft-deleted rows by
+    // default, so this assertion stays the same shape, but ?includeDeleted=true
+    // surfaces the row.
     const primary = await createContact(request, { label: 'merge-primary', phone: null });
     const secondary = await createContact(request, { label: 'merge-secondary', phone: uniquePhone() });
 
@@ -758,20 +768,153 @@ test.describe('Contacts API — POST /merge', () => {
     expect(body.success).toBe(true);
     expect(body.merged).toBe(1);
     expect(body.primaryId).toBe(primary.id);
+    // #592 — new envelope surfaces strategy + per-relation fold counts.
+    expect(body.strategy).toBe('soft-delete');
+    expect(body.folded).toBeTruthy();
 
-    // Secondary is hard-deleted by the route — GET should 404 (not 404+
-    // includeDeleted-recoverable, gone for good).
+    // Default GET 404s the soft-deleted secondary.
     const after = await get(request, token, `/api/contacts/${secondary.id}`);
     expect(after.status()).toBe(404);
+
+    // ?includeDeleted=true surfaces it with deletedAt set — proves soft, not hard.
+    const recovered = await get(request, token, `/api/contacts/${secondary.id}?includeDeleted=true`);
+    expect(recovered.status()).toBe(200);
+    const recoveredBody = await recovered.json();
+    expect(recoveredBody.deletedAt).toBeTruthy();
 
     // Primary should now carry the secondary's phone (filled-in field).
     const primaryAfter = await (await get(request, token, `/api/contacts/${primary.id}`)).json();
     expect(primaryAfter.phone).toBeTruthy();
+  });
 
-    // Drop the now-deleted id from the cleanup queue so afterAll doesn't
-    // complain (DELETE on a hard-deleted row 404s — harmless but noisy).
-    const idx = createdContactIds.indexOf(secondary.id);
-    if (idx >= 0) createdContactIds.splice(idx, 1);
+  test('200 folds activity rows from secondary into primary (#592)', async ({ request }) => {
+    // Seed a secondary with an activity, merge, then assert the activity is
+    // visible under the primary's contact-detail include.
+    const primary = await createContact(request, { label: 'fold-primary' });
+    const secondary = await createContact(request, { label: 'fold-secondary' });
+
+    const { token } = await getAdmin(request);
+    const actRes = await post(request, token, `/api/contacts/${secondary.id}/activities`, {
+      type: 'Note',
+      description: `${RUN_TAG} folded-activity-marker`,
+    });
+    expect(actRes.status()).toBe(201);
+
+    const merge = await post(request, token, '/api/contacts/merge', {
+      primaryId: primary.id,
+      secondaryIds: [secondary.id],
+    });
+    expect(merge.status()).toBe(200);
+    const mergeBody = await merge.json();
+    expect(mergeBody.folded.activities).toBeGreaterThanOrEqual(1);
+
+    // The contact-detail include returns activities; the folded activity
+    // (plus the auto-generated "Merged contact …" Note) must both be there.
+    const detail = await (await get(request, token, `/api/contacts/${primary.id}`)).json();
+    const descriptions = (detail.activities || []).map(a => a.description);
+    expect(descriptions.some(d => d && d.includes('folded-activity-marker'))).toBe(true);
+    expect(descriptions.some(d => d && d.startsWith('Merged contact'))).toBe(true);
+  });
+
+  test('200 multi-secondary merge folds all into primary (#592)', async ({ request }) => {
+    // Three contacts with the same email-derived label seed; merge two into one.
+    const c1 = await createContact(request, { label: 'multi-master' });
+    const c2 = await createContact(request, { label: 'multi-sib-a' });
+    const c3 = await createContact(request, { label: 'multi-sib-b' });
+
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/contacts/merge', {
+      primaryId: c1.id,
+      secondaryIds: [c2.id, c3.id],
+    });
+    expect(res.status(), `merge: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body.merged).toBe(2);
+    expect(body.mergedIds).toEqual(expect.arrayContaining([c2.id, c3.id]));
+  });
+});
+
+// ─── POST /api/contacts/duplicates/dismiss (#592) ────────────────────
+
+test.describe('Contacts API — POST /duplicates/dismiss', () => {
+  test('400 when neither groupKey nor contactIds supplied', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/contacts/duplicates/dismiss', {});
+    expect(res.status()).toBe(400);
+  });
+
+  test('200 dismisses a group and removes it from /duplicates/find on next call', async ({ request }) => {
+    const sharedPhone = uniquePhone();
+    const a = await createContact(request, { label: 'dismiss-A', phone: sharedPhone });
+    const b = await createContact(request, { label: 'dismiss-B', phone: sharedPhone });
+
+    const { token } = await getAdmin(request);
+
+    // Confirm the group is detected first.
+    const before = await get(request, token, '/api/contacts/duplicates/find');
+    expect(before.status()).toBe(200);
+    const beforeBody = await before.json();
+    const findGroup = (list) =>
+      list.find(g => {
+        const ids = new Set([g.primary.id, ...g.duplicates.map(d => d.id)]);
+        return ids.has(a.id) && ids.has(b.id);
+      });
+    const seeded = findGroup(beforeBody);
+    expect(seeded).toBeTruthy();
+    expect(seeded.groupKey).toBeTruthy();
+
+    // Dismiss via contactIds — the server derives the key.
+    const dismiss = await post(request, token, '/api/contacts/duplicates/dismiss', {
+      contactIds: [a.id, b.id],
+      reason: 'verified non-duplicate',
+    });
+    expect(dismiss.status(), `dismiss: ${await dismiss.text()}`).toBe(200);
+    const dismissBody = await dismiss.json();
+    expect(dismissBody.success).toBe(true);
+    expect(dismissBody.groupKey).toBe(seeded.groupKey);
+
+    // Re-fetch — the dismissed group must be gone.
+    const after = await get(request, token, '/api/contacts/duplicates/find');
+    const afterBody = await after.json();
+    const stillThere = findGroup(afterBody);
+    expect(stillThere).toBeUndefined();
+  });
+
+  test('200 idempotent on re-dismiss (same group)', async ({ request }) => {
+    const sharedPhone = uniquePhone();
+    const a = await createContact(request, { label: 'idem-A', phone: sharedPhone });
+    const b = await createContact(request, { label: 'idem-B', phone: sharedPhone });
+
+    const { token } = await getAdmin(request);
+    const first = await post(request, token, '/api/contacts/duplicates/dismiss', {
+      contactIds: [a.id, b.id],
+    });
+    expect(first.status()).toBe(200);
+    const second = await post(request, token, '/api/contacts/duplicates/dismiss', {
+      contactIds: [a.id, b.id],
+    });
+    expect(second.status()).toBe(200);
+    const body = await second.json();
+    expect(body.idempotent).toBe(true);
+  });
+
+  test('404 when contactIds reference rows from another tenant', async ({ request }) => {
+    // Seed a couple of generic-tenant contacts, then attempt to dismiss using
+    // their ids — but with a wellness-tenant token. Cross-tenant dismiss must
+    // not succeed.
+    const a = await createContact(request, { label: 'xt-A' });
+    const b = await createContact(request, { label: 'xt-B' });
+
+    // Wellness-tenant token; falls back gracefully if seed isn't present.
+    const wellness = await loginAs(request, 'admin@wellness.demo', 'password123');
+    if (!wellness.token) {
+      test.skip(true, 'wellness tenant unavailable in this run');
+      return;
+    }
+    const res = await post(request, wellness.token, '/api/contacts/duplicates/dismiss', {
+      contactIds: [a.id, b.id],
+    });
+    expect(res.status()).toBe(404);
   });
 });
 

@@ -5,6 +5,15 @@ import { formatMoney } from '../utils/money';
 import { Trophy, Users, TrendingUp, Phone, Mail, CheckSquare, Download, Calendar } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
+
+// #602: numeric/currency cells must not wrap mid-number; tabular-nums aligns
+// digit columns vertically across rows. min-width keeps a 7-digit currency
+// like "₹12,34,567" or "$1,234,567" on one line at typical zoom.
+const thBaseStyle = { padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' };
+const thNumStyle = { ...thBaseStyle, whiteSpace: 'nowrap' };
+const tdBaseStyle = { padding: '0.875rem 1rem' };
+const tdNumStyle = { ...tdBaseStyle, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', minWidth: '5rem' };
+
 const METRIC_OPTIONS = [
   { value: 'revenue', label: 'Revenue' },
   { value: 'deals', label: 'Deals Won' },
@@ -134,15 +143,15 @@ export default function AgentReports() {
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
-                <th style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' }}>#</th>
-                <th style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' }}>Agent</th>
-                <th style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' }}>Revenue</th>
-                <th style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' }}>Deals</th>
-                <th style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' }}>Win %</th>
-                <th style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' }}>Tasks</th>
-                <th style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' }}>Calls</th>
-                <th style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' }}>Emails</th>
-                <th style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.8rem' }}>Contacts</th>
+                <th style={thBaseStyle}>#</th>
+                <th style={thBaseStyle}>Agent</th>
+                <th style={thNumStyle}>Revenue</th>
+                <th style={thNumStyle}>Deals</th>
+                <th style={thNumStyle}>Win %</th>
+                <th style={thNumStyle}>Tasks</th>
+                <th style={thNumStyle}>Calls</th>
+                <th style={thNumStyle}>Emails</th>
+                <th style={thNumStyle}>Contacts</th>
               </tr>
             </thead>
             <tbody>
@@ -157,16 +166,16 @@ export default function AgentReports() {
                   className="table-row-hover"
                   onClick={() => setSelectedAgent(selectedAgent === agent.id ? null : agent.id)}
                 >
-                  <td style={{ padding: '0.875rem 1rem', fontWeight: '600', color: i < 3 ? '#f59e0b' : 'var(--text-secondary)' }}>
+                  <td style={{ ...tdNumStyle, fontWeight: '600', color: i < 3 ? '#f59e0b' : 'var(--text-secondary)' }}>
                     {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}
                   </td>
-                  <td style={{ padding: '0.875rem 1rem' }}>
+                  <td style={tdBaseStyle}>
                     <div style={{ fontWeight: '500' }}>{agent.name}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{agent.role}</div>
                   </td>
-                  <td style={{ padding: '0.875rem 1rem', fontWeight: '600', color: 'var(--success-color)' }}>{formatMoney(agent.revenue, { maximumFractionDigits: 0 })}</td>
-                  <td style={{ padding: '0.875rem 1rem' }}>{agent.dealsWon}/{agent.dealsTotal}</td>
-                  <td style={{ padding: '0.875rem 1rem' }}>
+                  <td style={{ ...tdNumStyle, fontWeight: '600', color: 'var(--success-color)' }}>{formatMoney(agent.revenue, { maximumFractionDigits: 0 })}</td>
+                  <td style={tdNumStyle}>{agent.dealsWon}/{agent.dealsTotal}</td>
+                  <td style={tdNumStyle}>
                     <span style={{
                       padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 'bold',
                       backgroundColor: agent.winRate >= 50 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
@@ -175,10 +184,10 @@ export default function AgentReports() {
                       {agent.winRate}%
                     </span>
                   </td>
-                  <td style={{ padding: '0.875rem 1rem' }}>{agent.tasksCompleted}</td>
-                  <td style={{ padding: '0.875rem 1rem' }}>{agent.callsMade}</td>
-                  <td style={{ padding: '0.875rem 1rem' }}>{agent.emailsSent}</td>
-                  <td style={{ padding: '0.875rem 1rem' }}>{agent.contactsAssigned}</td>
+                  <td style={tdNumStyle}>{agent.tasksCompleted}</td>
+                  <td style={tdNumStyle}>{agent.callsMade}</td>
+                  <td style={tdNumStyle}>{agent.emailsSent}</td>
+                  <td style={tdNumStyle}>{agent.contactsAssigned}</td>
                 </tr>
               ))}
             </tbody>
@@ -202,7 +211,7 @@ export default function AgentReports() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" horizontal={false} />
                   <XAxis type="number" stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={v => leaderMetric === 'revenue' ? formatMoney(v, { maximumFractionDigits: 0 }) : v} />
                   <YAxis dataKey="name" type="category" stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={80} tick={{ fontSize: 11 }} />
-                  <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} formatter={v => leaderMetric === 'revenue' ? formatMoney(v) : v} />
+                  <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} formatter={v => leaderMetric === 'revenue' ? formatMoney(v) : v} />
                   <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                     {leaderboard.slice(0, 6).map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Bar>

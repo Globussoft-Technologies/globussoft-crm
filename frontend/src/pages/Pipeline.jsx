@@ -144,22 +144,49 @@ const Pipeline = () => {
     e.dataTransfer.setData('dealId', id);
   };
 
+  // #605: stage→default-probability mapping. Won/lost are absolute (server
+  // enforces the same; mirrored here for instant UI). Intermediate stages get
+  // the conventional CRM probabilities so the per-column weighted total +
+  // the forecast widget update at drop time, not on next refresh.
+  const STAGE_PROBABILITY = {
+    lead: 25,
+    contacted: 40,
+    proposal: 70,
+    negotiation: 80,
+    won: 100,
+    lost: 0,
+  };
+
   const handleDrop = async (e, stageId) => {
     e.preventDefault();
     const dealId = parseInt(e.dataTransfer.getData('dealId'));
     if (!dealId) return;
-    
-    // Optimistic UI update
-    setDeals(prev => prev.map(d => d.id === dealId ? { ...d, stage: stageId } : d));
-    
+
+    // #605: snapshot current state for rollback + optimistically update both
+    // stage AND probability so the badge / column total / forecast reflect
+    // the new stage immediately, before the network round-trip.
+    const prevDeals = deals;
+    const newProb = STAGE_PROBABILITY[stageId];
+    setDeals(prev => prev.map(d => {
+      if (d.id !== dealId) return d;
+      return newProb !== undefined ? { ...d, stage: stageId, probability: newProb } : { ...d, stage: stageId };
+    }));
+
     try {
-      await fetchApi(`/api/deals/${dealId}/stage`, {
+      const updated = await fetchApi(`/api/deals/${dealId}`, {
         method: 'PUT',
-        body: JSON.stringify({ stage: stageId })
+        body: JSON.stringify(
+          newProb !== undefined ? { stage: stageId, probability: newProb } : { stage: stageId }
+        ),
       });
+      // Reconcile with server's authoritative copy (probability may differ if
+      // the server applied terminal-stage rules or per-tenant overrides).
+      if (updated && updated.id) {
+        setDeals(prev => prev.map(d => d.id === updated.id ? { ...d, ...updated } : d));
+      }
     } catch (err) {
-      // Revert if failed
-      fetchApi('/api/deals').then(data => setDeals(Array.isArray(data) ? data : [])).catch(() => {});
+      // Roll back to the pre-drop state on failure.
+      setDeals(prevDeals);
     }
   };
 
@@ -301,10 +328,12 @@ const Pipeline = () => {
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 150, animation: 'fadeIn 0.3s ease-out' }}>
           <div className="card" style={{ padding: '2.5rem', width: '500px', border: '1px solid #a855f7', boxShadow: '0 10px 40px rgba(168, 85, 247, 0.2)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              {/* #593: rebranded — backend/routes/ai_scoring.js is a rules engine
+                  (stage weights + budget multiplier + activity bucket). No LLM. */}
               <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Zap size={24} color="#a855f7" /> AI Predictive Insights
+                <Zap size={24} color="#a855f7" /> Deal Predictive Score
               </h3>
-              <button onClick={() => setAiScoreModal(null)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={24}/></button>
+              <button onClick={() => setAiScoreModal(null)} aria-label="Close deal score dialog" title="Close" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={24}/></button>
             </div>
             
             <div style={{ padding: '1.5rem', background: 'rgba(168, 85, 247, 0.05)', borderRadius: '12px', border: '1px solid rgba(168, 85, 247, 0.2)', marginBottom: '1.5rem' }}>
@@ -319,7 +348,7 @@ const Pipeline = () => {
               </div>
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>AI Confidence Level:</span>
+                <span style={{ color: 'var(--text-secondary)' }}>Confidence Level:</span>
                 <span style={{ padding: '0.25rem 0.75rem', borderRadius: '12px', backgroundColor: 'var(--subtle-bg-3)', fontSize: '0.875rem' }}>
                   {aiScoreModal.confidence}
                 </span>

@@ -27,12 +27,101 @@ import { describe, test, expect } from 'vitest';
 // routes identified by the v3.4.10 audit. Importing from the new canonical
 // path; the test name (`sanitize-json.test.js`) stays the same since the
 // covered helper signature is unchanged.
-const { sanitizeText, sanitizeJson } = require('../../lib/sanitizeJson.js');
+const { sanitizeText, sanitizeJson, sanitizeHtmlBody } = require('../../lib/sanitizeJson.js');
 
 describe('sanitize helpers — module shape', () => {
   test('exports sanitizeText + sanitizeJson as functions', () => {
     expect(typeof sanitizeText).toBe('function');
     expect(typeof sanitizeJson).toBe('function');
+    expect(typeof sanitizeHtmlBody).toBe('function');
+  });
+});
+
+// #596 — sanitizeHtmlBody preserves a marketing-email allow-list while
+// stripping the XSS surface. Used by routes/marketing.js for the campaign
+// "Body (HTML)" field (pre-fix the body was routed through sanitizeText
+// which silently stripped every tag).
+describe('sanitizeHtmlBody — #596 marketing email body allow-list', () => {
+  test('preserves <p>, <br>, <strong>, <em>, <a> tags verbatim', () => {
+    const input = '<p>Hello <strong>world</strong>!<br/>Visit <a href="https://example.com">our site</a>.</p>';
+    const out = sanitizeHtmlBody(input);
+    expect(out).toContain('<p>');
+    expect(out).toContain('<strong>world</strong>');
+    expect(out).toContain('<br');
+    expect(out).toContain('<a href="https://example.com">');
+  });
+
+  test('preserves heading tags (h1–h6)', () => {
+    const out = sanitizeHtmlBody('<h1>Big Title</h1><h2>Sub</h2>');
+    expect(out).toContain('<h1>Big Title</h1>');
+    expect(out).toContain('<h2>Sub</h2>');
+  });
+
+  test('preserves lists (ul/ol/li)', () => {
+    const out = sanitizeHtmlBody('<ul><li>One</li><li>Two</li></ul>');
+    expect(out).toContain('<ul>');
+    expect(out).toContain('<li>One</li>');
+    expect(out).toContain('<li>Two</li>');
+  });
+
+  test('strips <script> and any inline event handlers', () => {
+    const input = '<p>Hi</p><script>alert(1)</script><p onclick="alert(2)">Click</p>';
+    const out = sanitizeHtmlBody(input);
+    expect(out).not.toContain('<script>');
+    expect(out).not.toContain('alert(1)');
+    expect(out).not.toContain('onclick');
+  });
+
+  test('strips <iframe> / <object> / <embed>', () => {
+    const out = sanitizeHtmlBody('<iframe src="x"></iframe><object></object><embed/>');
+    expect(out).not.toContain('<iframe');
+    expect(out).not.toContain('<object');
+    expect(out).not.toContain('<embed');
+  });
+
+  test('preserves merge tags inside HTML', () => {
+    const out = sanitizeHtmlBody('<p>Hello {{first_name}}!</p>');
+    expect(out).toContain('{{first_name}}');
+  });
+
+  test('forces noopener+noreferrer on target=_blank anchors', () => {
+    const out = sanitizeHtmlBody('<a href="https://example.com" target="_blank">click</a>');
+    expect(out).toContain('target="_blank"');
+    expect(out).toMatch(/rel="[^"]*noopener[^"]*"/);
+    expect(out).toMatch(/rel="[^"]*noreferrer[^"]*"/);
+  });
+
+  test('preserves images with safe attributes', () => {
+    const out = sanitizeHtmlBody('<img src="https://cdn.x/y.png" alt="logo" width="100" />');
+    expect(out).toContain('<img');
+    expect(out).toContain('src="https://cdn.x/y.png"');
+    expect(out).toContain('alt="logo"');
+  });
+
+  test('strips javascript: scheme from anchors', () => {
+    const out = sanitizeHtmlBody('<a href="javascript:alert(1)">x</a>');
+    expect(out).not.toContain('javascript:');
+  });
+
+  test('passes through non-string input', () => {
+    expect(sanitizeHtmlBody(null)).toBeNull();
+    expect(sanitizeHtmlBody(undefined)).toBeUndefined();
+    expect(sanitizeHtmlBody(42)).toBe(42);
+  });
+
+  test('empty string returns empty string', () => {
+    expect(sanitizeHtmlBody('')).toBe('');
+  });
+
+  test('round-trip preserves a realistic marketing email body', () => {
+    const input = `<h1>Hello {{first_name}}</h1><p style="color:#0a7">Welcome to <strong>Globus Wellness</strong>.</p><p><a href="https://example.com">Book now</a></p>`;
+    const out = sanitizeHtmlBody(input);
+    expect(out).toContain('<h1>Hello {{first_name}}</h1>');
+    expect(out).toContain('<strong>Globus Wellness</strong>');
+    expect(out).toContain('href="https://example.com"');
+    expect(out).toContain('Book now');
+    // Color style passes the allow-list.
+    expect(out).toMatch(/color:\s*#0a7/);
   });
 });
 

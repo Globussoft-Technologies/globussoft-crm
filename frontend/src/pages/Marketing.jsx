@@ -184,6 +184,11 @@ export default function Marketing() {
       channel: camp.channel || 'EMAIL',
       budget: camp.budget || 0,
       scheduledAt: camp.scheduledAt || '',
+      // #610: snapshot the saved scheduledAt so a no-op Save doesn't overwrite
+      // the persisted Mon–Fri value with the +1yr placeholder. We compare
+      // against this on save and keep the original if the user didn't touch
+      // the field. The "today" defaulter is only legal in CREATE mode now.
+      originalScheduledAt: camp.scheduledAt || '',
       subject: extra.subject || '',
       preheader: extra.preheader || '',
       body: extra.body || '',
@@ -218,20 +223,29 @@ export default function Marketing() {
           status: editingCampaign.status || 'Draft',
         }),
       });
-      // Schedule call also writes scheduleFilters; we always set a
-      // far-future placeholder if the user didn't pick a real date so
-      // the metadata persists alongside the campaign without dispatching.
-      const scheduledAt = editingCampaign.scheduledAt
-        ? new Date(editingCampaign.scheduledAt).toISOString()
-        : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(); // +1yr placeholder
+      // #610: preserve the saved scheduledAt when the user didn't touch the
+      // picker. Pre-fix, an empty picker fell through to a +1yr placeholder
+      // which silently overwrote the saved Mon–Fri value. Now: if the user
+      // typed a real date use it; otherwise keep whatever was already on
+      // the row (which may itself be empty for a fresh draft, in which case
+      // we still need a placeholder so the metadata write succeeds).
+      let scheduledAt;
+      if (editingCampaign.scheduledAt) {
+        scheduledAt = new Date(editingCampaign.scheduledAt).toISOString();
+      } else if (editingCampaign.originalScheduledAt) {
+        scheduledAt = new Date(editingCampaign.originalScheduledAt).toISOString();
+      } else {
+        scheduledAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(); // +1yr placeholder, CREATE mode only
+      }
       await fetchApi(`/api/marketing/campaigns/${editingCampaign.id}/schedule`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scheduledAt, filters: filterPayload }),
       });
-      // If user didn't actually schedule it, immediately pause so it
-      // doesn't dispatch on the placeholder date.
-      if (!editingCampaign.scheduledAt) {
+      // If user didn't actually schedule it (and there's no pre-existing
+      // schedule), immediately pause so it doesn't dispatch on the
+      // placeholder date.
+      if (!editingCampaign.scheduledAt && !editingCampaign.originalScheduledAt) {
         await fetchApi(`/api/marketing/campaigns/${editingCampaign.id}/pause`, { method: 'POST' });
       }
       notify.success('Campaign saved');

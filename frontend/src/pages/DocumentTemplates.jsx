@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { FileText, Plus, Edit, Eye, Send, Copy, Trash2, X, Save, Code } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDate } from '../utils/date';
 
 const TYPES = ['PROPOSAL', 'NDA', 'CONTRACT', 'EMAIL'];
 
@@ -188,14 +189,14 @@ export default function DocumentTemplates() {
       {loading ? (
         <p style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading templates...</p>
       ) : filteredTemplates.length === 0 ? (
-        <div className="card" style={{ padding: '4rem', textAlign: 'center' }}>
+        <div className="card" data-testid="document-templates-empty-state" style={{ padding: '4rem', textAlign: 'center' }}>
           <FileText size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
           <h3 style={{ marginBottom: '0.5rem' }}>No templates yet</h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
-            Create reusable proposal, NDA, contract, or email templates with merge variables.
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem', maxWidth: '460px', margin: '0 auto 1.5rem' }}>
+            Document templates let you reuse content for quotes, invoices, NDAs, contracts, and email — with merge variables like <code>{'{{contact.name}}'}</code> and <code>{'{{deal.title}}'}</code>.
           </p>
-          <button className="btn-primary" onClick={openCreate}>
-            <Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Create Template
+          <button className="btn-primary" onClick={openCreate} data-testid="empty-state-create-cta">
+            <Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Create your first template
           </button>
         </div>
       ) : (
@@ -209,7 +210,7 @@ export default function DocumentTemplates() {
                   <div style={{ minWidth: 0 }}>
                     <h3 style={{ fontSize: '1.05rem', fontWeight: 600, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</h3>
                     <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                      Updated {new Date(t.updatedAt || t.createdAt).toLocaleDateString()}
+                      Updated {formatDate(t.updatedAt || t.createdAt)}
                     </p>
                   </div>
                   <span style={{ background: tc.bg, color: tc.color, padding: '0.25rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 600 }}>
@@ -417,7 +418,7 @@ function Modal({ title, children, onClose, wide }) {
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h3>
-          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <button onClick={onClose} aria-label={`Close ${title} dialog`} title="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <X size={20} />
           </button>
         </div>

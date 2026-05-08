@@ -1,9 +1,13 @@
 /**
- * Leads.jsx — client-side hardening tests for the Create-Lead form (#557 / HI-08).
+ * Leads.jsx — client-side hardening tests for the Create-Lead form (#557 / HI-08)
+ * + vertical-aware Lead form for the wellness tenant (#600).
  *
  * Scope: verifies the frontend guard rails added to the Create-Lead form so
  * users get fast feedback (no server round-trip) when they paste oversized
- * input, sneak in HTML / control characters, or skip required fields.
+ * input, sneak in HTML / control characters, or skip required fields. Also
+ * pins the wellness-vertical Lead form (Phone required, wellness sources,
+ * treatment-of-interest, preferred clinic/practitioner) and confirms the
+ * generic CRM form stays unchanged.
  *
  * The backend at routes/contacts.js + the global sanitizeBody middleware are
  * still the source of truth — these tests confirm the network call is NOT
@@ -17,12 +21,17 @@
  *   4. Empty required name → "Name is required"; no fetch.
  *   5. Invalid email shape → "valid email" error; no fetch.
  *   6. Happy path → POST /api/contacts fires exactly once with sanitised body.
+ *   7. (#600) Wellness tenant → Phone field renders, "WhatsApp" source option
+ *      exists; submitting without phone → "Phone is required", no fetch.
+ *   8. (#600) Generic tenant → Phone field is hidden, "WhatsApp" not in
+ *      Source dropdown.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import React from 'react';
 import Leads from '../pages/Leads';
+import { AuthContext } from '../App';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -47,10 +56,12 @@ vi.mock('react-router-dom', async () => {
   return { ...real, useNavigate: () => vi.fn() };
 });
 
-function renderLeads() {
+function renderLeads(authValue = null) {
   return render(
     <MemoryRouter>
-      <Leads />
+      <AuthContext.Provider value={authValue}>
+        <Leads />
+      </AuthContext.Provider>
     </MemoryRouter>,
   );
 }
@@ -262,5 +273,124 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     expect(screen.getByPlaceholderText('Email Address')).toHaveAttribute('maxLength', '191');
     expect(screen.getByPlaceholderText('Company')).toHaveAttribute('maxLength', '191');
     expect(screen.getByPlaceholderText('Job Title')).toHaveAttribute('maxLength', '200');
+  });
+});
+
+// #600 — wellness-vertical Lead form. Verifies the form schema flips when
+// AuthContext.tenant.vertical === 'wellness': Phone field renders, the 8
+// wellness sources replace the 6 generic ones, and submitting without a
+// phone trips the "Phone is required" guard. The generic-tenant case
+// asserts the inverse (Phone hidden, no WhatsApp option).
+describe('Leads — vertical-aware form schema (#600)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    notifyError.mockReset();
+    notifyInfo.mockReset();
+    notifySuccess.mockReset();
+  });
+
+  const wellnessAuth = {
+    tenant: { id: 2, vertical: 'wellness', name: 'Enhanced Wellness' },
+    user: { id: 1, role: 'ADMIN' },
+  };
+
+  const genericAuth = {
+    tenant: { id: 1, vertical: 'generic', name: 'Globussoft CRM' },
+    user: { id: 1, role: 'ADMIN' },
+  };
+
+  it('wellness tenant → Phone field renders and WhatsApp is in Source dropdown', async () => {
+    renderLeads(wellnessAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    // Phone input is rendered + required.
+    const phone = screen.getByPlaceholderText(/Phone \(10-digit/i);
+    expect(phone).toBeInTheDocument();
+    expect(phone).toHaveAttribute('required');
+
+    // WhatsApp option present in the Source dropdown.
+    const sourceSelect = screen.getByDisplayValue('Walk-in');
+    expect(sourceSelect).toBeInTheDocument();
+    const whatsappOpt = Array.from(sourceSelect.querySelectorAll('option')).find(
+      o => o.textContent === 'WhatsApp',
+    );
+    expect(whatsappOpt).toBeDefined();
+    expect(whatsappOpt.value).toBe('whatsapp');
+
+    // Generic CRM source must NOT appear (Patient taxonomy replaces it).
+    const linkedinOpt = Array.from(sourceSelect.querySelectorAll('option')).find(
+      o => o.value === 'LinkedIn',
+    );
+    expect(linkedinOpt).toBeUndefined();
+  });
+
+  it('wellness tenant → submitting without phone triggers "Phone is required"', async () => {
+    renderLeads(wellnessAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fetchApiMock.mockClear();
+
+    fireEvent.change(screen.getByPlaceholderText('Full Name'), { target: { value: 'Anita Sharma' } });
+    // Email is optional under wellness; phone is missing.
+    submitForm();
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/Phone is required/i));
+    });
+    const postCall = fetchApiMock.mock.calls.find(([, opts]) => opts?.method === 'POST');
+    expect(postCall).toBeUndefined();
+  });
+
+  it('wellness tenant → happy path POSTs phone, source, and treatmentOfInterest', async () => {
+    renderLeads(wellnessAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+
+    fireEvent.change(screen.getByPlaceholderText('Full Name'), { target: { value: 'Anita Sharma' } });
+    fireEvent.change(screen.getByPlaceholderText(/Phone \(10-digit/i), {
+      target: { value: '+919876543210' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Treatment of interest/i), {
+      target: { value: 'Botox' },
+    });
+    // Switch source to WhatsApp.
+    const sourceSelect = screen.getByDisplayValue('Walk-in');
+    fireEvent.change(sourceSelect, { target: { value: 'whatsapp' } });
+
+    submitForm();
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.name).toBe('Anita Sharma');
+      expect(body.phone).toBe('+919876543210');
+      expect(body.source).toBe('whatsapp');
+      expect(body.treatmentOfInterest).toBe('Botox');
+    });
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it('generic tenant → Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {
+    renderLeads(genericAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    expect(screen.queryByPlaceholderText(/Phone \(10-digit/i)).toBeNull();
+
+    const sourceSelect = screen.getByDisplayValue('Organic');
+    expect(sourceSelect).toBeInTheDocument();
+    const whatsappOpt = Array.from(sourceSelect.querySelectorAll('option')).find(
+      o => o.textContent === 'WhatsApp' || o.value === 'whatsapp',
+    );
+    expect(whatsappOpt).toBeUndefined();
+
+    // Generic taxonomy still present.
+    const linkedinOpt = Array.from(sourceSelect.querySelectorAll('option')).find(
+      o => o.value === 'LinkedIn',
+    );
+    expect(linkedinOpt).toBeDefined();
   });
 });

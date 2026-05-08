@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { Database, Plus, ArrowLeft, Download, Filter } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDate } from '../utils/date';
 
 export default function CustomObjectView() {
   const notify = useNotify();
@@ -92,7 +93,7 @@ export default function CustomObjectView() {
                     {f.type === 'Boolean' ? (r[f.name] ? 'True' : 'False') : String(r[f.name] || '—')}
                   </td>
                 ))}
-                <td style={{ padding: '1rem 1.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{new Date(r.createdAt).toLocaleDateString()}</td>
+                <td style={{ padding: '1rem 1.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{formatDate(r.createdAt)}</td>
               </tr>
             ))}
             {records.length === 0 && (

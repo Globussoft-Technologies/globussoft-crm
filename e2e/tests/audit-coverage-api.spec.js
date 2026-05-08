@@ -533,7 +533,7 @@ test.describe('Audit coverage — Patient', () => {
     expectAuditShape(row, { entity: 'Patient', action: 'UPDATE', entityId: p.id, userId, tenantId });
   });
 
-  test('DELETE /api/wellness/patients/:id emits AuditLog Patient DELETE row (#539)', async ({ request }) => {
+  test('DELETE /api/wellness/patients/:id emits AuditLog Patient SOFT_DELETE row (#539, #628)', async ({ request }) => {
     const { token, userId, tenantId } = await getWellnessAdmin(request);
     // Create a fresh patient with NO FK children so DELETE succeeds.
     const ts = Date.now();
@@ -548,12 +548,13 @@ test.describe('Audit coverage — Patient', () => {
 
     const delRes = await del(request, token, `/api/wellness/patients/${p.id}`);
     // #539: 409 PATIENT_HAS_CHILDREN if FK-bound, 200 success otherwise.
-    // Fresh patient has no children → expect 200. We only assert audit
-    // on the success path per the task acceptance criteria.
+    // Fresh patient has no children → expect 200.
+    // #628: DELETE switched from hard to soft-delete; audit action changed
+    // from DELETE → SOFT_DELETE to match Contact/Deal soft-delete shape.
     expect(delRes.status()).toBe(200);
 
-    const row = await findAuditRow(request, token, 'Patient', 'DELETE', p.id);
-    expectAuditShape(row, { entity: 'Patient', action: 'DELETE', entityId: p.id, userId, tenantId });
+    const row = await findAuditRow(request, token, 'Patient', 'SOFT_DELETE', p.id);
+    expectAuditShape(row, { entity: 'Patient', action: 'SOFT_DELETE', entityId: p.id, userId, tenantId });
   });
 });
 

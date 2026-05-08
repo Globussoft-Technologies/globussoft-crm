@@ -6,6 +6,7 @@ import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
 import { launchAdsGptAs, ADSGPT_DEMO_LOGIN } from '../../utils/adsgpt';
 import { launchCallifiedSSO } from '../../utils/callified';
+import { getGreeting } from '../../utils/greeting';
 
 // #207/#214: clinical staff (doctor/professional/telecaller/helper) must not
 // land on the Owner Dashboard. Mirror the Login redirect logic so a direct
@@ -36,6 +37,13 @@ export default function OwnerDashboard() {
   const { user, tenant } = useContext(AuthContext);
   const navigate = useNavigate();
   const [data, setData] = useState(null);
+  // #565 (HI-16): canonical revenue figure for the displayed window comes
+  // from /api/wellness/reports/pnl-by-service so the Owner Dashboard's
+  // headline KPI agrees with the /wellness/reports P&L tab. Pre-fix the
+  // dashboard surfaced data.today.expectedRevenue (a different scope —
+  // scheduled-not-yet-completed) which never reconciled with the P&L
+  // page's realised-revenue total.
+  const [pnl, setPnl] = useState(null);
   const [loading, setLoading] = useState(true);
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState('');
@@ -88,6 +96,25 @@ export default function OwnerDashboard() {
       .finally(() => setLoading(false));
   }, [locationId]);
 
+  // #565: fetch the canonical P&L total for "this month so far" so the
+  // headline revenue KPI matches /wellness/reports. Window: from the 1st
+  // of the current month to today (inclusive). YYYY-MM-DD on both ends
+  // — the route's reportRange helper widens DATE_ONLY values to the full
+  // day so we get realised revenue through end-of-today.
+  useEffect(() => {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const today = String(now.getDate()).padStart(2, '0');
+    const from = `${yyyy}-${mm}-01`;
+    const to = `${yyyy}-${mm}-${today}`;
+    const qs = new URLSearchParams({ from, to });
+    if (locationId) qs.set('locationId', String(locationId));
+    fetchApi(`/api/wellness/reports/pnl-by-service?${qs.toString()}`, { silent: true })
+      .then(setPnl)
+      .catch(() => setPnl(null));
+  }, [locationId]);
+
   if (loading) return <div style={{ padding: '2rem' }}>Loading owner dashboard…</div>;
   if (!data) return <div style={{ padding: '2rem' }}>Could not load dashboard. Make sure your tenant has the Wellness vertical enabled.</div>;
 
@@ -95,14 +122,13 @@ export default function OwnerDashboard() {
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-family)', fontSize: '1.75rem', fontWeight: 600 }}>{(() => {
-            // #203: greeting was hard-coded "Good morning". Compute against
-            // IST since the dashboard is wellness-vertical (India only).
-            const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-            if (istHour < 12) return 'Good morning';
-            if (istHour < 17) return 'Good afternoon';
-            return 'Good evening';
-          })()}</h1>
+          {/* #636: greeting now derives from the user's local clock via the
+              shared getGreeting helper (4 branches inc. "Good night" for
+              22:00–04:59). Was inline IST-only with 3 branches and no
+              late-night case. */}
+          <h1 style={{ fontFamily: 'var(--font-family)', fontSize: '1.75rem', fontWeight: 600 }}>
+            {getGreeting()}{user?.name ? `, ${user.name.split(' ')[0]}` : ''}
+          </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
             Here's the snapshot for today — {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
@@ -120,6 +146,16 @@ export default function OwnerDashboard() {
       {/* KPI grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard icon={Calendar} label="Today's appointments" value={data.today.visits} sub={`${data.today.completed} completed so far`} color="var(--accent-color)" onClick={() => navigate('/wellness/calendar')} />
+        {/* #565: month-to-date realised revenue from the canonical P&L
+            endpoint, matching the figure on /wellness/reports. */}
+        <StatCard
+          icon={IndianRupee}
+          label="Revenue this month"
+          value={formatRupees(pnl?.totalRevenue)}
+          sub="from completed visits (P&L canonical)"
+          color="var(--success-color)"
+          onClick={() => navigate('/wellness/reports')}
+        />
         <StatCard icon={IndianRupee} label="Today's expected revenue" value={formatRupees(data.today.expectedRevenue)} sub="based on scheduled services" color="var(--success-color)" />
         <StatCard icon={Activity} label="Occupancy" value={`${data.today.occupancyPct}%`} sub="vs target 100%" color={data.today.occupancyPct >= 60 ? 'var(--success-color)' : 'var(--warning-color)'} />
         <StatCard icon={Users} label="New leads today" value={data.today.newLeads} sub="across all channels" color="#3b82f6" />

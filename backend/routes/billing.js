@@ -7,6 +7,10 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { formatMoney } = require("../utils/formatMoney");
+// #577 — wire fieldFilter into Invoice routes so the FieldPermissions UI
+// rules are actually enforced (not just stored). Mirrors the deals.js +
+// contacts.js adoption pattern from #464.
+const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
 
 // Fetch all ledgers for current tenant
 router.get("/", verifyToken, async (req, res) => {
@@ -16,7 +20,9 @@ router.get("/", verifyToken, async (req, res) => {
       include: { contact: true, deal: true },
       orderBy: [{ status: "desc" }, { dueDate: "asc" }]
     });
-    res.json(invoices);
+    // #577: strip read-restricted fields per the caller's role.
+    const filtered = await filterReadFields(invoices, req.user.role, "Invoice", req.user.tenantId);
+    res.json(filtered);
   } catch (_err) {
     res.status(500).json({ error: "Failed to locate invoice ledger" });
   }
@@ -39,7 +45,9 @@ router.get("/:id", verifyToken, async (req, res) => {
       include: { contact: true, deal: true }
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
-    res.json(invoice);
+    // #577: strip read-restricted fields per the caller's role.
+    const filtered = await filterReadFields(invoice, req.user.role, "Invoice", req.user.tenantId);
+    res.json(filtered);
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch invoice" });
   }
@@ -48,6 +56,9 @@ router.get("/:id", verifyToken, async (req, res) => {
 // Draft new Invoice
 router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
+    // #577: strip write-restricted fields BEFORE the field-level validation
+    // below so a denied field can't slip through into the create payload.
+    req.body = await filterWriteFields(req.body, req.user.role, "Invoice", req.user.tenantId);
     const { amount, dueDate, contactId, dealId } = req.body;
     // #158 #177: validate amount > 0 and within sane cap, dueDate >= today.
     const amt = Number(amount);
@@ -115,6 +126,8 @@ router.patch("/:id", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, 
     if (!Number.isFinite(id) || id <= 0) {
       return res.status(400).json({ error: "invalid invoice id", code: "INVALID_ID" });
     }
+    // #577: strip write-restricted fields BEFORE applying the whitelist below.
+    req.body = await filterWriteFields(req.body, req.user.role, "Invoice", req.user.tenantId);
     const before = await prisma.invoice.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!before) return res.status(404).json({ error: "Invoice not found" });
 

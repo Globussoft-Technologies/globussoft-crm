@@ -3,6 +3,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { Plus, Calculator, FileCheck, Layers, Package, Trash2 } from 'lucide-react';
 import { formatMoney, currencySymbol } from '../utils/money';
+import { formatDate } from '../utils/date';
 
 export default function CPQBuilder({ dealId }) {
   const notify = useNotify();
@@ -137,7 +138,7 @@ export default function CPQBuilder({ dealId }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
               <div>
                 <h4 style={{ fontSize: '1.1rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FileCheck size={18} color="#10b981" /> {q.title}</h4>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Constructed {new Date(q.createdAt).toLocaleDateString()} • State: {q.status}</p>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Constructed {formatDate(q.createdAt)} • State: {q.status}</p>
               </div>
               <div style={{ textAlign: 'right' }}>
                 <p style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#8b5cf6' }}>{formatMoney(q.mrr, { maximumFractionDigits: 0 })} <span style={{fontSize: '0.7rem', color:'var(--text-secondary)'}}>MRR</span></p>

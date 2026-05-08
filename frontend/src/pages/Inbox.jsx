@@ -16,11 +16,27 @@ export default function Inbox() {
 
   // Compose modal state
   const [showCompose, setShowCompose] = useState(false);
-  const [composeData, setComposeData] = useState({ to: '', subject: '', body: '' });
+  // #623 — cc / bcc default empty + collapsed; toggle reveals the inputs.
+  // Mirrors Gmail / Outlook behaviour where Cc/Bcc are an opt-in surface
+  // rather than always-visible chrome.
+  const [composeData, setComposeData] = useState({ to: '', cc: '', bcc: '', subject: '', body: '' });
+  const [showCcBcc, setShowCcBcc] = useState(false);
+
+  // #624 — Sent folder UI: a sub-tab on the Emails tab toggles the
+  // backend folder filter (?folder=sent | ?folder=inbox | omitted=all).
+  const [emailFolder, setEmailFolder] = useState('all'); // 'all' | 'inbox' | 'sent'
 
   // SMS Compose modal state
   const [showComposeSms, setShowComposeSms] = useState(false);
   const [composeSmsData, setComposeSmsData] = useState({ to: '', body: '' });
+
+  // #594 — WhatsApp Compose modal state. Mirrors the SMS composer (phone +
+  // body) but POSTs to /api/whatsapp/send. Pre-fix the WhatsApp tab could
+  // only render inbound threads — there was no affordance to start a new
+  // conversation.
+  const [showComposeWa, setShowComposeWa] = useState(false);
+  const [composeWaData, setComposeWaData] = useState({ to: '', body: '' });
+  const [waSending, setWaSending] = useState(false);
 
   // Meeting modal state
   const [showMeet, setShowMeet] = useState(false);
@@ -58,9 +74,16 @@ export default function Inbox() {
   const [playingCallId, setPlayingCallId] = useState(null);
   const [playerErrors, setPlayerErrors] = useState({});
 
+  // #624 — re-fetch emails when the folder sub-tab changes so the Sent
+  // folder query lands the OUTBOUND-only set, the Inbox the INBOUND-only
+  // set, and All keeps the original combined behaviour.
+  const inboxPath = emailFolder === 'all'
+    ? '/api/communications/inbox'
+    : `/api/communications/inbox?folder=${emailFolder}`;
+
   useEffect(() => {
     Promise.all([
-      fetchApi('/api/communications/inbox'),
+      fetchApi(inboxPath),
       fetchApi('/api/communications/calls'),
       fetchApi('/api/contacts'),
       fetchApi('/api/sms/messages').catch(() => []),
@@ -76,7 +99,7 @@ export default function Inbox() {
       console.error(err);
       setLoading(false);
     });
-  }, []);
+  }, [inboxPath]);
 
   const handleSendEmail = async (e) => {
     e.preventDefault();
@@ -85,9 +108,10 @@ export default function Inbox() {
     notify.success(`Email Sent Successfully!\n\n[Epic #104] Tracking Pixel Active: You will be notified the instant ${composeData.to} opens or clicks links in this message.`);
 
     setShowCompose(false);
-    setComposeData({ to: '', subject: '', body: '' });
+    setComposeData({ to: '', cc: '', bcc: '', subject: '', body: '' });
+    setShowCcBcc(false);
     // Refresh
-    const data = await fetchApi('/api/communications/inbox');
+    const data = await fetchApi(inboxPath);
     setEmails(Array.isArray(data) ? data : []);
   };
 
@@ -106,6 +130,41 @@ export default function Inbox() {
     } catch (err) {
       notify.error('Failed to send SMS. Please check the phone number and try again.');
       console.error(err);
+    }
+  };
+
+  // #594 — Send a new WhatsApp message via /api/whatsapp/send. The route
+  // requires { to, body } at minimum (templateName is optional for richer
+  // template flows; for the in-thread quick-compose we use plain text).
+  const handleSendWa = async (e) => {
+    e.preventDefault();
+    const to = composeWaData.to.trim();
+    const body = composeWaData.body.trim();
+    if (!to || !body) {
+      notify.error('Phone number and message body are required');
+      return;
+    }
+    setWaSending(true);
+    try {
+      await fetchApi('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to, body }),
+      });
+      notify.success(`WhatsApp message queued for ${to}.`);
+      setShowComposeWa(false);
+      setComposeWaData({ to: '', body: '' });
+      const data = await fetchApi('/api/whatsapp/messages').catch(() => ({}));
+      setWaMessages(Array.isArray(data?.messages || data) ? (data?.messages || data) : []);
+    } catch (err) {
+      const msg = err?.message || 'Unable to send WhatsApp message';
+      if (/no active whatsapp/i.test(msg)) {
+        notify.error('No active WhatsApp provider configured. Open Settings > Channels to add credentials.');
+      } else {
+        notify.error(`WhatsApp send failed: ${msg}`);
+      }
+    } finally {
+      setWaSending(false);
     }
   };
 
@@ -272,6 +331,11 @@ export default function Inbox() {
           <button onClick={() => setShowComposeSms(true)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <MessageSquare size={18} /> Compose SMS
           </button>
+          {/* #594 — Compose WhatsApp affordance. Pre-fix the WhatsApp tab
+              had no way to start a new outbound thread. */}
+          <button onClick={() => setShowComposeWa(true)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(37, 211, 102, 0.15)', border: '1px solid #25D366', color: '#25D366' }}>
+            <MessageCircle size={18} /> Compose WhatsApp
+          </button>
           <button onClick={() => setShowCompose(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Mail size={18} /> Compose Email
           </button>
@@ -355,6 +419,37 @@ export default function Inbox() {
           </div>
         ) : activeTab === 'emails' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {/* #624 — folder sub-tabs (All / Inbox / Sent). Backend filter
+                is applied via /api/communications/inbox?folder=<v>. The
+                Sent folder was the bug surface in #624: pre-fix there was
+                no UI to view OUTBOUND-only mail; the backend has always
+                stored direction='OUTBOUND' on every send-email call. */}
+            <div role="tablist" aria-label="Email folder" style={{ display: 'flex', gap: '0.25rem', padding: '0.25rem', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', alignSelf: 'flex-start' }}>
+              {[
+                { id: 'all', label: 'All' },
+                { id: 'inbox', label: 'Inbox' },
+                { id: 'sent', label: 'Sent' },
+              ].map(f => (
+                <button
+                  key={f.id}
+                  role="tab"
+                  aria-selected={emailFolder === f.id}
+                  onClick={() => setEmailFolder(f.id)}
+                  style={{
+                    padding: '0.4rem 1rem',
+                    border: 'none',
+                    background: emailFolder === f.id ? 'var(--accent-color)' : 'transparent',
+                    color: emailFolder === f.id ? '#fff' : 'var(--text-secondary)',
+                    fontWeight: emailFolder === f.id ? 600 : 500,
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                  }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
             {/* #252: scope empty state to the active tab. Calls/SMS/WhatsApp
                 may still have data; the previous global "Inbox is empty"
                 message read like the whole CRM had no activity. */}
@@ -454,12 +549,38 @@ export default function Inbox() {
             </h3>
             <form onSubmit={handleSendEmail} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>To:</label>
-                <input type="email" list="contacts-list" required className="input-field" value={composeData.to} onChange={e => setComposeData({...composeData, to: e.target.value})} placeholder="client@company.com" />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <label style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>To:</label>
+                  {/* #623 — Cc/Bcc toggle. Hidden by default to keep the
+                      composer minimal; clicking expands the two fields below. */}
+                  {!showCcBcc && (
+                    <button
+                      type="button"
+                      onClick={() => setShowCcBcc(true)}
+                      aria-label="Show Cc and Bcc"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--accent-color)', fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}
+                    >
+                      Cc / Bcc
+                    </button>
+                  )}
+                </div>
+                <input type="text" list="contacts-list" required className="input-field" value={composeData.to} onChange={e => setComposeData({...composeData, to: e.target.value})} placeholder="client@company.com (comma-separated for multiple)" />
                 <datalist id="contacts-list">
                   {contacts.map(c => <option key={c.id} value={c.email}>{c.name}</option>)}
                 </datalist>
               </div>
+              {showCcBcc && (
+                <>
+                  <div>
+                    <label htmlFor="compose-cc" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Cc:</label>
+                    <input id="compose-cc" type="text" className="input-field" value={composeData.cc} onChange={e => setComposeData({...composeData, cc: e.target.value})} placeholder="cc@company.com (comma-separated)" />
+                  </div>
+                  <div>
+                    <label htmlFor="compose-bcc" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Bcc:</label>
+                    <input id="compose-bcc" type="text" className="input-field" value={composeData.bcc} onChange={e => setComposeData({...composeData, bcc: e.target.value})} placeholder="bcc@company.com (comma-separated)" />
+                  </div>
+                </>
+              )}
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Subject:</label>
                 <input type="text" required className="input-field" value={composeData.subject} onChange={e => setComposeData({...composeData, subject: e.target.value})} placeholder="Following up" />
@@ -499,7 +620,7 @@ export default function Inbox() {
                   </button>
                 </div>
                 <div style={{ display: 'flex', gap: '1rem' }}>
-                  <button type="button" onClick={() => setShowCompose(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
+                  <button type="button" onClick={() => { setShowCompose(false); setShowCcBcc(false); setComposeData({ to: '', cc: '', bcc: '', subject: '', body: '' }); }} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
                   <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <Send size={16} /> Send Email
                   </button>
@@ -685,6 +806,59 @@ export default function Inbox() {
                 <button type="button" onClick={() => setShowComposeSms(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
                 <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#10b981', borderColor: '#10b981' }}>
                   <Send size={16} /> Send SMS
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* #594 — Compose WhatsApp modal. Channel-specific entry: To field is
+          a phone number (E.164 expected by Meta Cloud API), body is plain
+          text, POST to /api/whatsapp/send. Email-specific fields (subject,
+          cc/bcc) are intentionally absent. */}
+      {showComposeWa && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, animation: 'fadeIn 0.2s ease-out' }}>
+          <div className="card" style={{ padding: '2.5rem', width: '600px', border: '1px solid rgba(37, 211, 102, 0.3)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
+            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <MessageCircle size={24} color="#25D366" /> New WhatsApp Message
+            </h3>
+            <form onSubmit={handleSendWa} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label htmlFor="compose-wa-to" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Phone Number (E.164):</label>
+                <input
+                  id="compose-wa-to"
+                  type="tel"
+                  required
+                  list="contacts-phone-list"
+                  className="input-field"
+                  value={composeWaData.to}
+                  onChange={e => setComposeWaData({ ...composeWaData, to: e.target.value })}
+                  placeholder="+919876543210"
+                />
+                <datalist id="contacts-phone-list">
+                  {contacts.filter(c => c.phone).map(c => (
+                    <option key={c.id} value={c.phone}>{c.name}</option>
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <label htmlFor="compose-wa-body" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Message:</label>
+                <textarea
+                  id="compose-wa-body"
+                  required
+                  className="input-field"
+                  value={composeWaData.body}
+                  onChange={e => setComposeWaData({ ...composeWaData, body: e.target.value })}
+                  placeholder="Type your WhatsApp message here..."
+                  rows={5}
+                  style={{ resize: 'vertical' }}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', gap: '1rem' }}>
+                <button type="button" onClick={() => { setShowComposeWa(false); setComposeWaData({ to: '', body: '' }); }} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
+                <button type="submit" disabled={waSending} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#25D366', borderColor: '#25D366' }}>
+                  <Send size={16} /> {waSending ? 'Sending…' : 'Send WhatsApp'}
                 </button>
               </div>
             </form>

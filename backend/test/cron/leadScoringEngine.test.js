@@ -937,3 +937,193 @@ describe('tickLeadScoringEngine — engine-shape contracts (#421 fixes verified)
     expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 });
+
+// ─── #571 — Static-feature scoring + non-uniform distribution ──────────────
+//
+// Acceptance criteria for issue #571 (Lead Scoring engine produces no
+// variation — all 100 cold leads scored 7/100). These tests pin the
+// new static-feature contributions (corporate-domain email, identity
+// completeness) AND assert that scoring 100 synthetic contacts with
+// varied profile + age produces a non-uniform distribution spanning
+// at least 3 of the 5 score buckets.
+
+describe('#571 — corporate-domain email scoring (+10 vs +0 personal)', () => {
+  test('corporate domain adds +10 over personal-domain baseline', () => {
+    const personal = computeScore(contactWith({ name: 'A', email: 'alice@gmail.com' }));
+    const corporate = computeScore(contactWith({ name: 'A', email: 'alice@acme.com' }));
+    expect(corporate - personal).toBe(10);
+  });
+
+  test('all major personal domains scored as personal (no +10)', () => {
+    const corp = computeScore(contactWith({ email: 'a@acme.com' }));
+    for (const personal of [
+      'a@gmail.com', 'a@yahoo.com', 'a@hotmail.com', 'a@outlook.com',
+      'a@icloud.com', 'a@aol.com', 'a@protonmail.com',
+    ]) {
+      const score = computeScore(contactWith({ email: personal }));
+      expect(corp - score).toBe(10);
+    }
+  });
+
+  test('no email present: corporate-domain branch is a no-op', () => {
+    const noEmail = computeScore(contactWith({}));
+    const empty = computeScore(contactWith({ email: '' }));
+    expect(empty).toBe(noEmail);
+  });
+});
+
+describe('#571 — identity completeness (name + email + phone +3 each)', () => {
+  test('each identity field adds +3 (name + email + phone = +9)', () => {
+    const baseline = computeScore(contactWith({}));
+    const fullyId = computeScore(contactWith({
+      name: 'Jane Doe', email: 'jane@gmail.com', phone: '+1-415-5550000',
+    }));
+    // baseline has no name/email/phone (contactWith defaults to none).
+    // fullyId adds +3 +3 +3 from identity. email is personal-domain so no
+    // corporate bump. So delta is exactly +9.
+    expect(fullyId - baseline).toBe(9);
+  });
+});
+
+describe('#571 — lead-funnel age decay (status=Lead only, ≤180d)', () => {
+  test('Lead aged 7-30 days loses 3 points', () => {
+    const fresh = computeScore(contactWith({ status: 'Lead', createdAt: new Date() }));
+    const aged20d = computeScore(contactWith({
+      status: 'Lead', createdAt: new Date(Date.now() - 20 * 86400000),
+    }));
+    expect(aged20d - fresh).toBe(-3);
+  });
+
+  test('Lead aged 30-180 days loses 6 points', () => {
+    const fresh = computeScore(contactWith({ status: 'Lead', createdAt: new Date() }));
+    const aged90d = computeScore(contactWith({
+      status: 'Lead', createdAt: new Date(Date.now() - 90 * 86400000),
+    }));
+    expect(aged90d - fresh).toBe(-6);
+  });
+
+  test('Customer status: age decay is suppressed (only applies to Leads)', () => {
+    const freshCustomer = computeScore(contactWith({ status: 'Customer', createdAt: new Date() }));
+    const aged90dCustomer = computeScore(contactWith({
+      status: 'Customer', createdAt: new Date(Date.now() - 90 * 86400000),
+    }));
+    expect(aged90dCustomer).toBe(freshCustomer);
+  });
+});
+
+describe('#571 — empty-activities array no longer triggers cold penalty', () => {
+  test('contact with NO activities is not penalised as cold (was -8 cliff)', () => {
+    // Pre-#571 the engine compared mostRecentDays = Infinity > 90 and
+    // applied -8 to every contact with an empty activities array — so
+    // every brand-new lead with no events collapsed to score 7. After
+    // #571 the penalty fires only when activities.length > 0.
+    const empty = computeScore(contactWith({ activities: [] }));
+    const oneRecent = computeScore(contactWith({
+      activities: [{ createdAt: new Date(), type: 'Note' }],
+    }));
+    // The recent-activity contact is still higher (engagement weight),
+    // but the gap should reflect the activity-recency contribution, NOT
+    // an extra -8 cold-penalty cliff. Pre-#571 gap was ~10 (8 penalty +
+    // ~2 weight); post-#571 gap should be ~2.
+    expect(oneRecent - empty).toBeLessThanOrEqual(4);
+    expect(oneRecent).toBeGreaterThan(empty);
+  });
+});
+
+describe('#571 — non-uniform distribution across 100 synthetic contacts', () => {
+  test('100 varied contacts produce scores spanning at least 3 buckets', () => {
+    // Mirror the seed strategy: 20% hot, 20% warm, 60% cold-tail with
+    // varied profile completeness, email quality, and age.
+    const buckets = [0, 0, 0, 0, 0]; // 0-20, 21-40, 41-60, 61-80, 81-100
+    const corpDomains = ['acme.com', 'techflow.io', 'novacrest.com', 'bigco.de'];
+    const personalDomains = ['gmail.com', 'yahoo.com', 'hotmail.com'];
+
+    for (let i = 0; i < 100; i++) {
+      const tier = i < 20 ? 'hot' : i < 40 ? 'warm' : 'cold';
+      const usePersonal = i % 5 === 0;
+      const domain = usePersonal ? personalDomains[i % 3] : corpDomains[i % 4];
+      const overrides = {
+        name: `Contact ${i}`,
+        email: `contact${i}@${domain}`,
+        phone: i % 7 === 0 ? null : `+1-555-${1000 + i}`,
+        company: `Company ${i}`,
+        title: i % 3 === 0 ? 'CEO' : 'Manager',
+        industry: i % 4 === 0 ? null : 'SaaS',
+        companySize: i % 5 === 0 ? '1000+' : i % 3 === 0 ? '51-200' : null,
+        source: tier === 'hot' ? 'referral' : tier === 'warm' ? 'website-form' : i % 4 === 0 ? 'cold' : 'organic',
+        createdAt: tier === 'hot'
+          ? new Date(Date.now() - (i % 5) * 86400000)
+          : tier === 'warm'
+            ? new Date(Date.now() - (15 + i) * 86400000)
+            : new Date(Date.now() - (60 + i) * 86400000),
+        status: tier === 'hot' ? 'Prospect' : 'Lead',
+        activities: tier === 'hot'
+          ? [{ createdAt: new Date(Date.now() - 2 * 86400000), type: 'Meeting' },
+             { createdAt: new Date(Date.now() - 5 * 86400000), type: 'Call' }]
+          : tier === 'warm'
+            ? [{ createdAt: new Date(Date.now() - 25 * 86400000), type: 'Note' }]
+            : [],
+        emails: tier === 'hot'
+          ? Array.from({ length: 3 + (i % 3) }, () => ({ direction: 'INBOUND', sentimentScore: 0.7 }))
+          : [],
+        callLogs: tier === 'hot'
+          ? Array.from({ length: 1 + (i % 3) }, () => ({ createdAt: new Date(Date.now() - 10 * 86400000) }))
+          : [],
+        touchpoints: tier === 'hot'
+          ? [{ channel: 'email' }, { channel: 'social' }, { channel: 'search' }]
+          : tier === 'warm'
+            ? [{ channel: 'email' }]
+            : [],
+        deals: tier === 'hot'
+          ? [{ stage: 'proposal', amount: 50000, probability: 60 }]
+          : [],
+      };
+      const score = computeScore(contactWith(overrides));
+      const bucket = Math.min(4, Math.floor(score / 21));
+      buckets[bucket]++;
+    }
+
+    // Acceptance: NOT all in 0-20 bucket; spans ≥ 3 of the 5 buckets.
+    expect(buckets[0]).toBeLessThan(95); // pre-fix: all 100 in [0,20]
+    const populatedBuckets = buckets.filter(c => c > 0).length;
+    expect(populatedBuckets).toBeGreaterThanOrEqual(3);
+
+    // No score should equal exactly 7 for every contact (the bug).
+    // After the fix, the empty-baseline floor varies with status/source
+    // so no synthetic contact should land on the exact pre-fix "7".
+    const allSeven = Array.from({ length: 100 }).every((_, i) => {
+      const ov = { name: `c${i}`, email: `c${i}@gmail.com`, status: 'Lead' };
+      return computeScore(contactWith(ov)) === 7;
+    });
+    expect(allSeven).toBe(false);
+  });
+
+  test('hot prospects do reach the 70+ band', () => {
+    // Build a maxed-out warm-bordering-hot contact and confirm scoring
+    // gets it past 70. Pre-fix, NO seeded contact crossed 70 — the
+    // demo's "Top Hot Leads" panel showed "No hot leads yet".
+    const hot = computeScore(contactWith({
+      status: 'Prospect',
+      name: 'Sarah Chen', email: 'sarah@techflow.io', phone: '+1-415-5551234',
+      company: 'TechFlow', title: 'VP Engineering',
+      industry: 'SaaS', companySize: '1000+',
+      linkedin: 'https://linkedin.com/in/sarahchen', website: 'https://techflow.io',
+      source: 'referral',
+      createdAt: new Date(Date.now() - 14 * 86400000),
+      activities: [
+        { createdAt: new Date(Date.now() - 1 * 86400000), type: 'Meeting' },
+        { createdAt: new Date(Date.now() - 3 * 86400000), type: 'Call' },
+      ],
+      emails: [
+        { direction: 'INBOUND', sentimentScore: 0.8 },
+        { direction: 'INBOUND', sentimentScore: 0.7 },
+        { direction: 'INBOUND', sentimentScore: 0.6 },
+      ],
+      callLogs: [{ createdAt: new Date() }, { createdAt: new Date() }],
+      touchpoints: [{ channel: 'email' }, { channel: 'social' }, { channel: 'search' }],
+      deals: [{ stage: 'proposal', amount: 100000, probability: 60 }],
+    }));
+    expect(hot).toBeGreaterThanOrEqual(70);
+  });
+});
+

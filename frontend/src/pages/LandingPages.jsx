@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { PanelTop, Plus, Eye, Copy, Trash2, Globe, FileEdit, BarChart3 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { formatPercent } from '../utils/percent';
 import { useNotify } from '../utils/notify';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -101,7 +102,10 @@ export default function LandingPages() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
           {pages.map(page => {
             const sc = STATUS_COLORS[page.status] || STATUS_COLORS.DRAFT;
-            const convRate = page.visits > 0 ? ((page.submissions / page.visits) * 100).toFixed(1) : 0;
+            // #639 — keep the raw numeric so formatPercent renders consistently
+            // (1-decimal "0.0%") on list, detail, and CSV. Pre-fix the list used
+            // an integer 0 fallback that rendered as bare "0%".
+            const convRate = page.visits > 0 ? (page.submissions / page.visits) * 100 : 0;
             return (
               <div key={page.id} className="card" style={{ padding: '1.5rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
@@ -118,7 +122,7 @@ export default function LandingPages() {
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Leads</div>
                   </div>
                   <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#10b981' }}>{convRate}%</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#10b981' }}>{formatPercent(convRate)}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Conv.</div>
                   </div>
                 </div>

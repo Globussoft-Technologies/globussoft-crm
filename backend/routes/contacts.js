@@ -6,7 +6,7 @@ const audienceController = require("../controllers/audienceController");
 const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, httpFromPrismaError } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
-const { normalizePhone } = require("../utils/deduplication");
+const { normalizePhone, computeDuplicateGroupKey } = require("../utils/deduplication");
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
 // FieldPermissions UI had zero effect on read/write payloads. Default
@@ -44,6 +44,23 @@ function validateContactInput(body, { isUpdate = false } = {}) {
     const stErr = ensureEnum(body.status, ["Lead", "Prospect", "Customer", "Churned", "Junk"], { field: "status" });
     if (stErr) return stErr;
   }
+  // #600 — wellness extras. Optional in both verticals (the Lead form gates
+  // them by tenant.vertical; this validator stays vertical-agnostic so a
+  // generic CRM contact can still receive a treatmentOfInterest from a
+  // future tooling integration without surprising 400s). Length-cap mirrors
+  // the existing 191-char Contact column convention.
+  if (body.treatmentOfInterest !== undefined && body.treatmentOfInterest !== null && body.treatmentOfInterest !== "") {
+    const tErr = ensureStringLength(body.treatmentOfInterest, { max: 191, field: "treatmentOfInterest" });
+    if (tErr) return tErr;
+  }
+  for (const idField of ["preferredLocationId", "preferredPractitionerId"]) {
+    if (body[idField] !== undefined && body[idField] !== null && body[idField] !== "") {
+      const v = Number(body[idField]);
+      if (!Number.isInteger(v) || v <= 0) {
+        return { status: 400, error: `${idField} must be a positive integer`, code: "INVALID_ID" };
+      }
+    }
+  }
   return null;
 }
 
@@ -61,6 +78,12 @@ router.get('/', async (req, res) => {
     if (req.query.unassigned === 'true') where.assignedToId = null;
     // #167: hide soft-deleted rows by default; admin views can opt in.
     applyDeletedAtFilter(where, req.query.includeDeleted === 'true');
+    // #588: USER role sees only contacts assigned to them; ADMIN/MANAGER see
+    // full tenant. Mirrors the deals-list scoping. An explicit ?assignedToId
+    // from a USER is overridden by their own userId — a sales rep cannot
+    // probe a colleague's book of business by URL. Total Contacts KPI on
+    // /dashboard now reflects own-book size for sales reps.
+    if (req.user.role === 'USER') where.assignedToId = req.user.userId;
     // #172: honor limit / offset query params with sensible defaults + a hard cap.
     // Pre-fix the API silently returned the entire dataset, breaking pagination
     // and exposing a perf/DoS surface.
@@ -115,6 +138,11 @@ router.post('/', async (req, res) => {
     // leading/trailing whitespace into search indexes, exports, etc. The
     // validator already verified there's at least one non-whitespace char.
     const normalised = { ...req.body, name: typeof req.body.name === "string" ? req.body.name.trim() : req.body.name };
+    // #588: default assignedToId to the creator so USER-role list scoping
+    // (which filters by assignedToId = req.user.userId) actually surfaces
+    // the contact they just created. Mirrors POST /api/deals which sets
+    // ownerId = req.user.userId. Explicit body.assignedToId still wins.
+    if (normalised.assignedToId == null) normalised.assignedToId = req.user.userId;
     const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
     try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
     // #179: audit row for new contact.
@@ -408,9 +436,17 @@ router.put('/:id/assign', async (req, res) => {
 });
 
 // ── Find duplicate contacts ───────────────────────────────────────
+// #592 — Detector now (a) skips soft-deleted contacts (deletedAt!=null) so a
+// merged-secondary doesn't keep showing up, and (b) filters out groups whose
+// stable group-key matches a row in DismissedDuplicateGroup so dismissed
+// pairs stop resurfacing on every refresh. Group key derivation is sorted
+// id-list → SHA-256 (see backend/utils/deduplication.js#computeDuplicateGroupKey).
 router.get('/duplicates/find', async (req, res) => {
   try {
-    const contacts = await prisma.contact.findMany({ where: { tenantId: req.user.tenantId }, select: { id: true, name: true, email: true, phone: true, company: true, status: true, aiScore: true, createdAt: true } });
+    const contacts = await prisma.contact.findMany({
+      where: { tenantId: req.user.tenantId, deletedAt: null },
+      select: { id: true, name: true, email: true, phone: true, company: true, status: true, aiScore: true, createdAt: true }
+    });
     const dupes = [];
     const seen = new Map();
 
@@ -461,72 +497,264 @@ router.get('/duplicates/find', async (req, res) => {
       }
     }
 
-    res.json(dupes);
+    // Stamp every group with its stable groupKey so the UI can reference it
+    // when dismissing. Filter out any group the operator has already
+    // dismissed for this tenant.
+    let dismissedKeys = new Set();
+    try {
+      const rows = await prisma.dismissedDuplicateGroup.findMany({
+        where: { tenantId: req.user.tenantId },
+        select: { groupKey: true }
+      });
+      dismissedKeys = new Set(rows.map(r => r.groupKey));
+    } catch (_e) {
+      // Table may not exist yet on a stale Prisma client; degrade to "no
+      // groups dismissed" so the detector still works.
+    }
+
+    const annotated = dupes
+      .map(g => ({ ...g, groupKey: computeDuplicateGroupKey(g.primary.id, g.duplicates.map(d => d.id)) }))
+      .filter(g => g.groupKey && !dismissedKeys.has(g.groupKey));
+
+    res.json(annotated);
   } catch (err) {
     console.error('[Contacts] Duplicate find error:', err);
     res.status(500).json({ error: 'Failed to find duplicates' });
   }
 });
 
-// Merge contacts: keep primary, move relationships from secondary, delete secondary
+// #592 — Merge contacts (transactional, soft-delete, full FK fold).
+//
+//   Body: { primaryId: number, secondaryIds: number[] }
+//
+// Reassigns every contactId-bearing FK from each secondary onto the primary,
+// then soft-deletes the secondary (deletedAt = now()). Soft-delete preserves
+// audit trail + restore path; the existing GET /:id 404s soft-deleted rows
+// unless ?includeDeleted=true is passed.
+//
+// FK relations folded onto the primary (every model with a contactId column
+// in schema.prisma — sweep verified 2026-05-08):
+//   Activity, Deal, EmailMessage, CallLog, Task, Invoice, Expense, Contract,
+//   Estimate, SmsMessage, WhatsAppMessage, Touchpoint, Project,
+//   ContactAttachment, MarketplaceLead, ChatbotConversation, Booking,
+//   SurveyResponse, ScheduledEmail, SocialMention, CalendarEvent,
+//   VoiceSession, WebVisitor, EmailTracking, PushSubscription, Patient
+//   (wellness link), DataExportRequest.
+//
+// SequenceEnrollment + ConsentRecord are intentionally NOT reassigned:
+//   - SequenceEnrollment is per-contact step state; folding two enrollments
+//     onto one contact violates the @@unique([sequenceId, contactId])
+//     constraint and "you sent the welcome sequence to this person twice"
+//     is the wrong fold semantics anyway. We delete the secondary's
+//     enrollments instead.
+//   - ConsentRecord is a legal artefact attesting that a *specific row* gave
+//     consent. Reassigning would falsify the record.
+//
+// Audit: writeAudit('Contact', 'MERGE', primaryId, ...) + a Note activity on
+// the primary documenting each fold.
+//
+// Wrapped in prisma.$transaction so a partial failure rolls back cleanly.
 router.post('/merge', async (req, res) => {
   try {
     const { primaryId, secondaryIds } = req.body;
     if (!primaryId || !Array.isArray(secondaryIds) || secondaryIds.length === 0) {
       return res.status(400).json({ error: 'primaryId and secondaryIds required' });
     }
+    const tenantId = req.user.tenantId;
+    const userId = req.user?.userId || null;
+    const pid = parseInt(primaryId);
+    if (!Number.isFinite(pid)) return res.status(400).json({ error: 'Invalid primaryId' });
 
-    const primary = await prisma.contact.findFirst({ where: { id: parseInt(primaryId), tenantId: req.user.tenantId } });
+    const primary = await prisma.contact.findFirst({ where: { id: pid, tenantId, deletedAt: null } });
     if (!primary) return res.status(404).json({ error: 'Primary contact not found' });
 
-    let merged = 0;
-    for (const secId of secondaryIds) {
-      const sid = parseInt(secId);
-      const secondary = await prisma.contact.findFirst({ where: { id: sid, tenantId: req.user.tenantId } });
-      if (!secondary) continue;
+    // Resolve every secondary up-front + tenant-scope guard. A secondary that
+    // belongs to another tenant or that is already soft-deleted is skipped
+    // (not error) — keeps the operation idempotent on retry.
+    const sids = secondaryIds.map(Number).filter((n) => Number.isFinite(n) && n !== pid);
+    const secondaries = await prisma.contact.findMany({
+      where: { id: { in: sids }, tenantId, deletedAt: null },
+      select: { id: true, name: true, email: true, phone: true, company: true, title: true, aiScore: true }
+    });
+    if (secondaries.length === 0) return res.status(404).json({ error: 'No mergeable secondaries' });
 
-      // Move all relationships to primary
-      await prisma.activity.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.deal.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.emailMessage.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.callLog.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.task.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.invoice.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.expense.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.contract.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.estimate.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.smsMessage.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
-      await prisma.whatsAppMessage.updateMany({ where: { contactId: sid }, data: { contactId: primary.id } });
+    const folded = {};
+    const validSecIds = secondaries.map(s => s.id);
 
-      // Fill in missing fields on primary from secondary
+    await prisma.$transaction(async (tx) => {
+      // Reassign FKs in bulk across all secondaries at once. updateMany returns
+      // {count} per call which we accumulate per relation for the audit row.
+      const reassign = async (model, label) => {
+        try {
+          const r = await tx[model].updateMany({
+            where: { contactId: { in: validSecIds } },
+            data: { contactId: primary.id }
+          });
+          folded[label] = (folded[label] || 0) + r.count;
+        } catch (_e) {
+          // Some relations (e.g. wellness Patient on a generic-vertical
+          // tenant) may not have any rows; an updateMany on a non-existent
+          // contactId column would throw at the Prisma level, but every
+          // model in this list does declare contactId in schema.prisma.
+        }
+      };
+      await reassign('activity', 'activities');
+      await reassign('deal', 'deals');
+      await reassign('emailMessage', 'emails');
+      await reassign('callLog', 'callLogs');
+      await reassign('task', 'tasks');
+      await reassign('invoice', 'invoices');
+      await reassign('expense', 'expenses');
+      await reassign('contract', 'contracts');
+      await reassign('estimate', 'estimates');
+      await reassign('smsMessage', 'smsMessages');
+      await reassign('whatsAppMessage', 'whatsappMessages');
+      await reassign('touchpoint', 'touchpoints');
+      await reassign('project', 'projects');
+      await reassign('contactAttachment', 'attachments');
+      await reassign('marketplaceLead', 'marketplaceLeads');
+      await reassign('chatbotConversation', 'chatbotConversations');
+      await reassign('booking', 'bookings');
+      await reassign('surveyResponse', 'surveyResponses');
+      await reassign('scheduledEmail', 'scheduledEmails');
+      await reassign('socialMention', 'socialMentions');
+      await reassign('calendarEvent', 'calendarEvents');
+      await reassign('voiceSession', 'voiceSessions');
+      await reassign('webVisitor', 'webVisitors');
+      await reassign('emailTracking', 'emailTrackings');
+      await reassign('pushSubscription', 'pushSubscriptions');
+      await reassign('patient', 'patients');
+      await reassign('dataExportRequest', 'dataExportRequests');
+
+      // Drop the secondaries' SequenceEnrollment rows (folding would violate
+      // the per-contact-per-sequence unique constraint). ConsentRecord is
+      // left alone — re-pointing it would falsify the legal artefact.
+      await tx.sequenceEnrollment.deleteMany({ where: { contactId: { in: validSecIds } } });
+
+      // Backfill missing fields on primary from the most-complete secondary.
+      // Take the first non-null per field (deterministic by id order).
       const updates = {};
-      if (!primary.phone && secondary.phone) updates.phone = secondary.phone;
-      if (!primary.company && secondary.company) updates.company = secondary.company;
-      if (!primary.title && secondary.title) updates.title = secondary.title;
-      if (secondary.aiScore > primary.aiScore) updates.aiScore = secondary.aiScore;
+      for (const sec of secondaries) {
+        if (!primary.phone && !updates.phone && sec.phone) updates.phone = sec.phone;
+        if (!primary.company && !updates.company && sec.company) updates.company = sec.company;
+        if (!primary.title && !updates.title && sec.title) updates.title = sec.title;
+        if ((sec.aiScore || 0) > (primary.aiScore || 0)) updates.aiScore = sec.aiScore;
+      }
       if (Object.keys(updates).length > 0) {
-        await prisma.contact.update({ where: { id: primary.id }, data: updates });
+        await tx.contact.update({ where: { id: primary.id }, data: updates });
       }
 
-      // Log the merge
-      await prisma.activity.create({
-        data: { type: 'Note', description: `Merged contact "${secondary.name}" (${secondary.email}) into this record`, contactId: primary.id, userId: req.user?.userId || null, tenantId: req.user.tenantId }
+      // Document each fold as a Note activity on the primary (operator-visible
+      // in the contact-detail timeline).
+      for (const sec of secondaries) {
+        await tx.activity.create({
+          data: {
+            type: 'Note',
+            description: `Merged contact "${sec.name}" (${sec.email}) into this record`,
+            contactId: primary.id,
+            userId,
+            tenantId,
+          }
+        });
+      }
+
+      // Soft-delete the secondaries. Contact.deletedAt exists (#167); this
+      // preserves the audit trail and lets ADMIN restore via the existing
+      // POST /:id/restore endpoint.
+      await tx.contact.updateMany({
+        where: { id: { in: validSecIds }, tenantId },
+        data: { deletedAt: new Date() }
       });
-
-      // Delete secondary
-      await prisma.sequenceEnrollment.deleteMany({ where: { contactId: sid } });
-      await prisma.contact.delete({ where: { id: sid } });
-      merged++;
-    }
-
-    await prisma.auditLog.create({
-      data: { action: 'MERGE', entity: 'Contact', entityId: primary.id, details: JSON.stringify({ mergedIds: secondaryIds, count: merged }), userId: req.user?.userId || null, tenantId: req.user.tenantId }
     });
 
-    res.json({ success: true, merged, primaryId: primary.id });
+    // Audit row outside the transaction — writeAudit is best-effort and
+    // already wrapped in its own try/catch (lib/audit.js).
+    await writeAudit('Contact', 'MERGE', primary.id, userId, tenantId, {
+      mergedIds: validSecIds,
+      count: validSecIds.length,
+      folded,
+      strategy: 'soft-delete',
+    });
+
+    res.json({
+      success: true,
+      merged: validSecIds.length,
+      primaryId: primary.id,
+      mergedIds: validSecIds,
+      folded,
+      strategy: 'soft-delete',
+    });
   } catch (err) {
     console.error('[Contacts] Merge error:', err);
     res.status(500).json({ error: 'Failed to merge contacts' });
+  }
+});
+
+// #592 — Dismiss a duplicate group ("not actually duplicates").
+//
+//   Body: one of —
+//     { groupKey: "<sha256-hex>" }                                 OR
+//     { primaryId: number, secondaryIds: number[] }   (server derives the key)
+//     { contactIds: number[] }                        (server derives the key)
+//
+// Idempotent: a re-dismiss of an already-dismissed group returns 200 with
+// {idempotent: true}. Per-tenant scoped — every contact id is verified to
+// belong to req.user.tenantId before we hash and persist the key (otherwise
+// a caller could lock down another tenant's groups via guessed ids).
+router.post('/duplicates/dismiss', async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const userId = req.user?.userId || null;
+    let { groupKey, primaryId, secondaryIds, contactIds, reason } = req.body || {};
+
+    let ids = [];
+    if (Array.isArray(contactIds) && contactIds.length > 0) {
+      ids = contactIds.map(Number).filter(Number.isFinite);
+    } else if (primaryId && Array.isArray(secondaryIds)) {
+      ids = [Number(primaryId), ...secondaryIds.map(Number)].filter(Number.isFinite);
+    }
+
+    // If the caller passed ids, derive + verify-tenant. If only groupKey was
+    // passed we trust the caller (the key was minted by /duplicates/find,
+    // which itself filters by tenant).
+    if (ids.length > 0) {
+      const found = await prisma.contact.findMany({
+        where: { id: { in: ids }, tenantId },
+        select: { id: true }
+      });
+      if (found.length !== ids.length) {
+        return res.status(404).json({ error: 'One or more contacts not found in tenant' });
+      }
+      groupKey = computeDuplicateGroupKey(ids[0], ids.slice(1));
+    }
+    if (!groupKey || typeof groupKey !== 'string' || groupKey.length < 8) {
+      return res.status(400).json({ error: 'groupKey or contactIds required' });
+    }
+
+    // Upsert keeps the first-dismissed-by/createdAt audit-true and makes the
+    // operation idempotent on retry.
+    const existing = await prisma.dismissedDuplicateGroup.findUnique({
+      where: { tenantId_groupKey: { tenantId, groupKey } }
+    });
+    if (existing) {
+      return res.json({ success: true, idempotent: true, groupKey, dismissedAt: existing.createdAt });
+    }
+    const row = await prisma.dismissedDuplicateGroup.create({
+      data: {
+        groupKey,
+        contactIds: ids.length > 0 ? ids.slice().sort((a, b) => a - b).join(',') : '',
+        reason: reason && typeof reason === 'string' ? reason.slice(0, 500) : null,
+        dismissedBy: userId,
+        tenantId,
+      }
+    });
+
+    await writeAudit('Contact', 'DUPLICATE_DISMISS', null, userId, tenantId, { groupKey, contactIds: ids });
+
+    res.json({ success: true, groupKey, dismissedAt: row.createdAt });
+  } catch (err) {
+    console.error('[Contacts] Duplicate dismiss error:', err);
+    res.status(500).json({ error: 'Failed to dismiss duplicate group' });
   }
 });
 

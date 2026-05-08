@@ -18,6 +18,13 @@ const RETENTION_ENTITY_MAP = {
   Activity: prisma.activity,
   SmsMessage: prisma.smsMessage,
   WhatsAppMessage: prisma.whatsAppMessage,
+  // #576 — clinical / medical record entities (wellness vertical).
+  Patient: prisma.patient,
+  Visit: prisma.visit,
+  Prescription: prisma.prescription,
+  ConsentForm: prisma.consentForm,
+  TreatmentPlan: prisma.treatmentPlan,
+  MedicalAttachment: prisma.attachment,
 };
 
 // ──────────────────────────────────────────────────────────────────
@@ -347,12 +354,37 @@ router.put('/retention-policies', async (req, res) => {
       if (isNaN(retainDays) || retainDays < 0) continue;
       const isActive = item.isActive == null ? true : !!item.isActive;
 
+      // #576 — capture before-state for the audit-log diff.
+      const before = await prisma.retentionPolicy.findUnique({
+        where: { tenantId_entity: { tenantId, entity } },
+      }).catch(() => null);
+
       const upserted = await prisma.retentionPolicy.upsert({
         where: { tenantId_entity: { tenantId, entity } },
         update: { retainDays, isActive },
         create: { tenantId, entity, retainDays, isActive },
       });
       results.push(upserted);
+
+      // #576 — audit-log every retention-policy change so compliance
+      // evidence is verifiable. Skip when nothing changed.
+      const changed = !before
+        || before.retainDays !== upserted.retainDays
+        || before.isActive !== upserted.isActive;
+      if (changed) {
+        await writeAudit(
+          'RetentionPolicy',
+          before ? 'UPDATE' : 'CREATE',
+          upserted.id,
+          req.user.userId,
+          tenantId,
+          {
+            entity,
+            from: before ? { retainDays: before.retainDays, isActive: before.isActive } : null,
+            to: { retainDays: upserted.retainDays, isActive: upserted.isActive },
+          }
+        );
+      }
     }
     res.json(results);
   } catch (err) {

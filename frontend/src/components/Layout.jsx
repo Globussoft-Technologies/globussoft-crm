@@ -5,15 +5,119 @@ import { Outlet, useNavigate } from 'react-router-dom';
 // to /profile. Logout is already a separate sibling button, so the simplest
 // honest fix is to drop the chevron rather than add a dropdown that
 // duplicates the logout button.
-import { LogOut, Menu } from 'lucide-react';
+import { LogOut, Menu, Building2, ChevronDown } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Omnibar from './Omnibar';
 import Presence from './Presence';
 import Softphone from './Softphone';
 import NotificationBell from './NotificationBell';
+import Avatar from './Avatar';
 import { AuthContext } from '../App';
-import { fetchApi } from '../utils/api';
+import { fetchApi, setActiveTenantId } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
+
+// #555 (HI-06): explicit tenant switcher. Pre-fix, the SPA's tenant
+// context flipped silently based on URL pathname (/dashboard vs
+// /wellness) — no switcher in the chrome, no audit trail, localStorage
+// could disagree with the rendered shell. The dropdown below renders
+// when the caller has access to MORE THAN ONE tenant (today: never,
+// because User.tenantId is single-valued; future-proofed for when a
+// UserTenant join table lands). Single-tenant users see no UI.
+function TenantSwitcher({ tenant, setTenant, setUser, setToken }) {
+  const navigate = useNavigate();
+  const [tenants, setTenants] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetchApi('/api/auth/tenants', { silent: true })
+      .then((data) => setTenants(Array.isArray(data?.tenants) ? data.tenants : []))
+      .catch(() => setTenants([]));
+  }, []);
+
+  if (!tenants || tenants.length < 2) return null; // single-tenant: no UI
+
+  const switchTo = async (t) => {
+    if (busy) return;
+    if (t.id === tenant?.id) { setOpen(false); return; }
+    setBusy(true);
+    try {
+      const res = await fetchApi('/api/auth/tenant-switch', {
+        method: 'POST',
+        body: JSON.stringify({ toTenantId: t.id }),
+      });
+      if (res?.token) setToken(res.token);
+      if (res?.tenant) {
+        setTenant(res.tenant);
+        setActiveTenantId(res.tenant.id);
+        // Re-fetch /me so user.role + features pick up tenant-scoped values
+        try {
+          const me = await fetchApi('/api/auth/me', { silent: true });
+          if (me) setUser(me);
+        } catch { /* leave the existing user if /me fails */ }
+        navigate(res.tenant.vertical === 'wellness' ? '/wellness' : '/dashboard', { replace: true });
+      }
+    } catch { /* fetchApi already surfaced a toast */ }
+    finally {
+      setBusy(false);
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div data-testid="tenant-switcher" style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Switch tenant"
+        style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          background: 'none', border: '1px solid var(--border-color)',
+          color: 'var(--text-primary)', borderRadius: 8,
+          padding: '6px 10px', cursor: 'pointer', fontSize: '0.85rem',
+        }}
+      >
+        <Building2 size={14} />
+        <span>{tenant?.name || 'Tenant'}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          aria-label="Available tenants"
+          style={{
+            position: 'absolute', top: 'calc(100% + 4px)', right: 0,
+            background: 'var(--surface-color)', border: '1px solid var(--border-color)',
+            borderRadius: 8, listStyle: 'none', margin: 0, padding: '4px 0',
+            minWidth: 220, boxShadow: '0 8px 20px rgba(0,0,0,0.15)', zIndex: 50,
+          }}
+        >
+          {tenants.map((t) => (
+            <li key={t.id} role="option" aria-selected={t.id === tenant?.id}>
+              <button
+                type="button"
+                onClick={() => switchTo(t)}
+                disabled={busy}
+                style={{
+                  width: '100%', textAlign: 'left',
+                  background: t.id === tenant?.id ? 'rgba(255,255,255,0.05)' : 'none',
+                  border: 'none', color: 'var(--text-primary)',
+                  padding: '8px 12px', cursor: busy ? 'wait' : 'pointer',
+                  fontSize: '0.85rem',
+                }}
+              >
+                {t.name}
+                {t.vertical === 'wellness' && <span style={{ marginLeft: 6, fontSize: '0.7rem', color: 'var(--text-secondary)' }}>(wellness)</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 // T2.1: drawer breakpoint. Mirror of the @media (max-width: 899px) rule in
 // frontend/src/styles/responsive.css. CSS owns the visual contract; JS uses
@@ -22,7 +126,7 @@ import { setupPush } from '../utils/pushSetup';
 const MOBILE_BREAKPOINT_PX = 900;
 
 const Layout = () => {
-  const { user, setUser, setToken, token, tenant } = useContext(AuthContext);
+  const { user, setUser, setToken, token, tenant, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === 'wellness';
@@ -178,6 +282,7 @@ const Layout = () => {
           >
             <Menu size={18} />
           </button>
+          <TenantSwitcher tenant={tenant} setTenant={setTenant} setUser={setUser} setToken={setToken} />
           <NotificationBell />
           <button
             onClick={() => navigate('/profile')}
@@ -191,14 +296,14 @@ const Layout = () => {
             onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
             onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
           >
-            <div style={{
-              width: 28, height: 28, borderRadius: '50%',
-              background: 'linear-gradient(135deg, var(--accent-color), var(--primary-color))',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '0.75rem', fontWeight: 'bold', color: '#fff',
-            }}>
-              {(user?.name || user?.email || '?').charAt(0).toUpperCase()}
-            </div>
+            {/* #642: shared Avatar primitive renders a deterministic-coloured
+                circle + role pip so signed-in operators can tell at a glance
+                whether they're Owner / Admin / Manager / User. */}
+            <Avatar
+              name={user?.name || user?.email || 'User'}
+              size={28}
+              roleBadge={user?.role || undefined}
+            />
             <span>{user?.name || user?.email || 'User'}</span>
           </button>
           <button
@@ -221,6 +326,29 @@ const Layout = () => {
         <main className="animate-fade-in" style={{ flex: 1, overflowY: 'auto', padding: '0', backgroundColor: 'transparent' }}>
           <Outlet />
         </main>
+        {/* #634: build identifier — small, low-contrast, app-shell footer.
+            Version is sourced from backend/package.json at build time (see
+            vite.config.js define block) so it stays aligned with /api/health.
+            Git SHA is git rev-parse --short HEAD at build time, omitted in
+            environments where git isn't available. */}
+        <footer
+          data-testid="app-build-footer"
+          style={{
+            flexShrink: 0,
+            padding: '4px 16px',
+            textAlign: 'right',
+            borderTop: '1px solid var(--border-color)',
+            background: 'var(--surface-color)',
+            color: 'var(--text-secondary)',
+            fontSize: '0.7rem',
+            opacity: 0.7,
+          }}
+        >
+          <small>
+            v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0'}
+            {typeof __APP_GIT_SHA__ !== 'undefined' && __APP_GIT_SHA__ ? ` · ${__APP_GIT_SHA__}` : ''}
+          </small>
+        </footer>
       </div>
       <Omnibar />
       {!isWellness && <Softphone />}

@@ -207,7 +207,15 @@ export default function Channels() {
       await fetchApi(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       notify.success('Configuration saved!');
       await loadConfigs(); // round-trip: re-read so the UI reflects what's in the DB
-    } catch { notify.error('Failed to save'); }
+    } catch {
+      // #590 / #591: fetchApi already auto-toasts the server's error
+      // message (the canonical RBAC denial copy on 403, the validation
+      // message on 4xx, etc.). The previous catch handler emitted a
+      // bare "Failed to save" — under Manager that masked an RBAC
+      // denial as a transient save failure, so users would retry
+      // repeatedly instead of seeing the real reason. Swallow here so
+      // the auto-toast stays on screen.
+    }
   };
 
   const templateEndpointBase = () =>

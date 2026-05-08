@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Shield, Eye, EyeOff, Edit, Save, AlertTriangle, Check } from 'lucide-react';
+import { Shield, Eye, EyeOff, Edit, Save, Check } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
 const ROLES = ['ADMIN', 'MANAGER', 'USER'];
@@ -172,22 +172,9 @@ export default function FieldPermissions() {
         </div>
       </header>
 
-      {/* Restart notice */}
-      <div className="card" style={{
-        padding: '0.9rem 1rem',
-        marginBottom: '1.25rem',
-        borderLeft: '4px solid #f59e0b',
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: '0.75rem',
-      }}>
-        <AlertTriangle size={18} color="#f59e0b" style={{ marginTop: '2px', flexShrink: 0 }} />
-        <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-          Restricting field access requires app restart for changes to fully apply.
-          Rules are stored immediately, but existing route handlers must adopt the
-          <code style={{ margin: '0 0.3rem' }}>fieldFilter</code> middleware before enforcement takes effect.
-        </div>
-      </div>
+      {/* #577 — banner removed: fieldFilter is now adopted by every route
+          shown in the entity tabs (Deal, Contact, Invoice, Quote). Rules
+          take effect on the next request, no restart required. */}
 
       {error && (
         <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', borderLeft: '4px solid #ef4444', color: '#ef4444', fontSize: '0.88rem' }}>

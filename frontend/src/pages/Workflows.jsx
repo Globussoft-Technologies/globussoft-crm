@@ -6,6 +6,7 @@ import 'reactflow/dist/style.css';
 import { Save, Play, Zap, Database, Mail } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { currencySymbol } from '../utils/money';
 
 const initialNodes = [
   { id: '1', type: 'input', data: { label: 'TRIGGER: Deal Stage → Won' }, position: { x: 250, y: 50 }, style: { background: '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 'bold' } },
@@ -85,7 +86,7 @@ export default function Workflows() {
           theme="dark"
         >
           <Panel position="top-left" style={{ display: 'flex', gap: '1rem', background: 'var(--surface-color)', padding: '0.75rem', borderRadius: '8px', backdropFilter: 'blur(10px)', border: '1px solid var(--border-color)' }}>
-            <button onClick={() => addNode('default', 'CONDITION: Value > $10,000', '#f59e0b')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Database size={16} /> Data Check</button>
+            <button onClick={() => addNode('default', `CONDITION: Value > ${currencySymbol()}10,000`, '#f59e0b')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Database size={16} /> Data Check</button>
             <button onClick={() => addNode('output', 'ACTION: Issue Final Invoice', '#3b82f6')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Mail size={16} /> Emit Invoice</button>
             <button onClick={() => addNode('output', 'WEBHOOK: Dispatch Payload', '#ec4899')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Zap size={16} /> POST Call</button>
           </Panel>

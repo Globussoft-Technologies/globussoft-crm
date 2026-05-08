@@ -263,9 +263,19 @@ const Sidebar = ({
     // Generic invalidation event — any module can emit and we re-fetch.
     socket.on("sidebar_counts_changed", () => refreshCounts());
 
+    // #625: cross-component invalidation via DOM CustomEvent. Pages that
+    // mutate tasks/tickets/etc. dispatch `sidebar:counts-changed` on window
+    // to force the badge to re-fetch — the existing socket event above only
+    // covers `*_created` (no server emit on `*_completed` today). Listening
+    // here means a Tasks-page completion ripples into the Sidebar without a
+    // page reload (the audit-trail bug in #625).
+    const onLocalInvalidate = () => refreshCounts();
+    window.addEventListener("sidebar:counts-changed", onLocalInvalidate);
+
     return () => {
       clearInterval(intervalId);
       socket.disconnect();
+      window.removeEventListener("sidebar:counts-changed", onLocalInvalidate);
     };
     // Depend only on user?.id — a primitive that ONLY changes on real
     // login/logout. refreshCounts is now a stable useCallback (deps: []).
@@ -273,6 +283,18 @@ const Sidebar = ({
     // is exactly the bug the storm-fix above unwound.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, refreshCounts]);
+
+  // #625: re-fetch sidebar counters when the route changes. Without this,
+  // a user who marks a task complete on /tasks navigates to /contacts and
+  // sees the stale pre-mutation count in the sidebar (the original mount
+  // fetch + 60s polling alone aren't enough for cross-page mutations that
+  // don't have a backend socket emit). Cheap — one fetch per navigation,
+  // and refreshCounts itself is a stable useCallback so it won't loop.
+  useEffect(() => {
+    if (!user) return;
+    refreshCounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
 
   // #151: persist sidebar scroll across re-renders. The browser usually does this
   // for free, but route-driven re-renders sometimes cause the nav to reset to top
@@ -295,6 +317,20 @@ const Sidebar = ({
     ? { ...sectionLabel, color: brandColor }
     : sectionLabel;
 
+  // #631: defensive active-state. Some users reported /deal-insights,
+  // /document-templates, /reports rendering without the active highlight
+  // even though NavLink's isActive should catch them. We OR the NavLink
+  // signal with an explicit segment-boundary startsWith check on the
+  // current pathname so any future NavLink behavior shift (e.g. someone
+  // adding `end` for a sibling) can't silently regress these top-level
+  // entries. The segment boundary (next char is `/` or end-of-string)
+  // prevents `/reports` from incorrectly matching `/reports-foo`.
+  const segmentMatches = (current, target) => {
+    if (current === target) return true;
+    if (!current.startsWith(target)) return false;
+    const tail = current[target.length];
+    return tail === "/" || tail === undefined;
+  };
   const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, count, matchPaths = [] }) => {
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
@@ -303,7 +339,8 @@ const Sidebar = ({
         to={to}
         className={({ isActive }) => {
           const isPathMatch = matchPaths.some(path => location.pathname === path);
-          const active = isActive || isPathMatch;
+          const isSegmentMatch = segmentMatches(location.pathname, to);
+          const active = isActive || isPathMatch || isSegmentMatch;
           return `nav-link ${active ? "active" : ""}`;
         }}
         style={navStyle}

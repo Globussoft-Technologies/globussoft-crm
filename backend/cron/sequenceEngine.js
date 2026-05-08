@@ -461,4 +461,6 @@ module.exports = {
   initSequenceCron,
   tickSequenceEngine,
   processInboundReplies, // exported for manual / test triggering
+  processStep, // #616: exported so unit tests can pin step dispatch shape
+  processStepListEnrollment, // #616: exported for wellness trigger unit tests
 };

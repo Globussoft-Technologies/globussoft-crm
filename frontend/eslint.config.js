@@ -30,7 +30,12 @@ export default [
     files: ['src/**/*.{js,jsx}'],
     languageOptions: {
       ecmaVersion: 2020,
-      globals: globals.browser,
+      globals: {
+        ...globals.browser,
+        // #634: vite `define` injects these at build time (see vite.config.js).
+        __APP_VERSION__: 'readonly',
+        __APP_GIT_SHA__: 'readonly',
+      },
       parserOptions: {
         ecmaVersion: 'latest',
         ecmaFeatures: { jsx: true },

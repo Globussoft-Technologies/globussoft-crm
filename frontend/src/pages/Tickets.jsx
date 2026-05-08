@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDate } from '../utils/date';
 import { Ticket, Plus, Trash2, AlertTriangle } from 'lucide-react';
 
 const PRIORITY_CONFIG = {
@@ -217,7 +218,8 @@ export default function Tickets() {
             </p>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+              {/* #633: stable-table — pins tableLayout=fixed so row hover never jumps column widths. */}
+              <table className="stable-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                     {['ID', 'Subject', 'Status', 'Priority', 'Assignee', 'Created', 'Actions'].map(h => (
@@ -261,7 +263,7 @@ export default function Tickets() {
                         {ticket.assignee ? (ticket.assignee.name || ticket.assignee.email) : '—'}
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                        {new Date(ticket.createdAt).toLocaleDateString()}
+                        {formatDate(ticket.createdAt)}
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
                         <button

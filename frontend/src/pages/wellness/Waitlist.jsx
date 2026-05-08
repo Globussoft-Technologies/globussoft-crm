@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Trash2, CheckCircle2, Clock, XCircle, UserPlus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { formatDate } from '../../utils/date';
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All', icon: null },
@@ -235,7 +236,7 @@ export default function Waitlist() {
                         {w.status}
                       </span>
                     </td>
-                    <td style={tdStyle}>{new Date(w.createdAt).toLocaleDateString('en-IN')}</td>
+                    <td style={tdStyle}>{formatDate(w.createdAt)}</td>
                     <td style={tdStyle}>{w.offeredAt ? new Date(w.offeredAt).toLocaleString('en-IN') : '—'}</td>
                     <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                       {w.status === 'waiting' && (

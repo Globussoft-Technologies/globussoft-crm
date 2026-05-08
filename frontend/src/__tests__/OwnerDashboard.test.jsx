@@ -51,10 +51,11 @@ const dashboardJson = {
   totals: { patients: 250, services: 105, locations: 1 },
 };
 
-function setupFetch(locations) {
+function setupFetch(locations, pnl = { totalRevenue: 1201900, totals: { revenue: 1201900 }, rows: [] }) {
   fetchApi.mockImplementation((url) => {
     if (url.includes('/api/wellness/locations')) return Promise.resolve(locations);
     if (url.includes('/api/wellness/dashboard')) return Promise.resolve(dashboardJson);
+    if (url.includes('/api/wellness/reports/pnl-by-service')) return Promise.resolve(pnl);
     return Promise.resolve({});
   });
 }
@@ -109,5 +110,18 @@ describe('<OwnerDashboard />', () => {
     await waitFor(() => expect(screen.getByText(/Today's appointments/i)).toBeInTheDocument());
     expect(screen.getByRole('option', { name: /All locations/i })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Patna/i })).toBeInTheDocument();
+  });
+
+  // #565 (HI-16): the dashboard's "Revenue this month" KPI now reads
+  // from the canonical /api/wellness/reports/pnl-by-service endpoint
+  // (totalRevenue scalar) so it agrees with /wellness/reports.
+  it('fetches /pnl-by-service and renders its totalRevenue', async () => {
+    setupFetch([{ id: 1, name: 'Ranchi' }], { totalRevenue: 1201900, totals: { revenue: 1201900 }, rows: [] });
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText(/Revenue this month/i)).toBeInTheDocument());
+    expect(screen.getByText(/₹12,01,900/)).toBeInTheDocument();
+    // The canonical endpoint was hit with a from/to query window.
+    const calls = fetchApi.mock.calls.map((c) => c[0]);
+    expect(calls.some((u) => /\/api\/wellness\/reports\/pnl-by-service\?.*from=/.test(u))).toBe(true);
   });
 });

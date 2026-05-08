@@ -107,8 +107,10 @@ describe('<Dashboard />', () => {
     expect(screen.getByText('$1,200,000,000')).toBeInTheDocument();
     // Total Deals tile reflects stats.totalDeals.
     expect(screen.getByText('5381')).toBeInTheDocument();
-    // Conversion Rate: round(wonCount / totalDeals * 100) = round(375/5381 * 100) = 7%
-    expect(screen.getByText('7%')).toBeInTheDocument();
+    // #639 — Conversion Rate is now formatted by formatPercent (1 decimal,
+    // canonical "0.0%"). 375/5381 * 100 ≈ 6.97 → "7.0%". Pre-#639 this was
+    // Math.round-d to "7%".
+    expect(screen.getByText('7.0%')).toBeInTheDocument();
   });
 
   it('Recent Deals widget reads from /api/deals?limit=10 (separate fetchApi call)', async () => {
@@ -167,11 +169,12 @@ describe('<Dashboard />', () => {
     expect(screen.getAllByText('$0').length).toBeGreaterThanOrEqual(2);
     // Total Contacts + Total Deals — plain "0".
     expect(screen.getAllByText('0').length).toBeGreaterThanOrEqual(2);
-    // Conversion Rate.
-    expect(screen.getByText('0%')).toBeInTheDocument();
-    // No NaN / em-dash leaked into the KPI tiles.
+    // Conversion Rate. #639 canonical 1-decimal format → "0.0%".
+    expect(screen.getByText('0.0%')).toBeInTheDocument();
+    // No NaN leaked into the KPI tiles. Note: em-dash IS the canonical
+    // formatPercent fallback for null/undefined, but a zero-deals tenant
+    // computes a real numeric 0 (not null) so we still expect "0.0%".
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
-    expect(screen.queryByText('—')).not.toBeInTheDocument();
   });
 
   it('Recent Deals widget shows "No deals in pipeline." when /api/deals returns []', async () => {

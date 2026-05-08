@@ -182,6 +182,32 @@ describe('verifyToken', () => {
     expect(req.user.tenantId).toBe(1);
   });
 
+  // #555 (HI-06): the SPA's tenant switcher mirrors the chosen tenantId
+  // into the X-Active-Tenant header on every API call. Today the only
+  // legal value is the JWT's own tenantId (single-tenant data model);
+  // cross-tenant values are silently ignored so a stale localStorage
+  // value from a previous session can't 401 the user.
+  test('X-Active-Tenant matching the JWT tenantId is mirrored into req.user.activeTenantId', async () => {
+    const token = jwt.sign({ userId: 7, role: 'USER', tenantId: 3 }, SECRET);
+    const { req, res, next } = makeReqResNext({
+      headers: { authorization: `Bearer ${token}`, 'x-active-tenant': '3' },
+    });
+    await verifyToken(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user.activeTenantId).toBe(3);
+  });
+
+  test('X-Active-Tenant NOT matching the JWT tenantId is silently ignored', async () => {
+    const token = jwt.sign({ userId: 7, role: 'USER', tenantId: 3 }, SECRET);
+    const { req, res, next } = makeReqResNext({
+      headers: { authorization: `Bearer ${token}`, 'x-active-tenant': '99' },
+    });
+    await verifyToken(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user.activeTenantId).toBeUndefined();
+    expect(req.user.tenantId).toBe(3);
+  });
+
   test('returns 401 Session revoked when jti is in RevokedToken', async () => {
     findUniqueMock.mockResolvedValueOnce({ id: 42 });
     const token = jwt.sign(
@@ -264,7 +290,14 @@ describe('verifyRole', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
-  test('403 when role does not match', () => {
+  // #590 / #591: canonical RBAC denial envelope. Pre-fix, three
+  // different denial strings shipped — verifyRole's "Insufficient Role
+  // Permissions. System Admin Required." leaked the role name "System
+  // Admin" (enumeration-helpful) and was inconsistent with
+  // verifyWellnessRole's separate copy. Now both gates emit the SAME
+  // neutral message (no role-taxonomy leakage) plus a stable code so
+  // SDKs / frontend / specs can distinguish RBAC from generic 403s.
+  test('403 with canonical RBAC_DENIED envelope when role does not match (#590 / #591)', () => {
     const mw = verifyRole(['ADMIN']);
     const { req, res, next } = makeReqResNext({
       user: { userId: 1, role: 'USER' },
@@ -272,16 +305,30 @@ describe('verifyRole', () => {
     mw(req, res, next);
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json).toHaveBeenCalledWith({
-      error: 'Insufficient Role Permissions. System Admin Required.',
+      error:
+        "You don't have permission to perform this action. Contact your administrator.",
+      code: 'RBAC_DENIED',
     });
+    // No role-taxonomy leakage — body must NOT mention internal role
+    // tokens ("System Admin", "ADMIN", "wellness role", "doctor", etc.)
+    // per #591. The neutral copy contains the word "administrator"
+    // which is the user-facing escalation path, not a role-token —
+    // we explicitly check for the leaked taxonomy strings.
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).not.toMatch(/system admin|wellness role|\bADMIN\b|\bMANAGER\b|\bdoctor\b|\bprofessional\b|\btelecaller\b|\bhelper\b/i);
     expect(next).not.toHaveBeenCalled();
   });
 
-  test('403 when req.user is null', () => {
+  test('403 with canonical RBAC_DENIED envelope when req.user is null (#590 / #591)', () => {
     const mw = verifyRole(['ADMIN']);
     const { req, res, next } = makeReqResNext({ user: null });
     mw(req, res, next);
     expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error:
+        "You don't have permission to perform this action. Contact your administrator.",
+      code: 'RBAC_DENIED',
+    });
     expect(next).not.toHaveBeenCalled();
   });
 

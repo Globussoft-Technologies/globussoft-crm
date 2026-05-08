@@ -167,16 +167,35 @@ router.all("/staff/*", wellnessNamespacedRedirect("/api/staff"));
 router.all("/audit", wellnessNamespacedRedirect("/api/audit"));
 router.all("/audit/*", wellnessNamespacedRedirect("/api/audit"));
 
-// Gap #22: Auto-credit loyalty points on completed visits.
-// Earn rule: 10% of amountCharged (floored). Idempotent — only one 'earned'
+// Gap #22 / #614: Auto-credit loyalty points on completed visits.
+// Earn rule reads from LoyaltyConfig (per-tenant): earnPerVisit (flat) +
+// (earnPercentOfSpend × amount/100) + (earnPerCurrencyUnit × amount). Defaults
+// preserve the original "10% of amountCharged" behaviour byte-identically when
+// no LoyaltyConfig row exists. Idempotent — only one 'earned'
 // LoyaltyTransaction per visitId. Failures are swallowed so the visit save
 // is never rolled back by a loyalty issue.
 async function maybeAutoCreditLoyalty(visit, tenantId) {
   try {
     if (!visit || visit.status !== "completed") return;
-    const amt = parseFloat(visit.amountCharged);
-    if (!amt || amt <= 0) return;
-    const points = Math.floor(amt * 0.1);
+    // Load tenant's earn rules; if no row, fall back to historic 10% rule.
+    let cfg;
+    try {
+      cfg = await prisma.loyaltyConfig.findUnique({ where: { tenantId } });
+    } catch {
+      cfg = null; // schema not yet pushed — keep old behaviour
+    }
+    const autoEnabled = cfg ? cfg.autoEarnEnabled !== false : true;
+    if (!autoEnabled) return;
+    const earnPerVisit = cfg?.earnPerVisit ?? 0;
+    const earnPercent = cfg?.earnPercentOfSpend ?? 10;
+    const earnPerUnit = cfg?.earnPerCurrencyUnit ?? 0;
+
+    const amt = parseFloat(visit.amountCharged) || 0;
+    let points = earnPerVisit;
+    if (amt > 0) {
+      points += Math.floor((amt * earnPercent) / 100);
+      points += Math.floor(amt * earnPerUnit);
+    }
     if (points <= 0) return;
     // Idempotency: skip if an 'earned' row already exists for this visit
     const existing = await prisma.loyaltyTransaction.findFirst({
@@ -190,7 +209,7 @@ async function maybeAutoCreditLoyalty(visit, tenantId) {
         tenantId,
         type: "earned",
         points,
-        reason: `Visit #${visit.id} (auto 10% earn)`,
+        reason: `Visit #${visit.id} (auto earn)`,
         visitId: visit.id,
       },
     });
@@ -307,6 +326,11 @@ router.get("/patients", phiReadGate, async (req, res) => {
       ];
     }
     if (locationId) where.locationId = parseInt(locationId);
+    // #628: hide soft-deleted patients from default list. Admin/manager
+    // can opt in via ?includeDeleted=1 for compliance / restore views.
+    if (req.query.includeDeleted !== '1' && req.query.includeDeleted !== 'true') {
+      where.deletedAt = null;
+    }
     const [patients, total] = await Promise.all([
       prisma.patient.findMany({
         where,
@@ -680,13 +704,18 @@ router.post("/patients", phiWriteGate, async (req, res) => {
     // #401: compute normalizedPhone for the @@unique(tenantId,
     // normalizedPhone) gate. Reuses the existing helper so dedup
     // semantics match contacts + marketplace leads.
-    const { normalizePhone } = require("../utils/deduplication");
+    // #595: canonicalise the stored display `phone` to E.164
+    // (`+919876543210`). Auto-dialer / SMS / WhatsApp keys all
+    // require E.164; falling back to the raw value on un-formattable
+    // input keeps non-IN demo data un-broken.
+    const { normalizePhone, toE164 } = require("../utils/deduplication");
     const normalizedPhone = phone ? normalizePhone(phone) : null;
+    const e164Phone = phone ? toE164(phone) || phone : null;
     const patient = await prisma.patient.create({
       data: {
         name: normalisedName,
         email,
-        phone,
+        phone: e164Phone,
         normalizedPhone,
         dob: dob ? new Date(dob) : null,
         gender,
@@ -773,9 +802,11 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
     // touches phone. Without this, an edit-phone flow would leave the
     // dedup gate's index pointing at the OLD phone — second create
     // attempt with the new phone would slip past the constraint.
+    // #595: also canonicalise the stored display value to E.164.
     if (req.body.phone !== undefined) {
-      const { normalizePhone } = require("../utils/deduplication");
+      const { normalizePhone, toE164 } = require("../utils/deduplication");
       data.normalizedPhone = req.body.phone ? normalizePhone(req.body.phone) : null;
+      data.phone = req.body.phone ? toE164(req.body.phone) || req.body.phone : null;
     }
 
     const updated = await prisma.patient.update({ where: { id }, data });
@@ -829,28 +860,69 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
     }
     const existing = await prisma.patient.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Patient not found" });
-
-    await prisma.patient.delete({ where: { id } });
-
-    // #179 audit pattern — patient name only, no email/phone PII in the blob.
-    await writeAudit('Patient', 'DELETE', id, req.user.userId, req.user.tenantId, {
-      patientName: existing.name,
-    });
-
-    res.json({ success: true, id });
-  } catch (e) {
-    // Prisma FK Restrict — patient has clinical children that would be orphaned.
-    if (e && e.code === "P2003") {
+    // #628 — soft-delete: set deletedAt instead of cascade-orphaning
+    // visits/Rx/consents. Already-soft-deleted rows return 409.
+    if (existing.deletedAt) {
       return res.status(409).json({
-        error: "Patient has visits / prescriptions / consents / treatment plans on file. Resolve those first or use the GDPR retention flow.",
-        code: "PATIENT_HAS_CHILDREN",
+        error: "Patient is already soft-deleted",
+        code: "PATIENT_ALREADY_DELETED",
       });
     }
+
+    const updated = await prisma.patient.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+
+    // #179 audit pattern — patient name only, no email/phone PII in the blob.
+    await writeAudit('Patient', 'SOFT_DELETE', id, req.user.userId, req.user.tenantId, {
+      patientName: existing.name,
+      deletedAt: updated.deletedAt,
+    });
+
+    res.json({ success: true, id, deletedAt: updated.deletedAt });
+  } catch (e) {
     if (e && e.code === "P2025") {
       return res.status(404).json({ error: "Patient not found" });
     }
     console.error("[wellness] delete patient error:", e.message);
     res.status(500).json({ error: "Failed to delete patient" });
+  }
+});
+
+// #628 — Restore a soft-deleted patient. Admin-only; clears deletedAt so
+// the row reappears in default lists. No-op (200 idempotent) if already
+// restored. Pairs with the soft-delete handler above; hard-purge runs
+// through the /privacy retention engine (#576) after the tombstone window.
+router.post("/patients/:id/restore", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ error: "Invalid patient id", code: "INVALID_ID" });
+    }
+    const existing = await prisma.patient.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Patient not found" });
+    if (!existing.deletedAt) {
+      return res.status(200).json({ success: true, id, idempotent: true });
+    }
+
+    const updated = await prisma.patient.update({
+      where: { id },
+      data: { deletedAt: null },
+    });
+
+    await writeAudit('Patient', 'RESTORE', id, req.user.userId, req.user.tenantId, {
+      patientName: existing.name,
+      restoredFrom: existing.deletedAt,
+    });
+
+    res.json({ success: true, id, patient: updated });
+  } catch (e) {
+    if (e && e.code === "P2025") {
+      return res.status(404).json({ error: "Patient not found" });
+    }
+    console.error("[wellness] restore patient error:", e.message);
+    res.status(500).json({ error: "Failed to restore patient" });
   }
 });
 
@@ -1053,6 +1125,28 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     // by (visitId, type='earned'). Failures must not roll back the visit.
     await maybeAutoCreditLoyalty(visit, req.user.tenantId);
 
+    // #616: emit wellness sequence triggers. visit.scheduled fires on every
+    // create (covers booking-confirmation drips); visit.completed also fires
+    // when a same-row create lands as status='completed' (the default). Failure
+    // here MUST NOT fail the visit-create response.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      emitEvent(
+        "visit.scheduled",
+        { visitId: visit.id, patientId: visit.patientId, serviceId: visit.serviceId, doctorId: visit.doctorId, status: visit.status, visitDate: visit.visitDate },
+        req.user.tenantId,
+        req.io
+      );
+      if (visit.status === "completed") {
+        emitEvent(
+          "visit.completed",
+          { visitId: visit.id, patientId: visit.patientId, serviceId: visit.serviceId, doctorId: visit.doctorId, amountCharged: visit.amountCharged },
+          req.user.tenantId,
+          req.io
+        );
+      }
+    } catch (_e) { /* event bus optional */ }
+
     // #179: audit Visit creation.
     await writeAudit('Visit', 'CREATE', visit.id, req.user.userId, req.user.tenantId, {
       patientId: visit.patientId,
@@ -1136,6 +1230,21 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
       } catch (hookErr) {
         console.error("[wellness] waitlist auto-offer hook failed:", hookErr.message);
       }
+    }
+
+    // #616: emit visit.completed when this update transitions the row INTO
+    // completed (not on a re-save of an already-completed visit). Failure
+    // here MUST NOT fail the user-facing response.
+    if (data.status === "completed" && existing.status !== "completed") {
+      try {
+        const { emitEvent } = require("../lib/eventBus");
+        emitEvent(
+          "visit.completed",
+          { visitId: updated.id, patientId: updated.patientId, serviceId: updated.serviceId, doctorId: updated.doctorId, amountCharged: updated.amountCharged },
+          req.user.tenantId,
+          req.io
+        );
+      } catch (_e) { /* event bus optional */ }
     }
 
     // #179: audit visit update. Status transitions (booked → in-treatment →
@@ -1480,6 +1589,18 @@ router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"])
       templateName: consent.templateName,
       signatureLength: signatureSvg.length,
     });
+
+    // #616: emit consent.signed. Failure here MUST NOT fail the response.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      emitEvent(
+        "consent.signed",
+        { consentId: consent.id, patientId: consent.patientId, serviceId: consent.serviceId, templateName: consent.templateName },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) { /* event bus optional */ }
+
     res.status(201).json(consent);
   } catch (e) {
     console.error("[wellness] create consent error:", e.message);
@@ -1522,6 +1643,122 @@ router.put("/consents/:id", verifyWellnessRole(["admin"]), async (req, res) => {
   } catch (e) {
     console.error("[wellness] amend consent error:", e.message);
     res.status(500).json({ error: "Failed to amend consent" });
+  }
+});
+
+// ── #612: Consent templates CRUD ───────────────────────────────────
+//
+// Pre-fix the consent-capture dropdown rendered 5 hardcoded options
+// (hair-transplant / botox-fillers / laser / chemical-peel / general)
+// inside PatientDetail.jsx. Clinics with paediatric / procedure-specific
+// flows could not customise. These endpoints expose ConsentTemplate as a
+// per-tenant CRUD resource. Already-signed ConsentForm rows reference the
+// template by string `key` so historical signatures stay immutable when
+// templates are renamed or deleted.
+
+const SEED_CONSENT_TEMPLATES = [
+  { key: "hair-transplant", label: "Hair Transplant" },
+  { key: "botox-fillers", label: "Botox / Fillers" },
+  { key: "laser", label: "Laser Treatment" },
+  { key: "chemical-peel", label: "Chemical Peel" },
+  { key: "general", label: "General Procedure" },
+];
+
+// Auto-seed the 5 starter templates the first time a tenant lists them.
+// isSeed=true marks them so the UI can hint they're tenant-overridable.
+async function ensureSeedConsentTemplates(tenantId) {
+  const existing = await prisma.consentTemplate.count({ where: { tenantId } });
+  if (existing > 0) return;
+  for (const t of SEED_CONSENT_TEMPLATES) {
+    await prisma.consentTemplate.create({
+      data: { ...t, tenantId, isSeed: true, isActive: true },
+    }).catch(() => { /* race-safe; @@unique([tenantId,key]) blocks dup */ });
+  }
+}
+
+router.get("/consent-templates", async (req, res) => {
+  try {
+    await ensureSeedConsentTemplates(req.user.tenantId);
+    const items = await prisma.consentTemplate.findMany({
+      where: { tenantId: req.user.tenantId },
+      orderBy: [{ isActive: "desc" }, { label: "asc" }],
+    });
+    res.json(items);
+  } catch (e) {
+    console.error("[wellness] list consent-templates:", e.message);
+    res.status(500).json({ error: "Failed to list consent templates" });
+  }
+});
+
+router.post("/consent-templates", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { key, label, body, language, isActive } = req.body;
+    if (!key || !String(key).trim()) {
+      return res.status(400).json({ error: "key is required", code: "KEY_REQUIRED" });
+    }
+    if (!label || !String(label).trim()) {
+      return res.status(400).json({ error: "label is required", code: "LABEL_REQUIRED" });
+    }
+    const normalisedKey = String(key).trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+    const dup = await prisma.consentTemplate.findFirst({
+      where: { tenantId: req.user.tenantId, key: normalisedKey },
+    });
+    if (dup) {
+      return res.status(409).json({ error: "Template key already exists", code: "DUPLICATE_KEY" });
+    }
+    const created = await prisma.consentTemplate.create({
+      data: {
+        key: normalisedKey,
+        label: String(label).trim(),
+        body: body || null,
+        language: language || "en",
+        isActive: isActive === undefined ? true : !!isActive,
+        isSeed: false,
+        tenantId: req.user.tenantId,
+      },
+    });
+    res.status(201).json(created);
+  } catch (e) {
+    console.error("[wellness] create consent-template:", e.message);
+    res.status(500).json({ error: "Failed to create consent template" });
+  }
+});
+
+router.put("/consent-templates/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid template id" });
+    const existing = await prisma.consentTemplate.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
+    const data = {};
+    if (req.body.label !== undefined) data.label = String(req.body.label).trim();
+    if (req.body.body !== undefined) data.body = req.body.body || null;
+    if (req.body.language !== undefined) data.language = req.body.language || "en";
+    if (req.body.isActive !== undefined) data.isActive = !!req.body.isActive;
+    // key is immutable post-create — historical ConsentForm rows reference it.
+    const updated = await prisma.consentTemplate.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] update consent-template:", e.message);
+    res.status(500).json({ error: "Failed to update consent template" });
+  }
+});
+
+router.delete("/consent-templates/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid template id" });
+    const existing = await prisma.consentTemplate.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Template not found" });
+    await prisma.consentTemplate.delete({ where: { id } });
+    res.json({ success: true, deleted: true, id });
+  } catch (e) {
+    console.error("[wellness] delete consent-template:", e.message);
+    res.status(500).json({ error: "Failed to delete consent template" });
   }
 });
 
@@ -1630,6 +1867,18 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
         totalPrice: plan.totalPrice,
       });
     } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+
+    // #616: emit treatment.started. Failure here MUST NOT fail the response.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      emitEvent(
+        "treatment.started",
+        { treatmentPlanId: plan.id, patientId: plan.patientId, serviceId: plan.serviceId, name: plan.name, totalSessions: plan.totalSessions },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) { /* event bus optional */ }
+
     res.status(201).json(plan);
   } catch (e) {
     console.error("[wellness] create treatment-plan error:", e.message);
@@ -2311,6 +2560,14 @@ async function computePnlByService(req) {
       visits: canonical.visits,
       revenue: canonical.revenue,
     },
+    // #565 (HI-16): canonical revenue scalar surfaced at the top level so
+    // OwnerDashboard's "today's revenue" KPI and /wellness/reports's P&L
+    // tab read from the same field. Equals sum(rows[].revenue) — the
+    // bucketed-by-service total, which is what the report's Revenue
+    // column displays. Pre-fix, OwnerDashboard pulled its revenue from
+    // /api/wellness/dashboard's own client-side aggregation, producing
+    // a different figure than the P&L page for the same window.
+    totalRevenue: bucketedRevenue,
     servicesSummary,
     rows,
   };
@@ -3875,6 +4132,79 @@ function requireManagerPlus(req, res, next) {
   if (role === "ADMIN" || role === "MANAGER") return next();
   return res.status(403).json({ error: "Manager or admin role required" });
 }
+
+// #614 — Loyalty rules (earn / burn config). Per-tenant row in LoyaltyConfig.
+// Defaults mirror the historic hardcoded rule (10% of spend) so behaviour is
+// byte-identical when no row exists. NOTE: these /loyalty/rules routes MUST
+// be registered BEFORE /loyalty/:patientId — otherwise Express's :patientId
+// path-param swallows "rules" as an integer-parse failure (400).
+const LOYALTY_DEFAULTS = {
+  earnPerVisit: 0,
+  earnPercentOfSpend: 10,
+  earnPerCurrencyUnit: 0,
+  redeemPointsPerUnit: 10,
+  welcomeBonus: 0,
+  referralBonus: 100,
+  autoEarnEnabled: true,
+};
+
+async function loadLoyaltyConfig(tenantId) {
+  const cfg = await prisma.loyaltyConfig.findUnique({ where: { tenantId } });
+  return cfg ? { ...LOYALTY_DEFAULTS, ...cfg } : { ...LOYALTY_DEFAULTS, tenantId };
+}
+
+router.get("/loyalty/rules", async (req, res) => {
+  try {
+    const cfg = await loadLoyaltyConfig(req.user.tenantId);
+    res.json(cfg);
+  } catch (e) {
+    console.error("[wellness] loyalty rules get error:", e.message);
+    res.status(500).json({ error: "Failed to load loyalty rules" });
+  }
+});
+
+router.put("/loyalty/rules", requireManagerPlus, async (req, res) => {
+  try {
+    const allowed = [
+      "earnPerVisit",
+      "earnPercentOfSpend",
+      "earnPerCurrencyUnit",
+      "redeemPointsPerUnit",
+      "welcomeBonus",
+      "referralBonus",
+      "autoEarnEnabled",
+    ];
+    const data = {};
+    for (const k of allowed) {
+      if (req.body[k] === undefined) continue;
+      if (k === "autoEarnEnabled") {
+        data[k] = !!req.body[k];
+        continue;
+      }
+      const n = Number(req.body[k]);
+      if (!Number.isFinite(n) || n < 0) {
+        return res.status(400).json({ error: `${k} must be a non-negative number` });
+      }
+      // Integers vs floats: percent + earnPerCurrencyUnit are floats; the rest are integers.
+      data[k] = ["earnPercentOfSpend", "earnPerCurrencyUnit"].includes(k) ? n : Math.floor(n);
+    }
+    if (data.earnPercentOfSpend !== undefined && data.earnPercentOfSpend > 100) {
+      return res.status(400).json({ error: "earnPercentOfSpend must be ≤ 100" });
+    }
+
+    const tenantId = req.user.tenantId;
+    const cfg = await prisma.loyaltyConfig.upsert({
+      where: { tenantId },
+      update: data,
+      create: { tenantId, ...data },
+    });
+    await writeAudit("LoyaltyConfig", "UPDATE", cfg.id, req.user.userId, tenantId, data);
+    res.json({ ...LOYALTY_DEFAULTS, ...cfg });
+  } catch (e) {
+    console.error("[wellness] loyalty rules put error:", e.message);
+    res.status(500).json({ error: "Failed to update loyalty rules" });
+  }
+});
 
 router.get("/loyalty/:patientId", async (req, res) => {
   try {

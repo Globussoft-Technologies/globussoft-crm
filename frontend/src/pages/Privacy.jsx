@@ -4,7 +4,8 @@ import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 
-const RETENTION_ENTITIES = [
+// CRM messaging entities — visible to every tenant.
+const CRM_RETENTION_ENTITIES = [
   { entity: 'EmailMessage', label: 'Email Messages', defaultDays: 730 },
   { entity: 'CallLog', label: 'Call Logs', defaultDays: 365 },
   { entity: 'Activity', label: 'Activities', defaultDays: 1095 },
@@ -12,10 +13,30 @@ const RETENTION_ENTITIES = [
   { entity: 'WhatsAppMessage', label: 'WhatsApp Messages', defaultDays: 365 },
 ];
 
+// #576 — Clinical / Medical Records retention. Visible only when
+// tenant.vertical === 'wellness'. Defaults match DPDP / clinical norms.
+// 2555d = ~7y; 3650d = ~10y. ConsentForm carries the legal-defensibility
+// rationale: signed consent must outlive the engagement.
+const CLINICAL_RETENTION_ENTITIES = [
+  { entity: 'Patient', label: 'Patients', defaultDays: 3650 },
+  { entity: 'Visit', label: 'Visits', defaultDays: 2555 },
+  { entity: 'Prescription', label: 'Prescriptions', defaultDays: 2555 },
+  { entity: 'ConsentForm', label: 'Consent Forms', defaultDays: 2555 },
+  { entity: 'TreatmentPlan', label: 'Treatment Plans', defaultDays: 2555 },
+  { entity: 'MedicalAttachment', label: 'Medical Attachments', defaultDays: 2555 },
+];
+
+
 export default function Privacy() {
   const notify = useNotify();
-  const { user } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
+  const isWellness = tenant?.vertical === 'wellness';
+  // #576 — wellness tenants append the Clinical/Medical Records sub-section
+  // to the editable RETENTION_ENTITIES list.
+  const VISIBLE_RETENTION_ENTITIES = isWellness
+    ? [...CRM_RETENTION_ENTITIES, ...CLINICAL_RETENTION_ENTITIES]
+    : CRM_RETENTION_ENTITIES;
 
   const [policies, setPolicies] = useState([]);
   const [policiesLoading, setPoliciesLoading] = useState(true);
@@ -42,7 +63,7 @@ export default function Privacy() {
       // so a zero or empty string leaked through as a blank input. Coerce
       // to a positive integer and fall back to the canonical default
       // otherwise.
-      const merged = RETENTION_ENTITIES.map(meta => {
+      const merged = VISIBLE_RETENTION_ENTITIES.map(meta => {
         const row = map[meta.entity];
         const raw = row?.retainDays;
         const days = Number(raw);
@@ -57,7 +78,7 @@ export default function Privacy() {
       setPolicies(merged);
     } catch (err) {
       console.error(err);
-      setPolicies(RETENTION_ENTITIES.map(m => ({ entity: m.entity, label: m.label, retainDays: m.defaultDays, isActive: false })));
+      setPolicies(VISIBLE_RETENTION_ENTITIES.map(m => ({ entity: m.entity, label: m.label, retainDays: m.defaultDays, isActive: false })));
     } finally {
       setPoliciesLoading(false);
     }
@@ -157,13 +178,14 @@ export default function Privacy() {
   };
 
   const card = {
-    background: 'var(--bg-secondary, rgba(255,255,255,0.6))',
+    background: 'var(--surface-color, rgba(255,255,255,0.6))',
     backdropFilter: 'blur(12px)',
     border: '1px solid var(--border-color, rgba(255,255,255,0.18))',
     borderRadius: '14px',
     padding: '1.5rem',
     marginBottom: '1.5rem',
     boxShadow: '0 4px 24px rgba(0,0,0,0.04)',
+    color: 'var(--text-primary)',
   };
 
   return (
@@ -229,48 +251,22 @@ export default function Privacy() {
           {policiesLoading ? (
             <div style={{ padding: '1rem', color: 'var(--text-secondary, #6b7280)' }}>Loading policies...</div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-color, #e5e7eb)' }}>
-                  <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary, #6b7280)' }}>Entity</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary, #6b7280)' }}>Retain (days)</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary, #6b7280)' }}>Active</th>
-                </tr>
-              </thead>
-              <tbody>
-                {policies.map(p => (
-                  <tr key={p.entity} style={{ borderBottom: '1px solid var(--border-color, #f3f4f6)' }}>
-                    <td style={{ padding: '0.6rem 0.5rem', fontWeight: '500' }}>{p.label}</td>
-                    <td style={{ padding: '0.6rem 0.5rem' }}>
-                      <input
-                        type="number"
-                        min={1}
-                        value={p.retainDays}
-                        onChange={(e) => updatePolicy(p.entity, 'retainDays', e.target.value)}
-                        style={{
-                          width: '110px', padding: '0.4rem 0.6rem', borderRadius: '6px',
-                          border: '1px solid var(--border-color, #d1d5db)', background: 'var(--bg-primary, #fff)',
-                          color: 'var(--text-primary, #111827)',
-                        }}
-                      />
-                    </td>
-                    <td style={{ padding: '0.6rem 0.5rem' }}>
-                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={!!p.isActive}
-                          onChange={(e) => updatePolicy(p.entity, 'isActive', e.target.checked)}
-                          style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                        />
-                        <span style={{ fontSize: '0.85rem', color: p.isActive ? '#10b981' : 'var(--text-secondary, #6b7280)' }}>
-                          {p.isActive ? 'Enabled' : 'Disabled'}
-                        </span>
-                      </label>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <RetentionTable
+                title="CRM Messaging"
+                rows={policies.filter(p => CRM_RETENTION_ENTITIES.some(m => m.entity === p.entity))}
+                updatePolicy={updatePolicy}
+              />
+              {isWellness && (
+                <RetentionTable
+                  title="Clinical / Medical Records"
+                  subtitle="DPDP / clinical-records norm — 7y for clinical entities, 10y for Patient. Soft-delete first, hard-purge after the tombstone window."
+                  rows={policies.filter(p => CLINICAL_RETENTION_ENTITIES.some(m => m.entity === p.entity))}
+                  updatePolicy={updatePolicy}
+                  testId="clinical-retention-table"
+                />
+              )}
+            </>
           )}
           <button
             onClick={handleSavePolicies}
@@ -324,6 +320,17 @@ export default function Privacy() {
               Right to access, rectification, erasure, portability, and restriction. Lawful basis: consent and legitimate interest.
             </p>
           </div>
+          {/* #576 — DPDP (India) bullet, only on wellness vertical. */}
+          {isWellness && (
+            <div data-testid="dpdp-compliance-bullet">
+              <strong style={{ display: 'block', marginBottom: '0.25rem' }}>DPDP (India)</strong>
+              <p style={{ color: 'var(--text-secondary, #6b7280)', fontSize: '0.85rem', margin: 0 }}>
+                Digital Personal Data Protection Act 2023. Clinical records retained per Indian Medical Council norms (7 years
+                for consents/Rx/visits/treatment plans; 10 years for patient identity). Configure windows in the Clinical /
+                Medical Records section above.
+              </p>
+            </div>
+          )}
           <div>
             <strong style={{ display: 'block', marginBottom: '0.25rem' }}>CCPA (California)</strong>
             <p style={{ color: 'var(--text-secondary, #6b7280)', fontSize: '0.85rem', margin: 0 }}>
@@ -357,8 +364,11 @@ export default function Privacy() {
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: 'var(--bg-primary, #fff)', borderRadius: '12px', padding: '1.75rem',
+              background: 'var(--surface-color, #fff)', borderRadius: '12px', padding: '1.75rem',
               maxWidth: '480px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+              color: 'var(--text-primary)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid var(--border-color)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
@@ -410,6 +420,8 @@ export default function Privacy() {
               style={{
                 width: '100%', padding: '0.55rem 0.75rem', borderRadius: '8px',
                 border: '1px solid var(--border-color, #d1d5db)',
+                background: 'var(--input-bg, #fff)',
+                color: 'var(--text-primary)',
                 marginBottom: '1rem', boxSizing: 'border-box',
               }}
             />
@@ -440,6 +452,64 @@ export default function Privacy() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// #576 — extracted retention-table fragment so the wellness vertical can
+// render two grouped tables (CRM Messaging + Clinical / Medical Records)
+// from the same single state array, without each row needing its own
+// section header.
+function RetentionTable({ title, subtitle, rows, updatePolicy, testId }) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div data-testid={testId} style={{ marginTop: '1rem' }}>
+      <h3 style={{ fontSize: '0.95rem', fontWeight: 600, margin: '0 0 0.25rem' }}>{title}</h3>
+      {subtitle && (
+        <p style={{ color: 'var(--text-secondary, #6b7280)', fontSize: '0.8rem', margin: '0 0 0.5rem' }}>{subtitle}</p>
+      )}
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--border-color, #e5e7eb)' }}>
+            <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary, #6b7280)' }}>Entity</th>
+            <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary, #6b7280)' }}>Retain (days)</th>
+            <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary, #6b7280)' }}>Active</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(p => (
+            <tr key={p.entity} style={{ borderBottom: '1px solid var(--border-color, #f3f4f6)' }}>
+              <td style={{ padding: '0.6rem 0.5rem', fontWeight: '500' }}>{p.label}</td>
+              <td style={{ padding: '0.6rem 0.5rem' }}>
+                <input
+                  type="number"
+                  min={1}
+                  value={p.retainDays}
+                  onChange={(e) => updatePolicy(p.entity, 'retainDays', e.target.value)}
+                  style={{
+                    width: '110px', padding: '0.4rem 0.6rem', borderRadius: '6px',
+                    border: '1px solid var(--border-color, #d1d5db)', background: 'var(--input-bg, #fff)',
+                    color: 'var(--text-primary, #111827)',
+                  }}
+                />
+              </td>
+              <td style={{ padding: '0.6rem 0.5rem' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!p.isActive}
+                    onChange={(e) => updatePolicy(p.entity, 'isActive', e.target.checked)}
+                    style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                  />
+                  <span style={{ fontSize: '0.85rem', color: p.isActive ? '#10b981' : 'var(--text-secondary, #6b7280)' }}>
+                    {p.isActive ? 'Enabled' : 'Disabled'}
+                  </span>
+                </label>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

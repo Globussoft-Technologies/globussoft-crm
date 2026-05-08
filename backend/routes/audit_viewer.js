@@ -4,8 +4,12 @@ const { formatInTenantTZ } = require('../lib/datetime');
 
 const prisma = require("../lib/prisma");
 
-// Admin/Manager only — audit log viewer
-router.use(verifyToken, verifyRole(["ADMIN", "MANAGER"]));
+// #621: ADMIN-only — audit log viewer.
+// Pre-fix MANAGER was in the allow-list but the wellness sidebar's
+// `adminOnly` flag hid the link, RoleGuard redirected MANAGER on /audit-log,
+// and the toast wording said "System Admin Required". Backend now matches
+// the rest of the surfaces — single consistent role contract across verticals.
+router.use(verifyToken, verifyRole(["ADMIN"]));
 
 // #387 callsite-sweep (2026-05-07): audit rows ship with a UTC `createdAt`
 // timestamp. Reviewers reading the trail need the local-time-of-action

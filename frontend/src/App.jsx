@@ -528,7 +528,14 @@ export default function App() {
                       }
                     />
                     <Route path="inbox" element={<Inbox />} />
-                    <Route path="marketing" element={<Marketing />} />
+                    <Route
+                      path="marketing"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Marketing requires manager access.">
+                          <Marketing />
+                        </RoleGuard>
+                      }
+                    />
                     <Route path="reports" element={<Reports />} />
                     <Route path="agent-reports" element={<AgentReports />} />
                     <Route path="workflows" element={<Workflows />} />
@@ -543,7 +550,14 @@ export default function App() {
                       path="marketplace-leads"
                       element={<MarketplaceLeads />}
                     />
-                    <Route path="channels" element={<Channels />} />
+                    <Route
+                      path="channels"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Channels requires admin access.">
+                          <Channels />
+                        </RoleGuard>
+                      }
+                    />
                     <Route path="landing-pages" element={<LandingPages />} />
                     <Route
                       path="landing-pages/builder/:id"
@@ -560,7 +574,14 @@ export default function App() {
                       element={<SequenceBuilder />}
                     />
                     <Route path="support" element={<Support />} />
-                    <Route path="settings" element={<Settings />} />
+                    <Route
+                      path="settings"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Settings requires admin access.">
+                          <Settings />
+                        </RoleGuard>
+                      }
+                    />
                     <Route path="expenses" element={<Expenses />} />
                     <Route path="contracts" element={<Contracts />} />
                     <Route path="estimates" element={<Estimates />} />
@@ -575,7 +596,14 @@ export default function App() {
                       path="converted-leads"
                       element={<ConvertedLeads />}
                     />
-                    <Route path="staff" element={<Staff />} />
+                    <Route
+                      path="staff"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Staff requires admin access.">
+                          <Staff />
+                        </RoleGuard>
+                      }
+                    />
                     <Route path="profile" element={<Profile />} />
                     <Route path="profile/2fa" element={<Profile2FA />} />
                     {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
@@ -622,7 +650,11 @@ export default function App() {
                     <Route path="currencies" element={<Currencies />} />
                     <Route
                       path="field-permissions"
-                      element={<FieldPermissions />}
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Field Permissions requires admin access.">
+                          <FieldPermissions />
+                        </RoleGuard>
+                      }
                     />
                     <Route path="lead-routing" element={<LeadRouting />} />
                     <Route path="territories" element={<Territories />} />

@@ -145,3 +145,120 @@ describe('<RoleGuard /> — /audit-log info-disclosure fix (#589)', () => {
     expect(notifyError).toHaveBeenCalledWith("You don't have access to that page.");
   });
 });
+
+/**
+ * Wave 11 sibling-route sweep — #589 follow-up + #574 frontend follow-up.
+ *
+ * Same render-and-toast pattern as /audit-log (#589) was repro'd against
+ * /field-permissions (#574), /channels, /staff, /settings, /marketing.
+ * Each route is now wrapped in App.jsx with <RoleGuard allow={...}>; these
+ * tests pin the per-route redirect contract so a future un-wrap reds CI.
+ *
+ * Allowlists pinned against backend gates + Sidebar adminOnly/managerOnly:
+ *   /field-permissions → ADMIN  (every route in routes/field_permissions.js
+ *                                 is verifyRole(["ADMIN"]); Sidebar adminOnly)
+ *   /channels          → ADMIN  (sms/whatsapp/telephony /config endpoints
+ *                                 are verifyRole(["ADMIN"]); Sidebar adminOnly)
+ *   /staff             → ADMIN  (mutating routes are verifyRole(["ADMIN"]);
+ *                                 Sidebar adminOnly)
+ *   /settings          → ADMIN  (Sidebar adminOnly; admin-only tenant config)
+ *   /marketing         → ADMIN+MANAGER  (Sidebar managerOnly; campaigns are
+ *                                         management-tier work)
+ */
+function renderRouteWithRole({ path, allow, role, message }) {
+  const user = { userId: 1, name: 'Test', email: 't@x.test', role };
+  return render(
+    <AuthContext.Provider value={{ user, token: 'tk', tenant: { vertical: 'generic' }, loading: false }}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route
+            path={path}
+            element={
+              <RoleGuard allow={allow} message={message}>
+                <ProtectedPage />
+              </RoleGuard>
+            }
+          />
+          <Route path="/dashboard" element={<DashboardStub />} />
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
+  );
+}
+
+describe('<RoleGuard /> — Wave 11 sibling-route sweep (#574 + #589 follow-up)', () => {
+  beforeEach(() => {
+    notifyError.mockReset();
+  });
+
+  it('/field-permissions: USER redirected (ADMIN-only — #574)', () => {
+    renderRouteWithRole({
+      path: '/field-permissions',
+      allow: ['ADMIN'],
+      role: 'USER',
+      message: 'Field Permissions requires admin access.',
+    });
+    expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-landing')).toBeInTheDocument();
+    expect(notifyError).toHaveBeenCalledWith('Field Permissions requires admin access.');
+  });
+
+  it('/channels: USER redirected (ADMIN-only — sms/whatsapp/telephony config)', () => {
+    renderRouteWithRole({
+      path: '/channels',
+      allow: ['ADMIN'],
+      role: 'USER',
+      message: 'Channels requires admin access.',
+    });
+    expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-landing')).toBeInTheDocument();
+    expect(notifyError).toHaveBeenCalledWith('Channels requires admin access.');
+  });
+
+  it('/staff: USER redirected (ADMIN-only — staff CRUD is admin work)', () => {
+    renderRouteWithRole({
+      path: '/staff',
+      allow: ['ADMIN'],
+      role: 'USER',
+      message: 'Staff requires admin access.',
+    });
+    expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-landing')).toBeInTheDocument();
+    expect(notifyError).toHaveBeenCalledWith('Staff requires admin access.');
+  });
+
+  it('/settings: USER redirected (ADMIN-only — tenant config)', () => {
+    renderRouteWithRole({
+      path: '/settings',
+      allow: ['ADMIN'],
+      role: 'USER',
+      message: 'Settings requires admin access.',
+    });
+    expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-landing')).toBeInTheDocument();
+    expect(notifyError).toHaveBeenCalledWith('Settings requires admin access.');
+  });
+
+  it('/marketing: USER redirected (ADMIN+MANAGER allowed); MANAGER stays (campaigns are mgmt-tier)', () => {
+    renderRouteWithRole({
+      path: '/marketing',
+      allow: ['ADMIN', 'MANAGER'],
+      role: 'USER',
+      message: 'Marketing requires manager access.',
+    });
+    expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-landing')).toBeInTheDocument();
+    expect(notifyError).toHaveBeenCalledWith('Marketing requires manager access.');
+
+    // MANAGER allowed — second render asserts mgmt-tier passes through
+    notifyError.mockReset();
+    renderRouteWithRole({
+      path: '/marketing',
+      allow: ['ADMIN', 'MANAGER'],
+      role: 'MANAGER',
+      message: 'Marketing requires manager access.',
+    });
+    expect(screen.getByTestId('audit-heading')).toBeInTheDocument();
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+});

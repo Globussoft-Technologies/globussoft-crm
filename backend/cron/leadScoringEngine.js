@@ -170,10 +170,13 @@ function computeScore(contact) {
   }
   // Cap the cumulative bump but spread it over many integer values
   score += Math.min(Math.round(activityWeight * 2), 14);
-  // Cold-lead decay: nothing in 90d (but skip for newly created leads <7d)
-  const leadAgeDays = (now - new Date(contact.createdAt || now).getTime()) / 86400000;
-  if (leadAgeDays > 7 && mostRecentDays > 90) score -= 8;
-  else if (leadAgeDays > 7 && mostRecentDays > 60) score -= 4;
+  // Cold-lead decay: nothing in 90d. #571 — only apply when there ARE
+  // activities; an empty activities array is "no signal", not "cold".
+  // Brand-new leads with no events should not be penalised.
+  if (activities.length > 0) {
+    if (mostRecentDays > 90) score -= 8;
+    else if (mostRecentDays > 60) score -= 4;
+  }
 
   // Activity-type variety (calls + meetings are higher intent than notes)
   const callCount = activities.filter(a => a.type === 'Call').length;

@@ -7,6 +7,8 @@ import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-rea
 import { AuthContext } from '../App';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
+const WELLNESS_SOURCE_OPTIONS = ['Organic', 'Referral', 'Walk-in', 'Phone', 'Website', 'Event', 'Other'];
+const INDIAN_MOBILE_RE = /^[6-9]\d{9}$/;
 const FIELD_LIMITS = { name: 191, email: 191, company: 191, title: 200, phone: 20 };
 const CONTROL_CHAR_RE = /[\t\n\r\f\v]/;
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
@@ -57,7 +59,6 @@ const Leads = () => {
     company: '',
     title: '',
     countryCode: '+1',
-    phone: '',
     source: 'Organic',
     status: 'Lead',
     treatmentOfInterest: '',

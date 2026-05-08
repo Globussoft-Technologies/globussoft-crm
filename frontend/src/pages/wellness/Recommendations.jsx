@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Sparkles, Check, X, Clock, AlertCircle } from 'lucide-react';
+import { Sparkles, Check, X, Clock, AlertCircle, Play } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 

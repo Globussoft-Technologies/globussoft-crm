@@ -157,6 +157,13 @@ const WellnessAutoConsumptionRules = lazy(() => import("./pages/wellness/AutoCon
 const WellnessResources = lazy(() => import("./pages/wellness/Resources"));
 const WellnessHolidays = lazy(() => import("./pages/wellness/Holidays"));
 const WellnessWorkingHours = lazy(() => import("./pages/wellness/WorkingHoursEditor"));
+// Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox).
+const WellnessWhatsAppThreads = lazy(() => import("./pages/wellness/WhatsAppThreads"));
+// Wave 2 Agent JJ — Staff Attendance + Leave Management. Open to all roles
+// (everyone needs to clock in/out + manage their own leave); manager+
+// surfaces appear inline based on AuthContext.role.
+const WellnessAttendance = lazy(() => import("./pages/wellness/Attendance"));
+const WellnessLeave = lazy(() => import("./pages/wellness/Leave"));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
 // #341: global catch-all 404. Previously unmapped or wrong-prefix URLs
@@ -788,6 +795,8 @@ export default function App() {
                 </WellnessOnly>
               } />
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
+              {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
+              <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
               <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
               <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
               {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}

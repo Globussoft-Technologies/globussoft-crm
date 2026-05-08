@@ -117,6 +117,8 @@ model Tenant {
   whatsappMessages     WhatsAppMessage[]
   whatsappTemplates    WhatsAppTemplate[]
   whatsappConfigs      WhatsAppConfig[]
+  whatsappThreads      WhatsAppThread[]
+  whatsappOptOuts      WhatsAppOptOut[]
   telephonyConfigs     TelephonyConfig[]
   pushSubscriptions    PushSubscription[]
   pushNotifications    PushNotification[]
@@ -307,6 +309,7 @@ model User {
   reportSchedules   ReportSchedule[]
   smsMessages       SmsMessage[]
   whatsappMessages  WhatsAppMessage[]
+  whatsappThreads   WhatsAppThread[]   @relation("WhatsAppThreadAssignee")
   pushSubscriptions PushSubscription[]
   landingPages      LandingPage[]
 
@@ -400,6 +403,7 @@ model Contact {
   marketplaceLeads    MarketplaceLead[]
   smsMessages         SmsMessage[]
   whatsappMessages    WhatsAppMessage[]
+  whatsappThreads     WhatsAppThread[]
   pushSubscriptions   PushSubscription[]
   touchpoints         Touchpoint[]
   attachments         ContactAttachment[]
@@ -1236,7 +1240,59 @@ model WhatsAppMessage {
   userId    Int?
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  // Wave 2 Agent KK: 2-way messaging - thread keyed by (tenantId, contactPhone).
+  threadId Int?
+  thread   WhatsAppThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+
   @@index([tenantId, createdAt])
+  @@index([threadId, createdAt])
+}
+
+// -- WhatsApp 2-way: Thread aggregation + opt-out (Wave 2 Agent KK) --
+model WhatsAppThread {
+  id            Int       @id @default(autoincrement())
+  contactPhone  String
+  status        String    @default("OPEN")
+  lastMessageAt DateTime  @default(now())
+  lastInboundAt DateTime?
+  snoozedUntil  DateTime?
+  unreadCount   Int       @default(0)
+  labels        String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  contactId Int?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  patientId Int?
+  patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  assignedToId Int?
+  assignedTo   User? @relation("WhatsAppThreadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  messages WhatsAppMessage[]
+
+  @@unique([tenantId, contactPhone])
+  @@index([tenantId, status, lastMessageAt])
+  @@index([assignedToId, status])
+}
+
+model WhatsAppOptOut {
+  id           Int      @id @default(autoincrement())
+  contactPhone String
+  reason       String   @default("USER_REQUESTED")
+  capturedAt   DateTime @default(now())
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, contactPhone])
+  @@index([tenantId, capturedAt])
 }
 
 model WhatsAppTemplate {
@@ -2252,6 +2308,8 @@ model Patient {
   // + ledger of credits (gift cards, cashback, manual refunds) and debits
   // (purchase, manual reversal). Created lazily on first /wallet read.
   wallet              Wallet?
+  // Wave 2 Agent KK: 2-way WhatsApp threads where this patient is counterparty.
+  whatsappThreads     WhatsAppThread[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -2295,6 +2353,17 @@ model Service {
   description    String? @db.Text
   isActive       Boolean @default(true)
 
+  // Wave 2 Agent LL — booking-widget completion (2026-05-08 Google Doc audit).
+  // JSON-string column listing the BookingType variants this service supports
+  // (e.g. ["CLINIC_VISIT","IN_HOME","VIDEO"]). Public booking widget filters
+  // the picker by this list; server cross-checks on POST /public/book and
+  // returns 422 BOOKING_TYPE_NOT_SUPPORTED if the chosen type is not allowed.
+  // null/empty = legacy default (CLINIC_VISIT only) — preserves backwards
+  // compatibility with seeded services that pre-date this column.
+  // String? @db.Text per the project's standing JSON-string-column rule
+  // (mirrors SequenceStep.conditionJson, MembershipPlan.entitlements, etc.).
+  supportedBookingTypes String? @db.Text // JSON array of BookingType strings
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -2322,6 +2391,47 @@ model Visit {
 
   // Agent B: telehealth — Jitsi room name (e.g. "gbs-123-john-doe")
   videoRoom String?
+
+  // Wave 2 Agent LL — booking-widget completion (2026-05-08 Google Doc audit).
+  // bookingType: which CHANNEL the appointment runs through.
+  //   CLINIC_VISIT — patient comes to the clinic (legacy default; visit happens at locationId)
+  //   IN_HOME      — staff travels to the patient's address (atHomeAddress + atHomePincode required)
+  //   VIDEO        — telehealth call (videoCallUrl populated; locationId optional)
+  //   PHONE        — voice-only consult (no address, no video link)
+  // String column (not Prisma enum) per project convention — matches the
+  // soft-enum pattern used by Visit.status / Service.ticketTier / Patient.source.
+  bookingType String @default("CLINIC_VISIT")
+
+  // IN_HOME visits — patient address (NOT the clinic location). Stored on the
+  // Visit row rather than the Patient row because the same patient can book
+  // an IN_HOME visit at one address (home) one week and a different address
+  // (parent's house) the next; no benefit to denormalising onto Patient.
+  atHomeAddress     String? @db.Text // multi-line: building, flat, landmark
+  atHomeCity        String?
+  atHomePincode     String?
+  // Estimated travel time (minutes) dispatch allocates for the staff member
+  // to reach the address. MVP: defaults to 30 min on IN_HOME.
+  // Future: pincode-distance-based + dynamic per location.
+  travelTimeMinutes Int?
+
+  // VIDEO visits — auto-generated meet link (Jitsi-style room URL or external
+  // provider link if configured). Distinct from videoRoom above (which is the
+  // Jitsi room NAME — telehealth-internal); videoCallUrl is the sharable URL
+  // the patient receives in the booking-confirmation SMS / email.
+  videoCallUrl String?
+
+  // UTM capture from the public booking widget — every public visit can be
+  // attributed back to the marketing campaign that drove it. Mirrored across
+  // all 5 standard utm_* fields plus the HTTP Referer header. Persisted on
+  // Visit (not a separate Booking row) because /public/book is the only
+  // public-create surface, and joining a side table for attribution reports
+  // doubles the read cost. Per-row null-default keeps existing rows clean.
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
+  referrer    String? @db.Text // can be a long URL with query params
 
   patientId Int
   patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -2365,6 +2475,12 @@ model Visit {
   @@index([patientId, visitDate])
   @@index([tenantId, status])
   @@index([tenantId, locationId, visitDate])
+  // Wave 2 Agent LL — tenant-scoped bookingType + UTM filtering
+  // (e.g. "show me all IN_HOME visits this week", "GROUP BY utmSource for
+  // last-30-day attribution dashboard"). Both predicates are tenant-scoped
+  // first per the project's standing tenant-isolation index pattern.
+  @@index([tenantId, bookingType, visitDate])
+  @@index([tenantId, utmSource])
 }
 
 model Prescription {

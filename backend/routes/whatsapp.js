@@ -1,10 +1,75 @@
+// @ts-check
+//
+// WhatsApp routes — /api/whatsapp/*
+//
+// Existing surface:
+//   POST   /send                      — send session-text or template message
+//   GET    /messages                  — list messages (paginated)
+//   GET    /templates                 — list templates
+//   POST   /templates                 — create template (PENDING until Meta-approved)
+//   PUT    /templates/:id             — update template body
+//   DELETE /templates/:id             — delete template
+//   POST   /templates/:id/sync        — pull approval-status from Meta
+//   GET    /config (ADMIN)            — list provider configs (masked accessToken)
+//   PUT    /config/:provider (ADMIN)  — upsert provider config
+//   GET    /webhook                   — Meta verify (no auth)
+//   POST   /webhook                   — Meta event ingress (no auth)
+//
+// Wave 2 Agent KK additions — 2-way completion:
+//   GET    /threads                   — list threads for tenant (paginated, filterable)
+//   GET    /threads/:id               — thread detail with last 50 messages
+//   POST   /threads/:id/assign        — set assignedToId + audit
+//   POST   /threads/:id/close         — set status=CLOSED
+//   POST   /threads/:id/snooze        — set status=SNOOZED + snoozedUntil
+//   POST   /threads/:id/mark-read     — zero unreadCount
+//   POST   /opt-outs                  — manual opt-out (admin/manager)
+//   GET    /opt-outs                  — list opt-outs (filter by phone)
+//   DELETE /opt-outs/:id              — re-opt-in (admin)
+//
+// The webhook handler now upserts a WhatsAppThread on every inbound message
+// and detects "STOP" / "UNSUBSCRIBE" keywords to auto-record opt-out.
+// The /send handler rejects 422 CONTACT_OPTED_OUT for opted-out recipients
+// (DPDP / TRAI compliance).
+
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { sendTemplate, sendText, verifyWebhook } = require("../services/whatsappProvider");
+const { toE164 } = require("../utils/deduplication");
+const { writeAudit } = require("../lib/audit");
 
-// ─── Send WhatsApp Message ──────────────────────────────────────────────────
+// ─── Phone helpers (Wave 2 Agent KK) ───────────────────────────────────────
+// Inbound webhook messages from Meta arrive as digits-only ("919876543210"),
+// while the operator UI / external partner API canonicalises to E.164
+// ("+919876543210"). We normalise to E.164 at thread-key creation so both
+// directions agree on a single key.
+function normalizeToE164(phone) {
+  if (!phone) return null;
+  const e164 = toE164(phone);
+  if (e164) return e164;
+  // toE164 returns null for non-Indian / unrecognised shapes; fall back to
+  // adding "+" if the input looks E.164-ish (digits-only, ≥10 chars). This
+  // keeps cross-border WABA usage working even though IN-only utils.toE164
+  // doesn't recognise e.g. US +1xxxxxxxxxx.
+  const stripped = String(phone).replace(/[^0-9+]/g, "");
+  if (stripped.startsWith("+") && stripped.length >= 11) return stripped;
+  if (/^[0-9]{10,15}$/.test(stripped)) return "+" + stripped;
+  return null;
+}
+
+// ─── Opt-out detection (Wave 2 Agent KK) ───────────────────────────────────
+// DPDP/TRAI compliance: inbound message bodies that match these keywords
+// auto-create a WhatsAppOptOut row + reply with a confirmation. Match is
+// case-insensitive + whole-word (so "STOPPED" inside a sentence does NOT
+// trigger; only literal "STOP" / "UNSUBSCRIBE" / "UNSUB" do).
+const STOP_KEYWORDS = /^\s*(STOP|UNSUBSCRIBE|UNSUB|OPT[\s-]?OUT|STOP ALL)\s*$/i;
+function isStopKeyword(body) {
+  if (!body || typeof body !== "string") return false;
+  return STOP_KEYWORDS.test(body.trim());
+}
+
+// ─── Send WhatsApp Message ─────────────────────────────────────────────────
 router.post("/send", verifyToken, async (req, res) => {
   try {
     const { to, body, templateName, parameters, contactId } = req.body;
@@ -16,10 +81,59 @@ router.post("/send", verifyToken, async (req, res) => {
       return res.status(400).json({ error: "body or templateName is required" });
     }
 
+    // Wave 2 Agent KK: opt-out gate. Reject before hitting Meta to keep
+    // delivery costs + spam-flag risk down. 422 with structured `code` so
+    // the frontend can show "This contact has opted out" instead of a
+    // generic 500. Phone normalisation aligns with how the opt-out row
+    // was stored.
+    const normalizedTo = normalizeToE164(to);
+    if (normalizedTo) {
+      const optOut = await prisma.whatsAppOptOut.findUnique({
+        where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: normalizedTo } },
+      });
+      if (optOut) {
+        return res.status(422).json({
+          error: "Recipient has opted out of WhatsApp messages",
+          code: "CONTACT_OPTED_OUT",
+          optedOutAt: optOut.capturedAt,
+          reason: optOut.reason,
+        });
+      }
+    }
+
     // Get active config for this tenant
     const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true, tenantId: req.user.tenantId } });
     if (!config) {
       return res.status(400).json({ error: "No active WhatsApp provider configured" });
+    }
+
+    // Wave 2 Agent KK: upsert thread for the recipient phone so outbound
+    // messages slot into the same conversation as inbound. lastMessageAt
+    // bumped; unreadCount NOT bumped (outbound doesn't increment unread).
+    let thread = null;
+    if (normalizedTo) {
+      thread = await prisma.whatsAppThread.upsert({
+        where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: normalizedTo } },
+        create: {
+          tenantId: req.user.tenantId,
+          contactPhone: normalizedTo,
+          status: "OPEN",
+          contactId: contactId || null,
+          lastMessageAt: new Date(),
+        },
+        update: {
+          lastMessageAt: new Date(),
+          // Reopen a CLOSED thread when the operator sends a new message.
+          ...(undefined /* keep status as-is unless CLOSED */),
+        },
+      });
+      // Re-open closed threads when an operator sends a new outbound.
+      if (thread.status === "CLOSED") {
+        thread = await prisma.whatsAppThread.update({
+          where: { id: thread.id },
+          data: { status: "OPEN" },
+        });
+      }
     }
 
     // Create message record
@@ -34,6 +148,7 @@ router.post("/send", verifyToken, async (req, res) => {
         contactId: contactId || null,
         userId: req.user.userId,
         tenantId: req.user.tenantId,
+        threadId: thread?.id || null,
       },
     });
 
@@ -74,7 +189,7 @@ router.post("/send", verifyToken, async (req, res) => {
     }
 
     if (result.success) {
-      res.json({ success: true, messageId: message.id, providerMsgId: result.providerMsgId });
+      res.json({ success: true, messageId: message.id, providerMsgId: result.providerMsgId, threadId: thread?.id || null });
     } else {
       res.status(500).json({ success: false, messageId: message.id, error: result.error });
     }
@@ -84,7 +199,7 @@ router.post("/send", verifyToken, async (req, res) => {
   }
 });
 
-// ─── List WhatsApp Messages ─────────────────────────────────────────────────
+// ─── List WhatsApp Messages ────────────────────────────────────────────────
 router.get("/messages", verifyToken, async (req, res) => {
   try {
     const { direction, contactId, status, page = 1, limit = 25 } = req.query;
@@ -122,7 +237,369 @@ router.get("/messages", verifyToken, async (req, res) => {
   }
 });
 
-// ─── List WhatsApp Templates ────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────
+// Threads (Wave 2 Agent KK)
+// ────────────────────────────────────────────────────────────────────────────
+
+// GET /threads — list threads for the current tenant
+//
+// Query params:
+//   ?assignedToId=<int>  filter by assignee (use "0" for unassigned)
+//   ?status=OPEN|PENDING_AGENT|SNOOZED|CLOSED
+//   ?unread=true         filter unreadCount > 0
+//   ?q=<phone-or-name>   substring match on phone or linked contact.name
+//   ?page=N&limit=N      pagination (defaults: page 1, limit 25)
+//
+// Snooze auto-expiry: any thread whose status=SNOOZED and snoozedUntil < now
+// is flipped back to OPEN as a side effect of this read. This avoids needing
+// a dedicated cron tick for snooze-wakeup.
+router.get("/threads", verifyToken, async (req, res) => {
+  try {
+    const { assignedToId, status, unread, q, page = 1, limit = 25 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const take = Math.min(parseInt(limit), 100);
+
+    // Auto-wake snoozed threads whose timer has elapsed.
+    await prisma.whatsAppThread.updateMany({
+      where: {
+        tenantId: req.user.tenantId,
+        status: "SNOOZED",
+        snoozedUntil: { lt: new Date() },
+      },
+      data: { status: "OPEN", snoozedUntil: null },
+    });
+
+    const where = { tenantId: req.user.tenantId };
+    if (status) where.status = String(status);
+    if (assignedToId !== undefined) {
+      const id = parseInt(assignedToId);
+      where.assignedToId = Number.isFinite(id) && id > 0 ? id : null;
+    }
+    if (unread === "true" || unread === "1") {
+      where.unreadCount = { gt: 0 };
+    }
+    if (q) {
+      const term = String(q).trim();
+      if (term) {
+        where.OR = [
+          { contactPhone: { contains: term } },
+          { contact: { name: { contains: term } } },
+        ];
+      }
+    }
+
+    const [threads, total] = await Promise.all([
+      prisma.whatsAppThread.findMany({
+        where,
+        orderBy: { lastMessageAt: "desc" },
+        skip,
+        take,
+        include: {
+          contact: { select: { id: true, name: true, phone: true, email: true } },
+          patient: { select: { id: true, name: true, phone: true } },
+          assignedTo: { select: { id: true, name: true, email: true } },
+        },
+      }),
+      prisma.whatsAppThread.count({ where }),
+    ]);
+
+    res.json({
+      threads,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: take,
+        pages: Math.ceil(total / take),
+      },
+    });
+  } catch (err) {
+    console.error("WhatsApp threads list error:", err);
+    res.status(500).json({ error: "Failed to fetch threads" });
+  }
+});
+
+// GET /threads/:id — thread detail with last 50 messages
+router.get("/threads/:id", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const thread = await prisma.whatsAppThread.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      include: {
+        contact: { select: { id: true, name: true, phone: true, email: true } },
+        patient: { select: { id: true, name: true, phone: true } },
+        assignedTo: { select: { id: true, name: true, email: true } },
+      },
+    });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+
+    const messages = await prisma.whatsAppMessage.findMany({
+      where: { threadId: thread.id, tenantId: req.user.tenantId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    });
+
+    // Check for opt-out so the frontend can disable the reply box.
+    const optOut = await prisma.whatsAppOptOut.findUnique({
+      where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: thread.contactPhone } },
+    });
+
+    res.json({
+      thread,
+      messages: messages.reverse(), // ascending for UI render
+      optedOut: optOut
+        ? { capturedAt: optOut.capturedAt, reason: optOut.reason, notes: optOut.notes || null }
+        : null,
+    });
+  } catch (err) {
+    console.error("WhatsApp thread detail error:", err);
+    res.status(500).json({ error: "Failed to fetch thread" });
+  }
+});
+
+// POST /threads/:id/assign body { userId }
+//
+// Self-assign: any logged-in user can assign to themselves (`userId === req.user.userId`).
+// Cross-assign to another user: ADMIN/MANAGER only.
+// userId = null clears the assignment.
+router.post("/threads/:id/assign", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const { userId } = req.body;
+    const targetId = userId === null || userId === undefined ? null : parseInt(userId);
+    if (targetId !== null && !Number.isFinite(targetId)) {
+      return res.status(400).json({ error: "userId must be a number or null" });
+    }
+
+    // RBAC: cross-assign requires manager; self-assign / unassign open to all.
+    const isSelf = targetId === req.user.userId;
+    const isUnassign = targetId === null;
+    const isManager = req.user.role === "ADMIN" || req.user.role === "MANAGER";
+    if (!isSelf && !isUnassign && !isManager) {
+      return res.status(403).json({ error: "Only managers can assign threads to other users" });
+    }
+
+    const thread = await prisma.whatsAppThread.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+
+    if (targetId !== null) {
+      // Verify target user belongs to the same tenant (cross-tenant assignment is a security hole).
+      const target = await prisma.user.findFirst({
+        where: { id: targetId, tenantId: req.user.tenantId },
+      });
+      if (!target) return res.status(404).json({ error: "Target user not found in tenant" });
+    }
+
+    const updated = await prisma.whatsAppThread.update({
+      where: { id: thread.id },
+      data: { assignedToId: targetId, status: targetId ? "OPEN" : thread.status },
+    });
+
+    await writeAudit("WhatsAppThread", "ASSIGN", thread.id, req.user.userId, req.user.tenantId, {
+      previousAssignedToId: thread.assignedToId,
+      newAssignedToId: targetId,
+    });
+
+    res.json(updated);
+  } catch (err) {
+    console.error("WhatsApp thread assign error:", err);
+    res.status(500).json({ error: "Failed to assign thread" });
+  }
+});
+
+// POST /threads/:id/close
+router.post("/threads/:id/close", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const thread = await prisma.whatsAppThread.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+
+    const updated = await prisma.whatsAppThread.update({
+      where: { id: thread.id },
+      data: { status: "CLOSED", snoozedUntil: null },
+    });
+
+    await writeAudit("WhatsAppThread", "CLOSE", thread.id, req.user.userId, req.user.tenantId, {
+      previousStatus: thread.status,
+    });
+
+    res.json(updated);
+  } catch (err) {
+    console.error("WhatsApp thread close error:", err);
+    res.status(500).json({ error: "Failed to close thread" });
+  }
+});
+
+// POST /threads/:id/snooze body { until: ISO datetime }
+router.post("/threads/:id/snooze", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const { until } = req.body;
+    if (!until) return res.status(400).json({ error: "until is required" });
+    const snoozeDate = new Date(until);
+    if (Number.isNaN(snoozeDate.getTime())) {
+      return res.status(400).json({ error: "until must be a valid ISO datetime" });
+    }
+    if (snoozeDate <= new Date()) {
+      return res.status(400).json({ error: "until must be in the future" });
+    }
+
+    const thread = await prisma.whatsAppThread.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+
+    const updated = await prisma.whatsAppThread.update({
+      where: { id: thread.id },
+      data: { status: "SNOOZED", snoozedUntil: snoozeDate },
+    });
+
+    await writeAudit("WhatsAppThread", "SNOOZE", thread.id, req.user.userId, req.user.tenantId, {
+      until: snoozeDate.toISOString(),
+    });
+
+    res.json(updated);
+  } catch (err) {
+    console.error("WhatsApp thread snooze error:", err);
+    res.status(500).json({ error: "Failed to snooze thread" });
+  }
+});
+
+// POST /threads/:id/mark-read — zero unreadCount
+router.post("/threads/:id/mark-read", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const thread = await prisma.whatsAppThread.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+
+    const updated = await prisma.whatsAppThread.update({
+      where: { id: thread.id },
+      data: { unreadCount: 0 },
+    });
+
+    res.json(updated);
+  } catch (err) {
+    console.error("WhatsApp thread mark-read error:", err);
+    res.status(500).json({ error: "Failed to mark thread read" });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Opt-outs (Wave 2 Agent KK)
+// ────────────────────────────────────────────────────────────────────────────
+
+// POST /opt-outs body { contactPhone, reason?, notes? } — manual opt-out
+//
+// Manager-only. Phone is normalised to E.164 before insert so the upsert
+// matches the format the /send and webhook handlers use as the lookup key.
+router.post("/opt-outs", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const { contactPhone, reason, notes } = req.body;
+    if (!contactPhone) return res.status(400).json({ error: "contactPhone is required" });
+
+    const normalized = normalizeToE164(contactPhone);
+    if (!normalized) {
+      return res.status(400).json({ error: "contactPhone must be a valid E.164 number" });
+    }
+
+    const validReasons = ["USER_REQUESTED", "STOP_KEYWORD", "COMPLAINT", "UNSUBSCRIBE_LINK"];
+    const finalReason = reason && validReasons.includes(reason) ? reason : "USER_REQUESTED";
+
+    const optOut = await prisma.whatsAppOptOut.upsert({
+      where: { tenantId_contactPhone: { tenantId: req.user.tenantId, contactPhone: normalized } },
+      create: {
+        tenantId: req.user.tenantId,
+        contactPhone: normalized,
+        reason: finalReason,
+        notes: notes || null,
+      },
+      update: {
+        reason: finalReason,
+        notes: notes || null,
+      },
+    });
+
+    await writeAudit("WhatsAppOptOut", "CREATE", optOut.id, req.user.userId, req.user.tenantId, {
+      contactPhone: normalized,
+      reason: finalReason,
+    });
+
+    res.status(201).json(optOut);
+  } catch (err) {
+    console.error("WhatsApp opt-out create error:", err);
+    res.status(500).json({ error: "Failed to record opt-out" });
+  }
+});
+
+// GET /opt-outs?phone=<E.164 prefix>
+router.get("/opt-outs", verifyToken, async (req, res) => {
+  try {
+    const { phone, page = 1, limit = 25 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const take = Math.min(parseInt(limit), 100);
+
+    const where = { tenantId: req.user.tenantId };
+    if (phone) where.contactPhone = { contains: String(phone).trim() };
+
+    const [optOuts, total] = await Promise.all([
+      prisma.whatsAppOptOut.findMany({
+        where,
+        orderBy: { capturedAt: "desc" },
+        skip,
+        take,
+      }),
+      prisma.whatsAppOptOut.count({ where }),
+    ]);
+
+    res.json({
+      optOuts,
+      pagination: { total, page: parseInt(page), limit: take, pages: Math.ceil(total / take) },
+    });
+  } catch (err) {
+    console.error("WhatsApp opt-outs list error:", err);
+    res.status(500).json({ error: "Failed to fetch opt-outs" });
+  }
+});
+
+// DELETE /opt-outs/:id — re-opt-in (ADMIN only — DPDP requires careful handling)
+router.delete("/opt-outs/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const existing = await prisma.whatsAppOptOut.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) return res.status(404).json({ error: "Opt-out not found" });
+
+    await prisma.whatsAppOptOut.delete({ where: { id: existing.id } });
+    await writeAudit("WhatsAppOptOut", "DELETE", existing.id, req.user.userId, req.user.tenantId, {
+      contactPhone: existing.contactPhone,
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("WhatsApp opt-out delete error:", err);
+    res.status(500).json({ error: "Failed to delete opt-out" });
+  }
+});
+
+// ─── List WhatsApp Templates ───────────────────────────────────────────────
 router.get("/templates", verifyToken, async (req, res) => {
   try {
     const templates = await prisma.whatsAppTemplate.findMany({
@@ -136,7 +613,7 @@ router.get("/templates", verifyToken, async (req, res) => {
   }
 });
 
-// ─── Create WhatsApp Template ───────────────────────────────────────────────
+// ─── Create WhatsApp Template ──────────────────────────────────────────────
 router.post("/templates", verifyToken, async (req, res) => {
   try {
     const { name, language, category, body, headerType, headerContent, footer, buttons } = req.body;
@@ -168,7 +645,7 @@ router.post("/templates", verifyToken, async (req, res) => {
   }
 });
 
-// ─── Update WhatsApp Template ───────────────────────────────────────────────
+// ─── Update WhatsApp Template ──────────────────────────────────────────────
 router.put("/templates/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -200,7 +677,7 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
   }
 });
 
-// ─── Delete WhatsApp Template ───────────────────────────────────────────────
+// ─── Delete WhatsApp Template ──────────────────────────────────────────────
 router.delete("/templates/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -215,7 +692,7 @@ router.delete("/templates/:id", verifyToken, async (req, res) => {
   }
 });
 
-// ─── Sync Template Status from Meta ─────────────────────────────────────────
+// ─── Sync Template Status from Meta ────────────────────────────────────────
 router.post("/templates/:id/sync", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -271,7 +748,7 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
   }
 });
 
-// ─── Get WhatsApp Config (ADMIN only) ───────────────────────────────────────
+// ─── Get WhatsApp Config (ADMIN only) ──────────────────────────────────────
 router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const configs = await prisma.whatsAppConfig.findMany({
@@ -291,7 +768,7 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
-// ─── Upsert WhatsApp Config (ADMIN only) ────────────────────────────────────
+// ─── Upsert WhatsApp Config (ADMIN only) ───────────────────────────────────
 router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { provider } = req.params;
@@ -339,7 +816,7 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
   }
 });
 
-// ─── Meta Webhook Verification (GET, NO AUTH) ───────────────────────────────
+// ─── Meta Webhook Verification (GET, NO AUTH) ──────────────────────────────
 router.get("/webhook", async (req, res) => {
   try {
     // Match against any active WhatsApp config across all tenants
@@ -358,8 +835,17 @@ router.get("/webhook", async (req, res) => {
   }
 });
 
-// ─── Meta Webhook (POST, NO AUTH) ───────────────────────────────────────────
+// ─── Meta Webhook (POST, NO AUTH) ──────────────────────────────────────────
+//
 // Tenant inferred from matched contact, defaults to 1.
+//
+// Wave 2 Agent KK 2-way completion:
+//   - Every inbound message upserts a WhatsAppThread for (tenantId, normalizedPhone).
+//   - Second inbound on same phone reuses the existing thread; lastMessageAt
+//     and lastInboundAt are bumped; unreadCount increments only when no agent
+//     is assigned (assigned threads zero-out via the mark-read endpoint).
+//   - "STOP" / "UNSUBSCRIBE" keyword auto-creates a WhatsAppOptOut row +
+//     enqueues a confirmation reply (best-effort; logs failure).
 router.post("/webhook", async (req, res) => {
   try {
     const { object, entry } = req.body;
@@ -390,6 +876,41 @@ router.post("/webhook", async (req, res) => {
           });
           const tenantId = contact?.tenantId || 1;
 
+          // Wave 2 Agent KK: thread upsert per (tenantId, normalizedPhone).
+          const normalizedFrom = normalizeToE164(from);
+          let thread = null;
+          if (normalizedFrom) {
+            thread = await prisma.whatsAppThread.upsert({
+              where: { tenantId_contactPhone: { tenantId, contactPhone: normalizedFrom } },
+              create: {
+                tenantId,
+                contactPhone: normalizedFrom,
+                status: "OPEN",
+                contactId: contact?.id || null,
+                lastMessageAt: new Date(),
+                lastInboundAt: new Date(),
+                unreadCount: 1,
+              },
+              update: {
+                lastMessageAt: new Date(),
+                lastInboundAt: new Date(),
+                // Reopen CLOSED threads on new inbound so the agent inbox
+                // surfaces the new message instead of silently dropping it.
+                status: "CLOSED" /* placeholder; updated below */,
+              },
+            });
+            // Two-step status reconciliation: re-fetch and apply OPEN if was CLOSED,
+            // increment unreadCount if no assignee.
+            const fresh = await prisma.whatsAppThread.findUnique({ where: { id: thread.id } });
+            const updates = { lastMessageAt: new Date(), lastInboundAt: new Date() };
+            if (fresh.status === "CLOSED") updates.status = "OPEN";
+            if (!fresh.assignedToId) updates.unreadCount = (fresh.unreadCount || 0) + 1;
+            thread = await prisma.whatsAppThread.update({
+              where: { id: thread.id },
+              data: updates,
+            });
+          }
+
           await prisma.whatsAppMessage.create({
             data: {
               to: metadata.display_phone_number || metadata.phone_number_id || "",
@@ -402,8 +923,68 @@ router.post("/webhook", async (req, res) => {
               providerMsgId: msg.id || null,
               contactId: contact?.id || null,
               tenantId,
+              threadId: thread?.id || null,
             },
           });
+
+          // Wave 2 Agent KK: STOP-keyword opt-out detection. Auto-record
+          // opt-out + best-effort confirmation reply. We don't fail the
+          // webhook on send-confirmation errors — Meta requires a 200 in
+          // ≤5s and the opt-out itself is the load-bearing record.
+          if (isStopKeyword(body) && normalizedFrom) {
+            try {
+              await prisma.whatsAppOptOut.upsert({
+                where: { tenantId_contactPhone: { tenantId, contactPhone: normalizedFrom } },
+                create: {
+                  tenantId,
+                  contactPhone: normalizedFrom,
+                  reason: "STOP_KEYWORD",
+                  notes: `Inbound: ${body.trim().slice(0, 100)}`,
+                },
+                update: {
+                  reason: "STOP_KEYWORD",
+                  notes: `Inbound: ${body.trim().slice(0, 100)}`,
+                },
+              });
+
+              // Outbound confirmation reply — uses sendText with the active
+              // config. Wrapped in its own try/catch so a Meta send error
+              // doesn't blow up the webhook.
+              const config = await prisma.whatsAppConfig.findFirst({
+                where: { isActive: true, tenantId },
+              });
+              if (config && config.accessToken && config.phoneNumberId) {
+                const confirmBody =
+                  "You have been unsubscribed from WhatsApp messages. Reply START to opt back in.";
+                try {
+                  const result = await sendText({
+                    to: from,
+                    body: confirmBody,
+                    phoneNumberId: config.phoneNumberId,
+                    accessToken: config.accessToken,
+                  });
+                  await prisma.whatsAppMessage.create({
+                    data: {
+                      to: from,
+                      from: config.phoneNumberId || "",
+                      body: confirmBody,
+                      direction: "OUTBOUND",
+                      status: result.success ? "SENT" : "FAILED",
+                      providerMsgId: result.providerMsgId || null,
+                      errorMessage: result.error || null,
+                      tenantId,
+                      threadId: thread?.id || null,
+                    },
+                  });
+                } catch (sendErr) {
+                  // Log + continue — opt-out itself is the load-bearing record.
+                  console.warn("STOP-keyword confirmation send failed:", sendErr?.message);
+                }
+              }
+            } catch (optErr) {
+              console.error("STOP-keyword opt-out record error:", optErr);
+            }
+          }
 
           if (req.io) {
             req.io.emit("whatsapp:received", {
@@ -411,6 +992,7 @@ router.post("/webhook", async (req, res) => {
               body,
               mediaType,
               contactId: contact?.id,
+              threadId: thread?.id,
               timestamp: msg.timestamp,
             });
           }

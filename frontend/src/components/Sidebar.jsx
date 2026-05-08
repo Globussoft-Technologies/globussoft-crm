@@ -691,6 +691,12 @@ function renderWellnessNav({
         label="Unified Inbox"
         count={counts.inbox}
       />
+      {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
+      <Link
+        to="/wellness/whatsapp"
+        icon={MessageSquare}
+        label="WhatsApp Threads"
+      />
       <Link
         to="/wellness/telecaller"
         icon={PhoneCall}

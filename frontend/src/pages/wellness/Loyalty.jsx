@@ -240,7 +240,7 @@ function SearchTab({ onCreditChange }) {
             onChange={(e) => setQ(e.target.value)}
             style={inputStyle}
           />
-          <button type="submit" style={{ padding: '0.5rem 0.75rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+          <button type="submit" aria-label="Search patients" style={{ padding: '0.5rem 0.75rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
             <Search size={14} />
           </button>
         </form>

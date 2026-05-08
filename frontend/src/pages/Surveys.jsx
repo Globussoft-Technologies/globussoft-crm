@@ -443,7 +443,7 @@ export default function Surveys() {
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Send size={18} /> Send "{selected.name}"
                 </h3>
-                <button onClick={() => setShowSendModal(false)} disabled={sending} style={iconBtn}><X size={18} /></button>
+                <button onClick={() => setShowSendModal(false)} disabled={sending} style={iconBtn} aria-label="Close send survey dialog"><X size={18} /></button>
               </div>
               <input
                 type="text"
@@ -576,6 +576,7 @@ export default function Surveys() {
                 <button
                   onClick={(e) => deleteSurvey(s.id, e)}
                   title="Delete"
+                  aria-label={`Delete survey ${s.name}`}
                   style={{ ...iconBtn, color: 'var(--text-secondary)' }}
                 >
                   <X size={16} />
@@ -618,7 +619,7 @@ export default function Surveys() {
           <form className="card" style={{ ...modalCard, width: 'min(520px, 92vw)' }} onClick={e => e.stopPropagation()} onSubmit={createSurvey}>
             <div style={modalHeader}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Create Survey</h3>
-              <button type="button" onClick={() => setShowCreate(false)} disabled={submitting} style={iconBtn}><X size={18} /></button>
+              <button type="button" onClick={() => setShowCreate(false)} disabled={submitting} style={iconBtn} aria-label="Close create survey dialog"><X size={18} /></button>
             </div>
             <label style={labelStyle}>Name</label>
             <input

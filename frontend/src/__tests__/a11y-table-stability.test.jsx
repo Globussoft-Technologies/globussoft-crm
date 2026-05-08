@@ -79,6 +79,15 @@ const ICON_BUTTON_SITES = [
   // wellness/Services — service edit + deactivate
   { file: ['pages', 'wellness', 'Services.jsx'], substr: 'aria-label={`Edit service ${service.name}`}' },
   { file: ['pages', 'wellness', 'Services.jsx'], substr: 'aria-label={`Deactivate service ${service.name}`}' },
+  // #632 follow-up — Surveys + Loyalty (skipped from original sweep due to
+  // peer-agent file contention; closed by the wave1-a-aria-632 dispatch).
+  // Surveys — send-survey modal X, list-card delete X (per-survey context),
+  // create-survey modal X.
+  { file: ['pages', 'Surveys.jsx'], substr: 'aria-label="Close send survey dialog"' },
+  { file: ['pages', 'Surveys.jsx'], substr: 'aria-label={`Delete survey ${s.name}`}' },
+  { file: ['pages', 'Surveys.jsx'], substr: 'aria-label="Close create survey dialog"' },
+  // wellness/Loyalty — patient-search submit (icon-only Search button).
+  { file: ['pages', 'wellness', 'Loyalty.jsx'], substr: 'aria-label="Search patients"' },
 ];
 
 describe('#632 — icon-only buttons have aria-label', () => {

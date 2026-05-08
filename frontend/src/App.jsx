@@ -152,6 +152,11 @@ const WellnessVendors = lazy(() => import("./pages/wellness/Vendors"));
 const WellnessInventoryReceipts = lazy(() => import("./pages/wellness/InventoryReceipts"));
 const WellnessInventoryAdjustments = lazy(() => import("./pages/wellness/InventoryAdjustments"));
 const WellnessAutoConsumptionRules = lazy(() => import("./pages/wellness/AutoConsumptionRules"));
+// Wave 11 Agent GG — Resource availability admin pages (rooms / machines /
+// holidays / per-doctor working hours). All ADMIN/MANAGER-only.
+const WellnessResources = lazy(() => import("./pages/wellness/Resources"));
+const WellnessHolidays = lazy(() => import("./pages/wellness/Holidays"));
+const WellnessWorkingHours = lazy(() => import("./pages/wellness/WorkingHoursEditor"));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
 // #341: global catch-all 404. Previously unmapped or wrong-prefix URLs
@@ -832,6 +837,30 @@ export default function App() {
                 <WellnessOnly>
                   <RoleGuard allow={["ADMIN", "MANAGER"]} message="Auto-consumption rules require manager access.">
                     <WellnessAutoConsumptionRules />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              {/* Wave 11 Agent GG — Resource availability admin pages (3 routes).
+                  All ADMIN/MANAGER-only. The booking-conflict gate runs on
+                  every POST/PUT visit. */}
+              <Route path="wellness/resources" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Resources require manager access.">
+                    <WellnessResources />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/holidays" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Holidays require manager access.">
+                    <WellnessHolidays />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/working-hours" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Working hours require manager access.">
+                    <WellnessWorkingHours />
                   </RoleGuard>
                 </WellnessOnly>
               } />

@@ -35,6 +35,8 @@ const { writeAudit, diffFields } = require("../lib/audit");
 // pinned to Asia/Kolkata here rather than reading from tenant.locale. The
 // migration is a clarity + DST-safety win, not a tenant-multi-TZ enabler.
 const { parseDateTimeLocalInTZ, formatInTenantTZ } = require("../lib/datetime");
+// Wave 11 Agent GG: 4-class booking-conflict gate.
+const { assertVisitSlotAvailable } = require("../lib/bookingAvailability");
 // Issue #207/#214/#216: wellness users carry both `role` (ADMIN/MANAGER/USER)
 // and an orthogonal `wellnessRole` (doctor/professional/telecaller/helper).
 // verifyRole only knows about the former, so a USER+doctor could hit Owner-
@@ -1072,7 +1074,8 @@ router.get("/visits/:id", phiReadGate, async (req, res) => {
 
 router.post("/visits", phiWriteGate, async (req, res) => {
   try {
-    const { patientId, serviceId, doctorId, visitDate, status, vitals, notes, amountCharged, treatmentPlanId } = req.body;
+    // Wave 11 Agent GG: resourceId + locationId added to destructure for the booking gate below.
+    const { patientId, serviceId, doctorId, visitDate, status, vitals, notes, amountCharged, treatmentPlanId, resourceId, locationId } = req.body;
     if (!patientId) return res.status(400).json({ error: "patientId is required" });
     // #170: visitDate must be a valid date in [now-5y, now+1y]. Pre-fix the
     // route accepted year 1800 / 3000 (silent 201) and 500'd on bogus strings.
@@ -1102,11 +1105,25 @@ router.post("/visits", phiWriteGate, async (req, res) => {
       return res.status(400).json({ error: "amountCharged exceeds the ₹50,00,000 per-visit cap", code: "AMOUNT_TOO_LARGE" });
     }
 
+    // Wave 11 Agent GG: 4-class booking conflict gate.
+    const slotCheck = await assertVisitSlotAvailable({
+      tenantId: req.user.tenantId,
+      visitDate: visitDate ? parseTenantDateInput(visitDate) : new Date(),
+      doctorId: doctorId ? parseInt(doctorId) : null,
+      resourceId: resourceId ? parseInt(resourceId) : null,
+      locationId: locationId ? parseInt(locationId) : null,
+    });
+    if (!slotCheck.ok) {
+      return res.status(409).json({ error: slotCheck.detail, code: slotCheck.code, detail: slotCheck.detail });
+    }
+
     const visit = await prisma.visit.create({
       data: {
         patientId: parseInt(patientId),
         serviceId: serviceId ? parseInt(serviceId) : null,
         doctorId: doctorId ? parseInt(doctorId) : null,
+        resourceId: resourceId ? parseInt(resourceId) : null,
+        locationId: locationId ? parseInt(locationId) : null,
         treatmentPlanId: treatmentPlanId ? parseInt(treatmentPlanId) : null,
         // #313: route datetime-local form input ("2026-05-15T10:30") through
         // the tenant-TZ parser; full ISO timestamps stay on the native ctor.
@@ -1182,8 +1199,12 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
 
     const data = {};
     // Agent B: added videoRoom (telehealth Jitsi room name)
-    const allowed = ["status", "vitals", "notes", "photosBefore", "photosAfter", "amountCharged", "videoRoom"];
+    // Wave 11 Agent GG: added doctorId/resourceId/locationId for booking gate.
+    const allowed = ["status", "vitals", "notes", "photosBefore", "photosAfter", "amountCharged", "videoRoom", "doctorId", "resourceId", "locationId"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    if (data.doctorId !== undefined) data.doctorId = data.doctorId ? parseInt(data.doctorId, 10) : null;
+    if (data.resourceId !== undefined) data.resourceId = data.resourceId ? parseInt(data.resourceId, 10) : null;
+    if (data.locationId !== undefined) data.locationId = data.locationId ? parseInt(data.locationId, 10) : null;
     // #170 / #197 (PUT-side parity): visitDate must be in [now-5y, now+1y]
     // — same range as POST /visits. Pre-fix the PUT skipped ensureVisitDate
     // and silently accepted year=3001 / year=1800 (parseTenantDateInput
@@ -1219,6 +1240,22 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
           error: `cannot transition visit from '${existing.status}' to '${data.status}'`,
           code: "INVALID_VISIT_TRANSITION",
         });
+      }
+    }
+
+    // Wave 11 Agent GG: re-run gate when slot dimension changes.
+    const slotMutated = data.visitDate !== undefined || data.doctorId !== undefined || data.resourceId !== undefined || data.locationId !== undefined;
+    if (slotMutated && data.status !== "cancelled") {
+      const slotCheck = await assertVisitSlotAvailable({
+        id,
+        tenantId: req.user.tenantId,
+        visitDate: data.visitDate ?? existing.visitDate,
+        doctorId: data.doctorId !== undefined ? data.doctorId : existing.doctorId,
+        resourceId: data.resourceId !== undefined ? data.resourceId : existing.resourceId,
+        locationId: data.locationId !== undefined ? data.locationId : existing.locationId,
+      });
+      if (!slotCheck.ok) {
+        return res.status(409).json({ error: slotCheck.detail, code: slotCheck.code, detail: slotCheck.detail });
       }
     }
 
@@ -2081,6 +2118,474 @@ router.put("/services/:id", verifyWellnessRole(["admin", "manager"]), async (req
   }
 });
 
+// ── Memberships ────────────────────────────────────────────────────
+//
+// Wave 11 Agent EE — Memberships (Google Doc audit, 8 May 2026).
+//
+// Wellness clinics sell time-bound prepaid bundles ("Gold Facial Pack:
+// 10 facials over 6 months for ₹15,000"). The catalog row is a
+// MembershipPlan (admin-managed); a Patient's instance is a Membership
+// (with a running per-service balance); each service consumed against
+// it is a MembershipRedemption row (append-only).
+//
+// Two JSON-string columns to read end-of-end carefully:
+//   plan.entitlements   → JSON `[{ serviceId, quantity }]`
+//   membership.balance  → JSON `[{ serviceId, remaining }]`
+// The balance is stamped from entitlements at purchase, decremented on
+// redeem. Stored stringified because (a) reads/writes always happen
+// as a unit during a redemption, and (b) MySQL JSON column adoption
+// is uneven in this codebase. Mirrors SequenceStep.conditionJson + AbTest
+// variantA/B + the project's standing JSON-string-column rule.
+
+// Parse + validate `entitlements` from request body. Returns either an
+// error object (suitable for res.status/json) or a normalized array of
+// `{ serviceId, quantity }` objects. The serviceId values are NOT yet
+// confirmed to belong to this tenant — call validateEntitlementServices
+// next for that round-trip.
+function parseEntitlementsInput(raw) {
+  if (raw == null) {
+    return { error: { status: 400, error: "entitlements required", code: "ENTITLEMENTS_REQUIRED" } };
+  }
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try { parsed = JSON.parse(raw); } catch {
+      return { error: { status: 400, error: "entitlements must be valid JSON", code: "ENTITLEMENTS_INVALID_JSON" } };
+    }
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    return { error: { status: 400, error: "entitlements must be a non-empty array", code: "ENTITLEMENTS_EMPTY" } };
+  }
+  const seen = new Set();
+  const cleaned = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") {
+      return { error: { status: 400, error: "each entitlement must be an object", code: "ENTITLEMENT_SHAPE_INVALID" } };
+    }
+    const sid = parseInt(item.serviceId, 10);
+    const qty = parseInt(item.quantity, 10);
+    if (!Number.isFinite(sid) || sid < 1) {
+      return { error: { status: 400, error: "entitlement serviceId must be a positive integer", code: "ENTITLEMENT_SERVICE_INVALID" } };
+    }
+    if (!Number.isFinite(qty) || qty < 1) {
+      return { error: { status: 400, error: "entitlement quantity must be ≥ 1", code: "ENTITLEMENT_QUANTITY_INVALID" } };
+    }
+    if (seen.has(sid)) {
+      return { error: { status: 400, error: "entitlements must not repeat the same serviceId", code: "ENTITLEMENT_DUPLICATE_SERVICE" } };
+    }
+    seen.add(sid);
+    cleaned.push({ serviceId: sid, quantity: qty });
+  }
+  return { entitlements: cleaned };
+}
+
+// Cross-tenant safety: every serviceId in entitlements must belong to
+// the current tenant + be active. Refuses unknown / soft-removed / cross-
+// tenant serviceIds with 400 ENTITLEMENT_SERVICE_NOT_FOUND.
+async function validateEntitlementServices(req, entitlements) {
+  const ids = entitlements.map((e) => e.serviceId);
+  const found = await prisma.service.findMany({
+    where: tenantWhere(req, { id: { in: ids } }),
+    select: { id: true },
+  });
+  const foundIds = new Set(found.map((s) => s.id));
+  const missing = ids.filter((id) => !foundIds.has(id));
+  if (missing.length > 0) {
+    return { status: 400, error: `service(s) not found in this tenant: ${missing.join(", ")}`, code: "ENTITLEMENT_SERVICE_NOT_FOUND", missing };
+  }
+  return null;
+}
+
+// GET /membership-plans — list active plans, all-roles (clinical staff
+// need to read so they can offer plans to patients during the visit).
+router.get("/membership-plans", async (req, res) => {
+  try {
+    const includeInactive = req.query.includeInactive === "1" || req.query.includeInactive === "true";
+    const plans = await prisma.membershipPlan.findMany({
+      where: tenantWhere(req, includeInactive ? {} : { isActive: true }),
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
+    });
+    res.json(plans);
+  } catch (e) {
+    console.error("[wellness] list membership plans error:", e.message);
+    res.status(500).json({ error: "Failed to list membership plans" });
+  }
+});
+
+router.get("/membership-plans/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const plan = await prisma.membershipPlan.findFirst({ where: tenantWhere(req, { id }) });
+    if (!plan) return res.status(404).json({ error: "Membership plan not found" });
+    res.json(plan);
+  } catch (e) {
+    console.error("[wellness] get membership plan error:", e.message);
+    res.status(500).json({ error: "Failed to load membership plan" });
+  }
+});
+
+// POST /membership-plans — admin/manager only (catalog mutation, mirrors
+// /services pattern at line 1955).
+router.post("/membership-plans", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const { name, description, durationDays, price, currency, entitlements } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: "name required", code: "NAME_REQUIRED" });
+    }
+    const dur = parseInt(durationDays, 10);
+    if (!Number.isFinite(dur) || dur < 1 || dur > 3650) {
+      return res.status(400).json({ error: "durationDays must be 1..3650", code: "DURATION_INVALID" });
+    }
+    const priceNum = Number(price);
+    if (!Number.isFinite(priceNum) || priceNum <= 0) {
+      return res.status(400).json({ error: "price must be greater than 0", code: "PRICE_REQUIRED" });
+    }
+    if (priceNum > 5_000_000) {
+      return res.status(400).json({ error: "price exceeds maximum (5,000,000)", code: "PRICE_TOO_HIGH" });
+    }
+    const ent = parseEntitlementsInput(entitlements);
+    if (ent.error) return res.status(ent.error.status).json(ent.error);
+    const svcErr = await validateEntitlementServices(req, ent.entitlements);
+    if (svcErr) return res.status(svcErr.status).json(svcErr);
+
+    const plan = await prisma.membershipPlan.create({
+      data: {
+        name: String(name).trim(),
+        description: description || null,
+        durationDays: dur,
+        price: priceNum,
+        currency: currency || "INR",
+        entitlements: JSON.stringify(ent.entitlements),
+        tenantId: req.user.tenantId,
+      },
+    });
+    try {
+      await writeAudit("MembershipPlan", "CREATE", plan.id, req.user.userId, req.user.tenantId, {
+        name: plan.name,
+        durationDays: plan.durationDays,
+        price: plan.price,
+        entitlementCount: ent.entitlements.length,
+      });
+    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    res.status(201).json(plan);
+  } catch (e) {
+    console.error("[wellness] create membership plan error:", e.message);
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to create membership plan" });
+  }
+});
+
+router.put("/membership-plans/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.membershipPlan.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Membership plan not found" });
+    const data = {};
+    if (req.body.name !== undefined) {
+      if (!String(req.body.name).trim()) {
+        return res.status(400).json({ error: "name cannot be empty", code: "NAME_REQUIRED" });
+      }
+      data.name = String(req.body.name).trim();
+    }
+    if (req.body.description !== undefined) data.description = req.body.description || null;
+    if (req.body.durationDays !== undefined) {
+      const dur = parseInt(req.body.durationDays, 10);
+      if (!Number.isFinite(dur) || dur < 1 || dur > 3650) {
+        return res.status(400).json({ error: "durationDays must be 1..3650", code: "DURATION_INVALID" });
+      }
+      data.durationDays = dur;
+    }
+    if (req.body.price !== undefined) {
+      const priceNum = Number(req.body.price);
+      if (!Number.isFinite(priceNum) || priceNum <= 0) {
+        return res.status(400).json({ error: "price must be greater than 0", code: "PRICE_REQUIRED" });
+      }
+      if (priceNum > 5_000_000) {
+        return res.status(400).json({ error: "price exceeds maximum (5,000,000)", code: "PRICE_TOO_HIGH" });
+      }
+      data.price = priceNum;
+    }
+    if (req.body.currency !== undefined) data.currency = String(req.body.currency || "INR");
+    if (req.body.isActive !== undefined) data.isActive = !!req.body.isActive;
+    if (req.body.entitlements !== undefined) {
+      const ent = parseEntitlementsInput(req.body.entitlements);
+      if (ent.error) return res.status(ent.error.status).json(ent.error);
+      const svcErr = await validateEntitlementServices(req, ent.entitlements);
+      if (svcErr) return res.status(svcErr.status).json(svcErr);
+      data.entitlements = JSON.stringify(ent.entitlements);
+    }
+
+    const updated = await prisma.membershipPlan.update({ where: { id }, data });
+    try {
+      const changes = diffFields(existing, updated, Object.keys(data));
+      if (Object.keys(changes).length > 0) {
+        await writeAudit("MembershipPlan", "UPDATE", updated.id, req.user.userId, req.user.tenantId, {
+          changedFields: changes,
+        });
+      }
+    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] update membership plan error:", e.message);
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to update membership plan" });
+  }
+});
+
+// DELETE /membership-plans/:id — soft-delete (set isActive=false).
+// Existing patient memberships are NOT cancelled; they keep their balance
+// until expiry. Only stops new sales of this plan.
+router.delete("/membership-plans/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.membershipPlan.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Membership plan not found" });
+    if (!existing.isActive) {
+      return res.status(409).json({ error: "Membership plan already inactive", code: "PLAN_ALREADY_INACTIVE" });
+    }
+    await prisma.membershipPlan.update({ where: { id }, data: { isActive: false } });
+    try {
+      await writeAudit("MembershipPlan", "SOFT_DELETE", id, req.user.userId, req.user.tenantId, {
+        name: existing.name,
+      });
+    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    res.json({ success: true, id });
+  } catch (e) {
+    console.error("[wellness] delete membership plan error:", e.message);
+    res.status(500).json({ error: "Failed to delete membership plan" });
+  }
+});
+
+// POST /patients/:id/memberships — purchase a membership for a patient.
+// Computes endDate from plan.durationDays, stamps initial balance from
+// plan.entitlements. Audit-logs MEMBERSHIP_PURCHASE.
+router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id, 10);
+    const patient = await prisma.patient.findFirst({ where: tenantWhere(req, { id: patientId, deletedAt: null }) });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const { planId, startDate, invoiceId } = req.body;
+    const planIdInt = parseInt(planId, 10);
+    if (!Number.isFinite(planIdInt) || planIdInt < 1) {
+      return res.status(400).json({ error: "planId required", code: "PLAN_ID_REQUIRED" });
+    }
+    const plan = await prisma.membershipPlan.findFirst({ where: tenantWhere(req, { id: planIdInt }) });
+    if (!plan) return res.status(404).json({ error: "Membership plan not found" });
+    if (!plan.isActive) {
+      return res.status(409).json({ error: "Membership plan is inactive", code: "PLAN_INACTIVE" });
+    }
+
+    const start = startDate ? new Date(startDate) : new Date();
+    if (Number.isNaN(start.getTime())) {
+      return res.status(400).json({ error: "startDate is invalid", code: "START_DATE_INVALID" });
+    }
+    const end = new Date(start.getTime() + plan.durationDays * 86400000);
+
+    // Stamp balance from plan.entitlements. JSON parse is safe because
+    // we wrote the column via JSON.stringify; a malformed legacy row
+    // would surface as 500 rather than a silent zero-balance.
+    let entitlements;
+    try {
+      entitlements = JSON.parse(plan.entitlements);
+    } catch {
+      return res.status(500).json({ error: "Plan entitlements are corrupt", code: "PLAN_ENTITLEMENTS_CORRUPT" });
+    }
+    const initialBalance = entitlements.map((e) => ({ serviceId: e.serviceId, remaining: e.quantity }));
+
+    const data = {
+      tenantId: req.user.tenantId,
+      patientId,
+      planId: plan.id,
+      startDate: start,
+      endDate: end,
+      balance: JSON.stringify(initialBalance),
+      status: "active",
+    };
+    if (invoiceId !== undefined && invoiceId !== null && invoiceId !== "") {
+      const invIdInt = parseInt(invoiceId, 10);
+      if (Number.isFinite(invIdInt)) data.invoiceId = invIdInt;
+    }
+    const membership = await prisma.membership.create({ data });
+    try {
+      await writeAudit("Membership", "PURCHASE", membership.id, req.user.userId, req.user.tenantId, {
+        patientId,
+        patientName: patient.name,
+        planId: plan.id,
+        planName: plan.name,
+        price: plan.price,
+        endDate: end,
+      });
+    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    res.status(201).json(membership);
+  } catch (e) {
+    console.error("[wellness] purchase membership error:", e.message);
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to purchase membership" });
+  }
+});
+
+// GET /patients/:id/memberships — list a patient's memberships
+// (active + cancelled + expired). Includes plan name + parsed balance
+// for the UI's at-a-glance render.
+router.get("/patients/:id/memberships", phiReadGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id, 10);
+    const patient = await prisma.patient.findFirst({ where: tenantWhere(req, { id: patientId }) });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+    const rows = await prisma.membership.findMany({
+      where: tenantWhere(req, { patientId }),
+      include: { plan: { select: { id: true, name: true, durationDays: true, price: true, currency: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(rows);
+  } catch (e) {
+    console.error("[wellness] list patient memberships error:", e.message);
+    res.status(500).json({ error: "Failed to list memberships" });
+  }
+});
+
+// GET /memberships/:id — fetch a single membership (with redemption history).
+router.get("/memberships/:id", phiReadGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const membership = await prisma.membership.findFirst({
+      where: tenantWhere(req, { id }),
+      include: {
+        plan: { select: { id: true, name: true, durationDays: true, price: true, currency: true, entitlements: true } },
+        patient: { select: { id: true, name: true } },
+        redemptions: { orderBy: { redeemedAt: "desc" } },
+      },
+    });
+    if (!membership) return res.status(404).json({ error: "Membership not found" });
+    res.json(membership);
+  } catch (e) {
+    console.error("[wellness] get membership error:", e.message);
+    res.status(500).json({ error: "Failed to load membership" });
+  }
+});
+
+// POST /memberships/:id/redeem — redeem 1 unit of a service.
+//
+// Status codes:
+//   200 — redeemed; returns updated balance + redemption row
+//   400 — bad serviceId / shape
+//   404 — membership not found
+//   409 — balance exhausted for that service (MEMBERSHIP_BALANCE_EXHAUSTED)
+//   410 — membership expired or cancelled (MEMBERSHIP_EXPIRED / MEMBERSHIP_CANCELLED)
+//
+// 410 chosen for expired (mirrors /api/wellness namespace's 410-for-Gone
+// pattern at the top of this file) so the frontend can distinguish "you
+// can buy a new one" from "this never existed."
+router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { serviceId, visitId } = req.body;
+    const serviceIdInt = parseInt(serviceId, 10);
+    if (!Number.isFinite(serviceIdInt) || serviceIdInt < 1) {
+      return res.status(400).json({ error: "serviceId required", code: "SERVICE_ID_REQUIRED" });
+    }
+
+    const membership = await prisma.membership.findFirst({ where: tenantWhere(req, { id }) });
+    if (!membership) return res.status(404).json({ error: "Membership not found" });
+    if (membership.status === "cancelled") {
+      return res.status(410).json({ error: "Membership has been cancelled", code: "MEMBERSHIP_CANCELLED" });
+    }
+    if (membership.status === "expired" || new Date(membership.endDate) < new Date()) {
+      // If the timestamp says expired but the row didn't get marked yet,
+      // mark it now so subsequent reads are correct.
+      if (membership.status !== "expired") {
+        await prisma.membership.update({ where: { id }, data: { status: "expired" } });
+      }
+      return res.status(410).json({ error: "Membership has expired", code: "MEMBERSHIP_EXPIRED" });
+    }
+
+    let balance;
+    try { balance = JSON.parse(membership.balance); } catch {
+      return res.status(500).json({ error: "Membership balance is corrupt", code: "MEMBERSHIP_BALANCE_CORRUPT" });
+    }
+    if (!Array.isArray(balance)) {
+      return res.status(500).json({ error: "Membership balance is corrupt", code: "MEMBERSHIP_BALANCE_CORRUPT" });
+    }
+    const line = balance.find((b) => b.serviceId === serviceIdInt);
+    if (!line) {
+      return res.status(409).json({ error: "Service not covered by this membership", code: "MEMBERSHIP_SERVICE_NOT_COVERED" });
+    }
+    if (line.remaining <= 0) {
+      return res.status(409).json({ error: "Membership balance exhausted for this service", code: "MEMBERSHIP_BALANCE_EXHAUSTED" });
+    }
+
+    line.remaining -= 1;
+
+    const visitIdInt = visitId !== undefined && visitId !== null && visitId !== "" ? parseInt(visitId, 10) : null;
+
+    const [updatedMembership, redemption] = await prisma.$transaction([
+      prisma.membership.update({
+        where: { id },
+        data: { balance: JSON.stringify(balance) },
+      }),
+      prisma.membershipRedemption.create({
+        data: {
+          tenantId: req.user.tenantId,
+          membershipId: id,
+          serviceId: serviceIdInt,
+          visitId: Number.isFinite(visitIdInt) ? visitIdInt : null,
+          redeemedBy: req.user.userId,
+        },
+      }),
+    ]);
+
+    try {
+      await writeAudit("Membership", "REDEEM", id, req.user.userId, req.user.tenantId, {
+        serviceId: serviceIdInt,
+        visitId: Number.isFinite(visitIdInt) ? visitIdInt : null,
+        remainingForService: line.remaining,
+      });
+    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+
+    res.json({
+      success: true,
+      membership: updatedMembership,
+      redemption,
+      balance,
+    });
+  } catch (e) {
+    console.error("[wellness] redeem membership error:", e.message);
+    res.status(500).json({ error: "Failed to redeem membership" });
+  }
+});
+
+// POST /memberships/:id/cancel — admin cancel. Sets status='cancelled',
+// stamps cancelledAt + cancelReason. Idempotent if already cancelled (200).
+router.post("/memberships/:id/cancel", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const membership = await prisma.membership.findFirst({ where: tenantWhere(req, { id }) });
+    if (!membership) return res.status(404).json({ error: "Membership not found" });
+    if (membership.status === "cancelled") {
+      return res.status(200).json({ success: true, idempotent: true, membership });
+    }
+    const reason = req.body.reason ? String(req.body.reason).slice(0, 500) : null;
+    const updated = await prisma.membership.update({
+      where: { id },
+      data: { status: "cancelled", cancelledAt: new Date(), cancelReason: reason },
+    });
+    try {
+      await writeAudit("Membership", "CANCEL", id, req.user.userId, req.user.tenantId, {
+        patientId: membership.patientId,
+        planId: membership.planId,
+        reason,
+      });
+    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    res.json({ success: true, membership: updated });
+  } catch (e) {
+    console.error("[wellness] cancel membership error:", e.message);
+    res.status(500).json({ error: "Failed to cancel membership" });
+  }
+});
+
 // ── Agent recommendations ──────────────────────────────────────────
 
 router.get("/recommendations", async (req, res) => {
@@ -2443,6 +2948,204 @@ router.put("/locations/:id", verifyWellnessRole(["admin", "manager"]), async (re
   }
 });
 
+// -- Resource availability: Resources / Holidays / WorkingHours -----
+//
+// Wave 11 Agent GG. Closes the Google Doc audit gap (8 May 2026): wellness
+// Calendar SYNC was complete but resource AVAILABILITY was missing - no
+// Resource model, no Holiday calendar, no per-doctor WorkingHours. The
+// 4-class conflict envelope helper lives in backend/lib/bookingAvailability.js
+// and is wired into POST/PUT visits above.
+
+router.get("/resources", verifyWellnessRole(["doctor", "professional", "telecaller", "admin", "manager"]), async (req, res) => {
+  try {
+    const where = tenantWhere(req);
+    if (req.query.locationId !== undefined && req.query.locationId !== '') {
+      where.locationId = parseInt(req.query.locationId, 10) || null;
+    }
+    if (req.query.activeOnly === '1' || req.query.activeOnly === 'true') {
+      where.isActive = true;
+    }
+    const rows = await prisma.resource.findMany({ where, orderBy: { name: "asc" } });
+    res.json(rows);
+  } catch (e) {
+    console.error("[wellness] list resources error:", e.message);
+    res.status(500).json({ error: "Failed to list resources" });
+  }
+});
+
+router.post("/resources", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const { name, type, locationId, isActive, serviceIds } = req.body;
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
+    }
+    const allowedTypes = new Set(["ROOM", "MACHINE", "EQUIPMENT"]);
+    if (type !== undefined && type !== null && type !== "" && !allowedTypes.has(type)) {
+      return res.status(400).json({ error: "type must be one of: " + [...allowedTypes].join(", "), code: "INVALID_TYPE" });
+    }
+    let serviceIdsCol = null;
+    if (serviceIds !== undefined && serviceIds !== null) {
+      serviceIdsCol = Array.isArray(serviceIds) ? JSON.stringify(serviceIds) : String(serviceIds);
+    }
+    const row = await prisma.resource.create({
+      data: {
+        name: name.trim(),
+        type: type || "ROOM",
+        locationId: locationId ? parseInt(locationId, 10) : null,
+        isActive: isActive !== false,
+        serviceIds: serviceIdsCol,
+        tenantId: req.user.tenantId,
+      },
+    });
+    try { await writeAudit('Resource', 'CREATE', row.id, req.user.userId, req.user.tenantId, { name: row.name, type: row.type, locationId: row.locationId }); } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+    res.status(201).json(row);
+  } catch (e) {
+    console.error("[wellness] create resource error:", e.message);
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to create resource" });
+  }
+});
+
+router.put("/resources/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.resource.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Resource not found" });
+    const data = {};
+    const allowed = ["name", "type", "locationId", "isActive", "serviceIds"];
+    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    if (data.type !== undefined) {
+      const allowedTypes = new Set(["ROOM", "MACHINE", "EQUIPMENT"]);
+      if (!allowedTypes.has(data.type)) return res.status(400).json({ error: "type must be one of: " + [...allowedTypes].join(", "), code: "INVALID_TYPE" });
+    }
+    if (data.serviceIds !== undefined && data.serviceIds !== null) {
+      data.serviceIds = Array.isArray(data.serviceIds) ? JSON.stringify(data.serviceIds) : String(data.serviceIds);
+    }
+    if (data.locationId !== undefined) data.locationId = data.locationId ? parseInt(data.locationId, 10) : null;
+    const updated = await prisma.resource.update({ where: { id }, data });
+    try {
+      const changes = diffFields(existing, updated, Object.keys(data));
+      if (Object.keys(changes).length > 0) await writeAudit('Resource', 'UPDATE', updated.id, req.user.userId, req.user.tenantId, { changedFields: changes });
+    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] update resource error:", e.message);
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to update resource" });
+  }
+});
+
+router.delete("/resources/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.resource.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Resource not found" });
+    await prisma.resource.delete({ where: { id } });
+    try { await writeAudit('Resource', 'DELETE', id, req.user.userId, req.user.tenantId, { name: existing.name, type: existing.type }); } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+    res.status(204).end();
+  } catch (e) {
+    console.error("[wellness] delete resource error:", e.message);
+    res.status(500).json({ error: "Failed to delete resource" });
+  }
+});
+
+router.get("/holidays", verifyWellnessRole(["doctor", "professional", "telecaller", "admin", "manager"]), async (req, res) => {
+  try {
+    const where = tenantWhere(req);
+    const { from, to } = req.query;
+    if (from || to) { where.date = {}; if (from) where.date.gte = new Date(from); if (to) where.date.lte = new Date(to); }
+    const rows = await prisma.holiday.findMany({ where, orderBy: { date: "asc" } });
+    res.json(rows);
+  } catch (e) {
+    console.error("[wellness] list holidays error:", e.message);
+    res.status(500).json({ error: "Failed to list holidays" });
+  }
+});
+
+router.post("/holidays", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const { date, name, locationId, doctorId } = req.body;
+    if (!date) return res.status(400).json({ error: "date is required", code: "DATE_REQUIRED" });
+    if (!name || typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
+    const istDay = formatInTenantTZ(new Date(date), "Asia/Kolkata", "yyyy-MM-dd");
+    const anchored = new Date(istDay + "T00:00:00.000Z");
+    const row = await prisma.holiday.create({
+      data: {
+        date: anchored,
+        name: name.trim(),
+        locationId: locationId ? parseInt(locationId, 10) : null,
+        doctorId: doctorId ? parseInt(doctorId, 10) : null,
+        tenantId: req.user.tenantId,
+      },
+    });
+    try { await writeAudit('Holiday', 'CREATE', row.id, req.user.userId, req.user.tenantId, { date: row.date, name: row.name, locationId: row.locationId, doctorId: row.doctorId }); } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+    res.status(201).json(row);
+  } catch (e) {
+    console.error("[wellness] create holiday error:", e.message);
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to create holiday" });
+  }
+});
+
+router.delete("/holidays/:id", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.holiday.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Holiday not found" });
+    await prisma.holiday.delete({ where: { id } });
+    try { await writeAudit('Holiday', 'DELETE', id, req.user.userId, req.user.tenantId, { name: existing.name, date: existing.date }); } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+    res.status(204).end();
+  } catch (e) {
+    console.error("[wellness] delete holiday error:", e.message);
+    res.status(500).json({ error: "Failed to delete holiday" });
+  }
+});
+
+router.get("/working-hours", verifyWellnessRole(["doctor", "professional", "telecaller", "admin", "manager"]), async (req, res) => {
+  try {
+    const where = tenantWhere(req);
+    if (req.query.doctorId !== undefined && req.query.doctorId !== '') where.doctorId = parseInt(req.query.doctorId, 10);
+    const rows = await prisma.workingHours.findMany({ where, orderBy: [{ doctorId: "asc" }, { dayOfWeek: "asc" }] });
+    res.json(rows);
+  } catch (e) {
+    console.error("[wellness] list working-hours error:", e.message);
+    res.status(500).json({ error: "Failed to list working hours" });
+  }
+});
+
+router.put("/working-hours/:doctorId", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const doctorId = parseInt(req.params.doctorId, 10);
+    if (!Number.isFinite(doctorId) || doctorId < 1) return res.status(400).json({ error: "doctorId must be a positive integer", code: "INVALID_DOCTOR_ID" });
+    const { schedule } = req.body;
+    if (!Array.isArray(schedule)) return res.status(400).json({ error: "schedule must be an array", code: "SCHEDULE_REQUIRED" });
+    const HHMM = /^\d{2}:\d{2}$/;
+    for (const s of schedule) {
+      if (!Number.isFinite(s.dayOfWeek) || s.dayOfWeek < 0 || s.dayOfWeek > 6) return res.status(400).json({ error: "dayOfWeek must be 0..6", code: "INVALID_DAY_OF_WEEK" });
+      if (!HHMM.test(s.startTime) || !HHMM.test(s.endTime)) return res.status(400).json({ error: "startTime/endTime must be HH:mm", code: "INVALID_TIME" });
+      if (s.startTime >= s.endTime) return res.status(400).json({ error: "endTime must be after startTime", code: "INVERTED_TIME_RANGE" });
+    }
+    const doctor = await prisma.user.findFirst({ where: { id: doctorId, tenantId: req.user.tenantId } });
+    if (!doctor) return res.status(404).json({ error: "Doctor not found in tenant" });
+    await prisma.$transaction(async (tx) => {
+      await tx.workingHours.deleteMany({ where: { tenantId: req.user.tenantId, doctorId } });
+      for (const s of schedule) {
+        await tx.workingHours.create({ data: { tenantId: req.user.tenantId, doctorId, dayOfWeek: s.dayOfWeek, startTime: s.startTime, endTime: s.endTime, isActive: s.isActive !== false } });
+      }
+    });
+    const rows = await prisma.workingHours.findMany({ where: { tenantId: req.user.tenantId, doctorId }, orderBy: { dayOfWeek: "asc" } });
+    try { await writeAudit('WorkingHours', 'UPDATE', doctorId, req.user.userId, req.user.tenantId, { doctorId, scheduleCount: rows.length }); } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+    res.json(rows);
+  } catch (e) {
+    console.error("[wellness] put working-hours error:", e.message);
+    const mapped = httpFromPrismaError(e);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    res.status(500).json({ error: "Failed to update working hours" });
+  }
+});
 // ── Reports: P&L per service / per-professional / per-location ─────
 //
 // All reports accept ?from=&to=&locationId= filters. Default window: last 30 days.
@@ -4915,6 +5618,627 @@ router.post("/portal/login/verify-otp", async (req, res) => {
   } catch (e) {
     console.error("[wellness] portal verify-otp error:", e.message);
     res.status(500).json({ error: "Failed to verify OTP" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Wave 11 Agent FF — Wallet + GiftCard + Coupon + Cashback ledger system.
+//
+// Surface map: see commit body. All routes tenant-scoped via tenantWhere.
+// Sign convention on WalletTransaction.amount: credits positive, debits
+// negative (mirrors QuickBooks). All ledger writes go through Prisma
+// $transaction so balance + ledger row stay in lock-step.
+// ─────────────────────────────────────────────────────────────────────
+const { generateGiftCode, computeCouponDiscount, computeCashbackEarn } = require("../lib/walletCodes");
+
+async function writeWalletTransaction({
+  tenantId, walletId, type, absAmount, performedBy, reason,
+  visitId = null, invoiceId = null, giftCardId = null, couponId = null,
+}) {
+  const isCredit = String(type || "").startsWith("CREDIT_");
+  const isDebit = String(type || "").startsWith("DEBIT_");
+  if (!isCredit && !isDebit) {
+    throw new Error(`Invalid wallet transaction type: ${type}`);
+  }
+  const signed = isCredit ? Math.abs(absAmount) : -Math.abs(absAmount);
+  return prisma.$transaction(async (tx) => {
+    const wallet = await tx.wallet.findFirst({ where: { id: walletId, tenantId } });
+    if (!wallet) throw new Error("WALLET_NOT_FOUND");
+    const newBalance = +(wallet.balance + signed).toFixed(2);
+    if (newBalance < 0) {
+      const e = new Error("INSUFFICIENT_BALANCE");
+      e.code = "INSUFFICIENT_BALANCE";
+      throw e;
+    }
+    await tx.wallet.update({ where: { id: walletId }, data: { balance: newBalance } });
+    return tx.walletTransaction.create({
+      data: {
+        tenantId, walletId, type, amount: signed, reason: reason || null,
+        visitId, invoiceId, giftCardId, couponId,
+        balanceAfter: newBalance, performedBy,
+      },
+    });
+  });
+}
+
+async function getOrCreateWallet(req, patientId) {
+  let wallet = await prisma.wallet.findFirst({
+    where: { tenantId: req.user.tenantId, patientId },
+  });
+  if (wallet) return wallet;
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: req.user.tenantId },
+    select: { defaultCurrency: true },
+  });
+  return prisma.wallet.create({
+    data: {
+      tenantId: req.user.tenantId,
+      patientId,
+      currency: tenant?.defaultCurrency || "INR",
+    },
+  });
+}
+
+router.get("/patients/:id/wallet", phiReadGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id, 10);
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true, name: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+    const wallet = await getOrCreateWallet(req, patientId);
+    const transactions = await prisma.walletTransaction.findMany({
+      where: { tenantId: req.user.tenantId, walletId: wallet.id },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    });
+    res.json({ patient, wallet, transactions });
+  } catch (e) {
+    console.error("[wellness] wallet get error:", e.message);
+    res.status(500).json({ error: "Failed to load wallet" });
+  }
+});
+
+router.post("/wallet/:walletId/credit", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const walletId = parseInt(req.params.walletId, 10);
+    const amount = Number(req.body.amount);
+    const reason = req.body.reason || "Manual credit";
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+    const wallet = await prisma.wallet.findFirst({
+      where: { id: walletId, tenantId: req.user.tenantId },
+    });
+    if (!wallet) return res.status(404).json({ error: "Wallet not found" });
+    const tx = await writeWalletTransaction({
+      tenantId: req.user.tenantId, walletId, type: "CREDIT_REFUND",
+      absAmount: amount, performedBy: req.user.userId, reason,
+    });
+    await writeAudit("Wallet", "CREDIT", walletId, req.user.userId, req.user.tenantId, {
+      transactionId: tx.id, amount, reason,
+    });
+    res.status(201).json(tx);
+  } catch (e) {
+    console.error("[wellness] wallet credit error:", e.message);
+    res.status(500).json({ error: "Failed to credit wallet" });
+  }
+});
+
+router.post("/wallet/:walletId/debit", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const walletId = parseInt(req.params.walletId, 10);
+    const amount = Number(req.body.amount);
+    const reason = req.body.reason || "Manual debit";
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+    const wallet = await prisma.wallet.findFirst({
+      where: { id: walletId, tenantId: req.user.tenantId },
+    });
+    if (!wallet) return res.status(404).json({ error: "Wallet not found" });
+    let tx;
+    try {
+      tx = await writeWalletTransaction({
+        tenantId: req.user.tenantId, walletId, type: "DEBIT_REVERSAL",
+        absAmount: amount, performedBy: req.user.userId, reason,
+      });
+    } catch (err) {
+      if (err.code === "INSUFFICIENT_BALANCE") {
+        return res.status(409).json({ error: "Wallet has insufficient balance", code: "INSUFFICIENT_BALANCE" });
+      }
+      throw err;
+    }
+    await writeAudit("Wallet", "DEBIT", walletId, req.user.userId, req.user.tenantId, {
+      transactionId: tx.id, amount, reason,
+    });
+    res.status(201).json(tx);
+  } catch (e) {
+    console.error("[wellness] wallet debit error:", e.message);
+    res.status(500).json({ error: "Failed to debit wallet" });
+  }
+});
+
+router.get("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const { status, limit = 100, offset = 0 } = req.query;
+    const where = tenantWhere(req);
+    if (status) where.status = String(status);
+    const [giftCards, total] = await Promise.all([
+      prisma.giftCard.findMany({
+        where, orderBy: { createdAt: "desc" },
+        take: Math.min(parseInt(limit, 10) || 100, 500),
+        skip: parseInt(offset, 10) || 0,
+      }),
+      prisma.giftCard.count({ where }),
+    ]);
+    res.json({ giftCards, total });
+  } catch (e) {
+    console.error("[wellness] giftcards list error:", e.message);
+    res.status(500).json({ error: "Failed to list gift cards" });
+  }
+});
+
+router.post("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+    const expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
+    if (expiresAt && Number.isNaN(expiresAt.getTime())) {
+      return res.status(400).json({ error: "expiresAt must be a valid date" });
+    }
+    if (expiresAt && expiresAt.getTime() < Date.now()) {
+      return res.status(400).json({ error: "expiresAt must be in the future" });
+    }
+    const issuedTo = req.body.issuedTo ? parseInt(req.body.issuedTo, 10) : null;
+    if (issuedTo) {
+      const recipient = await prisma.patient.findFirst({
+        where: tenantWhere(req, { id: issuedTo }),
+        select: { id: true },
+      });
+      if (!recipient) return res.status(404).json({ error: "Recipient patient not found" });
+    }
+    let row = null;
+    for (let i = 0; i < 3 && !row; i++) {
+      const code = generateGiftCode(16);
+      try {
+        row = await prisma.giftCard.create({
+          data: {
+            tenantId: req.user.tenantId, code, amount,
+            currency: req.body.currency || "INR",
+            expiresAt, issuedTo, issuedFrom: req.user.userId,
+          },
+        });
+      } catch (err) {
+        if (err.code !== "P2002") throw err;
+      }
+    }
+    if (!row) return res.status(500).json({ error: "Failed to allocate gift-card code" });
+    await writeAudit("GiftCard", "CREATE", row.id, req.user.userId, req.user.tenantId, {
+      code: row.code, amount, issuedTo,
+    });
+    res.status(201).json(row);
+  } catch (e) {
+    console.error("[wellness] giftcard create error:", e.message);
+    res.status(500).json({ error: "Failed to issue gift card" });
+  }
+});
+
+router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
+  try {
+    const code = String(req.body.code || "").trim().toUpperCase();
+    const patientId = parseInt(req.body.patientId, 10);
+    if (!code) return res.status(400).json({ error: "code is required", code: "CODE_REQUIRED" });
+    if (!Number.isFinite(patientId) || patientId < 1) {
+      return res.status(400).json({ error: "patientId is required" });
+    }
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true, name: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+    const giftCard = await prisma.giftCard.findFirst({
+      where: { tenantId: req.user.tenantId, code },
+    });
+    if (!giftCard) return res.status(404).json({ error: "Gift card not found", code: "GIFTCARD_NOT_FOUND" });
+    if (giftCard.status === "redeemed") {
+      return res.status(409).json({ error: "Gift card already redeemed", code: "GIFTCARD_ALREADY_REDEEMED" });
+    }
+    if (giftCard.status !== "active") {
+      return res.status(409).json({ error: `Gift card status is ${giftCard.status}`, code: "GIFTCARD_INACTIVE" });
+    }
+    if (giftCard.expiresAt && giftCard.expiresAt.getTime() < Date.now()) {
+      await prisma.giftCard.update({ where: { id: giftCard.id }, data: { status: "expired" } });
+      return res.status(410).json({ error: "Gift card has expired", code: "GIFTCARD_EXPIRED" });
+    }
+    const wallet = await getOrCreateWallet(req, patientId);
+    let tx;
+    try {
+      tx = await writeWalletTransaction({
+        tenantId: req.user.tenantId, walletId: wallet.id,
+        type: "CREDIT_GIFTCARD", absAmount: giftCard.amount,
+        performedBy: req.user.userId,
+        reason: `Gift card ${giftCard.code} redeemed`,
+        giftCardId: giftCard.id,
+      });
+    } catch (err) {
+      console.error("[wellness] giftcard redeem write tx error:", err.message);
+      return res.status(500).json({ error: "Failed to credit wallet" });
+    }
+    const updated = await prisma.giftCard.update({
+      where: { id: giftCard.id },
+      data: { status: "redeemed", redeemedAt: new Date(), redeemedBy: patientId },
+    });
+    await writeAudit("GiftCard", "REDEEM", giftCard.id, req.user.userId, req.user.tenantId, {
+      code: giftCard.code, amount: giftCard.amount, patientId, transactionId: tx.id,
+    });
+    res.status(201).json({ giftCard: updated, transaction: tx });
+  } catch (e) {
+    console.error("[wellness] giftcard redeem error:", e.message);
+    res.status(500).json({ error: "Failed to redeem gift card" });
+  }
+});
+
+function validateCouponBody(body) {
+  const errors = [];
+  if (!body.code || !String(body.code).trim()) errors.push("code is required");
+  if (!["PERCENT", "FLAT"].includes(body.discountType)) {
+    errors.push("discountType must be PERCENT or FLAT");
+  }
+  const v = Number(body.discountValue);
+  if (!Number.isFinite(v) || v <= 0) errors.push("discountValue must be a positive number");
+  if (body.discountType === "PERCENT" && v > 100) errors.push("PERCENT discountValue must be ≤ 100");
+  if (body.maxRedemptions != null) {
+    const m = parseInt(body.maxRedemptions, 10);
+    if (!Number.isFinite(m) || m < 0) errors.push("maxRedemptions must be a non-negative integer");
+  }
+  return errors;
+}
+
+router.get("/coupons", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const where = tenantWhere(req);
+    if (req.query.isActive === "true") where.isActive = true;
+    if (req.query.isActive === "false") where.isActive = false;
+    const coupons = await prisma.coupon.findMany({
+      where, orderBy: { createdAt: "desc" }, take: 200,
+    });
+    res.json({ coupons });
+  } catch (e) {
+    console.error("[wellness] coupons list error:", e.message);
+    res.status(500).json({ error: "Failed to list coupons" });
+  }
+});
+
+router.post("/coupons", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const errors = validateCouponBody(req.body);
+    if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+    const code = String(req.body.code).trim().toUpperCase();
+    const data = {
+      tenantId: req.user.tenantId,
+      code,
+      discountType: req.body.discountType,
+      discountValue: Number(req.body.discountValue),
+      maxRedemptions: req.body.maxRedemptions != null ? parseInt(req.body.maxRedemptions, 10) : null,
+      validFrom: req.body.validFrom ? new Date(req.body.validFrom) : null,
+      validUntil: req.body.validUntil ? new Date(req.body.validUntil) : null,
+      serviceIds: req.body.serviceIds
+        ? (Array.isArray(req.body.serviceIds)
+          ? JSON.stringify(req.body.serviceIds.map((n) => parseInt(n, 10)).filter(Number.isFinite))
+          : String(req.body.serviceIds))
+        : null,
+      isActive: req.body.isActive === false ? false : true,
+    };
+    let row;
+    try {
+      row = await prisma.coupon.create({ data });
+    } catch (err) {
+      if (err.code === "P2002") {
+        return res.status(409).json({ error: "Coupon code already exists in this tenant", code: "COUPON_DUPLICATE" });
+      }
+      throw err;
+    }
+    await writeAudit("Coupon", "CREATE", row.id, req.user.userId, req.user.tenantId, {
+      code: row.code, discountType: row.discountType, discountValue: row.discountValue,
+    });
+    res.status(201).json(row);
+  } catch (e) {
+    console.error("[wellness] coupon create error:", e.message);
+    res.status(500).json({ error: "Failed to create coupon" });
+  }
+});
+
+router.put("/coupons/:id", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.coupon.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Coupon not found" });
+    const data = {};
+    const allowed = ["discountType", "discountValue", "maxRedemptions", "validFrom", "validUntil", "isActive", "serviceIds"];
+    for (const k of allowed) {
+      if (req.body[k] === undefined) continue;
+      if (k === "discountValue") {
+        const v = Number(req.body[k]);
+        if (!Number.isFinite(v) || v <= 0) return res.status(400).json({ error: "discountValue must be positive" });
+        data[k] = v;
+      } else if (k === "discountType") {
+        if (!["PERCENT", "FLAT"].includes(req.body[k])) {
+          return res.status(400).json({ error: "discountType must be PERCENT or FLAT" });
+        }
+        data[k] = req.body[k];
+      } else if (k === "maxRedemptions") {
+        data[k] = req.body[k] == null ? null : parseInt(req.body[k], 10);
+      } else if (k === "validFrom" || k === "validUntil") {
+        data[k] = req.body[k] ? new Date(req.body[k]) : null;
+      } else if (k === "isActive") {
+        data[k] = !!req.body[k];
+      } else if (k === "serviceIds") {
+        data[k] = req.body[k]
+          ? (Array.isArray(req.body[k])
+            ? JSON.stringify(req.body[k].map((n) => parseInt(n, 10)).filter(Number.isFinite))
+            : String(req.body[k]))
+          : null;
+      }
+    }
+    const updated = await prisma.coupon.update({ where: { id }, data });
+    await writeAudit("Coupon", "UPDATE", id, req.user.userId, req.user.tenantId, diffFields(existing, updated));
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] coupon update error:", e.message);
+    res.status(500).json({ error: "Failed to update coupon" });
+  }
+});
+
+router.delete("/coupons/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.coupon.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Coupon not found" });
+    await prisma.coupon.delete({ where: { id } });
+    await writeAudit("Coupon", "DELETE", id, req.user.userId, req.user.tenantId, { code: existing.code });
+    res.status(204).send();
+  } catch (e) {
+    console.error("[wellness] coupon delete error:", e.message);
+    res.status(500).json({ error: "Failed to delete coupon" });
+  }
+});
+
+async function loadCouponForApply(req, code) {
+  const coupon = await prisma.coupon.findFirst({
+    where: { tenantId: req.user.tenantId, code: String(code || "").trim().toUpperCase() },
+  });
+  if (!coupon) return { error: { status: 404, code: "COUPON_NOT_FOUND", message: "Coupon not found" } };
+  if (!coupon.isActive) return { error: { status: 409, code: "COUPON_INACTIVE", message: "Coupon is inactive" }, coupon };
+  const now = Date.now();
+  if (coupon.validFrom && coupon.validFrom.getTime() > now) {
+    return { error: { status: 409, code: "COUPON_NOT_YET_VALID", message: "Coupon is not yet valid" }, coupon };
+  }
+  if (coupon.validUntil && coupon.validUntil.getTime() < now) {
+    return { error: { status: 410, code: "COUPON_EXPIRED", message: "Coupon has expired" }, coupon };
+  }
+  if (coupon.maxRedemptions != null && coupon.redemptionCount >= coupon.maxRedemptions) {
+    return { error: { status: 409, code: "COUPON_LIMIT_REACHED", message: "Coupon redemption limit reached" }, coupon };
+  }
+  return { coupon };
+}
+
+router.post("/coupons/preview", async (req, res) => {
+  try {
+    const { code, baseAmount, serviceId } = req.body || {};
+    const base = Number(baseAmount);
+    if (!Number.isFinite(base) || base <= 0) {
+      return res.status(400).json({ error: "baseAmount must be a positive number" });
+    }
+    const lookup = await loadCouponForApply(req, code);
+    if (lookup.error) {
+      return res.status(lookup.error.status).json({ error: lookup.error.message, code: lookup.error.code });
+    }
+    const result = computeCouponDiscount(lookup.coupon, base, serviceId ? parseInt(serviceId, 10) : null);
+    res.json({
+      code: lookup.coupon.code,
+      discountType: lookup.coupon.discountType,
+      discountValue: lookup.coupon.discountValue,
+      baseAmount: +base.toFixed(2),
+      ...result,
+    });
+  } catch (e) {
+    console.error("[wellness] coupon preview error:", e.message);
+    res.status(500).json({ error: "Failed to preview coupon" });
+  }
+});
+
+router.post("/coupons/apply", phiReadGate, async (req, res) => {
+  try {
+    const { code, baseAmount, invoiceId, serviceId } = req.body || {};
+    const base = Number(baseAmount);
+    if (!Number.isFinite(base) || base <= 0) {
+      return res.status(400).json({ error: "baseAmount must be a positive number" });
+    }
+    const lookup = await loadCouponForApply(req, code);
+    if (lookup.error) {
+      return res.status(lookup.error.status).json({ error: lookup.error.message, code: lookup.error.code });
+    }
+    const result = computeCouponDiscount(lookup.coupon, base, serviceId ? parseInt(serviceId, 10) : null);
+    if (!result.applied) {
+      return res.status(409).json({ error: "Coupon does not apply to this purchase", code: "COUPON_NOT_APPLICABLE" });
+    }
+    const updated = await prisma.coupon.update({
+      where: { id: lookup.coupon.id },
+      data: { redemptionCount: { increment: 1 } },
+    });
+    await writeAudit("Coupon", "APPLY", lookup.coupon.id, req.user.userId, req.user.tenantId, {
+      code: lookup.coupon.code,
+      baseAmount: +base.toFixed(2),
+      discount: result.discount,
+      finalAmount: result.finalAmount,
+      invoiceId: invoiceId ? parseInt(invoiceId, 10) : null,
+      serviceId: serviceId ? parseInt(serviceId, 10) : null,
+    });
+    res.json({
+      code: lookup.coupon.code,
+      ...result,
+      redemptionCount: updated.redemptionCount,
+    });
+  } catch (e) {
+    console.error("[wellness] coupon apply error:", e.message);
+    res.status(500).json({ error: "Failed to apply coupon" });
+  }
+});
+
+function validateCashbackRuleBody(body) {
+  const errors = [];
+  if (!body.name || !String(body.name).trim()) errors.push("name is required");
+  const v = Number(body.earnPercent);
+  if (!Number.isFinite(v) || v < 0) errors.push("earnPercent must be a non-negative number");
+  if (v > 100) errors.push("earnPercent must be ≤ 100");
+  if (body.minSpend != null) {
+    const m = Number(body.minSpend);
+    if (!Number.isFinite(m) || m < 0) errors.push("minSpend must be a non-negative number");
+  }
+  return errors;
+}
+
+router.get("/cashback-rules", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const where = tenantWhere(req);
+    if (req.query.isActive === "true") where.isActive = true;
+    if (req.query.isActive === "false") where.isActive = false;
+    const rules = await prisma.cashbackRule.findMany({ where, orderBy: { createdAt: "desc" } });
+    res.json({ rules });
+  } catch (e) {
+    console.error("[wellness] cashback list error:", e.message);
+    res.status(500).json({ error: "Failed to list cashback rules" });
+  }
+});
+
+router.post("/cashback-rules", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const errors = validateCashbackRuleBody(req.body);
+    if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+    const data = {
+      tenantId: req.user.tenantId,
+      name: String(req.body.name).trim(),
+      earnPercent: Number(req.body.earnPercent),
+      minSpend: req.body.minSpend != null ? Number(req.body.minSpend) : null,
+      serviceIds: req.body.serviceIds
+        ? (Array.isArray(req.body.serviceIds)
+          ? JSON.stringify(req.body.serviceIds.map((n) => parseInt(n, 10)).filter(Number.isFinite))
+          : String(req.body.serviceIds))
+        : null,
+      isActive: req.body.isActive === false ? false : true,
+    };
+    const row = await prisma.cashbackRule.create({ data });
+    await writeAudit("CashbackRule", "CREATE", row.id, req.user.userId, req.user.tenantId, {
+      name: row.name, earnPercent: row.earnPercent,
+    });
+    res.status(201).json(row);
+  } catch (e) {
+    console.error("[wellness] cashback create error:", e.message);
+    res.status(500).json({ error: "Failed to create cashback rule" });
+  }
+});
+
+router.put("/cashback-rules/:id", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.cashbackRule.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Cashback rule not found" });
+    const data = {};
+    const allowed = ["name", "earnPercent", "minSpend", "serviceIds", "isActive"];
+    for (const k of allowed) {
+      if (req.body[k] === undefined) continue;
+      if (k === "name") {
+        data[k] = String(req.body[k]).trim();
+      } else if (k === "earnPercent") {
+        const v = Number(req.body[k]);
+        if (!Number.isFinite(v) || v < 0 || v > 100) {
+          return res.status(400).json({ error: "earnPercent must be 0..100" });
+        }
+        data[k] = v;
+      } else if (k === "minSpend") {
+        data[k] = req.body[k] == null ? null : Number(req.body[k]);
+      } else if (k === "isActive") {
+        data[k] = !!req.body[k];
+      } else if (k === "serviceIds") {
+        data[k] = req.body[k]
+          ? (Array.isArray(req.body[k])
+            ? JSON.stringify(req.body[k].map((n) => parseInt(n, 10)).filter(Number.isFinite))
+            : String(req.body[k]))
+          : null;
+      }
+    }
+    const updated = await prisma.cashbackRule.update({ where: { id }, data });
+    await writeAudit("CashbackRule", "UPDATE", id, req.user.userId, req.user.tenantId, diffFields(existing, updated));
+    res.json(updated);
+  } catch (e) {
+    console.error("[wellness] cashback update error:", e.message);
+    res.status(500).json({ error: "Failed to update cashback rule" });
+  }
+});
+
+router.delete("/cashback-rules/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.cashbackRule.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Cashback rule not found" });
+    await prisma.cashbackRule.delete({ where: { id } });
+    await writeAudit("CashbackRule", "DELETE", id, req.user.userId, req.user.tenantId, { name: existing.name });
+    res.status(204).send();
+  } catch (e) {
+    console.error("[wellness] cashback delete error:", e.message);
+    res.status(500).json({ error: "Failed to delete cashback rule" });
+  }
+});
+
+router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
+  try {
+    const visitId = parseInt(req.params.id, 10);
+    const visit = await prisma.visit.findFirst({
+      where: tenantWhere(req, { id: visitId }),
+      select: { id: true, patientId: true, serviceId: true, amountCharged: true, status: true },
+    });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+    if (visit.status !== "completed") {
+      return res.status(409).json({ error: "Cashback can only be applied to completed visits", code: "VISIT_NOT_COMPLETED" });
+    }
+    const existing = await prisma.walletTransaction.findFirst({
+      where: { tenantId: req.user.tenantId, visitId, type: "CREDIT_CASHBACK" },
+      select: { id: true, amount: true },
+    });
+    if (existing) {
+      return res.status(409).json({
+        error: "Cashback already applied for this visit",
+        code: "CASHBACK_ALREADY_APPLIED",
+        transactionId: existing.id,
+      });
+    }
+    const rules = await prisma.cashbackRule.findMany({
+      where: { tenantId: req.user.tenantId, isActive: true },
+      orderBy: { createdAt: "asc" },
+    });
+    const result = computeCashbackEarn(rules, Number(visit.amountCharged) || 0, visit.serviceId);
+    if (!result.applied) {
+      return res.json({ applied: false, earn: 0, ruleId: null });
+    }
+    const wallet = await getOrCreateWallet(req, visit.patientId);
+    const tx = await writeWalletTransaction({
+      tenantId: req.user.tenantId, walletId: wallet.id,
+      type: "CREDIT_CASHBACK", absAmount: result.earn,
+      performedBy: req.user.userId,
+      reason: `Cashback for Visit #${visitId} (rule ${result.ruleId})`,
+      visitId,
+    });
+    await writeAudit("Patient", "CASHBACK_EARN", visit.patientId, req.user.userId, req.user.tenantId, {
+      visitId, ruleId: result.ruleId, earn: result.earn, transactionId: tx.id,
+    });
+    res.status(201).json({ applied: true, earn: result.earn, ruleId: result.ruleId, transaction: tx });
+  } catch (e) {
+    console.error("[wellness] cashback apply error:", e.message);
+    res.status(500).json({ error: "Failed to apply cashback" });
   }
 });
 

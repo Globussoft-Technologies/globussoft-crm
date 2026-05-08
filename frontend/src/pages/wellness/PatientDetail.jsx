@@ -1,11 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
 import { formatDate } from '../../utils/date';
-import { currencySymbol } from '../../utils/money';
+import { currencySymbol, formatMoney } from '../../utils/money';
 
 const tabStyle = (active) => ({
   padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
@@ -137,6 +137,10 @@ export default function PatientDetail() {
         <button style={tabStyle(tab === 'inventory')} onClick={() => setTab('inventory')}><Package size={14} /> Inventory used</button>
         {/* Agent B: telehealth tab */}
         <button style={tabStyle(tab === 'telehealth')} onClick={() => setTab('telehealth')}><Video size={14} /> Telehealth</button>
+        {/* Wave 11 Agent FF: wallet tab */}
+        <button style={tabStyle(tab === 'wallet')} onClick={() => setTab('wallet')}><WalletIcon size={14} /> Wallet</button>
+        {/* Wave 11 Agent EE: Memberships tab — patient's purchased plans + balances */}
+        <button style={tabStyle(tab === 'memberships')} onClick={() => setTab('memberships')}><Crown size={14} /> Memberships</button>
       </div>
 
       {tab === 'history' && <CaseHistoryTab patient={patient} />}
@@ -147,6 +151,112 @@ export default function PatientDetail() {
       {tab === 'photos' && <PhotosTab patient={patient} onSaved={load} />}
       {tab === 'inventory' && <InventoryTab patient={patient} onSaved={load} />}
       {tab === 'telehealth' && <TelehealthTab patient={patient} onSaved={load} />}
+      {tab === 'wallet' && <WalletTab patient={patient} />}
+      {tab === 'memberships' && <MembershipsTab patient={patient} services={services} />}
+    </div>
+  );
+}
+
+// ── Wallet tab — balance + recent transactions + redeem-giftcard ──
+// Wave 11 Agent FF. Read-only history; redeem flow lets staff paste a gift
+// code that the patient handed in (the credit lands in this patient's
+// wallet). For larger flows (admin manual credit/debit, full ledger view)
+// see /wellness/wallet at the admin sidebar entry.
+function WalletTab({ patient }) {
+  const [data, setData] = useState(null);
+  const [code, setCode] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const notify = useNotify();
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const j = await fetchApi(`/api/wellness/patients/${patient.id}/wallet`);
+      setData(j);
+    } catch (e) {
+      notify.error(e.message || 'Failed to load wallet');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); /* eslint-disable-line */ }, [patient.id]);
+
+  const redeem = async () => {
+    if (!code.trim()) return notify.error('Enter a gift card code.');
+    setSubmitting(true);
+    try {
+      await fetchApi('/api/wellness/giftcards/redeem', {
+        method: 'POST',
+        body: JSON.stringify({ code: code.trim().toUpperCase(), patientId: patient.id }),
+      });
+      notify.success('Gift card redeemed');
+      setCode('');
+      load();
+    } catch (e) {
+      notify.error(e.message || 'Failed to redeem gift card');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading || !data) return <div>Loading wallet…</div>;
+  const { wallet, transactions } = data;
+
+  return (
+    <div className="glass" style={{ padding: '1.25rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <div>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Wallet balance</div>
+          <div style={{ fontSize: '1.75rem', fontWeight: 600 }}>
+            {formatMoney(wallet.balance, { currency: wallet.currency })}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
+          <input
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="Gift card code"
+            style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
+          />
+          <button
+            onClick={redeem}
+            disabled={submitting}
+            style={{ padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+          >
+            {submitting ? 'Redeeming…' : 'Redeem'}
+          </button>
+        </div>
+      </div>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Recent transactions</h4>
+      {transactions.length === 0 ? (
+        <div style={{ color: 'var(--text-secondary)' }}>No transactions yet.</div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Date</th>
+              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Type</th>
+              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Amount</th>
+              <th style={{ textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {transactions.map((tx) => (
+              <tr key={tx.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{formatDate(tx.createdAt)}</td>
+                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.type.replace('_', ' ')}</td>
+                <td style={{ padding: '0.5rem', fontSize: '0.85rem', color: tx.amount >= 0 ? 'var(--success-color, #10b981)' : 'var(--danger-color, #ef4444)' }}>
+                  {tx.amount >= 0 ? '+' : ''}{formatMoney(tx.amount, { currency: wallet.currency })}
+                </td>
+                <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{tx.reason || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
@@ -1547,6 +1657,162 @@ function TelehealthTab({ patient, onSaved }) {
             allow="camera; microphone; fullscreen; display-capture; autoplay"
             style={{ width: '100%', height: 600, border: 0, borderRadius: 8, background: '#000' }}
           />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Wave 11 Agent EE: Memberships tab ──────────────────────────────
+// Lists the patient's memberships (active + cancelled + expired), shows
+// remaining balances per service, and offers a "Buy membership" button
+// that opens the plan picker. Redemption happens from the visit-create
+// flow (PHI-write gate); this tab is the patient-side surface.
+function MembershipsTab({ patient, services }) {
+  const notify = useNotify();
+  const [memberships, setMemberships] = useState([]);
+  const [plans, setPlans] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showBuy, setShowBuy] = useState(false);
+  const [pickedPlanId, setPickedPlanId] = useState('');
+  const [buying, setBuying] = useState(false);
+
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      fetchApi(`/api/wellness/patients/${patient.id}/memberships`).catch(() => []),
+      fetchApi('/api/wellness/membership-plans').catch(() => []),
+    ])
+      .then(([m, p]) => {
+        setMemberships(Array.isArray(m) ? m : []);
+        setPlans(Array.isArray(p) ? p : []);
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, [patient.id]);
+
+  const buy = async () => {
+    if (!pickedPlanId) {
+      notify.error('Pick a plan first');
+      return;
+    }
+    setBuying(true);
+    try {
+      await fetchApi(`/api/wellness/patients/${patient.id}/memberships`, {
+        method: 'POST',
+        body: JSON.stringify({ planId: parseInt(pickedPlanId, 10) }),
+      });
+      notify.success('Membership purchased');
+      setShowBuy(false);
+      setPickedPlanId('');
+      load();
+    } catch (_err) {
+      // fetchApi toasted
+    } finally {
+      setBuying(false);
+    }
+  };
+
+  const cancel = async (m) => {
+    if (!confirm(`Cancel "${m.plan?.name || 'membership'}"? Remaining entitlements will be void.`)) return;
+    try {
+      await fetchApi(`/api/wellness/memberships/${m.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'staff cancel' }),
+      });
+      notify.success('Membership cancelled');
+      load();
+    } catch (_err) { /* toasted */ }
+  };
+
+  const serviceName = (id) => {
+    const s = services.find((x) => x.id === id);
+    return s ? s.name : `Service #${id}`;
+  };
+
+  if (loading) return <div className="glass" style={{ padding: '1.5rem' }}>Loading memberships…</div>;
+
+  return (
+    <div className="glass" style={{ padding: '1.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <h2 style={{ fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <Crown size={18} /> Memberships
+        </h2>
+        <button
+          onClick={() => setShowBuy(!showBuy)}
+          style={{ padding: '0.4rem 0.8rem', borderRadius: 6, background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+        >
+          <Plus size={14} /> {showBuy ? 'Cancel' : 'Buy membership'}
+        </button>
+      </div>
+
+      {showBuy && (
+        <div style={{ background: 'var(--surface-color)', padding: '1rem', borderRadius: 6, marginBottom: '1rem' }}>
+          <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.4rem', color: 'var(--text-secondary)' }}>Select a plan</label>
+          <select
+            value={pickedPlanId}
+            onChange={(e) => setPickedPlanId(e.target.value)}
+            style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', marginBottom: '0.75rem' }}
+          >
+            <option value="">— Choose a plan —</option>
+            {plans.map((p) => (
+              <option key={p.id} value={p.id}>{p.name} ({p.durationDays} days, {p.currency} {p.price})</option>
+            ))}
+          </select>
+          <button onClick={buy} disabled={buying || !pickedPlanId} style={{ padding: '0.5rem 1rem', borderRadius: 6, border: 'none', background: 'var(--primary-color, var(--accent-color))', color: '#fff', cursor: buying ? 'wait' : 'pointer' }}>
+            {buying ? 'Purchasing…' : 'Confirm purchase'}
+          </button>
+        </div>
+      )}
+
+      {memberships.length === 0 ? (
+        <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>This patient has no memberships yet.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {memberships.map((m) => {
+            let balance = [];
+            try { balance = JSON.parse(m.balance || '[]'); } catch { balance = []; }
+            const expired = m.status === 'expired' || (new Date(m.endDate) < new Date());
+            const cancelled = m.status === 'cancelled';
+            const statusColor = cancelled ? '#991b1b' : expired ? '#92400e' : '#065f46';
+            const statusBg = cancelled ? '#fee2e2' : expired ? '#fef3c7' : '#d1fae5';
+            return (
+              <div key={m.id} style={{ padding: '1rem', border: '1px solid var(--border-color)', borderRadius: 8, opacity: cancelled ? 0.65 : 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                  <div>
+                    <strong>{m.plan?.name || `Plan #${m.planId}`}</strong>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      {formatDate(m.startDate)} → {formatDate(m.endDate)}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', borderRadius: 4, background: statusBg, color: statusColor }}>
+                    {cancelled ? 'cancelled' : expired ? 'expired' : 'active'}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.85rem' }}>
+                  <strong>Remaining:</strong>
+                  {balance.length === 0 ? (
+                    <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>(no balance)</span>
+                  ) : (
+                    <ul style={{ paddingLeft: '1.2rem', margin: '0.25rem 0' }}>
+                      {balance.map((b, i) => (
+                        <li key={i}>{serviceName(b.serviceId)}: {b.remaining}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                {!cancelled && !expired && (
+                  <button
+                    onClick={() => cancel(m)}
+                    style={{ marginTop: '0.5rem', padding: '0.25rem 0.5rem', fontSize: '0.8rem', borderRadius: 4, border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--danger-color, #ef4444)', cursor: 'pointer' }}
+                  >
+                    Cancel membership
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

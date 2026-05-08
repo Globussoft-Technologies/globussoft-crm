@@ -249,6 +249,12 @@ model Tenant {
   giftCards          GiftCard[]
   coupons            Coupon[]
   cashbackRules      CashbackRule[]
+
+  // Wave 11 Agent GG — Resource availability (Resource / Holiday /
+  // WorkingHours). Cascade-delete with the tenant.
+  resources    Resource[]
+  holidays     Holiday[]
+  workingHours WorkingHours[]
 }
 
 model User {
@@ -307,6 +313,10 @@ model User {
   // Wellness vertical
   doctorVisits        Visit[]        @relation("DoctorVisits")
   doctorPrescriptions Prescription[] @relation("DoctorPrescriptions")
+
+  // Wave 11 Agent GG — per-practitioner availability.
+  doctorHolidays     Holiday[]      @relation("DoctorHolidays")
+  doctorWorkingHours WorkingHours[] @relation("DoctorWorkingHours")
 }
 
 model Contact {
@@ -2336,6 +2346,10 @@ model Visit {
   locationId Int?
   location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
+  // Wave 11 Agent GG — optional resource reservation.
+  resourceId Int?
+  resource   Resource? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+
   prescriptions Prescription[]
   consumptions  ServiceConsumption[]
 
@@ -2534,8 +2548,11 @@ model Location {
   tenantId Int
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  patients Patient[]
-  visits   Visit[]
+  patients  Patient[]
+  visits    Visit[]
+  // Wave 11 Agent GG — resources + holidays scoped to this clinic.
+  resources Resource[]
+  holidays  Holiday[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2921,4 +2938,172 @@ model AutoConsumptionRule {
   // quantity is an UPDATE, not a duplicate insert.
   @@unique([tenantId, serviceId, productId])
   @@index([tenantId, serviceId, isActive])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Wave 11 Agent FF — Composite ledger system (Google Doc audit, 8 May 2026).
+//
+// Wallet            — one-per-Patient, holds running balance.
+// WalletTransaction — append-only ledger; positive amount = credit, negative
+//                     = debit (mirrors QuickBooks convention). balanceAfter
+//                     captured at write time so audits don't need to walk the
+//                     full history.
+// GiftCard          — purchasable code; on redeem credits a Patient's wallet
+//                     and flips status=redeemed (one-time use).
+// Coupon            — percent or flat discount; preview-able pre-apply, then
+//                     atomically applied (incrementing redemptionCount).
+// CashbackRule      — % of paid amount earns wallet credit on visit completion.
+//
+// All rows are tenant-scoped via tenantId (cascade-delete on tenant removal).
+// All currency-bearing rows carry an explicit `currency` so multi-currency
+// tenants don't lose context when a tenant flips defaultCurrency mid-flight.
+// ─────────────────────────────────────────────────────────────────────
+model Wallet {
+  id        Int      @id @default(autoincrement())
+  tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  patientId Int      @unique
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  balance   Float    @default(0)
+  currency  String   @default("INR")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions WalletTransaction[]
+
+  @@index([tenantId, patientId])
+}
+
+model WalletTransaction {
+  id           Int      @id @default(autoincrement())
+  tenantId     Int      @default(1)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  walletId     Int
+  wallet       Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type         String
+  amount       Float
+  reason       String?
+  visitId      Int?
+  invoiceId    Int?
+  giftCardId   Int?
+  couponId     Int?
+  balanceAfter Float
+  performedBy  Int
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, walletId, createdAt])
+  @@index([tenantId, type])
+}
+
+model GiftCard {
+  id         Int       @id @default(autoincrement())
+  tenantId   Int       @default(1)
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code       String
+  amount     Float
+  currency   String    @default("INR")
+  status     String    @default("active")
+  expiresAt  DateTime?
+  issuedTo   Int?
+  issuedFrom Int?
+  redeemedAt DateTime?
+  redeemedBy Int?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+}
+
+model Coupon {
+  id              Int       @id @default(autoincrement())
+  tenantId        Int       @default(1)
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code            String
+  discountType    String
+  discountValue   Float
+  maxRedemptions  Int?
+  redemptionCount Int       @default(0)
+  validFrom       DateTime?
+  validUntil      DateTime?
+  serviceIds      String?   @db.Text
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([tenantId, code])
+  @@index([tenantId, isActive])
+}
+
+model CashbackRule {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  earnPercent Float
+  serviceIds  String?  @db.Text
+  minSpend    Float?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Wave 11 Agent GG — Resource availability + holidays + working-hours
+// (stub models added defensively here so back-relations on Tenant/User/
+// Location/Visit validate while Agent GG's commit is in flight). If GG's
+// commit lands first these stubs become no-ops; if mine lands first the
+// CI / runtime reads the same field shapes Agent GG declared.
+// ─────────────────────────────────────────────────────────────────────
+model Resource {
+  id         Int       @id @default(autoincrement())
+  tenantId   Int       @default(1)
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name       String
+  type       String    @default("ROOM")
+  locationId Int?
+  location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  isActive   Boolean   @default(true)
+  serviceIds String?   @db.Text
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  visits Visit[]
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, locationId])
+}
+
+model Holiday {
+  id         Int       @id @default(autoincrement())
+  tenantId   Int       @default(1)
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  date       DateTime
+  name       String
+  locationId Int?
+  location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  doctorId   Int?
+  doctor     User?     @relation("DoctorHolidays", fields: [doctorId], references: [id], onDelete: SetNull)
+  createdAt  DateTime  @default(now())
+
+  @@unique([tenantId, date, locationId, doctorId])
+  @@index([tenantId, date])
+}
+
+model WorkingHours {
+  id        Int      @id @default(autoincrement())
+  tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  doctorId  Int
+  doctor    User     @relation("DoctorWorkingHours", fields: [doctorId], references: [id], onDelete: Cascade)
+  dayOfWeek Int
+  startTime String
+  endTime   String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, doctorId, dayOfWeek])
 }

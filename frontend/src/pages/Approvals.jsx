@@ -87,7 +87,7 @@ export default function Approvals() {
     }
   };
 
-  useEffect(() => { loadData(); /* eslint-disable-next-line */ }, [tab, filterStatus, filterEntity]);
+  useEffect(() => { loadData();   }, [tab, filterStatus, filterEntity]);
 
   const submitCreate = async (e) => {
     e.preventDefault();

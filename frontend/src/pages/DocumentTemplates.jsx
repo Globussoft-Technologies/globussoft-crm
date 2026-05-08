@@ -50,7 +50,7 @@ export default function DocumentTemplates() {
       .catch(() => { setTemplates([]); setLoading(false); });
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filterType]);
+  useEffect(() => { load();   }, [filterType]);
   useEffect(() => {
     fetchApi('/api/contacts').then(d => setContacts(Array.isArray(d) ? d : [])).catch(() => setContacts([]));
   }, []);

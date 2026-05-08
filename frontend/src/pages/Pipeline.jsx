@@ -232,41 +232,50 @@ const Pipeline = () => {
                   </p>
                 </div>
                 
-                <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1, overflowY: 'auto' }}>
+                <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}>
                   {stageDeals.map(deal => (
-                    <div 
-                      key={deal.id} 
-                      className="card table-row-hover" 
-                      draggable 
+                    <div
+                      key={deal.id}
+                      className="card table-row-hover"
+                      draggable
                       onClick={() => setSelectedDeal(deal)}
                       onDragStart={(e) => handleDragStart(e, deal.id)}
-                      style={{ padding: '1.25rem', cursor: 'pointer', position: 'relative' }}
+                      style={{ padding: '1.2rem', cursor: 'pointer', position: 'relative', display: 'flex', flexDirection: 'column', gap: '0.8rem', minWidth: 0, flexShrink: 0 }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <h4 style={{ fontWeight: '600', marginBottom: '0.5rem', paddingRight: '1rem', fontSize: '1rem' }}>{deal.title}</h4>
-                        <div style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-                          {/* #593: tooltip dropped "AI" — /api/ai_scoring is rules-based (see backend/routes/ai_scoring.js). */}
-                          <button onClick={(e) => fetchAiScore(e, deal.id)} aria-label={`Generate deal score for ${deal.title}`} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer' }} title="Generate Deal Score">
-                            <Zap size={16} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.filter = 'drop-shadow(0 0 5px #a855f7)'} onMouseOut={e => e.currentTarget.style.filter = 'none'} />
-                          </button>
-                          <button onClick={(e) => handleDelete(e, deal.id)} aria-label={`Delete deal ${deal.title}`} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }} title="Delete Deal">
-                            <Trash2 size={16} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'} />
-                          </button>
-                        </div>
+                      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', position: 'absolute', top: '0.75rem', right: '0.75rem' }}>
+                        <button onClick={(e) => fetchAiScore(e, deal.id)} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Generate AI Insights">
+                          <Zap size={14} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.filter = 'drop-shadow(0 0 5px #a855f7)'} onMouseOut={e => e.currentTarget.style.filter = 'none'} />
+                        </button>
+                        <button onClick={(e) => handleDelete(e, deal.id)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Delete Deal">
+                          <Trash2 size={14} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'} />
+                        </button>
                       </div>
-                      <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '0.75rem' }}>
-                        {formatMoney(deal.amount || 0, { currency: deal.currency })}
-                      </p>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '500' }}>{deal.company || deal.contactName || 'Unknown'}</span>
-                        <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', backgroundColor: `${stage.color}20`, color: stage.color, borderRadius: '4px', fontWeight: '600' }}>
-                          {deal.probability}%
-                        </span>
+
+                      <div style={{ paddingRight: '2.5rem' }}>
+                        <h4 style={{ fontWeight: '700', fontSize: '0.95rem', marginBottom: '0.4rem', color: 'var(--text-primary)', lineHeight: '1.3', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{deal.title}</h4>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {deal.company || deal.contactName || '—'}
+                        </p>
+                      </div>
+
+                      <div style={{ borderTop: `1px solid var(--border-color)`, paddingTop: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                        <div>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', fontWeight: '500' }}>Amount</p>
+                          <p style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '0' }}>
+                            {formatMoney(deal.amount || 0, { currency: deal.currency })}
+                          </p>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', fontWeight: '500' }}>Probability</p>
+                          <span style={{ fontSize: '0.95rem', padding: '0.35rem 0.6rem', backgroundColor: `${stage.color}20`, color: stage.color, borderRadius: '4px', fontWeight: '700', display: 'inline-block' }}>
+                            {deal.probability}%
+                          </span>
+                        </div>
                       </div>
                     </div>
                   ))}
                   {stageDeals.length === 0 && (
-                    <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem', padding: '2rem 1rem', border: '1px dashed var(--border-color)', borderRadius: '12px', margin: '1rem 0' }}>
+                    <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem', padding: '2rem 1rem', border: '1px dashed var(--border-color)', borderRadius: '12px' }}>
                       Drag deals here
                     </div>
                   )}

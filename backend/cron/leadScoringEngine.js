@@ -1,5 +1,76 @@
 const cron = require('node-cron');
 const prisma = require("../lib/prisma");
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+const GEMINI_KEY = process.env.GEMINI_API_KEY;
+let aiModel = null;
+if (GEMINI_KEY) {
+  try {
+    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+    aiModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    console.log("[LeadScoringEngine] Gemini initialized");
+  } catch (err) {
+    console.warn("[LeadScoringEngine] Gemini init failed:", err.message);
+  }
+}
+
+/**
+ * Use Gemini AI to score a lead based on its profile and engagement data.
+ */
+async function scoreWithGemini(contact) {
+  if (!aiModel) return null;
+
+  try {
+    const deals = contact.deals || [];
+    const wonDeals = deals.filter(d => d.stage === 'won').length;
+    const activities = (contact.activities || []).length;
+    const emails = (contact.emails || []).length;
+    const callLogs = (contact.callLogs || []).length;
+    const isPersonalEmail = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'aol.com', 'fivermail.com'].some(
+      d => (contact.email || '').toLowerCase().endsWith(d)
+    );
+    const emailQuality = isPersonalEmail ? 'personal' : 'corporate';
+
+    const prompt = `You are a B2B lead scoring expert. Score this lead from 1-99 based on quality and potential. Consider both profile quality and engagement.
+
+Lead Profile:
+- Name: ${contact.name || 'Unknown'}
+- Email: ${contact.email || 'N/A'} (${emailQuality})
+- Company: ${contact.company || 'N/A'}
+- Title: ${contact.title || 'N/A'}
+- Status: ${contact.status || 'Lead'}
+- Industry: ${contact.industry || 'N/A'}
+- Company Size: ${contact.companySize || 'N/A'}
+
+Engagement Quality:
+- Active Deals: ${deals.length} (won: ${wonDeals})
+- Recent Activities: ${activities}
+- Inbound Emails: ${emails}
+- Phone Calls: ${callLogs}
+
+Scoring guidance:
+- High score (70+): Senior titles at enterprise companies with corporate emails, active deals, recent engagement
+- Medium score (40-69): Title/company data present, some engagement, or strong profile
+- Low score (1-39): Minimal engagement, personal email, no company data
+
+Provide ONLY a single integer score from 1-99. No explanation.`;
+
+    const result = await aiModel.generateContent(prompt);
+    const scoreText = result.response.text().trim();
+    const score = parseInt(scoreText);
+
+    if (!isNaN(score) && score >= 1 && score <= 99) {
+      console.log(`[LeadScoringEngine] Gemini scored ${contact.name}: ${score}`);
+      return score;
+    }
+  } catch (err) {
+    console.warn("[LeadScoringEngine] Gemini scoring failed:", err.message);
+  }
+
+  return null;
+}
 
 /**
  * Calculate a lead score (1-99) for a given contact record.
@@ -101,9 +172,7 @@ function computeScore(contact) {
   score += Math.min(Math.round(activityWeight * 2), 14);
   // Cold-lead decay: nothing in 90d. #571 — only apply when there ARE
   // activities; an empty activities array is "no signal", not "cold".
-  // Brand-new leads with no events should not be penalised — the
-  // status/source/identity branches drive their score until the first
-  // touch lands.
+  // Brand-new leads with no events should not be penalised.
   if (activities.length > 0) {
     if (mostRecentDays > 90) score -= 8;
     else if (mostRecentDays > 60) score -= 4;
@@ -173,6 +242,18 @@ function computeScore(contact) {
   else if (/paid|google-ads|fb-ads|linkedin-ads/.test(src)) score += 3;
   else if (/cold|purchased-list|scraped/.test(src)) score -= 5;
   // organic / unknown: 0
+
+  // ── Email domain quality (corporate vs personal) ──────────────────
+  const email = String(contact.email || '').toLowerCase();
+  const corporateDomains = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'aol.com', 'fivermail.com'];
+  const isPersonalEmail = corporateDomains.some(d => email.endsWith(d));
+  if (!isPersonalEmail && email.includes('@')) score += 8; // corporate email is strong signal
+
+  // ── Job title seniority ──────────────────────────────────────────
+  const titleLower = String(contact.title || '').toLowerCase();
+  const seniorTitles = ['director', 'vp', 'c-level', 'ceo', 'cto', 'cfo', 'president', 'head of', 'manager', 'lead'];
+  const isSenior = seniorTitles.some(t => titleLower.includes(t));
+  if (isSenior) score += 6;
 
   // ── Data enrichment completeness (account fit signal) ────────────
   let enrichmentBonus = 0;
@@ -280,8 +361,17 @@ async function tickLeadScoringEngine(io) {
       });
 
       const tickStart = new Date();
-      const updates = contacts.map(contact => {
-        const newScore = computeScore(contact);
+      const updates = await Promise.all(contacts.map(async (contact) => {
+        // Try Gemini AI first, fall back to algorithm if Gemini unavailable
+        let newScore = null;
+        if (aiModel) {
+          newScore = await scoreWithGemini(contact);
+        }
+        // Fallback to algorithm if Gemini failed or unavailable
+        if (newScore === null) {
+          newScore = computeScore(contact);
+        }
+
         return prisma.contact.update({
           where: { id: contact.id },
           data: {
@@ -291,7 +381,7 @@ async function tickLeadScoringEngine(io) {
             aiScoreLastComputedAt: tickStart,
           },
         });
-      });
+      }));
 
       // #421 gap 3 — allSettled so one bad row doesn't drop the whole
       // tick. Log rejections individually so Sentry/log-tail surfaces

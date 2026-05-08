@@ -579,7 +579,6 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
 
 // Server File Uploads Statically
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
 // Health Check Endpoint
 const prisma = require("./lib/prisma");
 

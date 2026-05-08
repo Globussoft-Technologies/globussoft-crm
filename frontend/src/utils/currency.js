@@ -90,7 +90,7 @@ export function convertCurrency(amount, fromCode, toCode, currencies = []) {
 export function parseCurrency(str) {
   if (str == null) return 0;
   if (typeof str === 'number') return str;
-  const cleaned = String(str).replace(/[^0-9.\-]/g, '');
+  const cleaned = String(str).replace(/[^0-9.-]/g, '');
   if (!cleaned || cleaned === '-' || cleaned === '.') return 0;
   const n = parseFloat(cleaned);
   return Number.isFinite(n) ? n : 0;

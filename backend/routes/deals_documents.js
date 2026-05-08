@@ -3,6 +3,7 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 const PDFDocument = require("pdfkit");
+const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -95,7 +96,7 @@ router.post("/:dealId/generate-quote", async (req, res) => {
       doc.on("error", reject);
     });
 
-    // PDF Styling
+    // PDF Content
     doc.fontSize(24).text("Enterprise CRM Quote", { align: "center" });
     doc.moveDown();
     doc.fontSize(16).text(`Prepared For: ${deal.contact?.name || deal.company || "Valued Client"}`);
@@ -155,6 +156,31 @@ router.get("/:dealId/attachments", async (req, res) => {
     res.json(attachments);
   } catch (_err) {
     res.status(500).json({ error: "Failed to load attachments" });
+  }
+});
+
+// Download attachment with authentication & ownership validation
+router.get("/download/:attachmentId", verifyToken, async (req, res) => {
+  try {
+    const attachment = await prisma.attachment.findFirst({
+      where: {
+        id: parseInt(req.params.attachmentId),
+        tenantId: req.user.tenantId
+      },
+      include: { deal: true }
+    });
+
+    if (!attachment) {
+      return res.status(404).json({ error: "Attachment not found or access denied" });
+    }
+
+    // Extract filename from fileUrl (e.g., /uploads/quote-123-456.pdf -> quote-123-456.pdf)
+    const filename = attachment.fileUrl.split('/').pop();
+    const filepath = path.join(__dirname, "..", "uploads", filename);
+
+    res.download(filepath, attachment.filename);
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to download attachment" });
   }
 });
 

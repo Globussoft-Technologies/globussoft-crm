@@ -186,9 +186,14 @@ export default function WhatsAppThreads() {
   const assignToMe = async () => {
     if (!detail?.thread) return;
     try {
-      // userId = special marker; backend resolves "me" via req.user.userId.
-      // Frontend sends the current user's id from localStorage to keep the
-      // backend RBAC check happy (self-assign is open to all).
+      // Backend RBAC check: self-assign (targetUserId === req.user.userId)
+      // is open to all roles. Send the current user's id so the route can
+      // gate cross-assign vs self-assign.
+      //
+      // NOTE per CLAUDE.md "Standing rules" + backend route comment: the
+      // global stripDangerous middleware deletes req.body.userId on every
+      // request, so the field MUST be `targetUserId` — `userId` is silently
+      // dropped to undefined and the backend would unassign instead.
       const me = JSON.parse(localStorage.getItem('user') || 'null');
       if (!me?.id) {
         notify.error('Cannot determine your user id. Re-login.');
@@ -196,7 +201,7 @@ export default function WhatsAppThreads() {
       }
       await fetchApi(`/api/whatsapp/threads/${detail.thread.id}/assign`, {
         method: 'POST',
-        body: JSON.stringify({ userId: me.id }),
+        body: JSON.stringify({ targetUserId: me.id }),
       });
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
       setDetail(fresh);

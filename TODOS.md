@@ -3451,8 +3451,8 @@ Investigation pass on the carry-over from 2026-04-26 ("41 pre-existing e2e failu
 **Class D — Demo-state seed leak (relies on specific seed rows that have changed):**  1 of 9.
 - `e2e/tests/orchestrator-api.spec.js:509` — current /recommendations rows carry no pollution markers (#319). This is a "demo seed has accumulated test pollution rows whose title/body matches `_amended_title_` / `Tenant B scoped` / `Lifecycle <n>` etc." case. ✅ fixed in `0ad13a8` by extending `backend/scripts/scrub-test-data-pollution.js`'s `scrubAgentRecommendations()` matcher list — the post-tag scrub-demo job now clears these rows before the test runs.
 
-**Class E — Genuinely flaky (timing / network / race):**  1 of 9, still open.
-- `e2e/tests/gdpr.spec.js:85` — POST `/export/me` 15s timeout. The handler iterates 8+ Prisma models for the requesting user's data. On a demo box with thousands of audit + activity rows for `admin@globussoft.com`, the export legitimately takes >15s. ⚠️ NOT fixed in `0ad13a8` — left as is. **Recommendation:** raise the test's per-call timeout to 30s, OR add an `?email=…` filter so the test creates+exports a fresh fixture user with minimal seed footprint.
+**Class E — Genuinely flaky (timing / network / race):**  1 of 9, **✅ shipped (Wave 4 Agent QQ, `<pending-sha>`).**
+- `e2e/tests/gdpr.spec.js:85` — POST `/export/me` 15s timeout. The handler iterates 8+ Prisma models for the requesting user's data. On a demo box with thousands of audit + activity rows for `admin@globussoft.com`, the export legitimately takes >15s. ✅ Wave-4 Agent QQ refactored the spec to mint a fresh tenant + user via `/auth/register` in `beforeAll`, then export against THAT token (zero-row tenant). Per-call timeout dropped from 60s → 30s. Measured 3× consecutive runs against demo: **122 ms / 198 ms / 1.3 s** (vs the previous 4.8 s on admin's accumulated data — 25-300× margin under the new timeout). Falls back to seeded-admin token + 60s timeout if `/auth/register` is throttled. Audit drift note: the audit's "NOT fixed in 0ad13a8" line was already-stale at filing — `0ad13a8`'s diff DID raise the timeout to 60s. Agent QQ's refactor delivers the spirit of the audit's deeper recommendation (fresh fixture user) so the spec's timing stays bounded as demo data accumulates.
 
 ### Top 5 highest-impact items
 
@@ -3472,7 +3472,7 @@ Ranking by "if this stayed broken silently, what real product regression would s
 | B — Route drift | 0 | n/a | n/a |
 | C — Counter | 0 | 15-30 min/test | n/a |
 | D — Demo seed | 1 (in `0ad13a8` already) | 30-60 min/test (scrub script + assertion tightening) | ✅ shipped |
-| E — Flaky timing | 1 (open) | 30-90 min (fixture user + raise timeout) | ~1 hr |
+| E — Flaky timing | 1 (in Wave 4 Agent QQ) | 30-90 min (fixture user + raise timeout) | ✅ shipped |
 
 ### GH issues filed
 

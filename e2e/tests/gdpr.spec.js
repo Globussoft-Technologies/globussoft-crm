@@ -21,6 +21,18 @@ const PASSWORD = 'password123';
 let token = '';
 const auth = () => ({ Authorization: `Bearer ${token}` });
 
+// Fresh-user fixture for the /export/me happy-path test. The seeded admin
+// (admin@globussoft.com) accumulates demo data over time — 5,381 deals + 90+
+// days of activity / audit rows on the demo box — so /export/me's response
+// body is ~11 MB and the body transfer alone routinely brushes the 60s budget
+// over Cloudflare. A throwaway tenant + user has zero owned rows, so
+// /export/me returns a small envelope (sub-second). This keeps the spec's
+// signal ("does the route work + return the documented shape?") meaningful
+// even as the demo accumulates more seed data over the months.
+let freshToken = '';
+let freshEmail = '';
+let freshPassword = 'Throwaway1234!';
+
 let throwawayContactId = null;
 
 test.describe.configure({ mode: 'serial' });
@@ -47,6 +59,27 @@ test.describe('gdpr API smoke', () => {
       const c = await create.json();
       throwawayContactId = c.id || c.contact?.id;
     }
+
+    // Mint a fresh tenant + user via /auth/register for the /export/me
+    // happy-path test. See header comment on `freshToken` for rationale.
+    // Best-effort — if register is throttled or otherwise 4xxs, the test
+    // falls back to the seeded-admin token (which is still bounded by the
+    // 60s timeout downstream).
+    freshEmail = `e2e_audit_gdpr_export_${stamp}@delete.local`;
+    try {
+      const reg = await request.post(`${API}/auth/register`, {
+        data: {
+          email: freshEmail,
+          password: freshPassword,
+          name: 'E2E_AUDIT Throwaway Exporter',
+          organizationName: `E2E_AUDIT GDPR Tenant ${stamp}`,
+        },
+      });
+      if (reg.ok()) {
+        const j = await reg.json();
+        freshToken = j.token || '';
+      }
+    } catch (_e) { /* fall through to admin-token export */ }
   });
 
   test('GET /retention-policies requires auth', async ({ request }) => {
@@ -83,16 +116,21 @@ test.describe('gdpr API smoke', () => {
   });
 
   test('POST /export/me returns user data export', async ({ request }) => {
-    // Admin's full export on demo is ~11 MB (5,381 deals + 90+ days of
-    // activities/audit logs). The default Playwright actionTimeout in
-    // playwright.config.js is 15000ms, which the body transfer regularly
-    // exceeds against demo's Cloudflare-fronted backend. Bump to 60s for
-    // this single request — the route itself responds in <2s; the wire
-    // transfer is what eats the budget.
-    test.setTimeout(90_000);
+    // Wave 4 Agent QQ (2026-05-09): use the fresh-tenant fixture token
+    // when available so the export response is bounded (sub-second). Falls
+    // back to the seeded-admin token only if /auth/register failed in
+    // beforeAll; that path keeps the original 60s timeout for the ~11 MB
+    // body transfer over Cloudflare. Admin token path is what `0ad13a8`
+    // used pre-fixture; wave-4 prefers the bounded fixture path so the
+    // spec's timing stays fast as the demo accumulates more seed data.
+    const useFresh = !!freshToken;
+    const requestToken = useFresh ? freshToken : token;
+    const requestTimeout = useFresh ? 30000 : 60000;
+    if (!useFresh) test.setTimeout(90_000);
+
     const res = await request.post(`${API}/gdpr/export/me`, {
-      headers: auth(),
-      timeout: 60000,
+      headers: { Authorization: `Bearer ${requestToken}` },
+      timeout: requestTimeout,
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
@@ -100,6 +138,14 @@ test.describe('gdpr API smoke', () => {
     expect(body).toHaveProperty('user');
     expect(body).toHaveProperty('deals');
     expect(body).toHaveProperty('tasks');
+    // Fresh-fixture tenant has zero owned rows — assert that explicitly so
+    // a future regression where /export/me leaks cross-tenant data
+    // (returning seed-admin's deals when called by the fresh user) reds.
+    if (useFresh) {
+      expect(Array.isArray(body.deals)).toBe(true);
+      expect(body.deals.length).toBe(0);
+      expect(body.tasks.length).toBe(0);
+    }
   });
 
   test('POST /export/contact/:id 400s for invalid id', async ({ request }) => {

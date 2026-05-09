@@ -77,6 +77,29 @@ async function markInvoicePaid(invoiceId, tenantId) {
   }
 }
 
+// PRD Gap §13 wave-6a — emit payment.collected when a gateway success
+// webhook (Stripe/Razorpay) lands. Wrapped in try/catch so workflow rule
+// failures never break the webhook handler (which would cause the gateway
+// to retry indefinitely). Event payload mirrors the billing.js version
+// so workflow rule conditions can be authored once and match either path.
+function emitPaymentCollected(payment) {
+  try {
+    require("../lib/eventBus").emitEvent(
+      "payment.collected",
+      {
+        invoiceId: payment.invoiceId,
+        paymentId: payment.id,
+        amount: Number(payment.amount),
+        method: payment.gateway,
+        currency: payment.currency,
+        paidAt: payment.paidAt,
+      },
+      payment.tenantId,
+      null
+    );
+  } catch (_e) { /* best-effort */ }
+}
+
 // ─────────────────────────────────────────────────────────────────
 // PUBLIC WEBHOOKS — must be declared BEFORE any auth-aware logic
 // because /api/payments/webhook is in the openPaths allowlist.
@@ -108,11 +131,12 @@ router.post(
           where: { gateway: "stripe", gatewayId: intent.id },
         });
         if (payment) {
-          await prisma.payment.update({
+          const updated = await prisma.payment.update({
             where: { id: payment.id },
             data: { status: "SUCCESS", paidAt: new Date() },
           });
           await markInvoicePaid(payment.invoiceId, payment.tenantId);
+          emitPaymentCollected(updated);
         }
       } else if (event.type === "payment_intent.payment_failed") {
         const intent = event.data.object;
@@ -169,7 +193,7 @@ router.post(
             where: { gateway: "razorpay", gatewayId: orderId },
           });
           if (payment) {
-            await prisma.payment.update({
+            const updated = await prisma.payment.update({
               where: { id: payment.id },
               data: {
                 status: "SUCCESS",
@@ -178,6 +202,7 @@ router.post(
               },
             });
             await markInvoicePaid(payment.invoiceId, payment.tenantId);
+            emitPaymentCollected(updated);
           }
         }
       } else if (eventName === "payment.failed") {
@@ -419,6 +444,7 @@ router.post("/confirm-razorpay", async (req, res) => {
     });
 
     await markInvoicePaid(payment.invoiceId, tenantId);
+    emitPaymentCollected(updated);
 
     res.json({ success: true, payment: serialize(updated) });
   } catch (err) {

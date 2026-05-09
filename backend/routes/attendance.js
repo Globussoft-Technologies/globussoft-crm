@@ -103,6 +103,24 @@ router.post("/clock-in", verifyToken, async (req, res) => {
       clockInAt: now.toISOString(),
       source: "MANUAL",
     });
+    // PRD Gap §13 wave-6a — emit attendance.checked_in so workflow rules can
+    // react (Slack ping for late arrivals, daily standup notification trigger).
+    // Wrapped: workflow failures must NEVER fail the punch-in flow.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "attendance.checked_in",
+        {
+          attendanceId: row.id,
+          userId,
+          date: row.date,
+          clockInAt: row.clockInAt,
+          source: "MANUAL",
+          locationId: row.clockInLocationId,
+        },
+        tenantId,
+        req.io
+      );
+    } catch (_e) {}
 
     res.status(201).json(row);
   } catch (e) {
@@ -157,6 +175,27 @@ router.post("/clock-out", verifyToken, async (req, res) => {
       clockOutAt: now.toISOString(),
       totalMinutes,
     });
+    // PRD Gap §13 wave-6a — emit attendance.checked_out so workflow rules can
+    // react (auto-create timesheet adjustment if HALF_DAY, notify manager on
+    // overtime threshold). Wrapped: workflow failures don't block punch-out.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "attendance.checked_out",
+        {
+          attendanceId: row.id,
+          userId,
+          date: row.date,
+          clockInAt: row.clockInAt,
+          clockOutAt: row.clockOutAt,
+          totalMinutes,
+          status: row.status,
+          source: "MANUAL",
+          locationId: row.clockOutLocationId,
+        },
+        tenantId,
+        req.io
+      );
+    } catch (_e) {}
 
     res.json(row);
   } catch (e) {
@@ -475,6 +514,24 @@ router.post("/biometric/webhook", async (req, res) => {
       await writeAudit("Attendance", "CLOCK_IN", row.id, null, device.tenantId, {
         source: "BIOMETRIC", deviceId: device.deviceId, ts: ts.toISOString(),
       });
+      // PRD Gap §13 wave-6a — emit attendance.checked_in for biometric path
+      // too so the same workflow rules fire regardless of channel.
+      try {
+        require("../lib/eventBus").emitEvent(
+          "attendance.checked_in",
+          {
+            attendanceId: row.id,
+            userId,
+            date: row.date,
+            clockInAt: row.clockInAt,
+            source: "BIOMETRIC",
+            biometricDeviceId: device.id,
+            locationId: row.clockInLocationId,
+          },
+          device.tenantId,
+          req.io
+        );
+      } catch (_e) {}
       return res.status(201).json({ attendance: row, dedup: false });
     }
 
@@ -507,6 +564,26 @@ router.post("/biometric/webhook", async (req, res) => {
     await writeAudit("Attendance", "CLOCK_OUT", row.id, null, device.tenantId, {
       source: "BIOMETRIC", deviceId: device.deviceId, ts: ts.toISOString(), totalMinutes,
     });
+    // PRD Gap §13 wave-6a — emit attendance.checked_out for biometric path.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "attendance.checked_out",
+        {
+          attendanceId: row.id,
+          userId,
+          date: row.date,
+          clockInAt: row.clockInAt,
+          clockOutAt: row.clockOutAt,
+          totalMinutes,
+          status: row.status,
+          source: "BIOMETRIC",
+          biometricDeviceId: device.id,
+          locationId: row.clockOutLocationId,
+        },
+        device.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     return res.json({ attendance: row, dedup: false });
   } catch (e) {
     console.error("[attendance] webhook error:", e.message);

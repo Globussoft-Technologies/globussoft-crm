@@ -107,6 +107,24 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
       dealId: invoice.dealId,
       dueDate: invoice.dueDate,
     });
+    // PRD Gap §13 wave-6a — emit invoice.created for downstream automations.
+    // Wrapped: workflow failures must NEVER fail the invoice creation.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "invoice.created",
+        {
+          invoiceId: invoice.id,
+          invoiceNum: invoice.invoiceNum,
+          amount: invoice.amount,
+          contactId: invoice.contactId,
+          dealId: invoice.dealId,
+          dueDate: invoice.dueDate,
+          status: invoice.status,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.status(201).json(invoice);
   } catch (_err) {
     res.status(500).json({ error: "Invoice compilation and issuance failed" });
@@ -274,6 +292,47 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
         req.io
       );
     } catch (_e) {}
+    // PRD Gap §13 wave-6a — invoice.completed mirrors invoice.paid for the
+    // canonical "this invoice has reached its terminal PAID state" lifecycle
+    // event used by analytics dashboards (P&L, completion rate). Decoupled
+    // from invoice.paid so a workflow author can subscribe to either intent
+    // without coupling completion analytics to the payment side.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "invoice.completed",
+        {
+          invoiceId: invoice.id,
+          invoiceNum: invoice.invoiceNum,
+          amount: invoice.amount,
+          contactId: invoice.contactId,
+          dealId: invoice.dealId,
+          paidAt: invoice.paidAt,
+          status: invoice.status,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
+    // PRD Gap §13 wave-6a — emit payment.collected so downstream automations
+    // (cashflow KPIs, gateway-by-channel reports) can react to the money-in
+    // event, NOT just the invoice flip. Method is the gateway/payment-method
+    // enum value (manual/stripe/razorpay/etc.).
+    try {
+      require("../lib/eventBus").emitEvent(
+        "payment.collected",
+        {
+          invoiceId: invoice.id,
+          paymentId: payment ? payment.id : null,
+          amount: Number(invoice.amount),
+          method: paymentMethod || "manual",
+          currency: payment ? payment.currency : null,
+          transactionRef,
+          paidAt: invoice.paidAt,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
 
     // #179: audit the transition.
     await writeAudit('Invoice', 'MARK_PAID', invoice.id, req.user.userId, req.user.tenantId, {
@@ -306,6 +365,24 @@ router.post("/:id/pay", verifyToken, async (req, res) => {
         require("../lib/eventBus").emitEvent(
           "invoice.paid",
           { invoiceId: invoice.id, amount: invoice.amount, contactId: invoice.contactId, paidAt: invoice.paidAt },
+          req.user.tenantId,
+          req.io
+        );
+      } catch(_e) {}
+      // PRD Gap §13 wave-6a — invoice.completed + payment.collected mirror
+      // the mark-paid path so all three "money in" routes emit the same trio.
+      try {
+        require("../lib/eventBus").emitEvent(
+          "invoice.completed",
+          { invoiceId: invoice.id, invoiceNum: invoice.invoiceNum, amount: invoice.amount, contactId: invoice.contactId, dealId: invoice.dealId, paidAt: invoice.paidAt, status: invoice.status },
+          req.user.tenantId,
+          req.io
+        );
+      } catch(_e) {}
+      try {
+        require("../lib/eventBus").emitEvent(
+          "payment.collected",
+          { invoiceId: invoice.id, paymentId: null, amount: Number(invoice.amount), method: "manual", currency: null, paidAt: invoice.paidAt },
           req.user.tenantId,
           req.io
         );
@@ -343,6 +420,24 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
         require("../lib/eventBus").emitEvent(
           "invoice.paid",
           { invoiceId: invoice.id, amount: invoice.amount, contactId: invoice.contactId, paidAt: invoice.paidAt },
+          req.user.tenantId,
+          req.io
+        );
+      } catch(_e) {}
+      // PRD Gap §13 wave-6a — invoice.completed + payment.collected mirror
+      // the mark-paid path so all three "money in" routes emit the same trio.
+      try {
+        require("../lib/eventBus").emitEvent(
+          "invoice.completed",
+          { invoiceId: invoice.id, invoiceNum: invoice.invoiceNum, amount: invoice.amount, contactId: invoice.contactId, dealId: invoice.dealId, paidAt: invoice.paidAt, status: invoice.status },
+          req.user.tenantId,
+          req.io
+        );
+      } catch(_e) {}
+      try {
+        require("../lib/eventBus").emitEvent(
+          "payment.collected",
+          { invoiceId: invoice.id, paymentId: null, amount: Number(invoice.amount), method: "manual", currency: null, paidAt: invoice.paidAt },
           req.user.tenantId,
           req.io
         );
@@ -487,6 +582,25 @@ async function voidInvoiceHandler(req, res) {
       reason: req.body?.reason || null,
       via: req.method,
     });
+    // PRD Gap §13 wave-6a — emit invoice.voided so downstream automations
+    // (write-off analytics, AR adjustments, accounting sync) can react.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "invoice.voided",
+        {
+          invoiceId: invoice.id,
+          invoiceNum: invoice.invoiceNum,
+          amount: invoice.amount,
+          contactId: invoice.contactId,
+          dealId: invoice.dealId,
+          reason: req.body?.reason || null,
+          via: req.method,
+          status: invoice.status,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.json(invoice);
   } catch (_err) {
     res.status(500).json({ error: "Failed to void invoice" });
@@ -518,6 +632,24 @@ router.post("/:id/refund", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async 
       amount: invoice.amount,
       reason: req.body?.reason || null,
     });
+    // PRD Gap §13 wave-6a — emit invoice.refunded so downstream automations
+    // (refund-rate KPIs, accounting reversal sync, NPS dampening) can react.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "invoice.refunded",
+        {
+          invoiceId: invoice.id,
+          invoiceNum: invoice.invoiceNum,
+          amount: invoice.amount,
+          contactId: invoice.contactId,
+          dealId: invoice.dealId,
+          reason: req.body?.reason || null,
+          status: invoice.status,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.json(invoice);
   } catch (err) {
     console.error("[billing] refund error:", err);

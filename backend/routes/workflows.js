@@ -17,9 +17,28 @@ const TRIGGER_TYPES = [
   { value: "ticket.updated", label: "Ticket Updated", description: "Fires when a ticket status changes" },
   { value: "invoice.created", label: "Invoice Created", description: "Fires when an invoice is generated" },
   { value: "invoice.paid", label: "Invoice Paid", description: "Fires when an invoice is marked as paid" },
+  // PRD Gap §13 wave-6a — additional invoice + payment lifecycle events.
+  { value: "invoice.completed", label: "Invoice Completed", description: "Fires when an invoice reaches its terminal PAID state (analytics-friendly)" },
+  { value: "invoice.voided", label: "Invoice Voided", description: "Fires when an invoice is voided" },
+  { value: "invoice.refunded", label: "Invoice Refunded", description: "Fires when a PAID invoice is refunded" },
   { value: "invoice.overdue", label: "Invoice Overdue", description: "Fires when an invoice passes its due date" },
+  { value: "payment.collected", label: "Payment Collected", description: "Fires when payment is captured (gateway success or manual mark-paid)" },
   { value: "task.completed", label: "Task Completed", description: "Fires when a task is marked complete" },
   { value: "lead.converted", label: "Lead Converted", description: "Fires when a lead becomes a customer" },
+  // PRD Gap §13 wave-6a — wallet / cashback / gift-card / membership / attendance.
+  { value: "wallet.topup", label: "Wallet Top-up", description: "Fires on every wallet credit (manual, refund, gift-card, cashback)" },
+  { value: "wallet.spent", label: "Wallet Spent", description: "Fires on every wallet debit (redemption, reversal, manual)" },
+  { value: "cashback.credited", label: "Cashback Credited", description: "Fires when cashback is credited to a patient's wallet for a completed visit" },
+  { value: "giftcard.issued", label: "Gift Card Issued", description: "Fires when a gift card is issued by an admin/manager" },
+  { value: "giftcard.redeemed", label: "Gift Card Redeemed", description: "Fires when a gift card is redeemed against a patient's wallet" },
+  { value: "membership.plan_created", label: "Membership Plan Created", description: "Fires when an admin/manager creates a new membership plan" },
+  { value: "membership.enrolled", label: "Membership Enrolled", description: "Fires on first-time patient enrollment in a membership plan" },
+  { value: "membership.renewed", label: "Membership Renewed", description: "Fires when a patient purchases the same plan they previously held" },
+  { value: "membership.benefit_applied", label: "Membership Benefit Applied", description: "Fires when a service is redeemed against an active membership balance" },
+  { value: "membership.expired", label: "Membership Expired", description: "Fires on the active→expired transition (lazily detected on redeem)" },
+  { value: "membership.cancelled", label: "Membership Cancelled", description: "Fires when an admin/manager cancels a patient's membership" },
+  { value: "attendance.checked_in", label: "Attendance Clock-In", description: "Fires when a staff member clocks in (manual or biometric)" },
+  { value: "attendance.checked_out", label: "Attendance Clock-Out", description: "Fires when a staff member clocks out (manual or biometric)" },
   // #1 — approval lifecycle events. Lets a rule auto-create an approval on a
   // threshold AND lets a separate rule react when that approval is approved
   // (e.g. advance the deal stage). Decoupled by design.

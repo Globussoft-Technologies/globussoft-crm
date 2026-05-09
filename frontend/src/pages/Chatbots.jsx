@@ -360,7 +360,7 @@ function BotTester({ bot, tenantId, onClose }) {
     try {
       const res = await fetchApi(`/api/chatbots/chat/${bot.id}`, {
         method: 'POST',
-        body: JSON.stringify({ visitorId, message: text || undefined, tenantId }),
+        body: JSON.stringify({ visitorId, message: text || undefined, previewTenantId: tenantId }),
       });
       const replies = Array.isArray(res.replies) && res.replies.length ? res.replies : (res.reply ? [res.reply] : []);
       setMessages(m => [...m, ...replies.map(r => ({ from: 'bot', text: r }))]);

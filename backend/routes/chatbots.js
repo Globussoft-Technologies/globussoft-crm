@@ -273,15 +273,21 @@ router.get("/:id/conversations", async (req, res) => {
 router.post("/chat/:botId", async (req, res) => {
   try {
     const botId = parseInt(req.params.botId, 10);
-    const { visitorId, message, tenantId: tenantIdBody } = req.body || {};
+    // #646: body field is `previewTenantId` (NOT `tenantId`) because the global
+    // stripDangerous middleware deletes `tenantId` from every request body. With
+    // the old name the override never fired and inactive bots ALWAYS returned 403,
+    // making the test-mode preview path dead code. The endpoint is public (real
+    // visitors hit it without auth), so the preview "guard" is just knowledge of
+    // the bot's tenantId — sufficient for an in-CRM admin Test button without
+    // standing up a separate authenticated preview route.
+    const { visitorId, message, previewTenantId } = req.body || {};
     if (!botId) return res.status(400).json({ error: "botId required" });
     if (!visitorId) return res.status(400).json({ error: "visitorId required" });
 
     const bot = await prisma.chatbot.findUnique({ where: { id: botId } });
     if (!bot) return res.status(404).json({ error: "Bot not found" });
-    // Allow inactive bots in test mode (when tenantIdBody provided), but block for public visitors
-    // Simpler rule: if not active, only allow if tenantIdBody matches bot.tenantId (test from CRM UI)
-    if (!bot.isActive && parseInt(tenantIdBody, 10) !== bot.tenantId) {
+    // Allow inactive bots in test mode (when previewTenantId matches), but block for public visitors.
+    if (!bot.isActive && parseInt(previewTenantId, 10) !== bot.tenantId) {
       return res.status(403).json({ error: "Bot is not active" });
     }
 

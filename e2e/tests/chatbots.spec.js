@@ -151,12 +151,51 @@ test.describe('chatbots routes', () => {
     expect(res.status()).toBe(400);
   });
 
-  test('POST /api/chatbots/chat/:botId with inactive+wrong tenant returns 403', async ({ request }) => {
+  test('POST /api/chatbots/chat/:botId with inactive bot + no preview override returns 403', async ({ request }) => {
     const id = createdBotIds[0];
     test.skip(!id, 'no bot from previous test');
-    // Bot is currently deactivated. Public visitor (no tenantId override) → 403.
+    // Bot is currently deactivated. Public visitor (no previewTenantId override) → 403.
     const res = await request.post(`${API}/chatbots/chat/${id}`, {
       data: { visitorId: `visitor-${Date.now()}`, message: 'hi' },
+    });
+    expect(res.status()).toBe(403);
+  });
+
+  test('POST /api/chatbots/chat/:botId with inactive bot + WRONG previewTenantId returns 403', async ({ request }) => {
+    const id = createdBotIds[0];
+    test.skip(!id || !tenantId, 'no bot or tenant from previous test');
+    // #646: send a clearly-wrong previewTenantId. Must still 403.
+    const wrongTenant = (tenantId || 0) + 99999;
+    const res = await request.post(`${API}/chatbots/chat/${id}`, {
+      data: { visitorId: `visitor-${Date.now()}`, message: 'hi', previewTenantId: wrongTenant },
+    });
+    expect(res.status()).toBe(403);
+  });
+
+  test('POST /api/chatbots/chat/:botId with inactive bot + matching previewTenantId returns 200 (preview path works)', async ({ request }) => {
+    const id = createdBotIds[0];
+    test.skip(!id || !tenantId, 'no bot or tenant from previous test');
+    // #646: this is the regression bit — previously stripDangerous deleted
+    // req.body.tenantId so this branch never fired. With the rename to
+    // previewTenantId the in-CRM admin Test button can preview inactive bots.
+    const res = await request.post(`${API}/chatbots/chat/${id}`, {
+      data: { visitorId: `visitor-${Date.now()}`, message: 'hi', previewTenantId: tenantId },
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty('reply');
+    expect(typeof body.reply).toBe('string');
+    expect(body).toHaveProperty('conversationId');
+  });
+
+  test('POST /api/chatbots/chat/:botId ignores legacy body field tenantId (stripDangerous)', async ({ request }) => {
+    const id = createdBotIds[0];
+    test.skip(!id || !tenantId, 'no bot or tenant from previous test');
+    // Regression pin: the old body field name MUST NOT bypass stripDangerous.
+    // Sending the legacy `tenantId` (without `previewTenantId`) → still 403 because
+    // stripDangerous deletes tenantId before the route handler sees it.
+    const res = await request.post(`${API}/chatbots/chat/${id}`, {
+      data: { visitorId: `visitor-${Date.now()}`, message: 'hi', tenantId },
     });
     expect(res.status()).toBe(403);
   });

@@ -97,6 +97,19 @@ const API = `${BASE_URL}/api`;
 const REQUEST_TIMEOUT = 30000;
 const RUN_TAG = `E2E_RBAC_REG_${Date.now()}`;
 
+// Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
+// collide with 409. This helper returns a never-collides visitDate by combining
+// a per-test deterministic day offset (30+) with a random hour spread (720h)
+// — each call returns a different ISO string so retries against an
+// uncleaned backend don't double-book on (doctorId, hour). Bounded inside
+// the route's [now-5y, now+1y] VISIT_DATE_OUT_OF_RANGE window.
+let _visitDateOffset = 0;
+function nextVisitDate() {
+  const dayOffset = 30 + _visitDateOffset++;
+  const hourOffset = Math.floor(Math.random() * 720) * 3600 * 1000;
+  return new Date(Date.now() + dayOffset * 86400000 + hourOffset).toISOString();
+}
+
 const FIXTURES = {
   genericAdmin:   { email: 'admin@globussoft.com',          password: 'password123' },
   wellnessAdmin:  { email: 'admin@wellness.demo',           password: 'password123' },
@@ -210,7 +223,7 @@ test.beforeAll(async ({ request }) => {
         headers: authHdr(tokens.wellnessAdmin),
         data: {
           patientId: testPatientId, serviceId, doctorId: myDoctorId,
-          status: 'booked', visitDate: new Date().toISOString(),
+          status: 'booked', visitDate: nextVisitDate(),
         },
         timeout: REQUEST_TIMEOUT,
       });
@@ -221,7 +234,7 @@ test.beforeAll(async ({ request }) => {
         headers: authHdr(tokens.wellnessAdmin),
         data: {
           patientId: testPatientId, serviceId, doctorId: otherDoctorId,
-          status: 'booked', visitDate: new Date().toISOString(),
+          status: 'booked', visitDate: nextVisitDate(),
         },
         timeout: REQUEST_TIMEOUT,
       });

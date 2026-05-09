@@ -42,6 +42,7 @@ let locationId = null;
 let priyaId = null;
 let arjunId = null;
 let priyaVisitId = null;
+let priyaVisitIsoDate = null; // captured at create-time so the P&L window can scope it
 let arjunVisitId = null;
 let prescriptionId = null;
 let consentId = null;
@@ -49,6 +50,19 @@ let consumptionId = null;
 let priyaPortalToken = null;
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
+
+// Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
+// collide with 409. This helper returns a never-collides visitDate by combining
+// a per-test deterministic day offset (30+) with a random hour spread (720h)
+// — each call returns a different ISO string so retries against an
+// uncleaned backend don't double-book on (doctorId, hour). Bounded inside
+// the route's [now-5y, now+1y] VISIT_DATE_OUT_OF_RANGE window.
+let _visitDateOffset = 0;
+function nextVisitDate() {
+  const dayOffset = 30 + _visitDateOffset++;
+  const hourOffset = Math.floor(Math.random() * 720) * 3600 * 1000;
+  return new Date(Date.now() + dayOffset * 86400000 + hourOffset).toISOString();
+}
 const longSignatureSvg = () => {
   // The SIGNATURE_REQUIRED gate rejects strings shorter than 500 chars; repeat
   // the path data generously so the result is always > 1000 chars regardless
@@ -141,6 +155,10 @@ test.describe('Wellness clinical journey — full encounter flow', () => {
   });
 
   test('2. visit: doctor logs a completed visit at the priced service', async ({ request }) => {
+    // Wave 11 GG conflict gate — use nextVisitDate() so retries don't
+    // double-book on (doctorId, UTC-hour). Captured for the P&L window in
+    // step 6 (the report scopes by visitDate, not createdAt).
+    priyaVisitIsoDate = nextVisitDate();
     const res = await request.post(`${API}/wellness/visits`, {
       headers: doctorAuth(),
       data: {
@@ -149,7 +167,7 @@ test.describe('Wellness clinical journey — full encounter flow', () => {
         doctorId: doctorUserId,
         amountCharged: serviceBasePrice,
         status: 'completed',
-        visitDate: new Date().toISOString(),
+        visitDate: priyaVisitIsoDate,
         notes: `journey ${TAG}`,
       },
     });
@@ -244,14 +262,18 @@ test.describe('Wellness clinical journey — full encounter flow', () => {
   });
 
   test('6. P&L: productCost > 0 and contribution = revenue - productCost (regression for bb52840)', async ({ request }) => {
-    // Use a from = yesterday, to = tomorrow window so the visit's UTC
-    // mid-day timestamp falls inside regardless of server timezone. Passing
-    // from=today as `YYYY-MM-DD` parses to midnight UTC, which is *after*
-    // the visit's actual createdAt and would exclude it.
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    // Wave 11 GG conflict gate — Priya's visit lands at a future-dated slot
+    // (per nextVisitDate()) to avoid (doctorId, hour) collisions across runs.
+    // P&L scopes by visitDate (not createdAt), so the window must straddle
+    // the actual visitDate we sent in step 2 — not "today". Use [visitDate-1d,
+    // visitDate+1d] to keep the assertion stable while only including the
+    // single visit this journey created (other tests use different dayOffsets,
+    // so cross-test bleed-in is unlikely).
+    const visitMs = priyaVisitIsoDate ? new Date(priyaVisitIsoDate).getTime() : Date.now();
+    const from = new Date(visitMs - 86400000).toISOString().slice(0, 10);
+    const to = new Date(visitMs + 86400000).toISOString().slice(0, 10);
     const res = await request.get(
-      `${API}/wellness/reports/pnl-by-service?from=${yesterday}&to=${tomorrow}`,
+      `${API}/wellness/reports/pnl-by-service?from=${from}&to=${to}`,
       { headers: ownerAuth() },
     );
     expect(res.status(), `pnl-by-service: ${await res.text()}`).toBe(200);
@@ -400,7 +422,7 @@ test.describe('Wellness clinical journey — full encounter flow', () => {
     expect(me.gender).toBe('F');
   });
 
-  test('8d. portal: /portal/visits surfaces today\'s visit', async ({ request }) => {
+  test('8d. portal: /portal/visits surfaces the journey\'s visit', async ({ request }) => {
     test.skip(!priyaPortalToken, 'portal token not issued in 8b');
     const res = await request.get(`${API}/wellness/portal/visits`, {
       headers: { Authorization: `Bearer ${priyaPortalToken}` },
@@ -453,7 +475,7 @@ test.describe('Wellness clinical journey — full encounter flow', () => {
         doctorId: doctorUserId,
         amountCharged: serviceBasePrice,
         status: 'completed',
-        visitDate: new Date().toISOString(),
+        visitDate: nextVisitDate(),
         notes: `arjun ${TAG}`,
       },
     });

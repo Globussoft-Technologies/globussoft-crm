@@ -249,12 +249,12 @@ test.describe('Calendar Availability API — Holidays CRUD', () => {
     expect((await res.json()).code).toBe('DATE_REQUIRED');
   });
   test('POST /holidays — 400 missing name', async ({ request }) => {
-    const res = await post(request, wellnessAdminToken, '/api/wellness/holidays', { date: '2099-01-01' });
+    const res = await post(request, wellnessAdminToken, '/api/wellness/holidays', { date: '2027-01-01' });
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe('NAME_REQUIRED');
   });
   test('POST /holidays — 201 tenant-wide holiday', async ({ request }) => {
-    const date = '2099-12-25';
+    const date = '2027-12-25';
     const res = await post(request, wellnessAdminToken, '/api/wellness/holidays', {
       date, name: `${RUN_TAG} Tenant-wide`,
     });
@@ -265,10 +265,10 @@ test.describe('Calendar Availability API — Holidays CRUD', () => {
     created.holidays.add(body.id);
   });
   test('GET /holidays?from=&to= — range filter', async ({ request }) => {
-    const res = await get(request, wellnessAdminToken, '/api/wellness/holidays?from=2099-12-01&to=2099-12-31');
+    const res = await get(request, wellnessAdminToken, '/api/wellness/holidays?from=2027-12-01&to=2027-12-31');
     expect(res.status()).toBe(200);
     const list = await res.json();
-    expect(list.every((h) => new Date(h.date) >= new Date('2099-12-01') && new Date(h.date) <= new Date('2099-12-31T23:59:59'))).toBe(true);
+    expect(list.every((h) => new Date(h.date) >= new Date('2027-12-01') && new Date(h.date) <= new Date('2027-12-31T23:59:59'))).toBe(true);
   });
   test('Auth gate — no token → 401', async ({ request }) => {
     const res = await request.get(`${BASE_URL}/api/wellness/holidays`, { timeout: REQUEST_TIMEOUT });
@@ -277,13 +277,13 @@ test.describe('Calendar Availability API — Holidays CRUD', () => {
   test('RBAC — wellness USER cannot POST', async ({ request }) => {
     if (!wellnessUserToken) test.skip();
     const res = await post(request, wellnessUserToken, '/api/wellness/holidays', {
-      date: '2099-01-01', name: 'Forbidden',
+      date: '2027-01-01', name: 'Forbidden',
     });
     expect([401, 403]).toContain(res.status());
   });
   test('DELETE /holidays/:id — 204', async ({ request }) => {
     const create = await post(request, wellnessAdminToken, '/api/wellness/holidays', {
-      date: '2099-11-15', name: `${RUN_TAG} delete-me`,
+      date: '2027-11-15', name: `${RUN_TAG} delete-me`,
     });
     const h = await create.json();
     const res = await del(request, wellnessAdminToken, `/api/wellness/holidays/${h.id}`);
@@ -356,7 +356,7 @@ test.describe('Calendar Availability API — Booking conflict gate', () => {
   test('Happy path — visit creates with no conflicts', async ({ request }) => {
     if (!testDoctorId) test.skip();
     // Pick a far-future Wednesday at 14:00 IST so we don't collide with demo data
-    const visitDate = '2099-06-03T14:00:00+05:30';
+    const visitDate = '2027-04-03T14:00:00+05:30';
     // Need a patient — use the first available
     const patientsRes = await get(request, wellnessAdminToken, '/api/wellness/patients?limit=1');
     if (!patientsRes.ok()) test.skip();
@@ -377,7 +377,7 @@ test.describe('Calendar Availability API — Booking conflict gate', () => {
 
   test('HOLIDAY_BLOCKED — tenant-wide holiday blocks any visit on that day', async ({ request }) => {
     if (!testDoctorId) test.skip();
-    const date = '2099-06-04'; // a future Thursday
+    const date = '2027-04-04'; // a future Thursday
     const holRes = await post(request, wellnessAdminToken, '/api/wellness/holidays', {
       date, name: `${RUN_TAG} Test holiday`,
     });
@@ -392,7 +392,7 @@ test.describe('Calendar Availability API — Booking conflict gate', () => {
     const res = await post(request, wellnessAdminToken, '/api/wellness/visits', {
       patientId: patient.id,
       doctorId: testDoctorId,
-      visitDate: '2099-06-04T14:00:00+05:30',
+      visitDate: '2027-04-04T14:00:00+05:30',
       status: 'booked',
     });
     expect(res.status()).toBe(409);
@@ -403,7 +403,7 @@ test.describe('Calendar Availability API — Booking conflict gate', () => {
   test('DOCTOR_DOUBLE_BOOKED — two visits same doctor + same hour bucket', async ({ request }) => {
     if (!testDoctorId) test.skip();
     // Pick a date that's NOT the holiday date above
-    const visitDate = '2099-07-08T14:00:00+05:30';
+    const visitDate = '2027-04-08T14:00:00+05:30';
     const patientsRes = await get(request, wellnessAdminToken, '/api/wellness/patients?limit=2');
     const patientsBody = await patientsRes.json();
     const patients = (patientsBody.patients || patientsBody) || [];
@@ -446,7 +446,7 @@ test.describe('Calendar Availability API — Booking conflict gate', () => {
     if (patients.length < 2) test.skip();
 
     // Use a fresh date NOT touched by other tests
-    const visitDate = '2099-08-11T11:00:00+05:30';
+    const visitDate = '2027-04-11T11:00:00+05:30';
     const v1 = await post(request, wellnessAdminToken, '/api/wellness/visits', {
       patientId: patients[0].id,
       resourceId: r.id,
@@ -469,7 +469,7 @@ test.describe('Calendar Availability API — Booking conflict gate', () => {
 
   test('PUT /visits/:id — self-update at same slot does NOT self-conflict', async ({ request }) => {
     if (!testDoctorId) test.skip();
-    const visitDate = '2099-09-15T16:00:00+05:30';
+    const visitDate = '2027-04-15T16:00:00+05:30';
     const patientsRes = await get(request, wellnessAdminToken, '/api/wellness/patients?limit=1');
     const patientsBody = await patientsRes.json();
     const patient = (patientsBody.patients || patientsBody)?.[0];

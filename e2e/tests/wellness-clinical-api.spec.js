@@ -626,11 +626,16 @@ test.describe('Wellness API — GET /patients/:id/visits', () => {
 
   test('rows carry the trimmed patient + service + doctor select', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'NestedVisitsShape' });
-    // Drop a visit so the array has at least one row.
+    // Drop a visit so the array has at least one row. Unique visitDate per
+    // test avoids the booking-conflict gate (added Wave 11 GG, resource
+    // availability) when sibling tests target the same doctor at the
+    // route-default `new Date()`.
+    const visitDate = new Date(Date.now() + 13 * 86400000 + Math.floor(Math.random() * 86400000)).toISOString();
     const created = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate,
       status: 'booked',
     });
     expect(created.status()).toBe(201);
@@ -749,10 +754,14 @@ test.describe('Wellness API — GET /visits (list + filters)', () => {
 test.describe('Wellness API — GET /visits/:id (detail)', () => {
   test('200 with patient + service + doctor + prescriptions + consumptions', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'VisitDetail' });
+    // Unique visitDate to avoid the Wave 11 GG resource-availability
+    // booking-conflict gate when sibling tests pick the same doctor.
+    const visitDate = new Date(Date.now() + 14 * 86400000 + Math.floor(Math.random() * 86400000)).toISOString();
     const created = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate,
     });
     expect(created.status()).toBe(201);
     const v = await created.json();

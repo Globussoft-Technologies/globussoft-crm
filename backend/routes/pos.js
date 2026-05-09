@@ -490,7 +490,8 @@ router.post("/sales", cashierGate, async (req, res) => {
       if (!Number.isFinite(refId)) {
         return res.status(400).json({ error: `lineItems[${i}].refId must be numeric`, code: "INVALID_REF_ID" });
       }
-      const quantity = parseInt(li.quantity || 1);
+      // Use ?? not || so quantity=0 isn't silently coerced to 1.
+      const quantity = parseInt(li.quantity ?? 1);
       if (!Number.isFinite(quantity) || quantity < 1) {
         return res.status(400).json({ error: `lineItems[${i}].quantity must be >= 1`, code: "INVALID_QUANTITY" });
       }

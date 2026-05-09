@@ -369,9 +369,16 @@ router.post("/threads/:id/assign", verifyToken, async (req, res) => {
     if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
 
     const { userId } = req.body;
-    const targetId = userId === null || userId === undefined ? null : parseInt(userId);
-    if (targetId !== null && !Number.isFinite(targetId)) {
-      return res.status(400).json({ error: "userId must be a number or null" });
+    let targetId;
+    if (userId === null || userId === undefined) {
+      targetId = null;
+    } else if (typeof userId === "number" && Number.isFinite(userId) && Number.isInteger(userId)) {
+      targetId = userId;
+    } else if (typeof userId === "string" && /^\d+$/.test(userId.trim())) {
+      targetId = parseInt(userId, 10);
+    } else {
+      // Reject 'not-a-number', booleans, objects, fractional, etc.
+      return res.status(400).json({ error: "userId must be a number or null", code: "INVALID_USER_ID" });
     }
 
     // RBAC: cross-assign requires manager; self-assign / unassign open to all.

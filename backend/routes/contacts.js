@@ -220,6 +220,15 @@ router.post('/', async (req, res) => {
     // leading/trailing whitespace into search indexes, exports, etc. The
     // validator already verified there's at least one non-whitespace char.
     const normalised = { ...req.body, name: typeof req.body.name === "string" ? req.body.name.trim() : req.body.name };
+    // PRD Gap §1.1a/§1.1d — date fields come in as ISO strings; Prisma
+    // rejects strings on DateTime columns with PrismaClientValidationError.
+    // Coerce to Date objects after validation.
+    if (typeof normalised.anniversary === "string" && normalised.anniversary !== "") {
+      normalised.anniversary = new Date(normalised.anniversary);
+    }
+    if (typeof normalised.birthDate === "string" && normalised.birthDate !== "") {
+      normalised.birthDate = new Date(normalised.birthDate);
+    }
     // #588: default assignedToId to the creator so USER-role list scoping
     // (which filters by assignedToId = req.user.userId) actually surfaces
     // the contact they just created. Mirrors POST /api/deals which sets
@@ -287,7 +296,15 @@ router.put('/:id', async (req, res) => {
     // #168: same input checks as create so PUT can't bypass POST validation.
     const inputErr = validateContactInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
-    const contact = await prisma.contact.update({ where: { id: existing.id }, data: req.body });
+    // PRD Gap §1.1a/§1.1d — coerce date strings to Date objects (mirrors POST handler).
+    const updateData = { ...req.body };
+    if (typeof updateData.anniversary === "string" && updateData.anniversary !== "") {
+      updateData.anniversary = new Date(updateData.anniversary);
+    }
+    if (typeof updateData.birthDate === "string" && updateData.birthDate !== "") {
+      updateData.birthDate = new Date(updateData.birthDate);
+    }
+    const contact = await prisma.contact.update({ where: { id: existing.id }, data: updateData });
 
     // #179: audit only the keys that actually changed (skip unchanged + DB internals).
     const changes = diffFields(existing, contact, Object.keys(req.body || {}));

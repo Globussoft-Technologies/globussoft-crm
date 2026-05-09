@@ -95,6 +95,12 @@ prisma.invoice = {
   findFirst: vi.fn(),
   update: vi.fn(),
 };
+// Wave 6A wired payment.collected emitEvent on Stripe webhook success.
+// emitEvent in lib/eventBus.js calls prisma.automationRule.findMany — stub
+// it so the unit_tests env (no DATABASE_URL) doesn't blow up with
+// PrismaClientInitializationError on the async event tail.
+prisma.automationRule = prisma.automationRule || {};
+prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
 
 // ── msw outbound interceptor ───────────────────────────────────────
 import { mswServer } from './_helpers/msw-server.js';

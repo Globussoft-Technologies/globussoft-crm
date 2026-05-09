@@ -650,7 +650,9 @@ jobs:
             # the generator; --accept-data-loss allows additive changes
             # only — drops are still gated on schema.prisma.
             echo "=== prisma db push (schema sync) ==="
-            npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
+            # Capture full output for debugging schema-push failures (was tail -5).
+            # Reverted to tail -5 once the v3.5.0 schema sync settles.
+            npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -60
 
             echo "=== pm2 restart ==="
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3

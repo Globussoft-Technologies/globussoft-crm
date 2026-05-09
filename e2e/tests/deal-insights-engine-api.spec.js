@@ -242,6 +242,12 @@ test.afterAll(async ({ request }) => {
   // Order: insights → deals → contacts. Insights reference dealId by
   // raw column (no FK cascade), so they MUST be deleted before the deals
   // soft-delete (otherwise a teardown re-run misses them).
+  //
+  // Bump the hook timeout: against demo (e2e-full) the per-deal insight
+  // listing + per-row DELETE round-trips can serialise past Playwright's
+  // default 30s ceiling when the demo box is under shard-parallel load.
+  // 90s is comfortably above the worst observed (~45s) in shard-1.
+  test.setTimeout(90_000);
   if (tokens.admin) {
     // Sweep all insights tied to our deals BEFORE deleting deals (DELETE
     // /api/deal-insights/:id is tenant-checked, so this works).

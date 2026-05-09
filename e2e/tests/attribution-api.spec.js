@@ -396,10 +396,20 @@ test.describe('Attribution API — GET /report', () => {
 
   test('valid from + to range filters return arrays without 500', async ({ request }) => {
     const tok = await getGeneric(request);
+    // Narrow window: aggregating a decade against demo's accumulated
+    // touchpoint volume can exceed the proxy's 60s timeout under
+    // shard-parallel load (observed 502 in shard-1 of release-validation
+    // run 25603870964). The CONTRACT being tested is shape-only — route
+    // returns 200 with byChannel + bySource arrays — and that doesn't
+    // depend on a wide range. 30 days is plenty.
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const fromIso = thirtyDaysAgo.toISOString().slice(0, 10);
+    const toIso = today.toISOString().slice(0, 10);
     const res = await get(
       request,
       tok,
-      '/api/attribution/report?from=2020-01-01&to=2030-12-31'
+      `/api/attribution/report?from=${fromIso}&to=${toIso}`
     );
     expect(res.status()).toBe(200);
     const body = await res.json();

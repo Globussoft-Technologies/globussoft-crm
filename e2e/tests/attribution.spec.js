@@ -26,10 +26,26 @@ test.describe.configure({ mode: 'serial' });
 
 test.describe('Attribution — /api/attribution', () => {
   test.beforeAll(async ({ request }) => {
-    const login = await request.post(`${API}/auth/login`, {
-      data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
-    });
-    expect(login.ok(), 'admin login must succeed').toBeTruthy();
+    // Retry-on-429: the per-username + per-IP login limiters
+    // (loginUsernameLimiter + loginIpLimiter, see middleware/security.js)
+    // can trip when sibling specs in the same shard hammer /auth/login
+    // concurrently. A single back-off + retry is sufficient — the
+    // username window resets after 60s and per-shard parallelism is
+    // bounded; if we still get 429 after the retry, that's a real
+    // saturation event worth surfacing as a hard fail.
+    let login;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      login = await request.post(`${API}/auth/login`, {
+        data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
+      });
+      if (login.ok()) break;
+      if (login.status() === 429 && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 5_000 * (attempt + 1)));
+        continue;
+      }
+      break;
+    }
+    expect(login.ok(), `admin login must succeed (last status: ${login.status()})`).toBeTruthy();
     const body = await login.json();
     adminToken = body.token;
 

@@ -312,12 +312,21 @@ async function createPatient(request, label) {
 // completed/in-treatment per #109. visitDate accepts past dates within
 // 5y; we pass `now - 73h` so the engine's
 // `[now-14d, now-72h]` window picks it up.
+//
+// Wave 11 GG booking-conflict gate: subtract a per-call hour offset from
+// the requested visitDate so successive calls within the same spec
+// (all using seedIds.doctorId) don't bucket-collide on (doctor, UTC-hour)
+// at create time. The engine itself only filters by the post-backdate
+// visitDate, so shifting the create-time date by a few hours is safe —
+// we backdate immediately afterwards anyway.
+let _opsCreateOffsetH = 0;
 async function createCompletedVisit(request, patientId, visitDateIso) {
+  const shifted = new Date(new Date(visitDateIso).getTime() - (_opsCreateOffsetH++ * 3600 * 1000)).toISOString();
   const res = await authPost(request, tokens.wellnessAdmin, '/wellness/visits', {
     patientId,
     serviceId: seedIds.serviceId,
     doctorId: seedIds.doctorId,
-    visitDate: visitDateIso,
+    visitDate: shifted,
     status: 'completed',
   });
   if (!res.ok()) {

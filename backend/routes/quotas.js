@@ -66,6 +66,12 @@ router.get('/', async (req, res) => {
 // on every other route. Without this, the route was unreachable.
 router.post('/', async (req, res) => {
   try {
+    // #646: req.body.userId IS stripped by stripDangerous (this read
+    // evaluates to undefined in practice); the `req.query.userId`
+    // short-circuits first. Kept as a defensive belt-and-braces fallback
+    // in case the strip middleware is removed or scoped differently in
+    // the future. Documented behaviour.
+    // eslint-disable-next-line no-restricted-syntax
     const userId = req.query.userId || req.body.userId;
     const { period, target } = req.body;
     if (!userId || !period || target === undefined || target === null) {

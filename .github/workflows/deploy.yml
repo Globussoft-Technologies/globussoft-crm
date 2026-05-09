@@ -384,6 +384,7 @@ jobs:
             tests/attendance-api.spec.js \
             tests/leave-api.spec.js \
             tests/pos-api.spec.js \
+            tests/cross-tenant-stripdangerous-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

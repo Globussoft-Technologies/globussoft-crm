@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## v3.5.2 — 2026-05-10 — PRD Gap doc closure: 16+ items (events / notifications / POS hooks / Contact extras) + 4 RTL test suites
+
+Patch release driving the [2026-05-08 Google Doc PRD Gap audit](https://docs.google.com/document/d/1nVE2GDXSvxLNtaOQHlrq886ZTMZLkeCQ0O0VWthTdac/edit) toward 100%. The doc had assessed 103 items at 15% / 21% / 64% (✅ / ⚠️ / ❌) on 8 May; v3.5.0 closed the greenfield "0/X" sections (POS / Attendance / Leave / WhatsApp Threads / Booking Widget / Memberships / Wallet). v3.5.2 closes the wiring + foundation gaps that remained:
+
+### Wave 6 — PRD Gap closure (4 parallel agents)
+
+- **Cross-cutting analytics events** (commit `53917ab` — Wave 6A) — 18 new `emitEvent()` call sites across `routes/{billing,payments,wellness,attendance}.js` covering: `invoice.{created,completed,voided,refunded}`, `payment.collected`, `wallet.{topup,spent}`, `cashback.credited`, `giftcard.{issued,redeemed}`, `membership.{plan_created,enrolled,benefit_applied,expired,renewed,cancelled}`, `attendance.{checked_in,checked_out}`. All 18 added to `routes/workflows.js` `TRIGGER_TYPES` so AutomationRule UI surfaces them. +9 vitest pins. Closes PRD Gap §13 items 1-7.
+- **Notification wiring** (commit `ac1aa30` — Wave 6B) — 4 missing notification paths: approvals → admin/manager, SLA breach → assignee + admin/manager (rides existing `breached=false` precondition for idempotency), expiring memberships T-7 (new `Membership.expiryNotifiedAt` marker column for dedup), no-show risk daily 08:30 IST cron. +28 vitest cases across 4 new test files. Closes PRD Gap §12 items 4a/b/d/e.
+- **POS Sale completion hooks** (commit `ffdc7d4` — Wave 6C) — PRODUCT lineItems atomically decrement `Product.currentStock` inside the Sale-create transaction; loyalty auto-credit mirrors the visit-side helper (`maybeAutoCreditLoyaltyForSale`) with reason-keyed idempotency (`Sale #<id> (auto earn)`). `shift.opened`/`shift.closed` events also wired with variance payload. +6 e2e cases. Closes PRD Gap §2 item 9 + §13 item 4.
+- **Contact foundation extras** (commit `9e58829` — Wave 6D) — `birthDate`, `anniversary`, `gst` (validated via 15-char India GSTIN regex), `walletBalance` on Contact + `anniversary`, `walletBalance` on Patient. Smart choice on `walletBalance`: computed-on-read (single source of truth in `Wallet.balance`) instead of denorm to avoid drift risk. +11 e2e cases. Closes PRD Gap §1 items 1a, 1c, 1d, 1e.
+
+### Frontend RTL component test suites (4 commits, 54 cases)
+
+- `c51a3b3` — `PointOfSale.test.jsx` (12 cases) — closed-shift / open-shift state machine, basket math, line-item add/remove, complete-sale POST shape, close-shift validation
+- `caf1f5c` — `Attendance.test.jsx` (11 cases) — clock-in/out flow, history table, manager Staff-tab gate, 4xx/409 error toasts
+- `16396eb` — `Leave.test.jsx` (17 cases) — balance summary, request form submit + validation, history table, requester self-cancel + manager approve/reject
+- `1efdf59` — `WhatsAppThreads.test.jsx` (14 cases) + **inline #646-class bug fix**: page was POSTing `userId` to `/assign` which `stripDangerous` silently deletes — assign-to-me was silently UNassigning. Renamed to `targetUserId`; spec asserts both new shape AND that `userId` is absent.
+
+### Round 10 deploy-gate fix (Wave 6 fallout)
+
+- `36a76b9` — Wave 6 wiring surfaced 2 secondary regressions: (1) `stripe-webhook.test.js` triggered the new `payment.collected` emit which calls `prisma.automationRule.findMany` without `DATABASE_URL` in unit_tests env (PrismaClientInitializationError unhandled rejection — same class as round 1's consent-templates fix). Stubbed `prisma.automationRule.findMany` in the test's prisma-singleton patch block. (2) `contacts-api.spec.js` POST/PUT with `anniversary`/`birthDate` strings → `PrismaClientValidationError` because Prisma rejects strings on `DateTime` columns. Added explicit string → Date coercion in both POST and PUT handlers after validation.
+
+### Test surface delta
+
+- per-push gate: ~4,065 → ~4,128 (+63: 54 frontend RTL + 9 backend vitest)
+- backend vitest: 1779 → ~1,816+ (+37 across Wave 6A/6B/6C/6D)
+- 18 new TRIGGER_TYPES in `routes/workflows.js`
+
+### PRD Gap doc status
+
+- **Before v3.5.2 (after v3.5.0):** ~50/22/31 ✅/⚠️/❌
+- **After v3.5.2:** ~67/16/20 ✅/⚠️/❌ (~65% complete — 16+ items closed in this release)
+
+### Carry-over for v3.5.3
+
+- **B-03** SendGrid Sender Identity (operator-blocker, gist sent to DevOps)
+- **#555 / #565 / #527 / #200/#201/#211** product calls (unchanged)
+- **Deeper PRD Gap items** (Wave 7 candidates): ServiceCategory model, Drug database, full CSV import/export for services/products/packages/bookings, mini-website rich content editor, granular permissions matrix UI, CommissionProfile model, StaffRevenueGoal model + dashboard, POS Guest Checkout / Discount-coupon-manager-override UI
+
+---
+
 ## v3.5.1 — 2026-05-09 — #646 stripDangerous-strips-tenantId fix (3 routes silently broken since launch)
 
 Patch release on top of v3.5.0 closing GitHub [#646](https://github.com/Globussoft-Technologies/globussoft-crm/issues/646) — the global `stripDangerous` middleware (`backend/middleware/security.js:112-114`) deletes `userId` AND `tenantId` from `req.body` on every request. Three routes silently relied on `req.body.tenantId` and silently fell through to a tenantId=1 default whenever the field was missing (which was always). Multi-tenant correctness bug; surfaced by Wave 5B Agent VV's `stripDangerous` audit during the 2026-05-09 v3.5.0 release-validation cycle.

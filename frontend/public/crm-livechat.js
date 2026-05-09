@@ -151,10 +151,13 @@ display:flex;justify-content:space-between;align-items:center;}\
   }
 
   function startSession(name, email) {
+    // #646: must POST `siteTenantId` (not `tenantId`) — the global
+    // stripDangerous middleware deletes `tenantId` from every request body,
+    // so the route would otherwise return 400 INVALID_INPUT.
     return api('/start', {
       method: 'POST',
       body: JSON.stringify({
-        tenantId: TENANT_ID,
+        siteTenantId: TENANT_ID,
         visitorId: getVisitorId(),
         visitorName: name,
         visitorEmail: email,

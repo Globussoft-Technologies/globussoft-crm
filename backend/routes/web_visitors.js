@@ -7,11 +7,16 @@ function parseJSON(s, fallback) {
   try { return JSON.parse(s); } catch { return fallback; }
 }
 
-function getTenantId(req, fallback) {
-  const t = req.body && req.body.tenantId;
+// #646: req.body.tenantId is silently deleted by stripDangerous middleware
+// (backend/middleware/security.js — strips tenantId AND userId from every
+// request body to prevent cross-tenant writes). The embed widget posting
+// from a tenant's website MUST use `siteTenantId` so its value survives the
+// strip. Missing `siteTenantId` → 400 INVALID_INPUT (no silent fallback to 1).
+function getSiteTenantId(req) {
+  const t = req.body && req.body.siteTenantId;
   const n = parseInt(t, 10);
   if (!Number.isNaN(n) && n > 0) return n;
-  return fallback || 1;
+  return null;
 }
 
 // ── PUBLIC: Track page view ────────────────────────────────────────
@@ -21,7 +26,13 @@ router.post("/track", async (req, res) => {
     const { sessionId, url, userAgent, ipAddress, country } = req.body || {};
     if (!sessionId) return res.status(400).json({ error: "sessionId required" });
 
-    const tenantId = getTenantId(req, 1);
+    const tenantId = getSiteTenantId(req);
+    if (!tenantId) {
+      return res.status(400).json({
+        error: "siteTenantId required",
+        code: "INVALID_INPUT",
+      });
+    }
     const ip = ipAddress || req.ip || req.headers["x-forwarded-for"] || null;
     const ua = userAgent || req.headers["user-agent"] || null;
     const now = new Date();
@@ -73,13 +84,16 @@ router.post("/identify", async (req, res) => {
     const { sessionId, email } = req.body || {};
     if (!sessionId || !email) return res.status(400).json({ error: "sessionId and email required" });
 
-    const tenantId = getTenantId(req, 1);
+    // #646: identify is auth-gated, so req.user.tenantId is the authoritative
+    // tenant. Body's siteTenantId is only consulted as a soft fallback if a
+    // legacy visitor row predates tenant assignment.
+    const fallbackTenantId = getSiteTenantId(req) || (req.user && req.user.tenantId) || 1;
 
     const visitor = await prisma.webVisitor.findUnique({ where: { sessionId } });
     if (!visitor) return res.status(404).json({ error: "Visitor not found" });
 
     const contact = await prisma.contact.findFirst({
-      where: { email: email.toLowerCase().trim(), tenantId: visitor.tenantId || tenantId },
+      where: { email: email.toLowerCase().trim(), tenantId: visitor.tenantId || fallbackTenantId },
     });
 
     if (!contact) {

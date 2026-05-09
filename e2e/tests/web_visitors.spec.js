@@ -14,9 +14,16 @@ const API = `${BASE_URL}/api`;
 
 const ADMIN_EMAIL = 'admin@globussoft.com';
 const ADMIN_PASSWORD = 'password123';
+// Wellness admin — used to discover wellness tenantId for cross-tenant
+// body-routing assertions (#646).
+const WELLNESS_EMAIL = 'admin@wellness.demo';
+const WELLNESS_PASSWORD = 'password123';
 
 let adminToken = '';
+let genericTenantId = 0;
+let wellnessTenantId = 0;
 const seededSessionIds = [];
+const seededWellnessSessionIds = [];
 
 test.describe.configure({ mode: 'serial' });
 
@@ -26,7 +33,18 @@ test.describe('web_visitors.js — visitor tracking + identify + admin list', ()
       data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
     });
     expect(login.ok()).toBeTruthy();
-    adminToken = (await login.json()).token;
+    const body = await login.json();
+    adminToken = body.token;
+    genericTenantId = body.tenant && body.tenant.id;
+    expect(genericTenantId, 'generic tenant id must resolve from login').toBeGreaterThan(0);
+
+    const wLogin = await request.post(`${API}/auth/login`, {
+      data: { email: WELLNESS_EMAIL, password: WELLNESS_PASSWORD },
+    });
+    if (wLogin.ok()) {
+      const wBody = await wLogin.json();
+      wellnessTenantId = wBody.tenant && wBody.tenant.id;
+    }
   });
 
   // No DELETE endpoint exposed on this surface — visitors created here will
@@ -64,7 +82,29 @@ test.describe('web_visitors.js — visitor tracking + identify + admin list', ()
 
   test('POST /web-visitors/track without sessionId returns 400 (public)', async ({ request }) => {
     const res = await request.post(`${API}/web-visitors/track`, {
-      data: { url: '/' },
+      data: { url: '/', siteTenantId: genericTenantId },
+    });
+    expect(res.status()).toBe(400);
+  });
+
+  // #646: missing siteTenantId must 400 (no silent fallback to 1).
+  test('POST /web-visitors/track without siteTenantId returns 400 (#646)', async ({ request }) => {
+    const sessionId = `E2E_AUDIT_no_tenant_${Date.now()}`;
+    const res = await request.post(`${API}/web-visitors/track`, {
+      data: { sessionId, url: '/' },
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/siteTenantId/i);
+  });
+
+  // #646: posting the OLD `tenantId` field is silently stripped by
+  // stripDangerous middleware → must STILL 400, proving the rename closed
+  // the bug rather than letting the legacy field through.
+  test('POST /web-visitors/track with legacy tenantId field returns 400 (#646)', async ({ request }) => {
+    const sessionId = `E2E_AUDIT_legacy_${Date.now()}`;
+    const res = await request.post(`${API}/web-visitors/track`, {
+      data: { sessionId, url: '/', tenantId: genericTenantId }, // stripped server-side
     });
     expect(res.status()).toBe(400);
   });
@@ -74,6 +114,7 @@ test.describe('web_visitors.js — visitor tracking + identify + admin list', ()
     const res = await request.post(`${API}/web-visitors/track`, {
       data: {
         sessionId,
+        siteTenantId: genericTenantId, // #646: was tenantId — stripDangerous strips that
         url: '/pricing',
         userAgent: 'E2E-Audit/1.0',
         country: 'IN',
@@ -91,11 +132,54 @@ test.describe('web_visitors.js — visitor tracking + identify + admin list', ()
     const sessionId = seededSessionIds[0];
     test.skip(!sessionId, 'no seeded session');
     const res = await request.post(`${API}/web-visitors/track`, {
-      data: { sessionId, url: '/contact' },
+      data: { sessionId, siteTenantId: genericTenantId, url: '/contact' },
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.pageCount).toBeGreaterThanOrEqual(2);
+  });
+
+  // #646: cross-tenant body routing — POSTing siteTenantId=<wellness> must
+  // route the visitor row to the wellness tenant, NOT generic and NOT the
+  // route's old fallback of 1. Verified by listing visitors as wellness
+  // admin and finding the seeded sessionId there.
+  test('POST /web-visitors/track respects siteTenantId for cross-tenant routing (#646)', async ({ request }) => {
+    test.skip(!wellnessTenantId || wellnessTenantId === genericTenantId,
+      'wellness tenant unavailable or matches generic');
+    const sessionId = `E2E_AUDIT_xtenant_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const res = await request.post(`${API}/web-visitors/track`, {
+      data: {
+        sessionId,
+        siteTenantId: wellnessTenantId,
+        url: '/wellness-landing',
+        userAgent: 'E2E-Audit/1.0',
+      },
+    });
+    expect(res.status()).toBe(200);
+    seededWellnessSessionIds.push(sessionId);
+
+    // Verify the visitor row landed on the wellness tenant by querying as
+    // wellness admin. Generic admin's list MUST NOT contain the sessionId.
+    const wLogin = await request.post(`${API}/auth/login`, {
+      data: { email: WELLNESS_EMAIL, password: WELLNESS_PASSWORD },
+    });
+    expect(wLogin.ok()).toBeTruthy();
+    const wToken = (await wLogin.json()).token;
+
+    const wList = await request.get(`${API}/web-visitors?days=1`, {
+      headers: { Authorization: `Bearer ${wToken}` },
+    });
+    expect(wList.status()).toBe(200);
+    const wItems = await wList.json();
+    const found = wItems.find((x) => x.sessionId === sessionId);
+    expect(found, 'wellness admin must see the cross-tenant visitor').toBeTruthy();
+
+    // Generic admin must NOT see the wellness-tenant visitor.
+    const gList = await request.get(`${API}/web-visitors?days=1`, { headers: auth() });
+    expect(gList.status()).toBe(200);
+    const gItems = await gList.json();
+    const leak = gItems.find((x) => x.sessionId === sessionId);
+    expect(leak, 'generic admin must NOT see the wellness-tenant visitor (cross-tenant leak)').toBeUndefined();
   });
 
   test('GET /web-visitors/:id returns visitor detail with pages array', async ({ request }) => {

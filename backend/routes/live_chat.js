@@ -11,10 +11,22 @@ const router = express.Router();
 // POST /visitor/start — visitor opens a chat session
 router.post("/visitor/start", async (req, res) => {
   try {
-    const { tenantId, visitorName, visitorEmail, visitorId } = req.body || {};
+    // #646: req.body.tenantId is silently deleted by stripDangerous
+    // middleware (backend/middleware/security.js — strips tenantId AND
+    // userId from every request body to prevent cross-tenant writes). The
+    // embed widget posting from a tenant's website MUST use `siteTenantId`
+    // so its value survives the strip. Missing `siteTenantId` → 400
+    // INVALID_INPUT (no silent fallback to 1).
+    const { siteTenantId, visitorName, visitorEmail, visitorId } = req.body || {};
     if (!visitorId) return res.status(400).json({ error: "visitorId is required" });
 
-    const tid = parseInt(tenantId, 10) || 1;
+    const tid = parseInt(siteTenantId, 10);
+    if (!tid || tid <= 0) {
+      return res.status(400).json({
+        error: "siteTenantId is required",
+        code: "INVALID_INPUT",
+      });
+    }
 
     const session = await prisma.liveChatSession.create({
       data: {

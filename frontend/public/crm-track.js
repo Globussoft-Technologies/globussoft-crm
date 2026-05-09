@@ -83,9 +83,12 @@
   }
 
   function trackPageView() {
+    // #646: must POST `siteTenantId` (not `tenantId`) — the global
+    // stripDangerous middleware deletes `tenantId` from every request body,
+    // so the route would otherwise fall through to a default of 1.
     var body = {
       sessionId: getSessionId(),
-      tenantId: TENANT_ID,
+      siteTenantId: TENANT_ID,
       url: window.location.href,
       userAgent: navigator.userAgent,
     };
@@ -94,9 +97,10 @@
 
   function identify(email) {
     if (!email) return Promise.resolve(null);
+    // #646: see trackPageView() — `tenantId` is stripped server-side.
     var body = {
       sessionId: getSessionId(),
-      tenantId: TENANT_ID,
+      siteTenantId: TENANT_ID,
       email: String(email).trim().toLowerCase(),
     };
     return postJSON('/api/web-visitors/identify', body);

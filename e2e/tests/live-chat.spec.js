@@ -21,11 +21,20 @@ const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const API = `${BASE_URL}/api`;
 const EMAIL = 'admin@globussoft.com';
 const PASSWORD = 'password123';
+// Wellness tenant admin — used to discover the wellness tenantId at runtime
+// (#646 cross-tenant body-routing test below).
+const WELLNESS_EMAIL = 'admin@wellness.demo';
+const WELLNESS_PASSWORD = 'password123';
 
 let token = '';
+let genericTenantId = 0;
+let wellnessTenantId = 0;
 const auth = () => ({ Authorization: `Bearer ${token}` });
+const wellnessAuth = (t) => ({ Authorization: `Bearer ${t}` });
+let wellnessToken = '';
 
 const createdSessionIds = [];
+const createdWellnessSessionIds = [];
 
 test.describe.configure({ mode: 'serial' });
 
@@ -35,13 +44,33 @@ test.describe('live-chat API smoke', () => {
       data: { email: EMAIL, password: PASSWORD },
     });
     expect(login.ok(), 'admin login must succeed').toBeTruthy();
-    token = (await login.json()).token;
+    const loginBody = await login.json();
+    token = loginBody.token;
+    genericTenantId = loginBody.tenant && loginBody.tenant.id;
+    expect(genericTenantId, 'generic tenant id must resolve from login').toBeGreaterThan(0);
+
+    // Resolve wellness tenantId for cross-tenant assertions
+    const wLogin = await request.post(`${API}/auth/login`, {
+      data: { email: WELLNESS_EMAIL, password: WELLNESS_PASSWORD },
+    });
+    if (wLogin.ok()) {
+      const wBody = await wLogin.json();
+      wellnessToken = wBody.token;
+      wellnessTenantId = wBody.tenant && wBody.tenant.id;
+    }
   });
 
   test.afterAll(async ({ request }) => {
     // Close any unresolved sessions to keep state clean
     for (const id of createdSessionIds) {
       await request.post(`${API}/live-chat/${id}/close`, { headers: auth() }).catch(() => {});
+    }
+    // Close wellness-tenant sessions using wellness admin token (cross-tenant
+    // close from generic admin would 404 — sessions are tenant-scoped).
+    if (wellnessToken) {
+      for (const id of createdWellnessSessionIds) {
+        await request.post(`${API}/live-chat/${id}/close`, { headers: wellnessAuth(wellnessToken) }).catch(() => {});
+      }
     }
   });
 
@@ -53,9 +82,16 @@ test.describe('live-chat API smoke', () => {
 
   test('POST /visitor/start creates an open session (no auth)', async ({ request }) => {
     const stamp = Date.now();
+    // #646: must POST `siteTenantId` (not `tenantId`). The previous version
+    // of this test sent `tenantId: 1` and got 200, but that was a false
+    // positive — stripDangerous middleware deleted the field and the route
+    // silently fell through to its default of 1, which happened to equal
+    // what the test sent. We now POST `siteTenantId: <generic>` and assert
+    // the visitor row landed on that exact tenantId (proving the body
+    // field is the source of truth, not a fallback).
     const res = await request.post(`${API}/live-chat/visitor/start`, {
       data: {
-        tenantId: 1,
+        siteTenantId: genericTenantId,
         visitorId: `e2e_audit_${stamp}`,
         visitorName: 'Aarav Sharma',
         visitorEmail: `aarav_${stamp}@example.com`,
@@ -65,7 +101,59 @@ test.describe('live-chat API smoke', () => {
     const body = await res.json();
     expect(body.sessionId).toBeTruthy();
     expect(body.session.status).toBe('OPEN');
+    expect(body.session.tenantId).toBe(genericTenantId);
     createdSessionIds.push(body.sessionId);
+  });
+
+  // #646: missing siteTenantId must 400 (no silent fallback to tenantId=1).
+  test('POST /visitor/start without siteTenantId returns 400 (#646)', async ({ request }) => {
+    const stamp = Date.now();
+    const res = await request.post(`${API}/live-chat/visitor/start`, {
+      data: {
+        visitorId: `e2e_audit_no_tenant_${stamp}`,
+        visitorName: 'Should Reject',
+      },
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/siteTenantId/i);
+  });
+
+  // #646: posting tenantId (the OLD field) is silently stripped by the
+  // global stripDangerous middleware, so the route must STILL 400 — proves
+  // the rename actually closes the bug rather than papering over it.
+  test('POST /visitor/start with legacy tenantId field (no siteTenantId) returns 400 (#646)', async ({ request }) => {
+    const stamp = Date.now();
+    const res = await request.post(`${API}/live-chat/visitor/start`, {
+      data: {
+        tenantId: genericTenantId, // stripped by stripDangerous middleware
+        visitorId: `e2e_audit_legacy_${stamp}`,
+        visitorName: 'Legacy Caller',
+      },
+    });
+    expect(res.status()).toBe(400);
+  });
+
+  // #646: cross-tenant body routing — an embed widget on the wellness
+  // tenant's website POSTs siteTenantId=<wellness>; the visitor row must
+  // land on the wellness tenant, NOT generic, and NOT the route's old
+  // hardcoded fallback of 1.
+  test('POST /visitor/start respects siteTenantId for cross-tenant routing (#646)', async ({ request }) => {
+    test.skip(!wellnessTenantId || wellnessTenantId === genericTenantId,
+      'wellness tenant unavailable or matches generic');
+    const stamp = Date.now();
+    const res = await request.post(`${API}/live-chat/visitor/start`, {
+      data: {
+        siteTenantId: wellnessTenantId,
+        visitorId: `e2e_audit_xtenant_${stamp}`,
+        visitorName: 'Wellness Visitor',
+      },
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.session.tenantId).toBe(wellnessTenantId);
+    expect(body.session.tenantId).not.toBe(genericTenantId);
+    createdWellnessSessionIds.push(body.sessionId);
   });
 
   test('POST /visitor/:sessionId/message rejects empty body', async ({ request }) => {

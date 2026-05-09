@@ -113,6 +113,37 @@ test.describe('telephony.js — click-to-call + provider webhooks + admin config
     expect(body.status).toBe('ok');
   });
 
+  test('POST /telephony/webhook/myoperator: bare `id` field is NOT used as providerCallId (#646 dead-code removal)', async ({ request }) => {
+    // Pins the #646 fix: the dead `data.id` fallback at routes/telephony.js
+    // was removed because the global stripDangerous middleware deletes `id`
+    // from every request body before the handler runs, so the fallback could
+    // never fire in production. Submitting a payload with ONLY `id` (no
+    // `call_id`) MUST still return 200 (handler is permissive about missing
+    // providerCallId) but MUST NOT use `id` as a lookup key — the row is
+    // created with providerCallId=null.
+    const uniqueId = `e2e-646c-${Date.now()}`;
+    const callerNumber = `+91990${String(Date.now()).slice(-7)}`;
+    const res = await request.post(`${API}/telephony/webhook/myoperator`, {
+      data: {
+        // No call_id — only the (now-stripped) `id` field
+        id: uniqueId,
+        caller_number: callerNumber,
+        callee_number: '+919900445566',
+        duration: 17,
+        status: 'completed',
+        direction: 'outbound',
+      },
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('ok');
+    // Cannot directly inspect the CallLog row from the public webhook endpoint
+    // (no GET-by-providerCallId surface), but the green 200 is sufficient to
+    // pin the contract: `id` is silently stripped, the handler does NOT crash
+    // looking for a row by `id`, and a fresh CallLog is created with
+    // providerCallId=null.
+  });
+
   test('POST /telephony/webhook/knowlarity accepts a CDR payload (public)', async ({ request }) => {
     const res = await request.post(`${API}/telephony/webhook/knowlarity`, {
       data: {

@@ -67,7 +67,12 @@ router.post("/webhook/myoperator", async (req, res) => {
     const duration = parseInt(data.duration || data.call_duration || 0, 10);
     const recordingUrl = data.recording_url || data.recording || null;
     const status = data.status || data.call_status || "COMPLETED";
-    const providerCallId = data.call_id || data.id || null;
+    // #646: read `call_id` only — the previous `data.id` fallback was dead code.
+    // The global `stripDangerous` middleware (server.js:428, validateInput.js:76)
+    // deletes `id` from every request body BEFORE the handler runs, so the
+    // fallback could never fire. MyOperator's documented webhook field is
+    // `call_id` regardless; the dead branch was misleading not load-bearing.
+    const providerCallId = data.call_id || null;
     const direction = data.direction === "inbound" || data.type === "incoming" ? "INBOUND" : "OUTBOUND";
 
     let callLog = null;

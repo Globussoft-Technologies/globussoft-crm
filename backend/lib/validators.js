@@ -171,6 +171,28 @@ function ensureStringLength(value, { max, min = 0, field, code, required = false
   return null;
 }
 
+// PRD Gap §1.1c — Indian GSTIN validator. Canonical 15-char format:
+//   2 digits state code  | 5 letters PAN-prefix | 4 digits PAN-mid |
+//   1 letter PAN-suffix  | 1 digit entity-num   | 1 literal "Z"    |
+//   1 alphanumeric checksum
+// Example valid: `29ABCDE1234F1Z5`. Stored verbatim once validated.
+const GST_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9][Z][0-9A-Z]$/;
+function isValidGstOrEmpty(g) {
+  if (g == null || g === "") return true;
+  if (typeof g !== "string") return false;
+  return GST_RE.test(g);
+}
+function ensureGst(g, { required = false } = {}) {
+  if (g == null || g === "") {
+    return required
+      ? { status: 400, error: "gst is required", code: "GST_REQUIRED" }
+      : null;
+  }
+  return isValidGstOrEmpty(g)
+    ? null
+    : { status: 400, error: "gst must be a valid 15-character GSTIN (e.g. 29ABCDE1234F1Z5)", code: "INVALID_GST" };
+}
+
 // Validates an array of email recipients (strings).
 function ensureEmailList(list, { field = "recipients", min = 1, max = 50 } = {}) {
   if (!Array.isArray(list)) {
@@ -316,8 +338,10 @@ function httpFromPrismaError(e) {
 
 module.exports = {
   EMAIL_RE,
+  GST_RE,
   ensurePhone,
   ensureEmail,
+  ensureGst,
   ensureNumberInRange,
   ensureEnum,
   ensureDateInRange,
@@ -329,4 +353,5 @@ module.exports = {
   httpFromPrismaError,
   isValidEmailOrEmpty,
   isValidPhoneOrEmpty,
+  isValidGstOrEmpty,
 };

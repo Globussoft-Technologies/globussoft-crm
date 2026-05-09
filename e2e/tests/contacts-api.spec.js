@@ -307,6 +307,171 @@ test.describe('Contacts API — POST /', () => {
   });
 });
 
+// ─── PRD Gap §1.1a / §1.1c / §1.1d / §1.1e — foundation extras ──────
+//
+// New fields on Contact:
+//   - birthDate     DateTime?  birthday-marketing
+//   - anniversary   DateTime?  anniversary-marketing
+//   - gst           String?    Indian GSTIN (15-char, validated server-side)
+//   - walletBalance Float?     read-only computed surface (linked Patient
+//                              wallet); writes silently stripped, GET /:id
+//                              surfaces null when no Patient/Wallet linked.
+//
+// Validation contract:
+//   - gst format `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9][Z][0-9A-Z]$`
+//   - birthDate must not be in the future, must be ≥1900
+//   - anniversary must be in [1900, current year + 1]
+//   - walletBalance is dropped from incoming bodies (cannot be poisoned)
+
+test.describe('Contacts API — PRD Gap §1.1 foundation extras', () => {
+  test('POST 201 persists valid GST', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} gst-ok`,
+      email: uniqueEmail('gst-ok'),
+      gst: '29ABCDE1234F1Z5',
+    });
+    expect(res.status(), `gst create: ${await res.text()}`).toBe(201);
+    const c = await res.json();
+    createdContactIds.push(c.id);
+    expect(c.gst).toBe('29ABCDE1234F1Z5');
+  });
+
+  test('POST 400 INVALID_GST on malformed GST', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} gst-bad`,
+      email: uniqueEmail('gst-bad'),
+      gst: 'not-a-gst',
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_GST');
+  });
+
+  test('POST 400 INVALID_GST on lowercase GST (must be uppercase letters)', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} gst-lc`,
+      email: uniqueEmail('gst-lc'),
+      gst: '29abcde1234f1z5',
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_GST');
+  });
+
+  test('POST 201 persists anniversary + birthDate', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} dates-ok`,
+      email: uniqueEmail('dates-ok'),
+      anniversary: '2020-06-15',
+      birthDate: '1990-03-22',
+    });
+    expect(res.status(), `dates create: ${await res.text()}`).toBe(201);
+    const c = await res.json();
+    createdContactIds.push(c.id);
+    expect(c.anniversary).toBeTruthy();
+    expect(c.birthDate).toBeTruthy();
+    expect(new Date(c.birthDate).getUTCFullYear()).toBe(1990);
+    expect(new Date(c.anniversary).getUTCFullYear()).toBe(2020);
+  });
+
+  test('POST 400 INVALID_BIRTHDATE on a future birthDate', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    // Year 2099 — well in the future.
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} bd-future`,
+      email: uniqueEmail('bd-future'),
+      birthDate: '2099-01-01',
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_BIRTHDATE');
+  });
+
+  test('POST 400 INVALID_ANNIVERSARY on year far past +1y window', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    const tooFar = `${new Date().getUTCFullYear() + 50}-01-01`;
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} ann-too-far`,
+      email: uniqueEmail('ann-too-far'),
+      anniversary: tooFar,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_ANNIVERSARY');
+  });
+
+  test('PUT updates anniversary on existing contact', async ({ request }) => {
+    const c = await createContact(request, { label: 'put-ann' });
+    const { token } = await getAdmin(request);
+    const res = await put(request, token, `/api/contacts/${c.id}`, {
+      anniversary: '2018-11-30',
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(new Date(body.anniversary).getUTCFullYear()).toBe(2018);
+  });
+
+  test('PUT 400 INVALID_GST on bad GST during update', async ({ request }) => {
+    const c = await createContact(request, { label: 'put-gst-bad' });
+    const { token } = await getAdmin(request);
+    const res = await put(request, token, `/api/contacts/${c.id}`, {
+      gst: 'BADGST',
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_GST');
+  });
+
+  test('GET /:id surfaces walletBalance field (null for plain CRM contacts)', async ({ request }) => {
+    const c = await createContact(request, { label: 'wallet-null' });
+    const { token } = await getAdmin(request);
+    const res = await get(request, token, `/api/contacts/${c.id}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // walletBalance is on the response shape; null when no linked Patient
+    // with a Wallet (the generic-tenant default).
+    expect('walletBalance' in body).toBe(true);
+    expect(body.walletBalance === null || typeof body.walletBalance === 'number').toBe(true);
+  });
+
+  test('walletBalance in POST body is silently dropped (read-only)', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    // Caller tries to poison the denorm — server must drop it.
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} wallet-poison`,
+      email: uniqueEmail('wallet-poison'),
+      walletBalance: 99999.99,
+    });
+    expect(res.status()).toBe(201);
+    const c = await res.json();
+    createdContactIds.push(c.id);
+    // Either null (no wallet) or 0 (wallet exists but empty) — anything
+    // except 99999.99 proves the write was stripped.
+    expect(c.walletBalance === null || c.walletBalance === undefined || c.walletBalance === 0).toBe(true);
+  });
+
+  test('GET /:id surfaces birthDate + anniversary + gst when set', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    const create = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} surface-all`,
+      email: uniqueEmail('surface-all'),
+      birthDate: '1985-04-10',
+      anniversary: '2010-09-18',
+      gst: '07AACCG1234B1ZX',
+    });
+    expect(create.status()).toBe(201);
+    const created = await create.json();
+    createdContactIds.push(created.id);
+
+    const got = await (await get(request, token, `/api/contacts/${created.id}`)).json();
+    expect(got.birthDate).toBeTruthy();
+    expect(got.anniversary).toBeTruthy();
+    expect(got.gst).toBe('07AACCG1234B1ZX');
+    expect(new Date(got.birthDate).getUTCFullYear()).toBe(1985);
+    expect(new Date(got.anniversary).getUTCFullYear()).toBe(2010);
+  });
+});
+
 // ─── GET /api/contacts ──────────────────────────────────────────────
 
 test.describe('Contacts API — GET /', () => {

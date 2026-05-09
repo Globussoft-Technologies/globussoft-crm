@@ -3,7 +3,7 @@ const { verifyToken, verifyRole } = require('../middleware/auth');
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
-const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, httpFromPrismaError } = require("../lib/validators");
+const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, ensureGst, ensureDateInRange, httpFromPrismaError } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const { normalizePhone, computeDuplicateGroupKey } = require("../utils/deduplication");
@@ -61,7 +61,84 @@ function validateContactInput(body, { isUpdate = false } = {}) {
       }
     }
   }
+  // PRD Gap §1.1c — GST validation. Optional + 15-char India GSTIN format
+  // gate. Invalid input returns 400 INVALID_GST instead of falling through
+  // to a Prisma column-overflow 500 (gst column has no max-length cap, so
+  // the validator IS the only gate against bogus input).
+  if (body.gst !== undefined && body.gst !== null && body.gst !== "") {
+    const gstErr = ensureGst(body.gst);
+    if (gstErr) return gstErr;
+  }
+  // PRD Gap §1.1a / §1.1d — anniversary + birthDate. Both optional, both
+  // validated as bounded dates (≥1900, ≤+1y from now). The +1y upper
+  // bound on anniversary catches "anniversary in 2099" data-entry typos
+  // while still allowing a near-future "next anniversary" scheduling
+  // pattern. birthDate uses the same bounds as Patient.dob (no future
+  // dates allowed) via ensureDob.
+  if (body.birthDate !== undefined && body.birthDate !== null && body.birthDate !== "") {
+    const bdErr = ensureDateInRange(body.birthDate, {
+      minYear: 1900,
+      maxYear: new Date().getUTCFullYear(),
+      field: "birthDate",
+      code: "INVALID_BIRTHDATE",
+    });
+    if (bdErr) return bdErr;
+    const d = new Date(body.birthDate);
+    if (d.getTime() > Date.now()) {
+      return { status: 400, error: "birthDate cannot be in the future", code: "INVALID_BIRTHDATE" };
+    }
+  }
+  if (body.anniversary !== undefined && body.anniversary !== null && body.anniversary !== "") {
+    const annErr = ensureDateInRange(body.anniversary, {
+      minYear: 1900,
+      maxYear: new Date().getUTCFullYear() + 1,
+      field: "anniversary",
+      code: "INVALID_ANNIVERSARY",
+    });
+    if (annErr) return annErr;
+  }
   return null;
+}
+
+// PRD Gap §1.1e — walletBalance is a read-only computed surface. We strip
+// it from any incoming body BEFORE Prisma write so a caller can't poison
+// the denorm column out of band. Wave 11 FF Wallet remains the source of
+// truth; the column on Contact stays null at rest until a future
+// Wallet-on-Contact relation lands and a denorm hook is added.
+function stripWalletBalanceWrite(body) {
+  if (body && typeof body === "object" && "walletBalance" in body) {
+    const { walletBalance: _drop, ...rest } = body;
+    return rest;
+  }
+  return body;
+}
+
+// PRD Gap §1.1e — surface a computed walletBalance for a single Contact
+// when the contact has a linked Patient with a wallet. Best-effort: any
+// Prisma error here MUST NOT break the GET (the wallet is a wellness-only
+// surface; generic-tenant rows simply return null).
+async function attachComputedWalletBalance(contact, tenantId) {
+  if (!contact || typeof contact !== "object") return contact;
+  try {
+    // Find a Patient row linked to this contact (Patient.contactId == Contact.id).
+    const patient = await prisma.patient.findFirst({
+      where: { tenantId, contactId: contact.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!patient) {
+      return { ...contact, walletBalance: null };
+    }
+    const wallet = await prisma.wallet.findFirst({
+      where: { tenantId, patientId: patient.id },
+      select: { balance: true },
+    });
+    return { ...contact, walletBalance: wallet ? wallet.balance : 0 };
+  } catch (_e) {
+    // Defensive: a stale Prisma client (no Wallet model yet) or tenant
+    // without the wellness vertical schema simply yields null. Do NOT
+    // surface a 500 — Wallet is optional for generic-CRM contacts.
+    return { ...contact, walletBalance: null };
+  }
 }
 
 
@@ -116,7 +193,10 @@ router.get('/:id', async (req, res) => {
     if (contact.deletedAt && !includeDeleted) return res.status(404).json({ error: 'Contact not found' });
     // #464: strip read-restricted fields per the caller's role.
     const filtered = await filterReadFields(contact, req.user.role, "Contact", req.user.tenantId);
-    res.json(filtered);
+    // PRD Gap §1.1e — surface computed walletBalance from the linked Patient's
+    // Wallet (if any). Best-effort; falls back to null on any error.
+    const withWallet = await attachComputedWalletBalance(filtered, req.user.tenantId);
+    res.json(withWallet);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contact' });
   }
@@ -130,6 +210,8 @@ router.post('/', async (req, res) => {
     // path will surface EMAIL_REQUIRED instead of silently storing the
     // forbidden value.
     req.body = await filterWriteFields(req.body, req.user.role, "Contact", req.user.tenantId);
+    // PRD Gap §1.1e — strip walletBalance from writes (read-only computed surface).
+    req.body = stripWalletBalanceWrite(req.body);
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
     // clear code instead of a 500 from the DB layer.
     const inputErr = validateContactInput(req.body, { isUpdate: false });
@@ -200,6 +282,8 @@ router.put('/:id', async (req, res) => {
     // #464: strip write-restricted fields per the caller's role BEFORE
     // validation so blocked-field updates can't slip through.
     req.body = await filterWriteFields(req.body, req.user.role, "Contact", req.user.tenantId);
+    // PRD Gap §1.1e — strip walletBalance from writes (read-only computed surface).
+    req.body = stripWalletBalanceWrite(req.body);
     // #168: same input checks as create so PUT can't bypass POST validation.
     const inputErr = validateContactInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);

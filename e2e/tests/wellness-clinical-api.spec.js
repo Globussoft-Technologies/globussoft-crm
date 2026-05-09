@@ -908,10 +908,15 @@ test.describe('Wellness API — POST /visits (create + validation)', () => {
   // landed at 5:00 AM IST). The full ISO ('Z' suffix) path is unchanged.
   test('#313 datetime-local input "10:30" stores as 05:00Z (IST round-trip)', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'IstRoundTrip' });
-    // Pick a date 6 days out so the #170 [now-5y, now+1y] window passes.
-    // Wave 11 GG conflict gate: use a different day from sibling test 909
-    // (same doctor) so neither collides at the same UTC hour.
-    const localInput = '2026-08-12T10:30';
+    // Wave 11 GG conflict gate: vary the DAY per test invocation so retries
+    // (which re-run the test against the same backend without cleanup) don't
+    // collide on (doctorId, UTC-hour). The test pins datetime PARSING
+    // behaviour (10:30 IST → 05:00 UTC), so the day can be dynamic as long as
+    // input and expected stay in lockstep.
+    const dayOffset = Math.floor(Math.random() * 300) + 30; // 30..330 days out
+    const yyyymmdd = new Date(Date.now() + dayOffset * 86400000).toISOString().slice(0, 10);
+    const localInput = `${yyyymmdd}T10:30`;
+    const expectedUtc = `${yyyymmdd}T05:00:00.000Z`;
     const res = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
@@ -921,15 +926,17 @@ test.describe('Wellness API — POST /visits (create + validation)', () => {
     });
     expect(res.status(), `body: ${await res.text()}`).toBe(201);
     const created = await res.json();
-    // 10:30 IST = 05:00 UTC. Stored timestamp must match.
-    expect(new Date(created.visitDate).toISOString()).toBe('2026-08-12T05:00:00.000Z');
+    // 10:30 IST = 05:00 UTC. Stored timestamp must match the per-test date.
+    expect(new Date(created.visitDate).toISOString()).toBe(expectedUtc);
   });
 
   test('#313 full ISO input passes through unchanged (Z suffix path)', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'IsoPassthru' });
-    // Full ISO with Z suffix — unchanged native path. Different day from
-    // test 892 to avoid the Wave 11 GG conflict gate (same doctor + hour).
-    const isoInput = '2026-08-19T05:00:00.000Z';
+    // Full ISO with Z suffix — unchanged native path. Vary the day per
+    // invocation so retries don't collide on (doctorId, UTC-hour).
+    const dayOffset = Math.floor(Math.random() * 300) + 360; // 360..660 days out (different range from sibling test to reduce collision odds further)
+    const yyyymmdd = new Date(Date.now() + dayOffset * 86400000).toISOString().slice(0, 10);
+    const isoInput = `${yyyymmdd}T05:00:00.000Z`;
     const res = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
@@ -939,7 +946,7 @@ test.describe('Wellness API — POST /visits (create + validation)', () => {
     });
     expect(res.status(), `body: ${await res.text()}`).toBe(201);
     const created = await res.json();
-    expect(new Date(created.visitDate).toISOString()).toBe('2026-08-19T05:00:00.000Z');
+    expect(new Date(created.visitDate).toISOString()).toBe(isoInput);
   });
 });
 
@@ -964,13 +971,22 @@ test.describe('Wellness API — PUT /visits/:id (amend + transitions)', () => {
 
   test('422 INVALID_VISIT_TRANSITION on completed → booked (terminal)', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'Terminal' });
+    // Pass a unique visitDate; completed visits are excluded from the
+    // booking-conflict gate per bookingAvailability.js ACTIVE_STATUSES, but
+    // the create still needs a real date. The 400-instead-of-422 failure
+    // earlier was an `expect(created.status()).toBe(201)` skipped-assertion
+    // surfacing the underlying create bug — pin the create assertion here
+    // so any future regression of the create path doesn't cascade as a
+    // PUT-side mystery.
     const created = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'completed',
       amountCharged: 100,
     });
+    expect(created.status(), `terminal create: ${await created.text()}`).toBe(201);
     const v = await created.json();
     const res = await authPut(request, `/api/wellness/visits/${v.id}`, { status: 'booked' });
     expect(res.status()).toBe(422);

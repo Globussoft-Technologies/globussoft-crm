@@ -722,6 +722,7 @@ test.describe('Wellness API — GET /visits (list + filters)', () => {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'booked',
     });
     const res = await authGet(request, '/api/wellness/visits?status=booked&limit=200');
@@ -737,6 +738,7 @@ test.describe('Wellness API — GET /visits (list + filters)', () => {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
     });
     const res = await authGet(request, `/api/wellness/visits?patientId=${p.id}`);
     expect(res.status()).toBe(200);
@@ -1158,8 +1160,10 @@ test.describe('Wellness API — Prescriptions', () => {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'in-treatment',
     });
+    expect(created.status(), `RxShared visit setup: ${await created.text()}`).toBe(201);
     rxVisitId = (await created.json()).id;
   });
 
@@ -2175,6 +2179,7 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'booked',
     });
     const v = await created.json();
@@ -2203,6 +2208,7 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'in-treatment',
     });
     const visitId = (await created.json()).id;
@@ -2234,6 +2240,7 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'in-treatment',
     });
     const visitId = (await created.json()).id;
@@ -2612,6 +2619,7 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'in-treatment',
     });
     const visitId = (await visit.json()).id;
@@ -2658,6 +2666,7 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'in-treatment',
       notes: SENTINEL_VISIT_NOTES,
     });

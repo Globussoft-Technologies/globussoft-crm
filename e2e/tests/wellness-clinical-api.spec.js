@@ -87,6 +87,18 @@ function nextPhone() {
   return `+91 98765 ${suffix}`;
 }
 
+// Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
+// collide with 409. This helper returns a never-collides visitDate by
+// combining a per-test random hour offset across a 720-hour spread (30 days)
+// starting 30+ days from now (always within #170 [now-5y, now+1y] window).
+// Each call returns a different ISO string, so retries don't collide either.
+let _visitDateOffset = 0;
+function nextVisitDate() {
+  const dayOffset = 30 + _visitDateOffset++;
+  const hourOffset = Math.floor(Math.random() * 720) * 3600 * 1000;
+  return new Date(Date.now() + dayOffset * 86400000 + hourOffset).toISOString();
+}
+
 // ── Fixtures ───────────────────────────────────────────────────────
 // Wellness tenant credentials. Seeded by prisma/seed-wellness.js:
 //   admin@wellness.demo       — RBAC ADMIN, no wellnessRole (general admin)
@@ -627,10 +639,10 @@ test.describe('Wellness API — GET /patients/:id/visits', () => {
   test('rows carry the trimmed patient + service + doctor select', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'NestedVisitsShape' });
     // Drop a visit so the array has at least one row. Unique visitDate per
-    // test avoids the booking-conflict gate (added Wave 11 GG, resource
-    // availability) when sibling tests target the same doctor at the
-    // route-default `new Date()`.
-    const visitDate = new Date(Date.now() + 13 * 86400000 + Math.floor(Math.random() * 86400000)).toISOString();
+    // test invocation avoids the Wave 11 GG booking-conflict gate, which
+    // buckets visits in 60-minute UTC windows. Use a 30-day random spread
+    // (720 hour-slots) so retries don't collide with the first run.
+    const visitDate = new Date(Date.now() + 13 * 86400000 + Math.floor(Math.random() * 720) * 3600000).toISOString();
     const created = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
@@ -754,9 +766,10 @@ test.describe('Wellness API — GET /visits (list + filters)', () => {
 test.describe('Wellness API — GET /visits/:id (detail)', () => {
   test('200 with patient + service + doctor + prescriptions + consumptions', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'VisitDetail' });
-    // Unique visitDate to avoid the Wave 11 GG resource-availability
-    // booking-conflict gate when sibling tests pick the same doctor.
-    const visitDate = new Date(Date.now() + 14 * 86400000 + Math.floor(Math.random() * 86400000)).toISOString();
+    // Unique visitDate to avoid the Wave 11 GG booking-conflict gate (60-min
+    // UTC buckets per doctor). 30-day random spread = 720 hour-slots so retries
+    // don't collide.
+    const visitDate = new Date(Date.now() + 60 * 86400000 + Math.floor(Math.random() * 720) * 3600000).toISOString();
     const created = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
@@ -783,10 +796,15 @@ test.describe('Wellness API — GET /visits/:id (detail)', () => {
 test.describe('Wellness API — POST /visits (create + validation)', () => {
   test('201 happy path', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'VisitCreate' });
+    // Wave 11 GG booking-conflict gate: use a unique visitDate so this
+    // doesn't collide with sibling tests using drHarshUserId at the
+    // route-default `new Date()`. 30-day random hour-spread.
+    const visitDate = new Date(Date.now() + 90 * 86400000 + Math.floor(Math.random() * 720) * 3600000).toISOString();
     const res = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate,
       amountCharged: 1500,
     });
     expect(res.status()).toBe(201);
@@ -891,7 +909,9 @@ test.describe('Wellness API — POST /visits (create + validation)', () => {
   test('#313 datetime-local input "10:30" stores as 05:00Z (IST round-trip)', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'IstRoundTrip' });
     // Pick a date 6 days out so the #170 [now-5y, now+1y] window passes.
-    const localInput = '2026-08-15T10:30';
+    // Wave 11 GG conflict gate: use a different day from sibling test 909
+    // (same doctor) so neither collides at the same UTC hour.
+    const localInput = '2026-08-12T10:30';
     const res = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
@@ -902,13 +922,14 @@ test.describe('Wellness API — POST /visits (create + validation)', () => {
     expect(res.status(), `body: ${await res.text()}`).toBe(201);
     const created = await res.json();
     // 10:30 IST = 05:00 UTC. Stored timestamp must match.
-    expect(new Date(created.visitDate).toISOString()).toBe('2026-08-15T05:00:00.000Z');
+    expect(new Date(created.visitDate).toISOString()).toBe('2026-08-12T05:00:00.000Z');
   });
 
   test('#313 full ISO input passes through unchanged (Z suffix path)', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'IsoPassthru' });
-    // Full ISO with Z suffix — unchanged native path.
-    const isoInput = '2026-08-15T05:00:00.000Z';
+    // Full ISO with Z suffix — unchanged native path. Different day from
+    // test 892 to avoid the Wave 11 GG conflict gate (same doctor + hour).
+    const isoInput = '2026-08-19T05:00:00.000Z';
     const res = await authPost(request, '/api/wellness/visits', {
       patientId: p.id,
       serviceId: seededServiceId,
@@ -918,7 +939,7 @@ test.describe('Wellness API — POST /visits (create + validation)', () => {
     });
     expect(res.status(), `body: ${await res.text()}`).toBe(201);
     const created = await res.json();
-    expect(new Date(created.visitDate).toISOString()).toBe('2026-08-15T05:00:00.000Z');
+    expect(new Date(created.visitDate).toISOString()).toBe('2026-08-19T05:00:00.000Z');
   });
 });
 
@@ -929,6 +950,7 @@ test.describe('Wellness API — PUT /visits/:id (amend + transitions)', () => {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'booked',
     });
     const v = await created.json();
@@ -961,6 +983,7 @@ test.describe('Wellness API — PUT /visits/:id (amend + transitions)', () => {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'booked',
     });
     const v = await created.json();
@@ -975,6 +998,7 @@ test.describe('Wellness API — PUT /visits/:id (amend + transitions)', () => {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'booked',
     });
     const v = await created.json();
@@ -1004,6 +1028,7 @@ test.describe('Wellness API — POST /visits/:id/consumptions', () => {
       patientId: p.id,
       serviceId: seededServiceId,
       doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
       status: 'in-treatment',
     });
     visitId = (await created.json()).id;

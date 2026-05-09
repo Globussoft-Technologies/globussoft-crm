@@ -523,7 +523,7 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
     test.skip(createdThreadIds.length === 0, 'no thread');
     const res = await request.post(`${API}/whatsapp/threads/${createdThreadIds[0]}/assign`, {
       headers: auth(),
-      data: { userId: null },
+      data: { targetUserId: null },
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
@@ -534,7 +534,7 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
     test.skip(createdThreadIds.length === 0, 'no thread');
     const res = await request.post(`${API}/whatsapp/threads/${createdThreadIds[0]}/assign`, {
       headers: auth(),
-      data: { userId: 'not-a-number' },
+      data: { targetUserId: 'not-a-number' },
     });
     expect(res.status()).toBe(400);
   });
@@ -544,7 +544,7 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
     // Use an absurdly high id that's unlikely to exist.
     const res = await request.post(`${API}/whatsapp/threads/${createdThreadIds[0]}/assign`, {
       headers: auth(),
-      data: { userId: 9999999 },
+      data: { targetUserId: 9999999 },
     });
     expect(res.status()).toBe(404);
   });

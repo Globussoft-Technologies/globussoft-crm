@@ -358,27 +358,34 @@ router.get("/threads/:id", verifyToken, async (req, res) => {
   }
 });
 
-// POST /threads/:id/assign body { userId }
+// POST /threads/:id/assign body { targetUserId }
 //
-// Self-assign: any logged-in user can assign to themselves (`userId === req.user.userId`).
+// NOTE: per CLAUDE.md "Standing rules for new code", the global stripDangerous
+// middleware deletes req.body.userId on every request. Use `targetUserId`
+// (or `userId` is silently dropped to null and we'd unassign instead of
+// rejecting bad input). Falling back to `userId` for client back-compat is
+// pointless because it never reaches us.
+//
+// Self-assign: any logged-in user can assign to themselves
+// (`targetUserId === req.user.userId`).
 // Cross-assign to another user: ADMIN/MANAGER only.
-// userId = null clears the assignment.
+// targetUserId = null clears the assignment.
 router.post("/threads/:id/assign", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
 
-    const { userId } = req.body;
+    const { targetUserId } = req.body;
     let targetId;
-    if (userId === null || userId === undefined) {
+    if (targetUserId === null || targetUserId === undefined) {
       targetId = null;
-    } else if (typeof userId === "number" && Number.isFinite(userId) && Number.isInteger(userId)) {
-      targetId = userId;
-    } else if (typeof userId === "string" && /^\d+$/.test(userId.trim())) {
-      targetId = parseInt(userId, 10);
+    } else if (typeof targetUserId === "number" && Number.isFinite(targetUserId) && Number.isInteger(targetUserId)) {
+      targetId = targetUserId;
+    } else if (typeof targetUserId === "string" && /^\d+$/.test(targetUserId.trim())) {
+      targetId = parseInt(targetUserId, 10);
     } else {
       // Reject 'not-a-number', booleans, objects, fractional, etc.
-      return res.status(400).json({ error: "userId must be a number or null", code: "INVALID_USER_ID" });
+      return res.status(400).json({ error: "targetUserId must be a number or null", code: "INVALID_USER_ID" });
     }
 
     // RBAC: cross-assign requires manager; self-assign / unassign open to all.

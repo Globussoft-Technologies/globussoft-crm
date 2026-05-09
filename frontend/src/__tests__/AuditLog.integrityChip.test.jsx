@@ -78,11 +78,14 @@ describe('<AuditLog /> — hash-chain integrity chip (#558)', () => {
 
   it('admin: "Verify chain" button is rendered + clickable', async () => {
     renderAuditLog();
+    // The component fires an auto-verify on mount which puts the button
+    // into "Verifying..." loading state. Wait for that to settle into the
+    // idle "Verify chain" text before asserting + clicking.
     await waitFor(() => {
-      expect(screen.getByTestId('verify-chain-btn')).toBeInTheDocument();
+      const b = screen.getByTestId('verify-chain-btn');
+      expect(b).toHaveTextContent(/Verify chain/);
     });
     const btn = screen.getByTestId('verify-chain-btn');
-    expect(btn).toHaveTextContent(/Verify chain/);
 
     // Reset call count so we can assert on the click invocation.
     fetchApiMock.mockClear();

@@ -7,10 +7,28 @@ import { UserPlus, Search, ArrowRightCircle, UserCheck, Users } from 'lucide-rea
 import { AuthContext } from '../App';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
-const WELLNESS_SOURCE_OPTIONS = ['Organic', 'Referral', 'Walk-in', 'Phone', 'Website', 'Event', 'Other'];
-const INDIAN_MOBILE_RE = /^[6-9]\d{9}$/;
+// #600 — wellness vertical replaces the generic CRM source taxonomy with one
+// that matches Patient-intake channels. WhatsApp is the dominant inbound
+// channel for clinics; LinkedIn / Cold Call don't apply.
+const WELLNESS_SOURCE_OPTIONS = [
+  { value: 'walk-in', label: 'Walk-in' },
+  { value: 'whatsapp', label: 'WhatsApp' },
+  { value: 'phone', label: 'Phone' },
+  { value: 'website', label: 'Website' },
+  { value: 'referral', label: 'Referral' },
+  { value: 'organic', label: 'Organic' },
+  { value: 'event', label: 'Event' },
+  { value: 'other', label: 'Other' },
+];
+// Accept either a bare 10-digit Indian mobile (starting 6-9) OR with
+// an optional `+91` / `91` prefix. The wellness phone validator strips
+// whitespace/dashes/parens before testing.
+const INDIAN_MOBILE_RE = /^(?:\+?91)?[6-9]\d{9}$/;
 const FIELD_LIMITS = { name: 191, email: 191, company: 191, title: 200, phone: 20 };
-const CONTROL_CHAR_RE = /[\t\n\r\f\v]/;
+// Reject all C0 controls (NUL/BEL/etc.) + DEL. \t \n \r are intentionally
+// included — text inputs shouldn't carry them either, and any paste-from-
+// malicious-source typically smuggles via NUL or BEL.
+const CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
 const stripDangerousTags = (str) => {
   const DANGEROUS_TAG_RE = /<(script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)[^>]*>/gi;
@@ -52,14 +70,16 @@ const Leads = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkAgent, setBulkAgent] = useState('');
+  // #600 — Initial source defaults differ per vertical: wellness leads
+  // typically arrive walk-in/WhatsApp; generic CRM leads default to Organic.
   const [newLead, setNewLead] = useState({
     name: '',
     email: '',
     phone: '',
     company: '',
     title: '',
-    countryCode: '+1',
-    source: 'Organic',
+    countryCode: isWellness ? '+91' : '+1',
+    source: isWellness ? 'walk-in' : 'Organic',
     status: 'Lead',
     treatmentOfInterest: '',
     preferredLocationId: '',
@@ -212,11 +232,16 @@ const Leads = () => {
     // when the row was inserted server-side. Wrap in try/finally so the
     // refresh always runs and the form is reset on success.
     try {
-      const phoneWithCode = newLead.phone ? `${newLead.countryCode} ${newLead.phone}` : '';
+      // Generic CRM: prepend the picker's country code (the input field
+      // is the local-part). Wellness: phone is already canonicalised by
+      // the +91-optional regex above — store as-is.
+      const phoneOut = isWellness
+        ? phone
+        : (newLead.phone ? `${newLead.countryCode} ${newLead.phone}` : '');
       await fetchApi('/api/contacts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...newLead, name: trimmedName, phone: phoneWithCode, countryCode: undefined }),
+        body: JSON.stringify({ ...newLead, name: trimmedName, phone: phoneOut, countryCode: undefined }),
       });
       setNewLead({ name: '', email: '', company: '', title: '', countryCode: '+1', phone: '', source: 'Organic', status: 'Lead' });
     } finally {
@@ -353,19 +378,36 @@ const Leads = () => {
         {/* Left Panel: Create Lead Form */}
         <div className="card" style={{ padding: '1.5rem' }}>
           <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1.25rem' }}>Create Lead</h3>
-          <form onSubmit={handleCreateLead} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-            <input type="text" placeholder="Full Name" required className="input-field" value={newLead.name} onChange={e => handleChange('name', e.target.value)} />
-            <input type="email" placeholder="Email Address" required className="input-field" value={newLead.email} onChange={e => handleChange('email', e.target.value)} />
-            <input type="text" placeholder="Company" className="input-field" value={newLead.company} onChange={e => handleChange('company', e.target.value)} />
-            <input type="text" placeholder="Job Title" className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
-                {COUNTRY_CODES.map(cc => (
-                  <option key={cc.code} value={cc.code}>{cc.code}</option>
-                ))}
-              </select>
-              <input type="tel" placeholder="Phone Number" className="input-field" value={newLead.phone} onChange={e => handleChange('phone', e.target.value)} style={{ flex: 1 }} />
-            </div>
+          {/* #557: noValidate so the JS handler in handleCreateLead runs the
+              client-side validation (length caps, control-char rejection,
+              HTML strip, email shape). Native HTML5 validation would block
+              submit without giving us a chance to surface the targeted toasts. */}
+          <form onSubmit={handleCreateLead} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+            <input type="text" placeholder="Full Name" required maxLength={191} className="input-field" value={newLead.name} onChange={e => handleChange('name', e.target.value)} />
+            <input type="email" placeholder="Email Address" required={!isWellness} maxLength={191} className="input-field" value={newLead.email} onChange={e => handleChange('email', e.target.value)} />
+            <input type="text" placeholder="Company" maxLength={191} className="input-field" value={newLead.company} onChange={e => handleChange('company', e.target.value)} />
+            <input type="text" placeholder="Job Title" maxLength={200} className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
+            {/* #600 — phone field is wellness-specific (Patient-intake mirror).
+                Generic CRM keeps phone optional and out of the Lead form to
+                avoid noise. */}
+            {isWellness && (
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
+                  {COUNTRY_CODES.map(cc => (
+                    <option key={cc.code} value={cc.code}>{cc.code}</option>
+                  ))}
+                </select>
+                <input
+                  type="tel"
+                  placeholder="Phone (10-digit mobile, e.g. 9876543210)"
+                  required
+                  className="input-field"
+                  value={newLead.phone}
+                  onChange={e => handleChange('phone', e.target.value)}
+                  style={{ flex: 1 }}
+                />
+              </div>
+            )}
             <select
               className="input-field"
               name="source"

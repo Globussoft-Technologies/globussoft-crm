@@ -57,6 +57,12 @@ prisma.visit = prisma.visit || {};
 prisma.prescription = prisma.prescription || {};
 prisma.service = prisma.service || {};
 prisma.tenant = prisma.tenant || {};
+// #564 path: POST /consents fires an event through eventBus.emitEvent which
+// reads prisma.automationRule.findMany. Stub it (empty array = no rules to
+// run) so the async event chain doesn't hit the real Prisma client without
+// DATABASE_URL set in the unit_tests env block.
+prisma.automationRule = prisma.automationRule || {};
+prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
 
 import express from 'express';
 import request from 'supertest';

@@ -257,7 +257,9 @@ test.describe('whatsapp.js — Cloud API messaging + templates + webhook', () =>
 //   - Assign / close / snooze / mark-read state transitions.
 //   - Tenant isolation on threads + opt-outs.
 
-test.describe.configure({ mode: 'serial' });
+// Note: file-scope `test.describe.configure({ mode: 'serial' })` already at line 30
+// covers this describe too. Repeating it here would error with
+// "serial mode is already assigned for the enclosing scope".
 
 test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () => {
   let agentToken = '';

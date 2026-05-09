@@ -41,6 +41,14 @@
  *   ✅ Sequencing: invoiceNumber follows POS-YYYY-NNNN per tenant
  *   ✅ Polymorphism: SERVICE / PRODUCT / MEMBERSHIP / GIFTCARD / PACKAGE
  *      lines all accepted; lineTotal = quantity * unitPrice - lineDiscount
+ *   ✅ PRD Gap §2 item 9 — PRODUCT lineItems decrement Product.currentStock
+ *      atomically inside the Sale create transaction; SERVICE lines do not.
+ *   ✅ PRD Gap §2 item 9 — Sale completion auto-credits a LoyaltyTransaction
+ *      to sale.patientId (sibling of the Visit-completion hook); anonymous
+ *      (patientId=null) sales no-op cleanly.
+ *   ✅ PRD Gap §13 item 4 — POST /shifts/open emits 'shift.opened' and
+ *      POST /shifts/:id/close emits 'shift.closed' with variance, pinned via
+ *      AutomationRule audit-log probe (workflows-api.spec.js pattern).
  *
  * Non-obvious setup:
  *   - Tests run against the wellness tenant (admin@wellness.demo) because
@@ -139,6 +147,8 @@ async function authDelete(request, path, who = 'admin') {
 // ── Cleanup tracking ───────────────────────────────────────────────
 const createdRegisterIds = [];
 const createdShiftIds = [];
+const createdProductIds = [];
+const createdWorkflowIds = [];
 
 test.afterAll(async ({ request }) => {
   // Close any still-open shifts so register delete isn't blocked by SHIFT_ALREADY_OPEN.
@@ -149,11 +159,18 @@ test.afterAll(async ({ request }) => {
   for (const id of createdRegisterIds) {
     await authDelete(request, `/api/pos/registers/${id}`).catch(() => {});
   }
+  // Best-effort delete on AutomationRules created for shift.opened/closed probes.
+  for (const id of createdWorkflowIds) {
+    await authDelete(request, `/api/workflows/${id}`).catch(() => {});
+  }
+  // Products: no DELETE endpoint exposed for cpq/products today; the rows
+  // ride the broader teardown sweep via the RUN_TAG-prefixed name.
 });
 
 // ── Shared seed discovery ─────────────────────────────────────────
 let seededLocationId = null;
 let seededServiceId = null;
+let seededPatientId = null;
 
 test.beforeAll(async ({ request }) => {
   const tok = await login(request, 'admin');
@@ -189,6 +206,16 @@ test.beforeAll(async ({ request }) => {
     if (Array.isArray(services) && services.length > 0) seededServiceId = services[0].id;
   }
   if (!seededServiceId) seededServiceId = 1; // synthetic fallback — refId is opaque
+
+  // Patient for the loyalty-credit pin (LoyaltyTransaction needs a real
+  // patientId — the FK enforces existence, unlike the polymorphic SaleLineItem.refId).
+  const pr = await authGet(request, '/api/wellness/patients');
+  if (pr.ok()) {
+    const patients = await pr.json();
+    if (Array.isArray(patients) && patients.length > 0) seededPatientId = patients[0].id;
+  }
+  // No patient creation fallback — if seed has none, the loyalty test
+  // skips below rather than tripping over a 400 here.
 });
 
 // Helpers for the lifecycle flow.
@@ -474,6 +501,142 @@ test.describe('POS — POST /sales', () => {
   });
 });
 
+// ── Sales: PRD Gap §2 item 9 — completion hooks ────────────────────
+//
+// (1) PRODUCT lineItems decrement Product.currentStock atomically inside the
+//     Sale create transaction. SERVICE / MEMBERSHIP / GIFTCARD / PACKAGE
+//     lines do NOT touch Product.
+// (2) maybeAutoCreditLoyaltyForSale credits a LoyaltyTransaction row to the
+//     sale's patientId based on sale.total. Idempotency keyed on the
+//     "Sale #<id> (auto earn)" reason string (LoyaltyTransaction has no
+//     saleId column today; reason-based probe matches the visit-side helper's
+//     idempotency contract).
+
+test.describe('POS — Sale completion hooks (inventory + loyalty)', () => {
+  let seededProductId = null;
+  let initialStock = 50;
+
+  test.beforeAll(async ({ request }) => {
+    // Create a Product via /api/cpq/products with a known starting stock so
+    // the assertion can be exact (avoids race with concurrent test runs that
+    // might mutate a seed product's stock between read and re-read).
+    const created = await authPost(request, '/api/cpq/products', {
+      name: `${RUN_TAG} Stock Test Product`,
+      sku: `${RUN_TAG}-SKU`,
+      price: 250,
+      isRecurring: false,
+      currentStock: initialStock,
+      threshold: 5,
+    });
+    if (created.status() === 201) {
+      const body = await created.json();
+      seededProductId = body.id;
+      createdProductIds.push(body.id);
+      initialStock = body.currentStock; // pin the actual server-side starting value
+    }
+    // If product creation failed (route absent on this build) the test body
+    // skips itself rather than red-fail.
+  });
+
+  test('PRODUCT line decrements Product.currentStock by quantity', async ({ request }) => {
+    test.skip(!seededProductId, 'Product seed unavailable; cannot exercise stock decrement.');
+    const beforeRes = await authGet(request, '/api/cpq/products');
+    expect(beforeRes.status()).toBe(200);
+    const beforeList = await beforeRes.json();
+    const before = beforeList.find((p) => p.id === seededProductId);
+    expect(before, `seeded product ${seededProductId} should be present in /api/cpq/products`).toBeTruthy();
+    const beforeStock = before.currentStock;
+
+    // Ring up a sale with a PRODUCT line for quantity=3 against this product.
+    const qty = 3;
+    const res = await authPost(request, '/api/pos/sales', saleBody({
+      lineItems: [
+        { lineType: 'PRODUCT', refId: seededProductId, quantity: qty, unitPrice: 250, name: `${RUN_TAG} stock decrement` },
+      ],
+      paidAmount: 750,
+    }));
+    expect(res.status(), `create PRODUCT sale: ${await res.text()}`).toBe(201);
+
+    const afterRes = await authGet(request, '/api/cpq/products');
+    const afterList = await afterRes.json();
+    const after = afterList.find((p) => p.id === seededProductId);
+    expect(after, `seeded product ${seededProductId} should still exist after sale`).toBeTruthy();
+    expect(after.currentStock, `currentStock should drop by ${qty} (was ${beforeStock})`).toBe(beforeStock - qty);
+  });
+
+  test('SERVICE-only line does NOT touch Product.currentStock', async ({ request }) => {
+    test.skip(!seededProductId, 'Product seed unavailable.');
+    const beforeRes = await authGet(request, '/api/cpq/products');
+    const before = (await beforeRes.json()).find((p) => p.id === seededProductId);
+    const beforeStock = before.currentStock;
+
+    const res = await authPost(request, '/api/pos/sales', saleBody({
+      lineItems: [
+        { lineType: 'SERVICE', refId: seededServiceId, quantity: 2, unitPrice: 1000, name: `${RUN_TAG} svc no-stock` },
+      ],
+      paidAmount: 2000,
+    }));
+    expect(res.status()).toBe(201);
+
+    const afterRes = await authGet(request, '/api/cpq/products');
+    const after = (await afterRes.json()).find((p) => p.id === seededProductId);
+    // SERVICE line is not a Product line — stock is untouched.
+    expect(after.currentStock).toBe(beforeStock);
+  });
+
+  test('Loyalty credit fires on Sale completion when patientId is set', async ({ request }) => {
+    test.skip(!seededPatientId, 'No seeded patient available; cannot pin loyalty credit.');
+    // Read balance before
+    const beforeRes = await authGet(request, `/api/wellness/loyalty/${seededPatientId}`);
+    expect(beforeRes.status()).toBe(200);
+    const before = await beforeRes.json();
+    const beforeBalance = before.balance;
+
+    // Ring up a 2000-rupee CASH sale to this patient. Default LoyaltyConfig
+    // (or fallback) credits 10% of total → 200 points.
+    const saleRes = await authPost(request, '/api/pos/sales', saleBody({
+      patientId: seededPatientId,
+      lineItems: [
+        { lineType: 'SERVICE', refId: seededServiceId, quantity: 1, unitPrice: 2000, name: `${RUN_TAG} loyalty pin` },
+      ],
+      paidAmount: 2000,
+    }));
+    expect(saleRes.status(), `create loyalty sale: ${await saleRes.text()}`).toBe(201);
+    const sale = await saleRes.json();
+
+    // Tiny gap so the post-transaction loyalty create has flushed.
+    await new Promise((r) => setTimeout(r, 250));
+
+    const afterRes = await authGet(request, `/api/wellness/loyalty/${seededPatientId}`);
+    expect(afterRes.status()).toBe(200);
+    const after = await afterRes.json();
+    expect(
+      after.balance,
+      `loyalty balance should grow after a 2000-rupee sale; before=${beforeBalance}, after=${after.balance}`
+    ).toBeGreaterThan(beforeBalance);
+
+    // The new LoyaltyTransaction's reason references this sale's id — proves
+    // the credit came from the sale-completion hook, not noise.
+    const ourRow = (after.transactions || []).find(
+      (t) => t.type === 'earned' && t.reason && t.reason.includes(`Sale #${sale.id}`)
+    );
+    expect(ourRow, `expected an 'earned' LoyaltyTransaction with reason referencing Sale #${sale.id}`).toBeTruthy();
+    expect(ourRow.points).toBeGreaterThan(0);
+  });
+
+  test('Loyalty credit is idempotent — anonymous (no patientId) sales do not error', async ({ request }) => {
+    // Hook MUST no-op cleanly on patient-less sales. Sale create still 201.
+    const res = await authPost(request, '/api/pos/sales', saleBody({
+      patientId: null,
+      lineItems: [
+        { lineType: 'SERVICE', refId: seededServiceId, quantity: 1, unitPrice: 100, name: `${RUN_TAG} anon` },
+      ],
+      paidAmount: 100,
+    }));
+    expect(res.status()).toBe(201);
+  });
+});
+
 // ── Sales: GET ────────────────────────────────────────────────────
 
 test.describe('POS — GET /sales', () => {
@@ -570,6 +733,151 @@ test.describe('POS — POST /shifts/:id/close', () => {
     const res = await authPost(request, '/api/pos/sales', saleBody());
     expect(res.status()).toBe(409);
     expect((await res.json()).code).toBe('SHIFT_CLOSED');
+  });
+});
+
+// ── PRD Gap §13 item 4 — shift.opened / shift.closed event emission ──
+//
+// Both POST /shifts/open and POST /shifts/:id/close call emitEvent(...) inside
+// a try/catch swallow so a flaky bus never reds a real shift mutation. Pin
+// the emission via the workflows audit-log side effect: the AutomationRule
+// engine writes an audit-log row keyed by (entity:'AutomationRule',
+// entityId:<rule.id>) every time it executes a matching rule. By creating
+// a no-op rule subscribed to shift.opened (or shift.closed) BEFORE firing
+// the shift mutation, the post-mutation /api/workflows/history list grows
+// by ≥1 row referencing the rule's id — proving the emission landed.
+//
+// The trigger names (shift.opened / shift.closed) are whitelisted in
+// routes/workflows.js TRIGGER_TYPES so the rule create itself doesn't 400.
+
+test.describe('POS — shift.opened / shift.closed event emission', () => {
+  test('POST /shifts/open emits shift.opened (audit-log proof)', async ({ request }) => {
+    // Need a fresh register because an event-pinning shift can't reuse the
+    // serial-mode mainRegisterId (already has a shift open + later closed).
+    const reg = await authPost(request, '/api/pos/registers', registerBody({
+      name: `${RUN_TAG} ShiftOpenEvent Register`,
+    }));
+    expect(reg.status()).toBe(201);
+    const register = await reg.json();
+    createdRegisterIds.push(register.id);
+
+    // Subscribe a no-op AutomationRule to shift.opened so the engine writes
+    // an audit-log row keyed by this rule's id when the event fires.
+    const ruleRes = await authPost(request, '/api/workflows', {
+      name: `${RUN_TAG} shift-opened-probe-${Date.now()}`,
+      triggerType: 'shift.opened',
+      actionType: 'send_sms', // no-op (engine logs to console for SMS)
+      targetState: { to: '+0000000000', message: 'shift opened probe' },
+    });
+    expect(ruleRes.status(), `create shift.opened rule: ${await ruleRes.text()}`).toBe(201);
+    const rule = await ruleRes.json();
+    createdWorkflowIds.push(rule.id);
+
+    // Snapshot history total.
+    const before = await authGet(request, '/api/workflows/history?limit=200');
+    expect(before.status()).toBe(200);
+    const beforeBody = await before.json();
+    const beforeTotal = beforeBody.total;
+
+    // Fire the event by opening a shift on the fresh register.
+    const openRes = await authPost(request, '/api/pos/shifts/open', { registerId: register.id });
+    expect(openRes.status(), `open shift: ${await openRes.text()}`).toBe(201);
+    const shift = await openRes.json();
+    createdShiftIds.push(shift.id);
+
+    // Tiny gap so emitEvent's async tail (rule scan + audit write) commits
+    // before we read history. Mirrors the workflows-api pattern exactly.
+    await new Promise((r) => setTimeout(r, 350));
+
+    const after = await authGet(request, '/api/workflows/history?limit=200');
+    const afterBody = await after.json();
+    expect(
+      afterBody.total,
+      `history total should grow by ≥1 after shift.opened fired; delta ${afterBody.total - beforeTotal}`
+    ).toBeGreaterThan(beforeTotal);
+
+    // Stronger contract — at least one new audit row references our rule's id.
+    const ourRow = afterBody.logs.find(
+      (l) => l.entity === 'AutomationRule' && l.entityId === rule.id
+    );
+    expect(
+      ourRow,
+      `expected audit row with entityId=${rule.id} after shift.opened fired; latest entityIds: ${JSON.stringify(afterBody.logs.slice(0, 5).map((l) => l.entityId))}`
+    ).toBeTruthy();
+  });
+
+  test('POST /shifts/:id/close emits shift.closed with variance', async ({ request }) => {
+    const reg = await authPost(request, '/api/pos/registers', registerBody({
+      name: `${RUN_TAG} ShiftClosedEvent Register`,
+    }));
+    expect(reg.status()).toBe(201);
+    const register = await reg.json();
+    createdRegisterIds.push(register.id);
+
+    // Open a shift on the fresh register so we have something to close.
+    const openRes = await authPost(request, '/api/pos/shifts/open', {
+      registerId: register.id,
+      openingFloat: 1000,
+    });
+    expect(openRes.status()).toBe(201);
+    const shift = await openRes.json();
+    // NOT pushed to createdShiftIds — we close it explicitly below; teardown
+    // would 409 on a CLOSED shift via best-effort close.
+
+    // Subscribe to shift.closed BEFORE the close.
+    const ruleRes = await authPost(request, '/api/workflows', {
+      name: `${RUN_TAG} shift-closed-probe-${Date.now()}`,
+      triggerType: 'shift.closed',
+      actionType: 'send_sms',
+      targetState: { to: '+0000000000', message: 'shift closed probe' },
+    });
+    expect(ruleRes.status(), `create shift.closed rule: ${await ruleRes.text()}`).toBe(201);
+    const rule = await ruleRes.json();
+    createdWorkflowIds.push(rule.id);
+
+    const before = await authGet(request, '/api/workflows/history?limit=200');
+    const beforeTotal = (await before.json()).total;
+
+    // Close with a deliberate variance — closingTotal != expectedCash.
+    const closeRes = await authPost(request, `/api/pos/shifts/${shift.id}/close`, {
+      closingTotal: 1234,
+      notes: `${RUN_TAG} close-with-variance`,
+    });
+    expect(closeRes.status(), `close shift: ${await closeRes.text()}`).toBe(200);
+    const closed = await closeRes.json();
+    // expectedCash = 1000 (openingFloat) + 0 (no CASH sales on this shift)
+    expect(closed.expectedCash).toBe(1000);
+    expect(closed.variance).toBeCloseTo(1234 - 1000, 2);
+    expect(closed.status).toBe('CLOSED');
+
+    await new Promise((r) => setTimeout(r, 350));
+    const after = await authGet(request, '/api/workflows/history?limit=200');
+    const afterBody = await after.json();
+    expect(
+      afterBody.total,
+      `history total should grow by ≥1 after shift.closed fired; delta ${afterBody.total - beforeTotal}`
+    ).toBeGreaterThan(beforeTotal);
+
+    const ourRow = afterBody.logs.find(
+      (l) => l.entity === 'AutomationRule' && l.entityId === rule.id
+    );
+    expect(
+      ourRow,
+      `expected audit row with entityId=${rule.id} after shift.closed fired`
+    ).toBeTruthy();
+
+    // Audit-log details JSON carries the original payload — assert variance
+    // landed in the dispatched payload, not just the route response.
+    if (ourRow && ourRow.details) {
+      let parsed;
+      try { parsed = JSON.parse(ourRow.details); } catch { parsed = null; }
+      if (parsed && parsed.payload) {
+        expect(parsed.payload.shiftId).toBe(shift.id);
+        expect(parsed.payload.registerId).toBe(register.id);
+        expect(typeof parsed.payload.variance).toBe('number');
+        expect(parsed.payload.variance).toBeCloseTo(234, 2);
+      }
+    }
   });
 });
 

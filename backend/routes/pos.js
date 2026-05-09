@@ -49,6 +49,67 @@ const cashierGate = verifyWellnessRole([
   "helper",
 ]);
 
+// ── Sale-side loyalty auto-credit (PRD Gap §2 item 9) ────────────────
+// Sibling of routes/wellness.js maybeAutoCreditLoyalty(visit, ...). The
+// visit-side helper credits on Visit completion using visit.amountCharged;
+// the sale-side helper credits on Sale completion using sale.total. Same
+// LoyaltyConfig rules (earnPerVisit, earnPercentOfSpend, earnPerCurrencyUnit,
+// autoEarnEnabled) apply uniformly across both completion surfaces — a sale
+// to a patient is the same earnable economic event as a visit charge, so
+// rule semantics are reused 1:1.
+//
+// Idempotency: LoyaltyTransaction has a `visitId` column but no `saleId`.
+// Adding a column would step into Agent 6D's schema turf, so we use a
+// reason-based idempotency probe ("Sale #<id> (auto earn)") — a second
+// invocation with the same sale id finds the existing row and no-ops.
+//
+// Failures swallowed so a flaky loyalty layer can never red a legitimate
+// sale create. Same-shape contract as the visit-side helper.
+async function maybeAutoCreditLoyaltyForSale(sale, tenantId) {
+  try {
+    if (!sale || sale.status !== "COMPLETED") return;
+    if (!sale.patientId) return; // anonymous walk-in — no loyalty link
+    let cfg;
+    try {
+      cfg = await prisma.loyaltyConfig.findUnique({ where: { tenantId } });
+    } catch {
+      cfg = null;
+    }
+    const autoEnabled = cfg ? cfg.autoEarnEnabled !== false : true;
+    if (!autoEnabled) return;
+    const earnPerVisit = cfg?.earnPerVisit ?? 0;
+    const earnPercent = cfg?.earnPercentOfSpend ?? 10;
+    const earnPerUnit = cfg?.earnPerCurrencyUnit ?? 0;
+
+    const amt = parseFloat(sale.total) || 0;
+    let points = earnPerVisit;
+    if (amt > 0) {
+      points += Math.floor((amt * earnPercent) / 100);
+      points += Math.floor(amt * earnPerUnit);
+    }
+    if (points <= 0) return;
+    const reason = `Sale #${sale.id} (auto earn)`;
+    // Idempotency probe — match on patient + tenant + reason. Same
+    // semantics as the visit-side visitId probe.
+    const existing = await prisma.loyaltyTransaction.findFirst({
+      where: { tenantId, patientId: sale.patientId, type: "earned", reason },
+      select: { id: true },
+    });
+    if (existing) return;
+    await prisma.loyaltyTransaction.create({
+      data: {
+        patientId: sale.patientId,
+        tenantId,
+        type: "earned",
+        points,
+        reason,
+      },
+    });
+  } catch (err) {
+    console.error("[pos] auto-credit loyalty failed:", err.message);
+  }
+}
+
 // ── invoiceNumber generator ──────────────────────────────────────────
 // Tenant-scoped human-readable receipt id "POS-YYYY-NNNN". Inlined here
 // because it's a single use; if a second route needs the same shape we'll
@@ -278,6 +339,24 @@ router.post("/shifts/open", cashierGate, async (req, res) => {
       registerId: reg.id,
       openingFloat: float,
     });
+    // PRD Gap §13 item 4 — emit shift.opened so AutomationRules + outbound
+    // webhooks can react (e.g. Slack ping the manager when a register opens).
+    // Failure here MUST NOT roll back the shift create — fire-and-forget with
+    // a swallow so the cashier always gets their 201.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      emitEvent(
+        "shift.opened",
+        {
+          shiftId: shift.id,
+          registerId: reg.id,
+          userId: req.user.userId,
+          openingFloat: float,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) { /* event bus optional */ }
     res.status(201).json(shift);
   } catch (e) {
     console.error("[pos] open shift error:", e.message);
@@ -340,6 +419,25 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
       expectedCash,
       variance,
     });
+    // PRD Gap §13 item 4 — emit shift.closed so AutomationRules + webhooks can
+    // react (e.g. flag |variance| > N for manager review). Variance is signed:
+    // positive = drawer over expected, negative = under. Same swallow pattern
+    // as shift.opened above so a flaky bus never reds a legitimate close.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      emitEvent(
+        "shift.closed",
+        {
+          shiftId: id,
+          registerId: shift.registerId,
+          expectedCash,
+          closingTotal: closing,
+          variance,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) { /* event bus optional */ }
     res.json(closed);
   } catch (e) {
     console.error("[pos] close shift error:", e.message);
@@ -549,7 +647,16 @@ router.post("/sales", cashierGate, async (req, res) => {
       resolvedPatientId = pid;
     }
 
-    // Transactional create — invoiceNumber + Sale + SaleLineItem rows.
+    // PRD Gap §2 item 9 — Sale-completion inventory consumption. PRODUCT
+    // lineItems decrement Product.currentStock atomically inside the same
+    // transaction as the Sale create, so a partial-failure can never leave
+    // stock and ledger out of sync. SERVICE / MEMBERSHIP / GIFTCARD / PACKAGE
+    // lines do not touch Product (they reference different tables via the
+    // polymorphic refId).
+    const productLines = normalisedLines.filter((l) => l.lineType === "PRODUCT");
+
+    // Transactional create — invoiceNumber + Sale + SaleLineItem rows +
+    // Product.currentStock decrements (PRODUCT lines only).
     const sale = await prisma.$transaction(async (tx) => {
       const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId);
       const created = await tx.sale.create({
@@ -580,6 +687,17 @@ router.post("/sales", cashierGate, async (req, res) => {
         },
         include: { lineItems: true },
       });
+      // Decrement Product.currentStock for each PRODUCT line. Tenant-scoped
+      // updateMany so a wrong tenantId can't decrement a sibling tenant's
+      // stock (Prisma update by-id alone wouldn't tenant-gate). Negative
+      // stock is permitted by design — backorder flow needs visibility into
+      // oversells; the LowStock alert engine surfaces sub-threshold counts.
+      for (const line of productLines) {
+        await tx.product.updateMany({
+          where: { id: line.refId, tenantId: req.user.tenantId },
+          data: { currentStock: { decrement: line.quantity } },
+        });
+      }
       return created;
     });
 
@@ -589,6 +707,13 @@ router.post("/sales", cashierGate, async (req, res) => {
       paymentMethod: sale.paymentMethod,
       lineCount: sale.lineItems.length,
     });
+
+    // PRD Gap §2 item 9 — auto-credit loyalty on Sale completion. Same
+    // earn-rule shape as the visit-side hook; runs post-transaction so a
+    // loyalty hiccup can never roll back the sale itself. Anonymous sales
+    // (no patientId) and non-COMPLETED states are no-ops.
+    await maybeAutoCreditLoyaltyForSale(sale, req.user.tenantId);
+
     res.status(201).json(sale);
   } catch (e) {
     console.error("[pos] create sale error:", e.message);

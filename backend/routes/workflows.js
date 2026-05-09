@@ -30,6 +30,11 @@ const TRIGGER_TYPES = [
   // ticket has missed its first-response SLA. Lets rules react: notify manager,
   // escalate, send Slack ping, etc.
   { value: "sla.breached", label: "SLA Breached", description: "Fires when a ticket misses its first-response SLA (cron: every 5 min)" },
+  // PRD Gap §13 item 4 — POS shift lifecycle. Emitted by routes/pos.js on
+  // POST /shifts/open and POST /shifts/:id/close. Lets a manager subscribe
+  // (e.g. Slack ping when a register opens, flag |variance| > N on close).
+  { value: "shift.opened", label: "POS Shift Opened", description: "Fires when a cashier opens a register shift (POST /api/pos/shifts/open)" },
+  { value: "shift.closed", label: "POS Shift Closed", description: "Fires when a register shift is closed (POST /api/pos/shifts/:id/close); payload includes variance" },
 ];
 
 // Supported action types

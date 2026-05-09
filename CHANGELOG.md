@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## v3.5.1 — 2026-05-09 — #646 stripDangerous-strips-tenantId fix (3 routes silently broken since launch)
+
+Patch release on top of v3.5.0 closing GitHub [#646](https://github.com/Globussoft-Technologies/globussoft-crm/issues/646) — the global `stripDangerous` middleware (`backend/middleware/security.js:112-114`) deletes `userId` AND `tenantId` from `req.body` on every request. Three routes silently relied on `req.body.tenantId` and silently fell through to a tenantId=1 default whenever the field was missing (which was always). Multi-tenant correctness bug; surfaced by Wave 5B Agent VV's `stripDangerous` audit during the 2026-05-09 v3.5.0 release-validation cycle.
+
+### Fixes
+
+- **`backend/routes/web_visitors.js`** + **`frontend/public/crm-track.js`** + **`e2e/tests/web_visitors.spec.js`** (commit `93d38c3`) — body field renamed `tenantId` → `siteTenantId` in `getSiteTenantId()` helper. POST `/track` now returns 400 `INVALID_INPUT` when missing instead of silent fallback. POST `/identify` (auth-gated) uses `req.user.tenantId` as authoritative + `siteTenantId` as legacy soft-fallback. The crm-track.js public-API field stays `tenantId` (it's a JS-level config arg, not a body payload) — only the inner POST body changes. Spec gains 4 new tests including bidirectional cross-tenant leak check.
+- **`backend/routes/live_chat.js`** + **`frontend/public/crm-livechat.js`** + **`e2e/tests/live-chat.spec.js`** (same commit `93d38c3`) — same shape: `/visitor/start` body field renamed to `siteTenantId`. Spec's pre-existing false-positive test (sent `tenantId: 1`, got 200, passed only because the route's silent fallback equalled what it sent) flipped to send `siteTenantId: <wellnessTenantId>` and assert the visitor lands on wellness, NOT generic.
+- **`backend/routes/chatbots.js`** + **`frontend/src/pages/Chatbots.jsx`** + **`e2e/tests/chatbots.spec.js`** (commit `1f02856`) — body field renamed `tenantId` → `previewTenantId` for the in-CRM test-mode preview of inactive bots (`POST /chat/:botId`). Pre-fix the override path was DEAD code (always 403'd because the field was always stripped before the handler saw it). Spec rewritten from 1 to 4 cases including a regression pin that the legacy `tenantId` field is still stripped.
+- **`backend/routes/telephony.js`** + **`e2e/tests/telephony.spec.js`** (commit `fcc5cdb`) — `data.id` fallback in the MyOperator webhook handler at line 70 was confirmed-dead-code (stripDangerous removes `id` from every body; the primary `data.call_id` path always fires). Fallback removed + 5-line comment explaining why future readers shouldn't reintroduce it. Spec gains a regression test that submits a webhook payload with only `id` (no `call_id`) and asserts 200 + the handler doesn't crash.
+
+### Defense-in-depth
+
+- **`backend/eslint.config.js`** + **`backend/routes/quotas.js`** + **`CLAUDE.md`** + **`e2e/tests/cross-tenant-stripdangerous-api.spec.js`** (commit `6afe135`) — new ESLint local rule blocks `req.body.{id|userId|tenantId|createdAt|updatedAt}` reads in `backend/routes/*.js` with tailored error messages pointing at the canonical fix patterns (`targetUserId`, `siteTenantId`, `previewTenantId`) and #646. The single legitimate defensive read in `routes/quotas.js:74` (documented fallback to query string) carries an explicit `// eslint-disable-next-line no-restricted-syntax` directive. CLAUDE.md "Standing rules for new code" extended to point at the rule + #646. New 6-test gate spec pins cross-tenant routing behaviour for all three fixed routes (web_visitors / live_chat / chatbots) — both happy-path with the new field name AND legacy-field-still-stripped regression assertions.
+
+### Other
+
+- **`scripts/cleanup-orphan-touchpoints.py`** (commit `08ae845`) — landed the one-time cleanup script used during v3.5.0 deploy to clear 346 orphan Touchpoint rows that violated the new `Touchpoint_contactId_fkey` FK introduced in `fbde436`. Idempotent — useful template for future "MySQL has data violating a new FK Prisma is trying to add" situations.
+- **`.github/workflows/deploy.yml`** (commit `0fbc94b`) — reverted the `tail -60` debug widening from `6c12aa2` back to `tail -5`. The widening was used to diagnose v3.5.0's Touchpoint FK orphan issue; no longer needed.
+
+### Test surface delta (v3.5.0 → v3.5.1)
+
+- per-push gate: ~4,051 → ~4,065 (+14 from cross-tenant + per-route spec extensions)
+- ESLint rules: +1 local rule with 5 selectors
+
+### Carry-over for v3.5.2
+
+- **B-03** SendGrid Sender Identity (operator-blocker, unchanged)
+- **#555 / #565 / #527 / #200/#201/#211** product calls (unchanged)
+- Frontend RTL component tests for v3.5.0's 4 new feature pages (POS / Attendance / Leave / WhatsApp Threads) — carry-over from v3.5.0
+
+---
+
 ## v3.5.0 — 2026-05-09 — 4 greenfield feature areas (POS / Attendance+Leave / WhatsApp 2-way / Booking widget) + Wave-3 coverage extension + 6-round deploy-gate stabilization
 
 Minor-version bump after a multi-wave parallel session that landed four entirely new product surfaces (each with new Prisma models, route file, gate spec, and frontend page) plus a Wave-3 audit pass on existing surfaces and a 25-hour deploy-gate outage that took six bundled fix rounds to fully unblock. The v3.5.0 label reflects the breadth of greenfield work — POS / Attendance / Leave / WhatsApp Threads / Booking-widget extensions are real customer-visible features, not test-infra growth. The 6-round triage chronicles below document an unusually deep cascade where every fix surfaced an adjacent one masked behind it; `68180bc` (round 6b) is the version-bump base and frontend RTL component tests for the four new feature pages remain the carry-over to v3.5.1.

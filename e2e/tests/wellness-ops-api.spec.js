@@ -319,7 +319,13 @@ async function createPatient(request, label) {
 // at create time. The engine itself only filters by the post-backdate
 // visitDate, so shifting the create-time date by a few hours is safe —
 // we backdate immediately afterwards anyway.
-let _opsCreateOffsetH = 0;
+//
+// Round-7-followup: start the offset at 96h (4 days back) so the FIRST
+// call doesn't land on the `new Date()` hour-bucket where sibling specs
+// (wellness-clinical-api, wellness-rbac-regression) may have created
+// active-status visits. All offsets stay safely within the engine
+// window `[now-14d, now-72h]`.
+let _opsCreateOffsetH = 96;
 async function createCompletedVisit(request, patientId, visitDateIso) {
   const shifted = new Date(new Date(visitDateIso).getTime() - (_opsCreateOffsetH++ * 3600 * 1000)).toISOString();
   const res = await authPost(request, tokens.wellnessAdmin, '/wellness/visits', {

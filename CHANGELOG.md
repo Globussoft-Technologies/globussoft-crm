@@ -1,5 +1,129 @@
 # CHANGELOG
 
+## v3.5.0 — 2026-05-09 — 4 greenfield feature areas (POS / Attendance+Leave / WhatsApp 2-way / Booking widget) + Wave-3 coverage extension + 6-round deploy-gate stabilization
+
+Minor-version bump after a multi-wave parallel session that landed four entirely new product surfaces (each with new Prisma models, route file, gate spec, and frontend page) plus a Wave-3 audit pass on existing surfaces and a 25-hour deploy-gate outage that took six bundled fix rounds to fully unblock. The v3.5.0 label reflects the breadth of greenfield work — POS / Attendance / Leave / WhatsApp Threads / Booking-widget extensions are real customer-visible features, not test-infra growth. The 6-round triage chronicles below document an unusually deep cascade where every fix surfaced an adjacent one masked behind it; `68180bc` (round 6b) is the version-bump base and frontend RTL component tests for the four new feature pages remain the carry-over to v3.5.1.
+
+### Greenfield feature areas (4)
+
+#### POS / Cash Register / Shift / Sale (commit `e37369a`)
+
+Closes the "POS/New Sale shape" + "Cash Register/Shift" rows from the 2026-05-08 Google Doc audit's "Confirmed-missing entirely" list.
+
+- **4 new Prisma models:** `Register`, `Shift`, `Sale`, `SaleLineItem`. Polymorphic line items via `lineType + refId` (vs 5 nullable FKs) so future line types — PACKAGE, BUNDLE, EVENT_TICKET, DEPOSIT — slot in without migrations.
+- **New route:** [`backend/routes/pos.js`](backend/routes/pos.js) (~12 endpoints) — register CRUD, shift open/close lifecycle, sale creation in a Prisma transaction with sequential `POS-YYYY-NNNN` invoice numbering, refund + double-refund 409, shift-close variance computation (`closingTotal - (openingFloat + sum(CASH sales))`).
+- **RBAC:** wellness-vertical-gated via `verifyWellnessRole`. Generic tenants get a clean 403 with `code: WELLNESS_TENANT_REQUIRED`. Admin/manager configure registers + refund; clinical staff can ring up sales on their own OPEN shift only.
+- **Spec:** [`e2e/tests/pos-api.spec.js`](e2e/tests/pos-api.spec.js) — 38 tests. Frontend page: [`frontend/src/pages/wellness/PointOfSale.jsx`](frontend/src/pages/wellness/PointOfSale.jsx) (Sidebar Finance link, route `/wellness/pos`).
+
+#### Attendance + Biometric webhook + Leave Management (commit `3f0b68c` + wire-in `3db02cf`)
+
+Closes the staff time-tracking + leave-management gaps from the 2026-05-08 Google Doc audit's "Confirmed-missing entirely" rows.
+
+- **5 new Prisma models:** `Attendance`, `BiometricDevice`, `LeavePolicy`, `LeaveBalance`, `LeaveRequest`.
+- **2 new routes:** [`backend/routes/attendance.js`](backend/routes/attendance.js) (11 endpoints — clock-in/out + biometric webhook + manager views) and [`backend/routes/leave.js`](backend/routes/leave.js) (12 endpoints — policy CRUD, balance queries, request workflow with approval).
+- **2 new specs** wired into deploy.yml + coverage.yml: `attendance-api.spec.js` (25 tests), `leave-api.spec.js` (28 tests).
+- **2 new frontend pages:** `wellness/Attendance.jsx`, `wellness/Leave.jsx` (sidebar links under "Staff" section, open to all roles).
+- **Scope notes:** half-day leave deferred (integer days only). Carry-forward + encashment policies are configured but not yet processed by a periodic job (queued for v3.5.1).
+
+#### WhatsApp 2-way completion — Threads + agent assignment + opt-out (commit `97b157f`)
+
+Closes the WhatsApp 2-way gap from the 2026-05-08 Google Doc audit ("WhatsAppThread + agent assignment + opt-out missing").
+
+- **2 new Prisma models:** `WhatsAppThread`, `WhatsAppOptOut`. `WhatsAppMessage` gains `threadId`.
+- **Inbound webhook** now upserts a thread per `(tenant, normalised E.164 phone)` — second inbound on same phone reuses + bumps `unreadCount` + `lastInboundAt`. STOP / UNSUBSCRIBE keyword auto-creates an opt-out row (`reason=STOP_KEYWORD`) + sends a confirmation reply (best-effort).
+- **Outbound `/send`** rejects `422 CONTACT_OPTED_OUT` for opted-out phones (DPDP / TRAI compliance) BEFORE hitting Meta.
+- **9 new endpoints** under `/api/whatsapp/threads/*` and `/api/whatsapp/opt-outs/*` — list + detail + assign + close + snooze + mark-read + opt-out CRUD. Each state transition writes an `AuditLog` row for DPDP traceability.
+- **Frontend:** new `/wellness/whatsapp` page (`WhatsAppThreads.jsx`) with left-rail thread list + right-pane message stream + Assign-to-me / Close / Snooze / Opt-out buttons. Reply box disabled with red chip when contact is opted out.
+
+#### Booking widget completion — bookingType + at-home address + UTM (commit `9c74d46`)
+
+Closes the booking-widget completion gap from the 2026-05-08 Google Doc audit (Mini Website + Booking Widget ~70% done — `bookingType` enum, At-Home address+travel-time, UTM-into-booking missing).
+
+- **Schema additions:** `BookingType` vocabulary (`CLINIC_VISIT` / `IN_HOME` / `VIDEO` / `PHONE`); `Service.supportedBookingTypes` (JSON-string column); `Visit.{bookingType, atHomeAddress, atHomeCity, atHomePincode, travelTimeMinutes, videoCallUrl, utmSource, utmMedium, utmCampaign, utmTerm, utmContent, referrer}` columns; tenant-scoped indexes `(tenantId, bookingType, visitDate)` and `(tenantId, utmSource)`.
+- **Validation:** `POST /public/book` validates `bookingType` against `service.supportedBookingTypes` (422 `BOOKING_TYPE_NOT_SUPPORTED` with the actual supported list); requires `atHomeAddress` (5–500 chars) + 6-digit `atHomePincode` when `IN_HOME`. VIDEO bookings auto-generate a Jitsi-style `videoCallUrl`. IN_HOME bookings get a 30-minute `travelTimeMinutes` default (TODO: pincode-distance-based).
+- **Backwards compatible:** payloads without `bookingType` default to `CLINIC_VISIT` so legacy widget builds continue to 201.
+- **Frontend:** `wellness/PublicBooking.jsx` gains booking-type chip group (filtered per service), gated address fields, video-link explainer, and URL UTM capture (`utm_source/medium/campaign/term/content`) + `document.referrer` on mount.
+
+### Coverage + audit (Wave 3)
+
+- **Orchestrator depth audit (commit `15fbd7f`)** — Wave 3A Agent NN's PRD §6.7 read-through verdict: engine is **deep, not a stub**. `backend/cron/orchestratorEngine.js` emits 5 distinct rule-based recommendation types covering all three PRD §6.7 goals (100% occupancy, maximize ROAS, zero missed leads). Gemini integration with rule-based fallback. **+13 vitest pins** added to `backend/test/cron/orchestratorEngine.test.js` locking the goal→rule mapping so a future refactor that drops a rule reds the gate.
+- **e2e brittleness audit (commit `3380d71`)** — Wave 3D Agent PP's investigation of the carry-over from 2026-04-26 ("41 pre-existing e2e failures"). Headline finding: the **41 count was severely stale**. Today's actual brittleness against demo (run 25526512408) was 9 distinct tests, of which 7 were already shipped in commit `0ad13a8` (2026-05-08), 1 was already-shipped scrub coverage, and **1 substantive open item** (gdpr.spec.js:85 export timing — see commit `6ba0320` below). 0 GH issues filed (no Class-B route-contract gaps surfaced).
+- **Coverage extension (commit `75d0094`)** — Wave 3C Agent OO closed the "Next 3 coverage gaps" block (TODOS.md, set 2026-04-26). **+80 vitest cases** across `eventBus.test.js` (+51), `landingPageRenderer.test.js`, `slaBreachEngine.test.js`. eventBus.js coverage jumped **37.93% → 82.75% lines (+44.82pp)**, **33.54% → 91.13% branches (+57.59pp)** — lifts the lib/eventBus.js exemption from the 70% critical-path floor. Test-file-header drift surfaced and corrected: a prior comment claimed `vi.mock` couldn't intercept the SUT's CJS `require('./prisma')`; vitest.config.js's `inline: [/backend\/lib\//]` makes singleton-patching the imported `prisma` module work fine — same pattern `slaBreachEngine.test.js` already used.
+- **gdpr.spec.js export-timing fix (commits `6ba0320` + `94c00d5`)** — closes the only remaining open item from Wave 3 PP's audit. Agent QQ replaced the bare 15s timeout with a fresh-tenant fixture that bounds the export's row count, so the test runs against a known-small audit + activity volume regardless of demo's accumulated state.
+- **#227 phantom strike (commit `718af41`)** — Wave 3 Agent MM ran `verifying-issue-before-pickup` and found Reports CSV/PDF export had already shipped 2026-04-30 in commit `ed23f5d`. TODOS row was struck with rationale; the GH issue had already auto-closed. Second instance of the phantom-carry-over pattern in two days (first was 2026-05-07 wave-3 #534 follow-up).
+
+### Small fixes (Wave 1)
+
+- **#632 follow-up — Surveys + Loyalty aria-label sweep (commit `647bca9`)** — extends `6d6cced`'s aria-label coverage for icon-only buttons across `Surveys.jsx` (3 sites) and `wellness/Loyalty.jsx` (1 site); the other 4 candidate pages from the v3.4.14 follow-up row turned out to have zero icon-only buttons on audit (a standing-rule for the next sweep author: grep before listing).
+- **Estimate `validUntil` upper-bound cap (commit `ae18d88`)** — closes the `+10y` gap surfaced 2026-05-07 by regression-coverage-backlog #11 (Wave 9 Agent S). New error code `INVALID_VALID_UNTIL_FUTURE` on POST + PUT; spec test in `estimates-api.spec.js` flipped from "currently accepted" to "now rejected" semantics.
+- **`/send-now` 502 → 200+success:false (commit `d194492`, partial close of #645)** — Cloudflare/Nginx proxy stack swallows backend 502 JSON bodies and returns its own HTML error page. Flipped upstream-rejected paths (`SENDGRID_REJECTED`, `SENDGRID_NOT_CONFIGURED`) to `200` with the same `{success: false, code, detail, record}` envelope. Truly-internal errors (DB write fail, unhandled exception) keep their 500/502 status.
+- **PR #644 follow-up Pipeline.jsx aria regression (commit `e098b61`)** — restores `aria-label` on `aria-score` + delete buttons that were accidentally dropped during the Gemini-AI lead-scoring rewrite squash-merge. Found by Wave 1 audit pass on PR #644 (`3114b8a`).
+- **PRD §14.4 demo script (commit `2c10f6b`)** — closes Wave 1 Agent D's PRD-verification follow-up. Adds [`scripts/demo-callified-booking.sh`](scripts/demo-callified-booking.sh) curl wrapper + [`docs/wellness-client/DEMO_14_4.md`](docs/wellness-client/DEMO_14_4.md) so the WhatsApp→Visit flow is run-able today as a Callified-stand-in until the partner team's auto-post webhook ships.
+- **PRD 14.3 / 14.4 verification findings (commit `3e81987`)** — read-only audit findings parked in TODOS.md. Verdict: 14.3 demo-ready as a launcher (creative-rendering correctly out-of-scope per PRD §6.6); 14.4 CRM-side ingest contract fully shipped + tested, chatbot routing absent inside CRM (lives in Callified by design).
+
+### Deploy-gate triage (6 rounds — 25-hour outage cleared)
+
+The api_tests + unit_tests gates went red on commit `1399826` (#571 Gemini lead scoring, 2026-05-07 23:14) and stayed red across 25 commits / ~25 hours. Demo was frozen on the last green deploy (`353c119`) for that entire window — every Wave 1 / 2 / 3 commit sat on top of the red gate, so none of today's greenfield features were live until round 6a. Round-by-round chronicle:
+
+- **Round 1 — `53545d6`** — closed 2 distinct failures: (a) `whatsapp.spec.js:260` had `test.describe.configure({ mode: 'serial' })` inside a file already configured serial at line 30; Playwright threw `"serial" mode is already assigned for the enclosing scope` BEFORE running any test, failing the gate in 4s; (b) `consent-templates.test.js` stubbed `prisma.consentTemplate / consentForm / auditLog` but not `prisma.automationRule` — the #564 fix in `f42f7d7` added an `eventBus.emitEvent` call that pulled in workflow rule lookup; un-handled rejection nuked the suite.
+- **Round 2 — `ad9a98e`** — 4 more failures: (a) `calendar-availability-api.spec.js` had 12 sites using 2099-dated visits/holidays — outside the `[-5y, +1y]` `VISIT_DATE_OUT_OF_RANGE` window from Agent O's #313 datetime fix on 2026-05-07; replaced with 2027-dates; (b) `routes/pos.js` POST /sales used `parseInt(li.quantity || 1)` which silently coerces `0 → 1` (0 is falsy) — spec sent `quantity:0` expecting 400 INVALID_QUANTITY; route returned 201; fix uses `??` not `||`; (c+d) `wellness-clinical-api.spec.js:627 + :750` — sibling tests omitting `visitDate` collided at the route-default `new Date()` against the Wave 11 GG resource-availability booking-conflict gate.
+- **Round 3 — `b69e2c5`** — 3 more: (a) `routes/whatsapp.js` POST /threads/:id/assign body parameter renamed `userId → targetUserId`. The global `stripDangerous` middleware deletes `req.body.userId` from EVERY request — route never saw the field, returned 200 silently. **CLAUDE.md "Standing rules for new code" calls this out explicitly**; Wave 2 Agent KK violated it. Type-discriminated validation kept from round 2; (b+c) wellness-clinical-api booking-conflict cascade — added a `nextVisitDate()` helper used at 4 visit-creation sites that picked unique non-overlapping future visit dates per test invocation.
+- **Round 4 — `fbdcdf9`** — 3 more wellness-clinical conflicts: (a+b) `wellness-clinical-api.spec.js:909 + :928` (#313 datetime-local + #313 ISO passthrough) — these tests pin specific datetime PARSING behaviour, so the day component varies dynamically per invocation while hour:minute stays fixed; (c) `:965` (422 INVALID_VISIT_TRANSITION on completed→booked terminal) — added explicit `expect(created.status()).toBe(201)` so the next regression surfaces at the right assertion.
+- **Round 5 — `0b6692f`** — bound #313 day offsets within +1y window. Round 4's `Math.random()*300+360` = 360..660 day offsets exceeded the route's `[-5y, +1y]` cap (+365 max) → VISIT_DATE_OUT_OF_RANGE 400. Tightened to two non-overlapping ranges (30..200d and 210..360d) safely under +365. Bug-of-bug fix; round 4's approach was right but the cap was miscalculated.
+- **Round 6a — `86a15de`** — 7 more `nextVisitDate()` sites in wellness-clinical-api.spec.js still using route-default `new Date()` (lines 723 / 738 / 1158 / 2174 / 2202 / 2233 / 2618 / 2664). Round 5's deploy revealed test 1180 (Prescriptions: 201 as doctor) cascading from an upstream rxVisitId beforeAll's visit creation hitting the conflict gate.
+- **Round 6b — `68180bc`** (Wave 5 Agent UU) — preventive sweep across 2 more wellness specs (`wellness-rbac-regression-api.spec.js` + `wellness-clinical-journey-flow.spec.js`) that seeded visits at the route-default `new Date()` with the same `drHarshUserId` and were one collision away from joining the cascade. Wired in the same `nextVisitDate()` helper. 4 sibling specs verified SAFE (no `doctorId` on the seeded visits — gate short-circuits). Frontend RTL component tests for the 4 new feature pages (PointOfSale / Attendance / Leave / WhatsAppThreads) remain the v3.5.1 carry-over.
+
+**Lesson:** the 6-round count was unusually high because each fix surfaced an adjacent failure masked behind it (silent-200 from `stripDangerous`, conflict-gate cascade, +1y bound miscalculation). When a deploy gate has been red >24 hours with that many cascading dependencies, bundling fixes in tighter rounds (and running the local 4/4 mirror per push) shortens the outage; the `triaging-stuck-deploy-gate` skill's "bundle all root-cause fixes into ONE commit" rule applies but the cascade was deeper than the skill anticipated.
+
+### Process / cron learnings (5 entries logged in commit `b276d00`)
+
+Five process observations from today's 13-agent multi-wave dispatch session, all single-instance — retained for "third-instance triggers promotion" per the cron-learnings discipline:
+
+1. **`git commit --only <file>` doesn't isolate at the hunk level** when sibling agents have uncommitted hunks in the same file (4 agents concurrently appending to `prisma/schema.prisma`). Recovery patterns that worked: one-shot Node patch script (`.tmp-apply-schema.js`) that atomically appends + commits; `git apply --cached <patch>` for true hunk-level isolation. Worth a `dispatching-parallel-agent-wave` skill extension on third instance.
+2. **`/tmp/` paths fail on Windows git** — the standing template `git commit --only ... -F /tmp/agent-XX-msg.txt` failed under PowerShell. Workaround: project-local `.tmp-agent-XX-msg.txt` (gitignored, deleted after commit). Deterministic Windows failure mode — promote on next review without waiting for third instance.
+3. **vitest test-file headers can lie about what's reachable** — Agent OO inherited `eventBus.test.js` whose header documented "vi.mock can't intercept the SUT's CJS require, so executeAction and emitEvent's async tail are unreachable." 5-line probe disproved it. Coverage jumped 38% → 83% lines just by exercising what was wrongly believed unreachable. Discipline: trust-but-verify file-header testability claims with a probe before scoping.
+4. **Phantom carry-over hits second instance** — Agent MM's #227 verification (this session) is the second instance of "TODOS row open for X days while feature was already shipped." First was 2026-05-07 wave-3 (#534 follow-up phantom). Each instance costs ~30 min of agent dispatch time. Recommendation: every TODOS row gets a 30-second `gh issue view <N>` + commit-grep before pickup.
+5. **Failure-count metrics carry verbatim across waves without verification** — Agent PP audited the "41 pre-existing e2e failures" row (open in TODOS since 2026-04-26). Reality: 9 distinct failing tests, of which 7 were absorbed by commit `0ad13a8` (2026-05-08) without a backlink to the row. Pattern: every failure-count claim in TODOS needs an inline `gh run id` citation OR `e2e/tests/<spec>.spec.js:<line>` reference so the next reader can verify in 30 seconds.
+
+### Issue #457 expansion — sections 8–17
+
+Issue #457 (manual-only QA umbrella) gained 10 new sections via a comment posted by indianbill007 today after a fresh codebase scan (95 routes / ~110 pages / supporting libs). Sections 8–17 cover surfaces genuinely impossible to automate:
+
+- **8. Authentication MFA + federated identity** (real authenticator apps, SSO with real Okta, SCIM provisioning, silent SSO from sister products)
+- **9. External Partner API live integration** (Callified / AdsGPT / Globus Phone hitting `/api/v1/external/*` with their own retry behaviors and timing)
+- **10. File upload + PDF / Excel / CSV cross-app fidelity** (PDFs across Acrobat / Preview / Chrome / Foxit / iPhone Mail / Evince; xlsx across Excel 2016 / 365 / LibreOffice / Numbers / Sheets; CSV import with mixed encodings + phone formats)
+- **11. Embedded widget + cross-origin behavior** (drop-in script across host pages with conflicting CSPs, framebusters, ad-blocker interference)
+- **12. POS hardware integration** (Wave 2A backbone — receipt printer, barcode scanner, cash drawer)
+- **13. WhatsApp message rendering across devices** (Wave 2C backbone — Meta WhatsApp Business app on Android / iOS / web, RTL languages)
+- **14. Booking widget at-home flow with real geocoding** (Wave 2D — pincode→travel-time when the auto-router becomes pincode-distance-based)
+- **15. Attendance biometric devices** (Wave 2B — fingerprint reader webhook payloads from real hardware)
+- **16. Leave management with calendar sync** (Wave 2B — leave dates round-trip into Google / Outlook calendars)
+- **17. Wellness Photo Tab device-fidelity** (real iPhone / Android camera uploads, EXIF stripping, large-file handling)
+
+Pattern: half-day per category, comments prefixed with section number, separate bug issues for findings. Sign off when all 17 sections green for a release tag.
+
+### Test surface
+
+| Tier | Tool | v3.4.14 | v3.5.0 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | ~79 specs / ~2,560 tests | **~82 specs** / ~2,651 tests | +3 specs (attendance / leave / pos) / +91 tests |
+| Per-push backend unit tests | vitest | 43 files / ~1,196 tests | **~49 files** / ~1,365 tests | +6 files (eventBus / landingPageRenderer / slaBreachEngine extensions; new leadSlaEngine / lowStockEngine / scheduledEmailEngine vitests from Wave 5 Agent XX) / +169 tests |
+| Per-push frontend unit tests | vitest | 6 files / ~35 tests | 6 files / ~35 tests | 0 (4 new pages' frontend tests are v3.5.1 carry-over) |
+| **Total per-push** |  | ~3,791 | **~4,051** | **+260 tests / +6.9%** |
+
+Wave 5 Agent XX (commit `0dd1f84`) lifted three previously-uncovered cron engines from 0% to 90%+ lines: `leadSlaEngine.js` 0 → 90.47% (+26 cases), `lowStockEngine.js` 0 → 91.11% (+29 cases), `scheduledEmailEngine.js` 0 → 93.18% (+21 cases). Counts above include this contribution. Version-bump base is `0dd1f84`; round 6b (`68180bc`) deploy-gate state is `in_progress` at write-time.
+
+### Carry-over for v3.5.1
+
+- **Frontend RTL component tests for the 4 new pages** (PointOfSale.jsx / Attendance.jsx / Leave.jsx / WhatsAppThreads.jsx). The 4 frontend pages shipped without component tests because the Wave-2 agents prioritised the API gate spec. Pattern to copy: any of the 14 existing files in `frontend/src/__tests__/`. ~6h once the test scaffolding is decided per page.
+- **B-03** — SendGrid Sender Identity for `noreply@crm.globusdemos.com` still operator-blocked (path A: dashboard Single-Sender Verification, ~2 min; path B: Domain Authentication via DNS, ~10 min). Until B-03 ships, no email delivers from demo regardless of code; `/send-now` will continue surfacing `SENDGRID_REJECTED` (now 200+success:false per `d194492`).
+- **WhatsApp opt-out re-opt-in audit row policy** — the `97b157f` commit emits `AuditLog(WhatsAppOptOut, DELETE, ...)` on re-opt-in but the privilege gate is admin-only. Worth a product call on whether the re-opt-in itself should require explicit user consent (DPDP §11) or just a manager+ override is enough.
+- **Leave carry-forward + encashment cron** — the `LeavePolicy` has the columns; nightly job not yet implemented. Queued for v3.5.1.
+- **Booking widget pincode-distance-based travel time** — currently a flat 30-minute default. Distance table or geocoder integration needed.
+- **Phantom-carry-over hit 2nd instance** — promote `verifying-issue-before-pickup`-on-every-TODOS-row to a hard standing rule once the third instance lands (per cron-learnings discipline).
+
+---
+
 ## v3.4.14 — 2026-05-06 — pen-test sweep: 22 QA issues closed in one day (CRIT/HIGH/MEDIUM/LOW)
 
 Same-day pen-test response. The QA sweep against v3.4.13 filed 23 issues across CRIT/HIGH/MEDIUM/LOW; 22 shipped today across 22 commits on main, plus 3 spec alignments to keep the per-push gate green. Themes: privilege-boundary close-out across `/api/wellness/*` (the bigger half of CRIT-02), observability rebuild on the `/send-now` 500 surface, an actual root-cause for the dashboard "retry storm" (was a React context dep-cycle, not the misdiagnosed retry-on-400), perf wins on cold-call patient/visit lists, and an hourly demo hygiene cron so QA residue self-cleans between releases.

@@ -27,7 +27,10 @@ const INDIAN_MOBILE_RE = /^(?:\+?91)?[6-9]\d{9}$/;
 const FIELD_LIMITS = { name: 191, email: 191, company: 191, title: 200, phone: 20 };
 // Reject all C0 controls (NUL/BEL/etc.) + DEL. \t \n \r are intentionally
 // included — text inputs shouldn't carry them either, and any paste-from-
-// malicious-source typically smuggles via NUL or BEL.
+// malicious-source typically smuggles via NUL or BEL. Detecting control
+// chars requires control chars in the pattern; the eslint rule is for
+// preventing accidental control chars, so disable it here intentionally.
+// eslint-disable-next-line no-control-regex
 const CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
 const stripDangerousTags = (str) => {

@@ -256,3 +256,254 @@ describe('cron/orchestratorEngine — dedup short-circuit (no Task.create call)'
     expect(prisma.task.create).not.toHaveBeenCalled();
   });
 });
+
+// ─── PRD §6.7 depth audit (Wave 3 Agent NN, 2026-05-09) ────────────────────
+//
+// Audit verdict: engine is ALREADY DEEP. The rule-based proposal generator
+// emits up to 5 distinct recommendation cards mapping cleanly onto the
+// three PRD §6.7 goals:
+//
+//   ┌──────────────────────────────┬──────────────────────────────────────────┐
+//   │ PRD §6.7 goal                │ Engine rules that fire                   │
+//   ├──────────────────────────────┼──────────────────────────────────────────┤
+//   │ 100% occupancy this week     │ #2 occupancy_alert (occupancyPct < 30)   │
+//   │                              │ #4 campaign_boost (utilisationPct < 50)  │
+//   │ maximize ROAS                │ #3 campaign_boost (cold high-ticket svc) │
+//   │                              │ #4 campaign_boost (reach × price scoring,│
+//   │                              │      basePrice-scaled budget 300-2000 ₹) │
+//   │ zero missed leads            │ #1 lead_followup (oldLeads >= 5, 24h+)   │
+//   │                              │ #5 lead_followup (slaBreachLeads, SLA)   │
+//   └──────────────────────────────┴──────────────────────────────────────────┘
+//
+// These tests pin each rule's input → output mapping so a regression in
+// any threshold, scoring formula, payload-shape, or goalContext label is
+// caught at unit-test time. They DO NOT exercise the prisma.* read paths
+// or the Gemini call — that surface is integration-tested by the
+// orchestrator-api.spec.js gate spec.
+
+describe('cron/orchestratorEngine — PRD §6.7 goal coverage (audit pins)', () => {
+  // Helper: empty context with all guards FALSE; per-test we override the
+  // fields the rule under test reads. Mirrors the makeCtx pattern above.
+  const baseCtx = () => ({
+    oldLeads: 0,
+    oldLeadsList: [],
+    occupancyPct: 80,
+    todayBooked: 30,
+    highTickerCold: [],
+    utilisationPct: 80,
+    zeroBookingServices: [],
+    slaBreachLeads: [],
+    topServices: [],
+    suggestedAssignee: null,
+    slaMinutes: 30,
+    capacityMinutes: 660,
+    usedMinutes: 540,
+  });
+
+  // ── PRD §6.7 goal: 100% occupancy ──────────────────────────────────────
+
+  test('rule #2 (occupancy_alert) fires when occupancyPct < 30 AND todayBooked < 10', () => {
+    const ctx = { ...baseCtx(), occupancyPct: 18, todayBooked: 4 };
+    const cards = ruleBasedProposals(ctx);
+    const card = cards.find((c) => c.type === 'occupancy_alert');
+    expect(card, 'occupancy_alert should fire at occupancyPct=18, booked=4').toBeTruthy();
+    expect(card.title).toContain('18%');
+    expect(card.priority).toBe('medium');
+    // payload shape pin
+    expect(card.payload.occupancyPct).toBe(18);
+    expect(card.payload.todayBooked).toBe(4);
+  });
+
+  test('rule #2 (occupancy_alert) does NOT fire when occupancyPct >= 30', () => {
+    const ctx = { ...baseCtx(), occupancyPct: 30, todayBooked: 4 };
+    const cards = ruleBasedProposals(ctx);
+    expect(cards.find((c) => c.type === 'occupancy_alert')).toBeUndefined();
+  });
+
+  test('rule #2 (occupancy_alert) does NOT fire when todayBooked >= 10 even at low occupancyPct', () => {
+    // The AND-guard means a high single-service-load booked count
+    // shouldn't trip the under-utilised-day rule.
+    const ctx = { ...baseCtx(), occupancyPct: 15, todayBooked: 10 };
+    const cards = ruleBasedProposals(ctx);
+    expect(cards.find((c) => c.type === 'occupancy_alert')).toBeUndefined();
+  });
+
+  test('rule #2 anchors body to top-performing service when present (PRD §6.7 occupancy goal)', () => {
+    const ctx = {
+      ...baseCtx(),
+      occupancyPct: 12, todayBooked: 2,
+      topServices: [{ id: 7, name: 'Hydrafacial' }],
+    };
+    const [card] = ruleBasedProposals(ctx);
+    expect(card.body).toContain('Hydrafacial');
+    expect(card.payload.anchorServiceId).toBe(7);
+    expect(card.payload.anchorServiceName).toBe('Hydrafacial');
+  });
+
+  test('rule #4 (occupancy_gap) fires when utilisationPct < 50 — emits goalContext "100% occupancy this week"', () => {
+    const ctx = {
+      ...baseCtx(),
+      occupancyPct: 80, todayBooked: 30, // suppress rule #2
+      utilisationPct: 35,
+      capacityMinutes: 660,
+      usedMinutes: 231,
+      zeroBookingServices: [
+        { id: 12, name: 'Laser Hair Removal', basePrice: 50000, targetRadiusKm: 15, ticketTier: 'high' },
+      ],
+    };
+    const card = ruleBasedProposals(ctx).find((c) => c.type === 'campaign_boost' && c.title.startsWith('Occupancy gap'));
+    expect(card, 'occupancy-gap rule #4 should fire').toBeTruthy();
+    expect(card.goalContext).toBe('100% occupancy this week');
+    expect(card.priority).toBe('high');
+    expect(card.title).toContain('35%');
+    expect(card.title).toContain('Laser Hair Removal');
+    // PRD §6.7 mapping: payload identifies the service + suggested daily budget
+    expect(card.payload.serviceId).toBe(12);
+    expect(card.payload.reason).toBe('occupancy_gap_below_50');
+  });
+
+  test('rule #4 budget formula: 1% of basePrice, rounded to ₹50, floor ₹300, cap ₹2000', () => {
+    // basePrice 10,000 → 1% = 100 → max(300, 100) = 300 (floor)
+    const lowCtx = {
+      ...baseCtx(),
+      utilisationPct: 20,
+      zeroBookingServices: [{ id: 1, name: 'Cleanup', basePrice: 10000, targetRadiusKm: 5 }],
+    };
+    const lowCard = ruleBasedProposals(lowCtx).find((c) => c.title.startsWith('Occupancy gap'));
+    expect(lowCard.payload.suggestedDailyBudget).toBe(300);
+
+    // basePrice 50,000 → 1% = 500 → between floor and cap → rounds to nearest 50 → 500
+    const midCtx = {
+      ...baseCtx(),
+      utilisationPct: 20,
+      zeroBookingServices: [{ id: 2, name: 'Mid', basePrice: 50000, targetRadiusKm: 10 }],
+    };
+    const midCard = ruleBasedProposals(midCtx).find((c) => c.title.startsWith('Occupancy gap'));
+    expect(midCard.payload.suggestedDailyBudget).toBe(500);
+
+    // basePrice 500,000 → 1% = 5000 → cap at 2000
+    const highCtx = {
+      ...baseCtx(),
+      utilisationPct: 20,
+      zeroBookingServices: [{ id: 3, name: 'Premium', basePrice: 500000, targetRadiusKm: 50 }],
+    };
+    const highCard = ruleBasedProposals(highCtx).find((c) => c.title.startsWith('Occupancy gap'));
+    expect(highCard.payload.suggestedDailyBudget).toBe(2000);
+  });
+
+  test('rule #4 does NOT fire when utilisationPct >= 50', () => {
+    const ctx = {
+      ...baseCtx(),
+      utilisationPct: 50,
+      zeroBookingServices: [{ id: 1, name: 'Cleanup', basePrice: 10000 }],
+    };
+    const cards = ruleBasedProposals(ctx);
+    expect(cards.find((c) => c.title.startsWith('Occupancy gap'))).toBeUndefined();
+  });
+
+  test('rule #4 does NOT fire when no zero-booking services exist (no ROAS target)', () => {
+    const ctx = { ...baseCtx(), utilisationPct: 20, zeroBookingServices: [] };
+    const cards = ruleBasedProposals(ctx);
+    expect(cards.find((c) => c.title.startsWith('Occupancy gap'))).toBeUndefined();
+  });
+
+  // ── PRD §6.7 goal: maximize ROAS ───────────────────────────────────────
+
+  test('rule #3 (campaign_boost cold high-ticket) fires when highTickerCold has at least one service', () => {
+    const ctx = {
+      ...baseCtx(),
+      highTickerCold: [{ id: 99, name: 'PRP Therapy', basePrice: 20000 }],
+    };
+    const card = ruleBasedProposals(ctx).find((c) => c.type === 'campaign_boost' && c.title.startsWith('Boost campaign'));
+    expect(card, 'rule #3 cold high-ticket card should fire').toBeTruthy();
+    expect(card.title).toContain('PRP Therapy');
+    expect(card.priority).toBe('high');
+    expect(card.payload.serviceId).toBe(99);
+    expect(card.payload.suggestedDailyBudget).toBe(500);
+    // Body cites the rupee figure for ROAS-aware framing
+    expect(card.body).toMatch(/₹/);
+  });
+
+  // ── PRD §6.7 goal: zero missed leads ───────────────────────────────────
+
+  test('rule #5 (sla_breach) fires when slaBreachLeads non-empty — emits goalContext "zero missed leads"', () => {
+    const ctx = {
+      ...baseCtx(),
+      slaBreachLeads: [
+        { id: 101, name: 'Anita Kumar', phone: '+919876543210', assignedToId: null, createdAt: new Date(Date.now() - 90 * 60_000) },
+        { id: 102, name: 'Rakesh Singh', phone: '+919876543211', assignedToId: null, createdAt: new Date(Date.now() - 60 * 60_000) },
+      ],
+      slaMinutes: 30,
+      suggestedAssignee: { id: 7, name: 'Pooja Telecaller', email: 'pooja@x.in' },
+    };
+    const card = ruleBasedProposals(ctx).find((c) => c.type === 'lead_followup' && c.title.includes('SLA'));
+    expect(card, 'sla_breach rule #5 should fire').toBeTruthy();
+    expect(card.goalContext).toBe('zero missed leads');
+    expect(card.priority).toBe('high');
+    expect(card.title).toContain('30-min SLA');
+    expect(card.body).toContain('Anita Kumar');
+    expect(card.body).toContain('Pooja Telecaller');
+    // Payload pin
+    expect(card.payload.leadIds).toEqual([101, 102]);
+    expect(card.payload.reassignToUserId).toBe(7);
+    expect(card.payload.slaMinutes).toBe(30);
+    expect(card.payload.reason).toBe('sla_breach');
+  });
+
+  test('rule #5 caps payload.leadIds at 10 even when 25 leads breach SLA', () => {
+    const breaches = Array.from({ length: 25 }, (_, i) => ({
+      id: 200 + i, name: `Lead ${i}`, phone: `+9100${i}`, assignedToId: null, createdAt: new Date(),
+    }));
+    const ctx = { ...baseCtx(), slaBreachLeads: breaches, slaMinutes: 30, suggestedAssignee: { id: 7, name: 'TC' } };
+    const card = ruleBasedProposals(ctx).find((c) => c.title.includes('SLA'));
+    expect(card.payload.leadIds.length).toBe(10);
+    expect(card.title).toContain('25 leads');
+  });
+
+  test('rule #5 falls back to "the on-duty telecaller" when suggestedAssignee is null', () => {
+    const ctx = {
+      ...baseCtx(),
+      slaBreachLeads: [{ id: 1, name: 'X', phone: '+91', assignedToId: null, createdAt: new Date() }],
+      slaMinutes: 30,
+      suggestedAssignee: null,
+    };
+    const card = ruleBasedProposals(ctx).find((c) => c.title.includes('SLA'));
+    expect(card.body).toContain('the on-duty telecaller');
+    expect(card.payload.reassignToUserId).toBeNull();
+  });
+
+  // ── Multi-goal: a low-utilisation, SLA-breached, cold-service tenant
+  //    should emit all three PRD §6.7 cards in one cron run ──────────────
+
+  test('all 3 PRD §6.7 goals can fire from the same context (deep coverage, not single-stub)', () => {
+    const ctx = {
+      // Goal 1: occupancy
+      occupancyPct: 15, todayBooked: 3,
+      utilisationPct: 25, capacityMinutes: 660, usedMinutes: 165,
+      zeroBookingServices: [{ id: 1, name: 'Botox', basePrice: 30000, targetRadiusKm: 20 }],
+      // Goal 2: ROAS
+      highTickerCold: [{ id: 2, name: 'Hair Transplant', basePrice: 200000 }],
+      topServices: [],
+      // Goal 3: missed leads (both rule #1 aging + rule #5 SLA)
+      oldLeads: 8,
+      oldLeadsList: [
+        { id: 50, name: 'Aging A', source: 'IndiaMART', assignedToId: null, createdAt: new Date(Date.now() - 30 * 3600 * 1000) },
+      ],
+      slaBreachLeads: [{ id: 60, name: 'Breaching B', phone: '+91', assignedToId: null, createdAt: new Date() }],
+      slaMinutes: 30,
+      suggestedAssignee: { id: 99, name: 'Telecaller' },
+    };
+    const cards = ruleBasedProposals(ctx);
+    const types = cards.map((c) => c.type);
+    const goalContexts = cards.map((c) => c.goalContext).filter(Boolean);
+
+    // Should emit at least one card per PRD §6.7 goal
+    expect(types.includes('occupancy_alert') || goalContexts.includes('100% occupancy this week')).toBe(true);
+    expect(types.includes('campaign_boost')).toBe(true); // covers ROAS goal
+    expect(types.includes('lead_followup')).toBe(true); // covers zero-missed-leads goal
+    expect(goalContexts).toContain('zero missed leads');
+    expect(goalContexts).toContain('100% occupancy this week');
+    // Verdict: engine is deep — at least 4 distinct cards from this fully-loaded context
+    expect(cards.length).toBeGreaterThanOrEqual(4);
+  });
+});

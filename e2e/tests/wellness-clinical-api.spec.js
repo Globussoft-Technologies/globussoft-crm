@@ -912,8 +912,9 @@ test.describe('Wellness API — POST /visits (create + validation)', () => {
     // (which re-run the test against the same backend without cleanup) don't
     // collide on (doctorId, UTC-hour). The test pins datetime PARSING
     // behaviour (10:30 IST → 05:00 UTC), so the day can be dynamic as long as
-    // input and expected stay in lockstep.
-    const dayOffset = Math.floor(Math.random() * 300) + 30; // 30..330 days out
+    // input and expected stay in lockstep. Bounded to 30..200 days to stay
+    // safely within the route's [-5y, +1y] VISIT_DATE_OUT_OF_RANGE window.
+    const dayOffset = Math.floor(Math.random() * 170) + 30; // 30..200 days out
     const yyyymmdd = new Date(Date.now() + dayOffset * 86400000).toISOString().slice(0, 10);
     const localInput = `${yyyymmdd}T10:30`;
     const expectedUtc = `${yyyymmdd}T05:00:00.000Z`;
@@ -933,8 +934,11 @@ test.describe('Wellness API — POST /visits (create + validation)', () => {
   test('#313 full ISO input passes through unchanged (Z suffix path)', async ({ request }) => {
     const p = await createPatient(request, { suffix: 'IsoPassthru' });
     // Full ISO with Z suffix — unchanged native path. Vary the day per
-    // invocation so retries don't collide on (doctorId, UTC-hour).
-    const dayOffset = Math.floor(Math.random() * 300) + 360; // 360..660 days out (different range from sibling test to reduce collision odds further)
+    // invocation so retries don't collide on (doctorId, UTC-hour). Range
+    // chosen to NOT overlap with the IST round-trip test (30..200) so
+    // sibling tests at the same hour don't double-book on the same day.
+    // Bounded within the route's [-5y, +1y] window.
+    const dayOffset = Math.floor(Math.random() * 150) + 210; // 210..360 days out
     const yyyymmdd = new Date(Date.now() + dayOffset * 86400000).toISOString().slice(0, 10);
     const isoInput = `${yyyymmdd}T05:00:00.000Z`;
     const res = await authPost(request, '/api/wellness/visits', {

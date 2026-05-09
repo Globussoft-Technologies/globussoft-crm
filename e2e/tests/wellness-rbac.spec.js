@@ -37,6 +37,19 @@ const FIXTURES = {
 
 const TAG = `E2E_RBAC_${Date.now()}`;
 
+// Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
+// collide with 409. This helper returns a never-collides visitDate by combining
+// a per-test unique day-offset (30..390 days from now, always within #170
+// [now-5y, now+1y] window) + random hour offset. Ensures retries don't
+// collide with each other either. (Self-contained — no shared imports per
+// the e2e/ convention.)
+let _visitDateOffset = 0;
+function nextVisitDate() {
+  const dayOffset = 30 + _visitDateOffset++;
+  const hourOffset = Math.floor(Math.random() * 720) * 3600 * 1000;
+  return new Date(Date.now() + dayOffset * 86400000 + hourOffset).toISOString();
+}
+
 const tokens = {};
 let createdServiceIds = [];
 let createdConsentIds = [];
@@ -81,10 +94,12 @@ test.describe.serial('Wellness RBAC (#207/#214/#216)', () => {
         serviceId,
         doctorId,
         status: 'booked',
-        visitDate: new Date().toISOString(),
+        // Wave 11 GG: stagger visitDate to dodge the 409 (doctorId, UTC-hour)
+        // booking-conflict gate that collides on demo with concurrent specs.
+        visitDate: nextVisitDate(),
       },
     });
-    expect(visit.ok()).toBeTruthy();
+    expect(visit.ok(), `seed visit POST failed: ${visit.status()} ${await visit.text()}`).toBeTruthy();
     testVisitId = (await visit.json()).id;
   });
 

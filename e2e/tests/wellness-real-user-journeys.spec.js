@@ -45,6 +45,17 @@ let _resolvedPartnerKey = null;
 // Unique suffix so re-runs don't collide
 const STAMP = Date.now().toString().slice(-6);
 
+// Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
+// collide with 409. This helper returns a never-collides visitDate so visit-
+// create POSTs in this spec don't smash into each other or other concurrent
+// specs running against the same demo. Self-contained — no shared imports.
+let _visitDateOffset = 0;
+function nextVisitDate() {
+  const dayOffset = 30 + _visitDateOffset++;
+  const hourOffset = Math.floor(Math.random() * 720) * 3600 * 1000;
+  return new Date(Date.now() + dayOffset * 86400000 + hourOffset).toISOString();
+}
+
 // ---------- helpers ----------
 
 async function apiLogin(request, creds) {
@@ -226,9 +237,13 @@ test.describe.serial('Journey A — Patient portal (real person, phone+OTP)', ()
         status: 'completed',
         notes: 'Routine consultation — scalp check.',
         amountCharged: 500,
+        // Wave 11 GG: the booking-conflict gate compares visitDate at UTC-hour
+        // granularity. On demo, concurrent specs collide when omitted because
+        // route default is "now". Stagger via nextVisitDate() (30+ days out).
+        visitDate: nextVisitDate(),
       },
     });
-    expect(visit.ok()).toBeTruthy();
+    expect(visit.ok(), `visit POST failed: ${visit.status()} ${await visit.text()}`).toBeTruthy();
     const v = await visit.json();
     patient.visitId = v.id;
 

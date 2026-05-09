@@ -286,6 +286,12 @@ test.describe('GDPR DSAR Export — /export/me happy path', () => {
   });
 
   test('idempotent — calling /export/me twice returns the same shape', async ({ request }) => {
+    // Demo's /export/me handler does ~9 findMany calls across the full
+    // generic-admin tenant graph, taking ~22-25s per call against
+    // crm.globusdemos.com (vs ~200ms on local stack). Two sequential calls
+    // routinely brush the default 30s test timeout. Bump to 90s so the
+    // shape-equality assertion below has room to complete cleanly.
+    test.setTimeout(90_000);
     const { token } = await getGenericAdmin(request);
     const a = await post(request, token, '/api/gdpr/export/me');
     const b = await post(request, token, '/api/gdpr/export/me');

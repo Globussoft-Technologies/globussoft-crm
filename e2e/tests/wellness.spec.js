@@ -26,6 +26,17 @@ const PARTNER_KEY = process.env.WELLNESS_PARTNER_KEY ||
 
 let TOKEN = '';
 
+// Wave 11 GG booking-conflict gate: visits with the same (doctorId, UTC-hour)
+// collide with 409. Helper returns a never-collides visitDate (30+ days out)
+// so this spec's visit POSTs don't smash into each other or other concurrent
+// specs running against the same demo. Self-contained — no shared imports.
+let _visitDateOffset = 0;
+function nextVisitDate() {
+  const dayOffset = 30 + _visitDateOffset++;
+  const hourOffset = Math.floor(Math.random() * 720) * 3600 * 1000;
+  return new Date(Date.now() + dayOffset * 86400000 + hourOffset).toISOString();
+}
+
 test.describe.serial('Wellness — Tenant + Auth + Currency', () => {
   test('1. Owner (Rishu) login returns wellness tenant + INR currency', async ({ request }) => {
     const res = await request.post(`${API}/auth/login`, { data: RISHU });
@@ -236,9 +247,12 @@ test.describe.serial('Wellness — Patient + Visit + Prescription create flow', 
         notes: 'Initial consultation. Patient considering PRP for early hair thinning. Discussed 6-session protocol.',
         amountCharged: 1500,
         status: 'completed',
+        // Wave 11 GG: stagger visitDate to dodge the 409 (doctorId, UTC-hour)
+        // booking-conflict gate that collides on demo with concurrent specs.
+        visitDate: nextVisitDate(),
       },
     });
-    expect(res.ok()).toBeTruthy();
+    expect(res.ok(), `visit POST failed: ${res.status()} ${await res.text()}`).toBeTruthy();
     const v = await res.json();
     expect(v.id).toBeTruthy();
     createdVisitId = v.id;
@@ -633,8 +647,13 @@ test.describe.serial('Wellness — Patient + Visit UPDATE + reads', () => {
         notes: 'Skin consultation — discussed HydraFacial regimen for monthly maintenance.',
         status: 'completed',
         amountCharged: 1000,
+        // Wave 11 GG: stagger to dodge (doctorId, UTC-hour) booking-conflict
+        // 409 — without an explicit visitDate the route defaults to "now"
+        // which collides with sibling specs running concurrently against demo.
+        visitDate: nextVisitDate(),
       },
     });
+    expect(vr.ok(), `seed visit POST failed: ${vr.status()} ${await vr.text()}`).toBeTruthy();
     visitId = (await vr.json()).id;
   });
 

@@ -2311,6 +2311,16 @@ router.post("/membership-plans", verifyWellnessRole(["admin", "manager"]), async
         entitlementCount: ent.entitlements.length,
       });
     } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    // PRD Gap §13 wave-6a — emit membership.plan_created so workflow rules
+    // can react (e.g. announce a new plan to active patients via campaign).
+    try {
+      require("../lib/eventBus").emitEvent(
+        "membership.plan_created",
+        { planId: plan.id, name: plan.name, durationDays: plan.durationDays, price: plan.price, currency: plan.currency, entitlementCount: ent.entitlements.length },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.status(201).json(plan);
   } catch (e) {
     console.error("[wellness] create membership plan error:", e.message);
@@ -2452,6 +2462,19 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
       const invIdInt = parseInt(invoiceId, 10);
       if (Number.isFinite(invIdInt)) data.invoiceId = invIdInt;
     }
+    // PRD Gap §13 wave-6a — sniff whether this is a NEW enrollment or a
+    // RENEWAL (prior membership of the same plan exists for this patient).
+    // Used to disambiguate the `membership.enrolled` vs `membership.renewed`
+    // events emitted below. Best-effort — failure to read prior memberships
+    // must NOT break the purchase flow.
+    let isRenewal = false;
+    try {
+      const priorCount = await prisma.membership.count({
+        where: { tenantId: req.user.tenantId, patientId, planId: plan.id },
+      });
+      isRenewal = priorCount > 0;
+    } catch (_e) { /* best-effort */ }
+
     const membership = await prisma.membership.create({ data });
     try {
       await writeAudit("Membership", "PURCHASE", membership.id, req.user.userId, req.user.tenantId, {
@@ -2463,6 +2486,27 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
         endDate: end,
       });
     } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    // PRD Gap §13 wave-6a — emit membership.enrolled OR membership.renewed
+    // so workflow rules can react (welcome SMS on first enrollment,
+    // thank-you-for-renewing on re-purchase). Wrapped: workflow failures
+    // never break the purchase response.
+    try {
+      require("../lib/eventBus").emitEvent(
+        isRenewal ? "membership.renewed" : "membership.enrolled",
+        {
+          membershipId: membership.id,
+          patientId,
+          planId: plan.id,
+          planName: plan.name,
+          price: plan.price,
+          startDate: start,
+          endDate: end,
+          isRenewal,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.status(201).json(membership);
   } catch (e) {
     console.error("[wellness] purchase membership error:", e.message);
@@ -2541,8 +2585,25 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
     if (membership.status === "expired" || new Date(membership.endDate) < new Date()) {
       // If the timestamp says expired but the row didn't get marked yet,
       // mark it now so subsequent reads are correct.
-      if (membership.status !== "expired") {
+      const wasJustExpired = membership.status !== "expired";
+      if (wasJustExpired) {
         await prisma.membership.update({ where: { id }, data: { status: "expired" } });
+        // PRD Gap §13 wave-6a — emit membership.expired only on the actual
+        // active→expired transition (not on every redeem attempt against an
+        // already-expired row). Wrapped: workflow failure ≠ block redeem path.
+        try {
+          require("../lib/eventBus").emitEvent(
+            "membership.expired",
+            {
+              membershipId: id,
+              patientId: membership.patientId,
+              planId: membership.planId,
+              endDate: membership.endDate,
+            },
+            req.user.tenantId,
+            req.io
+          );
+        } catch (_e) {}
       }
       return res.status(410).json({ error: "Membership has expired", code: "MEMBERSHIP_EXPIRED" });
     }
@@ -2589,6 +2650,25 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
         remainingForService: line.remaining,
       });
     } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    // PRD Gap §13 wave-6a — emit membership.benefit_applied so workflow rules
+    // can react (e.g. send SMS confirming the service was redeemed against
+    // the membership; trigger reminder once balance hits 1 remaining).
+    try {
+      require("../lib/eventBus").emitEvent(
+        "membership.benefit_applied",
+        {
+          membershipId: id,
+          patientId: membership.patientId,
+          planId: membership.planId,
+          serviceId: serviceIdInt,
+          visitId: Number.isFinite(visitIdInt) ? visitIdInt : null,
+          remainingForService: line.remaining,
+          redemptionId: redemption.id,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
 
     res.json({
       success: true,
@@ -2624,6 +2704,22 @@ router.post("/memberships/:id/cancel", verifyWellnessRole(["admin", "manager"]),
         reason,
       });
     } catch (auditErr) { console.warn("[audit]", auditErr.message); }
+    // PRD Gap §13 wave-6a — emit membership.cancelled so workflow rules can
+    // react (refund-warning, win-back campaign enrollment, churn flag).
+    try {
+      require("../lib/eventBus").emitEvent(
+        "membership.cancelled",
+        {
+          membershipId: id,
+          patientId: membership.patientId,
+          planId: membership.planId,
+          reason,
+          cancelledAt: updated.cancelledAt,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.json({ success: true, membership: updated });
   } catch (e) {
     console.error("[wellness] cancel membership error:", e.message);
@@ -2825,12 +2921,34 @@ router.post("/reminders/run", verifyWellnessRole(["admin", "manager"]), async (r
   }
 });
 
+// PRD Gap §12 #4e — manual trigger for the no-show risk Notification fan-out.
+// Mirrors /reminders/run shape: admin/manager only, runs the engine for the
+// caller's tenant, returns { scored, flagged, notified }.
+router.post("/no-show-risk/run", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const { runNoShowRiskForTenant } = require("../cron/appointmentRemindersEngine");
+    const result = await runNoShowRiskForTenant(req.user.tenantId);
+    res.json(result);
+  } catch (e) {
+    console.error("[no-show-risk] manual run failed:", e.message);
+    res.status(500).json({ error: "Failed to run no-show risk", detail: e.message });
+  }
+});
+
 router.post("/ops/run", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
-    const { runNpsForTenant, runRetentionForTenant } = require("../cron/wellnessOpsEngine");
+    const {
+      runNpsForTenant,
+      runRetentionForTenant,
+      runMembershipExpiryForTenant,
+    } = require("../cron/wellnessOpsEngine");
     const npsSent = await runNpsForTenant(req.user.tenantId);
     const purged = await runRetentionForTenant(req.user.tenantId);
-    res.json({ npsSent, purged });
+    // PRD Gap §12 #4d — also drive the membership-expiry T-7 notifier so the
+    // /ops/run trigger can be exercised end-to-end (mirrors the e2e pattern
+    // used by reminders/run + low-stock/run for cron-engine specs).
+    const membershipExpiry = await runMembershipExpiryForTenant(req.user.tenantId);
+    res.json({ npsSent, purged, membershipExpiry });
   } catch (e) {
     console.error("[wellness-ops] manual run failed:", e.message);
     res.status(500).json({ error: "Failed to run ops", detail: e.message });
@@ -5930,6 +6048,17 @@ router.post("/wallet/:walletId/credit", verifyRole(["ADMIN"]), async (req, res) 
     await writeAudit("Wallet", "CREDIT", walletId, req.user.userId, req.user.tenantId, {
       transactionId: tx.id, amount, reason,
     });
+    // PRD Gap §13 wave-6a — emit wallet.topup so workflow rules can react to
+    // every credit (manual, refund, gift-card redemption, cashback). Wrapped
+    // so workflow failures never break the ledger response.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "wallet.topup",
+        { walletId, patientId: wallet.patientId, transactionId: tx.id, amount, balanceAfter: tx.balanceAfter, type: tx.type, reason },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.status(201).json(tx);
   } catch (e) {
     console.error("[wellness] wallet credit error:", e.message);
@@ -5964,6 +6093,16 @@ router.post("/wallet/:walletId/debit", verifyRole(["ADMIN"]), async (req, res) =
     await writeAudit("Wallet", "DEBIT", walletId, req.user.userId, req.user.tenantId, {
       transactionId: tx.id, amount, reason,
     });
+    // PRD Gap §13 wave-6a — emit wallet.spent so workflow rules can react to
+    // every debit (redemption, reversal, manual debit). Mirrors wallet.topup.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "wallet.spent",
+        { walletId, patientId: wallet.patientId, transactionId: tx.id, amount, balanceAfter: tx.balanceAfter, type: tx.type, reason },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.status(201).json(tx);
   } catch (e) {
     console.error("[wellness] wallet debit error:", e.message);
@@ -6031,6 +6170,16 @@ router.post("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => 
     await writeAudit("GiftCard", "CREATE", row.id, req.user.userId, req.user.tenantId, {
       code: row.code, amount, issuedTo,
     });
+    // PRD Gap §13 wave-6a — emit giftcard.issued so workflow rules can react
+    // (e.g. send WhatsApp ack to issuedTo, log against an attribution campaign).
+    try {
+      require("../lib/eventBus").emitEvent(
+        "giftcard.issued",
+        { giftCardId: row.id, code: row.code, amount: row.amount, currency: row.currency, issuedTo: row.issuedTo, issuedFrom: row.issuedFrom, expiresAt: row.expiresAt },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.status(201).json(row);
   } catch (e) {
     console.error("[wellness] giftcard create error:", e.message);
@@ -6086,6 +6235,16 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
     await writeAudit("GiftCard", "REDEEM", giftCard.id, req.user.userId, req.user.tenantId, {
       code: giftCard.code, amount: giftCard.amount, patientId, transactionId: tx.id,
     });
+    // PRD Gap §13 wave-6a — emit giftcard.redeemed so workflow rules can
+    // react (top-up confirmation SMS, refer-a-friend bonus on redemption).
+    try {
+      require("../lib/eventBus").emitEvent(
+        "giftcard.redeemed",
+        { giftCardId: giftCard.id, code: giftCard.code, amount: giftCard.amount, patientId, transactionId: tx.id, walletId: wallet.id },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.status(201).json({ giftCard: updated, transaction: tx });
   } catch (e) {
     console.error("[wellness] giftcard redeem error:", e.message);
@@ -6446,6 +6605,16 @@ router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
     await writeAudit("Patient", "CASHBACK_EARN", visit.patientId, req.user.userId, req.user.tenantId, {
       visitId, ruleId: result.ruleId, earn: result.earn, transactionId: tx.id,
     });
+    // PRD Gap §13 wave-6a — emit cashback.credited so workflow rules can
+    // react (cashback-redemption SMS, loyalty-tier upgrades).
+    try {
+      require("../lib/eventBus").emitEvent(
+        "cashback.credited",
+        { patientId: visit.patientId, visitId, ruleId: result.ruleId, amount: result.earn, walletId: wallet.id, transactionId: tx.id },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) {}
     res.status(201).json({ applied: true, earn: result.earn, ruleId: result.ruleId, transaction: tx });
   } catch (e) {
     console.error("[wellness] cashback apply error:", e.message);

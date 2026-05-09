@@ -162,6 +162,35 @@ router.post("/", verifyToken, async (req, res) => {
         tenantId,
       },
     });
+
+    // PRD Gap §12 #4a — fire in-app Notification rows for every approver.
+    // Schema has no explicit Approver join (approvedBy is set when the
+    // decision lands, not at request time), so the implicit approver pool
+    // is "all ADMIN/MANAGER users in this tenant" (the same role-set
+    // /to-approve filters on). Best-effort — never break the create call.
+    try {
+      const approvers = await prisma.user.findMany({
+        where: { tenantId, role: { in: ["ADMIN", "MANAGER"] } },
+        select: { id: true },
+      });
+      if (approvers.length > 0) {
+        const subject = `${created.entity} #${created.entityId}`;
+        const reasonSuffix = created.reason ? ` — ${String(created.reason).slice(0, 80)}` : "";
+        await prisma.notification.createMany({
+          data: approvers.map((u) => ({
+            tenantId,
+            userId: u.id,
+            title: `Approval pending: ${subject}`,
+            message: `A new approval request was created for ${subject}${reasonSuffix}.`,
+            type: "approval",
+            link: `/approvals/${created.id}`,
+          })),
+        });
+      }
+    } catch (notifErr) {
+      console.warn("[approvals] notify approvers failed:", notifErr.message);
+    }
+
     const [hydrated] = await hydrateUsers([created], tenantId);
     res.status(201).json(hydrated);
   } catch (err) {

@@ -107,6 +107,15 @@ beforeAll(() => {
   // fired with eventName=X, tenantId=Y". See the file header for rationale.
   prisma.automationRule = { findMany: vi.fn() };
   prisma.webhook = { findMany: vi.fn() };
+  // PRD §12 #4b — Notification side-effect added in Wave 6B. The breach
+  // path now also fans out Notification rows for ADMIN/MANAGER recipients.
+  // Stub user.findMany + notification.createMany so the side-effect runs
+  // cleanly inside this file's existing tests. Behaviour-pinned in
+  // slaBreachEngine-notifications.test.js — here we just want non-hanging
+  // mocks so the unrelated tests (boundary math, payload shape, etc.) keep
+  // passing.
+  prisma.user = { findMany: vi.fn() };
+  prisma.notification = { createMany: vi.fn() };
 });
 
 beforeEach(() => {
@@ -116,6 +125,8 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset();
   prisma.automationRule.findMany.mockReset();
   prisma.webhook.findMany.mockReset();
+  prisma.user.findMany.mockReset();
+  prisma.notification.createMany.mockReset();
 
   // Defaults — every test overrides what it cares about.
   prisma.ticket.findMany.mockResolvedValue([]);
@@ -124,6 +135,8 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockResolvedValue(null);
   prisma.automationRule.findMany.mockResolvedValue([]); // no rules → no executeAction
   prisma.webhook.findMany.mockResolvedValue([]); // no webhooks → no fetch
+  prisma.user.findMany.mockResolvedValue([]);
+  prisma.notification.createMany.mockResolvedValue({ count: 0 });
 });
 
 const TENANT = { id: 'tenant-A', slug: 'enhanced' };

@@ -791,8 +791,10 @@ if (process.env.DISABLE_CRONS === '1') {
   initOrchestratorCron();
 
   // Initialize Appointment Reminders Engine (every 15 min, wellness tenants)
-  const { initAppointmentRemindersCron } = require('./cron/appointmentRemindersEngine');
+  const { initAppointmentRemindersCron, initNoShowRiskCron } = require('./cron/appointmentRemindersEngine');
   initAppointmentRemindersCron();
+  // PRD Gap §12 #4e — daily 08:30 IST no-show risk Notification fan-out.
+  initNoShowRiskCron();
 
   // Initialize Wellness Ops Engine (hourly: NPS surveys + junk-lead retention)
   const { initWellnessOpsCron } = require('./cron/wellnessOpsEngine');

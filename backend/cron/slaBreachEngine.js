@@ -79,6 +79,43 @@ async function processTenant(tenant) {
         tenant.id,
       );
 
+      // PRD Gap §12 #4b — surface SLA breach on the bell of: (a) the
+      // ticket's assignee (if any) so the responsible owner sees it
+      // immediately; (b) every ADMIN/MANAGER in the tenant so a manager
+      // can step in if the assignee is unavailable. Idempotent because
+      // the breached=false precondition above guarantees we reach here
+      // exactly once per ticket. Best-effort — a notification failure
+      // must not roll back the breach flip.
+      try {
+        const recipients = new Set();
+        if (t.assigneeId) recipients.add(t.assigneeId);
+        const managers = await prisma.user.findMany({
+          where: { tenantId: tenant.id, role: { in: ["ADMIN", "MANAGER"] } },
+          select: { id: true },
+        });
+        for (const u of managers) recipients.add(u.id);
+        if (recipients.size > 0) {
+          const title = `SLA breached: ${t.subject || `Ticket #${t.id}`}`;
+          const lateMin = breachedBy ? Math.round(breachedBy / 60000) : 0;
+          const message = `Ticket #${t.id} (${t.priority || "—"}) has missed its first-response SLA${lateMin > 0 ? ` by ${lateMin} min` : ""}.`;
+          await prisma.notification.createMany({
+            data: Array.from(recipients).map((uid) => ({
+              tenantId: tenant.id,
+              userId: uid,
+              title,
+              message,
+              type: "warning",
+              link: `/tickets/${t.id}`,
+            })),
+          });
+        }
+      } catch (notifErr) {
+        console.warn(
+          `[SLABreach] tenant=${tenant.id} ticket=${t.id} notify failed:`,
+          notifErr.message,
+        );
+      }
+
       breachedIds.push(t.id);
     } catch (err) {
       console.error(

@@ -210,8 +210,219 @@ function initAppointmentRemindersCron() {
   );
 }
 
+// ── PRD Gap §12 #4e — No-show risk Notification fan-out ──────────────
+//
+// Mirrors the dashboard's noShowRisk scorer (routes/wellness.js around
+// line 3960) but runs as a cron job so high-risk visits surface on the
+// owner/doctor's bell without requiring someone to load the dashboard.
+// Idempotency: dedup by Notification metadata isn't structured (no
+// metadata column), so we use the link path `/wellness/visits/:id` +
+// type='warning' as the dedup key. One notification per (visit, doctor)
+// per visit lifetime — repeat ticks find the existing row and skip.
+//
+// Threshold: NOSHOW_THRESHOLD (60) matches the dashboard's #289 fix bar
+// so on-bell parity matches what the dashboard renders.
+
+const NOSHOW_THRESHOLD = 60;
+const NOSHOW_NOTIF_TYPE = "warning";
+
+async function alreadyNotifiedNoShow(tenantId, visitId, userId) {
+  const link = `/wellness/visits/${visitId}`;
+  const existing = await prisma.notification.findFirst({
+    where: {
+      tenantId,
+      userId,
+      link,
+      type: NOSHOW_NOTIF_TYPE,
+    },
+    select: { id: true },
+  });
+  return Boolean(existing);
+}
+
+async function scoreUpcomingVisit(tenantId, v, signals) {
+  const istHour = new Date(v.visitDate.getTime() + 5.5 * 3600 * 1000).getUTCHours();
+  const hoursOut = (v.visitDate.getTime() - Date.now()) / 3600000;
+  let score = 0;
+  if (signals.noShowSet.has(v.patientId)) score += 30;
+  if (
+    hoursOut <= 24 &&
+    hoursOut >= 1 &&
+    !signals.remindedPhones.has(v.patient?.phone)
+  ) {
+    score += 20;
+  }
+  if (!signals.visitedPatientSet.has(v.patientId)) score += 15;
+  if (istHour < 10 || istHour >= 18) score += 10;
+  if (signals.loyalSet.has(v.patientId)) score -= 10;
+  return Math.max(0, Math.min(100, score));
+}
+
+async function runNoShowRiskForTenant(tenantId) {
+  const now = new Date();
+  // Window: next 48h of booked visits (one notification covers the
+  // T-24h + T-1h reminder cadence comfortably).
+  const upcomingEnd = new Date(now.getTime() + 48 * 3600 * 1000);
+  const upcomingVisits = await prisma.visit.findMany({
+    where: {
+      tenantId,
+      status: "booked",
+      visitDate: { gte: now, lte: upcomingEnd },
+    },
+    include: {
+      patient: { select: { id: true, name: true, phone: true } },
+      doctor: { select: { id: true } },
+    },
+    take: 200,
+  });
+
+  if (upcomingVisits.length === 0) {
+    return { scored: 0, flagged: 0, notified: 0 };
+  }
+
+  const patientIds = upcomingVisits.map((v) => v.patientId);
+  const ninetyDaysAgo = new Date(now.getTime() - 90 * 86400000);
+  const thirtyDaysAgoLoyalty = new Date(now.getTime() - 30 * 86400000);
+
+  const [pastNoShows, anyVisits, smsSent, loyaltyRecent] = await Promise.all([
+    prisma.visit.findMany({
+      where: {
+        tenantId,
+        status: "no-show",
+        patientId: { in: patientIds },
+        visitDate: { gte: ninetyDaysAgo },
+      },
+      select: { patientId: true },
+    }),
+    prisma.visit.findMany({
+      where: {
+        tenantId,
+        patientId: { in: patientIds },
+        id: { notIn: upcomingVisits.map((v) => v.id) },
+      },
+      select: { patientId: true },
+    }),
+    prisma.smsMessage.findMany({
+      where: {
+        tenantId,
+        direction: "OUTBOUND",
+        status: { in: ["SENT", "DELIVERED"] },
+        createdAt: { gte: new Date(now.getTime() - 48 * 3600 * 1000) },
+        to: { in: upcomingVisits.map((v) => v.patient?.phone).filter(Boolean) },
+        OR: [{ body: { contains: "reminder" } }, { body: { contains: "appointment" } }],
+      },
+      select: { to: true },
+    }),
+    // LoyaltyTransaction may not be enabled on every tenant install; guard.
+    (async () => {
+      try {
+        return await prisma.loyaltyTransaction.findMany({
+          where: { tenantId, patientId: { in: patientIds }, createdAt: { gte: thirtyDaysAgoLoyalty } },
+          select: { patientId: true },
+        });
+      } catch {
+        return [];
+      }
+    })(),
+  ]);
+
+  const signals = {
+    noShowSet: new Set(pastNoShows.map((v) => v.patientId)),
+    visitedPatientSet: new Set(anyVisits.map((v) => v.patientId)),
+    remindedPhones: new Set(smsSent.map((s) => s.to)),
+    loyalSet: new Set(loyaltyRecent.map((l) => l.patientId)),
+  };
+
+  const owners = await prisma.user.findMany({
+    where: { tenantId, role: { in: ["ADMIN", "MANAGER"] } },
+    select: { id: true },
+  });
+
+  let flagged = 0;
+  let notified = 0;
+
+  for (const v of upcomingVisits) {
+    const score = await scoreUpcomingVisit(tenantId, v, signals);
+    if (score < NOSHOW_THRESHOLD) continue;
+    flagged++;
+
+    // Recipients: doctor (if assigned) + every ADMIN/MANAGER. Dedup at
+    // the per-(visit, user) level so a doctor who is also an ADMIN
+    // receives one notification, not two.
+    const recipients = new Set();
+    if (v.doctor?.id) recipients.add(v.doctor.id);
+    for (const u of owners) recipients.add(u.id);
+
+    const title = `High no-show risk: ${v.patient?.name || `Patient #${v.patientId}`}`;
+    const message = `Booked ${v.visitDate.toLocaleString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" })} — risk score ${score}/100. Consider a confirmation call.`;
+    const link = `/wellness/visits/${v.id}`;
+
+    for (const userId of recipients) {
+      try {
+        if (await alreadyNotifiedNoShow(tenantId, v.id, userId)) continue;
+        await prisma.notification.create({
+          data: {
+            tenantId,
+            userId,
+            title,
+            message,
+            type: NOSHOW_NOTIF_TYPE,
+            link,
+          },
+        });
+        notified++;
+      } catch (e) {
+        console.error(
+          `[NoShowRisk] tenant=${tenantId} visit=${v.id} user=${userId} failed:`,
+          e.message,
+        );
+      }
+    }
+  }
+
+  return { scored: upcomingVisits.length, flagged, notified };
+}
+
+async function runNoShowRiskForAllWellnessTenants() {
+  const tenants = await prisma.tenant.findMany({
+    where: { vertical: "wellness", isActive: true },
+    select: { id: true, slug: true },
+  });
+  for (const t of tenants) {
+    try {
+      const r = await runNoShowRiskForTenant(t.id);
+      if (r.flagged > 0) {
+        console.log(
+          `[NoShowRisk] tenant ${t.slug}: scored=${r.scored} flagged=${r.flagged} notified=${r.notified}`,
+        );
+      }
+    } catch (e) {
+      console.error("[NoShowRisk] tenant fail:", t.slug, e.message);
+    }
+  }
+}
+
+function initNoShowRiskCron() {
+  // Daily 08:30 IST — early enough for owners to act on the day's risks
+  // before patients leave for work.
+  cron.schedule(
+    "30 8 * * *",
+    () => {
+      runNoShowRiskForAllWellnessTenants().catch((e) =>
+        console.error("[NoShowRisk] cron fail:", e.message),
+      );
+    },
+    { timezone: "Asia/Kolkata" },
+  );
+  console.log("[NoShowRisk] cron initialized (daily 08:30 IST)");
+}
+
 module.exports = {
   initAppointmentRemindersCron,
   tickAppointmentReminders,
   processTenant, // exported for manual testing
+  // PRD Gap §12 #4e — no-show risk fan-out
+  initNoShowRiskCron,
+  runNoShowRiskForTenant,
+  runNoShowRiskForAllWellnessTenants,
 };

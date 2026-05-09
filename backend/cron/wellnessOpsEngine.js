@@ -16,6 +16,7 @@ const crypto = require("crypto");
 const NPS_DELAY_HOURS = 72;       // 3 days post-visit
 const JUNK_RETENTION_DAYS = 90;   // delete junk leads older than this
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+const MEMBERSHIP_EXPIRY_WINDOW_DAYS = 7; // T-7 expiry notification
 
 // Deep retention thresholds
 const PATIENT_DORMANT_MONTHS = 24;  // anonymize patients with no visits in 24 months
@@ -94,6 +95,86 @@ function hashFor(prefix, idOrValue) {
   return `${prefix}${h}`;
 }
 
+// PRD Gap §12 #4d — fire one Notification per membership when endDate
+// is in [now, now+7d] and we haven't already notified for that membership.
+// Targets every ADMIN/MANAGER in the tenant (mirrors lowStockEngine pattern;
+// patients are not Users so direct patient-bell targeting isn't possible
+// without a portal-user join — managers/owners is the right operational
+// audience anyway, since they own renewal upsell). Idempotency via
+// Membership.expiryNotifiedAt: stamped on first fire, query filters it
+// out on subsequent ticks.
+async function runMembershipExpiryForTenant(tenantId) {
+  const now = new Date();
+  const windowEnd = new Date(now.getTime() + MEMBERSHIP_EXPIRY_WINDOW_DAYS * 86400000);
+
+  const expiring = await prisma.membership.findMany({
+    where: {
+      tenantId,
+      status: "active",
+      expiryNotifiedAt: null,
+      endDate: { gte: now, lte: windowEnd },
+    },
+    include: {
+      patient: { select: { id: true, name: true } },
+      plan: { select: { id: true, name: true } },
+    },
+    take: 500,
+  });
+
+  if (expiring.length === 0) return { notified: 0, notifications: 0 };
+
+  const recipients = await prisma.user.findMany({
+    where: { tenantId, role: { in: ["ADMIN", "MANAGER"] } },
+    select: { id: true },
+  });
+
+  let notified = 0;
+  let notifications = 0;
+
+  for (const m of expiring) {
+    try {
+      const daysLeft = Math.max(
+        0,
+        Math.ceil((new Date(m.endDate).getTime() - now.getTime()) / 86400000),
+      );
+      const planName = m.plan?.name || "Membership";
+      const patientName = m.patient?.name || `Patient #${m.patientId}`;
+      const title = `Membership expiring: ${patientName}`;
+      const message = `${planName} for ${patientName} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} (${new Date(m.endDate).toLocaleDateString("en-IN")}). Reach out for renewal.`;
+      const link = `/wellness/patients/${m.patientId}`;
+
+      if (recipients.length > 0) {
+        await prisma.notification.createMany({
+          data: recipients.map((u) => ({
+            tenantId,
+            userId: u.id,
+            title,
+            message,
+            type: "warning",
+            link,
+          })),
+        });
+        notifications += recipients.length;
+      }
+
+      // Stamp marker AFTER the notifications insert so a transient failure
+      // above leaves expiryNotifiedAt=null and the next tick retries.
+      await prisma.membership.update({
+        where: { id: m.id },
+        data: { expiryNotifiedAt: now },
+      });
+      notified++;
+    } catch (e) {
+      console.error(
+        `[WellnessOps][membership-expiry] tenant=${tenantId} membership=${m.id} failed:`,
+        e.message,
+      );
+    }
+  }
+
+  return { notified, notifications };
+}
+
 async function runDeepRetentionForTenant(tenantId) {
   const now = Date.now();
   const dormantCutoff = new Date(now - PATIENT_DORMANT_MONTHS * 30 * 86400000);
@@ -161,11 +242,12 @@ async function runOpsForAllWellnessTenants() {
       const npsSent  = await runNpsForTenant(t.id);
       const purged   = await runRetentionForTenant(t.id);
       const deep     = await runDeepRetentionForTenant(t.id);
-      if (npsSent || purged || deep.anonymized || deep.consentsDeleted || deep.callLogsDeleted) {
+      const expiry   = await runMembershipExpiryForTenant(t.id);
+      if (npsSent || purged || deep.anonymized || deep.consentsDeleted || deep.callLogsDeleted || expiry.notified) {
         console.log(
           `[WellnessOps] tenant ${t.slug}: ${npsSent} NPS sent, ${purged} junk leads purged, ` +
           `${deep.anonymized} patients anonymized, ${deep.consentsDeleted} consents deleted, ` +
-          `${deep.callLogsDeleted} call logs deleted`
+          `${deep.callLogsDeleted} call logs deleted, ${expiry.notified} memberships flagged expiring`
         );
       }
     } catch (e) {
@@ -187,4 +269,5 @@ module.exports = {
   runNpsForTenant,
   runRetentionForTenant,
   runDeepRetentionForTenant,
+  runMembershipExpiryForTenant,
 };

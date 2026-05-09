@@ -600,3 +600,282 @@ describe('renderPage — full integration (#447 surfaces never appear in final H
     expect(html).not.toMatch(/<script>alert/i);
   });
 });
+
+// ─── Form submission flow + successRedirectUrl validation (#451) ───────
+//
+// The form component embeds inline JS that POSTs to /api/pages/:slug/submit
+// and either reveals the thank-you panel or redirects to a configured URL.
+// The redirect URL is validated AT RENDER TIME — invalid URLs (javascript:,
+// mailto:, malformed) silently fall back to the thank-you panel mode so a
+// bad URL never reaches the browser's location.assign.
+
+describe('form — submit JS + successRedirectUrl validation', () => {
+  test('default success path reveals the thank-you panel (no redirect)', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{ type: 'form', props: { fields: [{ name: 'email' }] } }],
+    });
+    // The thank-you reveal block is present in the success branch.
+    expect(html).toContain('document.getElementById');
+    expect(html).toContain('_thanks');
+    // No window.location.assign embedded in the script.
+    expect(html).not.toContain('window.location.assign');
+  });
+
+  test('valid https successRedirectUrl emits window.location.assign branch', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          successRedirectUrl: 'https://example.com/thanks',
+        },
+      }],
+    });
+    expect(html).toContain('window.location.assign');
+    expect(html).toContain('"https://example.com/thanks"');
+  });
+
+  test('valid http successRedirectUrl is also accepted', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          successRedirectUrl: 'http://example.com/thanks',
+        },
+      }],
+    });
+    expect(html).toContain('window.location.assign');
+    expect(html).toContain('"http://example.com/thanks"');
+  });
+
+  test('javascript: successRedirectUrl falls back to thank-you panel', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          successRedirectUrl: 'javascript:alert(1)',
+        },
+      }],
+    });
+    // The validator URL ctor accepts the parse but the protocol check
+    // rejects it → fall back to the thank-you-panel branch.
+    expect(html).not.toContain('window.location.assign');
+    expect(html).not.toMatch(/javascript:alert/i);
+    expect(html).toContain('_thanks');
+  });
+
+  test('mailto: successRedirectUrl falls back to thank-you panel', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          successRedirectUrl: 'mailto:a@b.co',
+        },
+      }],
+    });
+    expect(html).not.toContain('window.location.assign');
+    expect(html).toContain('_thanks');
+  });
+
+  test('file: successRedirectUrl falls back to thank-you panel', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          successRedirectUrl: 'file:///etc/passwd',
+        },
+      }],
+    });
+    expect(html).not.toContain('window.location.assign');
+    expect(html).not.toMatch(/file:\/\//);
+  });
+
+  test('malformed (un-parseable) successRedirectUrl falls back to thank-you panel', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          // Not a valid absolute URL → URL ctor throws → caught → fallback
+          successRedirectUrl: 'not a url at all',
+        },
+      }],
+    });
+    expect(html).not.toContain('window.location.assign');
+  });
+
+  test('non-string successRedirectUrl is ignored (typeof guard)', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          successRedirectUrl: 12345, // number, not string
+        },
+      }],
+    });
+    expect(html).not.toContain('window.location.assign');
+    expect(html).not.toContain('12345');
+  });
+
+  test('empty-string successRedirectUrl is ignored', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          successRedirectUrl: '',
+        },
+      }],
+    });
+    expect(html).not.toContain('window.location.assign');
+  });
+});
+
+describe('form — CAPTCHA / Turnstile (#451)', () => {
+  test('without enableCaptcha, no Turnstile script or widget rendered', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{ type: 'form', props: { fields: [{ name: 'email' }] } }],
+    });
+    expect(html).not.toContain('challenges.cloudflare.com/turnstile');
+    expect(html).not.toContain('cf-turnstile');
+  });
+
+  test('with enableCaptcha=true, Turnstile script + widget appear', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: { fields: [{ name: 'email' }], enableCaptcha: true },
+      }],
+    });
+    expect(html).toContain('challenges.cloudflare.com/turnstile');
+    expect(html).toContain('class="cf-turnstile"');
+    expect(html).toContain('cfTurnstileToken');
+    // The default test site-key is used when no override + no env var.
+    expect(html).toContain('1x00000000000000000000AA');
+  });
+
+  test('with enableCaptcha=true + per-form turnstileSiteKey override, override wins', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          enableCaptcha: true,
+          turnstileSiteKey: '0xMYREALSITEKEY123',
+        },
+      }],
+    });
+    expect(html).toContain('0xMYREALSITEKEY123');
+    expect(html).not.toContain('1x00000000000000000000AA');
+  });
+
+  test('Turnstile site-key is HTML-escaped to prevent attribute injection', () => {
+    const html = renderPage({
+      slug: 'p',
+      content: [{
+        type: 'form',
+        props: {
+          fields: [{ name: 'email' }],
+          enableCaptcha: true,
+          turnstileSiteKey: '"><script>alert(1)</script>',
+        },
+      }],
+    });
+    expect(html).not.toContain('"><script>alert(1)</script>');
+    expect(html).toContain('&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
+});
+
+// ─── safeUrl edge cases — percent-encoded XSS, CR/LF, bizarre schemes ───
+//
+// Browsers normalize whitespace and percent-encoding before scheme parsing.
+// safeUrl does not URL-decode, so a percent-encoded "javascript:" stays
+// embedded verbatim and lands in the no-scheme-match relative-path branch.
+// We pin the contract so future "should we URL-decode?" refactors notice.
+
+describe('safeUrl — percent-encoded / malformed / exotic edge cases', () => {
+  test('percent-encoded "javascript%3A" does NOT match the dangerous scheme regex (passes through as relative)', () => {
+    // Trimmed value starts with "javascript%3A..." — no `:` at the
+    // unencoded scheme position, so the scheme regex doesn't match.
+    // It falls through to the no-scheme branch which treats it as relative.
+    // This is the documented contract — caller is responsible for further
+    // decoding if URL-decoded interpretation is needed.
+    const out = safeUrl('javascript%3Aalert(1)', 'link-href');
+    // Verify it is NOT rejected (i.e. it didn't fall back to '#').
+    // The output should be the input verbatim (preserved as relative).
+    expect(out).toBe('javascript%3Aalert(1)');
+  });
+
+  test('CR-LF in URL is preserved (no scheme match → treated as relative)', () => {
+    const out = safeUrl('foo\nbar.png', 'image-src');
+    // Input doesn't start with a denied scheme — passes through.
+    expect(out).toBe('foo\nbar.png');
+  });
+
+  test('webcal: scheme falls back (not on the link-href allowlist)', () => {
+    expect(safeUrl('webcal://cal.example.com/feed', 'link-href')).toBe('#');
+  });
+
+  test('ftp: scheme falls back for image-src', () => {
+    expect(safeUrl('ftp://example.com/photo.png', 'image-src')).toBe('');
+  });
+
+  test('chrome-extension: scheme falls back', () => {
+    expect(safeUrl('chrome-extension://aaa/file.png', 'image-src')).toBe('');
+  });
+
+  test('safeUrl with unknown kind returns "" fallback even for valid scheme', () => {
+    // The safeUrl signature accepts a `kind` string; the kind-specific
+    // branches (image-src/link-href/iframe-src) each return the input on
+    // success. An unknown kind falls through past every branch to the
+    // final `return SAFE_FALLBACK[kind] ?? ''` — which yields '' because
+    // SAFE_FALLBACK has no key for unknown kinds.
+    expect(safeUrl('https://example.com', 'unknown-kind')).toBe('');
+    // Null input + unknown kind → '' too (early-return uses same
+    // SAFE_FALLBACK[kind] ?? '' fallback).
+    expect(safeUrl(null, 'unknown-kind')).toBe('');
+    // Empty input + unknown kind → '' likewise.
+    expect(safeUrl('', 'unknown-kind')).toBe('');
+  });
+
+  test('whitespace-only input returns the kind-specific fallback', () => {
+    expect(safeUrl('   ', 'link-href')).toBe('#');
+    expect(safeUrl('   ', 'image-src')).toBe('');
+    expect(safeUrl('   ', 'iframe-src')).toBe('about:blank');
+  });
+
+  test('tab-prefixed javascript: still rejected (browser parses TAB before scheme)', () => {
+    expect(safeUrl('\tjavascript:alert(1)', 'link-href')).toBe('#');
+  });
+
+  test('case-insensitive scheme detection (JaVaScRiPt:)', () => {
+    expect(safeUrl('JaVaScRiPt:alert(1)', 'link-href')).toBe('#');
+    expect(safeUrl('JAVASCRIPT:alert(1)', 'image-src')).toBe('');
+    expect(safeUrl('javaScript:alert(1)', 'iframe-src')).toBe('about:blank');
+  });
+
+  test('data:image/svg+xml IS accepted for image-src (SVG can self-XSS but the matcher is permissive by design)', () => {
+    // Note: the implementation allows ANY data:image/* (including SVG, which
+    // can host JS via <script> tags inside the SVG body). This is the
+    // current contract — pinning it for review. A tighter implementation
+    // would limit to data:image/(png|jpe?g|gif|webp) only.
+    expect(safeUrl('data:image/svg+xml,<svg/>', 'image-src')).toBe('data:image/svg+xml,<svg/>');
+  });
+});

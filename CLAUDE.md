@@ -15,7 +15,7 @@ When a gap / backlog / regression-tracking file is **fully closed** (every entry
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.6.0 — see [CHANGELOG.md](CHANGELOG.md) for the full release history. Per-push gate is currently ~83 Playwright specs / ~2,680 tests + 53 backend vitest files / ~1,413 tests + 10 frontend vitest files / ~89 tests (~4,128 total) across 6 mandatory deploy gates + a separate PR pre-merge checks workflow (vite build + ESLint), with 14 reusable Claude Skills under `.claude/skills/`.
+- **Version:** v3.7.0 — see [CHANGELOG.md](CHANGELOG.md) for the full release history. Per-push gate is currently ~83 Playwright specs / ~2,680 tests + 53 backend vitest files / ~1,413 tests + 10 frontend vitest files / ~89 tests (~4,128 total) across 6 mandatory deploy gates + a separate PR pre-merge checks workflow (vite build + ESLint), with 14 reusable Claude Skills under `.claude/skills/`.
 - **Branch:** main (single-branch workflow)
 - **Deploy:** GitHub Actions auto-deploy on push to main ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) — health-check + rollback to HEAD~1 on fail. Local `ssh_deploy_*.py` scripts are legacy.
 

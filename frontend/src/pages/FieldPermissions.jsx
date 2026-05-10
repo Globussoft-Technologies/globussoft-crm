@@ -1,8 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Shield, Eye, EyeOff, Edit, Save, Check } from 'lucide-react';
+import { Shield, Eye, EyeOff, Edit, Save, Check, Grid3X3, ListChecks } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
 const ROLES = ['ADMIN', 'MANAGER', 'USER'];
+// PRD Gap §1.3 — module × action permissions matrix. Modules with field='*'
+// only (no per-field gates) are rendered in the matrix view; entities with
+// real fields keep their existing per-field view.
+const ACTIONS = ['READ', 'WRITE', 'DELETE', 'EXPORT'];
+// All roles supported by the backend (RBAC + wellness sub-roles). The matrix
+// view exposes them as columns; the per-field view stays on the canonical
+// RBAC trio because field-level rules pre-date the wellness sub-roles.
+const MATRIX_ROLES = ['ADMIN', 'MANAGER', 'USER', 'doctor', 'professional', 'telecaller', 'helper'];
 
 // Fallback used if /entities endpoint is unreachable — keeps the UI usable.
 const FALLBACK_ENTITIES = {
@@ -10,19 +18,35 @@ const FALLBACK_ENTITIES = {
   Contact: ['name', 'email', 'phone', 'company', 'title', 'status', 'source', 'aiScore', 'industry', 'linkedin'],
   Invoice: ['amount', 'status', 'dueDate'],
   Quote: ['totalAmount', 'mrr', 'status'],
+  Patient: ['*'],
+  Visit: ['*'],
+  Prescription: ['*'],
+  ConsentForm: ['*'],
+  Staff: ['*'],
+  Settings: ['*'],
+  Audit: ['*'],
+  Reports: ['*'],
 };
 
 const roleColors = {
   ADMIN: '#a855f7',
   MANAGER: '#3b82f6',
   USER: '#22c55e',
+  doctor: '#0ea5e9',
+  professional: '#10b981',
+  telecaller: '#f59e0b',
+  helper: '#6b7280',
 };
 
 export default function FieldPermissions() {
+  // 'fields' (legacy per-field view) | 'matrix' (PRD Gap §1.3 module×action view)
+  const [view, setView] = useState('fields');
   const [entities, setEntities] = useState(FALLBACK_ENTITIES);
   const [activeEntity, setActiveEntity] = useState('Deal');
-  // matrix[entity][role][field] = { canRead, canWrite }
+  // matrix[entity][role][field] = { canRead, canWrite }  — for fields view
   const [matrix, setMatrix] = useState({});
+  // moduleMatrix[module][role][action] = { canRead, canWrite } — for matrix view
+  const [moduleMatrix, setModuleMatrix] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
@@ -63,6 +87,10 @@ export default function FieldPermissions() {
         Object.keys(grouped).forEach((entity) => {
           if (!m[entity]) return;
           (grouped[entity] || []).forEach((rule) => {
+            // Skip rules with action != 'WRITE' here — the per-field tab
+            // operates on the legacy WRITE bucket. Action-axis rules are
+            // managed via the Module × Action matrix view.
+            if (rule.action && rule.action !== 'WRITE') return;
             if (!m[entity][rule.role]) return;
             if (!m[entity][rule.role][rule.field]) return;
             m[entity][rule.role][rule.field] = {
@@ -73,13 +101,37 @@ export default function FieldPermissions() {
         });
       }
       setMatrix(m);
+
+      // PRD Gap §1.3 — load the module × action × role topology.
+      try {
+        const mm = await fetchApi('/api/field-permissions/matrix');
+        if (mm && typeof mm === 'object') setModuleMatrix(mm);
+        else setModuleMatrix(buildDefaultModuleMatrix(entityMap));
+      } catch {
+        setModuleMatrix(buildDefaultModuleMatrix(entityMap));
+      }
     } catch (e) {
       console.error(e);
       setError(e.message || 'Failed to load field permissions');
       setMatrix(buildDefaultMatrix(FALLBACK_ENTITIES));
+      setModuleMatrix(buildDefaultModuleMatrix(FALLBACK_ENTITIES));
     } finally {
       setLoading(false);
     }
+  };
+
+  const buildDefaultModuleMatrix = (entityMap) => {
+    const mm = {};
+    Object.keys(entityMap).forEach((entity) => {
+      mm[entity] = {};
+      MATRIX_ROLES.forEach((role) => {
+        mm[entity][role] = {};
+        ACTIONS.forEach((action) => {
+          mm[entity][role][action] = { canRead: true, canWrite: true };
+        });
+      });
+    });
+    return mm;
   };
 
   useEffect(() => { loadAll(); }, []);
@@ -106,14 +158,35 @@ export default function FieldPermissions() {
 
   const buildRulesPayload = () => {
     const rules = [];
+    // Per-field rules — action='WRITE' bucket (legacy semantics).
     Object.keys(matrix).forEach((entity) => {
       Object.keys(matrix[entity] || {}).forEach((role) => {
         Object.keys(matrix[entity][role] || {}).forEach((field) => {
+          // Skip the synthetic '*' field — module-level rules are emitted
+          // from the moduleMatrix block below with the action axis.
+          if (field === '*') return;
           const cell = matrix[entity][role][field];
           rules.push({
             role,
             entity,
             field,
+            action: 'WRITE',
+            canRead: Boolean(cell.canRead),
+            canWrite: Boolean(cell.canWrite),
+          });
+        });
+      });
+    });
+    // Module × action rules — field='*' marker, all 4 actions.
+    Object.keys(moduleMatrix).forEach((entity) => {
+      Object.keys(moduleMatrix[entity] || {}).forEach((role) => {
+        Object.keys(moduleMatrix[entity][role] || {}).forEach((action) => {
+          const cell = moduleMatrix[entity][role][action];
+          rules.push({
+            role,
+            entity,
+            field: '*',
+            action,
             canRead: Boolean(cell.canRead),
             canWrite: Boolean(cell.canWrite),
           });
@@ -121,6 +194,27 @@ export default function FieldPermissions() {
       });
     });
     return rules;
+  };
+
+  // For the matrix view: each cell is a single allow/deny toggle. READ uses
+  // canRead, all other actions use canWrite. Helper to read/write the
+  // effective single-bit per cell.
+  const matrixCellAllowed = (entity, role, action) => {
+    const cell = moduleMatrix[entity]?.[role]?.[action] || { canRead: true, canWrite: true };
+    return action === 'READ' ? cell.canRead : cell.canWrite;
+  };
+
+  const flipMatrixCell = (entity, role, action) => {
+    setModuleMatrix((prev) => {
+      const next = { ...prev };
+      const cell = (next[entity]?.[role]?.[action]) || { canRead: true, canWrite: true };
+      const newVal = !(action === 'READ' ? cell.canRead : cell.canWrite);
+      const updated = action === 'READ'
+        ? { ...cell, canRead: newVal }
+        : { ...cell, canWrite: newVal };
+      next[entity] = { ...next[entity], [role]: { ...next[entity][role], [action]: updated } };
+      return next;
+    });
   };
 
   const save = async () => {
@@ -182,6 +276,109 @@ export default function FieldPermissions() {
         </div>
       )}
 
+      {/* PRD Gap §1.3 — view toggle: per-field (legacy) vs module × action matrix. */}
+      <div style={{ display: 'inline-flex', background: 'var(--glass-bg)', border: '1px solid var(--glass-border)', borderRadius: '10px', padding: '0.3rem', marginBottom: '1rem' }}>
+        <button
+          onClick={() => setView('fields')}
+          data-testid="fp-view-fields"
+          className={view === 'fields' ? 'btn-primary' : ''}
+          style={{ padding: '0.45rem 0.9rem', borderRadius: '7px', background: view === 'fields' ? undefined : 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+        >
+          <ListChecks size={14} /> Per-field
+        </button>
+        <button
+          onClick={() => setView('matrix')}
+          data-testid="fp-view-matrix"
+          className={view === 'matrix' ? 'btn-primary' : ''}
+          style={{ padding: '0.45rem 0.9rem', borderRadius: '7px', background: view === 'matrix' ? undefined : 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+        >
+          <Grid3X3 size={14} /> Module × action
+        </button>
+      </div>
+
+      {/* Module × action matrix view */}
+      {view === 'matrix' && (
+        <div className="card" style={{ padding: 0, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }} data-testid="fp-matrix-table">
+            <thead>
+              <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <th style={{ ...th, width: 130 }}>Module</th>
+                <th style={{ ...th, width: 120 }}>Role</th>
+                {ACTIONS.map((a) => (
+                  <th key={a} style={{ ...th, textAlign: 'center' }}>{a}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.keys(moduleMatrix).map((entity) => (
+                MATRIX_ROLES.map((role, ri) => (
+                  <tr key={`${entity}-${role}`} style={{ borderTop: ri === 0 ? '2px solid var(--border-color)' : '1px solid var(--border-color)' }}>
+                    {ri === 0 && (
+                      <td rowSpan={MATRIX_ROLES.length} style={{ ...td, fontWeight: 600, verticalAlign: 'top' }}>
+                        {entity}
+                      </td>
+                    )}
+                    <td style={td}>
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '0.2rem 0.55rem',
+                        borderRadius: '999px',
+                        border: `1px solid ${roleColors[role] || '#888'}`,
+                        color: roleColors[role] || 'var(--text-secondary)',
+                        fontSize: '0.72rem',
+                        textTransform: role === 'ADMIN' || role === 'MANAGER' || role === 'USER' ? 'uppercase' : 'capitalize',
+                        letterSpacing: '0.04em',
+                      }}>{role}</span>
+                    </td>
+                    {ACTIONS.map((action) => {
+                      const allowed = matrixCellAllowed(entity, role, action);
+                      const isAdmin = role === 'ADMIN';
+                      return (
+                        <td key={action} style={{ ...td, textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => !isAdmin && flipMatrixCell(entity, role, action)}
+                            disabled={isAdmin}
+                            data-testid={`fp-cell-${entity}-${role}-${action}`}
+                            title={isAdmin ? 'ADMIN bypass: implicit allow' : (allowed ? 'Allowed (click to deny)' : 'Denied (click to allow)')}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.3rem',
+                              padding: '0.25rem 0.6rem',
+                              borderRadius: '6px',
+                              background: isAdmin
+                                ? 'rgba(168,85,247,0.15)'
+                                : allowed
+                                  ? 'rgba(34,197,94,0.18)'
+                                  : 'rgba(239,68,68,0.18)',
+                              border: isAdmin
+                                ? '1px solid #a855f7'
+                                : allowed
+                                  ? '1px solid #22c55e'
+                                  : '1px solid #ef4444',
+                              color: isAdmin ? '#a855f7' : (allowed ? '#22c55e' : '#ef4444'),
+                              cursor: isAdmin ? 'not-allowed' : 'pointer',
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              opacity: isAdmin ? 0.7 : 1,
+                            }}
+                          >
+                            {isAdmin ? '∞' : (allowed ? 'Allow' : 'Deny')}
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {view === 'fields' && (
+      <>
       {/* Entity selector tabs */}
       <div style={{
         display: 'inline-flex',
@@ -288,6 +485,8 @@ export default function FieldPermissions() {
         </span>
         <span>Revoking Read automatically revokes Write for that cell.</span>
       </div>
+      </>
+      )}
     </div>
   );
 }

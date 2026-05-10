@@ -846,6 +846,19 @@ function renderWellnessNav({
           <Link to="/wellness/inventory-adjustments" icon={Receipt} label="Adjustments" managerOnly />
           <Link to="/wellness/auto-consumption-rules" icon={Recycle} label="Auto-consumption" managerOnly />
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
+          {/* PRD Gap §1.5 / §1.6 — wellness admins also manage payroll. */}
+          <Link
+            to="/commission-profiles"
+            icon={Award}
+            label="Commission Profiles"
+            adminOnly
+          />
+          <Link
+            to="/revenue-goals"
+            icon={Target}
+            label="Revenue Goals"
+            adminOnly
+          />
           <Link to="/channels" icon={Radio} label="Channels" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
@@ -994,6 +1007,19 @@ function renderGenericNav({
             to="/field-permissions"
             icon={Shield}
             label="Field Permissions"
+            adminOnly
+          />
+          {/* PRD Gap §1.5 / §1.6 — Commission profiles + revenue goals admin pages. */}
+          <Link
+            to="/commission-profiles"
+            icon={Award}
+            label="Commission Profiles"
+            adminOnly
+          />
+          <Link
+            to="/revenue-goals"
+            icon={Target}
+            label="Revenue Goals"
             adminOnly
           />
           <Link to="/channels" icon={Radio} label="Channels" adminOnly />

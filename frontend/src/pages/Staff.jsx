@@ -80,8 +80,24 @@ export default function Staff() {
   // wellnessRole } when an admin clicked Edit on a row.
   const [editing, setEditing] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  // PRD Gap §1.5 — commission profiles are listed in the edit modal as a
+  // dropdown so admins can assign payroll rules per staff member.
+  const [commissionProfiles, setCommissionProfiles] = useState([]);
 
-  useEffect(() => { loadStaff(); }, []);
+  useEffect(() => { loadStaff(); loadCommissionProfiles(); }, []);
+
+  const loadCommissionProfiles = async () => {
+    if (!canManageStaff) return;
+    try {
+      const data = await fetchApi('/api/staff/commission-profiles');
+      setCommissionProfiles(Array.isArray(data) ? data.filter((p) => p.isActive !== false) : []);
+    } catch {
+      // Non-fatal — the dropdown just shows "(none)" + the assigned profile
+      // is preserved on save because we only send commissionProfileId when
+      // it actually changed.
+      setCommissionProfiles([]);
+    }
+  };
 
   const loadStaff = async () => {
     try {
@@ -112,6 +128,8 @@ export default function Staff() {
       email: member.email || '',
       role: member.role || 'USER',
       wellnessRole: member.wellnessRole || '',
+      // PRD Gap §1.5 — current commission-profile assignment (null = unassigned).
+      commissionProfileId: member.commissionProfileId == null ? '' : String(member.commissionProfileId),
     });
   };
 
@@ -128,6 +146,8 @@ export default function Staff() {
           // Send null (not '') when wellnessRole is cleared so the backend
           // can clear the column rather than reject an empty string.
           wellnessRole: editing.wellnessRole || null,
+          // PRD Gap §1.5 — number or null. '' becomes null (clear assignment).
+          commissionProfileId: editing.commissionProfileId === '' ? null : Number(editing.commissionProfileId),
         }),
       });
       notify.success('Staff member updated.');
@@ -510,6 +530,22 @@ export default function Staff() {
                   <option value="telecaller">Telecaller</option>
                   <option value="helper">Helper</option>
                   <option value="stylist">Stylist</option>
+                </select>
+              </label>
+              {/* PRD Gap §1.5 — assign a commission profile. Empty = no profile. */}
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Commission profile <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(optional)</span>
+                <select
+                  className="input-field"
+                  value={editing.commissionProfileId}
+                  onChange={(e) => setEditing({ ...editing, commissionProfileId: e.target.value })}
+                  data-testid="staff-edit-commission-profile"
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                >
+                  <option value="">— None —</option>
+                  {commissionProfiles.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
                 </select>
               </label>
             </div>

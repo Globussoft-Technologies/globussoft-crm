@@ -14,6 +14,7 @@ const {
   getFieldPermissions,
   filterReadFields,
   filterWriteFields,
+  hasModuleAction,
   clearCache,
 } = require('../../middleware/fieldFilter.js');
 
@@ -81,11 +82,14 @@ describe('getFieldPermissions', () => {
     expect(findManyMock).toHaveBeenCalledTimes(2);
   });
 
-  test('defaults tenantId to 1 when missing', async () => {
+  test('defaults tenantId to 1 + action to WRITE when missing', async () => {
     findManyMock.mockResolvedValueOnce([]);
     await getFieldPermissions('USER', 'Deal');
     expect(findManyMock).toHaveBeenCalledWith({
-      where: { role: 'USER', entity: 'Deal', tenantId: 1 },
+      // PRD Gap §1.3 — action axis. Default is "WRITE" (the legacy bucket)
+      // so existing call sites without an action argument keep the same
+      // semantics as before the action column was added.
+      where: { role: 'USER', entity: 'Deal', tenantId: 1, action: 'WRITE' },
     });
   });
 
@@ -203,5 +207,94 @@ describe('filterWriteFields', () => {
     const payload = { name: 'Acme', salary: 1, notes: 'x' };
     const out = await filterWriteFields(payload, 'USER', 'Deal', 1);
     expect(out).toEqual(payload);
+  });
+});
+
+// PRD Gap §1.3 — module × action permissions. hasModuleAction() is the
+// gate every route handler can call instead of (or in addition to) the
+// per-field filterReadFields / filterWriteFields helpers above.
+describe('hasModuleAction', () => {
+  test('returns false when user is null', async () => {
+    expect(await hasModuleAction(null, 'Deal', 'DELETE')).toBe(false);
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+
+  test('ADMIN bypasses every action without DB hit', async () => {
+    const admin = { role: 'ADMIN', tenantId: 1 };
+    expect(await hasModuleAction(admin, 'Deal', 'READ')).toBe(true);
+    expect(await hasModuleAction(admin, 'Deal', 'WRITE')).toBe(true);
+    expect(await hasModuleAction(admin, 'Deal', 'DELETE')).toBe(true);
+    expect(await hasModuleAction(admin, 'Deal', 'EXPORT')).toBe(true);
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+
+  test('MANAGER bypasses READ + WRITE but not DELETE/EXPORT', async () => {
+    const manager = { role: 'MANAGER', tenantId: 1 };
+    expect(await hasModuleAction(manager, 'Deal', 'READ')).toBe(true);
+    expect(await hasModuleAction(manager, 'Deal', 'WRITE')).toBe(true);
+    expect(findManyMock).not.toHaveBeenCalled();
+    findManyMock.mockResolvedValueOnce([]);
+    expect(await hasModuleAction(manager, 'Deal', 'DELETE')).toBe(true); // default-allow
+    findManyMock.mockResolvedValueOnce([
+      { field: '*', action: 'EXPORT', canRead: true, canWrite: false },
+    ]);
+    expect(await hasModuleAction(manager, 'Deal', 'EXPORT')).toBe(false);
+  });
+
+  test('USER default-allows when no rule exists for (role, module, action)', async () => {
+    findManyMock.mockResolvedValueOnce([]);
+    expect(
+      await hasModuleAction({ role: 'USER', tenantId: 1 }, 'Deal', 'DELETE')
+    ).toBe(true);
+  });
+
+  test('module-level rule (field=*) is authoritative', async () => {
+    findManyMock.mockResolvedValueOnce([
+      { field: '*', action: 'DELETE', canRead: true, canWrite: false },
+    ]);
+    expect(
+      await hasModuleAction({ role: 'USER', tenantId: 1 }, 'Deal', 'DELETE')
+    ).toBe(false);
+  });
+
+  test('per-field deny propagates to module-level when no field=* rule', async () => {
+    findManyMock.mockResolvedValueOnce([
+      { field: 'amount', action: 'WRITE', canRead: true, canWrite: false },
+    ]);
+    expect(
+      await hasModuleAction({ role: 'USER', tenantId: 1 }, 'Deal', 'WRITE')
+    ).toBe(false);
+  });
+
+  test('READ uses canRead, mutating actions use canWrite', async () => {
+    findManyMock.mockResolvedValueOnce([
+      { field: '*', action: 'READ', canRead: false, canWrite: true },
+    ]);
+    expect(
+      await hasModuleAction({ role: 'USER', tenantId: 1 }, 'Patient', 'READ')
+    ).toBe(false);
+    findManyMock.mockResolvedValueOnce([
+      { field: '*', action: 'WRITE', canRead: false, canWrite: true },
+    ]);
+    expect(
+      await hasModuleAction({ role: 'USER', tenantId: 1 }, 'Patient', 'WRITE')
+    ).toBe(true);
+  });
+
+  test('DB error fails open (preserves availability of historically-open routes)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    findManyMock.mockRejectedValueOnce(new Error('DB down'));
+    expect(
+      await hasModuleAction({ role: 'USER', tenantId: 1 }, 'Deal', 'DELETE')
+    ).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  test('unknown action falls back to WRITE bucket', async () => {
+    findManyMock.mockResolvedValueOnce([]);
+    await hasModuleAction({ role: 'USER', tenantId: 1 }, 'Deal', 'BOGUS');
+    expect(findManyMock).toHaveBeenCalledWith({
+      where: { role: 'USER', entity: 'Deal', tenantId: 1, action: 'WRITE' },
+    });
   });
 });

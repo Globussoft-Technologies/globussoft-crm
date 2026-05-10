@@ -11,15 +11,34 @@ const { clearCache: clearFieldFilterCache } = require("../middleware/fieldFilter
 
 const tenantId = (req) => req.user?.tenantId || 1;
 
-// Supported entities + fields registry
+// Supported entities + fields registry. The synthetic '*' field is the
+// module-level marker used by hasModuleAction() — never exposed in the
+// per-field UI but accepted here so the bulk-update can ship module-level
+// rules as a single row alongside the per-field ones.
 const ENTITY_FIELDS = {
   Deal: ["title", "amount", "currency", "probability", "stage", "expectedClose", "ownerId", "lostReason"],
   Contact: ["name", "email", "phone", "company", "title", "status", "source", "aiScore", "industry", "linkedin"],
   Invoice: ["amount", "status", "dueDate"],
   Quote: ["totalAmount", "mrr", "status"],
+  // PRD Gap §1.3 — wellness + admin modules added so the module×action matrix
+  // covers the full surface a clinic operator cares about. These have only
+  // the synthetic '*' field today (module-level) since we don't expose
+  // per-field gates for them yet; the matrix UI renders just the action row.
+  Patient: ["*"],
+  Visit: ["*"],
+  Prescription: ["*"],
+  ConsentForm: ["*"],
+  Staff: ["*"],
+  Settings: ["*"],
+  Audit: ["*"],
+  Reports: ["*"],
 };
 
-const SUPPORTED_ROLES = ["ADMIN", "MANAGER", "USER"];
+const SUPPORTED_ROLES = ["ADMIN", "MANAGER", "USER", "doctor", "professional", "telecaller", "helper", "stylist"];
+
+// PRD Gap §1.3 — supported actions. WRITE is the legacy default (preserves
+// the existing canWrite-as-permission semantics).
+const SUPPORTED_ACTIONS = ["READ", "WRITE", "DELETE", "EXPORT"];
 
 // #574 (CRIT-10): admin-only across the board. The matrix lets a USER read
 // the per-role permission topology (canRead/canWrite for ADMIN/MANAGER/USER
@@ -32,20 +51,27 @@ router.get("/entities", ...adminOnly, async (_req, res) => {
   res.json(ENTITY_FIELDS);
 });
 
-// GET /api/field-permissions/effective?role=USER&entity=Deal
-// Returns { field: { canRead, canWrite } } — defaults to full access when no rule exists
+// GET /api/field-permissions/effective?role=USER&entity=Deal&action=WRITE
+// Returns { field: { canRead, canWrite } } — defaults to full access when no rule exists.
+// action defaults to "WRITE" (the legacy bucket) for back-compat with callers that
+// don't know about the action axis yet.
 router.get("/effective", ...adminOnly, async (req, res) => {
   try {
-    const role = String(req.query.role || "").toUpperCase();
+    const roleRaw = String(req.query.role || "");
+    const role = SUPPORTED_ROLES.includes(roleRaw) ? roleRaw : roleRaw.toUpperCase();
     const entity = String(req.query.entity || "");
+    const action = String(req.query.action || "WRITE").toUpperCase();
     if (!SUPPORTED_ROLES.includes(role)) {
       return res.status(400).json({ error: "Invalid role" });
     }
     if (!ENTITY_FIELDS[entity]) {
       return res.status(400).json({ error: "Unsupported entity" });
     }
+    if (!SUPPORTED_ACTIONS.includes(action)) {
+      return res.status(400).json({ error: "Invalid action" });
+    }
     const rules = await prisma.fieldPermission.findMany({
-      where: { role, entity, tenantId: tenantId(req) },
+      where: { role, entity, action, tenantId: tenantId(req) },
     });
     const ruleByField = {};
     rules.forEach((r) => {
@@ -59,6 +85,41 @@ router.get("/effective", ...adminOnly, async (req, res) => {
   } catch (err) {
     console.error("[FieldPermissions][effective]", err);
     res.status(500).json({ error: "Failed to compute effective permissions" });
+  }
+});
+
+// GET /api/field-permissions/actions — registry of supported actions
+router.get("/actions", ...adminOnly, async (_req, res) => {
+  res.json({ actions: SUPPORTED_ACTIONS, roles: SUPPORTED_ROLES });
+});
+
+// GET /api/field-permissions/matrix — full module × action × role topology.
+// Returns { [module]: { [role]: { [action]: { canRead, canWrite } } } }
+// for every supported (module, role, action) triple. Defaults missing rules
+// to { canRead: true, canWrite: true } (default-allow). Admin only.
+router.get("/matrix", ...adminOnly, async (req, res) => {
+  try {
+    const tid = tenantId(req);
+    const rules = await prisma.fieldPermission.findMany({
+      where: { tenantId: tid, field: "*" },
+    });
+    const out = {};
+    Object.keys(ENTITY_FIELDS).forEach((entity) => {
+      out[entity] = {};
+      SUPPORTED_ROLES.forEach((role) => {
+        out[entity][role] = {};
+        SUPPORTED_ACTIONS.forEach((action) => {
+          const hit = rules.find((r) => r.entity === entity && r.role === role && r.action === action);
+          out[entity][role][action] = hit
+            ? { canRead: hit.canRead, canWrite: hit.canWrite }
+            : { canRead: true, canWrite: true };
+        });
+      });
+    });
+    res.json(out);
+  } catch (err) {
+    console.error("[FieldPermissions][matrix]", err);
+    res.status(500).json({ error: "Failed to fetch module matrix" });
   }
 });
 
@@ -87,15 +148,28 @@ router.get("/", ...adminOnly, async (req, res) => {
   }
 });
 
-// POST /api/field-permissions — upsert a single rule (admin only)
+// Helper: normalize role — keep wellness sub-roles lowercase, RBAC roles uppercase.
+function normalizeRole(role) {
+  if (!role) return null;
+  const r = String(role);
+  // Try exact match first (handles "doctor" / "telecaller" etc.).
+  if (SUPPORTED_ROLES.includes(r)) return r;
+  const up = r.toUpperCase();
+  if (SUPPORTED_ROLES.includes(up)) return up;
+  return null;
+}
+
+// POST /api/field-permissions — upsert a single rule (admin only).
+// Body now optionally accepts `action` (defaults to "WRITE" for back-compat).
 router.post("/", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { role, entity, field, canRead, canWrite } = req.body || {};
+    const action = String(req.body?.action || "WRITE").toUpperCase();
     if (!role || !entity || !field) {
       return res.status(400).json({ error: "role, entity and field are required" });
     }
-    const roleUp = String(role).toUpperCase();
-    if (!SUPPORTED_ROLES.includes(roleUp)) {
+    const normalizedRole = normalizeRole(role);
+    if (!normalizedRole) {
       return res.status(400).json({ error: "Invalid role" });
     }
     if (!ENTITY_FIELDS[entity]) {
@@ -104,13 +178,17 @@ router.post("/", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
     if (!ENTITY_FIELDS[entity].includes(field)) {
       return res.status(400).json({ error: `Field '${field}' is not supported on ${entity}` });
     }
+    if (!SUPPORTED_ACTIONS.includes(action)) {
+      return res.status(400).json({ error: "Invalid action" });
+    }
     const tid = tenantId(req);
     const rule = await prisma.fieldPermission.upsert({
       where: {
-        role_entity_field_tenantId: {
-          role: roleUp,
+        role_entity_field_action_tenantId: {
+          role: normalizedRole,
           entity,
           field,
+          action,
           tenantId: tid,
         },
       },
@@ -119,9 +197,10 @@ router.post("/", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
         canWrite: canWrite !== undefined ? Boolean(canWrite) : undefined,
       },
       create: {
-        role: roleUp,
+        role: normalizedRole,
         entity,
         field,
+        action,
         canRead: canRead !== undefined ? Boolean(canRead) : true,
         canWrite: canWrite !== undefined ? Boolean(canWrite) : true,
         tenantId: tid,
@@ -147,26 +226,28 @@ router.post("/bulk-update", verifyToken, verifyRole(["ADMIN"]), async (req, res)
     const errors = [];
 
     for (const raw of rules) {
-      const roleUp = String(raw.role || "").toUpperCase();
+      const normalizedRole = normalizeRole(raw.role);
       const entity = raw.entity;
       const field = raw.field;
-      if (!SUPPORTED_ROLES.includes(roleUp) || !ENTITY_FIELDS[entity] || !ENTITY_FIELDS[entity].includes(field)) {
-        errors.push({ role: roleUp, entity, field, error: "invalid role/entity/field" });
+      const action = String(raw.action || "WRITE").toUpperCase();
+      if (!normalizedRole || !ENTITY_FIELDS[entity] || !ENTITY_FIELDS[entity].includes(field) || !SUPPORTED_ACTIONS.includes(action)) {
+        errors.push({ role: raw.role, entity, field, action, error: "invalid role/entity/field/action" });
         continue;
       }
       try {
         const rule = await prisma.fieldPermission.upsert({
           where: {
-            role_entity_field_tenantId: { role: roleUp, entity, field, tenantId: tid },
+            role_entity_field_action_tenantId: { role: normalizedRole, entity, field, action, tenantId: tid },
           },
           update: {
             canRead: Boolean(raw.canRead),
             canWrite: Boolean(raw.canWrite),
           },
           create: {
-            role: roleUp,
+            role: normalizedRole,
             entity,
             field,
+            action,
             canRead: Boolean(raw.canRead),
             canWrite: Boolean(raw.canWrite),
             tenantId: tid,
@@ -175,7 +256,7 @@ router.post("/bulk-update", verifyToken, verifyRole(["ADMIN"]), async (req, res)
         results.push(rule);
       } catch (e) {
         console.error("[FieldPermissions][bulk][row]", e);
-        errors.push({ role: roleUp, entity, field, error: e.message });
+        errors.push({ role: normalizedRole, entity, field, action, error: e.message });
       }
     }
 
@@ -235,3 +316,4 @@ router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 module.exports = router;
 module.exports.ENTITY_FIELDS = ENTITY_FIELDS;
 module.exports.SUPPORTED_ROLES = SUPPORTED_ROLES;
+module.exports.SUPPORTED_ACTIONS = SUPPORTED_ACTIONS;

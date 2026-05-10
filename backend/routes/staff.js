@@ -69,6 +69,9 @@ router.get("/", async (req, res) => {
         // dropdown was empty because this field wasn't returned and the
         // frontend filter `u.wellnessRole === 'doctor'` matched nothing.
         wellnessRole: true,
+        // PRD Gap §1.5 — assigned commission profile (FK, nullable). Frontend
+        // dropdown reads this to show the current assignment.
+        commissionProfileId: true,
         createdAt: true,
         // #618 — surface deactivatedAt so the directory can flag inactive rows
         // (UI renders an "Inactive" badge; the row stays in the list so an
@@ -135,7 +138,7 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
     const target = await prisma.user.findFirst({ where: { id: userId, tenantId: req.user.tenantId } });
     if (!target) return res.status(404).json({ error: "User not found." });
 
-    const { name, email, role, wellnessRole } = req.body || {};
+    const { name, email, role, wellnessRole, commissionProfileId } = req.body || {};
     const data = {};
     const changed = {};
 
@@ -169,6 +172,22 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
         changed.wellnessRole = { from: target.wellnessRole, to: wellnessRole };
       }
     }
+    // PRD Gap §1.5 — assign / clear a commission profile.
+    if (commissionProfileId !== undefined) {
+      const next = commissionProfileId == null || commissionProfileId === "" ? null : parseInt(commissionProfileId, 10);
+      if (next !== null && (!Number.isInteger(next) || next <= 0)) {
+        return res.status(400).json({ error: "Invalid commissionProfileId." });
+      }
+      if (next !== null) {
+        // Verify the profile belongs to the same tenant.
+        const profile = await prisma.commissionProfile.findFirst({ where: { id: next, tenantId: req.user.tenantId } });
+        if (!profile) return res.status(404).json({ error: "Commission profile not found." });
+      }
+      if (next !== target.commissionProfileId) {
+        data.commissionProfileId = next;
+        changed.commissionProfileId = { from: target.commissionProfileId, to: next };
+      }
+    }
 
     if (Object.keys(data).length === 0) {
       // No-op edit — return current row without writing audit.
@@ -178,6 +197,7 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
         name: target.name,
         role: target.role,
         wellnessRole: target.wellnessRole,
+        commissionProfileId: target.commissionProfileId,
         createdAt: target.createdAt,
         deactivatedAt: target.deactivatedAt,
       });
@@ -194,6 +214,7 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
           name: true,
           role: true,
           wellnessRole: true,
+          commissionProfileId: true,
           createdAt: true,
           deactivatedAt: true,
         },
@@ -251,6 +272,7 @@ router.patch("/:id", verifyRole(["ADMIN"]), async (req, res) => {
         name: true,
         role: true,
         wellnessRole: true,
+        commissionProfileId: true,
         createdAt: true,
         deactivatedAt: true,
       },
@@ -374,6 +396,343 @@ router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
+// ───────────────────────────────────────────────────────────────────
+// PRD Gap §1.5 — Commission profiles
+//
+// Tenant-scoped commission rule sets. Mounted under /api/staff/commission-
+// profiles. ADMIN-only (mirrors the staff edit/delete endpoints — payroll
+// rules are sensitive). The User.commissionProfileId FK is set via the
+// PUT /api/staff/:id endpoint above (we extended its data block to accept
+// `commissionProfileId`); CRUD here only manages the profile rows.
+// ───────────────────────────────────────────────────────────────────
+
+const VALID_COMMISSION_BASIS = ["PER_SERVICE", "PER_PRODUCT", "REVENUE_PERCENT", "FLAT_PER_INVOICE"];
+
+function validateCommissionBody(body, { partial = false } = {}) {
+  const errors = [];
+  if (!partial || body.name !== undefined) {
+    if (typeof body.name !== "string" || !body.name.trim()) errors.push("name is required");
+  }
+  if (body.basis !== undefined && !VALID_COMMISSION_BASIS.includes(body.basis)) {
+    errors.push(`basis must be one of: ${VALID_COMMISSION_BASIS.join(", ")}`);
+  }
+  // percentage / flatAmount: at least one is required on create. Validate ranges.
+  const pct = body.percentage;
+  const flat = body.flatAmount;
+  if (pct !== undefined && pct !== null) {
+    const n = Number(pct);
+    if (!Number.isFinite(n) || n < 0 || n > 100) errors.push("percentage must be 0..100");
+  }
+  if (flat !== undefined && flat !== null) {
+    const n = Number(flat);
+    if (!Number.isFinite(n) || n < 0) errors.push("flatAmount must be >= 0");
+  }
+  if (!partial && (pct == null || pct === "") && (flat == null || flat === "")) {
+    errors.push("either percentage or flatAmount must be set");
+  }
+  return errors;
+}
+
+// GET /commission-profiles — list (admin only)
+router.get("/commission-profiles", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const rows = await prisma.commissionProfile.findMany({
+      where: { tenantId: req.user.tenantId },
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error("[staff][commission-profiles][list]", err);
+    res.status(500).json({ error: "Failed to fetch commission profiles." });
+  }
+});
+
+// POST /commission-profiles — create (admin only)
+router.post("/commission-profiles", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const errors = validateCommissionBody(req.body || {}, { partial: false });
+    if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+
+    const { name, percentage, flatAmount, basis, appliesToCategory, isActive } = req.body;
+    const row = await prisma.commissionProfile.create({
+      data: {
+        tenantId: req.user.tenantId,
+        name: String(name).trim(),
+        percentage: percentage == null || percentage === "" ? null : String(percentage),
+        flatAmount: flatAmount == null || flatAmount === "" ? null : String(flatAmount),
+        basis: basis || "REVENUE_PERCENT",
+        appliesToCategory: appliesToCategory || null,
+        isActive: isActive === false ? false : true,
+      },
+    });
+    await writeAudit("CommissionProfile", "CREATE", row.id, req.user.userId, req.user.tenantId, {
+      name: row.name, basis: row.basis,
+    });
+    res.status(201).json(row);
+  } catch (err) {
+    if (err.code === "P2002") return res.status(409).json({ error: "A commission profile with that name already exists." });
+    console.error("[staff][commission-profiles][create]", err);
+    res.status(500).json({ error: "Failed to create commission profile." });
+  }
+});
+
+// PUT /commission-profiles/:id — update (admin only)
+router.put("/commission-profiles/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id." });
+    const existing = await prisma.commissionProfile.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Commission profile not found." });
+
+    const errors = validateCommissionBody(req.body || {}, { partial: true });
+    if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+
+    const { name, percentage, flatAmount, basis, appliesToCategory, isActive } = req.body || {};
+    const data = {};
+    if (name !== undefined) data.name = String(name).trim();
+    if (percentage !== undefined) data.percentage = percentage == null || percentage === "" ? null : String(percentage);
+    if (flatAmount !== undefined) data.flatAmount = flatAmount == null || flatAmount === "" ? null : String(flatAmount);
+    if (basis !== undefined) data.basis = basis;
+    if (appliesToCategory !== undefined) data.appliesToCategory = appliesToCategory || null;
+    if (isActive !== undefined) data.isActive = Boolean(isActive);
+
+    const row = await prisma.commissionProfile.update({ where: { id }, data });
+    await writeAudit("CommissionProfile", "UPDATE", row.id, req.user.userId, req.user.tenantId, { id });
+    res.json(row);
+  } catch (err) {
+    if (err.code === "P2002") return res.status(409).json({ error: "A commission profile with that name already exists." });
+    if (err.code === "P2025") return res.status(404).json({ error: "Commission profile not found." });
+    console.error("[staff][commission-profiles][update]", err);
+    res.status(500).json({ error: "Failed to update commission profile." });
+  }
+});
+
+// DELETE /commission-profiles/:id — delete (admin only). Cascading FK
+// nulls User.commissionProfileId on every assigned user (SetNull).
+router.delete("/commission-profiles/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id." });
+    const existing = await prisma.commissionProfile.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Commission profile not found." });
+
+    await prisma.commissionProfile.delete({ where: { id } });
+    await writeAudit("CommissionProfile", "DELETE", id, req.user.userId, req.user.tenantId, { name: existing.name });
+    res.status(204).end();
+  } catch (err) {
+    if (err.code === "P2025") return res.status(404).json({ error: "Commission profile not found." });
+    console.error("[staff][commission-profiles][delete]", err);
+    res.status(500).json({ error: "Failed to delete commission profile." });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────
+// PRD Gap §1.6 — Staff revenue goals
+//
+// Per-user, per-period revenue target. Distinct from generic Quota.
+// achievedAmount is computed on GET as SUM(Sale.total) over the period
+// where Sale.cashierId = userId AND Sale.status = 'COMPLETED'. The
+// stored achievedAmount column is kept for cron / payroll consumers
+// that don't want to re-aggregate; we update it on read so it's
+// always fresh enough for the dashboard widget.
+// ───────────────────────────────────────────────────────────────────
+
+const VALID_GOAL_PERIOD = ["MONTHLY", "QUARTERLY", "YEARLY"];
+const VALID_GOAL_SCOPE = ["ALL", "SERVICE", "PRODUCT", "MEMBERSHIP"];
+
+function validateGoalBody(body, { partial = false } = {}) {
+  const errors = [];
+  if (!partial || body.userId !== undefined) {
+    const uid = parseInt(body.userId, 10);
+    if (!Number.isInteger(uid) || uid <= 0) errors.push("userId is required (positive integer)");
+  }
+  if (body.period !== undefined && !VALID_GOAL_PERIOD.includes(body.period)) {
+    errors.push(`period must be one of: ${VALID_GOAL_PERIOD.join(", ")}`);
+  }
+  if (body.scope !== undefined && !VALID_GOAL_SCOPE.includes(body.scope)) {
+    errors.push(`scope must be one of: ${VALID_GOAL_SCOPE.join(", ")}`);
+  }
+  if (!partial || body.targetAmount !== undefined) {
+    const n = Number(body.targetAmount);
+    if (!Number.isFinite(n) || n < 0) errors.push("targetAmount must be >= 0");
+  }
+  if (!partial || body.periodStart !== undefined) {
+    const d = new Date(body.periodStart);
+    if (isNaN(d.getTime())) errors.push("periodStart must be a valid date");
+  }
+  if (!partial || body.periodEnd !== undefined) {
+    const d = new Date(body.periodEnd);
+    if (isNaN(d.getTime())) errors.push("periodEnd must be a valid date");
+  }
+  if (!partial && body.periodStart && body.periodEnd) {
+    if (new Date(body.periodStart).getTime() >= new Date(body.periodEnd).getTime()) {
+      errors.push("periodStart must be before periodEnd");
+    }
+  }
+  return errors;
+}
+
+// Compute SUM(Sale.total) for a userId in [periodStart, periodEnd]. Returns
+// a Number; 0 on empty/error so the UI can render "₹0 / ₹50,000".
+async function computeAchievedAmount(tenantId, userId, periodStart, periodEnd, scope, _scopeFilter) {
+  try {
+    const where = {
+      tenantId,
+      cashierId: userId,
+      status: "COMPLETED",
+      createdAt: { gte: periodStart, lt: periodEnd },
+    };
+    // For scope filtering, we'd join on SaleLineItem; ALL is the common case.
+    // SERVICE / PRODUCT / MEMBERSHIP narrow via lineItems.lineType match.
+    if (scope && scope !== "ALL") {
+      // Aggregate over SaleLineItem joined to Sale by sale.cashierId etc.
+      const rows = await prisma.saleLineItem.findMany({
+        where: {
+          tenantId,
+          lineType: scope,
+          sale: where,
+        },
+        select: { lineTotal: true },
+      });
+      return rows.reduce((acc, r) => acc + Number(r.lineTotal || 0), 0);
+    }
+    const agg = await prisma.sale.aggregate({
+      where,
+      _sum: { total: true },
+    });
+    return Number(agg._sum.total || 0);
+  } catch (err) {
+    console.error("[staff][revenue-goals][computeAchieved]", err);
+    return 0;
+  }
+}
+
+// GET /revenue-goals — admin sees all, USER sees only their own goals.
+router.get("/revenue-goals", async (req, res) => {
+  try {
+    const isPrivileged = req.user.role === "ADMIN" || req.user.role === "MANAGER";
+    const where = { tenantId: req.user.tenantId };
+    if (!isPrivileged) where.userId = req.user.userId;
+    if (req.query.userId) {
+      const filterUid = parseInt(req.query.userId, 10);
+      if (!isPrivileged && filterUid !== req.user.userId) {
+        return res.status(403).json({ error: "Cannot read other users' revenue goals." });
+      }
+      where.userId = filterUid;
+    }
+    const rows = await prisma.staffRevenueGoal.findMany({
+      where,
+      orderBy: [{ periodStart: "desc" }, { id: "desc" }],
+      include: { user: { select: { id: true, name: true, email: true, wellnessRole: true } } },
+    });
+
+    // Refresh achievedAmount on read.
+    const out = await Promise.all(
+      rows.map(async (g) => {
+        const achieved = await computeAchievedAmount(
+          req.user.tenantId, g.userId, g.periodStart, g.periodEnd, g.scope, g.scopeFilter
+        );
+        // Best-effort write-back; don't fail the read if it errors.
+        prisma.staffRevenueGoal
+          .update({ where: { id: g.id }, data: { achievedAmount: String(achieved) } })
+          .catch(() => {});
+        return { ...g, achievedAmount: achieved };
+      })
+    );
+    res.json(out);
+  } catch (err) {
+    console.error("[staff][revenue-goals][list]", err);
+    res.status(500).json({ error: "Failed to fetch revenue goals." });
+  }
+});
+
+// POST /revenue-goals — create (admin only)
+router.post("/revenue-goals", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const errors = validateGoalBody(req.body || {}, { partial: false });
+    if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+
+    const { userId, period, periodStart, periodEnd, targetAmount, scope, scopeFilter, notes } = req.body;
+    // Verify user belongs to this tenant.
+    const target = await prisma.user.findFirst({ where: { id: parseInt(userId, 10), tenantId: req.user.tenantId } });
+    if (!target) return res.status(404).json({ error: "Target user not found in this tenant." });
+
+    const row = await prisma.staffRevenueGoal.create({
+      data: {
+        tenantId: req.user.tenantId,
+        userId: target.id,
+        period: period || "MONTHLY",
+        periodStart: new Date(periodStart),
+        periodEnd: new Date(periodEnd),
+        targetAmount: String(targetAmount),
+        scope: scope || "ALL",
+        scopeFilter: scopeFilter || null,
+        notes: notes || null,
+      },
+    });
+    await writeAudit("StaffRevenueGoal", "CREATE", row.id, req.user.userId, req.user.tenantId, {
+      targetUserId: target.id, period: row.period, target: targetAmount,
+    });
+    res.status(201).json(row);
+  } catch (err) {
+    if (err.code === "P2002") return res.status(409).json({ error: "A goal already exists for this user / period / start." });
+    console.error("[staff][revenue-goals][create]", err);
+    res.status(500).json({ error: "Failed to create revenue goal." });
+  }
+});
+
+// PUT /revenue-goals/:id — update (admin only)
+router.put("/revenue-goals/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id." });
+    const existing = await prisma.staffRevenueGoal.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Revenue goal not found." });
+
+    const errors = validateGoalBody(req.body || {}, { partial: true });
+    if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+
+    const { period, periodStart, periodEnd, targetAmount, scope, scopeFilter, notes } = req.body || {};
+    const data = {};
+    if (period !== undefined) data.period = period;
+    if (periodStart !== undefined) data.periodStart = new Date(periodStart);
+    if (periodEnd !== undefined) data.periodEnd = new Date(periodEnd);
+    if (targetAmount !== undefined) data.targetAmount = String(targetAmount);
+    if (scope !== undefined) data.scope = scope;
+    if (scopeFilter !== undefined) data.scopeFilter = scopeFilter || null;
+    if (notes !== undefined) data.notes = notes || null;
+
+    const row = await prisma.staffRevenueGoal.update({ where: { id }, data });
+    await writeAudit("StaffRevenueGoal", "UPDATE", row.id, req.user.userId, req.user.tenantId, { id });
+    res.json(row);
+  } catch (err) {
+    if (err.code === "P2025") return res.status(404).json({ error: "Revenue goal not found." });
+    console.error("[staff][revenue-goals][update]", err);
+    res.status(500).json({ error: "Failed to update revenue goal." });
+  }
+});
+
+// DELETE /revenue-goals/:id — delete (admin only)
+router.delete("/revenue-goals/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id." });
+    const existing = await prisma.staffRevenueGoal.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Revenue goal not found." });
+
+    await prisma.staffRevenueGoal.delete({ where: { id } });
+    await writeAudit("StaffRevenueGoal", "DELETE", id, req.user.userId, req.user.tenantId, {
+      targetUserId: existing.userId, period: existing.period,
+    });
+    res.status(204).end();
+  } catch (err) {
+    if (err.code === "P2025") return res.status(404).json({ error: "Revenue goal not found." });
+    console.error("[staff][revenue-goals][delete]", err);
+    res.status(500).json({ error: "Failed to delete revenue goal." });
+  }
+});
+
 module.exports = router;
 // Test hooks — exported only for backend/test/routes/staff.test.js.
 module.exports.__testHooks = { adminResetTokens, inviteTokens };
+module.exports.__internals = { computeAchievedAmount };

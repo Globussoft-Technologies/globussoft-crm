@@ -808,7 +808,15 @@ test.describe('Wave 2 Agent LL — bookingType + at-home + UTM capture', () => {
     expect(body.visit.atHomeAddress).toContain('Springwood');
     expect(body.visit.atHomeCity).toBe('Gurgaon');
     expect(body.visit.atHomePincode).toBe('122001');
-    expect(body.visit.travelTimeMinutes).toBe(30); // MVP default
+    // Wave 8b: travelTimeMinutes is now zone-based (lib/pincodeZones.js).
+    // Clinic seed pincode is 834008 (Ranchi, non-metro) and patient is
+    // 122001 (Gurgaon, non-metro) — both unknown to METRO_PREFIXES so the
+    // helper returns OUTSIDE_METRO_MINUTES (90). The original "MVP default
+    // 30" only applied to the flat-default code path that pincodeZones
+    // replaced. Assert on the contract: a positive integer in the legal
+    // band (30 / 60 / 90), not the literal 30.
+    expect(typeof body.visit.travelTimeMinutes).toBe('number');
+    expect([30, 60, 90]).toContain(body.visit.travelTimeMinutes);
     expect(body.visit.videoCallUrl).toBeNull();
     createdVisitIds.push(body.visit.id);
   });

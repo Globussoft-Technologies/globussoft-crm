@@ -682,13 +682,20 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
 
   test('POST /whatsapp/send to non-opted-out phone is NOT rejected by opt-out gate', async ({ request }) => {
     // Use a fresh phone that's never opted out. Send may still 400 (no
-    // active config) or 500 (Meta error) — we ONLY assert it's not 422.
+    // active config), 422 OUTSIDE_24H_WINDOW (Wave 7D 24h gate — fresh
+    // phone has no inbound history), or 500 (Meta error). We ONLY assert
+    // the rejection (if any) is NOT due to the opt-out gate
+    // (CONTACT_OPTED_OUT). 422 is allowed but its `code` must not equal
+    // CONTACT_OPTED_OUT.
     const fresh = `+9199${stamp}7`;
     const res = await request.post(`${API}/whatsapp/send`, {
       headers: auth(),
       data: { to: fresh, body: 'Hello fresh contact' },
     });
-    expect(res.status()).not.toBe(422);
+    if (res.status() === 422) {
+      const body = await res.json();
+      expect(body.code).not.toBe('CONTACT_OPTED_OUT');
+    }
   });
 
   test('GET /whatsapp/opt-outs returns paginated shape', async ({ request }) => {

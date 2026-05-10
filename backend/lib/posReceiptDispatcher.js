@@ -1,21 +1,34 @@
 /**
  * POS Receipt Dispatcher — Wave 8b residual closure.
  *
+ * ────────────────────────────────────────────────────────────────────────
+ *  PURPOSE
+ * ────────────────────────────────────────────────────────────────────────
+ *
  * Subscribes to the in-process eventBus on `sale.completed` and queues
  * outbound SMS receipts for the buying patient, plus a WhatsApp receipt
  * if the patient has WhatsApp opt-in (Contact.whatsappOptIn=true on the
  * patient's matched contact, looked up by normalised phone).
  *
- * Why this lives in lib/ and not as an inline emit-and-go in pos.js:
- *   pos.js fires `sale.completed` synchronously after the create; the
- *   subscriber here runs out-of-band so a SMS/WhatsApp provider hiccup
- *   can never roll back the sale itself. Same fire-and-forget shape as
- *   `lib/autoConsumptionApplier.js`.
+ * ────────────────────────────────────────────────────────────────────────
+ *  CONTRACT
+ * ────────────────────────────────────────────────────────────────────────
  *
  * Both messages are QUEUED on SmsMessage / WhatsAppMessage rows — the
  * existing provider workers pick them up. Templates are kept short and
  * include: invoice number, total, line summary, clinic name. Localised
  * to the tenant's defaultCurrency for the total formatter.
+ *
+ * Trigger: `bus.emit('sale.completed', { payload, tenantId })` where
+ *   payload = { saleId, status: 'COMPLETED' }.
+ *
+ * Skip conditions (silent no-op, all logged via console but not thrown):
+ *   - payload.status set and !== 'COMPLETED' (refund / cancel reuses the topic)
+ *   - sale row not found by saleId+tenantId
+ *   - sale.status !== 'COMPLETED' (re-check post-fetch in case of race)
+ *   - sale.patientId is null (anonymous walk-in)
+ *   - patient row missing or has no phone
+ *   - duplicate within DEDUP_WINDOW_MIN (30 min) for same to + invoiceNumber
  *
  * Idempotency: dedup by querying the last 30 minutes of SmsMessage rows
  * for the same to + invoiceNumber substring. A second `sale.completed`
@@ -24,6 +37,41 @@
  *
  * Wire-in: `start()` is called once on server boot from server.js, after
  * the eventBus is loaded. No cron tick — purely event-driven.
+ *
+ * ────────────────────────────────────────────────────────────────────────
+ *  RATIONALE — why lib/ not inline in pos.js
+ * ────────────────────────────────────────────────────────────────────────
+ *
+ * pos.js fires `sale.completed` synchronously after the create; the
+ * subscriber here runs out-of-band so a SMS/WhatsApp provider hiccup
+ * can never roll back the sale itself. Same fire-and-forget shape as
+ * `lib/autoConsumptionApplier.js`.
+ *
+ * Alternatives considered:
+ *   (A) Direct provider call in pos.js handler — rejected because a
+ *       provider timeout would block the sale.created response.
+ *   (B) Cron poll over recently-completed sales — rejected as too
+ *       laggy; user expects receipt within seconds of payment.
+ *   (✓) eventBus subscription — fires synchronously after sale write
+ *       commits but rolls forward independently. Failures land in
+ *       error logs without rolling back the sale.
+ *
+ * ────────────────────────────────────────────────────────────────────────
+ *  TESTED + ADOPTED
+ * ────────────────────────────────────────────────────────────────────────
+ *
+ * Tested at: backend/test/lib/posReceiptDispatcher.test.js
+ *   (vitest cases for SMS template body, WhatsApp template body,
+ *    currency formatting, dedup-window probe, skip-conditions matrix)
+ *
+ * Adopted by:
+ *   - server.js — start() wired at boot when DISABLE_CRONS is unset
+ *   - routes/pos.js — emits `sale.completed` after every sale create
+ *
+ * NOT adopted by (deliberate):
+ *   - PUT /sales/:id (refund / void) — refunds do NOT emit a new receipt;
+ *     a refund-aware template should be added in a future wave if Rishu
+ *     asks. Today the dedup-window stops a re-emit on the same invoice.
  */
 const prisma = require("./prisma");
 const { bus } = require("./eventBus");
@@ -34,25 +82,55 @@ const { bus } = require("./eventBus");
 // different invoiceNumber anyway).
 const DEDUP_WINDOW_MIN = 30;
 
+/**
+ * Format an amount with a 3-letter currency symbol fallback. Uses Rs.
+ * for INR (DLT-safe) and `$` for USD; other currencies render the raw
+ * 3-letter ISO code as the prefix.
+ *
+ * @param {number|string|null|undefined} amount
+ * @param {string|null} currency  3-letter ISO code (INR / USD / etc.)
+ * @returns {string}  formatted "<symbol><amount.toFixed(2)>"
+ */
 function formatMoney(amount, currency) {
   const num = Number(amount) || 0;
   // Currency token only — the existing SMS template doesn't need locale-
-  // specific decimal grouping; consumers see "₹1234.50" or "$1234.50".
+  // specific decimal grouping; consumers see "Rs.1234.50" or "$1234.50".
   const symbol = currency === "INR" ? "Rs." : currency === "USD" ? "$" : currency || "";
   return `${symbol}${num.toFixed(2)}`;
 }
 
+/**
+ * Render the SMS body for a sale receipt. Kept short to fit a single
+ * DLT-template segment.
+ *
+ * @param {{ sale: { total:number|string, invoiceNumber:string }, patientName:string, clinicName:string, currency:string, lineCount:number }} args
+ * @returns {string}
+ */
 function composeSmsBody({ sale, patientName, clinicName, currency, lineCount }) {
   const total = formatMoney(sale.total, currency);
   return `Hi ${patientName || "there"}, thank you for your purchase at ${clinicName}! Invoice ${sale.invoiceNumber} for ${total} (${lineCount} item${lineCount === 1 ? "" : "s"}). Reach us if you have any questions.`;
 }
 
+/**
+ * Render the WhatsApp body for a sale receipt. Slightly longer than the
+ * SMS variant (no DLT length cap on WhatsApp Business API).
+ *
+ * @param {{ sale: { total:number|string, invoiceNumber:string }, patientName:string, clinicName:string, currency:string, lineCount:number }} args
+ * @returns {string}
+ */
 function composeWhatsappBody({ sale, patientName, clinicName, currency, lineCount }) {
-  // WhatsApp body can carry slightly more detail (no DLT length cap).
   const total = formatMoney(sale.total, currency);
   return `Hi ${patientName || "there"}, your purchase at ${clinicName} is confirmed. Invoice ${sale.invoiceNumber} • Total ${total} • ${lineCount} item${lineCount === 1 ? "" : "s"}. Thank you!`;
 }
 
+/**
+ * Dispatch SMS + (conditionally) WhatsApp receipts for a single sale.
+ * Exported so the vitest unit can drive it directly without booting
+ * the eventBus.
+ *
+ * @param {{ payload: { saleId:number, status?:string }, tenantId:number }} args
+ * @returns {Promise<void>}  fire-and-forget; never throws (catches internally)
+ */
 async function dispatchReceiptForSale({ payload, tenantId }) {
   // Defensive — skip silently if the payload isn't shaped right (a future
   // refactor of the emitter shouldn't crash this listener and take down
@@ -151,6 +229,13 @@ async function dispatchReceiptForSale({ payload, tenantId }) {
 
 let _started = false;
 
+/**
+ * Wire the eventBus subscription at boot. Idempotent — safe to call
+ * repeatedly (uses a module-private flag to avoid duplicate listeners
+ * across hot reloads in dev).
+ *
+ * @returns {void}
+ */
 function start() {
   if (_started) return;
   _started = true;

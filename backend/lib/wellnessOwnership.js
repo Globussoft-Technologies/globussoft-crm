@@ -131,6 +131,25 @@
  * gate definitions in routes/wellness.js MUST stay in sync with the
  * constants here — the wellnessOwnership.test.js spec asserts that
  * sync explicitly.
+ *
+ * ────────────────────────────────────────────────────────────────────────
+ *  TESTED + ADOPTED
+ * ────────────────────────────────────────────────────────────────────────
+ *
+ * Tested at: backend/test/middleware/wellnessOwnership.test.js
+ *   (12 vitest cases pinning PHI_READ_ROLES vs PHI_WRITE_ROLES contract,
+ *    canEditVisit / canEditPatient tenant-scope guard, isClinicalStaff
+ *    telecaller-excluded predicate, ADMIN/MANAGER override on all four
+ *    helpers, schema-reality limits per POLICY 2 documentation)
+ *
+ * Adopted by:
+ *   - routes/wellness.js phiReadGate / phiWriteGate (allowed-list mirror)
+ *   - test/middleware/wellnessOwnership.test.js (sync-check spec)
+ *
+ * NOT adopted by (deliberate):
+ *   - Generic CRM /api/contacts, /api/deals — no wellness-role concept.
+ *     The role check there is the bare verifyRole(['ADMIN', 'MANAGER',
+ *     'USER']) middleware. Wellness PHI policy is vertical-specific.
  */
 
 /**

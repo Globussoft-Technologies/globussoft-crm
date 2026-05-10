@@ -1,21 +1,19 @@
 /**
  * Pincode zone lookup — Wave 8b residual closure.
  *
+ * ────────────────────────────────────────────────────────────────────────
+ *  PURPOSE
+ * ────────────────────────────────────────────────────────────────────────
+ *
  * Replaces the flat `DEFAULT_TRAVEL_TIME_MIN = 30` constant in
  * routes/wellness.js IN_HOME booking handler with a coarse zone-based
  * estimate. No external API key needed — purely a lookup against a
  * static map keyed by the first 3 digits of an Indian 6-digit PIN code.
  *
- * Why static + coarse:
- *   The Wave 8b ask was specifically a stub — a full distance-API
- *   integration (Google Maps Distance Matrix, OpenStreetMap, etc.)
- *   carries vendor cost + key management overhead that's premature for
- *   the booking-widget MVP. The zone approach is "good enough" travel-
- *   time guidance to populate `travelTimeMinutes` on the Visit row;
- *   downstream the operations dashboard surfaces actual times for
- *   calibration.
+ * ────────────────────────────────────────────────────────────────────────
+ *  CONTRACT
+ * ────────────────────────────────────────────────────────────────────────
  *
- * Behaviour contract:
  *   - estimateTravelMinutes(clinicPincode, patientPincode) → minutes (Int)
  *   - Same zone (first 3 digits match) → 30 min (within-metro hop)
  *   - Different zone within same metro → 60 min (cross-metro)
@@ -37,6 +35,38 @@
  *   Jaipur        302xxx
  *
  * Adding a metro is a one-line entry in METRO_PREFIXES + zone map.
+ *
+ * ────────────────────────────────────────────────────────────────────────
+ *  RATIONALE — why static + coarse (alternatives considered)
+ * ────────────────────────────────────────────────────────────────────────
+ *
+ * The Wave 8b ask was specifically a stub — a full distance-API
+ * integration (Google Maps Distance Matrix, OpenStreetMap, etc.)
+ * carries vendor cost + key management overhead that's premature for
+ * the booking-widget MVP. The zone approach is "good enough" travel-
+ * time guidance to populate `travelTimeMinutes` on the Visit row;
+ * downstream the operations dashboard surfaces actual times for
+ * calibration.
+ *
+ * If a future product call wants real distance / time API integration,
+ * the seam is one function (estimateTravelMinutes). Provider integration
+ * would replace the function body; the contract + callsites stay stable.
+ *
+ * ────────────────────────────────────────────────────────────────────────
+ *  TESTED + ADOPTED
+ * ────────────────────────────────────────────────────────────────────────
+ *
+ * Tested at: backend/test/lib/pincodeZones.test.js
+ *   (16 vitest cases pinning prefix extraction, metro mapping, time bands,
+ *    monotonic-band ordering, legacy FALLBACK match)
+ *
+ * Adopted by:
+ *   - routes/wellness.js — public-booking IN_HOME visitDate computation
+ *     (sets Visit.travelTimeMinutes from estimateTravelMinutes output)
+ *
+ * NOT adopted by (deliberate):
+ *   - generic CRM /api/booking routes — no travel-time concept;
+ *     bookings are always at-clinic for generic vertical.
  */
 
 // First 3 digits of an Indian 6-digit PIN code → metro identifier.
@@ -65,6 +95,14 @@ const CROSS_ZONE_MINUTES = 60;
 const OUTSIDE_METRO_MINUTES = 90;
 const FALLBACK_MINUTES = 30; // legacy default for missing pincodes
 
+/**
+ * Extract the 3-digit prefix from a 6-digit Indian PIN code. Non-digit
+ * characters (whitespace, hyphens, formatting) are stripped before
+ * slicing. Returns null for missing or short input.
+ *
+ * @param {string|number|null|undefined} pincode  raw PIN — string preferred
+ * @returns {string|null}  3-digit string preserving leading zeros, or null
+ */
 function pinPrefix(pincode) {
   if (!pincode) return null;
   const digits = String(pincode).replace(/\D/g, "");
@@ -72,6 +110,13 @@ function pinPrefix(pincode) {
   return digits.slice(0, 3);
 }
 
+/**
+ * Map a PIN code to a metro identifier (BLR / MUM / DEL / etc.) or null
+ * if the prefix isn't in the static METRO_PREFIXES table.
+ *
+ * @param {string|number|null|undefined} pincode  6-digit PIN
+ * @returns {string|null}  metro short code, or null for rural / unknown
+ */
 function metroOf(pincode) {
   const prefix = pinPrefix(pincode);
   if (!prefix) return null;

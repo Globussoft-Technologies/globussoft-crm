@@ -2,6 +2,50 @@
 
 **Read this on session start.** This is the persistent backlog of architectural / multi-day work that's been deferred from cron / overnight runs because it's too risky to ship without alignment. Each item has the diagnosis, the recommended approach, and an estimate. Pick from the top of each priority bucket; check items off (with the commit SHA) when shipped.
 
+---
+
+## 🏁 SESSION HANDOFF (2026-05-10 — v3.6.0 release + Wave 8 phantom audit)
+
+**HEAD on origin/main:** `d1d2eb4` (post-v3.6.0 + scripts/seed-drugs-on-demo.py).
+
+**v3.6.0 shipped today** — Wave 6 (4 agents / 16 items) + Wave 7 (4 agents / 17 items) closed ~33 PRD Gap doc items. e2e-full release validation green on attempt 3 (attempt 1 hit drugs seed gap; attempt 2 self-inflicted by mid-run pm2 restart from a scripts commit). GH Release published at https://github.com/Globussoft-Technologies/globussoft-crm/releases/tag/v3.6.0.
+
+**Wave 8 dispatched + abandoned (phantom)** — 4 parallel agents on Calendar/Resources, Inventory Backbone, Wallet/Cashback, GiftCards/Coupons (17 PRD Gap items). All 4 scopes were ALREADY SHIPPED in Wave 11 (`a177c99` Agent GG calendar/holidays/conflict; `b69febf` Agent FF wallet/giftcard/coupon/cashback ledger; `d05ee16` Agent HH inventory backbone). Agent A self-exited with full audit; Agents B/C/D stopped mid-flight after 3-5 min apiece. Tainted commit `d1db110` (Agent B's `git commit -o schema.prisma` swept up Agent D's incomplete WIP — schema-sweep cron-learning manifested) reverted. **Promoted phantom-carry-over to standing rule** in CLAUDE.md (4 instances: #534 follow-up, #227 Reports CSV, regression-23 #24, Wave 8). The PRD Gap Google Doc dated 8 May 2026 hasn't been re-scored after v3.5.0 + v3.5.2 + v3.6.0 + Wave 11 — virtually every "❌ open" row in the Calendar/Inventory/Loyalty/Memberships clusters is now ✅.
+
+### Larger PRD gaps from the 8-May Google Doc — STATUS POST WAVE-11 + v3.6.0
+
+| Cluster | Doc said open | Actually | Reference |
+|---|---|---|---|
+| Calendar / Resources | 4/4 | ✅ all closed | Wave 11 GG `a177c99` (Resource + Holiday + 4-class conflict engine: HOLIDAY_BLOCKED + OUTSIDE_WORKING_HOURS + RESOURCE_DOUBLE_BOOKED + DOCTOR_DOUBLE_BOOKED) + frontend booking-type legend Wave 7D `a7bc989` |
+| Inventory Backbone | 5 open | ✅ all closed | Wave 11 HH `d05ee16` (ProductCategory + Vendor + InventoryReceipt + InventoryAdjustment + AutoConsumptionRule) + `lib/autoConsumptionApplier.js` visit-completed listener |
+| Loyalty Wallet/Cashback | 4 open | ✅ all closed | Wave 11 FF `b69febf` (WalletTransaction ledger + CashbackRule + `writeWalletTransaction` inline + `computeCashbackEarn`) |
+| GiftCards/Coupons | 4 open | ✅ all closed | Wave 11 FF `b69febf` (GiftCard + Coupon + Sale-completion supports `WALLET` / `GIFTCARD` / `COMBINED` payment methods at `pos.js:527`) |
+
+Specs already covering these: `calendar-availability-api.spec.js` (30 tests), `wallet-giftcard-coupon-api.spec.js` (48 tests), `inventory-extension-api.spec.js` (45 tests).
+
+### Genuinely-pending items (small leftover gaps from the doc)
+
+These are autonomous-fixable when the user is ready:
+
+- **POS SMS/WhatsApp receipt-after-sale hook** — Sale completion already emits `payment.collected` event; needs a subscriber that sends a templated SMS/WhatsApp with invoice summary + total. ~2h.
+- **Membership T-7 reminders cron** — daily job: find memberships expiring in 7 days, send templated SMS + email. Plug into existing scheduledEmailEngine pattern. ~2h.
+- **Leave carry-forward + encashment cron** — `LeavePolicy` columns shipped Wave 5; nightly job not implemented. Compute carry-forward at year-end + encashment payout via Payroll CSV. ~3h.
+- **WhatsApp Chats screen tabs** — thread+assignment+opt-out backend shipped Wave 11; frontend `Channels.jsx` needs tabs UI for threads/assignments/templates. ~2h.
+- **Booking widget pincode-distance travel time** — currently flat 30-min default for IN_HOME bookings; integrate Google Distance Matrix or similar. Needs API key. ~3h once key provisioned.
+- **Lead_source naming drift** (cosmetic) — UI alignment between dashboard chips + backend field. ~30 min.
+- **Mini-website at-store Resource reservation** — depends on Resource model (now shipped); needs Booking widget UI to surface available resources. ~2h.
+- **No-show risk + expiring-membership notification rules** — extend existing notification path wiring (Wave 6) with two new templates. ~1h.
+
+Total: ~16 hours of focused work across ~8 small items. Could fit in a v3.7.0 minor bump after one focused single-agent dispatch.
+
+### Three things to do first next session
+
+1. **If user wants v3.7.0:** dispatch ONE focused agent on the 8 small leftover items above. Single agent with file-locality bundling per the `dispatching-parallel-agent-wave` skill's "1 commit covering all N fixes" rule (added 2026-05-05). Cap: 4 hours of agent runtime.
+2. **PRD doc reconciliation:** the 8-May Google Doc needs a re-score. Either give me edit access OR I write up a delta tracker doc the user pastes. Doc currently shows 64% open which is wildly stale.
+3. **Demo seed automation:** v3.6.0 deploy didn't seed Drug rows — required `scripts/seed-drugs-on-demo.py` post-deploy. Worth extending deploy.yml's deploy step with a `node prisma/seed-wellness.js` invocation guarded by an env flag, OR documenting the manual step explicitly. Filed as standing rule candidate.
+
+---
+
 **Closed gap-files** (every entry shipped, zero open markers remaining) live under [docs/gaps/archive/](docs/gaps/archive/) — see that folder's README for the archival convention. Active backlogs (this file, `docs/E2E_GAPS.md`, `docs/regression-coverage-backlog.md`) stay at their root locations as long as ≥1 item is open.
 
 ---

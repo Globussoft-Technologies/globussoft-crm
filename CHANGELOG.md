@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## v3.6.0 — 2026-05-10 — Wave 6 + Wave 7 PRD Gap closure (~33 items): Guest Checkout / Service Catalogue / Drug DB / CSV import-export framework / Commission profiles / Module×Action permissions matrix / Mini-website rich editor / WhatsApp 24h gate / Memberships dashboard
+
+Minor release driving the PRD Gap doc to ~95%+ closure across two parallel-agent waves (Wave 6: 4 agents / 16 items; Wave 7: 4 agents / 17 items). Material surface-area additions warrant the minor bump rather than a third 3.5.x patch.
+
+**Wave 6 (4 parallel agents) — wiring + foundations:**
+- **POS Sale completion hooks** (`ffdc7d4`) — every closed Sale now atomically decrements inventory, accrues loyalty points, emits `shift.opened` / `shift.closed` analytics events; matches the Zylu/Salonist contract Rishu's referenced.
+- **Contact extras** (`9e58829`) — `anniversary`, `gst`, `birthDate`, `walletBalance` denorm field on Contact + Patient. Birthday/anniversary trigger eligibility for AutomationRule + Sequence enrollment.
+- **Notification path wiring** (`ac1aa30`) — 4 missing in-app notification taps (visit-completed, prescription-issued, payment-received, low-inventory) wired through notificationService → push + bell + email per template.
+- **Analytics event emit** (`53917ab`) — invoice / payment / wallet / cashback / giftcard / membership / attendance now emit eventBus events with the canonical `{tenantId, actorUserId, ...}` envelope so Marketing/AutomationRule triggers can react.
+
+**Wave 7 (4 parallel agents) — feature polish + admin extensions:**
+- **POS Guest Checkout + invoice alias + sum validation** (`25a8025`) — `/api/v1/invoices` shorthand mounted alongside `/api/billing/invoices`; sum-validation guard on every Sale (line totals + tax + discount = grand-total ±₹0.01); discount/coupon/manager-override flow with reason audit.
+- **Service Catalogue + Drug DB + CSV framework** (`8021bcd`) — `ServiceCategory` + `Drug` Prisma models; bulk CSV import/export skeleton at `/api/csv/services|drugs|patients|contacts` with row-level validation report.
+- **Staff Commission + Permissions matrix** (`d38534d`) — `CommissionProfile` (per-staff override) + `StaffRevenueGoal` (monthly target with progress KPI) + module×action permissions grid (`USER_MODULE_PERMISSION_MATRIX` keyed `<module>.<action>` e.g. `wellness.delete_patient`).
+- **Polish — mini-website rich editor / WhatsApp 24h gate / delivery ticks / calendar legend / memberships dashboard** (`a7bc989`) — public BookingPage gets TipTap-style rich-text editor for hero/about/services blocks; WhatsApp send-API now enforces 24h messaging window with `OUTSIDE_24H_WINDOW` 422 (template-only after window expires); 1-tick/2-tick/blue-tick read receipts; calendar legend tooltip; memberships dashboard at `/api/wellness/memberships/dashboard` with active/expiring/churned aggregates.
+
+**Deploy gate stabilization rounds 11-15 (Wave 7 fallout):**
+- Round 11 (`0ef1a71`) — `userId` → `targetUserId` rename in revenue-goals (stripDangerous strip) + booking-pages PII test reframe (Wave 7D made contactEmail/contactPhone intentionally public on mini-website). `[allow-unique]` for FieldPermission unique extension.
+- Round 12 (`86ba352`) — `/api/csv/` excluded from Content-Type guard + `/memberships/:id(\d+)` numeric-only constraint so `/memberships/dashboard` doesn't collide.
+- Round 13 (`e8a1ef8`) — router-level `express.text({ type: ["text/csv", "text/plain"] })` so CSV uploads land as `req.body` string instead of `{}`.
+- Rounds 14 + 15 (`040417b` + `b65f415`) — whatsapp.spec.js now accepts 422 OUTSIDE_24H_WINDOW for fresh phones with no inbound history; opt-out negative test asserts on body.code, not status.
+
+**5 new Prisma models** (CommissionProfile, StaffRevenueGoal, ServiceCategory, Drug + supporting indexes), **14 new route files** spanning catalogue / CSV import-export / staff revenue-goals / commissions / memberships dashboard, **4 new admin pages** (Service Catalogue / Drug DB / Commission Profiles / Module Permissions matrix), **4 RTL component test suites** carried in from v3.5.2 (Attendance / PointOfSale / Leave / WhatsAppThreads).
+
+**Tests:** ~4,180 per-push (was ~4,128 in 3.5.2); release-validation full suite untouched at ~5,400+.
+
 ## v3.5.2 — 2026-05-10 — PRD Gap doc closure: 16+ items (events / notifications / POS hooks / Contact extras) + 4 RTL test suites
 
 Patch release driving the [2026-05-08 Google Doc PRD Gap audit](https://docs.google.com/document/d/1nVE2GDXSvxLNtaOQHlrq886ZTMZLkeCQ0O0VWthTdac/edit) toward 100%. The doc had assessed 103 items at 15% / 21% / 64% (✅ / ⚠️ / ❌) on 8 May; v3.5.0 closed the greenfield "0/X" sections (POS / Attendance / Leave / WhatsApp Threads / Booking Widget / Memberships / Wallet). v3.5.2 closes the wiring + foundation gaps that remained:

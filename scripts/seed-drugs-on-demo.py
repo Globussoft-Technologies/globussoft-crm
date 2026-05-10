@@ -3,9 +3,10 @@
 Wave 7's `8021bcd` introduced the Drug + ServiceCategory Prisma models and
 extended seed-wellness.js with 16 drugs + N categories. The deploy.yml
 deploy step only runs `prisma db push` (additive schema sync) — it does
-NOT re-run `node prisma/seed-wellness.js`. Result: demo has the Drug
-TABLE but zero Drug ROWS, and drugs-api e2e-full specs go red on
-"admin can list and seed brings paracetamol/ibuprofen/etc.".
+NOT re-run `node prisma/seed-wellness.js` automatically on a regular
+push. Result: demo has the Drug TABLE but zero Drug ROWS, and drugs-api
+e2e-full specs go red on "admin can list and seed brings paracetamol/
+ibuprofen/etc.".
 
 Fix: SSH and run `node prisma/seed-wellness.js`. Idempotent — every
 upsert keys on (tenantId, name) so re-running on a partially-seeded
@@ -13,6 +14,14 @@ demo is safe.
 
 Usage:
     python scripts/seed-drugs-on-demo.py
+
+Alternative (preferred when the operator already plans to deploy):
+    Trigger the deploy.yml workflow manually with the `seed_wellness=true`
+    input — the deploy job then runs `node prisma/seed-wellness.js`
+    automatically AFTER the schema-sync step on the demo box.
+        gh workflow run deploy.yml -f seed_wellness=true
+    Or via the GitHub Actions UI: Deploy → Run workflow → tick
+    "Re-run seed-wellness.js after schema sync".
 """
 import sys
 import paramiko

@@ -200,9 +200,11 @@ router.post("/", async (req, res) => {
   }
 });
 
-// GET /preferences — stub: return user notification preferences
+// GET /preferences — defaults from server config (no per-user override yet).
+// A UserNotificationPreference model would let users mute push/email channels
+// individually; that's deferred to the product backlog and is not in MVP scope
+// — frontend gracefully treats this static envelope as the live preferences.
 router.get("/preferences", async (req, res) => {
-  // TODO: back with a UserNotificationPreference model
   res.json({
     channels: {
       db: { enabled: true, configurable: false },
@@ -213,9 +215,10 @@ router.get("/preferences", async (req, res) => {
   });
 });
 
-// PUT /preferences — stub: save preferences
+// PUT /preferences — accepts the body and echoes back so the frontend "Save
+// preferences" button surfaces a success toast. No persistence layer until the
+// UserNotificationPreference model is on the roadmap (deferred — see GET note).
 router.put("/preferences", async (req, res) => {
-  // TODO: persist to DB when model exists
   res.json({ status: "ok", code: "PREFERENCES_SAVED", preferences: req.body }); // #550
 });
 

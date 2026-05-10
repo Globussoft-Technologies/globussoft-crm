@@ -8,6 +8,24 @@ const router = express.Router();
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
+// Operator-facing hint helper. SendGrid's rejection bodies for an
+// unverified Sender Identity are noisy JSON envelopes; QA staring at the
+// raw `detail` field can't tell at a glance whether the failure is a code
+// regression or an unfinished dashboard step. When the rejection text matches
+// the verified-sender fingerprint, surface a one-line hint that points the
+// operator at the exact dashboard URL. Returns null when the rejection is
+// some other class so the caller doesn't add a misleading hint.
+function sendGridHintFor(reason) {
+  if (typeof reason !== "string" || !reason) return null;
+  // SendGrid response strings on this failure mode contain phrases like
+  // "from address does not match a verified Sender Identity" or simply
+  // "verified Sender Identity". Match either form, case-insensitively.
+  if (/verified\s+sender\s+identity|sender\s+identity\s+verification|do(?:es)?\s+not\s+match\s+a\s+verified/i.test(reason)) {
+    return "Verify Sender Identity at https://app.sendgrid.com/settings/sender_auth";
+  }
+  return null;
+}
+
 async function sendSendGrid(to, subject, body) {
   if (!SENDGRID_API_KEY) {
     console.log(`[ScheduledEmail] SendGrid not configured — email to ${to} logged but not sent`);
@@ -321,13 +339,15 @@ router.post("/:id/send-now", async (req, res) => {
       // 5xx — see EMAIL_PERSIST_FAILED and SEND_NOW_INTERNAL above/below.
       // The proxy will swallow those bodies too, but those are genuine
       // server-error signals where loud HTTP-status failure is correct.
-      return res.status(200).json({
-        success: false,
-        delivered: false,
-        record: updated,
-        code: result.reason === "no_api_key" ? "SENDGRID_NOT_CONFIGURED" : "SENDGRID_REJECTED",
-        detail: String(result.reason || "send failed").slice(0, 200),
-      });
+      const code = result.reason === "no_api_key" ? "SENDGRID_NOT_CONFIGURED" : "SENDGRID_REJECTED";
+      const detail = String(result.reason || "send failed").slice(0, 200);
+      // Add an operator-facing hint when the rejection looks like an
+      // unverified Sender Identity, so QA can tell at a glance whether
+      // the issue is the code or the SendGrid dashboard configuration.
+      const hint = sendGridHintFor(result.reason);
+      const body = { success: false, delivered: false, record: updated, code, detail };
+      if (hint) body.hint = hint;
+      return res.status(200).json(body);
     }
   } catch (err) {
     console.error("[ScheduledEmail] Send-now error:", err);

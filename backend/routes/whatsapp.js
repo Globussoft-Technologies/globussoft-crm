@@ -623,10 +623,36 @@ router.get("/opt-outs", verifyToken, async (req, res) => {
 });
 
 // DELETE /opt-outs/:id — re-opt-in (ADMIN only — DPDP requires careful handling)
+//
+// DPDP Act §11 (right to withdraw consent) implication: re-opting a contact in
+// silently lets the system message a user who previously opted out, which the
+// regulation reads as "fresh consent". Until the product surface gains an
+// explicit user-side re-opt-in flow (separate user-attention item), every
+// admin-initiated re-opt-in MUST justify itself via a written reason that
+// lands in the audit trail, so a regulator can reconstruct WHY the contact
+// was reactivated without their direct re-confirmation.
+//
+// Contract:
+//   - body.reason  is REQUIRED; min 10 chars after trim. Missing / too short
+//                  → 400 REASON_REQUIRED so the frontend can surface a clear
+//                  modal prompt instead of a generic 500.
+//   - audit row    written with action='WHATSAPP_OPT_IN_RESET' (NOT 'DELETE')
+//                  so audit-log filters can find every re-opt-in event without
+//                  scanning every WhatsAppOptOut DELETE row.
+//   - details      includes actor='admin', the supplied reason, and the prior
+//                  opt-out row's reason / capturedAt for a self-contained log.
 router.delete("/opt-outs/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    if (reason.length < 10) {
+      return res.status(400).json({
+        error: "reason is required (min 10 chars) — DPDP §11 audit requirement",
+        code: "REASON_REQUIRED",
+      });
+    }
 
     const existing = await prisma.whatsAppOptOut.findFirst({
       where: { id, tenantId: req.user.tenantId },
@@ -634,8 +660,13 @@ router.delete("/opt-outs/:id", verifyToken, verifyRole(["ADMIN"]), async (req, r
     if (!existing) return res.status(404).json({ error: "Opt-out not found" });
 
     await prisma.whatsAppOptOut.delete({ where: { id: existing.id } });
-    await writeAudit("WhatsAppOptOut", "DELETE", existing.id, req.user.userId, req.user.tenantId, {
+    await writeAudit("WhatsAppOptOut", "WHATSAPP_OPT_IN_RESET", existing.id, req.user.userId, req.user.tenantId, {
+      actor: "admin",
+      reasonRequired: true,
+      reason,
       contactPhone: existing.contactPhone,
+      priorReason: existing.reason,
+      priorCapturedAt: existing.capturedAt,
     });
 
     res.json({ success: true });

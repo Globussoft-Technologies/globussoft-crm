@@ -217,9 +217,27 @@ router.post("/tickets", verifyPortalToken, async (req, res) => {
         tenantId: req.portal.tenantId,
       },
     });
-    // TODO(sla): mirror SLA auto-apply from routes/support.js + routes/tickets.js
-    // (look up SlaPolicy by tenantId+priority+isActive, stamp slaResponseDue/slaResolveDue).
-    // Out of scope for the current SLA-port task.
+
+    // Auto-apply SLA if a policy exists for (tenant, priority). Mirrors the
+    // exact pattern at routes/tickets.js:80 + routes/support.js:60. Portal-
+    // submitted tickets need the same SLA timer as agent-created ones, else
+    // the SLA breach dashboard silently under-counts inbound work.
+    try {
+      const sla = await prisma.slaPolicy.findFirst({
+        where: { tenantId: req.portal.tenantId, priority: ticket.priority, isActive: true },
+      });
+      if (sla) {
+        const now = new Date(ticket.createdAt);
+        await prisma.ticket.update({
+          where: { id: ticket.id },
+          data: {
+            slaResponseDue: new Date(now.getTime() + sla.responseMinutes * 60000),
+            slaResolveDue: new Date(now.getTime() + sla.resolveMinutes * 60000),
+          },
+        });
+      }
+    } catch (_e) { /* SLA is non-critical */ }
+
     res.status(201).json(ticket);
   } catch (err) {
     console.error("[Portal][create ticket]", err);

@@ -214,6 +214,62 @@ test.describe('email-scheduling /send-now contract', () => {
     }
   });
 
+  test('POST /send-now adds Sender-Identity hint when SendGrid rejects on unverified sender', async ({
+    request,
+  }) => {
+    // Operator-facing surface: when the SendGrid rejection's `reason`
+    // matches an unverified-Sender-Identity fingerprint, the route adds
+    // a `hint` field pointing the operator at the SendGrid dashboard
+    // URL. This lets QA tell at a glance whether a 200+success:false
+    // response is a code regression or an unfinished dashboard step
+    // (B-03 SendGrid Sender Identity verification).
+    //
+    // CI without SENDGRID_API_KEY → reason="no_api_key" — does NOT match
+    //                               the fingerprint → no hint expected.
+    // CI/demo with key + unverified sender → reason contains "verified
+    //                               Sender Identity" → hint MUST appear.
+    // CI/demo with key + verified sender → success:true → no hint, no
+    //                               failure path exercised.
+    //
+    // Spec asserts the contract IF the failure path fires AND its detail
+    // matches the fingerprint; otherwise skips silently. The hint string
+    // itself is pinned: must contain the dashboard URL so QA can click
+    // through directly.
+    const created = await createScheduledEmail(request, 'priya.sharma', 'sendgrid_hint_check');
+
+    const r = await request.post(`${API}/email-scheduling/${created.id}/send-now`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+
+    if (body.success === true) {
+      test.skip(true, 'sender verified — hint failure path not exercised');
+      return;
+    }
+
+    // Failure path. Inspect the detail string to decide whether the hint
+    // SHOULD have been added. The fingerprint mirrors sendGridHintFor()
+    // in routes/email_scheduling.js.
+    const detail = String(body.detail || '');
+    const looksLikeUnverified =
+      /verified\s+sender\s+identity|sender\s+identity\s+verification|do(?:es)?\s+not\s+match\s+a\s+verified/i.test(
+        detail,
+      );
+
+    if (looksLikeUnverified) {
+      // The hint MUST appear and MUST point at the SendGrid sender_auth
+      // page. QA reads this directly from the response.
+      expect(body.hint, `hint missing on unverified-sender rejection: ${detail}`).toBeTruthy();
+      expect(body.hint).toMatch(/sendgrid\.com\/settings\/sender_auth/);
+    } else {
+      // Other failure modes (no_api_key, transient 5xx, rate-limit) MUST
+      // NOT add a misleading hint about Sender Identity.
+      expect(body.hint).toBeFalsy();
+    }
+  });
+
   test('POST /send-now on already-SENT row returns 400 with ALREADY_SENT', async ({
     request,
   }) => {

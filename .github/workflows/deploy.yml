@@ -24,6 +24,19 @@ on:
         description: "Skip build + api_tests gates (emergency hotfix only)"
         type: boolean
         default: false
+      seed_wellness:
+        # Re-runs prisma/seed-wellness.js on the demo box AFTER the schema
+        # sync step succeeds. Defaults false on regular pushes — only set
+        # this when a release adds new seeded models / rows that the
+        # additive `prisma db push` cannot create on its own (e.g. v3.6.0
+        # added the Drug model + 16 drug rows; the model landed via
+        # `db push` but the rows required a manual seed-on-demo run, and
+        # drugs-api e2e-full specs went red until someone noticed).
+        # Idempotent — every upsert keys on (tenantId, name).
+        # Alternative trigger: scripts/seed-drugs-on-demo.py.
+        description: "Re-run seed-wellness.js after schema sync (use after adding new seeded models)"
+        type: boolean
+        default: false
 
 # One deploy at a time — never cancel an in-flight deploy. A half-finished
 # deploy on prod is worse than the next push waiting in the queue.
@@ -660,6 +673,16 @@ jobs:
             # only — drops are still gated on schema.prisma.
             echo "=== prisma db push (schema sync) ==="
             npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
+
+            # Optional: re-run seed-wellness.js when the operator opts in via
+            # workflow_dispatch.seed_wellness=true. Only fires on manual
+            # dispatch (regular push has empty inputs.seed_wellness so the
+            # condition is false). Idempotent upserts mean it's safe to
+            # re-run on a partially-seeded demo. Output capped to 20 lines.
+            if [ "${{ github.event.inputs.seed_wellness }}" = "true" ]; then
+              echo "=== seed-wellness (operator-triggered) ==="
+              node prisma/seed-wellness.js 2>&1 | tail -20
+            fi
 
             echo "=== pm2 restart ==="
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3

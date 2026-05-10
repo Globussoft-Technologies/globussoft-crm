@@ -710,7 +710,11 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
   test('DELETE /whatsapp/opt-outs/:id (admin re-opt-in) removes the row', async ({ request }) => {
     test.skip(createdOptOutIds.length === 0, 'no opt-outs to delete');
     const id = createdOptOutIds.pop();
-    const res = await request.delete(`${API}/whatsapp/opt-outs/${id}`, { headers: auth() });
+    // DPDP §11 — reason now required in body. See whatsapp.js DELETE handler.
+    const res = await request.delete(`${API}/whatsapp/opt-outs/${id}`, {
+      headers: auth(),
+      data: { reason: 'User confirmed re-opt-in via support call (ticket #E2E)' },
+    });
     expect(res.status()).toBe(200);
 
     // Subsequent GET should not include the deleted row.
@@ -718,6 +722,99 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
     const body = await list.json();
     const found = body.optOuts.find((o) => o.id === id);
     expect(found).toBeFalsy();
+  });
+
+  // ── DPDP §11 — admin re-opt-in audit-trail contract ─────────────────────
+  // Re-opting a contact in is regulated under DPDP §11 (right to withdraw
+  // consent). Every re-opt-in must justify itself in the audit trail so a
+  // regulator can reconstruct WHY the contact was reactivated without their
+  // direct re-confirmation. The DELETE handler enforces:
+  //   - body.reason required (≥10 chars after trim) → 400 REASON_REQUIRED
+  //   - audit row written with action='WHATSAPP_OPT_IN_RESET' (NOT 'DELETE')
+  //   - details.{actor,reasonRequired,reason,priorReason,priorCapturedAt}
+  //
+  test('DELETE /whatsapp/opt-outs/:id without reason → 400 REASON_REQUIRED', async ({ request }) => {
+    // Create a fresh opt-out to attempt deleting without a reason.
+    const phone = `+9199${Date.now().toString().slice(-7)}`;
+    const create = await request.post(`${API}/whatsapp/opt-outs`, {
+      headers: auth(),
+      data: { contactPhone: phone, reason: 'COMPLAINT' },
+    });
+    expect(create.status()).toBe(201);
+    const optOutId = (await create.json()).id;
+    createdOptOutIds.push(optOutId);
+
+    // No body → 400.
+    const noBody = await request.delete(`${API}/whatsapp/opt-outs/${optOutId}`, { headers: auth() });
+    expect(noBody.status()).toBe(400);
+    const noBodyJson = await noBody.json();
+    expect(noBodyJson.code).toBe('REASON_REQUIRED');
+
+    // Reason too short (<10 chars) → 400.
+    const tooShort = await request.delete(`${API}/whatsapp/opt-outs/${optOutId}`, {
+      headers: auth(),
+      data: { reason: 'short' },
+    });
+    expect(tooShort.status()).toBe(400);
+    expect((await tooShort.json()).code).toBe('REASON_REQUIRED');
+
+    // Whitespace-only reason → 400 (route trims before length check).
+    const blank = await request.delete(`${API}/whatsapp/opt-outs/${optOutId}`, {
+      headers: auth(),
+      data: { reason: '          ' },
+    });
+    expect(blank.status()).toBe(400);
+    expect((await blank.json()).code).toBe('REASON_REQUIRED');
+
+    // Row still present — none of the above succeeded.
+    const list = await request.get(`${API}/whatsapp/opt-outs?limit=100`, { headers: auth() });
+    const stillThere = (await list.json()).optOuts.find((o) => o.id === optOutId);
+    expect(stillThere).toBeTruthy();
+  });
+
+  test('DELETE /whatsapp/opt-outs/:id with valid reason emits WHATSAPP_OPT_IN_RESET audit row', async ({ request }) => {
+    // Create a fresh opt-out to delete WITH a valid reason and inspect the
+    // audit log contract afterwards.
+    const phone = `+9199${(Date.now() + 1).toString().slice(-7)}`;
+    const create = await request.post(`${API}/whatsapp/opt-outs`, {
+      headers: auth(),
+      data: { contactPhone: phone, reason: 'USER_REQUESTED', notes: 'audit-trail test' },
+    });
+    expect(create.status()).toBe(201);
+    const optOutId = (await create.json()).id;
+
+    const justification = 'User confirmed re-opt-in via inbound support call 2026-05-10';
+    const del = await request.delete(`${API}/whatsapp/opt-outs/${optOutId}`, {
+      headers: auth(),
+      data: { reason: justification },
+    });
+    expect(del.status()).toBe(200);
+
+    // Audit log API: GET /api/audit?entity=WhatsAppOptOut&action=WHATSAPP_OPT_IN_RESET
+    // Skip silently if the audit endpoint isn't reachable on this build.
+    const audit = await request.get(
+      `${API}/audit?entity=WhatsAppOptOut&entityId=${optOutId}&limit=10`,
+      { headers: auth() },
+    );
+    if (audit.status() !== 200) {
+      test.skip(true, '/api/audit not available on this build');
+      return;
+    }
+    const auditBody = await audit.json();
+    const rows = Array.isArray(auditBody) ? auditBody : (auditBody.entries || auditBody.data || []);
+    const resetRow = rows.find((r) => r.action === 'WHATSAPP_OPT_IN_RESET' && r.entityId === optOutId);
+    expect(resetRow, `no WHATSAPP_OPT_IN_RESET audit row for opt-out id=${optOutId}`).toBeTruthy();
+
+    // Inspect the details payload — JSON-encoded on most builds.
+    let details = resetRow.details;
+    if (typeof details === 'string') {
+      try { details = JSON.parse(details); } catch { /* keep string */ }
+    }
+    expect(details && typeof details === 'object', 'details payload missing').toBeTruthy();
+    expect(details.actor).toBe('admin');
+    expect(details.reasonRequired).toBe(true);
+    expect(details.reason).toBe(justification);
+    expect(details.contactPhone).toBe(phone);
   });
 
   // ── Tenant isolation ────────────────────────────────────────────────────

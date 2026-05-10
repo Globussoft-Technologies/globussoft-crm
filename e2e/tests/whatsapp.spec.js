@@ -115,9 +115,11 @@ test.describe('whatsapp.js — Cloud API messaging + templates + webhook', () =>
     });
     // 200 = WhatsAppConfig active and Meta accepted
     // 400 = no active config in this tenant (CI / local default)
+    // 422 = OUTSIDE_24H_WINDOW (Wave 7D — Meta 24h re-engagement gate
+    //       blocks free-form sends to phones with no prior inbound)
     // 500 = config present but Meta provider error (network / quota / etc.)
     // The test asserts the auth gate + shape passed validation, not delivery.
-    expect([200, 400, 500]).toContain(res.status());
+    expect([200, 400, 422, 500]).toContain(res.status());
     if (res.status() === 400) {
       const body = await res.json();
       // Should be the "no active config" error, NOT a "missing required field" error
@@ -139,7 +141,8 @@ test.describe('whatsapp.js — Cloud API messaging + templates + webhook', () =>
     });
     // 200/400/500 same matrix as session-text — what we assert is the
     // {templateName, parameters} field shape passed validation (not 400 with
-    // "missing body or templateName").
+    // "missing body or templateName"). Templates bypass the 24h window
+    // (no 422 in this branch).
     expect([200, 400, 500]).toContain(res.status());
     if (res.status() === 400) {
       const body = await res.json();
@@ -159,7 +162,10 @@ test.describe('whatsapp.js — Cloud API messaging + templates + webhook', () =>
       headers: auth(),
       data: { to: '+919900112233', body: 'Hello with stray templateId', templateId: 99999 },
     });
-    expect([200, 400, 500]).toContain(res.status());
+    // 422 added: Wave 7D 24h gate fires for free-form sends with no prior
+    // inbound (templateId ≠ templateName, so the body branch wins, then
+    // the 24h gate evaluates and rejects).
+    expect([200, 400, 422, 500]).toContain(res.status());
     if (res.status() === 400) {
       const body = await res.json();
       // 400 must be "no active config", not a validation error from

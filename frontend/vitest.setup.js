@@ -45,3 +45,13 @@ if (!Element.prototype.getBoundingClientRect.toString().includes('jsdom')) {
     return { width: 800, height: 400, top: 0, left: 0, right: 800, bottom: 400, x: 0, y: 0, toJSON: () => ({}) };
   };
 }
+
+// Wave 12: jsdom doesn't implement scrollIntoView. Several pages call it
+// inside a useEffect after toggling a panel (e.g. wellness/Patients.jsx
+// `setShowAdd(true)` → form ref.scrollIntoView). Without this stub the
+// effect throws, React unmounts the component, and the test reds with a
+// hard-to-debug "element not found" downstream. Promoted from Wave 12
+// per-test fix so future RTL authors get it for free.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function () {};
+}

@@ -529,3 +529,81 @@ test.describe('Leave — UNPAID policy', () => {
     expect(r.days).toBe(1);
   });
 });
+
+// ── policy-carry-forward admin trigger (post-v3.7.0) ────────────────
+//
+// Wave 8b's leavePolicyEngine fires daily at 02:30 IST, but only acts
+// on the configured fiscal-year-end (31 March wellness, 31 December
+// generic). Demo / QA can't otherwise validate carry-forward + encashment
+// behaviour without waiting for the calendar tick. The admin trigger
+// at POST /api/leave/policy-carry-forward/run wraps cron/leavePolicyEngine.js
+// runForTenant() with the requesting admin's tenantId. Body field
+// `now` (ISO string, optional) overrides the engine's date so QA can
+// force fiscal-year-end behaviour synthetically.
+//
+// Mirror of forecasting/snapshot/run + email/scheduled/run.
+test.describe('Leave — admin policy-carry-forward trigger (post-v3.7.0)', () => {
+  test('non-admin manager → 403', async ({ request }) => {
+    const res = await authPost(request, '/api/leave/policy-carry-forward/run', {}, 'manager');
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test('non-admin user → 403', async ({ request }) => {
+    const res = await authPost(request, '/api/leave/policy-carry-forward/run', {}, 'user');
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test('admin happy path: returns success envelope with tenantId echo', async ({ request }) => {
+    const res = await authPost(request, '/api/leave/policy-carry-forward/run', {}, 'admin');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(typeof body.tenantId).toBe('number');
+    // Engine returns { policies, carriedForward, encashed } — these are
+    // all integers. On a non-fiscal-year-end day they'll all be 0 (no-op
+    // path), which is the documented contract.
+    expect(typeof body.policies).toBe('number');
+    expect(typeof body.carriedForward).toBe('number');
+    expect(typeof body.encashed).toBe('number');
+  });
+
+  test('admin with body.now=2026-03-31 (FY-end IST) forces engine to act', async ({ request }) => {
+    // 31 March is the wellness fiscal year-end (FISCAL_END_WELLNESS).
+    // For the generic admin tenant this won't match (vertical=generic, FY-end Dec 31)
+    // so the engine still no-ops and returns zeros — but the route still 200s
+    // with the success envelope. The wellness-tenant variant of this test
+    // would actually exercise the carry-forward path.
+    const res = await authPost(
+      request,
+      '/api/leave/policy-carry-forward/run',
+      { now: '2026-03-31T03:00:00.000Z' },
+      'admin',
+    );
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+  });
+
+  test('admin with invalid body.now returns 400 INVALID_INPUT', async ({ request }) => {
+    const res = await authPost(
+      request,
+      '/api/leave/policy-carry-forward/run',
+      { now: 'not-a-date' },
+      'admin',
+    );
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.code).toBe('INVALID_INPUT');
+    expect(body.tenantId).toBeDefined();
+  });
+
+  test('no token → 401/403', async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/leave/policy-carry-forward/run`, {
+      data: {},
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+});

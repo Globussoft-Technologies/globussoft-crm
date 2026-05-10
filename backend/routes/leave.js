@@ -552,4 +552,48 @@ router.post("/requests/:id/cancel", verifyToken, async (req, res) => {
   }
 });
 
+// POST /api/leave/policy-carry-forward/run — admin-gated manual trigger for
+// cron/leavePolicyEngine.js. Wave 8b's engine fires only on fiscal-year-end
+// (31 March wellness, 31 December generic) so demo / QA can't otherwise
+// validate carry-forward + encashment behaviour without waiting nine months.
+//
+// Mirror of /api/forecasting/snapshot/run + /api/billing/recurring/run +
+// /api/email/scheduled/run (admin-gated, per-tenant scope, predictable
+// envelope). Calls the engine's per-tenant function with the requesting
+// admin's tenantId so cron + manual paths can never drift on dedup
+// semantics.
+//
+// Optional body field `now` (ISO string) lets QA force the engine to act
+// AS IF a specific date were the fiscal-year-end. Without it, the engine
+// uses the actual server clock and is a no-op on non-FY-end days.
+const { runForTenant: runLeavePolicyForTenant } = require("../cron/leavePolicyEngine");
+
+router.post("/policy-carry-forward/run", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const overrideNow = req.body?.now ? new Date(req.body.now) : new Date();
+    if (Number.isNaN(overrideNow.getTime())) {
+      return res.status(400).json({
+        success: false,
+        tenantId: req.user.tenantId,
+        error: "body.now must be a valid ISO date string when provided",
+        code: "INVALID_INPUT",
+      });
+    }
+    const result = await runLeavePolicyForTenant(req.user.tenantId, { now: overrideNow });
+    res.json({
+      success: true,
+      tenantId: req.user.tenantId,
+      ...result,
+    });
+  } catch (err) {
+    console.error("[leave] manual carry-forward trigger failed:", err);
+    res.status(500).json({
+      success: false,
+      tenantId: req.user.tenantId,
+      error: err.message,
+      code: "LEAVE_POLICY_RUN_FAILED",
+    });
+  }
+});
+
 module.exports = router;

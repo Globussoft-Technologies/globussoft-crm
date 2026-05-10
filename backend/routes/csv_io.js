@@ -49,6 +49,13 @@ const upload = multer({
 const MAX_IMPORT_ROWS = 5000;
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
+// Body parser for raw text/csv + text/plain bodies — Express's default
+// JSON / urlencoded parsers don't handle these. Without this, posting
+// `text/csv` lands req.body as `{}` and readUploadedCsv() returns null,
+// triggering NO_CSV instead of EMPTY_CSV. Per /api/csv prefix only so
+// other routes aren't affected.
+router.use(express.text({ type: ["text/csv", "text/plain"], limit: "5mb" }));
+
 // router-level guard so every endpoint inherits auth + RBAC.
 router.use(verifyToken, verifyRole(["ADMIN", "MANAGER"]));
 

@@ -542,9 +542,16 @@ const VALID_GOAL_SCOPE = ["ALL", "SERVICE", "PRODUCT", "MEMBERSHIP"];
 
 function validateGoalBody(body, { partial = false } = {}) {
   const errors = [];
-  if (!partial || body.userId !== undefined) {
-    const uid = parseInt(body.userId, 10);
-    if (!Number.isInteger(uid) || uid <= 0) errors.push("userId is required (positive integer)");
+  // PRD Gap §1.6 follow-up: stripDangerous deletes req.body.userId, so we
+  // accept `targetUserId` (non-stripped name per the CLAUDE.md standing rule).
+  // Legacy `userId` in body would silently be dropped — caller must use
+  // targetUserId. The ESLint no-restricted-syntax rule enforces this on
+  // future writes; the helper here is the runtime backstop.
+  // eslint-disable-next-line no-restricted-syntax
+  const inputUserId = body.targetUserId !== undefined ? body.targetUserId : body.userId;
+  if (!partial || inputUserId !== undefined) {
+    const uid = parseInt(inputUserId, 10);
+    if (!Number.isInteger(uid) || uid <= 0) errors.push("targetUserId is required (positive integer)");
   }
   if (body.period !== undefined && !VALID_GOAL_PERIOD.includes(body.period)) {
     errors.push(`period must be one of: ${VALID_GOAL_PERIOD.join(", ")}`);
@@ -652,9 +659,12 @@ router.post("/revenue-goals", verifyRole(["ADMIN"]), async (req, res) => {
     const errors = validateGoalBody(req.body || {}, { partial: false });
     if (errors.length) return res.status(400).json({ error: errors.join("; ") });
 
-    const { userId, period, periodStart, periodEnd, targetAmount, scope, scopeFilter, notes } = req.body;
+    const { targetUserId, period, periodStart, periodEnd, targetAmount, scope, scopeFilter, notes } = req.body;
+    // PRD Gap §1.6 follow-up: prefer targetUserId (non-stripped name).
+    // eslint-disable-next-line no-restricted-syntax
+    const resolvedUserId = targetUserId !== undefined ? targetUserId : req.body.userId;
     // Verify user belongs to this tenant.
-    const target = await prisma.user.findFirst({ where: { id: parseInt(userId, 10), tenantId: req.user.tenantId } });
+    const target = await prisma.user.findFirst({ where: { id: parseInt(resolvedUserId, 10), tenantId: req.user.tenantId } });
     if (!target) return res.status(404).json({ error: "Target user not found in this tenant." });
 
     const row = await prisma.staffRevenueGoal.create({

@@ -102,7 +102,7 @@ test.describe('Revenue Goals — auth gates', () => {
     const r = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(userToken),
       data: {
-        userId: userUserId,
+        targetUserId: userUserId,
         period: 'MONTHLY',
         targetAmount: 50000,
         ...win,
@@ -130,7 +130,7 @@ test.describe('Revenue Goals — validation', () => {
     const win = farFutureWindow();
     const r = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(adminToken),
-      data: { userId: adminUserId, period: 'BIWEEKLY', targetAmount: 100, ...win, notes: RUN_TAG },
+      data: { targetUserId: adminUserId, period: 'BIWEEKLY', targetAmount: 100, ...win, notes: RUN_TAG },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r.status()).toBe(400);
@@ -141,7 +141,7 @@ test.describe('Revenue Goals — validation', () => {
     const win = farFutureWindow();
     const r = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(adminToken),
-      data: { userId: adminUserId, period: 'MONTHLY', targetAmount: 100, scope: 'BOGUS', ...win, notes: RUN_TAG },
+      data: { targetUserId: adminUserId, period: 'MONTHLY', targetAmount: 100, scope: 'BOGUS', ...win, notes: RUN_TAG },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r.status()).toBe(400);
@@ -152,7 +152,7 @@ test.describe('Revenue Goals — validation', () => {
     const win = farFutureWindow();
     const r = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(adminToken),
-      data: { userId: adminUserId, period: 'MONTHLY', targetAmount: -100, ...win, notes: RUN_TAG },
+      data: { targetUserId: adminUserId, period: 'MONTHLY', targetAmount: -100, ...win, notes: RUN_TAG },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r.status()).toBe(400);
@@ -163,7 +163,7 @@ test.describe('Revenue Goals — validation', () => {
     const r = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(adminToken),
       data: {
-        userId: adminUserId,
+        targetUserId: adminUserId,
         period: 'MONTHLY',
         targetAmount: 100,
         periodStart: new Date(Date.UTC(2099, 1, 1)).toISOString(),
@@ -180,7 +180,7 @@ test.describe('Revenue Goals — validation', () => {
     const win = farFutureWindow();
     const r = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(adminToken),
-      data: { userId: 999_999_999, period: 'MONTHLY', targetAmount: 100, ...win, notes: RUN_TAG },
+      data: { targetUserId: 999_999_999, period: 'MONTHLY', targetAmount: 100, ...win, notes: RUN_TAG },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r.status()).toBe(404);
@@ -196,7 +196,7 @@ test.describe('Revenue Goals — happy path', () => {
     const r = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(adminToken),
       data: {
-        userId: adminUserId,
+        targetUserId: adminUserId,
         period: 'MONTHLY',
         targetAmount: 50000,
         scope: 'ALL',
@@ -262,7 +262,7 @@ test.describe('Revenue Goals — RBAC scoping on GET', () => {
     };
     const r1 = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(adminToken),
-      data: { userId: adminUserId, period: 'MONTHLY', targetAmount: 1000, scope: 'ALL', notes: RUN_TAG, ...win2 },
+      data: { targetUserId: adminUserId, period: 'MONTHLY', targetAmount: 1000, scope: 'ALL', notes: RUN_TAG, ...win2 },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r1.status()).toBe(201);
@@ -271,7 +271,7 @@ test.describe('Revenue Goals — RBAC scoping on GET', () => {
 
     const r2 = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(adminToken),
-      data: { userId: userUserId, period: 'MONTHLY', targetAmount: 2000, scope: 'ALL', notes: RUN_TAG, ...win },
+      data: { targetUserId: userUserId, period: 'MONTHLY', targetAmount: 2000, scope: 'ALL', notes: RUN_TAG, ...win },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r2.status()).toBe(201);

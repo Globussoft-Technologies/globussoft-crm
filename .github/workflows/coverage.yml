@@ -244,6 +244,12 @@ jobs:
             tests/pos-api.spec.js \
             tests/v1-invoices-api.spec.js \
             tests/cross-tenant-stripdangerous-api.spec.js \
+            tests/service-categories-api.spec.js \
+            tests/drugs-api.spec.js \
+            tests/csv-import-export-api.spec.js \
+            tests/commission-profiles-api.spec.js \
+            tests/revenue-goals-api.spec.js \
+            tests/module-action-permissions-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

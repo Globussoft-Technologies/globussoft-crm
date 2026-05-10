@@ -838,6 +838,38 @@ async function main() {
   });
   console.log("[seed-wellness] agent recommendations: 3");
 
+  // ── Drug catalogue (PRD Gap §10 item 2) ───────────────────────────
+  // 16 Indian-clinic-typical OTC + Rx drugs. Idempotent — keyed on
+  // (tenantId, name). Realistic defaults pre-fill the prescription
+  // writer's typeahead so doctors only type deltas.
+  const drugSeeds = [
+    { name: "Paracetamol",   genericName: "Acetaminophen",   dosageForm: "tablet",    strengthValue: "500", strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "every 6 hours as needed",   defaultDuration: "3 days" },
+    { name: "Crocin Advance", genericName: "Acetaminophen",   dosageForm: "tablet",    strengthValue: "500", strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "every 6 hours as needed",   defaultDuration: "3 days" },
+    { name: "Amoxicillin",   genericName: "Amoxicillin",     dosageForm: "capsule",   strengthValue: "500", strengthUnit: "mg", defaultDosage: "1 capsule", defaultFrequency: "three times daily",         defaultDuration: "5 days" },
+    { name: "Augmentin",     genericName: "Amoxicillin + Clavulanate", dosageForm: "tablet", strengthValue: "625", strengthUnit: "mg", defaultDosage: "1 tablet", defaultFrequency: "twice daily after food", defaultDuration: "5 days" },
+    { name: "Ibuprofen",     genericName: "Ibuprofen",       dosageForm: "tablet",    strengthValue: "400", strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "twice daily after food",    defaultDuration: "5 days" },
+    { name: "Brufen",        genericName: "Ibuprofen",       dosageForm: "tablet",    strengthValue: "400", strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "twice daily after food",    defaultDuration: "5 days" },
+    { name: "Omeprazole",    genericName: "Omeprazole",      dosageForm: "capsule",   strengthValue: "20",  strengthUnit: "mg", defaultDosage: "1 capsule", defaultFrequency: "once daily before breakfast", defaultDuration: "14 days" },
+    { name: "Pantoprazole",  genericName: "Pantoprazole",    dosageForm: "tablet",    strengthValue: "40",  strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once daily before breakfast", defaultDuration: "14 days" },
+    { name: "Cetirizine",    genericName: "Cetirizine",      dosageForm: "tablet",    strengthValue: "10",  strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once at bedtime",          defaultDuration: "5 days" },
+    { name: "Levocetirizine",genericName: "Levocetirizine",  dosageForm: "tablet",    strengthValue: "5",   strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once at bedtime",          defaultDuration: "7 days" },
+    { name: "Metformin",     genericName: "Metformin",       dosageForm: "tablet",    strengthValue: "500", strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "twice daily after food",   defaultDuration: "ongoing" },
+    { name: "Atorvastatin",  genericName: "Atorvastatin",    dosageForm: "tablet",    strengthValue: "10",  strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once at bedtime",          defaultDuration: "ongoing" },
+    { name: "Azithromycin",  genericName: "Azithromycin",    dosageForm: "tablet",    strengthValue: "500", strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once daily",               defaultDuration: "3 days" },
+    { name: "Minoxidil",     genericName: "Minoxidil",       dosageForm: "topical",   strengthValue: "5",   strengthUnit: "%",  defaultDosage: "1 ml",      defaultFrequency: "twice daily on scalp",     defaultDuration: "ongoing", notes: "Apply on dry scalp; do not wash for 4 hours." },
+    { name: "Finasteride",   genericName: "Finasteride",     dosageForm: "tablet",    strengthValue: "1",   strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once daily",               defaultDuration: "ongoing", notes: "Schedule H — physician supervision required." },
+    { name: "Tretinoin",     genericName: "Tretinoin",       dosageForm: "topical",   strengthValue: "0.025", strengthUnit: "%",defaultDosage: "pea-size",  defaultFrequency: "once at night",            defaultDuration: "12 weeks", notes: "Apply on dry skin; sunscreen mandatory next day." },
+  ];
+  for (const d of drugSeeds) {
+    const existing = await prisma.drug.findFirst({ where: { tenantId: tenant.id, name: d.name } });
+    if (existing) {
+      await prisma.drug.update({ where: { id: existing.id }, data: d });
+    } else {
+      await prisma.drug.create({ data: { ...d, tenantId: tenant.id } });
+    }
+  }
+  console.log(`[seed-wellness] drugs: ${drugSeeds.length}`);
+
   console.log("\n[seed-wellness] DONE");
   console.log("\nLogin to Enhanced Wellness with:");
   console.log("  ── Demo accounts (use these for the live walkthrough) ──");

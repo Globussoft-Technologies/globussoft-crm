@@ -80,6 +80,10 @@ const Signatures = lazy(() => import("./pages/Signatures"));
 const KnowledgeBase = lazy(() => import("./pages/KnowledgeBase"));
 const Currencies = lazy(() => import("./pages/Currencies"));
 const FieldPermissions = lazy(() => import("./pages/FieldPermissions"));
+// PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
+// revenue goals.
+const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
+const RevenueGoals = lazy(() => import("./pages/RevenueGoals"));
 const LeadRouting = lazy(() => import("./pages/LeadRouting"));
 const Territories = lazy(() => import("./pages/Territories"));
 const Quotas = lazy(() => import("./pages/Quotas"));
@@ -118,6 +122,9 @@ const WellnessPatientDetail = lazy(
 const WellnessServices = lazy(() => import("./pages/wellness/Services"));
 const WellnessLocations = lazy(() => import("./pages/wellness/Locations"));
 const WellnessMemberships = lazy(() => import("./pages/wellness/Memberships"));
+// Wave 7 Agent A — ServiceCategory + Drug catalogue (PRD Gap §10 #1 + #2)
+const WellnessServiceCategories = lazy(() => import("./pages/wellness/ServiceCategories"));
+const WellnessDrugs = lazy(() => import("./pages/wellness/Drugs"));
 // Wave 11 Agent FF — Wallet + Gift Cards + Coupons + Cashback rules
 // (4 admin/manager-gated pages under /wellness/* — see RoleGuard wrap below).
 const WellnessWallet = lazy(() => import("./pages/wellness/Wallet"));
@@ -684,6 +691,23 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
+                    {/* PRD Gap §1.5 / §1.6 */}
+                    <Route
+                      path="commission-profiles"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Commission Profiles requires admin access.">
+                          <CommissionProfiles />
+                        </RoleGuard>
+                      }
+                    />
+                    <Route
+                      path="revenue-goals"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="Revenue Goals requires staff access.">
+                          <RevenueGoals />
+                        </RoleGuard>
+                      }
+                    />
                     <Route path="lead-routing" element={<LeadRouting />} />
                     <Route path="territories" element={<Territories />} />
                     <Route
@@ -757,6 +781,21 @@ export default function App() {
               <Route path="wellness/patients" element={<WellnessOnly><WellnessPatients /></WellnessOnly>} />
               <Route path="wellness/patients/:id" element={<WellnessOnly><WellnessPatientDetail /></WellnessOnly>} />
               <Route path="wellness/services" element={<WellnessOnly><WellnessServices /></WellnessOnly>} />
+              {/* Wave 7 Agent A — ServiceCategory + Drug admin pages (admin/manager) */}
+              <Route path="wellness/service-categories" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Service Categories requires manager access.">
+                    <WellnessServiceCategories />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/drugs" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Drug catalogue requires manager access.">
+                    <WellnessDrugs />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               <Route path="wellness/visits" element={<WellnessOnly><WellnessVisits /></WellnessOnly>} />
               <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
               {/* Wave 11 Agent EE: Memberships catalog — admin/manager only */}

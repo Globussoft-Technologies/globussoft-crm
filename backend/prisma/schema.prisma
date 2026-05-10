@@ -270,6 +270,12 @@ model Tenant {
   shifts        Shift[]
   sales         Sale[]
   saleLineItems SaleLineItem[]
+
+  // Wave 7 Agent A — Service Catalogue depth (PRD Gap §10):
+  //   ServiceCategory — hierarchical taxonomy for Service.
+  //   Drug            — drug catalogue used by prescription writing.
+  serviceCategories ServiceCategory[]
+  drugs             Drug[]
 }
 
 model User {
@@ -2425,9 +2431,20 @@ model Patient {
 }
 
 model Service {
-  id             Int     @id @default(autoincrement())
-  name           String
-  category       String? // hair, skin, salon, slimming, ayurveda, aesthetics
+  id   Int    @id @default(autoincrement())
+  name String
+
+  // Wave 7 Agent A — Service Catalogue depth (PRD Gap §10 item 1).
+  // The legacy `category` String column is kept as a transition mirror so
+  // older frontends + integrations that read it stay working. New code
+  // should write to `categoryId` (FK → ServiceCategory) and only fall back
+  // to the string column for back-compat.
+  // TODO: drop the legacy `category` column in v3.6.0 once the React
+  //       frontend + the wellness external API consumers have migrated.
+  category   String? // hair, skin, salon, slimming, ayurveda, aesthetics (DEPRECATED — use categoryId)
+  categoryId Int?
+  serviceCategory ServiceCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
   ticketTier     String  @default("medium") // low, medium, high
   basePrice      Float   @default(0)
   durationMin    Int     @default(30)
@@ -2459,6 +2476,7 @@ model Service {
 
   @@index([tenantId, isActive])
   @@index([tenantId, ticketTier])
+  @@index([tenantId, categoryId])
 }
 
 model Visit {
@@ -3579,4 +3597,93 @@ model SaleLineItem {
 
   @@index([tenantId, saleId])
   @@index([tenantId, lineType, refId])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Wave 7 Agent A — Service Catalogue depth + Drug catalogue
+// (PRD Gap doc §10 items 1 + 2). 2026-05-10.
+//
+// ServiceCategory: hierarchical taxonomy (parent/children) for Service.
+//   The legacy free-text Service.category column stays as a transition
+//   mirror; the FK column Service.categoryId is the new source of truth.
+//   Per-tenant, soft-deletable via isActive. Cascade-delete with tenant.
+//
+// Drug: drug catalogue used by prescription-writing typeahead. Stores
+//   defaults for dosage / frequency / duration so the doctor's UI can
+//   pre-fill from the catalogue and the writer only types deltas.
+//   Indexed by (tenantId, name) and (tenantId, genericName) for the
+//   typeahead. Optional link from Prescription via the existing JSON
+//   `drugs` column — each entry can carry `drugId` to pin to the
+//   catalogue row, while legacy free-text entries (no drugId) remain
+//   valid (backwards-compatible).
+// ─────────────────────────────────────────────────────────────────────
+
+model ServiceCategory {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  // Display order in admin UI / picker dropdowns. Lower numbers render
+  // first; ties broken by name asc. Default 0 keeps freshly-created rows
+  // above the alphabetical floor only when the user hasn't reordered.
+  displayOrder Int @default(0)
+
+  // Self-referential hierarchy ("Hair > Restoration > FUE Transplant").
+  // SetNull so deleting a parent doesn't cascade-delete children;
+  // they re-parent to the root and the admin can re-nest manually.
+  parentId Int?
+  parent   ServiceCategory?  @relation("ServiceCategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children ServiceCategory[] @relation("ServiceCategoryHierarchy")
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  services Service[]
+
+  // Tenant-scoped uniqueness on name lets two tenants both have an "Aesthetics"
+  // category without colliding, while one tenant cannot duplicate it.
+  @@unique([tenantId, name])
+  @@index([tenantId, parentId])
+  @@index([tenantId, isActive, displayOrder])
+}
+
+model Drug {
+  id          Int     @id @default(autoincrement())
+  name        String // brand or trade name as written on the prescription pad
+  genericName String? // generic / INN — used for substitution / formulary cross-ref
+
+  // Dosage form — soft-enum (string) per project convention.
+  // tablet | capsule | syrup | injection | topical | drops | inhaler | other
+  dosageForm String @default("tablet")
+
+  // Strength as a numeric value + unit pair (e.g. 500 + "mg", 10 + "ml",
+  // 5 + "%"). Splitting them lets the UI render "Paracetamol 500 mg" without
+  // the doctor having to type the unit each time.
+  strengthValue String? // String (not Float) — supports "5/10" combination drugs
+  strengthUnit  String? // mg | ml | mcg | % | IU | g | other
+
+  // Defaults pre-populated into the prescription writer; doctor can override
+  // per-prescription. All free-text strings — Indian-clinic phrasing varies
+  // ("1 tablet", "5 ml", "2 puffs", "1-0-1", "twice daily after food").
+  defaultDosage    String? // "1 tablet", "5 ml", "2 puffs"
+  defaultFrequency String? // "twice daily", "1-0-1", "every 6 hours"
+  defaultDuration  String? // "5 days", "till finished", "as needed"
+
+  notes    String?  @db.Text // admin-only — scheduling info, contraindications, etc.
+  isActive Boolean  @default(true)
+
+  tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Typeahead lookups go through these. Tenant-first per project
+  // tenant-isolation index pattern. genericName is nullable but indexed
+  // separately for "search across both" UI.
+  @@index([tenantId, name])
+  @@index([tenantId, genericName])
+  @@index([tenantId, isActive])
 }

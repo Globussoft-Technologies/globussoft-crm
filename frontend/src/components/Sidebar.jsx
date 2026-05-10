@@ -651,6 +651,20 @@ function renderWellnessNav({
         label="Service Catalog"
         managerOnly
       />
+      {/* Wave 7 Agent A — ServiceCategory hierarchical taxonomy (PRD Gap §10 #1) */}
+      <Link
+        to="/wellness/service-categories"
+        icon={Stethoscope}
+        label="Service Categories"
+        managerOnly
+      />
+      {/* Wave 7 Agent A — Drug catalogue for prescription writing (PRD Gap §10 #2) */}
+      <Link
+        to="/wellness/drugs"
+        icon={Stethoscope}
+        label="Drug Catalogue"
+        managerOnly
+      />
       {/* Wave 11 Agent EE: Memberships catalog — manager+ only (mirrors Service Catalog) */}
       <Link
         to="/wellness/memberships"

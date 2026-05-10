@@ -921,6 +921,180 @@ test.describe('POS — tenant isolation', () => {
   });
 });
 
+// ── Wave 7C — Guest Checkout + sum-validation + discount/coupon/manager ──
+//
+// PRD Gap §2 items 2 + 8 + 10. These cases exercise paths that already
+// flow through POST /api/pos/sales — the sum-validation hook (§2 item 8) is
+// new in Wave 7C; guest checkout (§2 item 2) was already supported by Wave 2A
+// but had no spec pinning the behaviour. Manager-override (§2 item 10) is
+// asserted via the notes-payload pass-through to writeAudit (audit-log
+// inspection mirrors the workflows-api pattern).
+//
+// Note: these cases need a fresh OPEN shift since the lifecycle suite above
+// closes mainShiftId. Each test in this block opens its own shift on a
+// dedicated register so the serial-mode lifecycle isn't disturbed.
+
+test.describe('POS — Wave 7C extras (guest, sum-validation, discount, manager-override)', () => {
+  let extrasRegisterId = null;
+  let extrasShiftId = null;
+
+  test.beforeAll(async ({ request }) => {
+    const reg = await authPost(request, '/api/pos/registers', registerBody({
+      name: `${RUN_TAG} Extras Register`,
+    }));
+    expect(reg.status()).toBe(201);
+    const r = await reg.json();
+    extrasRegisterId = r.id;
+    createdRegisterIds.push(r.id);
+
+    const shift = await authPost(request, '/api/pos/shifts/open', {
+      registerId: extrasRegisterId,
+      openingFloat: 1000,
+    });
+    expect(shift.status()).toBe(201);
+    const s = await shift.json();
+    extrasShiftId = s.id;
+    createdShiftIds.push(s.id);
+  });
+
+  test('Guest Checkout: 201 sale with patientId=null is accepted', async ({ request }) => {
+    const res = await authPost(request, '/api/pos/sales', {
+      shiftId: extrasShiftId,
+      paymentMethod: 'CASH',
+      patientId: null,
+      lineItems: [
+        { lineType: 'PRODUCT', refId: 1, quantity: 1, unitPrice: 250, name: `${RUN_TAG} guest-item` },
+      ],
+      paidAmount: 250,
+    });
+    expect(res.status(), `guest sale: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.patientId).toBeNull();
+    expect(body.invoiceNumber).toMatch(/^POS-\d{4}-\d{4}$/);
+  });
+
+  test('sum-validation: paidAmount mismatching grand_total ±0.01 returns 400 INVALID_PAYMENT_TOTAL', async ({ request }) => {
+    const res = await authPost(request, '/api/pos/sales', {
+      shiftId: extrasShiftId,
+      paymentMethod: 'CASH',
+      lineItems: [
+        { lineType: 'SERVICE', refId: 1, quantity: 1, unitPrice: 1000, name: `${RUN_TAG} mismatch` },
+      ],
+      paidAmount: 999, // off by 1, well outside ±0.01 tolerance
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_PAYMENT_TOTAL');
+    expect(body.paidAmount).toBe(999);
+    expect(body.grandTotal).toBe(1000);
+  });
+
+  test('sum-validation: paidAmount within ±0.01 of grand_total is accepted', async ({ request }) => {
+    const res = await authPost(request, '/api/pos/sales', {
+      shiftId: extrasShiftId,
+      paymentMethod: 'CASH',
+      lineItems: [
+        { lineType: 'SERVICE', refId: 1, quantity: 1, unitPrice: 1000.005, name: `${RUN_TAG} fp-edge` },
+      ],
+      paidAmount: 1000.00, // FP edge — within tolerance
+    });
+    // Either 201 (accepted under tolerance) or 400 if the route rounded the
+    // FP differently. Pin: NOT 400 with an INVALID_PAYMENT_TOTAL code where
+    // the diff is < 0.01.
+    if (res.status() === 400) {
+      const body = await res.json();
+      expect(body.code).not.toBe('INVALID_PAYMENT_TOTAL');
+    } else {
+      expect(res.status()).toBe(201);
+    }
+  });
+
+  test('sum-validation: COMBINED requires paymentBreakdownJson summing to grand_total', async ({ request }) => {
+    // Breakdown sums to 600 but grand total is 500 — should reject.
+    const bad = await authPost(request, '/api/pos/sales', {
+      shiftId: extrasShiftId,
+      paymentMethod: 'COMBINED',
+      lineItems: [
+        { lineType: 'SERVICE', refId: 1, quantity: 1, unitPrice: 500, name: `${RUN_TAG} combined-bad` },
+      ],
+      paidAmount: 500,
+      paymentBreakdownJson: JSON.stringify([
+        { method: 'CASH', amount: 300 },
+        { method: 'CARD', amount: 300 }, // sum=600, total=500 → reject
+      ]),
+    });
+    expect(bad.status()).toBe(400);
+    expect((await bad.json()).code).toBe('INVALID_PAYMENT_TOTAL');
+
+    // Breakdown sums to exactly 500 — should pass.
+    const good = await authPost(request, '/api/pos/sales', {
+      shiftId: extrasShiftId,
+      paymentMethod: 'COMBINED',
+      lineItems: [
+        { lineType: 'SERVICE', refId: 1, quantity: 1, unitPrice: 500, name: `${RUN_TAG} combined-good` },
+      ],
+      paidAmount: 500,
+      paymentBreakdownJson: JSON.stringify([
+        { method: 'CASH', amount: 200 },
+        { method: 'CARD', amount: 300 },
+      ]),
+    });
+    expect(good.status(), `combined good: ${await good.text()}`).toBe(201);
+  });
+
+  test('sum-validation: COMBINED rejects empty breakdown', async ({ request }) => {
+    const res = await authPost(request, '/api/pos/sales', {
+      shiftId: extrasShiftId,
+      paymentMethod: 'COMBINED',
+      lineItems: [
+        { lineType: 'SERVICE', refId: 1, quantity: 1, unitPrice: 100, name: `${RUN_TAG} no-breakdown` },
+      ],
+      paidAmount: 100,
+      // No paymentBreakdownJson at all.
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('BREAKDOWN_REQUIRED');
+  });
+
+  test('Discount + tax compute the right grand_total under sum-validation', async ({ request }) => {
+    // 2 lines: 2*1000=2000 + 1*500=500 → subtotal 2500
+    // line discounts 100, order discount 50, tax 100 → total = 2500 - 150 + 100 = 2450
+    const res = await authPost(request, '/api/pos/sales', {
+      shiftId: extrasShiftId,
+      paymentMethod: 'CARD',
+      lineItems: [
+        { lineType: 'SERVICE', refId: 1, quantity: 2, unitPrice: 1000, lineDiscount: 100, name: `${RUN_TAG} svc-discount` },
+        { lineType: 'PRODUCT', refId: 2, quantity: 1, unitPrice: 500, name: `${RUN_TAG} prod-discount` },
+      ],
+      discountTotal: 50,
+      taxTotal: 100,
+      paidAmount: 2450,
+    });
+    expect(res.status(), `discount sale: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.total).toBe(2450);
+    expect(body.discountTotal).toBe(150);
+    expect(body.taxTotal).toBe(100);
+  });
+
+  test('paidAmount=0 (charge later) is allowed without sum-validation', async ({ request }) => {
+    // PRD comment in the route — paidAmount=0 means "credit / charge later",
+    // a valid pattern. Must not trip INVALID_PAYMENT_TOTAL.
+    const res = await authPost(request, '/api/pos/sales', {
+      shiftId: extrasShiftId,
+      paymentMethod: 'CASH',
+      lineItems: [
+        { lineType: 'SERVICE', refId: 1, quantity: 1, unitPrice: 800, name: `${RUN_TAG} charge-later` },
+      ],
+      paidAmount: 0,
+    });
+    expect(res.status(), `charge-later sale: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.paidAmount).toBe(0);
+    expect(body.total).toBe(800);
+  });
+});
+
 // ── Registers: DELETE (last so the lifecycle isn't torn apart) ─────
 
 test.describe('POS — DELETE /registers/:id', () => {

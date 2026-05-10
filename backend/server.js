@@ -293,6 +293,7 @@ const marketingRoutes = require("./routes/marketing");
 const reportsRoutes = require("./routes/reports");
 const developerRoutes = require("./routes/developer");
 const billingRoutes = require("./routes/billing");
+const v1InvoicesRoutes = require("./routes/v1_invoices");
 const searchRoutes = require("./routes/search");
 const aiRoutes = require("./routes/ai");
 const ticketsRoutes = require("./routes/tickets");
@@ -391,6 +392,14 @@ const leaveRoutes = require("./routes/leave");
 const externalRoutes = require("./routes/external");
 // Admin tooling — manual triggers + read APIs for ops actions (G-15 backup)
 const adminRoutes = require("./routes/admin");
+// Wave 7 Agent A — Service catalogue depth (PRD Gap §10):
+//   service-categories: hierarchical taxonomy CRUD
+//   drugs:              drug catalogue + typeahead
+//   csv_io:             services / products / membership-plans import+export
+//                       + bookings export-only
+const serviceCategoriesRoutes = require("./routes/service_categories");
+const drugsRoutes = require("./routes/drugs");
+const csvIoRoutes = require("./routes/csv_io");
 
 // OpenAPI Swagger Bootloader
 //
@@ -453,6 +462,11 @@ app.use("/api/marketing", marketingRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/developer", developerRoutes);
 app.use("/api/billing", billingRoutes);
+// PRD Gap §2 items 7a-d — `/api/v1/invoices` stable public-API alias for the
+// legacy /api/billing surface. Includes a NEW POST /:id/payments endpoint
+// (item 7c) and a /complete alias for mark-paid (item 7d). Mounted alongside
+// /api/billing so existing consumers stay green.
+app.use("/api/v1/invoices", v1InvoicesRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/tickets", ticketsRoutes);
@@ -542,6 +556,10 @@ app.use("/api/wellness", wellnessRoutes);
 // does NOT own (product-categories, vendors, inventory/receipts,
 // inventory/adjustments, inventory/movements, auto-consumption-rules).
 app.use("/api/wellness", inventoryRoutes);
+// Wave 7 Agent A — Service catalogue depth + Drug catalogue + CSV io.
+app.use("/api/wellness/service-categories", serviceCategoriesRoutes);
+app.use("/api/wellness/drugs", drugsRoutes);
+app.use("/api/csv", csvIoRoutes);
 // Wave 2 Agent II — POS / cash register / shift / sale backbone. Mounted at
 // /api/pos. Wellness-vertical-gated; generic tenants get a clean 403.
 app.use("/api/pos", posRoutes);

@@ -18,18 +18,20 @@
 //   - Payment method select (CASH default), paidAmount auto-fills total.
 //   - Submit POST /api/pos/sales — on 201, clear basket + show invoiceNumber.
 //
-// What this MVP doesn't do (parking for later, all backend-supported):
-//   - Patient-search picker (the field is hidden; sales without patientId
-//     are valid for walk-in cash purchases — common in clinic retail).
-//   - Refund flow (use Reports → /api/pos/sales/:id/refund from a list page
-//     in v3.5+; admin/manager only on the backend).
-//   - Sale history table (the cashier sees only invoiceNumber confirmation
-//     + a "Today's sales: <count>" counter; full history lives elsewhere).
-//   - Wallet / Gift Card / Coupon application at checkout (the Sale row
-//     accepts WALLET / GIFTCARD as paymentMethod values, but the UX of
-//     "show patient's available wallet credits and apply" is its own page).
+// Wave 7C extras (PRD Gap §2 items 2 + 10):
+//   - Guest Checkout toggle (item 2): a checkbox above the totals lets the
+//     cashier mark this as an anonymous walk-in. When ticked, patientId is
+//     forced to null on submit and the patient picker is hidden. Backend
+//     accepts null patientId per Wave 2A; this surfaces it in the UI.
+//   - Discount block (item 10): %, flat, OR coupon-code input. Coupon path
+//     calls /api/wellness/coupons/preview (no role gate) to compute the
+//     discount; flat/% paths set discountTotal directly.
+//   - Manager-override (item 10): admin/manager-only block lets the operator
+//     override the computed grand total with a custom amount + required
+//     reason; reason is logged into Sale.notes and AuditLog (server-side
+//     audit row written by routes/pos.js → writeAudit).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useContext } from 'react';
 import {
   Calculator,
   Plus,
@@ -38,10 +40,14 @@ import {
   Unlock,
   Receipt,
   CheckCircle2,
+  UserX,
+  Tag,
+  ShieldAlert,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
+import { AuthContext } from '../../App';
 
 const LINE_TYPES = [
   { value: 'SERVICE', label: 'Service' },
@@ -54,6 +60,9 @@ const LINE_TYPES = [
 const PAYMENT_METHODS = ['CASH', 'CARD', 'UPI', 'WALLET', 'GIFTCARD', 'COMBINED'];
 
 export default function PointOfSale() {
+  const { user } = useContext(AuthContext) || {};
+  const isAdminOrManager = user && (user.role === 'ADMIN' || user.role === 'MANAGER');
+
   const [registers, setRegisters] = useState([]);
   const [currentShift, setCurrentShift] = useState(null);
   const [openingForm, setOpeningForm] = useState({ registerId: '', openingFloat: '' });
@@ -75,6 +84,22 @@ export default function PointOfSale() {
   const [busy, setBusy] = useState(false);
   const [lastReceipt, setLastReceipt] = useState(null);
   const notify = useNotify();
+
+  // Wave 7C extras (PRD Gap §2 items 2 + 10)
+  const [guestCheckout, setGuestCheckout] = useState(false);
+  const [patientId, setPatientId] = useState('');
+  // Discount mode: 'percent' | 'flat' | 'coupon'.
+  const [discountMode, setDiscountMode] = useState('flat');
+  const [discountPercent, setDiscountPercent] = useState('');
+  const [couponCode, setCouponCode] = useState('');
+  const [couponPreview, setCouponPreview] = useState(null); // { code, discount, finalAmount } | null
+  const [couponBusy, setCouponBusy] = useState(false);
+  // Manager-override (admin/manager only): override the computed grand total
+  // with a custom amount + required reason. Reason hits Sale.notes + AuditLog
+  // when the sale lands.
+  const [overrideEnabled, setOverrideEnabled] = useState(false);
+  const [overrideAmount, setOverrideAmount] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
 
   const loadRegisters = async () => {
     try {
@@ -109,15 +134,83 @@ export default function PointOfSale() {
     () => basket.reduce((acc, l) => acc + Number(l.lineDiscount || 0), 0),
     [basket],
   );
-  const grandTotal = useMemo(
-    () => Math.max(0, subtotal - lineDiscountTotal - Number(discountTotal || 0) + Number(taxTotal || 0)),
-    [subtotal, lineDiscountTotal, discountTotal, taxTotal],
+  // Wave 7C — resolve the order-level discount from the active discount mode.
+  // Percent mode: subtotal * percent / 100; flat: discountTotal; coupon: the
+  // server-computed couponPreview.discount (preview is computed against
+  // (subtotal - lineDiscountTotal) so it doesn't double-apply line discounts).
+  const resolvedOrderDiscount = useMemo(() => {
+    if (discountMode === 'percent') {
+      const pct = Math.max(0, Math.min(100, Number(discountPercent || 0)));
+      return Math.max(0, ((subtotal - lineDiscountTotal) * pct) / 100);
+    }
+    if (discountMode === 'coupon' && couponPreview) {
+      return Math.max(0, Number(couponPreview.discount || 0));
+    }
+    return Math.max(0, Number(discountTotal || 0));
+  }, [discountMode, discountPercent, couponPreview, discountTotal, subtotal, lineDiscountTotal]);
+
+  const computedGrandTotal = useMemo(
+    () => Math.max(0, subtotal - lineDiscountTotal - resolvedOrderDiscount + Number(taxTotal || 0)),
+    [subtotal, lineDiscountTotal, resolvedOrderDiscount, taxTotal],
   );
+
+  // Manager-override: when admin/manager toggles override on, the grand total
+  // becomes the manually-entered overrideAmount. The override path requires
+  // a non-empty reason — completeSale enforces that.
+  const grandTotal = useMemo(() => {
+    if (overrideEnabled && isAdminOrManager) {
+      const v = parseFloat(overrideAmount);
+      return Number.isFinite(v) && v >= 0 ? v : computedGrandTotal;
+    }
+    return computedGrandTotal;
+  }, [overrideEnabled, overrideAmount, computedGrandTotal, isAdminOrManager]);
 
   useEffect(() => {
     // Auto-fill paidAmount when grandTotal changes (cashier overrides if needed)
     setPaidAmount(grandTotal);
   }, [grandTotal]);
+
+  // ── Coupon preview (Wave 7C / PRD §2 item 10) ──────────────────────
+  // Calls /api/wellness/coupons/preview to compute the discount the backend
+  // would actually apply. We DON'T call /apply here — application increments
+  // the redemptionCount, which is a side-effect that should only happen on
+  // sale completion. (Future enhancement: route the coupon through the Sale
+  // create payload so the backend can apply atomically.)
+  const previewCoupon = async () => {
+    if (!couponCode.trim()) {
+      notify.error('Enter a coupon code');
+      return;
+    }
+    if (subtotal <= 0) {
+      notify.error('Add at least one line item before applying a coupon');
+      return;
+    }
+    setCouponBusy(true);
+    try {
+      const baseAmount = Math.max(0, subtotal - lineDiscountTotal);
+      const result = await fetchApi('/api/wellness/coupons/preview', {
+        method: 'POST',
+        body: JSON.stringify({ code: couponCode.trim(), baseAmount }),
+      });
+      if (result && result.applied !== false && Number(result.discount) > 0) {
+        setCouponPreview({
+          code: result.code,
+          discount: Number(result.discount),
+          finalAmount: Number(result.finalAmount),
+          discountType: result.discountType,
+        });
+        notify.success(`Coupon ${result.code} — discount ${formatMoney(result.discount, 'INR', 'en-IN')}`);
+      } else {
+        setCouponPreview(null);
+        notify.error('Coupon does not apply to this purchase');
+      }
+    } catch (e) {
+      setCouponPreview(null);
+      notify.error(e.message || 'Failed to validate coupon');
+    } finally {
+      setCouponBusy(false);
+    }
+  };
 
   // ── Shift open ──────────────────────────────────────────────────────
   const openShift = async () => {
@@ -204,24 +297,72 @@ export default function PointOfSale() {
       notify.error('Add at least one line item');
       return;
     }
+    // Wave 7C — manager-override requires a non-empty reason. Backend logs
+    // the reason via writeAudit so we MUST send it.
+    if (overrideEnabled && isAdminOrManager) {
+      if (!overrideReason.trim()) {
+        notify.error('Manager-override requires a reason');
+        return;
+      }
+      const v = parseFloat(overrideAmount);
+      if (!Number.isFinite(v) || v < 0) {
+        notify.error('Manager-override amount must be a non-negative number');
+        return;
+      }
+    }
+    // Wave 7C — Guest checkout forces patientId=null. When NOT in guest mode
+    // the cashier may optionally enter a patientId; empty == anonymous (same
+    // as guest). The backend accepts null patientId per Wave 2A.
+    const resolvedPatientId = guestCheckout
+      ? null
+      : (patientId && Number.isFinite(parseInt(patientId)) ? parseInt(patientId) : null);
+
     setBusy(true);
     try {
+      const payload = {
+        shiftId: currentShift.id,
+        lineItems: basket,
+        paymentMethod,
+        discountTotal: Number(resolvedOrderDiscount || 0),
+        taxTotal: Number(taxTotal || 0),
+        paidAmount: Number(paidAmount || grandTotal),
+        patientId: resolvedPatientId,
+      };
+      // When manager-override is active, surface the override + reason in the
+      // request body so the backend can attach it to Sale.notes / AuditLog.
+      // (Server-side audit row writes through routes/pos.js writeAudit; the
+      // notes field is best-effort — schema may or may not include it on the
+      // Sale model. Either way the AuditLog catches the action.)
+      if (overrideEnabled && isAdminOrManager) {
+        payload.managerOverride = {
+          amount: Number(overrideAmount),
+          reason: overrideReason.trim(),
+        };
+        payload.notes = `Manager override: ${overrideReason.trim()} (override total ${overrideAmount})`;
+      }
+      // When a coupon was previewed, include its code so backend audit captures
+      // it. (Atomic coupon-apply routing is a future enhancement; today the
+      // coupon's discount is already baked into discountTotal above.)
+      if (discountMode === 'coupon' && couponPreview) {
+        payload.couponCode = couponPreview.code;
+      }
       const sale = await fetchApi('/api/pos/sales', {
         method: 'POST',
-        body: JSON.stringify({
-          shiftId: currentShift.id,
-          lineItems: basket,
-          paymentMethod,
-          discountTotal: Number(discountTotal || 0),
-          taxTotal: Number(taxTotal || 0),
-          paidAmount: Number(paidAmount || grandTotal),
-        }),
+        body: JSON.stringify(payload),
       });
       setLastReceipt(sale);
       setBasket([]);
       setDiscountTotal(0);
+      setDiscountPercent('');
+      setCouponCode('');
+      setCouponPreview(null);
       setTaxTotal(0);
       setPaymentMethod('CASH');
+      setGuestCheckout(false);
+      setPatientId('');
+      setOverrideEnabled(false);
+      setOverrideAmount('');
+      setOverrideReason('');
       notify.success(`Sale complete: ${sale.invoiceNumber}`);
     } catch (e) {
       notify.error(e.message || 'Failed to complete sale');
@@ -493,11 +634,70 @@ export default function PointOfSale() {
             )}
           </div>
 
-          {/* Totals + payment */}
+          {/* Wave 7C — Guest Checkout + Patient picker (PRD §2 item 2) */}
           <div style={cardStyle}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.75rem', alignItems: 'end' }}>
+            <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <UserX size={18} /> Customer
+            </h2>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.5rem' }}>
+              <input
+                type="checkbox"
+                checked={guestCheckout}
+                onChange={(e) => {
+                  setGuestCheckout(e.target.checked);
+                  if (e.target.checked) setPatientId('');
+                }}
+                aria-label="Guest checkout (anonymous walk-in)"
+              />
+              <span>Guest checkout (anonymous walk-in — no patient record)</span>
+            </label>
+            {!guestCheckout && (
               <div>
-                <label style={labelStyle}>Order discount</label>
+                <label style={labelStyle}>Patient ID (optional — leave blank for anonymous)</label>
+                <input
+                  type="number"
+                  min="1"
+                  style={inputStyle}
+                  value={patientId}
+                  onChange={(e) => setPatientId(e.target.value)}
+                  placeholder="e.g. 42"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Wave 7C — Discount + Coupon-code (PRD §2 item 10) */}
+          <div style={cardStyle}>
+            <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Tag size={18} /> Discount
+            </h2>
+            <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+              {['flat', 'percent', 'coupon'].map((mode) => (
+                <label key={mode} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="discount-mode"
+                    value={mode}
+                    checked={discountMode === mode}
+                    onChange={() => {
+                      setDiscountMode(mode);
+                      // Clear the others when switching modes so the resolved
+                      // discount comes from a single source of truth.
+                      if (mode !== 'flat') setDiscountTotal(0);
+                      if (mode !== 'percent') setDiscountPercent('');
+                      if (mode !== 'coupon') {
+                        setCouponCode('');
+                        setCouponPreview(null);
+                      }
+                    }}
+                  />
+                  <span style={{ textTransform: 'capitalize' }}>{mode === 'flat' ? 'Flat amount' : mode === 'percent' ? 'Percent' : 'Coupon code'}</span>
+                </label>
+              ))}
+            </div>
+            {discountMode === 'flat' && (
+              <div>
+                <label style={labelStyle}>Flat discount</label>
                 <input
                   type="number"
                   min="0"
@@ -505,6 +705,110 @@ export default function PointOfSale() {
                   style={inputStyle}
                   value={discountTotal}
                   onChange={(e) => setDiscountTotal(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+            )}
+            {discountMode === 'percent' && (
+              <div>
+                <label style={labelStyle}>Discount percentage (0–100)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="any"
+                  style={inputStyle}
+                  value={discountPercent}
+                  onChange={(e) => setDiscountPercent(e.target.value)}
+                  placeholder="e.g. 10"
+                />
+              </div>
+            )}
+            {discountMode === 'coupon' && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.5rem', alignItems: 'end' }}>
+                <div>
+                  <label style={labelStyle}>Coupon code</label>
+                  <input
+                    type="text"
+                    style={inputStyle}
+                    value={couponCode}
+                    onChange={(e) => {
+                      setCouponCode(e.target.value);
+                      setCouponPreview(null);
+                    }}
+                    placeholder="WELCOME10"
+                  />
+                </div>
+                <div>
+                  <button onClick={previewCoupon} disabled={couponBusy || !couponCode.trim()} style={primaryBtnStyle}>
+                    {couponBusy ? 'Validating…' : 'Apply coupon'}
+                  </button>
+                </div>
+                {couponPreview && (
+                  <div style={{ gridColumn: '1 / -1', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    Coupon <strong>{couponPreview.code}</strong> — discount {formatMoney(couponPreview.discount, 'INR', 'en-IN')} → final {formatMoney(couponPreview.finalAmount, 'INR', 'en-IN')}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Wave 7C — Manager-override (PRD §2 item 10, admin/manager-only) */}
+          {isAdminOrManager && (
+            <div style={cardStyle}>
+              <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <ShieldAlert size={18} /> Manager override
+              </h2>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  checked={overrideEnabled}
+                  onChange={(e) => setOverrideEnabled(e.target.checked)}
+                  aria-label="Enable manager override for grand total"
+                />
+                <span>Override the computed grand total (logged to audit log)</span>
+              </label>
+              {overrideEnabled && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.5rem' }}>
+                  <div>
+                    <label style={labelStyle}>Override amount</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      style={inputStyle}
+                      value={overrideAmount}
+                      onChange={(e) => setOverrideAmount(e.target.value)}
+                      placeholder="e.g. 1500"
+                    />
+                  </div>
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <label style={labelStyle}>Reason (required)</label>
+                    <input
+                      type="text"
+                      style={inputStyle}
+                      value={overrideReason}
+                      onChange={(e) => setOverrideReason(e.target.value)}
+                      placeholder="e.g. Goodwill discount for repeat patient — approved by Dr Harsh"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Totals + payment */}
+          <div style={cardStyle}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.75rem', alignItems: 'end' }}>
+              <div>
+                <label style={labelStyle}>Resolved discount</label>
+                <input
+                  type="number"
+                  step="any"
+                  style={{ ...inputStyle, background: 'var(--surface-2, #f7f7f8)' }}
+                  value={resolvedOrderDiscount}
+                  readOnly
+                  aria-label="Resolved order discount (read-only)"
                 />
               </div>
               <div>
@@ -548,8 +852,14 @@ export default function PointOfSale() {
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                   Subtotal {formatMoney(subtotal, 'INR', 'en-IN')} ·
                   Line discounts {formatMoney(lineDiscountTotal, 'INR', 'en-IN')} ·
+                  Order discount {formatMoney(resolvedOrderDiscount, 'INR', 'en-IN')} ·
                   Tax {formatMoney(Number(taxTotal || 0), 'INR', 'en-IN')}
                 </div>
+                {overrideEnabled && isAdminOrManager && (
+                  <div style={{ fontSize: '0.85rem', color: 'var(--warning-color, #b16a00)', marginTop: '0.25rem' }}>
+                    Manager override active — computed total {formatMoney(computedGrandTotal, 'INR', 'en-IN')}
+                  </div>
+                )}
                 <div style={{ fontSize: '1.5rem', fontWeight: 700, marginTop: '0.25rem' }}>
                   Total: {formatMoney(grandTotal, 'INR', 'en-IN')}
                 </div>

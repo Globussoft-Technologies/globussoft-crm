@@ -635,6 +635,52 @@ router.post("/sales", cashierGate, async (req, res) => {
       return res.status(400).json({ error: "paidAmount must be >= 0", code: "INVALID_PAID_AMOUNT" });
     }
 
+    // PRD Gap §2 item 8 — `sum(payments) == grand_total ±0.01` validation.
+    // When paymentMethod=COMBINED a structured breakdown JSON is required;
+    // every method's amount must sum to `total` within one paise/cent. This
+    // catches client-side splits that drop or duplicate a tender (a common
+    // POS class-bug — the cashier hits "Add" twice, the second tender shows
+    // visually but the JSON payload omits it). FP tolerance = 0.01 so float
+    // noise (0.1 + 0.2 = 0.30000000000000004) doesn't trip a false negative.
+    if (pm === "COMBINED") {
+      let breakdown;
+      if (typeof paymentBreakdownJson === "string") {
+        try { breakdown = JSON.parse(paymentBreakdownJson); } catch { breakdown = null; }
+      } else if (paymentBreakdownJson && typeof paymentBreakdownJson === "object") {
+        breakdown = paymentBreakdownJson;
+      }
+      if (!Array.isArray(breakdown) || breakdown.length === 0) {
+        return res.status(400).json({
+          error: "paymentBreakdownJson must be a non-empty array when paymentMethod=COMBINED",
+          code: "BREAKDOWN_REQUIRED",
+        });
+      }
+      const sum = breakdown.reduce((acc, row) => {
+        const a = parseFloat(row && row.amount);
+        return acc + (Number.isFinite(a) ? a : 0);
+      }, 0);
+      if (Math.abs(sum - total) > 0.01) {
+        return res.status(400).json({
+          error: `sum(paymentBreakdownJson amounts) must equal grand total ±0.01 (got ${sum.toFixed(2)} vs ${total.toFixed(2)})`,
+          code: "INVALID_PAYMENT_TOTAL",
+          breakdownSum: +sum.toFixed(2),
+          grandTotal: +total.toFixed(2),
+        });
+      }
+    } else if (paid > 0 && Math.abs(paid - total) > 0.01) {
+      // For non-COMBINED methods, paidAmount IS the entire tender. If the
+      // caller supplied a paid value that mismatches the computed total
+      // (and isn't 0 — 0 means "credit / charge later", a valid pattern),
+      // reject 400. Same INVALID_PAYMENT_TOTAL code as the COMBINED branch
+      // so consumers can handle both shapes uniformly.
+      return res.status(400).json({
+        error: `paidAmount must equal grand total ±0.01 for single-tender sales (got ${paid.toFixed(2)} vs ${total.toFixed(2)})`,
+        code: "INVALID_PAYMENT_TOTAL",
+        paidAmount: +paid.toFixed(2),
+        grandTotal: +total.toFixed(2),
+      });
+    }
+
     // Patient sanity-check (optional)
     let resolvedPatientId = null;
     if (patientId !== undefined && patientId !== null && patientId !== "") {

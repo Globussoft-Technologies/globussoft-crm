@@ -3478,7 +3478,12 @@ async function computePnlByService(req) {
     // #212: id was missing here, so visitIdToCost[v.id || -1] always
     // resolved to -1 → 0 for every row, making PRODUCT COST ₹0
     // and CONTRIBUTION = REVENUE on every service.
-    select: { id: true, serviceId: true, amountCharged: true, doctorId: true },
+    // #565 (Wave 9 Agent A) follow-up: status is required because
+    // pnlSumCompleted defensively re-applies the status='completed' filter.
+    // Without it every row's v.status is undefined and the helper drops
+    // them all → canonical.revenue=0 (visits already pre-filtered by the
+    // WHERE above, but the helper doesn't trust that).
+    select: { id: true, status: true, serviceId: true, amountCharged: true, doctorId: true },
   });
   const services = await prisma.service.findMany({
     where: { tenantId },
@@ -3567,7 +3572,9 @@ async function computePerProfessional(req) {
 
   const visits = await prisma.visit.findMany({
     where: visitWhere,
-    select: { doctorId: true, amountCharged: true, serviceId: true },
+    // status required because pnlSumCompleted re-applies the filter
+    // defensively. See comment at computePnlByService.
+    select: { status: true, doctorId: true, amountCharged: true, serviceId: true },
   });
   const doctors = await prisma.user.findMany({
     where: { tenantId },
@@ -3672,7 +3679,8 @@ async function computePerLocation(req) {
 
   const visits = await prisma.visit.findMany({
     where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
-    select: { locationId: true, amountCharged: true },
+    // status required for canonicalVisitTotals — see comment at computePnlByService.
+    select: { status: true, locationId: true, amountCharged: true },
   });
   const patients = await prisma.patient.groupBy({
     by: ["locationId"], where: { tenantId }, _count: { _all: true },

@@ -853,6 +853,20 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initAuditIntegrityCron } = require('./cron/auditIntegrityEngine');
   initAuditIntegrityCron();
 
+  // Wave 8b — POS receipt dispatcher subscribes to sale.completed events
+  // and queues SMS (always) + WhatsApp (if Contact opted-in) receipt rows.
+  // Event-driven, no cron tick. Fire-and-forget: a dispatch hiccup never
+  // affects the sale itself.
+  const { start: startPosReceiptDispatcher } = require('./lib/posReceiptDispatcher');
+  startPosReceiptDispatcher();
+
+  // Wave 8b — Leave Policy Engine (daily 02:30 IST). Detects fiscal
+  // year-end per LeavePolicy and applies carry-forward + encashment
+  // payouts where the policy specifies them. Idempotent on a
+  // per-(tenant,policy,user,year) basis via LeaveBalance lookups.
+  const { initLeavePolicyCron } = require('./cron/leavePolicyEngine');
+  initLeavePolicyCron();
+
 } // end DISABLE_CRONS guard
 
 // nodemon restart trigger

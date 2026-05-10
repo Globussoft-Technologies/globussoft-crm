@@ -4299,7 +4299,7 @@ router.get("/public/tenant/:slug", async (req, res) => {
     // content (logo / hero / featured / contact) so the public mini-website
     // can render branding alongside the service catalogue. Single page per
     // tenant for the MVP — picks the most-recently-updated active page.
-    const [rawServices, allLocations, miniSite] = await Promise.all([
+    const [rawServices, allLocations, miniSite, allResources] = await Promise.all([
       prisma.service.findMany({
         where: { tenantId: tenant.id, isActive: true },
         // Wave 2 Agent LL — include supportedBookingTypes so the public
@@ -4323,6 +4323,15 @@ router.get("/public/tenant/:slug", async (req, res) => {
           featuredServiceIds: true, contactPhone: true, contactEmail: true, hoursJson: true,
         },
       }).catch(() => null),
+      // Wave 8b — surface the tenant's active Resource (rooms / chairs /
+      // equipment) catalogue so the public booking widget can offer
+      // CLINIC_VISIT bookers an optional room/resource preference. Empty
+      // array on tenants without any resources keeps the widget simple.
+      prisma.resource.findMany({
+        where: { tenantId: tenant.id, isActive: true },
+        select: { id: true, name: true, type: true, locationId: true },
+        orderBy: [{ locationId: "asc" }, { name: "asc" }],
+      }).catch(() => []),
     ]);
     // Wave 2 Agent LL — parse the JSON-string column into a real array on the
     // wire. Legacy services with null column expose ["CLINIC_VISIT"] (the
@@ -4362,7 +4371,10 @@ router.get("/public/tenant/:slug", async (req, res) => {
         hours,
       };
     }
-    res.json({ tenant, services, locations, miniSite: miniSitePayload });
+    // Wave 8b — passthrough resources (already filtered to isActive=true).
+    // The widget renders these as an optional select per CLINIC_VISIT
+    // booking. Empty array → widget hides the picker entirely.
+    res.json({ tenant, services, locations, miniSite: miniSitePayload, resources: allResources });
   } catch (_e) {
     res.status(500).json({ error: "Failed to load clinic profile" });
   }
@@ -4454,6 +4466,10 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
       // block below so the legacy "no bookingType" flow stays visible).
       bookingType: rawBookingType,
       atHomeAddress, atHomeCity, atHomePincode,
+      // Wave 8b — optional Resource (room/chair/equipment) preference
+      // surfaced from the public widget. Validated below against the
+      // tenant's resource catalogue and stored on Visit.resourceId.
+      resourceId: rawResourceId,
       utm, referrer,
     } = req.body;
     if (!tenantSlug || !serviceId || !name || !phone) {
@@ -4591,11 +4607,59 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
     // didn't capture document.referrer client-side).
     const utmFields = sanitizeUtmInput(utm, referrer ?? req.get("referer") ?? null);
 
+    // Wave 8b — optional Resource preference. Validate against the
+    // tenant's catalogue (must be active + tenant-scoped + match the
+    // resolved location if both are set). Reject malformed input with
+    // INVALID_RESOURCE 400; an unknown ID falls through silently to
+    // null so a stale widget reference doesn't 500 an otherwise-valid
+    // booking.
+    let resolvedResourceId = null;
+    if (rawResourceId !== undefined && rawResourceId !== null && rawResourceId !== "") {
+      const parsedResourceId = parseInt(rawResourceId);
+      if (!Number.isFinite(parsedResourceId)) {
+        return res.status(400).json({ error: "resourceId must be numeric", code: "INVALID_RESOURCE" });
+      }
+      const resWhere = { id: parsedResourceId, tenantId: tenant.id, isActive: true };
+      const found = await prisma.resource.findFirst({ where: resWhere });
+      if (found) {
+        // Cross-check the resource's locationId matches the booking's
+        // resolvedLocationId — a resource at clinic A can't serve a
+        // visit at clinic B.
+        if (found.locationId == null || found.locationId === resolvedLocationId) {
+          resolvedResourceId = found.id;
+        }
+      }
+      // Silent fallthrough — null resolvedResourceId on stale/foreign id.
+    }
+
     // Wave 2 Agent LL — travel-time + video-link defaults per bookingType.
-    //   IN_HOME → travelTimeMinutes defaults to 30 (TODO: pincode-distance-based)
+    //   IN_HOME → travelTimeMinutes resolved via lib/pincodeZones.js zone
+    //             lookup (Wave 8b residual closure of the original TODO).
+    //             Falls back to DEFAULT_TRAVEL_TIME_MIN when either pincode
+    //             is missing — preserves legacy behaviour.
     //   VIDEO   → videoCallUrl auto-generated as a Jitsi-style room URL
     //   CLINIC_VISIT / PHONE → both stay null (legacy shape)
-    const travelTimeMinutes = bookingType === "IN_HOME" ? DEFAULT_TRAVEL_TIME_MIN : null;
+    let travelTimeMinutes = null;
+    if (bookingType === "IN_HOME") {
+      try {
+        const { estimateTravelMinutes } = require("../lib/pincodeZones");
+        // resolvedLocationId may be null on a no-locations tenant — fetch
+        // the clinic pincode if a location was resolved, else fall back.
+        let clinicPincode = null;
+        if (resolvedLocationId) {
+          const loc = await prisma.location.findUnique({
+            where: { id: resolvedLocationId },
+            select: { pincode: true },
+          });
+          clinicPincode = loc?.pincode || null;
+        }
+        travelTimeMinutes = estimateTravelMinutes(clinicPincode, normalizedPincode);
+      } catch (_e) {
+        // Defensive — if the helper throws for any reason, fall back to
+        // the legacy 30-min default rather than 500 the booking.
+        travelTimeMinutes = DEFAULT_TRAVEL_TIME_MIN;
+      }
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       let patient = await tx.patient.findFirst({
@@ -4634,6 +4698,8 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
           atHomePincode: normalizedPincode,
           travelTimeMinutes,
           videoCallUrl,
+          // Wave 8b — optional Resource (room/chair/equipment) preference.
+          resourceId: resolvedResourceId,
           utmSource: utmFields.utmSource,
           utmMedium: utmFields.utmMedium,
           utmCampaign: utmFields.utmCampaign,

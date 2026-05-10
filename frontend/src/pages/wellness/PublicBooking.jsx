@@ -11,6 +11,10 @@ const INITIAL_FORM = {
   // whose supportedBookingTypes is null.
   bookingType: 'CLINIC_VISIT',
   atHomeAddress: '', atHomeCity: '', atHomePincode: '',
+  // Wave 8b — optional Resource (room/chair/equipment) preference for
+  // CLINIC_VISIT bookings. Empty string = "no preference" (server stores
+  // null). The widget hides the picker when the tenant has no resources.
+  resourceId: '',
 };
 
 // Booking-type metadata (icon + label + description) — kept here next to the
@@ -104,6 +108,12 @@ export default function PublicBooking() {
         payload.atHomeAddress = form.atHomeAddress;
         payload.atHomeCity = form.atHomeCity;
         payload.atHomePincode = form.atHomePincode;
+      }
+      // Wave 8b — only attach resourceId on CLINIC_VISIT bookings (rooms
+      // / chairs only matter when the patient comes to the clinic). Empty
+      // string → server stores null.
+      if (form.bookingType === 'CLINIC_VISIT' && form.resourceId) {
+        payload.resourceId = parseInt(form.resourceId, 10);
       }
       // Attach UTM only when at least one field is populated — keeps the
       // organic-traffic payload identical to pre-Wave-2 shape.
@@ -314,6 +324,37 @@ export default function PublicBooking() {
               You&apos;ll receive a video call link by SMS once we confirm the slot.
             </div>
           )}
+
+          {/* Wave 8b — optional Resource preference for CLINIC_VISIT bookings.
+              Filtered to the picked location (or unscoped resources) so the
+              patient never sees rooms from a different clinic. Empty list →
+              picker is hidden entirely (tenant has no resources defined). */}
+          {form.bookingType === 'CLINIC_VISIT' && Array.isArray(profile?.resources) && profile.resources.length > 0 && (() => {
+            const locId = picked.location?.id || null;
+            const filtered = profile.resources.filter((r) => r.locationId == null || r.locationId === locId);
+            if (filtered.length === 0) return null;
+            return (
+              <div style={{ marginBottom: '0.75rem' }}>
+                <label htmlFor="pb-resource" style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                  Preferred room (optional)
+                </label>
+                <select
+                  id="pb-resource"
+                  aria-label="Preferred room or resource"
+                  value={form.resourceId}
+                  onChange={(e) => setForm({ ...form, resourceId: e.target.value })}
+                  style={input}
+                >
+                  <option value="">No preference</option>
+                  {filtered.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}{r.type && r.type !== 'ROOM' ? ` (${r.type.toLowerCase()})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          })()}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.5rem', marginBottom: '0.75rem' }}>
             <input type="datetime-local" aria-label="Preferred slot" value={form.preferredSlot} onChange={(e) => setForm({ ...form, preferredSlot: e.target.value })} style={input} />

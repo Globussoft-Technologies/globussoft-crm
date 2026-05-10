@@ -760,6 +760,29 @@ router.post("/sales", cashierGate, async (req, res) => {
     // (no patientId) and non-COMPLETED states are no-ops.
     await maybeAutoCreditLoyaltyForSale(sale, req.user.tenantId);
 
+    // Wave 8b — emit sale.completed so the POS receipt dispatcher
+    // (lib/posReceiptDispatcher.js) can queue an SMS (always) +
+    // WhatsApp (if Contact opted in) receipt. Fire-and-forget; an
+    // event-bus hiccup never affects the sale itself.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      emitEvent(
+        "sale.completed",
+        {
+          saleId: sale.id,
+          invoiceNumber: sale.invoiceNumber,
+          patientId: sale.patientId,
+          total: sale.total,
+          paymentMethod: sale.paymentMethod,
+          status: sale.status,
+          shiftId: sale.shiftId,
+          registerId: sale.registerId,
+        },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) { /* event bus optional */ }
+
     res.status(201).json(sale);
   } catch (e) {
     console.error("[pos] create sale error:", e.message);

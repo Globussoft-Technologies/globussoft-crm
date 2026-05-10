@@ -229,7 +229,10 @@ const SUPPORTED_CONTENT_TYPES = [
   "application/x-www-form-urlencoded",
   "multipart/form-data",
 ];
-const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = ["/api/marketing/submit"];
+// Wave 7A CSV import endpoints accept text/csv content type; let them
+// bypass the JSON-only guard. The route's own readUploadedCsv() helper
+// handles multipart-vs-raw-text intake.
+const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = ["/api/marketing/submit", "/api/csv/"];
 app.use("/api", (req, res, next) => {
   if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
   const lenHeader = req.headers["content-length"];

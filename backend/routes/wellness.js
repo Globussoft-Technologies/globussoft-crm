@@ -2537,7 +2537,12 @@ router.get("/patients/:id/memberships", phiReadGate, async (req, res) => {
 });
 
 // GET /memberships/:id — fetch a single membership (with redemption history).
-router.get("/memberships/:id", phiReadGate, async (req, res) => {
+// Numeric-only constraint so non-numeric subpaths like `/memberships/dashboard`
+// (Wave 7D Memberships dashboard endpoint at line ~2698) don't collide here
+// and parse as `:id="dashboard"` → 400. Express matches routes in declaration
+// order; adding the regex ensures `/memberships/dashboard` falls through to
+// the right handler regardless of order.
+router.get("/memberships/:id(\\d+)", phiReadGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const membership = await prisma.membership.findFirst({

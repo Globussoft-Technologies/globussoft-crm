@@ -3432,10 +3432,28 @@ const reportRange = (req) => {
 // target was deleted). The unbucketed count is what was previously
 // silently dropped from every tab independently, which is what produced
 // the 87 / 80 / 111 disagreement.
+//
+// #565 (Wave 9 Agent A, 2026-05-10): the headline `revenue` figure is now
+// computed via the shared `sumCompleted()` helper from lib/pnlMath.js so
+// /reports/pnl-by-service, /reports/per-professional, /reports/per-location
+// AND the Owner-Dashboard yesterday-revenue tile read from the SAME
+// definition (sum(amountCharged) where status='completed'). Pre-this,
+// canonicalVisitTotals included revenue from cancelled / no-show visits
+// whose amountCharged was set when the visit was first scheduled —
+// inflating every tab's headline by the cancellation rate.
+//
+// `visits` count remains unfiltered (matches whatever the route passed in)
+// so #281's "+N visits without service" footnote math still works (the
+// footnote needs the row-bucketed visits to be a subset of canonical
+// visits — which means canonical can't be status-filtered).
+const { sumCompleted: pnlSumCompleted } = require("../lib/pnlMath");
+
 function canonicalVisitTotals(visits) {
+  const completed = pnlSumCompleted(visits);
   return {
     visits: visits.length,
-    revenue: visits.reduce((s, v) => s + (parseFloat(v.amountCharged) || 0), 0),
+    revenue: completed.revenue,
+    completedCount: completed.count,
   };
 }
 
@@ -4116,8 +4134,6 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
       }),
     ]);
 
-    const sum = (arr, k) => arr.reduce((s, x) => s + (parseFloat(x[k]) || 0), 0);
-
     // Bucket revenue by day for the 30-day strip
     const dayBuckets = {};
     for (let i = 29; i >= 0; i--) {
@@ -4257,7 +4273,17 @@ router.get("/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, r
       yesterday: {
         visits: yesterdayVisits.length,
         completed: yesterdayVisits.filter((v) => v.status === "completed").length,
-        revenue: sum(yesterdayVisits, "amountCharged"),
+        // #565 (Wave 9 Agent A, 2026-05-10): yesterday.revenue is the
+        // canonical figure (sum(amountCharged) WHERE status='completed')
+        // so it reconciles byte-for-byte with the corresponding window on
+        // /reports/pnl-by-service. Pre-fix this summed amountCharged for
+        // ALL yesterday's visits regardless of status, so cancelled /
+        // no-show rows whose amountCharged was set when the visit was
+        // originally scheduled inflated yesterday's revenue silently.
+        // The shared helper at backend/lib/pnlMath.js encodes the
+        // canonical definition; see that file's header for the
+        // alternatives that were considered + why "completed" won.
+        revenue: pnlSumCompleted(yesterdayVisits).revenue,
       },
       pendingApprovals: pendingRecommendations.length,
       pendingRecommendations,

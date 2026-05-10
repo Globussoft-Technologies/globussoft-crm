@@ -777,7 +777,114 @@ test.describe('Wellness Reports API — PDF exports (#227)', () => {
 });
 
 // =====================================================================
-// 12. RUN_TAG sanity — this spec creates no fixtures, but log the tag
+// 12. #565 (HI-16) canonical revenue reconciliation across surfaces
+// =====================================================================
+//
+// Wave 9 Agent A, 2026-05-10. The bug this pins:
+//   /wellness Owner Dashboard, /wellness/reports P&L tab, and /wellness/reports
+//   per-professional / per-location tabs were each computing revenue with a
+//   different status filter. The 2026-05-07 retest comment on #565 logged
+//   five different totals for the same window. Post-this-spec, all surfaces
+//   read sum(amountCharged) WHERE status='completed' (the canonical, encoded
+//   in backend/lib/pnlMath.js).
+//
+// What we assert: for the SAME tenant + window, the headline revenue figure
+// surfaced by /reports/pnl-by-service.totalRevenue equals the sum of the
+// /reports/per-professional rows AND equals the sum of the /reports/per-location
+// rows. We also assert /pnl-by-service.totalRevenue == sum(rows.revenue) on
+// itself (the #281 internal-sanity contract).
+//
+// The dashboard's /api/wellness/dashboard endpoint reports yesterday.revenue
+// for a fixed yesterday IST window. We can't trivially align the report's
+// from/to to that exact window from the test because the dashboard window
+// is server-side IST midnight-anchored. We assert a weaker contract: for a
+// 30-day window covering yesterday, the P&L revenue is >= the dashboard's
+// yesterday.revenue (i.e. the dashboard figure is a single day's slice of
+// the larger window). This catches regressions where yesterday.revenue
+// silently sums non-completed visits and exceeds the canonical bound.
+//
+// Tenant choice: the wellness Admin's view. Demo seed has enough data
+// across 30 days for the rows to actually have nonzero revenue.
+
+test.describe('#565 (HI-16) — canonical revenue reconciliation across surfaces', () => {
+  test('P&L by-service totalRevenue == sum(rows.revenue) (internal sanity, #281)', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/reports/pnl-by-service', 'admin');
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(typeof body.totalRevenue).toBe('number');
+    const sumOfRows = (body.rows || []).reduce(
+      (s, row) => s + (Number(row.revenue) || 0),
+      0,
+    );
+    // toBeCloseTo with 2 decimals — float accumulation can drift in the
+    // 12th decimal otherwise.
+    expect(body.totalRevenue).toBeCloseTo(sumOfRows, 2);
+  });
+
+  test('P&L revenue == per-professional revenue total (same window)', async ({ request }) => {
+    const pnl = await authGet(request, '/api/wellness/reports/pnl-by-service', 'admin');
+    const perPro = await authGet(request, '/api/wellness/reports/per-professional', 'admin');
+    expect(pnl.ok()).toBeTruthy();
+    expect(perPro.ok()).toBeTruthy();
+    const pnlBody = await pnl.json();
+    const perProBody = await perPro.json();
+    // Note: per-professional.totals.revenue uses the canonical computation
+    // over the full visit set — equals the P&L canonical.revenue (which is
+    // the un-bucketed total). pnl.totalRevenue is the BUCKETED total
+    // (rows summed) and may differ from canonical when visits lack a
+    // serviceId. We compare against pnl.canonical.revenue here per the
+    // route's documented contract.
+    expect(typeof pnlBody.canonical?.revenue).toBe('number');
+    expect(typeof perProBody.totals?.revenue).toBe('number');
+    expect(pnlBody.canonical.revenue).toBeCloseTo(perProBody.totals.revenue, 2);
+  });
+
+  test('P&L revenue == per-location revenue total (same window)', async ({ request }) => {
+    const pnl = await authGet(request, '/api/wellness/reports/pnl-by-service', 'admin');
+    const perLoc = await authGet(request, '/api/wellness/reports/per-location', 'admin');
+    expect(pnl.ok()).toBeTruthy();
+    expect(perLoc.ok()).toBeTruthy();
+    const pnlBody = await pnl.json();
+    const perLocBody = await perLoc.json();
+    expect(typeof pnlBody.canonical?.revenue).toBe('number');
+    expect(typeof perLocBody.totals?.revenue).toBe('number');
+    expect(pnlBody.canonical.revenue).toBeCloseTo(perLocBody.totals.revenue, 2);
+  });
+
+  test('per-professional and per-location agree on revenue total (transitive)', async ({ request }) => {
+    const perPro = await authGet(request, '/api/wellness/reports/per-professional', 'admin');
+    const perLoc = await authGet(request, '/api/wellness/reports/per-location', 'admin');
+    expect(perPro.ok()).toBeTruthy();
+    expect(perLoc.ok()).toBeTruthy();
+    const perProBody = await perPro.json();
+    const perLocBody = await perLoc.json();
+    expect(perProBody.totals.revenue).toBeCloseTo(perLocBody.totals.revenue, 2);
+  });
+
+  test('dashboard yesterday.revenue is bounded by P&L for same tenant + 30-day window', async ({ request }) => {
+    // Sanity bound: dashboard.yesterday.revenue is a single-day window
+    // inside the 30-day default report window. Post-#565 fix the dashboard
+    // value uses the canonical filter, so 0 <= yesterday.revenue <=
+    // pnl.canonical.revenue (default 30-day).  Pre-fix the dashboard value
+    // could exceed P&L because cancelled/no-show rows leaked in.
+    const dashRes = await authGet(request, '/api/wellness/dashboard', 'admin');
+    const pnlRes = await authGet(request, '/api/wellness/reports/pnl-by-service', 'admin');
+    expect(dashRes.ok()).toBeTruthy();
+    expect(pnlRes.ok()).toBeTruthy();
+    const dash = await dashRes.json();
+    const pnl = await pnlRes.json();
+    const yesterdayRevenue = Number(dash?.yesterday?.revenue ?? 0);
+    const pnlRevenue = Number(pnl?.canonical?.revenue ?? 0);
+    expect(yesterdayRevenue).toBeGreaterThanOrEqual(0);
+    // Strict-less-equal with a 1-rupee slack for window-boundary timing
+    // (the dashboard uses startOfDay/endOfDay IST; the report defaults
+    // to "now - 30 days" which may chop the boundary by ms).
+    expect(yesterdayRevenue).toBeLessThanOrEqual(pnlRevenue + 1);
+  });
+});
+
+// =====================================================================
+// 13. RUN_TAG sanity — this spec creates no fixtures, but log the tag
 // =====================================================================
 
 // Read-only spec: no afterAll / fixture cleanup needed. RUN_TAG ${RUN_TAG}

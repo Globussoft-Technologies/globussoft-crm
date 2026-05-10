@@ -633,3 +633,131 @@ test.describe('happy-path role baselines', () => {
     }
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// #527 (Wave 9 Agent A, 2026-05-10) — formalized policy contract.
+//
+// The cd664f9 fix shipped the gates (phiReadGate / phiWriteGate); this
+// describe block pins the FORMALIZED POLICY CHOICES from the close-comment
+// that were left as "open by design" + "tracked for Rishu's product call":
+//
+//   POLICY 1 — Telecaller has READ but not WRITE (junk-disposition needs
+//              clinical context; clinical authorship requires the doctor
+//              or professional role)
+//   POLICY 2 — Cross-professional edits stay open by design (multi-doctor
+//              clinic semantics; audit log is the accountability surface)
+//   POLICY 3 — Helper has neither read nor write (front-desk role, no
+//              clinical training)
+//   POLICY 4 — ADMIN/MANAGER bypass via the "admin"/"manager" alias
+//              tokens (after #325 tenant-vertical gate)
+//
+// Source of truth for the policies: backend/lib/wellnessOwnership.js.
+// Mirror at routes/wellness.js phiReadGate + phiWriteGate. Unit tests at
+// backend/test/middleware/wellnessOwnership.test.js (38 cases).  These
+// e2e tests are the LIVE-API confirmation that the unit-tested helper +
+// the actual middleware agree.
+// ──────────────────────────────────────────────────────────────────────
+
+test.describe('#527 formalized policy contract — POLICIES 1-4', () => {
+  // POLICY 1 — Telecaller READ allowed, WRITE blocked.
+  test('POLICY 1 — telecaller GET /wellness/visits returns 200 (read access)', async ({ request }) => {
+    test.skip(!tokens.telecaller, 'telecaller login unavailable');
+    const r = await request.get(`${API}/wellness/visits?limit=1`, {
+      headers: authHdr(tokens.telecaller),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+  });
+
+  test('POLICY 1 — telecaller POST /wellness/visits returns 403 (write blocked)', async ({ request }) => {
+    test.skip(!tokens.telecaller, 'telecaller login unavailable');
+    const r = await request.post(`${API}/wellness/visits`, {
+      headers: authHdr(tokens.telecaller),
+      data: {
+        patientId: testPatientId || 999999,
+        serviceId: 1,
+        status: 'booked',
+        visitDate: nextVisitDate(),
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(403);
+    const body = await r.json();
+    expect(body.code).toBe('WELLNESS_ROLE_FORBIDDEN');
+    if (Array.isArray(body.allowed)) {
+      // The gate's allowed list MUST exclude telecaller for writes.
+      expect(body.allowed).not.toContain('telecaller');
+    }
+  });
+
+  test('POLICY 1 — telecaller PUT /wellness/patients/:id returns 403 (write blocked)', async ({ request }) => {
+    test.skip(!tokens.telecaller, 'telecaller login unavailable');
+    test.skip(!testPatientId, 'no patient seeded — beforeAll skipped');
+    const r = await request.put(`${API}/wellness/patients/${testPatientId}`, {
+      headers: authHdr(tokens.telecaller),
+      data: { name: `${RUN_TAG} TelecallerWriteAttempt` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(403);
+  });
+
+  // POLICY 2 — Cross-professional edits allowed.  Doctor edits a visit
+  // whose doctorId is NOT theirs.  This is the "open by design" close-
+  // comment formalized as a regression pin.
+  test('POLICY 2 — doctor PUT /wellness/visits/:id (other doctor\'s visit) returns 200 (cross-professional)', async ({ request }) => {
+    test.skip(!tokens.doctor, 'doctor login unavailable');
+    test.skip(!testVisitOtherDoctorId, 'no other-doctor visit seeded');
+    // drharsh edits a visit assigned to a DIFFERENT doctor.  Pre-fix
+    // someone might have assumed this should be blocked; the formalized
+    // policy says it's allowed (audit log captures the cross-user UPDATE).
+    const r = await request.put(`${API}/wellness/visits/${testVisitOtherDoctorId}`, {
+      headers: authHdr(tokens.doctor),
+      data: { notes: `${RUN_TAG} cross-doctor-edit` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    // 200 (success) is the contract.  If the route blocks cross-doctor
+    // edits in the future, this test goes red — flagging the regression
+    // for a deliberate policy review.
+    expect(r.status(), `cross-doctor edit should be allowed: ${(await r.text()).slice(0, 200)}`).toBe(200);
+  });
+
+  test('POLICY 2 — professional PUT /wellness/patients/:id (admin-created) returns 200 (cross-creator)', async ({ request }) => {
+    test.skip(!tokens.professional, 'professional login unavailable');
+    test.skip(!testPatientId, 'no patient seeded');
+    // The patient was created by wellnessAdmin in beforeAll.  Stylist
+    // edits it — POLICY 2 says this is allowed.
+    const r = await request.put(`${API}/wellness/patients/${testPatientId}`, {
+      headers: authHdr(tokens.professional),
+      data: { notes: `${RUN_TAG} cross-creator-edit` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status(), `cross-creator edit should be allowed: ${(await r.text()).slice(0, 200)}`).toBe(200);
+  });
+
+  // POLICY 3 — Helper blocked from BOTH read and write paths.
+  test('POLICY 3 — helper GET /wellness/visits returns 403 (no clinical read)', async ({ request }) => {
+    test.skip(!tokens.helper, 'helper login unavailable');
+    const r = await request.get(`${API}/wellness/visits?limit=1`, {
+      headers: authHdr(tokens.helper),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(403);
+    const body = await r.json();
+    expect(body.code).toBe('WELLNESS_ROLE_FORBIDDEN');
+    if (Array.isArray(body.allowed)) {
+      expect(body.allowed).not.toContain('helper');
+    }
+  });
+
+  // POLICY 4 — ADMIN/MANAGER bypass works after the #325 tenant gate.
+  test('POLICY 4 — wellness MANAGER can PUT /wellness/visits/:id (manager alias works)', async ({ request }) => {
+    test.skip(!tokens.manager, 'manager login unavailable');
+    test.skip(!testVisitMineId, 'no visit seeded');
+    const r = await request.put(`${API}/wellness/visits/${testVisitMineId}`, {
+      headers: authHdr(tokens.manager),
+      data: { notes: `${RUN_TAG} manager-write` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status(), `manager write should pass via "manager" alias: ${(await r.text()).slice(0, 200)}`).toBe(200);
+  });
+});

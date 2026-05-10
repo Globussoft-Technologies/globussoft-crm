@@ -1,5 +1,86 @@
 # CHANGELOG
 
+## v3.7.1 — 2026-05-10 — Wave 9 user-attention defaults: P&L canonical reconcile + wellness ownership policy + DPDP §11 + ops polish
+
+Patch release closing 4 user-attention items the discovery audit flagged as
+having defensible-default paths, plus the SELECT-status follow-up that the
+canonical reconcile surfaced.
+
+### Wave 9 — design-call defaults shipped
+
+- **#565 P&L canonical revenue reconcile** (`4eca36c` + follow-up `e0fa216`) —
+  three Owner-facing surfaces (`/wellness/dashboard.yesterday.revenue`,
+  `/reports/pnl-by-service`, `/reports/per-professional`, `/reports/per-location`)
+  drifted on revenue math. Extracted shared `backend/lib/pnlMath.js` helper with
+  one canonical definition: `sum(amountCharged) WHERE status='completed' AND
+  visitDate IN [from, to]` in IST. All four surfaces now compute through the
+  helper. Rationale documented at the top of the file with rejected alternatives;
+  user can override `CANONICAL_STATUS` + `sumCompleted` to switch the canonical.
+  Follow-up `e0fa216` added `status: true` to 3 visit SELECTs that the helper
+  defensively re-filters on (the helper is shape-preserving but the SELECTs had
+  projected away `status` since the WHERE already filtered).
+  +20 vitest cases at `backend/test/lib/pnlMath.test.js` + 5 e2e reconciliation
+  tests at `wellness-reports-api.spec.js`.
+
+- **#527 wellness ownership policy** (`f73cd4b`) — RBAC defaults documented in
+  `backend/lib/wellnessOwnership.js` with `PHI_READ_ROLES` / `PHI_WRITE_ROLES`
+  constants. Chosen policies:
+    - **POLICY 1**: telecaller READ allowed, WRITE blocked (already partial; now
+      formalized so contract drift goes red on per-push)
+    - **POLICY 2**: cross-professional + cross-location edits allowed (clinic
+      ops require coverage between professionals; audit log is the
+      accountability surface)
+    - **POLICY 3**: helper denied both
+    - **POLICY 4**: ADMIN/MANAGER bypass via alias tokens
+  +38 vitest cases at `backend/test/middleware/wellnessOwnership.test.js`.
+  +7 POLICY 1-4 tests at `wellness-rbac-regression-api.spec.js`. To override:
+  edit role constants + the gate definitions in `routes/wellness.js`.
+
+- **WhatsApp opt-out re-opt-in DPDP §11 audit row** (`a667d07`) — `DELETE
+  /api/whatsapp/opt-outs/:id` now requires `body.reason` (≥10 chars after
+  trim) → 400 `REASON_REQUIRED`; emits `WHATSAPP_OPT_IN_RESET` audit action
+  (not generic DELETE) with `details.{actor, reasonRequired, reason,
+  contactPhone, priorReason, priorCapturedAt}`. +2 spec tests pinning the
+  contract.
+
+### Wave 9 — operational polish
+
+- **deploy.yml `seed_wellness` workflow_dispatch input** (`a667d07`) — new
+  boolean input (default false). When triggered via `gh workflow run deploy.yml
+  -f seed_wellness=true`, the deploy step runs `node prisma/seed-wellness.js`
+  AFTER `prisma db push`. Closes the cron-learning candidate flagged after
+  v3.6.0's drugs-seed-gap (`scripts/seed-drugs-on-demo.py` no longer needed
+  for the standard case).
+
+- **SendGrid Sender Identity hint** (`a667d07`) — `email_scheduling.js` now
+  pattern-matches the unverified-Sender-Identity rejection text and surfaces
+  `hint: 'Verify Sender Identity at https://app.sendgrid.com/settings/sender_auth'`
+  in the response so QA / operators can tell at a glance whether B-03 is
+  blocking before logging into SendGrid.
+
+- **Code cleanup** (`a667d07`) — stale TODO comments dropped from `routes/
+  notifications.js` (UserNotificationPreference deferred-product) +
+  `routes/portal.js` (SLA auto-apply mirror — actually SHIPPED 15 lines
+  inline, mirroring `routes/tickets.js:80` + `routes/support.js:60`).
+  Portal-submitted tickets now stamp `slaResponseDue` / `slaResolveDue`.
+
+### Standing rule update
+
+- **The "shape-preserving helper + projected-away column" trap** — when
+  promoting an inline reducer to a lib helper that defensively re-applies a
+  filter, audit every callsite's Prisma SELECT for the filter-input fields.
+  The defensive re-filter is good practice, but means callers can no longer
+  project away the filter columns silently — `e0fa216` is the canonical
+  example. Worth a CLAUDE.md one-liner if a third instance lands.
+
+### Stats
+
+- **2 new lib helpers + 1 follow-up SELECT fix** (pnlMath, wellnessOwnership)
+- **+58 vitest unit tests** (1162 → 1220)
+- **+12 e2e tests** (5 reconciliation + 7 RBAC POLICY)
+- **2 new GitHub Actions inputs** (deploy.yml `seed_wellness`)
+- **DPDP §11 audit contract** for WhatsApp opt-out re-opt-in
+
 ## v3.7.0 — 2026-05-10 — Wave 8b PRD Gap residual sweep (4 new items + 4 verified-shipped audit) + phantom-carry-over standing rule
 
 Minor release. The bigger story is the **Wave 8 phantom-carry-over audit**: the 8-May-2026 PRD Gap Google Doc had ~17 "❌ open" rows across Calendar/Resources, Inventory Backbone, Wallet/Cashback, GiftCards/Coupons that turned out to be 100% already-shipped in Wave 11 (`a177c99`, `b69febf`, `d05ee16`). A 4-agent parallel wave dispatched on those clusters exited as 4× phantom — Agent A self-exited cleanly with full audit; Agents B/C/D stopped mid-flight after 3-5 min apiece after their pre-flight grep found the schema already populated. The phantom-carry-over pattern was promoted from cron-learning to standing rule (4 confirmed instances in 4 days).

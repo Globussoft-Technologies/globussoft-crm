@@ -1979,19 +1979,34 @@ model DocumentTemplate {
 // ── Meeting Scheduler ────────────────────────────────────────────
 
 model BookingPage {
-  id           Int      @id @default(autoincrement())
-  slug         String   @unique
-  title        String
-  description  String?
-  ownerId      Int
-  durationMins Int      @default(30)
-  bufferMins   Int      @default(0)
-  availability String   @db.Text // JSON: weekly schedule
-  isActive     Boolean  @default(true)
-  tenantId     Int      @default(1)
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 Int      @id @default(autoincrement())
+  slug               String   @unique
+  title              String
+  description        String?
+  ownerId            Int
+  durationMins       Int      @default(30)
+  bufferMins         Int      @default(0)
+  availability       String   @db.Text // JSON: weekly schedule
+  isActive           Boolean  @default(true)
+  // Wave 7D — PRD Gap §6 item 8 — Mini Website rich content editor.
+  // logoUrl + heroImageUrl point at uploaded files under /uploads/booking-pages/.
+  // featuredServiceIds is a JSON-string column (back-compat, no native JSON
+  // required) with the ordered list of Service ids to feature on the public
+  // booking page. hoursJson is a JSON-string of weekday → "HH:MM-HH:MM" rows
+  // so the public page can show "Mon-Sat 9:00-19:00" alongside the contact
+  // block. All optional — pre-Wave-7D rows have null for every new field.
+  logoUrl            String?  @db.Text
+  heroImageUrl       String?  @db.Text
+  heroHeadline       String?
+  heroSubheadline    String?  @db.Text
+  featuredServiceIds String?  @db.Text
+  contactPhone       String?
+  contactEmail       String?
+  hoursJson          String?  @db.Text
+  tenantId           Int      @default(1)
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 model Booking {

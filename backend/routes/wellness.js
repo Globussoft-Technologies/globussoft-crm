@@ -2682,6 +2682,73 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
   }
 });
 
+// Wave 7D — GET /memberships/dashboard — PRD Gap §4 item 8.
+// Three aggregates the Memberships page surfaces above its existing list:
+//   - active count + total deferred-revenue value (sum of plan.price scaled
+//     by remaining-balance fraction across the entitlements array)
+//   - expiring-this-week count (active + endDate within next 7 days)
+//   - expired count (status='expired' OR endDate < now)
+// Tenant-scoped; admin/manager only (mirrors POS/staff/POS-extras gating).
+//
+// Deferred-revenue maths: a membership's "remaining value" is plan.price *
+// (sum(b.remaining) / sum(plan_qty)). That isn't a perfect dollar-cost
+// allocation per service (a £100 facial vs a £20 follow-up are valued
+// equally here), but it's the simplest defensible per-row calculation and
+// matches how the existing Memberships card describes value to admins.
+router.get("/memberships/dashboard", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+  try {
+    const now = new Date();
+    const weekOut = new Date(now.getTime() + 7 * 24 * 3600 * 1000);
+    const tenantId = req.user.tenantId;
+
+    const [actives, expiringThisWeek, expiredCount] = await Promise.all([
+      prisma.membership.findMany({
+        where: { tenantId, status: "active", endDate: { gte: now } },
+        include: { plan: { select: { price: true, entitlements: true } } },
+      }),
+      prisma.membership.count({
+        where: { tenantId, status: "active", endDate: { gte: now, lte: weekOut } },
+      }),
+      prisma.membership.count({
+        where: {
+          tenantId,
+          OR: [
+            { status: "expired" },
+            { AND: [{ status: "active" }, { endDate: { lt: now } }] },
+          ],
+        },
+      }),
+    ]);
+
+    // Deferred revenue: per-membership plan.price * (remaining / planTotal).
+    // Skip rows with corrupt / unparseable balances rather than failing
+    // the whole aggregate — one bad row shouldn't black out the dashboard.
+    let deferredRevenue = 0;
+    for (const m of actives) {
+      try {
+        const balance = JSON.parse(m.balance || "[]");
+        const plan = JSON.parse(m.plan?.entitlements || "[]");
+        if (!Array.isArray(balance) || !Array.isArray(plan)) continue;
+        const planTotal = plan.reduce((acc, p) => acc + (parseInt(p.quantity, 10) || 0), 0);
+        if (planTotal <= 0) continue;
+        const remaining = balance.reduce((acc, b) => acc + (parseInt(b.remaining, 10) || 0), 0);
+        const fraction = Math.max(0, Math.min(1, remaining / planTotal));
+        deferredRevenue += (parseFloat(m.plan?.price) || 0) * fraction;
+      } catch { /* skip corrupt row */ }
+    }
+
+    res.json({
+      active: { count: actives.length, deferredRevenue: Math.round(deferredRevenue * 100) / 100 },
+      expiringThisWeek: { count: expiringThisWeek },
+      expired: { count: expiredCount },
+      asOf: now.toISOString(),
+    });
+  } catch (e) {
+    console.error("[wellness] memberships dashboard error:", e.message);
+    res.status(500).json({ error: "Failed to load memberships dashboard" });
+  }
+});
+
 // POST /memberships/:id/cancel — admin cancel. Sets status='cancelled',
 // stamps cancelledAt + cancelReason. Idempotent if already cancelled (200).
 router.post("/memberships/:id/cancel", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
@@ -4223,7 +4290,11 @@ router.get("/public/tenant/:slug", async (req, res) => {
     });
     if (!tenant || tenant.vertical !== "wellness") return res.status(404).json({ error: "Clinic not found" });
 
-    const [rawServices, allLocations] = await Promise.all([
+    // Wave 7D — also surface the tenant's first active BookingPage rich
+    // content (logo / hero / featured / contact) so the public mini-website
+    // can render branding alongside the service catalogue. Single page per
+    // tenant for the MVP — picks the most-recently-updated active page.
+    const [rawServices, allLocations, miniSite] = await Promise.all([
       prisma.service.findMany({
         where: { tenantId: tenant.id, isActive: true },
         // Wave 2 Agent LL — include supportedBookingTypes so the public
@@ -4238,6 +4309,15 @@ router.get("/public/tenant/:slug", async (req, res) => {
         where: { tenantId: tenant.id, isActive: true },
         select: { id: true, name: true, addressLine: true, city: true, state: true, pincode: true, phone: true, hours: true },
       }),
+      prisma.bookingPage.findFirst({
+        where: { tenantId: tenant.id, isActive: true },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          slug: true,
+          logoUrl: true, heroImageUrl: true, heroHeadline: true, heroSubheadline: true,
+          featuredServiceIds: true, contactPhone: true, contactEmail: true, hoursJson: true,
+        },
+      }).catch(() => null),
     ]);
     // Wave 2 Agent LL — parse the JSON-string column into a real array on the
     // wire. Legacy services with null column expose ["CLINIC_VISIT"] (the
@@ -4253,7 +4333,31 @@ router.get("/public/tenant/:slug", async (req, res) => {
     // /book/<slug> step 2 (Pick a clinic) and step 3 (order summary).
     const INTERNAL_LOCATION_NAME_RE = /^(smoke-test|e2e[-_ ]|test[-_ ]|qa[-_ ]|dev[-_ ])/i;
     const locations = allLocations.filter((l) => !INTERNAL_LOCATION_NAME_RE.test(String(l.name || "").trim()));
-    res.json({ tenant, services, locations });
+    // Wave 7D — flatten miniSite into a friendlier shape for the widget.
+    let miniSitePayload = null;
+    if (miniSite) {
+      let featuredServiceIds = [];
+      try {
+        if (miniSite.featuredServiceIds) {
+          const parsed = JSON.parse(miniSite.featuredServiceIds);
+          if (Array.isArray(parsed)) featuredServiceIds = parsed.map((n) => parseInt(n, 10)).filter(Number.isFinite);
+        }
+      } catch { /* leave empty */ }
+      let hours = null;
+      try { if (miniSite.hoursJson) hours = JSON.parse(miniSite.hoursJson); } catch { /* leave null */ }
+      miniSitePayload = {
+        slug: miniSite.slug,
+        logoUrl: miniSite.logoUrl || null,
+        heroImageUrl: miniSite.heroImageUrl || null,
+        heroHeadline: miniSite.heroHeadline || null,
+        heroSubheadline: miniSite.heroSubheadline || null,
+        featuredServiceIds,
+        contactPhone: miniSite.contactPhone || null,
+        contactEmail: miniSite.contactEmail || null,
+        hours,
+      };
+    }
+    res.json({ tenant, services, locations, miniSite: miniSitePayload });
   } catch (_e) {
     res.status(500).json({ error: "Failed to load clinic profile" });
   }

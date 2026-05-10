@@ -839,3 +839,84 @@ test.describe('Booking pages API — auth gate', () => {
     expect(c.status()).toBe(404);
   });
 });
+
+// Wave 7D — PRD Gap §6 item 8 — rich-content fields (logo / hero / featured
+// services / contact block / hours). Pin the contract that BookingPage now
+// accepts these fields on POST + PUT and surfaces them on the public GET.
+test.describe('Booking pages API — Wave 7D rich content', () => {
+  test('POST / accepts rich-content fields and PUT round-trips them', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    const created = await createPage(request, 'generic', {
+      title: `${RUN_TAG} richcontent-${Date.now()}`,
+      heroHeadline: 'Welcome to Globussoft Demos',
+      heroSubheadline: 'Book your next discovery call',
+      contactPhone: '+91 99999 12345',
+      contactEmail: 'hello@globusdemos.com',
+      featuredServiceIds: [101, 202, 303],
+      hoursJson: 'Mon-Fri 9-18',
+    });
+    expect(created.heroHeadline).toBe('Welcome to Globussoft Demos');
+    expect(created.contactPhone).toBe('+91 99999 12345');
+    // featuredServiceIds is a JSON-string column — backend stringifies on
+    // create. The shape on the wire is whatever the column holds.
+    expect(typeof created.featuredServiceIds === 'string' || created.featuredServiceIds === null).toBe(true);
+
+    const putRes = await put(request, token, `/api/booking-pages/${created.id}`, {
+      heroHeadline: 'New headline',
+      heroSubheadline: null,
+      featuredServiceIds: [202, 101],
+    });
+    expect(putRes.status()).toBe(200);
+    const updated = await putRes.json();
+    expect(updated.heroHeadline).toBe('New headline');
+    expect(updated.heroSubheadline).toBeNull();
+    // featuredServiceIds order preserved
+    const parsed = typeof updated.featuredServiceIds === 'string'
+      ? JSON.parse(updated.featuredServiceIds)
+      : updated.featuredServiceIds;
+    expect(parsed).toEqual([202, 101]);
+  });
+
+  test('GET /public/:slug surfaces rich-content fields', async ({ request }) => {
+    const created = await createPage(request, 'generic', {
+      title: `${RUN_TAG} pub-rich-${Date.now()}`,
+      heroHeadline: 'Pub headline',
+      heroSubheadline: 'Pub subheadline',
+      contactPhone: '+91 88888 22222',
+      contactEmail: 'pubcontact@example.test',
+      featuredServiceIds: [11, 22, 33],
+      hoursJson: 'Mon-Sat 10-19',
+    });
+    const pub = await pubGet(request, `/api/booking-pages/public/${created.slug}`);
+    expect(pub.status()).toBe(200);
+    const body = await pub.json();
+    expect(body.heroHeadline).toBe('Pub headline');
+    expect(body.heroSubheadline).toBe('Pub subheadline');
+    expect(body.contactPhone).toBe('+91 88888 22222');
+    expect(body.contactEmail).toBe('pubcontact@example.test');
+    // featuredServiceIds parsed into a JS array on public response
+    expect(Array.isArray(body.featuredServiceIds)).toBe(true);
+    expect(body.featuredServiceIds).toEqual([11, 22, 33]);
+  });
+
+  test('POST /:id/upload requires multipart file + 404 on cross-tenant', async ({ request }) => {
+    const { token: genTok } = await getGeneric(request);
+    // Without `file` field → 400
+    const noFile = await request.post(`${BASE_URL}/api/booking-pages/1/upload`, {
+      headers: { Authorization: `Bearer ${genTok}` },
+    });
+    // 400 (missing file) OR 404 (page not found) are both acceptable;
+    // the failure path the spec is pinning is "no 5xx on missing field".
+    expect([400, 404]).toContain(noFile.status());
+
+    // Cross-tenant 404
+    const wellnessPage = await createPage(request, 'wellness', { title: `${RUN_TAG} upload-cross-${Date.now()}` });
+    const crossRes = await request.post(`${BASE_URL}/api/booking-pages/${wellnessPage.id}/upload`, {
+      headers: { Authorization: `Bearer ${genTok}` },
+      multipart: {
+        file: { name: 'tiny.png', mimeType: 'image/png', buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]) },
+      },
+    });
+    expect(crossRes.status()).toBe(404);
+  });
+});

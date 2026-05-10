@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, User as UserIcon, Stethoscope, Plus, X } from 'lucide-react';
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, User as UserIcon, Stethoscope, Plus, X, Building2, Home, Video, Phone, Car } from 'lucide-react';
 import React from 'react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -35,6 +35,18 @@ const STATUS_BORDER = {
 // though they had visits booked, and the receptionist couldn't see their
 // availability from the grid.
 const PRACTITIONER_ROLES = new Set(['doctor', 'professional']);
+
+// Wave 7D — PRD Gap §11 item 4 — booking-type meta. Mirrors
+// PublicBooking.jsx so the calendar's per-event badge + legend uses the
+// same icons the patient saw at booking time. Default falls back to
+// CLINIC_VISIT for legacy rows where bookingType is null.
+const BOOKING_TYPE_META = {
+  CLINIC_VISIT: { label: 'Clinic visit',  icon: Building2, color: '#0ea5e9' },
+  IN_HOME:      { label: 'At home',       icon: Home,      color: '#10b981' },
+  VIDEO:        { label: 'Video consult', icon: Video,     color: '#a855f7' },
+  PHONE:        { label: 'Phone consult', icon: Phone,     color: '#f59e0b' },
+};
+const BOOKING_TYPE_ORDER = ['CLINIC_VISIT', 'IN_HOME', 'VIDEO', 'PHONE'];
 
 // #263: render the IST calendar day, not the UTC day. toISOString() returns
 // UTC, so any IST clock time before 05:30 (e.g. 1 AM IST = 19:30 prev-day UTC)
@@ -355,6 +367,35 @@ export default function CalendarGrid() {
                           <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {v.service?.name || '—'}
                           </div>
+                          {/* Wave 7D — booking-type badge + travel-time
+                              annotation. Both fields land on Visit per
+                              Wave 2D; pre-Wave-2D rows have null bookingType,
+                              so we treat that as CLINIC_VISIT for the badge
+                              icon (matches the column default). Travel time
+                              is only surfaced for IN_HOME visits where the
+                              field is meaningful — staff dispatch needs to
+                              know the buffer to allocate. */}
+                          {(() => {
+                            const bt = v.bookingType || 'CLINIC_VISIT';
+                            const meta = BOOKING_TYPE_META[bt] || BOOKING_TYPE_META.CLINIC_VISIT;
+                            const Icon = meta.icon;
+                            return (
+                              <div style={{
+                                display: 'flex', alignItems: 'center', gap: 4,
+                                marginTop: 3, fontSize: '0.65rem',
+                                color: meta.color,
+                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                              }}>
+                                <Icon size={11} aria-hidden="true" />
+                                <span data-testid={`booking-type-${bt}`}>{meta.label}</span>
+                                {bt === 'IN_HOME' && Number.isFinite(v.travelTimeMinutes) && v.travelTimeMinutes > 0 && (
+                                  <span data-testid="travel-time" style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                                    <Car size={10} aria-hidden="true" /> Travel: {v.travelTimeMinutes} min
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </Link>
                       ))}
                       {isCreatable && (
@@ -387,6 +428,30 @@ export default function CalendarGrid() {
             <span style={{ width: 10, height: 10, borderRadius: 2, background: color }} />{s}
           </span>
         ))}
+      </div>
+
+      {/* Wave 7D — booking-type legend chip. Same icons used on the
+          PublicBooking.jsx widget + on each event card above, so the
+          receptionist can match an at-home Home icon to "AT HOME" at a
+          glance. Rendered as a separate row below the status legend. */}
+      <div
+        data-testid="booking-type-legend"
+        style={{
+          marginTop: '0.5rem',
+          display: 'flex', flexWrap: 'wrap', gap: '0.75rem',
+          fontSize: '0.75rem',
+        }}
+      >
+        <span style={{ color: 'var(--text-secondary)', fontWeight: 600, marginRight: '0.25rem' }}>Booking type:</span>
+        {BOOKING_TYPE_ORDER.map((bt) => {
+          const meta = BOOKING_TYPE_META[bt];
+          const Icon = meta.icon;
+          return (
+            <span key={bt} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: meta.color }}>
+              <Icon size={12} aria-hidden="true" /> {meta.label}
+            </span>
+          );
+        })}
       </div>
 
       {newVisit && (

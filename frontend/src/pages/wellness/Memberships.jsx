@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Crown, Plus, Pencil, Trash2, X, Save, IndianRupee, Calendar, Package } from 'lucide-react';
+import { Crown, Plus, Pencil, Trash2, X, Save, IndianRupee, Calendar, Package, AlertCircle, Clock } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
@@ -31,20 +31,29 @@ export default function Memberships() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  // Wave 7D — PRD Gap §4 item 8 — dashboard summary cards. Loaded only when
+  // the current user is an admin/manager (the backend gates the endpoint).
+  // Set to null on 403 / network error so the cards render gracefully blank.
+  const [dashboard, setDashboard] = useState(null);
 
   const load = () => {
     setLoading(true);
     Promise.all([
       fetchApi('/api/wellness/membership-plans?includeInactive=1').catch(() => []),
       fetchApi('/api/wellness/services').catch(() => []),
+      isAdmin
+        ? fetchApi('/api/wellness/memberships/dashboard').catch(() => null)
+        : Promise.resolve(null),
     ])
-      .then(([p, s]) => {
+      .then(([p, s, d]) => {
         setPlans(Array.isArray(p) ? p : []);
         setServices(Array.isArray(s) ? s : []);
+        setDashboard(d && typeof d === 'object' ? d : null);
       })
       .finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [isAdmin]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -279,6 +288,61 @@ export default function Memberships() {
             </button>
           </div>
         </form>
+      )}
+
+      {/* Wave 7D — dashboard summary cards. Visible to ADMIN/MANAGER only;
+          backend already gates /memberships/dashboard so unauthenticated /
+          unauthorised callers get null and the cards section short-circuits. */}
+      {isAdmin && dashboard && (
+        <div
+          data-testid="memberships-dashboard-cards"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
+            gap: '1rem',
+            marginBottom: '1.5rem',
+          }}
+        >
+          <div className="glass" style={{ padding: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+              <Crown size={16} /> ACTIVE MEMBERSHIPS
+            </div>
+            <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.5rem' }}>{dashboard.active?.count || 0}</div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+              Deferred revenue: {formatMoney(dashboard.active?.deferredRevenue || 0, 'INR')}
+            </div>
+          </div>
+          <a
+            href="/wellness/memberships?expiresWithin=7d"
+            className="glass"
+            style={{ padding: '1.25rem', textDecoration: 'none', color: 'inherit', display: 'block' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+              <Clock size={16} /> EXPIRING THIS WEEK
+            </div>
+            <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.5rem', color: '#f59e0b' }}>
+              {dashboard.expiringThisWeek?.count || 0}
+            </div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+              Active memberships ending in next 7 days
+            </div>
+          </a>
+          <a
+            href="/wellness/memberships?status=EXPIRED"
+            className="glass"
+            style={{ padding: '1.25rem', textDecoration: 'none', color: 'inherit', display: 'block' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+              <AlertCircle size={16} /> EXPIRED
+            </div>
+            <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.5rem', color: '#ef4444' }}>
+              {dashboard.expired?.count || 0}
+            </div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+              Memberships past their end date
+            </div>
+          </a>
+        </div>
       )}
 
       {loading ? (

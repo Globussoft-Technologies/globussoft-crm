@@ -737,4 +737,46 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
     const res = await request.get(`${API}/whatsapp/threads/${createdThreadIds[0]}`, { headers: wellnessAuth() });
     expect(res.status()).toBe(404);
   });
+
+  // ── Wave 7D — PRD Gap §7 item 5 — 24h re-engagement-window enforcement ──
+  // Per Meta WhatsApp Business policy, free-form (non-template) messages are
+  // only allowed within 24h of the customer's last inbound message. Outside
+  // that window the route must reject 422 OUTSIDE_24H_WINDOW; templates
+  // bypass the gate (per Meta — templates re-open the window).
+
+  test('POST /whatsapp/send rejects free-form to a phone with NO inbound history (cold outreach) → 422 OUTSIDE_24H_WINDOW', async ({ request }) => {
+    // Phone unique to this run so no prior inbound exists. We expect 422 with
+    // the documented code BEFORE the route hits Meta — the WhatsAppConfig
+    // check happens after. Status should NOT be 400 (validation), 401 (auth),
+    // or 500 (config missing) — the 24h gate fires earliest.
+    const phone = `+91${Date.now().toString().slice(-10)}`;
+    const res = await request.post(`${API}/whatsapp/send`, {
+      headers: auth(),
+      data: { to: phone, body: 'Hi from cold outreach' },
+    });
+    expect(res.status()).toBe(422);
+    const body = await res.json();
+    expect(body.code).toBe('OUTSIDE_24H_WINDOW');
+    expect(body.error).toMatch(/24 hours|template/i);
+    expect(body.hint).toMatch(/templateName/);
+  });
+
+  test('POST /whatsapp/send with templateName bypasses 24h-window gate', async ({ request }) => {
+    // Same cold phone — but with templateName the route must NOT reject
+    // 422 OUTSIDE_24H_WINDOW. It may still 400 / 500 downstream (no template
+    // by that name in DB, no active config) but the response code must NOT
+    // be OUTSIDE_24H_WINDOW.
+    const phone = `+91${(Date.now() + 1).toString().slice(-10)}`;
+    const res = await request.post(`${API}/whatsapp/send`, {
+      headers: auth(),
+      data: { to: phone, templateName: 'utility_hello', parameters: [] },
+    });
+    // Could be 200 (template+config present), 400 (no active config),
+    // 500 (Meta error). Only 422 with OUTSIDE_24H_WINDOW is forbidden here.
+    if (res.status() === 422) {
+      const body = await res.json();
+      expect(body.code).not.toBe('OUTSIDE_24H_WINDOW');
+    }
+    expect([200, 400, 500, 422]).toContain(res.status());
+  });
 });

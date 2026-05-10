@@ -1611,6 +1611,16 @@ function TelehealthTab({ patient, onSaved }) {
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                     Status: {v.status}
                     {has && <> • Room: <code style={{ color: 'var(--accent-color)' }}>{v.videoRoom}</code></>}
+                    {/* Wave 7D — surface bookingType + travel-time so the
+                        clinician knows whether this is a clinic visit, an
+                        at-home visit (with travel buffer), a video, or a
+                        phone consult. */}
+                    {v.bookingType && v.bookingType !== 'CLINIC_VISIT' && (
+                      <> • {v.bookingType.replace(/_/g, ' ').toLowerCase()}</>
+                    )}
+                    {v.bookingType === 'IN_HOME' && Number.isFinite(v.travelTimeMinutes) && v.travelTimeMinutes > 0 && (
+                      <> • Travel: {v.travelTimeMinutes} min</>
+                    )}
                   </div>
                 </div>
                 <button

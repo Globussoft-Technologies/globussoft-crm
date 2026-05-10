@@ -1,8 +1,69 @@
 const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 
 const router = express.Router();
+
+// Wave 7D — PRD Gap §6 item 8 — image upload for the Mini Website rich editor.
+// Mirrors the pattern from routes/landing_pages.js (multer disk storage under
+// `backend/uploads/`). The directory is created on demand so a fresh checkout
+// works without bootstrap. Files are PNG/JPEG/WebP only, max 4 MB.
+const UPLOAD_DIR = path.join(__dirname, "..", "uploads", "booking-pages");
+try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch { /* best-effort */ }
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase();
+      const safeExt = /^\.(png|jpe?g|webp)$/i.test(ext) ? ext.toLowerCase() : ".png";
+      const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+      cb(null, `bp-${stamp}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(png|jpe?g|webp)$/i.test(file.mimetype || "")) return cb(null, true);
+    return cb(new Error("Only PNG / JPEG / WebP images are allowed"));
+  },
+});
+
+// Wave 7D — coerce the rich-content fields into the safe DB shape. Keeps the
+// route validation logic close to the column definitions so a future Prisma
+// migration that flips a column type can update one place.
+function coerceFeaturedServiceIds(raw) {
+  if (raw === null || raw === undefined) return undefined;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return JSON.stringify(parsed.map((n) => parseInt(n, 10)).filter(Number.isFinite));
+    } catch { /* fall through */ }
+    return undefined;
+  }
+  if (Array.isArray(raw)) return JSON.stringify(raw.map((n) => parseInt(n, 10)).filter(Number.isFinite));
+  return undefined;
+}
+function coerceHoursJson(raw) {
+  if (raw === null || raw === undefined) return undefined;
+  if (typeof raw === "string") {
+    try { JSON.parse(raw); return raw; } catch { return undefined; }
+  }
+  if (typeof raw === "object") return JSON.stringify(raw);
+  return undefined;
+}
+function parseFeaturedServiceIds(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed.map((n) => parseInt(n, 10)).filter(Number.isFinite) : [];
+  } catch { return []; }
+}
+function parseHoursJson(raw) {
+  if (!raw) return null;
+  try { return typeof raw === "string" ? JSON.parse(raw) : raw; } catch { return null; }
+}
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -110,7 +171,11 @@ router.get("/", verifyToken, async (req, res) => {
 
 router.post("/", verifyToken, async (req, res) => {
   try {
-    const { title, description, durationMins, bufferMins, availability, isActive } = req.body || {};
+    const {
+      title, description, durationMins, bufferMins, availability, isActive,
+      logoUrl, heroImageUrl, heroHeadline, heroSubheadline,
+      featuredServiceIds, contactPhone, contactEmail, hoursJson,
+    } = req.body || {};
     if (!title) return res.status(400).json({ error: "title is required" });
 
     const baseSlug = slugify(title);
@@ -139,6 +204,15 @@ router.post("/", verifyToken, async (req, res) => {
         availability: availStr,
         isActive: isActive !== false,
         tenantId: req.user.tenantId,
+        // Wave 7D rich-content fields (all optional)
+        logoUrl: logoUrl || null,
+        heroImageUrl: heroImageUrl || null,
+        heroHeadline: heroHeadline || null,
+        heroSubheadline: heroSubheadline || null,
+        featuredServiceIds: coerceFeaturedServiceIds(featuredServiceIds) || null,
+        contactPhone: contactPhone || null,
+        contactEmail: contactEmail || null,
+        hoursJson: coerceHoursJson(hoursJson) || null,
       },
     });
     res.status(201).json(page);
@@ -154,7 +228,11 @@ router.put("/:id", verifyToken, async (req, res) => {
     const existing = await prisma.bookingPage.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Booking page not found" });
 
-    const { title, description, durationMins, bufferMins, availability, isActive } = req.body || {};
+    const {
+      title, description, durationMins, bufferMins, availability, isActive,
+      logoUrl, heroImageUrl, heroHeadline, heroSubheadline,
+      featuredServiceIds, contactPhone, contactEmail, hoursJson,
+    } = req.body || {};
     const data = {};
     if (title !== undefined) data.title = title;
     if (description !== undefined) data.description = description;
@@ -162,6 +240,21 @@ router.put("/:id", verifyToken, async (req, res) => {
     if (bufferMins !== undefined) data.bufferMins = parseInt(bufferMins, 10) || 0;
     if (availability !== undefined) data.availability = typeof availability === "string" ? availability : JSON.stringify(availability);
     if (isActive !== undefined) data.isActive = !!isActive;
+    // Wave 7D rich-content fields. Allow null clears via explicit null.
+    if (logoUrl !== undefined) data.logoUrl = logoUrl || null;
+    if (heroImageUrl !== undefined) data.heroImageUrl = heroImageUrl || null;
+    if (heroHeadline !== undefined) data.heroHeadline = heroHeadline || null;
+    if (heroSubheadline !== undefined) data.heroSubheadline = heroSubheadline || null;
+    if (featuredServiceIds !== undefined) {
+      const coerced = coerceFeaturedServiceIds(featuredServiceIds);
+      data.featuredServiceIds = coerced === undefined ? null : coerced;
+    }
+    if (contactPhone !== undefined) data.contactPhone = contactPhone || null;
+    if (contactEmail !== undefined) data.contactEmail = contactEmail || null;
+    if (hoursJson !== undefined) {
+      const coerced = coerceHoursJson(hoursJson);
+      data.hoursJson = coerced === undefined ? null : coerced;
+    }
 
     const updated = await prisma.bookingPage.update({ where: { id: existing.id }, data });
     res.json(updated);
@@ -227,6 +320,36 @@ router.post("/:id/cancel/:bookingId", verifyToken, async (req, res) => {
   }
 });
 
+// Wave 7D — POST /:id/upload — accept a logo or hero image upload, return
+// a relative URL the editor can stash into logoUrl / heroImageUrl. Multer
+// stores the file under backend/uploads/booking-pages/. The kind query
+// param distinguishes "logo" vs "hero" but only affects bookkeeping —
+// both end up at the same /uploads URL prefix.
+router.post("/:id/upload", verifyToken, upload.single("file"), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    const existing = await prisma.bookingPage.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) {
+      // Clean up the orphaned upload before bailing.
+      if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch { /* swallow */ } }
+      return res.status(404).json({ error: "Booking page not found" });
+    }
+    if (!req.file) return res.status(400).json({ error: "file is required (multipart field 'file')" });
+    const url = `/uploads/booking-pages/${req.file.filename}`;
+    const kind = (req.query.kind || req.body.kind || "logo") === "hero" ? "hero" : "logo";
+    const data = kind === "hero" ? { heroImageUrl: url } : { logoUrl: url };
+    const updated = await prisma.bookingPage.update({ where: { id: existing.id }, data });
+    res.status(201).json({ success: true, kind, url, page: updated });
+  } catch (err) {
+    console.error("[BookingPages] Upload error:", err);
+    if (err && /file too large|allowed/i.test(err.message)) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to upload image" });
+  }
+});
+
 // ── Public routes (no auth, mounted under /booking-pages/public/*) ─
 
 router.get("/public/:slug", async (req, res) => {
@@ -260,6 +383,17 @@ router.get("/public/:slug", async (req, res) => {
       ownerName: owner?.name || owner?.email || "Host",
       availability: parseAvailability(page.availability),
       days,
+      // Wave 7D — surface rich-content fields on the public payload so
+      // the iframe / mini-website widget can render the logo, hero, and
+      // featured-services block alongside the slot picker.
+      logoUrl: page.logoUrl || null,
+      heroImageUrl: page.heroImageUrl || null,
+      heroHeadline: page.heroHeadline || null,
+      heroSubheadline: page.heroSubheadline || null,
+      featuredServiceIds: parseFeaturedServiceIds(page.featuredServiceIds),
+      contactPhone: page.contactPhone || null,
+      contactEmail: page.contactEmail || null,
+      hours: parseHoursJson(page.hoursJson),
     });
   } catch (err) {
     console.error("[BookingPages] Public details error:", err);

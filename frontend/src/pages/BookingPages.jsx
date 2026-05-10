@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, Copy, Edit, Trash2, Clock, Check, X as XIcon, Link as LinkIcon } from 'lucide-react';
+import { Calendar, Plus, Copy, Edit, Trash2, Clock, Check, X as XIcon, Link as LinkIcon, Image, Upload, GripVertical, Phone, Mail } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -299,6 +299,24 @@ function EditDrawer({ page, bookings, onClose, onSaved, onCancelBooking, onCopyU
   const [isActive, setIsActive] = useState(page.isActive);
   const [availability, setAvailability] = useState(page.availability);
   const [saving, setSaving] = useState(false);
+  // Wave 7D — rich-content editor state. featuredServiceIds is an ordered
+  // list (drag to reorder); empty list = "show all services in default order".
+  const [logoUrl, setLogoUrl] = useState(page.logoUrl || '');
+  const [heroImageUrl, setHeroImageUrl] = useState(page.heroImageUrl || '');
+  const [heroHeadline, setHeroHeadline] = useState(page.heroHeadline || '');
+  const [heroSubheadline, setHeroSubheadline] = useState(page.heroSubheadline || '');
+  const [contactPhone, setContactPhone] = useState(page.contactPhone || '');
+  const [contactEmail, setContactEmail] = useState(page.contactEmail || '');
+  const [hoursJson, setHoursJson] = useState(page.hoursJson || '');
+  const [featuredServiceIds, setFeaturedServiceIds] = useState(() => {
+    if (Array.isArray(page.featuredServiceIds)) return page.featuredServiceIds;
+    if (typeof page.featuredServiceIds === 'string' && page.featuredServiceIds) {
+      try { const p = JSON.parse(page.featuredServiceIds); return Array.isArray(p) ? p : []; } catch { return []; }
+    }
+    return [];
+  });
+  const [services, setServices] = useState([]);
+  const [uploading, setUploading] = useState(null); // 'logo' | 'hero' | null
 
   useEffect(() => {
     setTitle(page.title);
@@ -307,7 +325,81 @@ function EditDrawer({ page, bookings, onClose, onSaved, onCancelBooking, onCopyU
     setBufferMins(page.bufferMins || 0);
     setIsActive(page.isActive);
     setAvailability(page.availability);
+    setLogoUrl(page.logoUrl || '');
+    setHeroImageUrl(page.heroImageUrl || '');
+    setHeroHeadline(page.heroHeadline || '');
+    setHeroSubheadline(page.heroSubheadline || '');
+    setContactPhone(page.contactPhone || '');
+    setContactEmail(page.contactEmail || '');
+    setHoursJson(page.hoursJson || '');
+    setFeaturedServiceIds(() => {
+      if (Array.isArray(page.featuredServiceIds)) return page.featuredServiceIds;
+      if (typeof page.featuredServiceIds === 'string' && page.featuredServiceIds) {
+        try { const p = JSON.parse(page.featuredServiceIds); return Array.isArray(p) ? p : []; } catch { return []; }
+      }
+      return [];
+    });
   }, [page.id]);
+
+  // Load services for the featured-services picker. Wellness tenant ships
+  // /api/wellness/services; generic tenants don't have a comparable list,
+  // so a 4xx silently leaves featured-services UI empty and the page-level
+  // editor still saves the rest of the rich content.
+  useEffect(() => {
+    fetchApi('/api/wellness/services')
+      .then((s) => setServices(Array.isArray(s) ? s : []))
+      .catch(() => setServices([]));
+  }, []);
+
+  const uploadImage = async (file, kind) => {
+    if (!file) return;
+    setUploading(kind);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const tok = localStorage.getItem('token') || '';
+      const res = await fetch(`/api/booking-pages/${page.id}/upload?kind=${kind}`, {
+        method: 'POST',
+        headers: tok ? { Authorization: `Bearer ${tok}` } : {},
+        body: fd,
+      });
+      if (!res.ok) {
+        let msg = 'Upload failed';
+        try { msg = (await res.json()).error || msg; } catch { /* swallow */ }
+        notify.error(msg);
+        return;
+      }
+      const body = await res.json();
+      if (kind === 'hero') setHeroImageUrl(body.url);
+      else setLogoUrl(body.url);
+    } catch (e) {
+      notify.error(e.message || 'Upload failed');
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const moveFeatured = (idx, delta) => {
+    setFeaturedServiceIds((prev) => {
+      const next = [...prev];
+      const target = idx + delta;
+      if (target < 0 || target >= next.length) return prev;
+      const [row] = next.splice(idx, 1);
+      next.splice(target, 0, row);
+      return next;
+    });
+  };
+  const removeFeatured = (idx) => setFeaturedServiceIds((prev) => prev.filter((_, i) => i !== idx));
+  const addFeatured = (id) => {
+    const sid = parseInt(id, 10);
+    if (!Number.isFinite(sid) || featuredServiceIds.includes(sid)) return;
+    setFeaturedServiceIds((prev) => [...prev, sid]);
+  };
+  const serviceLabel = (id) => {
+    const s = services.find((x) => x.id === id);
+    return s ? s.name : `Service #${id}`;
+  };
+  const availableServices = services.filter((s) => s.isActive !== false && !featuredServiceIds.includes(s.id));
 
   const updateWindow = (day, idx, field, value) => {
     setAvailability(prev => {
@@ -335,6 +427,16 @@ function EditDrawer({ page, bookings, onClose, onSaved, onCancelBooking, onCopyU
           durationMins: parseInt(durationMins, 10) || 30,
           bufferMins: parseInt(bufferMins, 10) || 0,
           isActive, availability,
+          // Wave 7D rich-content fields. Send `null` (not '') so the backend
+          // clears the column rather than stamping an empty string.
+          logoUrl: logoUrl || null,
+          heroImageUrl: heroImageUrl || null,
+          heroHeadline: heroHeadline || null,
+          heroSubheadline: heroSubheadline || null,
+          featuredServiceIds,
+          contactPhone: contactPhone || null,
+          contactEmail: contactEmail || null,
+          hoursJson: hoursJson || null,
         }),
       });
       onSaved(updated);
@@ -422,6 +524,146 @@ function EditDrawer({ page, bookings, onClose, onSaved, onCancelBooking, onCopyU
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        {/* Wave 7D — Mini Website rich-content editor. Logo + hero image
+            uploads via POST /:id/upload, hero copy, drag-ordered featured
+            services, contact block + hours. All optional — admins can leave
+            this whole section blank for a pure-scheduler experience. */}
+        <div style={{ marginBottom: '1.25rem' }}>
+          <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Image size={16} aria-hidden="true" /> Mini Website Content
+          </h4>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+            <div>
+              <label style={labelStyle}>Logo</label>
+              {logoUrl ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <img src={logoUrl} alt="Logo preview" data-testid="logo-preview" style={{ height: 48, borderRadius: 6, background: 'var(--subtle-bg)' }} />
+                  <button type="button" className="btn-secondary" onClick={() => setLogoUrl('')} style={{ fontSize: '0.75rem' }}>Remove</button>
+                </div>
+              ) : (
+                <label data-testid="logo-upload-label" className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                  <Upload size={14} /> {uploading === 'logo' ? 'Uploading…' : 'Upload Logo'}
+                  <input
+                    type="file" accept="image/png,image/jpeg,image/webp" hidden
+                    onChange={(e) => uploadImage(e.target.files?.[0], 'logo')}
+                  />
+                </label>
+              )}
+            </div>
+            <div>
+              <label style={labelStyle}>Hero Image</label>
+              {heroImageUrl ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <img src={heroImageUrl} alt="Hero preview" data-testid="hero-preview" style={{ height: 48, borderRadius: 6, background: 'var(--subtle-bg)' }} />
+                  <button type="button" className="btn-secondary" onClick={() => setHeroImageUrl('')} style={{ fontSize: '0.75rem' }}>Remove</button>
+                </div>
+              ) : (
+                <label data-testid="hero-upload-label" className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                  <Upload size={14} /> {uploading === 'hero' ? 'Uploading…' : 'Upload Hero'}
+                  <input
+                    type="file" accept="image/png,image/jpeg,image/webp" hidden
+                    onChange={(e) => uploadImage(e.target.files?.[0], 'hero')}
+                  />
+                </label>
+              )}
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={labelStyle}>Hero Headline</label>
+              <input
+                value={heroHeadline}
+                onChange={(e) => setHeroHeadline(e.target.value)}
+                placeholder="Welcome to Enhanced Wellness"
+                style={inputStyle}
+                data-testid="hero-headline"
+              />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={labelStyle}>Hero Subheadline</label>
+              <textarea
+                value={heroSubheadline}
+                onChange={(e) => setHeroSubheadline(e.target.value)}
+                rows={2}
+                placeholder="Book your next appointment with our specialists"
+                style={{ ...inputStyle, resize: 'vertical' }}
+                data-testid="hero-subheadline"
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '0.75rem' }}>
+            <label style={labelStyle}>Featured Services (drag to reorder)</label>
+            {featuredServiceIds.length === 0 ? (
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic', margin: '0 0 0.5rem 0' }}>
+                No featured services. Add one below to control the order patients see on your booking page.
+              </p>
+            ) : (
+              <div data-testid="featured-services-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '0.5rem' }}>
+                {featuredServiceIds.map((id, idx) => (
+                  <div key={id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.6rem', background: 'var(--subtle-bg)', borderRadius: 6 }}>
+                    <GripVertical size={14} style={{ color: 'var(--text-secondary)' }} />
+                    <span style={{ flex: 1, fontSize: '0.85rem' }}>{idx + 1}. {serviceLabel(id)}</span>
+                    <button type="button" onClick={() => moveFeatured(idx, -1)} disabled={idx === 0} style={{ ...iconBtnStyle, padding: 4, opacity: idx === 0 ? 0.3 : 1 }} title="Move up">↑</button>
+                    <button type="button" onClick={() => moveFeatured(idx, +1)} disabled={idx === featuredServiceIds.length - 1} style={{ ...iconBtnStyle, padding: 4, opacity: idx === featuredServiceIds.length - 1 ? 0.3 : 1 }} title="Move down">↓</button>
+                    <button type="button" onClick={() => removeFeatured(idx)} style={{ ...iconBtnStyle, padding: 4, color: '#ef4444' }} title="Remove"><XIcon size={14} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {availableServices.length > 0 && (
+              <select
+                value=""
+                onChange={(e) => { addFeatured(e.target.value); e.target.value = ''; }}
+                style={{ ...inputStyle, fontSize: '0.85rem' }}
+                data-testid="featured-services-add"
+              >
+                <option value="">+ Add service to featured list</option>
+                {availableServices.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <label style={labelStyle}><Phone size={11} style={{ verticalAlign: 'middle' }} /> Contact Phone</label>
+              <input
+                value={contactPhone}
+                onChange={(e) => setContactPhone(e.target.value)}
+                placeholder="+91 98765 43210"
+                style={inputStyle}
+                data-testid="contact-phone"
+              />
+            </div>
+            <div>
+              <label style={labelStyle}><Mail size={11} style={{ verticalAlign: 'middle' }} /> Contact Email</label>
+              <input
+                type="email"
+                value={contactEmail}
+                onChange={(e) => setContactEmail(e.target.value)}
+                placeholder="hello@clinic.example"
+                style={inputStyle}
+                data-testid="contact-email"
+              />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={labelStyle}>Hours (free-text)</label>
+              <textarea
+                value={hoursJson}
+                onChange={(e) => setHoursJson(e.target.value)}
+                rows={2}
+                placeholder='Mon-Sat 9:00-19:00, Sun closed'
+                style={{ ...inputStyle, resize: 'vertical' }}
+                data-testid="contact-hours"
+              />
+              <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                Plain-text or a JSON object like <code>{'{"monday":"9-19"}'}</code>. Surfaced on the public booking page.
+              </p>
+            </div>
           </div>
         </div>
 

@@ -64,6 +64,7 @@ const { validateNumericId } = require("./middleware/validateNumericId");
 }
 
 const { verifyToken } = require("./middleware/auth");
+const checkSubscription = require("./middleware/checkSubscription");
 
 const app = express();
 app.set('trust proxy', 1); // trust first proxy (Nginx)
@@ -252,6 +253,10 @@ app.use("/api", (req, res, next) => {
 const io = new Server(server, { cors: { origin: "*" } });
 const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 
+// Set global io reference for eventBus notifications
+const { setIO } = require('./lib/eventBus');
+setIO(io);
+
 // Attach socket to requests so routes can emit events
 app.use((req, res, next) => {
   req.io = io;
@@ -314,6 +319,7 @@ const supportRoutes = require("./routes/support");
 const reportSchedulesRoutes = require("./routes/report_schedules");
 const pipelineStagesRoutes = require("./routes/pipeline_stages");
 const notificationsRoutes = require("./routes/notifications");
+const subscriptionsRoutes = require("./routes/subscriptions");
 const emailTemplatesRoutes = require("./routes/email_templates");
 const emailRoutes = require("./routes/email");
 const auditRoutes = require("./routes/audit");
@@ -432,7 +438,10 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 app.use("/api", (req, res, next) => {
   const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
-  verifyToken(req, res, next);
+  verifyToken(req, res, (err) => {
+    if (err) return next(err);
+    checkSubscription(req, res, next);
+  });
 });
 
 // Strip dangerous fields (id, createdAt, updatedAt, tenantId, userId) from all request bodies
@@ -481,6 +490,7 @@ app.use("/api/support", supportRoutes);
 app.use("/api/tasks", tasksRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/expenses", expensesRoutes);
+app.use("/api/subscriptions", subscriptionsRoutes);
 app.use("/api/contracts", contractsRoutes);
 app.use("/api/estimates", estimatesRoutes);
 app.use("/api/projects", projectsRoutes);
@@ -866,6 +876,12 @@ if (process.env.DISABLE_CRONS === '1') {
   // per-(tenant,policy,user,year) basis via LeaveBalance lookups.
   const { initLeavePolicyCron } = require('./cron/leavePolicyEngine');
   initLeavePolicyCron();
+
+  // Initialize Notification Rules Engine — event-driven notifications for
+  // business events (SLA breaches, approvals, expenses, leave requests).
+  // Subscribes to eventBus events and creates notifications via notificationService.
+  const notificationRules = require('./lib/notificationRulesEngine');
+  notificationRules.init(io);
 
 } // end DISABLE_CRONS guard
 

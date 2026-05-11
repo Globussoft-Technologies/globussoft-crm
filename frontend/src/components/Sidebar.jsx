@@ -754,6 +754,7 @@ function renderWellnessNav({
       <Link to="/wellness/pos" icon={Calculator} label="Point of Sale" />
       <Link to="/invoices" icon={Receipt} label="Invoices" />
       <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
+      <Link to="/expenses" icon={DollarSign} label="Expenses" />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
       {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (manager+) */}
       <Link to="/wellness/wallet" icon={WalletIcon} label="Patient Wallets" managerOnly />

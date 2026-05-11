@@ -4,8 +4,20 @@
  *
  * Run: node prisma/seed.js
  */
+const path = require('path');
+const dotenv = require('dotenv');
+
+// Load .env file (it's in the project root, 2 levels up from backend/prisma/)
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
+
+// Verify DATABASE_URL is set
+if (!process.env.DATABASE_URL) {
+  console.error('Error: DATABASE_URL not set in .env file');
+  process.exit(1);
+}
 
 const prisma = new PrismaClient();
 
@@ -27,6 +39,7 @@ async function main() {
     'Activity', 'Task', 'Expense', 'Invoice', 'Contract', 'Project',
     'Deal', 'Ticket', 'Campaign', 'AutomationRule', 'Integration',
     'Webhook', 'ApiKey', 'Touchpoint', 'Contact', 'User',
+    'Subscription', 'SubscriptionPlan',
     'Tenant',
   ];
   for (const table of tables) {
@@ -49,16 +62,58 @@ async function main() {
   console.log('  Default Org tenant created (id=1).\n');
 
   // ══════════════════════════════════════════════════════════════
-  // STEP 2: USERS — The NovaCrest team
+  // STEP 2: SUBSCRIPTION PLANS
+  // ══════════════════════════════════════════════════════════════
+  const plans = await Promise.all([
+    prisma.subscriptionPlan.create({
+      data: {
+        name: 'Starter',
+        price: 499,
+        currency: 'INR',
+        billingIntervalDays: 30,
+        description: 'For startups & SMBs seeking efficient pipeline management.',
+        features: JSON.stringify(['Contact, Account & Deal Management', 'Contact Lifecycle Stages', 'Built-in Chat, Email & Phone', 'Email Templates & Tracking', 'Custom Fields & Kanban Views', 'Basic Workflows (20)', 'Visual Sales Pipeline', 'Product Catalog', 'Curated Reports & Dashboards', 'Slack Integration & Marketplace', 'Mobile App & 24×5 Support']),
+        isActive: true,
+      }
+    }),
+    prisma.subscriptionPlan.create({
+      data: {
+        name: 'Professional',
+        price: 1499,
+        currency: 'INR',
+        billingIntervalDays: 30,
+        description: 'For growing teams needing AI, automation & multi-pipeline.',
+        features: JSON.stringify(['AI-Powered Contact Scoring', 'Multiple Sales Pipelines', 'Sales Sequences & Automation', 'Territory Management', 'Auto-assignment Rules', 'AI Email Writing & Enhancement', 'Deal Insights by AI', 'Advanced Workflows (50)', 'Custom Reports & Dashboards', 'Account Hierarchy & BYOC']),
+        isActive: true,
+      }
+    }),
+    prisma.subscriptionPlan.create({
+      data: {
+        name: 'Enterprise',
+        price: 2499,
+        currency: 'INR',
+        billingIntervalDays: 30,
+        description: 'For large teams needing customization, governance & AI forecasting.',
+        features: JSON.stringify(['Custom Modules', 'AI Forecasting Insights', 'Field-level Permissions', 'Sandbox Environment', 'Audit Logs & Compliance', 'Auto Profile Enrichment', 'Deal Teams & Advanced Metrics', '5,000 Bulk Emails/user/day', '100 GB Storage/user', 'Dedicated Account Manager', 'Priority 24×7 Support']),
+        isActive: true,
+      }
+    }),
+  ]);
+  console.log(`Subscription Plans: ${plans.length} created`);
+
+  // ══════════════════════════════════════════════════════════════
+  // STEP 3: USERS — The NovaCrest team
   // ══════════════════════════════════════════════════════════════
   const pw = await bcrypt.hash('password123', 10);
+  const trialStartDate = new Date();
+  const trialEndsAt = new Date(Date.now() + 15 * 86400000); // 15 days from now
   const users = await Promise.all([
-    prisma.user.create({ data: { email: 'admin@globussoft.com', password: pw, role: 'ADMIN', name: 'Rajesh Sharma' } }),
-    prisma.user.create({ data: { email: 'manager@crm.com', password: pw, role: 'MANAGER', name: 'Priya Patel' } }),
-    prisma.user.create({ data: { email: 'user@crm.com', password: pw, role: 'USER', name: 'Amit Singh' } }),
-    prisma.user.create({ data: { email: 'sneha@globussoft.com', password: pw, role: 'USER', name: 'Sneha Reddy' } }),
-    prisma.user.create({ data: { email: 'vikram@globussoft.com', password: pw, role: 'MANAGER', name: 'Vikram Joshi' } }),
-    prisma.user.create({ data: { email: 'anita@globussoft.com', password: pw, role: 'USER', name: 'Anita Desai' } }),
+    prisma.user.create({ data: { email: 'admin@globussoft.com', password: pw, role: 'ADMIN', name: 'Rajesh Sharma', subscriptionStatus: 'TRIAL', trialStartDate, trialEndsAt } }),
+    prisma.user.create({ data: { email: 'manager@crm.com', password: pw, role: 'MANAGER', name: 'Priya Patel', subscriptionStatus: 'TRIAL', trialStartDate, trialEndsAt } }),
+    prisma.user.create({ data: { email: 'user@crm.com', password: pw, role: 'USER', name: 'Amit Singh', subscriptionStatus: 'TRIAL', trialStartDate, trialEndsAt } }),
+    prisma.user.create({ data: { email: 'sneha@globussoft.com', password: pw, role: 'USER', name: 'Sneha Reddy', subscriptionStatus: 'TRIAL', trialStartDate, trialEndsAt } }),
+    prisma.user.create({ data: { email: 'vikram@globussoft.com', password: pw, role: 'MANAGER', name: 'Vikram Joshi', subscriptionStatus: 'TRIAL', trialStartDate, trialEndsAt } }),
+    prisma.user.create({ data: { email: 'anita@globussoft.com', password: pw, role: 'USER', name: 'Anita Desai', subscriptionStatus: 'TRIAL', trialStartDate, trialEndsAt } }),
   ]);
   console.log(`Users: ${users.length} created`);
 

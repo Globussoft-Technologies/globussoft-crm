@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Check, ArrowRight, X, Plus } from 'lucide-react';
+import React, { useState, useEffect, useContext } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Check, ArrowRight, X, Plus, Loader } from 'lucide-react';
+import { AuthContext } from '../App';
+import { fetchApi } from '../utils/api';
 
 const C = {
   bg: '#f8fafc', bg2: '#ffffff', text: '#1e293b', text2: '#334155', text3: '#64748b', text4: '#94a3b8',
@@ -103,9 +105,9 @@ const FAQ_ITEMS = [
 ];
 
 export default function Pricing() {
+  const navigate = useNavigate();
+  const { token } = useContext(AuthContext);
   const [annual, setAnnual] = useState(true);
-  // Auto-detect currency: India → INR, else USD. Manual toggle below overrides.
-  // Check stored preference first so a user who clicked the toggle stays on it.
   const [currency, setCurrency] = useState(() => {
     try {
       const stored = localStorage.getItem('pricingCurrency');
@@ -116,6 +118,121 @@ export default function Pricing() {
       return isIndia ? 'inr' : 'usd';
     } catch { return 'usd'; }
   });
+
+  const [apiPlans, setApiPlans] = useState(null);
+  const [loadingPayment, setLoadingPayment] = useState(null);
+
+  // Fetch subscription plans from API if authenticated
+  useEffect(() => {
+    if (token) {
+      console.log('[Pricing] Fetching plans with token:', token.slice(0, 20) + '...');
+      fetchApi('/api/subscriptions/plans')
+        .then(plans => {
+          console.log('[Pricing] Plans loaded:', plans);
+          setApiPlans(plans);
+        })
+        .catch(err => console.error('[Pricing] Failed to fetch plans:', err.message || err));
+    } else {
+      console.log('[Pricing] No token, apiPlans not loading');
+    }
+  }, [token]);
+
+  // Load Razorpay script
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    document.body.appendChild(script);
+    return () => document.body.removeChild(script);
+  }, []);
+
+  const handlePayment = async (planId, planName) => {
+    if (!window.Razorpay) {
+      alert('Payment system is not loaded. Please refresh and try again.');
+      return;
+    }
+
+    setLoadingPayment(planName);
+    try {
+      // Create order
+      console.log('[Pricing] Creating order for planId:', planId);
+      const orderData = await fetchApi('/api/subscriptions/create-order', {
+        method: 'POST',
+        body: JSON.stringify({ planId: parseInt(planId) })
+      });
+
+      console.log('[Pricing] Order created:', orderData);
+
+      const razorpayKeyId = import.meta.env.VITE_RAZORPAY_KEY_ID;
+      if (!razorpayKeyId) {
+        throw new Error('Razorpay Key ID not configured (VITE_RAZORPAY_KEY_ID)');
+      }
+
+      if (!orderData.orderId || !orderData.amount || !orderData.currency) {
+        throw new Error('Invalid order data from server: ' + JSON.stringify(orderData));
+      }
+
+      // Open Razorpay popup
+      const options = {
+        key: razorpayKeyId,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        order_id: orderData.orderId,
+        name: 'GlobusCRM',
+        description: `${planName} Plan`,
+        handler: async (response) => {
+          // Verify payment
+          try {
+            console.log('[Pricing] Payment handler response:', response);
+            const verifyData = await fetchApi('/api/subscriptions/verify-payment', {
+              method: 'POST',
+              body: JSON.stringify({
+                razorpayOrderId: orderData.orderId,
+                razorpayPaymentId: response.razorpay_payment_id,
+                razorpaySignature: response.razorpay_signature,
+                planId: parseInt(planId)
+              })
+            });
+
+            console.log('[Pricing] Verification response:', verifyData);
+            if (verifyData?.success) {
+              // Pass subscription details to success page
+              navigate('/payment-success', {
+                state: {
+                  planName: planName,
+                  endDate: verifyData.subscription?.endDate,
+                  subscriptionId: verifyData.subscription?.id
+                }
+              });
+            } else {
+              console.error('[Pricing] Verification failed:', verifyData);
+              navigate('/payment-failed');
+            }
+          } catch (err) {
+            console.error('[Pricing] Payment verification error:', err);
+            navigate('/payment-failed');
+          }
+        },
+        prefill: {
+          name: '',
+          email: ''
+        },
+        theme: {
+          color: '#f97316'
+        }
+      };
+
+      console.log('[Pricing] Opening Razorpay with options:', options);
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (err) {
+      console.error('[Pricing] Payment error:', err.message);
+      alert(`Payment failed: ${err.message}`);
+      setLoadingPayment(null);
+    } finally {
+      setLoadingPayment(null);
+    }
+  };
 
   // Persist when the user clicks the toggle
   React.useEffect(() => { try { localStorage.setItem('pricingCurrency', currency); } catch {} }, [currency]);
@@ -205,7 +322,7 @@ export default function Pricing() {
       {/* Plans */}
       <section style={{ maxWidth: 1120, margin: '0 auto', padding: '0 20px 64px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 24, alignItems: 'start' }}>
-          {PLANS.map((plan) => (
+          {PLANS.map((plan, index) => (
             <div key={plan.name} style={getCardStyle(plan)}>
               {plan.popular && (
                 <div style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', padding: '4px 14px', borderRadius: 100, background: C.pro, fontSize: '0.69rem', fontWeight: 700, color: '#fff', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
@@ -225,9 +342,38 @@ export default function Pricing() {
                 <div style={{ fontSize: '0.69rem', color: C.text4, marginTop: 3, opacity: 0.8 }}>{getYearLabel(plan.priceKey)}</div>
               </div>
 
-              <Link to="/signup" style={getCtaStyle(plan)}>
-                {plan.cta} <ArrowRight size={14} />
-              </Link>
+              {token && apiPlans && apiPlans.length > 0 ? (
+                <button
+                  onClick={() => {
+                    const dbPlan = apiPlans[index];
+                    if (dbPlan) {
+                      console.log('[Pricing] Paying for plan:', dbPlan);
+                      handlePayment(dbPlan.id, plan.name);
+                    }
+                  }}
+                  disabled={loadingPayment === plan.name}
+                  style={{
+                    ...getCtaStyle(plan),
+                    cursor: loadingPayment === plan.name ? 'not-allowed' : 'pointer',
+                    opacity: loadingPayment === plan.name ? 0.7 : 1
+                  }}
+                >
+                  {loadingPayment === plan.name ? (
+                    <>
+                      <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      Pay Now <ArrowRight size={14} />
+                    </>
+                  )}
+                </button>
+              ) : (
+                <Link to="/signup" style={getCtaStyle(plan)}>
+                  {plan.cta} <ArrowRight size={14} />
+                </Link>
+              )}
 
               {/* Separator */}
               <div style={{ height: 1, background: C.borderLight, margin: '24px 0 16px' }} />

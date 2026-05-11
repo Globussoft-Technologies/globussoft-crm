@@ -25,7 +25,7 @@ export default function InventoryAdjustments() {
     if (productFilter) qs.set('productId', productFilter);
     Promise.all([
       fetchApi(`/api/wellness/inventory/adjustments${qs.toString() ? `?${qs}` : ''}`).catch(() => []),
-      fetchApi('/api/products').catch(() => []),
+      fetchApi('/api/wellness/products').catch(() => []),
     ]).then(([adjs, prods]) => {
       setAdjustments(Array.isArray(adjs) ? adjs : []);
       setProducts(Array.isArray(prods) ? prods : []);

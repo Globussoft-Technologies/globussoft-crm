@@ -57,20 +57,44 @@ async function sendSendGrid(to, subject, body) {
 // --------------- Core dispatcher ---------------
 
 /**
- * Send a notification to a single user across multiple channels.
+ * Send a notification to a single user across multiple channels with deduplication.
  * @param {Object} opts
  * @param {number} opts.userId       - Target user ID
  * @param {number} opts.tenantId     - Tenant ID for multi-tenancy
  * @param {string} opts.title        - Notification title
  * @param {string} opts.message      - Notification body
  * @param {string} [opts.type=info]  - info | success | warning | error
+ * @param {string} [opts.priority=normal] - low | normal | high | critical
  * @param {string} [opts.link]       - Deep-link path (e.g. "/pipeline")
+ * @param {string} [opts.entityType] - lead | ticket | approval | expense | leave
+ * @param {number} [opts.entityId]   - ID of the entity
+ * @param {number} [opts.dedupWindowHours=24] - Hours to look back for dedup
  * @param {string[]} [opts.channels] - Delivery channels: db, socket, push, email (default: ['db','socket'])
  * @param {Object} [opts.io]         - Socket.io server instance
- * @returns {Promise<Object>}        - The created Notification record
+ * @returns {Promise<Object|null>}   - The created Notification record or null if deduped
  */
-async function notify({ userId, tenantId, title, message, type, link, channels, io }) {
+async function notify({ userId, tenantId, title, message, type, priority, link, entityType, entityId, dedupWindowHours = 24, channels, io }) {
   const activeChannels = channels || ["db", "socket"];
+
+  // Deduplication check: look for duplicate within window
+  if (entityId && entityType) {
+    const windowStart = new Date(Date.now() - dedupWindowHours * 60 * 60 * 1000);
+    const existing = await prisma.notification.findFirst({
+      where: {
+        userId,
+        tenantId,
+        type,
+        entityId,
+        entityType,
+        createdAt: { gte: windowStart }
+      }
+    });
+
+    if (existing) {
+      console.log(`[Notification] Deduped ${type} for entity ${entityId} within ${dedupWindowHours}h window`);
+      return null; // Skip duplicate
+    }
+  }
 
   // 1. Always save to DB
   const notification = await prisma.notification.create({
@@ -78,15 +102,35 @@ async function notify({ userId, tenantId, title, message, type, link, channels, 
       title,
       message,
       type: type || "info",
+      priority: priority || "normal",
       link: link || null,
+      entityType: entityType || null,
+      entityId: entityId || null,
+      isRead: false,
       userId,
       tenantId,
     },
   });
 
+  console.log(`[notificationService] Created notification for user ${userId}:`, { title, message, entityType, hasIo: !!io });
+
   // 2. Real-time socket
   if (activeChannels.includes("socket") && io) {
-    io.emit("notification_new", { userId, notification });
+    console.log(`[notificationService] Sending socket.io notification to user:${userId}`);
+    io.to(`user:${userId}`).emit("notification_new", {
+      id: notification.id,
+      userId,
+      title: notification.title,
+      message: notification.message,
+      type: notification.type,
+      priority: notification.priority,
+      link: notification.link,
+      entityType: notification.entityType,
+      entityId: notification.entityId,
+      createdAt: notification.createdAt
+    });
+  } else {
+    console.log(`[notificationService] Socket.io not available or disabled for user ${userId}`);
   }
 
   // 3. Web push (best-effort)
@@ -146,4 +190,23 @@ async function notifyTenant({ tenantId, title, message, type, link, channels, io
   });
 }
 
-module.exports = { notify, notifyMany, notifyTenant };
+/**
+ * Mark a notification as resolved (read + resolved).
+ */
+async function resolve(notificationId, tenantId) {
+  try {
+    const updated = await prisma.notification.update({
+      where: { id: notificationId, tenantId },
+      data: {
+        isRead: true,
+        readAt: new Date()
+      }
+    });
+    return updated;
+  } catch (err) {
+    console.error('[Notification] resolve error:', err.message);
+    return null;
+  }
+}
+
+module.exports = { notify, notifyMany, notifyTenant, resolve };

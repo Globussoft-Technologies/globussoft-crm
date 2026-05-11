@@ -119,11 +119,24 @@ router.post("/register", async (req, res) => {
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "starter" }
+      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL" }
     });
 
+    const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);
+    const now = new Date();
+    const trialEnd = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
+
     const user = await prisma.user.create({
-      data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
+      data: {
+        email,
+        password: hashedPassword,
+        name,
+        role: "ADMIN",
+        tenantId: tenant.id,
+        trialStartDate: now,
+        trialEndsAt: trialEnd,
+        subscriptionStatus: "TRIAL"
+      }
     });
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
@@ -158,11 +171,24 @@ router.post("/signup", async (req, res) => {
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "starter" }
+      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL" }
     });
 
+    const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);
+    const now = new Date();
+    const trialEnd = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
+
     const user = await prisma.user.create({
-      data: { email, password: hashedPassword, name, role: "ADMIN", tenantId: tenant.id }
+      data: {
+        email,
+        password: hashedPassword,
+        name,
+        role: "ADMIN",
+        tenantId: tenant.id,
+        trialStartDate: now,
+        trialEndsAt: trialEnd,
+        subscriptionStatus: "TRIAL"
+      }
     });
 
     // #325: include vertical on the JWT so verifyWellnessRole can check

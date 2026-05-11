@@ -59,6 +59,10 @@ jobs:
   migration_check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      pull-requests: write
+      issues: write
+      contents: read
     steps:
       - name: Checkout (full history for merge-base)
         uses: actions/checkout@v5

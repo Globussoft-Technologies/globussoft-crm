@@ -143,8 +143,8 @@ router.patch("/:id/submit", verifyToken, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid expense ID" });
 
-    const expense = await prisma.expense.findUnique({
-      where: { id }
+    const expense = await prisma.expense.findFirst({
+      where: { id, tenantId: req.user.tenantId }
     });
 
     if (!expense || expense.tenantId !== req.user.tenantId) {
@@ -182,11 +182,11 @@ router.patch("/:id/approve", verifyRole(["ADMIN"]), async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid expense ID" });
 
-    const expense = await prisma.expense.findUnique({
-      where: { id }
+    const expense = await prisma.expense.findFirst({
+      where: { id, tenantId: req.user.tenantId }
     });
 
-    if (!expense || expense.tenantId !== req.user.tenantId) {
+    if (!expense) {
       return res.status(404).json({ error: "Expense not found" });
     }
 
@@ -222,11 +222,11 @@ router.patch("/:id/reject", verifyRole(["ADMIN"]), async (req, res) => {
 
     const { reason } = req.body;
 
-    const expense = await prisma.expense.findUnique({
-      where: { id }
+    const expense = await prisma.expense.findFirst({
+      where: { id, tenantId: req.user.tenantId }
     });
 
-    if (!expense || expense.tenantId !== req.user.tenantId) {
+    if (!expense) {
       return res.status(404).json({ error: "Expense not found" });
     }
 

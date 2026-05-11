@@ -196,7 +196,7 @@ async function notifyTenant({ tenantId, title, message, type, link, channels, io
 async function resolve(notificationId, tenantId) {
   try {
     const updated = await prisma.notification.update({
-      where: { id: notificationId },
+      where: { id: notificationId, tenantId },
       data: {
         isRead: true,
         readAt: new Date()

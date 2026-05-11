@@ -163,13 +163,18 @@ export default function Pricing() {
 
       console.log('[Pricing] Order created:', orderData);
 
-      if (!orderData.orderId || !orderData.amount || !orderData.currency || !orderData.key) {
+      const razorpayKeyId = import.meta.env.VITE_RAZORPAY_KEY_ID;
+      if (!razorpayKeyId) {
+        throw new Error('Razorpay Key ID not configured (VITE_RAZORPAY_KEY_ID)');
+      }
+
+      if (!orderData.orderId || !orderData.amount || !orderData.currency) {
         throw new Error('Invalid order data from server: ' + JSON.stringify(orderData));
       }
 
       // Open Razorpay popup
       const options = {
-        key: orderData.key,
+        key: razorpayKeyId,
         amount: orderData.amount,
         currency: orderData.currency,
         order_id: orderData.orderId,

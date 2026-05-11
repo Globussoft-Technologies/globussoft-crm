@@ -122,8 +122,7 @@ router.post('/create-order', verifyToken, async (req, res) => {
       amount: order.amount,
       currency: order.currency,
       planId: plan.id,
-      planName: plan.name,
-      key: process.env.RAZORPAY_KEY_ID
+      planName: plan.name
     });
   } catch (err) {
     console.error('[subscriptions.post/create-order]', err);

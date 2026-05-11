@@ -64,6 +64,7 @@ const { validateNumericId } = require("./middleware/validateNumericId");
 }
 
 const { verifyToken } = require("./middleware/auth");
+const checkSubscription = require("./middleware/checkSubscription");
 
 const app = express();
 app.set('trust proxy', 1); // trust first proxy (Nginx)
@@ -437,7 +438,10 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 app.use("/api", (req, res, next) => {
   const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
-  verifyToken(req, res, next);
+  verifyToken(req, res, (err) => {
+    if (err) return next(err);
+    checkSubscription(req, res, next);
+  });
 });
 
 // Strip dangerous fields (id, createdAt, updatedAt, tenantId, userId) from all request bodies

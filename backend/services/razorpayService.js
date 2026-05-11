@@ -31,15 +31,17 @@ function verifySignature(orderId, paymentId, signature) {
     hmac.update(message);
     const hash = hmac.digest('hex');
 
-    console.log('[razorpayService.verifySignature] Message:', message);
-    console.log('[razorpayService.verifySignature] Expected hash:', hash);
-    console.log('[razorpayService.verifySignature] Received signature:', signature);
-
-    // Compare the calculated hash with the signature provided
-    const isValid = hash === signature;
-    console.log('[razorpayService.verifySignature] Match:', isValid);
-
-    return isValid;
+    // Compare using timing-safe comparison to prevent timing attacks
+    try {
+      const isValid = crypto.timingSafeEqual(
+        Buffer.from(hash, 'hex'),
+        Buffer.from(signature, 'hex')
+      );
+      return isValid;
+    } catch (bufferErr) {
+      // timingSafeEqual throws if buffers are different lengths — signature is invalid
+      return false;
+    }
   } catch (err) {
     console.error('[razorpayService.verifySignature] Error:', err.message);
     return false;

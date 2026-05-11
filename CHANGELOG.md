@@ -1,5 +1,143 @@
 # CHANGELOG
 
+## v3.7.3 — 2026-05-11 — User-attention dispositions: #555 lock-per-session + #564 tablet-handoff+BLOB + phantom-cluster verification
+
+Patch release closing the four user-attention decisions Sumit dispositioned
+post-v3.7.2, plus one verified gap surfaced while triaging the
+"genuinely-pending items" handoff block from 2026-05-10.
+
+### #555 (HI-06) tenant access — lock-per-session policy
+
+The earlier in-session `TenantSwitcher` widget removed; policy reset to
+"pick at LOGIN, log out to switch." Rationale: the JWT's tenantId is the
+only trustworthy scope boundary for per-tenant data isolation, and any
+in-session switcher creates a window where the JWT and the rendered
+shell can disagree (the pen-test privilege-confusion surface).
+
+- `POST /api/auth/login` and `POST /api/auth_2fa/verify` emit a `LOGIN`
+  audit row stamping the tenantId. This is the canonical accountability
+  surface under the lock-per-session policy. Fail-soft: audit-store
+  errors do not block authentication.
+- `POST /api/auth/tenant-switch` always returns **410 Gone** with code
+  `TENANT_SWITCH_DISABLED`. Three rejection paths pinned by spec:
+  same-tenant no-op, cross-tenant, empty body.
+- Frontend `Layout.jsx` swaps the in-session `TenantSwitcher` dropdown
+  for a read-only `TenantChip` (Building2 icon + tenant.name + wellness
+  label). No click handler dispatches a switch. The chip exposes a
+  tooltip pointing users to logout → login for tenant changes.
+- New E2E spec at `e2e/tests/tenant-switch-disabled-api.spec.js` (5
+  tests). Layout RTL spec rewritten (`frontend/src/__tests__/Layout.test.jsx`).
+
+### #564 wellness consent — staff-tablet-handoff workflow + DB BLOB
+
+Workflow disposition: **B. Staff-tablet handoff** (staff opens the form
+on a tablet during patient intake, hands the tablet to the patient,
+patient signs, staff confirms + submits). Storage disposition:
+**Database BLOB** (DPDP/GDPR retention rules apply automatically).
+
+- `ConsentForm` gains four columns: `captureMethod`
+  (default `'tablet-handoff'`), `capturedByUserId`,
+  `signedPdfBlob @db.LongBlob`, `signedPdfMime`.
+- `POST /api/wellness/consents` accepts an optional `captureMethod`
+  allowlisted to `{tablet-handoff, portal-self-serve, imported-pdf}`;
+  unknown values fall back to the default. Stamps `capturedByUserId`
+  from the JWT. `CONSENT_CAPTURE` audit row now includes both fields.
+- New endpoint `POST /api/wellness/consents/:id/archive` renders the
+  PDF once via `renderConsentPdf` and persists the exact bytes into
+  `signedPdfBlob`. Idempotent: re-archive returns 200 + `alreadyArchived:
+  true` and does NOT overwrite the frozen bytes. RBAC: same gate as POST
+  (doctor/professional/admin). Audit verb: `CONSENT_PDF_ARCHIVED`.
+- `GET /api/wellness/consents/:id/pdf` prefers the BLOB if present,
+  falls back to on-demand render otherwise. Both paths emit the
+  existing `CONSENT_PDF_DOWNLOAD` audit row with a new `servedFromBlob`
+  flag.
+- Frontend `PatientDetail.jsx` consent canvas sends
+  `captureMethod: 'tablet-handoff'` explicitly so the audit row
+  reflects the operational flow even on legacy callers.
+- New E2E spec at `e2e/tests/wellness-consent-archive-api.spec.js`
+  (10 tests pinning the allowlist, capturedByUserId stamping, archive
+  idempotence, BLOB preference on download, telecaller-403 on archive,
+  400 on invalid id, 404 on missing id).
+
+### WhatsApp opt-out re-opt-in (DPDP §11) — keep current
+
+Disposition: **keep current default** as shipped in v3.7.1 (`a667d07`).
+Admin can re-opt-in via `DELETE /api/whatsapp/opt-outs/:id` requiring
+`body.reason` (≥10 chars) and emitting `WHATSAPP_OPT_IN_RESET`. No code
+change. The "stricter explicit consent capture" path remains documented
+in `docs/PENDING_USER_AND_OPERATOR.md` as the escalation option.
+
+### Phantom-cluster verification (TODOS.md handoff line 26-39)
+
+The 2026-05-10 handoff's "genuinely-pending items" block listed 8 small
+items (POS receipt hook / membership T-7 reminders / leave carry-forward
+cron / WhatsApp Chats UI / no-show notification rules / etc.) totaling
+~16h. Triage-before-pickup verified each against the codebase:
+
+- **POS SMS/WhatsApp receipt** — SHIPPED at `backend/lib/posReceiptDispatcher.js`
+  (Wave 8b), wired in `server.js:870`, subscribed to `sale.completed`
+  emitted from `pos.js:761`.
+- **Membership T-7 reminders cron** — SHIPPED at
+  `backend/cron/wellnessOpsEngine.js:runMembershipExpiryForTenant`
+  (`MEMBERSHIP_EXPIRY_WINDOW_DAYS = 7`), wired via `initWellnessOpsCron()`.
+- **Leave carry-forward + encashment cron** — SHIPPED at
+  `backend/cron/leavePolicyEngine.js`, wired via
+  `initLeavePolicyCron()` (Wave 8b residual closure).
+- **WhatsApp Chats UI tabs** — SHIPPED as a standalone page at
+  `frontend/src/pages/wellness/WhatsAppThreads.jsx` (Wave 2 Agent KK),
+  routed at `/wellness/whatsapp`, sidebar-linked, RTL-tested. The
+  "Channels.jsx-side tab" framing in the handoff was incorrect — the
+  dedicated page is the right home for live conversations.
+- **No-show notification rules** — SHIPPED at
+  `backend/cron/appointmentRemindersEngine.js:runNoShowRiskForTenant`
+  with manual trigger at `/api/wellness/no-show-risk/run` (PRD Gap §12
+  #4e).
+- **Expiring-membership notification rules** — SHIPPED inline in the
+  wellnessOpsEngine path above.
+
+This is the 5th confirmed instance of the phantom-carry-over standing
+rule (already promoted to CLAUDE.md after v3.7.0). The verifying-issue-
+before-pickup pattern E (cluster-of-attributed-causes) correctly
+flagged all 6 items for re-verification before pickup.
+
+### One genuine extension surfaced during verification
+
+`wellnessOpsEngine.runMembershipExpiryForTenant` previously created
+in-app notifications directly but did NOT emit an event — so user-
+configured workflow rules could not hook in to send templated email /
+SMS / WhatsApp ahead of the in-app fire. Fixed at this release:
+
+- New event `membership.renewal_due` emitted from
+  `wellnessOpsEngine.js` after the `expiryNotifiedAt` stamp (at-most-
+  once per membership row). Payload:
+  `{membershipId, patientId, patientName, planId, planName, daysLeft, endDate}`.
+- Registered in `backend/routes/workflows.js` EVENT_CATALOGUE so it
+  appears in the workflow-rule trigger dropdown alongside the existing
+  `membership.expired` / `.renewed` / `.cancelled` events.
+- The in-app notification path is unchanged; the new event is purely
+  additive, letting customers attach a `send_email` or `send_sms`
+  workflow rule for the T-7 reminder without touching the cron code.
+
+### Standing rule confirmed
+
+- **Phantom-carry-over** (originally promoted to CLAUDE.md after v3.7.0,
+  4 instances; now 5). Every "this should still be open" claim in a
+  handoff doc requires a single-grep + line-citation before pickup. The
+  v3.7.3 verification path closed all 6 of the 2026-05-10 handoff's
+  pending items in ~10 minutes of grepping vs. ~16h of dispatched work.
+
+### Stats
+
+- **+2 backend route changes** (auth.js, auth_2fa.js, wellness.js
+  /consents, /consents/:id/archive, wellnessOpsEngine.js emit,
+  workflows.js catalogue), 1 frontend component swap (Layout.jsx),
+  1 frontend submit field (PatientDetail.jsx)
+- **+15 e2e tests** (5 tenant-switch-disabled + 10 consent-archive)
+- **+5 backend route columns** (ConsentForm)
+- **+1 event** (`membership.renewal_due`)
+
+---
+
 ## v3.7.2 — 2026-05-11 — Two external PRs landed + audit chain repair + Waves 10-12 coverage extension
 
 Patch release capturing one day's high-velocity arc: two external PRs merged

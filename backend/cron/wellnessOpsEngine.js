@@ -163,6 +163,34 @@ async function runMembershipExpiryForTenant(tenantId) {
         where: { id: m.id },
         data: { expiryNotifiedAt: now },
       });
+
+      // v3.7.3 — emit `membership.renewal_due` so user-configured workflow
+      // rules can hook in (e.g. send_email to the patient, queue an SMS).
+      // Fires AFTER the expiryNotifiedAt stamp so the event is at-most-once
+      // per membership row (the next tick filters out marker-stamped rows).
+      // Wrapped in try/catch so a workflow-rule failure never re-throws
+      // and rolls back the loop.
+      try {
+        require("../lib/eventBus").emitEvent(
+          "membership.renewal_due",
+          {
+            membershipId: m.id,
+            patientId: m.patientId,
+            patientName,
+            planId: m.planId,
+            planName,
+            daysLeft,
+            endDate: m.endDate,
+          },
+          tenantId,
+        );
+      } catch (eventErr) {
+        console.warn(
+          `[WellnessOps][membership-expiry] tenant=${tenantId} membership=${m.id} event emit failed:`,
+          eventErr.message,
+        );
+      }
+
       notified++;
     } catch (e) {
       console.error(

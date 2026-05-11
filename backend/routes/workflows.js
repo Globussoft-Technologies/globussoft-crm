@@ -37,6 +37,12 @@ const TRIGGER_TYPES = [
   { value: "membership.benefit_applied", label: "Membership Benefit Applied", description: "Fires when a service is redeemed against an active membership balance" },
   { value: "membership.expired", label: "Membership Expired", description: "Fires on the active→expired transition (lazily detected on redeem)" },
   { value: "membership.cancelled", label: "Membership Cancelled", description: "Fires when an admin/manager cancels a patient's membership" },
+  // v3.7.3 — proactive T-7 renewal-due event. Emitted by wellnessOpsEngine
+  // when a membership's endDate falls in the next 7 days AND it has not yet
+  // been notified (idempotent via expiryNotifiedAt marker). Lets workflow
+  // rules send templated email / SMS / WhatsApp ahead of the in-app
+  // notification that staff already see.
+  { value: "membership.renewal_due", label: "Membership Renewal Due (T-7)", description: "Fires once per membership when it enters the 7-day expiry window. Payload: { membershipId, patientId, patientName, planId, planName, daysLeft, endDate }" },
   { value: "attendance.checked_in", label: "Attendance Clock-In", description: "Fires when a staff member clocks in (manual or biometric)" },
   { value: "attendance.checked_out", label: "Attendance Clock-Out", description: "Fires when a staff member clocks out (manual or biometric)" },
   // #1 — approval lifecycle events. Lets a rule auto-create an approval on a

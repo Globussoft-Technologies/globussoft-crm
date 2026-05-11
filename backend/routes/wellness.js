@@ -6277,7 +6277,15 @@ router.post("/portal/login/verify-otp", async (req, res) => {
 // negative (mirrors QuickBooks). All ledger writes go through Prisma
 // $transaction so balance + ledger row stay in lock-step.
 // ─────────────────────────────────────────────────────────────────────
-const { generateGiftCode, computeCouponDiscount, computeCashbackEarn } = require("../lib/walletCodes");
+const {
+  generateGiftCode,
+  hashGiftCode,
+  verifyGiftCode,
+  maskGiftCode,
+  lastFour,
+  computeCouponDiscount,
+  computeCashbackEarn,
+} = require("../lib/walletCodes");
 
 async function writeWalletTransaction({
   tenantId, walletId, type, absAmount, performedBy, reason,
@@ -6429,6 +6437,10 @@ router.post("/wallet/:walletId/debit", verifyRole(["ADMIN"]), async (req, res) =
   }
 });
 
+// Wave-B Agent 3 (#653) — GET list never returns the bcrypt hash or any
+// redeemable secret. The `code` column now stores a masked display value
+// ("ABCD****WXYZ"); we additionally select `codeLast4` for UI display
+// ("ending in WXYZ") and explicitly omit `codeHash`.
 router.get("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const { status, limit = 100, offset = 0 } = req.query;
@@ -6439,6 +6451,14 @@ router.get("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
         where, orderBy: { createdAt: "desc" },
         take: Math.min(parseInt(limit, 10) || 100, 500),
         skip: parseInt(offset, 10) || 0,
+        select: {
+          id: true, tenantId: true, code: true, codeLast4: true,
+          amount: true, currency: true, status: true,
+          expiresAt: true, issuedTo: true, issuedFrom: true,
+          redeemedAt: true, redeemedBy: true,
+          createdAt: true, updatedAt: true,
+          // codeHash deliberately omitted — never leaks via list.
+        },
       }),
       prisma.giftCard.count({ where }),
     ]);
@@ -6449,6 +6469,11 @@ router.get("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   }
 });
 
+// Wave-B Agent 3 (#653) — POST returns plaintext as `code` + `oneTimeCode`
+// in the response (one-time disclosure). The DB stores `codeHash` (bcrypt)
+// + a masked `code` ("ABCD****WXYZ") + `codeLast4`. Subsequent reads of
+// the row will NEVER return the redeemable plaintext again — operators
+// who lose it must reissue.
 router.post("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const amount = Number(req.body.amount);
@@ -6471,46 +6496,76 @@ router.post("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => 
       if (!recipient) return res.status(404).json({ error: "Recipient patient not found" });
     }
     let row = null;
+    let plaintext = null;
     for (let i = 0; i < 3 && !row; i++) {
-      const code = generateGiftCode(16);
+      const candidate = generateGiftCode(16);
+      const maskedCode = maskGiftCode(candidate);
+      const codeHash = await hashGiftCode(candidate);
+      const codeLast4 = lastFour(candidate);
       try {
         row = await prisma.giftCard.create({
           data: {
-            tenantId: req.user.tenantId, code, amount,
+            tenantId: req.user.tenantId,
+            code: maskedCode,        // non-secret masked display value
+            codeHash,                // bcrypt at rest
+            codeLast4,               // last-4 for UI + lookup narrowing
+            amount,
             currency: req.body.currency || "INR",
             expiresAt, issuedTo, issuedFrom: req.user.userId,
           },
         });
+        plaintext = candidate;
       } catch (err) {
         if (err.code !== "P2002") throw err;
       }
     }
-    if (!row) return res.status(500).json({ error: "Failed to allocate gift-card code" });
+    if (!row || !plaintext) {
+      return res.status(500).json({ error: "Failed to allocate gift-card code" });
+    }
+    // Audit row stores ONLY the masked code + last-4 — never the
+    // plaintext, so a leaked audit log cannot redeem.
     await writeAudit("GiftCard", "CREATE", row.id, req.user.userId, req.user.tenantId, {
-      code: row.code, amount, issuedTo,
+      code: row.code, codeLast4: row.codeLast4, amount, issuedTo,
     });
     // PRD Gap §13 wave-6a — emit giftcard.issued so workflow rules can react
     // (e.g. send WhatsApp ack to issuedTo, log against an attribution campaign).
+    // The event carries the plaintext so workflow rules (SMS/WhatsApp to the
+    // recipient) can transmit the redeemable secret. Subscribers must treat
+    // it with the same care as a password.
     try {
       require("../lib/eventBus").emitEvent(
         "giftcard.issued",
-        { giftCardId: row.id, code: row.code, amount: row.amount, currency: row.currency, issuedTo: row.issuedTo, issuedFrom: row.issuedFrom, expiresAt: row.expiresAt },
+        { giftCardId: row.id, code: plaintext, codeLast4: row.codeLast4, amount: row.amount, currency: row.currency, issuedTo: row.issuedTo, issuedFrom: row.issuedFrom, expiresAt: row.expiresAt },
         req.user.tenantId,
         req.io
       );
     } catch (_e) {}
-    res.status(201).json(row);
+    // Return the plaintext ONCE in the response as `code` (back-compat with
+    // 48 existing spec assertions) + `oneTimeCode` (explicit alias making
+    // the disclosure semantics obvious to API consumers).
+    const { codeHash: _drop, ...rowOut } = row;
+    res.status(201).json({
+      ...rowOut,
+      code: plaintext,
+      oneTimeCode: plaintext,
+    });
   } catch (e) {
     console.error("[wellness] giftcard create error:", e.message);
     res.status(500).json({ error: "Failed to issue gift card" });
   }
 });
 
+// Wave-B Agent 3 (#653) — Lookup now hashes the incoming code via
+// bcrypt.compare against candidate rows narrowed by codeLast4. We never
+// plaintext-match against the (masked) `code` column. The 404 path is
+// indistinguishable from "wrong code" by design — the route returns the
+// same GIFTCARD_NOT_FOUND code whether the row is absent or the hash
+// mismatched, so an attacker can't enumerate which last-4 are in use.
 router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
   try {
-    const code = String(req.body.code || "").trim().toUpperCase();
+    const plaintext = String(req.body.code || "").trim().toUpperCase();
     const patientId = parseInt(req.body.patientId, 10);
-    if (!code) return res.status(400).json({ error: "code is required", code: "CODE_REQUIRED" });
+    if (!plaintext) return res.status(400).json({ error: "code is required", code: "CODE_REQUIRED" });
     if (!Number.isFinite(patientId) || patientId < 1) {
       return res.status(400).json({ error: "patientId is required" });
     }
@@ -6519,10 +6574,27 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
       select: { id: true, name: true },
     });
     if (!patient) return res.status(404).json({ error: "Patient not found" });
-    const giftCard = await prisma.giftCard.findFirst({
-      where: { tenantId: req.user.tenantId, code },
+
+    // Narrow candidate set: only cards in this tenant with matching last-4
+    // are considered. With 30^4 = 810,000 possible last-4 values, this is
+    // effectively a single row in practice. We then bcrypt.compare to confirm.
+    const last4 = lastFour(plaintext);
+    const candidates = await prisma.giftCard.findMany({
+      where: { tenantId: req.user.tenantId, codeLast4: last4 },
+      orderBy: { createdAt: "desc" },
+      take: 50,
     });
-    if (!giftCard) return res.status(404).json({ error: "Gift card not found", code: "GIFTCARD_NOT_FOUND" });
+    let giftCard = null;
+    for (const row of candidates) {
+      if (!row.codeHash) continue;
+      if (await verifyGiftCode(plaintext, row.codeHash)) {
+        giftCard = row;
+        break;
+      }
+    }
+    if (!giftCard) {
+      return res.status(404).json({ error: "Gift card not found", code: "GIFTCARD_NOT_FOUND" });
+    }
     if (giftCard.status === "redeemed") {
       return res.status(409).json({ error: "Gift card already redeemed", code: "GIFTCARD_ALREADY_REDEEMED" });
     }
@@ -6540,6 +6612,8 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
         tenantId: req.user.tenantId, walletId: wallet.id,
         type: "CREDIT_GIFTCARD", absAmount: giftCard.amount,
         performedBy: req.user.userId,
+        // Reason uses the MASKED code (giftCard.code) — never the plaintext —
+        // so the ledger row + audit trail does not leak the redeemable secret.
         reason: `Gift card ${giftCard.code} redeemed`,
         giftCardId: giftCard.id,
       });
@@ -6550,16 +6624,27 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
     const updated = await prisma.giftCard.update({
       where: { id: giftCard.id },
       data: { status: "redeemed", redeemedAt: new Date(), redeemedBy: patientId },
+      select: {
+        id: true, tenantId: true, code: true, codeLast4: true,
+        amount: true, currency: true, status: true,
+        expiresAt: true, issuedTo: true, issuedFrom: true,
+        redeemedAt: true, redeemedBy: true,
+        createdAt: true, updatedAt: true,
+      },
     });
     await writeAudit("GiftCard", "REDEEM", giftCard.id, req.user.userId, req.user.tenantId, {
-      code: giftCard.code, amount: giftCard.amount, patientId, transactionId: tx.id,
+      // Audit stores masked code + last-4 only.
+      code: giftCard.code, codeLast4: giftCard.codeLast4,
+      amount: giftCard.amount, patientId, transactionId: tx.id,
     });
     // PRD Gap §13 wave-6a — emit giftcard.redeemed so workflow rules can
     // react (top-up confirmation SMS, refer-a-friend bonus on redemption).
     try {
       require("../lib/eventBus").emitEvent(
         "giftcard.redeemed",
-        { giftCardId: giftCard.id, code: giftCard.code, amount: giftCard.amount, patientId, transactionId: tx.id, walletId: wallet.id },
+        // Event carries masked code only; plaintext is no longer needed
+        // post-redemption (status flips to "redeemed").
+        { giftCardId: giftCard.id, code: giftCard.code, codeLast4: giftCard.codeLast4, amount: giftCard.amount, patientId, transactionId: tx.id, walletId: wallet.id },
         req.user.tenantId,
         req.io
       );

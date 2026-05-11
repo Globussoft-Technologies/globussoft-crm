@@ -62,6 +62,12 @@
  * PUT-renamed `_teardown_ledger_${id}` + the ledger Wallet/Tx rows
  * cascade-delete behind the scenes. Coupons + Cashback rules + Gift
  * cards have full DELETE; spec uses authDelete in afterAll.
+ *
+ * Wave-B Agent 3 (#653) — bcrypt-hash-at-rest hardening added 6 new
+ * assertions under the GiftCards describe (oneTimeCode alias presence,
+ * codeHash never on the wire, codeLast4 matches plaintext suffix, GET
+ * list masks the code, redeem rejects wrong-code-same-last-4, redeem
+ * succeeds via the one-time plaintext).
  */
 const { test, expect } = require('@playwright/test');
 
@@ -408,6 +414,120 @@ test.describe('GiftCards', () => {
     // Either 403 (RBAC) or 404 (cross-tenant invisible) is acceptable; the
     // wallet credit must NOT happen.
     expect([403, 404]).toContain(r.status());
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // Wave-B Agent 3 (#653) — bcrypt-hash-at-rest hardening
+  // ────────────────────────────────────────────────────────────────
+  //
+  // Codes are bcrypt-hashed at rest. Plaintext is returned ONCE on POST
+  // (response carries `code` (plaintext) + `oneTimeCode` (alias)). The
+  // DB stores `codeHash` + masked `code` ("ABCD****WXYZ") + `codeLast4`.
+  // Subsequent reads (GET /giftcards) never return the plaintext.
+
+  test('POST /giftcards response carries `oneTimeCode` alias for the plaintext', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    const r = await post(request, token, '/api/wellness/giftcards', { amount: 111 });
+    expect(r.status()).toBe(201);
+    const row = await r.json();
+    testGiftCardIds.push(row.id);
+
+    expect(typeof row.oneTimeCode).toBe('string');
+    expect(row.oneTimeCode).toMatch(/^[A-Z0-9]{16}$/);
+    // The `code` field on POST response equals `oneTimeCode` for back-compat
+    // with operators emailing the recipient using the existing field.
+    expect(row.code).toBe(row.oneTimeCode);
+  });
+
+  test('POST /giftcards response NEVER exposes codeHash', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    const r = await post(request, token, '/api/wellness/giftcards', { amount: 99 });
+    expect(r.status()).toBe(201);
+    const row = await r.json();
+    testGiftCardIds.push(row.id);
+    expect(row.codeHash).toBeUndefined();
+  });
+
+  test('POST /giftcards exposes `codeLast4` matching the plaintext suffix', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    const r = await post(request, token, '/api/wellness/giftcards', { amount: 50 });
+    expect(r.status()).toBe(201);
+    const row = await r.json();
+    testGiftCardIds.push(row.id);
+
+    expect(typeof row.codeLast4).toBe('string');
+    expect(row.codeLast4).toHaveLength(4);
+    expect(row.oneTimeCode.slice(-4)).toBe(row.codeLast4);
+  });
+
+  test('GET /giftcards (list) NEVER returns the redeemable plaintext code', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    // Issue a card so we have at least one row to inspect.
+    const issue = await post(request, token, '/api/wellness/giftcards', { amount: 77 });
+    const created = await issue.json();
+    testGiftCardIds.push(created.id);
+    const plaintext = created.oneTimeCode;
+
+    const r = await get(request, token, '/api/wellness/giftcards');
+    expect(r.status()).toBe(200);
+    const j = await r.json();
+    const row = j.giftCards.find((g) => g.id === created.id);
+    expect(row).toBeTruthy();
+
+    // The list MUST NOT carry the plaintext code or the bcrypt hash.
+    expect(row.codeHash).toBeUndefined();
+    expect(row.code).not.toBe(plaintext);
+    // Masked-display format: "AAAA****ZZZZ" (12 chars: 4 + 4 stars + 4).
+    expect(row.code).toMatch(/^.{4}\*{4}.{4}$/);
+    // Last-4 of the masked display equals last-4 of the plaintext (UI hint).
+    expect(row.code.slice(-4)).toBe(plaintext.slice(-4));
+    expect(row.codeLast4).toBe(plaintext.slice(-4));
+  });
+
+  test('POST /giftcards/redeem uses hash-verify — wrong code with right last-4 returns 404', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    test.skip(!testPatientId, 'no test patient');
+
+    const issue = await post(request, token, '/api/wellness/giftcards', { amount: 33 });
+    const card = await issue.json();
+    testGiftCardIds.push(card.id);
+    const last4 = card.oneTimeCode.slice(-4);
+
+    // Construct a 16-char code with the SAME last-4 but a different prefix.
+    // Even though codeLast4 narrows candidates to this card, bcrypt.compare
+    // on the wrong prefix MUST fail and return GIFTCARD_NOT_FOUND.
+    const fakePrefix = 'ZZZZZZZZZZZZ'.slice(0, 12);
+    const fakeCode = fakePrefix + last4;
+    expect(fakeCode).not.toBe(card.oneTimeCode);
+
+    const r = await post(request, token, '/api/wellness/giftcards/redeem', {
+      code: fakeCode,
+      patientId: testPatientId,
+    });
+    expect(r.status()).toBe(404);
+    const j = await r.json();
+    expect(j.code).toBe('GIFTCARD_NOT_FOUND');
+  });
+
+  test('POST /giftcards/redeem succeeds using the plaintext returned at issue', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    test.skip(!testPatientId, 'no test patient');
+
+    // Issue + redeem, exercising the full hash → verify roundtrip.
+    const issue = await post(request, token, '/api/wellness/giftcards', { amount: 60 });
+    const card = await issue.json();
+    testGiftCardIds.push(card.id);
+
+    const r = await post(request, token, '/api/wellness/giftcards/redeem', {
+      code: card.oneTimeCode, // ← plaintext from POST response
+      patientId: testPatientId,
+    });
+    expect(r.status()).toBe(201);
+    const j = await r.json();
+    expect(j.giftCard.status).toBe('redeemed');
+    // Redeemed-row response also keeps codeHash off the wire.
+    expect(j.giftCard.codeHash).toBeUndefined();
+    expect(j.transaction.amount).toBe(60);
   });
 });
 

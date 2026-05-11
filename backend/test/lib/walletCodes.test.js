@@ -36,6 +36,10 @@
 import { describe, test, expect } from 'vitest';
 import {
   generateGiftCode,
+  hashGiftCode,
+  verifyGiftCode,
+  maskGiftCode,
+  lastFour,
   computeCouponDiscount,
   computeCashbackEarn,
   parseJsonArray,
@@ -74,6 +78,97 @@ describe('generateGiftCode', () => {
 
   test('alphabet has the expected 30 characters (drops 6 ambiguous out of 36)', () => {
     expect(CODE_ALPHABET).toHaveLength(30);
+  });
+});
+
+// ── hashGiftCode + verifyGiftCode (Wave-B Agent 3, #653) ────────────
+//
+// The bcrypt-hashed-at-rest pattern. Codes go in plaintext on issue
+// (POST response is one-time), into the DB as bcrypt hash. Lookup
+// pipeline uses verifyGiftCode (bcrypt.compare).
+
+describe('hashGiftCode + verifyGiftCode', () => {
+  test('hashGiftCode returns a bcrypt-shaped string ($2a$10$...)', async () => {
+    const hash = await hashGiftCode('ABCD1234WXYZ5678');
+    expect(typeof hash).toBe('string');
+    // bcryptjs uses the $2a$ or $2b$ prefix; cost 10 (matches GIFT_CODE_BCRYPT_COST)
+    expect(hash).toMatch(/^\$2[abxy]\$10\$/);
+    expect(hash.length).toBeGreaterThanOrEqual(60);
+  });
+
+  test('two hashes of the same plaintext are different (random salt)', async () => {
+    const plaintext = 'SAMEPLAINTEXT123';
+    const h1 = await hashGiftCode(plaintext);
+    const h2 = await hashGiftCode(plaintext);
+    expect(h1).not.toBe(h2);
+    // Both still verify against the plaintext
+    expect(await verifyGiftCode(plaintext, h1)).toBe(true);
+    expect(await verifyGiftCode(plaintext, h2)).toBe(true);
+  });
+
+  test('verifyGiftCode true on matching plaintext', async () => {
+    const code = generateGiftCode(16);
+    const hash = await hashGiftCode(code);
+    expect(await verifyGiftCode(code, hash)).toBe(true);
+  });
+
+  test('verifyGiftCode false on non-matching plaintext', async () => {
+    const code = generateGiftCode(16);
+    const hash = await hashGiftCode(code);
+    // Same-length, same-alphabet, different code
+    const other = generateGiftCode(16);
+    if (other === code) return; // 1-in-2^80 — skip silently
+    expect(await verifyGiftCode(other, hash)).toBe(false);
+  });
+
+  test('verifyGiftCode false on empty / null inputs (defensive)', async () => {
+    const hash = await hashGiftCode('ANYCODE12345678');
+    expect(await verifyGiftCode('', hash)).toBe(false);
+    expect(await verifyGiftCode(null, hash)).toBe(false);
+    expect(await verifyGiftCode(undefined, hash)).toBe(false);
+    expect(await verifyGiftCode('something', '')).toBe(false);
+    expect(await verifyGiftCode('something', null)).toBe(false);
+    expect(await verifyGiftCode('something', 'not-a-bcrypt-hash')).toBe(false);
+  });
+
+  test('hashGiftCode rejects empty / non-string input', async () => {
+    await expect(hashGiftCode('')).rejects.toThrow();
+    await expect(hashGiftCode(null)).rejects.toThrow();
+    await expect(hashGiftCode(undefined)).rejects.toThrow();
+  });
+
+  test('verifyGiftCode is case-sensitive (codes uppercased at API layer)', async () => {
+    const code = 'ABCD1234WXYZ5678';
+    const hash = await hashGiftCode(code);
+    expect(await verifyGiftCode(code.toLowerCase(), hash)).toBe(false);
+    expect(await verifyGiftCode(code, hash)).toBe(true);
+  });
+});
+
+describe('maskGiftCode + lastFour', () => {
+  test('maskGiftCode reveals only first-4 + last-4 of a 16-char code', () => {
+    const masked = maskGiftCode('ABCD1234WXYZ5678');
+    expect(masked).toBe('ABCD****5678');
+  });
+
+  test('maskGiftCode contains no characters from the middle 8', () => {
+    const code = 'XXXXMIDDLEXXYYYY';
+    const masked = maskGiftCode(code);
+    // The masked output must NOT include the middle 8 ('MIDDLEXX')
+    expect(masked).not.toContain('MIDDLE');
+  });
+
+  test('maskGiftCode handles short codes (< 8) without leaking', () => {
+    // For ultra-short codes the function falls back to "****" + last-4
+    const masked = maskGiftCode('ABC123');
+    expect(masked).toBe('****C123');
+  });
+
+  test('lastFour returns the last 4 chars', () => {
+    expect(lastFour('ABCD1234WXYZ5678')).toBe('5678');
+    expect(lastFour('SHORT')).toBe('HORT');
+    expect(lastFour('')).toBe('');
+    expect(lastFour(null)).toBe('');
   });
 });
 

@@ -1292,12 +1292,18 @@ model SmsTemplate {
 model SmsConfig {
   id          Int      @id @default(autoincrement())
   provider    String // "msg91", "twilio", "fast2sms"
-  apiKey      String?
-  authToken   String?
+  // #651 — credential columns widened to @db.Text so AES-256-GCM ciphertext
+  // (ENC:v1:<iv>:<tag>:<ct> wrapper) fits regardless of plaintext length.
+  apiKey      String?  @db.Text
+  authToken   String?  @db.Text
   senderId    String?
   dltEntityId String?
   isActive    Boolean  @default(false)
   settings    String?  @db.Text
+  // #651 — Stamp every credential rotation so the admin UI can show
+  // "Last rotated <date>" and so the audit chain has a corroborating
+  // signal alongside the ProviderConfig.ROTATE row.
+  lastRotatedAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1415,10 +1421,13 @@ model WhatsAppConfig {
   provider           String // "meta_cloud", "twilio_whatsapp", "gupshup"
   phoneNumberId      String?
   businessAccountId  String?
-  accessToken        String?
+  // #651 — accessToken widened to @db.Text for AES-256-GCM ciphertext.
+  accessToken        String?  @db.Text
   webhookVerifyToken String?
   isActive           Boolean  @default(false)
   settings           String?  @db.Text
+  // #651 — see SmsConfig.lastRotatedAt
+  lastRotatedAt      DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -1434,12 +1443,15 @@ model WhatsAppConfig {
 model TelephonyConfig {
   id            Int      @id @default(autoincrement())
   provider      String // "myoperator", "knowlarity", "twilio"
-  apiKey        String?
-  apiSecret     String?
+  // #651 — apiKey + apiSecret widened to @db.Text for AES-256-GCM ciphertext.
+  apiKey        String?  @db.Text
+  apiSecret     String?  @db.Text
   virtualNumber String?
   agentNumber   String?
   isActive      Boolean  @default(false)
   settings      String?  @db.Text
+  // #651 — see SmsConfig.lastRotatedAt
+  lastRotatedAt DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -3281,7 +3293,19 @@ model GiftCard {
   id         Int       @id @default(autoincrement())
   tenantId   Int       @default(1)
   tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Wave-B Agent 3 (#653) — `code` is now a masked display value, e.g.
+  // "ABCD****WXYZ". It is no longer redeemable; redemption uses codeHash.
+  // Existing rows on demo were cleared by Wave-A4 cleanup so no backfill
+  // is required. The legacy column is kept for back-compat (UI tables that
+  // already render `code` as a column will render the mask instead).
   code       String
+  // bcrypt hash of the plaintext gift-card code (cost 10). Set on issue;
+  // never reversible. Lookup hashes the incoming code via bcrypt.compare.
+  codeHash   String?
+  // Last-4 of the original plaintext code, kept in cleartext for UI
+  // display ("ending in WXYZ") and to narrow candidates during lookup.
+  // Not redeemable on its own.
+  codeLast4  String?
   amount     Float
   currency   String    @default("INR")
   status     String    @default("active")
@@ -3295,6 +3319,7 @@ model GiftCard {
 
   @@unique([tenantId, code])
   @@index([tenantId, status])
+  @@index([tenantId, codeLast4])
 }
 
 model Coupon {

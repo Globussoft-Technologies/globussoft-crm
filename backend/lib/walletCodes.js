@@ -13,6 +13,12 @@
 // would be heavier than the helpers themselves.
 
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+
+// Wave-B Agent 3 (#653) — bcrypt cost for gift-card / coupon code hashing.
+// 10 mirrors the password-hash cost in routes/auth.js + routes/portal.js
+// (~80-100ms per hash on demo's box, acceptable on the issue path).
+const GIFT_CODE_BCRYPT_COST = 10;
 
 // ── Code generator ──────────────────────────────────────────────────
 //
@@ -34,6 +40,72 @@ function generateGiftCode(length = 16) {
     out += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length];
   }
   return out;
+}
+
+// ── Gift-card code hashing (Wave-B Agent 3, #653) ──────────────────
+//
+// Gift-card codes were previously stored in cleartext. A DB dump leaked
+// every active code in plaintext — anyone with the dump could redeem.
+// We now bcrypt-hash codes at rest and ONLY return the plaintext to the
+// issuing operator in the POST response (one-time). Subsequent lookups
+// hash-compare the incoming code rather than plaintext-match.
+//
+// Pattern matches how the codebase already handles passwords (see
+// backend/routes/auth.js, portal.js, auth_2fa.js). bcryptjs is a
+// pre-existing dependency.
+
+/**
+ * Bcrypt-hash a gift-card code so it can be stored at rest.
+ *
+ * @param {string} plaintext — the raw code returned by generateGiftCode()
+ * @returns {Promise<string>} bcrypt hash (60-char `$2a$10$...` string)
+ */
+async function hashGiftCode(plaintext) {
+  if (typeof plaintext !== 'string' || plaintext.length === 0) {
+    throw new Error('hashGiftCode requires a non-empty string');
+  }
+  return bcrypt.hash(plaintext, GIFT_CODE_BCRYPT_COST);
+}
+
+/**
+ * Verify a candidate plaintext code against a stored bcrypt hash.
+ *
+ * @param {string} plaintext — code submitted by the redemption request
+ * @param {string} hash — value previously produced by hashGiftCode()
+ * @returns {Promise<boolean>}
+ */
+async function verifyGiftCode(plaintext, hash) {
+  if (typeof plaintext !== 'string' || plaintext.length === 0) return false;
+  if (typeof hash !== 'string' || hash.length === 0) return false;
+  try {
+    return await bcrypt.compare(plaintext, hash);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mask a plaintext gift-card code for safe storage / display.
+ * Returns "ABCD****WXYZ" for an N-char code with N≥8; for shorter codes,
+ * falls back to "***" + last-4 to avoid leaking the prefix on tiny codes.
+ *
+ * @param {string} plaintext
+ * @returns {string}
+ */
+function maskGiftCode(plaintext) {
+  const s = String(plaintext || '');
+  if (s.length < 8) return '****' + s.slice(-4);
+  return s.slice(0, 4) + '****' + s.slice(-4);
+}
+
+/**
+ * Last-4 of a plaintext code, used for the codeLast4 index column.
+ *
+ * @param {string} plaintext
+ * @returns {string}
+ */
+function lastFour(plaintext) {
+  return String(plaintext || '').slice(-4);
 }
 
 // ── Coupon discount calculator ──────────────────────────────────────
@@ -176,6 +248,10 @@ function round2(n) {
 
 module.exports = {
   generateGiftCode,
+  hashGiftCode,
+  verifyGiftCode,
+  maskGiftCode,
+  lastFour,
   computeCouponDiscount,
   computeCashbackEarn,
   // Exported for tests + future call-sites that need the same parsing.

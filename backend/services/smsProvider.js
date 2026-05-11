@@ -1,5 +1,10 @@
 const https = require("https");
 const _http = require("http");
+// #651 — credentials are stored encrypted at rest (opt-in via
+// WELLNESS_FIELD_KEY). decryptCredential() is a no-op when the env var is
+// unset OR the stored value isn't an ENC:v1: wrapper, so legacy plaintext
+// rows keep working.
+const { decryptCredential } = require("../lib/credentialMasking");
 
 /**
  * Normalize phone number — strip non-digits, prepend 91 for 10-digit Indian numbers
@@ -275,11 +280,13 @@ async function resolveProviderConfig(prisma, tenantId) {
       where: { isActive: true, tenantId },
     });
     if (cfg && cfg.apiKey) {
+      // #651 — decrypt on-read so the provider HTTP call gets plaintext
+      // even when at-rest encryption is enabled.
       return {
         provider: cfg.provider,
-        apiKey: cfg.apiKey,
+        apiKey: decryptCredential(cfg.apiKey),
         senderId: cfg.senderId || "",
-        authToken: cfg.authToken || "",
+        authToken: decryptCredential(cfg.authToken || ""),
         source: "db",
       };
     }

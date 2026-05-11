@@ -3,6 +3,17 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { initiateCall, lookupContact, normalizePhone } = require("../services/telephonyProvider");
+const {
+  encryptCredential,
+  decryptCredential,
+  looksLikeMaskedSentinel,
+  maskConfigRow,
+} = require("../lib/credentialMasking");
+const { writeAudit } = require("../lib/audit");
+
+// #651 — third-party credentials on TelephonyConfig. GET masks; PUT requires
+// full fresh value; rotation stamps lastRotatedAt + emits audit row.
+const TEL_SECRET_FIELDS = ["apiKey", "apiSecret"];
 
 // POST /click-to-call — Initiate outbound call
 router.post("/click-to-call", verifyToken, async (req, res) => {
@@ -21,12 +32,13 @@ router.post("/click-to-call", verifyToken, async (req, res) => {
       if (contact && contact.tenantId === req.user.tenantId) resolvedContactId = contact.id;
     }
 
+    // #651 — decrypt on-read; no-op for legacy plaintext rows.
     const result = await initiateCall({
       from: config.agentNumber || config.virtualNumber,
       to,
       provider: config.provider,
-      apiKey: config.apiKey,
-      apiSecret: config.apiSecret,
+      apiKey: decryptCredential(config.apiKey),
+      apiSecret: decryptCredential(config.apiSecret),
       virtualNumber: config.virtualNumber,
     });
 
@@ -194,18 +206,16 @@ router.post("/webhook/knowlarity", async (req, res) => {
 });
 
 // GET /config — Get telephony configs (ADMIN only)
+//
+// #651 — see routes/sms.js GET /config doc-comment. apiKey + apiSecret
+// projected to `{ configured, last4 }`; the browser never sees plaintext.
 router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const configs = await prisma.telephonyConfig.findMany({
       where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
     });
-    // Mask secrets in response
-    const masked = configs.map((c) => ({
-      ...c,
-      apiKey: c.apiKey ? `${c.apiKey.slice(0, 4)}****` : null,
-      apiSecret: c.apiSecret ? "****" : null,
-    }));
+    const masked = configs.map((c) => maskConfigRow(c, TEL_SECRET_FIELDS));
     res.json(masked);
   } catch (err) {
     console.error("Get telephony config error:", err);
@@ -214,38 +224,69 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // PUT /config/:provider — Upsert telephony config (ADMIN only)
+//
+// #651 — see routes/sms.js PUT /config doc-comment. Masked sentinels are
+// dropped; rotation stamps lastRotatedAt + emits a ProviderConfig.ROTATE
+// audit row.
 router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { provider } = req.params;
-    const { apiKey, apiSecret, virtualNumber, agentNumber, isActive, settings } = req.body;
+    const { virtualNumber, agentNumber, isActive, settings } = req.body;
 
     if (!["myoperator", "knowlarity"].includes(provider.toLowerCase())) {
       return res.status(400).json({ error: "Provider must be myoperator or knowlarity" });
     }
 
+    const rotatedFields = [];
+    const cleanSecrets = {};
+    for (const f of TEL_SECRET_FIELDS) {
+      const v = req.body[f];
+      if (v === undefined) continue;
+      if (v === null || v === "") {
+        cleanSecrets[f] = null;
+        rotatedFields.push(f);
+        continue;
+      }
+      if (typeof v === "object") continue;
+      if (typeof v !== "string") continue;
+      if (looksLikeMaskedSentinel(v)) continue;
+      cleanSecrets[f] = encryptCredential(v);
+      rotatedFields.push(f);
+    }
+
+    const stampRotation = rotatedFields.length > 0;
+
     const config = await prisma.telephonyConfig.upsert({
       where: { tenantId_provider: { tenantId: req.user.tenantId, provider: provider.toLowerCase() } },
       update: {
-        ...(apiKey !== undefined && { apiKey }),
-        ...(apiSecret !== undefined && { apiSecret }),
+        ...cleanSecrets,
         ...(virtualNumber !== undefined && { virtualNumber }),
         ...(agentNumber !== undefined && { agentNumber }),
         ...(isActive !== undefined && { isActive }),
         ...(settings !== undefined && { settings: typeof settings === "string" ? settings : JSON.stringify(settings) }),
+        ...(stampRotation && { lastRotatedAt: new Date() }),
       },
       create: {
         provider: provider.toLowerCase(),
-        apiKey: apiKey || "",
-        apiSecret: apiSecret || "",
+        apiKey: cleanSecrets.apiKey !== undefined ? cleanSecrets.apiKey : "",
+        apiSecret: cleanSecrets.apiSecret !== undefined ? cleanSecrets.apiSecret : "",
         virtualNumber: virtualNumber || "",
         agentNumber: agentNumber || "",
         isActive: isActive !== undefined ? isActive : true,
         settings: settings ? (typeof settings === "string" ? settings : JSON.stringify(settings)) : null,
         tenantId: req.user.tenantId,
+        ...(stampRotation && { lastRotatedAt: new Date() }),
       },
     });
 
-    res.json(config);
+    if (stampRotation) {
+      await writeAudit("ProviderConfig", "ROTATE", config.id, req.user.userId, req.user.tenantId, {
+        provider: `telephony:${provider.toLowerCase()}`,
+        rotatedFields,
+      });
+    }
+
+    res.json(maskConfigRow(config, TEL_SECRET_FIELDS));
   } catch (err) {
     console.error("Upsert telephony config error:", err);
     res.status(500).json({ error: "Failed to save config" });

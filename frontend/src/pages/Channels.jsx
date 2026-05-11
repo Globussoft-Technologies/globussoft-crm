@@ -24,7 +24,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Radio, MessageSquare, MessageCircle, Phone, Bell, Plus, Save, Trash2, Copy,
-  CheckCircle2, Edit2, Send, Eye, Megaphone, AlertCircle,
+  CheckCircle2, Edit2, Send, Eye, Megaphone, AlertCircle, RefreshCw, Lock,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -157,14 +157,14 @@ export default function Channels() {
     } catch { setTemplates([]); }
   };
 
-  // #586: fetch the saved config rows for the active tab and populate the
-  // per-provider state map so inputs render the persisted values on mount /
-  // after a refresh. The GET endpoints return masked secrets (apiKey trimmed
-  // to 6 chars + "****", accessToken/authToken/apiSecret similarly masked) —
-  // the masked value is fine for display; if the user wants to rotate the
-  // credential they retype the field, otherwise the masked value passes
-  // through on save and the upsert leaves the column untouched (the route's
-  // `apiKey !== undefined` guard handles partial updates).
+  // #651: fetch the saved config rows for the active tab and populate the
+  // per-provider state map. The GET endpoints return:
+  //   - non-secret fields verbatim (provider, senderId, isActive, …)
+  //   - secret fields as { configured: <bool>, last4: '****<tail>' | null }
+  //     — the plaintext credential NEVER leaves the server.
+  // The UI renders secret fields as a readonly "**** + last4" pill + a
+  // Rotate button that opens a modal asking for a fresh credential. There
+  // is no edit-in-place of existing secret values.
   const loadConfigs = async () => {
     try {
       let endpoint = null;
@@ -188,34 +188,55 @@ export default function Channels() {
     }));
   };
 
+  // #651: non-secret fields save in-place. Secret fields go via the
+  // RotateSecretModal (see below) which POSTs a payload containing ONLY the
+  // single rotated field, so an accidental masked-shape echo on a sibling
+  // field can't override unchanged credentials. For non-secret saves we
+  // strip every value whose shape looks like the GET-side masked object
+  // ({configured,last4}) — sending it back would either crash the route's
+  // typeof-string check or be silently dropped, so we filter for hygiene.
   const handleSaveConfig = async (providerKey, endpoint) => {
     try {
       const cfg = configsByProvider[providerKey] || {};
-      // Strip masked-secret sentinels: GET masks apiKey to "TEST-A****", so
-      // if the user didn't retype the field we shouldn't echo the masked
-      // value back as the new credential. The route's `apiKey !== undefined`
-      // guard means dropping the key from the body leaves the DB column
-      // untouched.
-      const { id: _id, createdAt: _c, updatedAt: _u, tenantId: _t, ...rest } = cfg;
+      const { id: _id, createdAt: _c, updatedAt: _u, tenantId: _t, lastRotatedAt: _r, ...rest } = cfg;
       const payload = {};
       for (const [k, v] of Object.entries(rest)) {
-        if (typeof v === 'string' && v.endsWith('****')) continue;
+        // Skip masked-secret objects from GET (shape: {configured, last4})
+        if (v && typeof v === 'object' && ('configured' in v || 'last4' in v)) continue;
+        // Skip legacy string sentinels ending "****"
+        if (typeof v === 'string' && v.endsWith('****') && v.length <= 16) continue;
         payload[k] = v;
       }
       payload.provider = providerKey;
       payload.isActive = cfg.isActive ?? false;
       await fetchApi(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       notify.success('Configuration saved!');
-      await loadConfigs(); // round-trip: re-read so the UI reflects what's in the DB
+      await loadConfigs();
     } catch {
       // #590 / #591: fetchApi already auto-toasts the server's error
-      // message (the canonical RBAC denial copy on 403, the validation
-      // message on 4xx, etc.). The previous catch handler emitted a
-      // bare "Failed to save" — under Manager that masked an RBAC
-      // denial as a transient save failure, so users would retry
-      // repeatedly instead of seeing the real reason. Swallow here so
-      // the auto-toast stays on screen.
+      // message; swallow here so the auto-toast stays on screen.
     }
+  };
+
+  // #651: rotate a single secret. Posts ONLY {provider, isActive, <field>}
+  // so neighbouring credentials can't be accidentally trampled. Sends the
+  // fresh plaintext over HTTPS; the backend immediately encrypt-at-rest if
+  // WELLNESS_FIELD_KEY is set and stamps lastRotatedAt + a ROTATE audit
+  // row. On success we re-read to surface the new last4.
+  const handleRotateSecret = async (providerKey, endpoint, field, plaintext) => {
+    const cfg = configsByProvider[providerKey] || {};
+    const payload = {
+      provider: providerKey,
+      isActive: cfg.isActive ?? false,
+      [field]: plaintext,
+    };
+    await fetchApi(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    notify.success(`${field} rotated`);
+    await loadConfigs();
   };
 
   const templateEndpointBase = () =>
@@ -299,8 +320,8 @@ export default function Channels() {
       {activeTab === 'sms' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-            {[{ provider: 'msg91', label: 'MSG91', fields: [{ key: 'apiKey', label: 'API Key' }, { key: 'senderId', label: 'Sender ID (6 chars)' }, { key: 'dltEntityId', label: 'DLT Entity ID' }] },
-              { provider: 'twilio', label: 'Twilio', fields: [{ key: 'apiKey', label: 'Account SID' }, { key: 'authToken', label: 'Auth Token', type: 'password' }, { key: 'senderId', label: 'Phone Number' }] }
+            {[{ provider: 'msg91', label: 'MSG91', fields: [{ key: 'apiKey', label: 'API Key', secret: true }, { key: 'senderId', label: 'Sender ID (6 chars)' }, { key: 'dltEntityId', label: 'DLT Entity ID' }] },
+              { provider: 'twilio', label: 'Twilio', fields: [{ key: 'apiKey', label: 'Account SID' }, { key: 'authToken', label: 'Auth Token', secret: true }, { key: 'senderId', label: 'Phone Number' }] }
             ].map(p => (
               <ConfigCard
                 key={p.provider}
@@ -308,6 +329,7 @@ export default function Channels() {
                 config={configsByProvider[p.provider] || {}}
                 onChangeField={(field, value) => updateProviderField(p.provider, field, value)}
                 onSave={() => handleSaveConfig(p.provider, `/api/sms/config/${p.provider}`)}
+                onRotateSecret={(field, value) => handleRotateSecret(p.provider, `/api/sms/config/${p.provider}`, field, value)}
               />
             ))}
           </div>
@@ -330,10 +352,11 @@ export default function Channels() {
       {activeTab === 'whatsapp' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <ConfigCard
-            provider={{ provider: 'meta_cloud', label: 'Meta Cloud API', fields: [{ key: 'phoneNumberId', label: 'Phone Number ID' }, { key: 'accessToken', label: 'Access Token', type: 'password' }, { key: 'businessAccountId', label: 'Business Account ID' }, { key: 'webhookVerifyToken', label: 'Webhook Verify Token' }] }}
+            provider={{ provider: 'meta_cloud', label: 'Meta Cloud API', fields: [{ key: 'phoneNumberId', label: 'Phone Number ID' }, { key: 'accessToken', label: 'Access Token', secret: true }, { key: 'businessAccountId', label: 'Business Account ID' }, { key: 'webhookVerifyToken', label: 'Webhook Verify Token', secret: true }] }}
             config={configsByProvider['meta_cloud'] || {}}
             onChangeField={(field, value) => updateProviderField('meta_cloud', field, value)}
             onSave={() => handleSaveConfig('meta_cloud', '/api/whatsapp/config/meta_cloud')}
+            onRotateSecret={(field, value) => handleRotateSecret('meta_cloud', '/api/whatsapp/config/meta_cloud', field, value)}
           />
           <WebhookInfo label="WhatsApp Webhook" url={`${webhookBase}/api/whatsapp/webhook`} copied={copied} copyText={copyText} />
           <TemplateSection
@@ -353,8 +376,8 @@ export default function Channels() {
       {/* Telephony Config */}
       {activeTab === 'telephony' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-          {[{ provider: 'myoperator', label: 'MyOperator', fields: [{ key: 'apiKey', label: 'API Token' }, { key: 'virtualNumber', label: 'Virtual Number' }] },
-            { provider: 'knowlarity', label: 'Knowlarity', fields: [{ key: 'apiKey', label: 'API Key' }, { key: 'apiSecret', label: 'SR Number' }, { key: 'virtualNumber', label: 'Virtual Number' }] }
+          {[{ provider: 'myoperator', label: 'MyOperator', fields: [{ key: 'apiKey', label: 'API Token', secret: true }, { key: 'virtualNumber', label: 'Virtual Number' }] },
+            { provider: 'knowlarity', label: 'Knowlarity', fields: [{ key: 'apiKey', label: 'API Key', secret: true }, { key: 'apiSecret', label: 'SR Number', secret: true }, { key: 'virtualNumber', label: 'Virtual Number' }] }
           ].map(p => (
             <ConfigCard
               key={p.provider}
@@ -362,6 +385,7 @@ export default function Channels() {
               config={configsByProvider[p.provider] || {}}
               onChangeField={(field, value) => updateProviderField(p.provider, field, value)}
               onSave={() => handleSaveConfig(p.provider, `/api/telephony/config/${p.provider}`)}
+              onRotateSecret={(field, value) => handleRotateSecret(p.provider, `/api/telephony/config/${p.provider}`, field, value)}
             />
           ))}
           <div style={{ gridColumn: '1 / -1' }}>
@@ -447,32 +471,54 @@ function stripIds(obj) {
 /**
  * ConfigCard — controlled per-provider config editor.
  *
- * #586: pre-fix this card was uncontrolled (inputs had only `placeholder` +
- * `onChange`, no `value`) and shared a single `configForm` state across every
- * provider on the tab — so (a) typing into MSG91 then Twilio collided on
- * shared field keys (apiKey, senderId, etc.); (b) on mount / refresh the
- * inputs rendered empty regardless of what was persisted in the DB. The
- * "Save" path called the backend correctly and the upsert succeeded — but
- * the next page load showed empty fields, which operators (legitimately)
- * read as "save did not persist." Now value-driven from the per-provider
- * config object loaded by `loadConfigs()`.
+ * #586: pre-fix this card was uncontrolled and shared a single state across
+ * every provider — both bugs are fixed by value-driving from the loaded
+ * config map.
+ *
+ * #651: third-party CREDENTIAL fields (marked `secret: true` in the
+ * provider field-spec) are rendered as a readonly "**** + last4" pill +
+ * Rotate button that opens RotateSecretModal. The plaintext NEVER lands in
+ * an input value; the page state never holds the plaintext after a save
+ * round-trip. This closes the leak where round-tripping plaintext to the
+ * browser made credentials viewable in DevTools / browser history.
+ *
+ * Non-secret fields (phone numbers, sender IDs, IDs) keep the inline-
+ * editable shape they always had — those values aren't sensitive.
  */
-function ConfigCard({ provider, config, onChangeField, onSave }) {
+function ConfigCard({ provider, config, onChangeField, onSave, onRotateSecret }) {
+  const [rotating, setRotating] = React.useState(null); // { field, label }
+  const { lastRotatedAt } = config;
   return (
     <div className="card" style={{ padding: '1.5rem' }}>
-      <h3 style={{ fontWeight: '600', marginBottom: '1rem' }}>{provider.label}</h3>
+      <h3 style={{ fontWeight: '600', marginBottom: '0.25rem' }}>{provider.label}</h3>
+      {lastRotatedAt && (
+        <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+          Last rotated {new Date(lastRotatedAt).toLocaleDateString()}
+        </p>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         {provider.fields.map(f => (
           <div key={f.key}>
-            <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>{f.label}</label>
-            <input
-              className="input-field"
-              type={f.type || 'text'}
-              placeholder={f.label}
-              value={config[f.key] ?? ''}
-              onChange={e => onChangeField(f.key, e.target.value)}
-              style={{ width: '100%', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
-            />
+            <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+              {f.secret && <Lock size={10} style={{ verticalAlign: 'middle', marginRight: '0.3rem' }} />}
+              {f.label}
+            </label>
+            {f.secret ? (
+              <SecretFieldRow
+                value={config[f.key]}
+                label={f.label}
+                onRotate={() => setRotating({ field: f.key, label: f.label })}
+              />
+            ) : (
+              <input
+                className="input-field"
+                type={f.type || 'text'}
+                placeholder={f.label}
+                value={config[f.key] ?? ''}
+                onChange={e => onChangeField(f.key, e.target.value)}
+                style={{ width: '100%', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
+              />
+            )}
           </div>
         ))}
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '0.25rem' }}>
@@ -486,6 +532,139 @@ function ConfigCard({ provider, config, onChangeField, onSave }) {
         <button className="btn-primary" onClick={onSave} style={{ padding: '0.5rem 1rem', fontSize: '0.85rem', marginTop: '0.25rem', width: 'fit-content' }}>
           <Save size={14} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Save
         </button>
+      </div>
+      {rotating && (
+        <RotateSecretModal
+          field={rotating.field}
+          label={rotating.label}
+          onCancel={() => setRotating(null)}
+          onConfirm={async (plaintext) => {
+            await onRotateSecret(rotating.field, plaintext);
+            setRotating(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * SecretFieldRow — readonly display of "configured / last4" + Rotate button.
+ *
+ * Accepts the GET-shape object `{configured, last4}` OR (for compatibility
+ * with the just-rotated round-trip) a bare string that looks masked. Anything
+ * else renders as "Not configured".
+ */
+function SecretFieldRow({ value, label, onRotate }) {
+  let display;
+  let configured = false;
+  if (value && typeof value === 'object' && ('configured' in value || 'last4' in value)) {
+    configured = !!value.configured;
+    display = configured ? (value.last4 || '****') : 'Not configured';
+  } else if (typeof value === 'string' && value.length > 0) {
+    // Legacy plaintext fall-through (older backend that hadn't been
+    // upgraded yet). Mask client-side so we still don't display it.
+    configured = true;
+    display = '****' + value.slice(-4);
+  } else {
+    display = 'Not configured';
+  }
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '0.5rem',
+      padding: '0.5rem 0.75rem',
+      background: 'var(--subtle-bg)',
+      borderRadius: '6px',
+      border: '1px solid var(--border-color)',
+    }}>
+      <code style={{
+        flex: 1,
+        fontSize: '0.85rem',
+        color: configured ? 'var(--text-primary)' : 'var(--text-secondary)',
+        fontStyle: configured ? 'normal' : 'italic',
+      }}>{display}</code>
+      <button
+        type="button"
+        onClick={onRotate}
+        title={`Rotate ${label}`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.3rem',
+          background: 'none',
+          border: '1px solid var(--border-color)',
+          padding: '0.25rem 0.6rem',
+          borderRadius: '4px',
+          cursor: 'pointer',
+          fontSize: '0.75rem',
+          color: 'var(--text-secondary)',
+        }}
+      >
+        <RefreshCw size={11} /> {configured ? 'Rotate' : 'Set'}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * RotateSecretModal — single-purpose modal that takes a fresh credential
+ * and submits it. The plaintext is held only in this modal's local state
+ * (cleared on close) — it never lives in the parent Channels state, never
+ * round-trips through GET, never appears in fetch payload bodies for any
+ * non-rotation save.
+ */
+function RotateSecretModal({ field, label, onCancel, onConfirm }) {
+  const [value, setValue] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [reveal, setReveal] = React.useState(false);
+  const submit = async () => {
+    if (!value.trim()) return;
+    setBusy(true);
+    try {
+      await onConfirm(value);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 220 }}>
+      <div className="card" style={{ padding: '2rem', width: '460px' }}>
+        <h3 style={{ fontWeight: 'bold', marginBottom: '0.4rem' }}>Rotate {label}</h3>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+          Paste the new {label} below. The previous value is overwritten on save.
+          The plaintext is encrypted at rest if <code>WELLNESS_FIELD_KEY</code> is configured.
+        </p>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+          <input
+            className="input-field"
+            type={reveal ? 'text' : 'password'}
+            placeholder={`New ${label}`}
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            autoFocus
+            autoComplete="off"
+            spellCheck="false"
+            style={{ flex: 1, padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
+          />
+          <button
+            type="button"
+            onClick={() => setReveal(r => !r)}
+            style={{ background: 'none', border: '1px solid var(--border-color)', padding: '0.4rem 0.6rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem' }}
+          >{reveal ? 'Hide' : 'Show'}</button>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+          <button onClick={onCancel} disabled={busy} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={busy || !value.trim()}>
+            {busy ? 'Saving...' : 'Save & Rotate'}
+          </button>
+        </div>
+        {/* Hint kept to a single line so the field key isn't user-facing
+            noise; full name lives in the title bar above. */}
+        <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.75rem' }}>
+          Field: <code>{field}</code>
+        </p>
       </div>
     </div>
   );

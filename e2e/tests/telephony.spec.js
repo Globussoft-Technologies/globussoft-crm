@@ -49,9 +49,18 @@ test.describe('telephony.js — click-to-call + provider webhooks + admin config
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body)).toBe(true);
+    // #651: secret fields project to {configured, last4} objects; raw
+    // plaintext never round-trips. Pre-fix contract was "apiKey + "****"
+    // suffix string" — that leaked the 4-char prefix.
     for (const cfg of body) {
-      if (cfg.apiSecret) expect(cfg.apiSecret).toBe('****');
-      if (cfg.apiKey) expect(cfg.apiKey).toMatch(/\*\*\*\*$/);
+      if (cfg.apiSecret != null) {
+        expect(typeof cfg.apiSecret).toBe('object');
+        expect(cfg.apiSecret).toHaveProperty('configured');
+      }
+      if (cfg.apiKey != null) {
+        expect(typeof cfg.apiKey).toBe('object');
+        expect(cfg.apiKey).toHaveProperty('configured');
+      }
     }
   });
 

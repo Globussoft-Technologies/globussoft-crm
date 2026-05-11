@@ -38,6 +38,16 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { sendTemplate, sendText, verifyWebhook } = require("../services/whatsappProvider");
 const { toE164 } = require("../utils/deduplication");
 const { writeAudit } = require("../lib/audit");
+const {
+  encryptCredential,
+  decryptCredential,
+  looksLikeMaskedSentinel,
+  maskConfigRow,
+} = require("../lib/credentialMasking");
+
+// #651 — third-party credentials on WhatsAppConfig. GET masks; PUT requires
+// full fresh value; rotation stamps lastRotatedAt + emits audit row.
+const WA_SECRET_FIELDS = ["accessToken", "webhookVerifyToken"];
 
 // ─── Phone helpers (Wave 2 Agent KK) ───────────────────────────────────────
 // Inbound webhook messages from Meta arrive as digits-only ("919876543210"),
@@ -186,6 +196,8 @@ router.post("/send", verifyToken, async (req, res) => {
 
     let result;
 
+    // #651 — decrypt on-read; no-op for legacy plaintext rows.
+    const accessTokenPlain = decryptCredential(config.accessToken);
     if (templateName) {
       // Look up template within tenant
       const tpl = await prisma.whatsAppTemplate.findFirst({ where: { name: templateName, tenantId: req.user.tenantId } });
@@ -195,14 +207,14 @@ router.post("/send", verifyToken, async (req, res) => {
         language: tpl?.language || "en_US",
         parameters: parameters || [],
         phoneNumberId: config.phoneNumberId,
-        accessToken: config.accessToken,
+        accessToken: accessTokenPlain,
       });
     } else {
       result = await sendText({
         to,
         body,
         phoneNumberId: config.phoneNumberId,
-        accessToken: config.accessToken,
+        accessToken: accessTokenPlain,
       });
     }
 
@@ -785,7 +797,8 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
         hostname: "graph.facebook.com",
         path: `/v18.0/${config.businessAccountId}/message_templates?name=${encodeURIComponent(template.name)}`,
         method: "GET",
-        headers: { Authorization: `Bearer ${config.accessToken}` },
+        // #651 — decrypt on-read for the Meta API call.
+        headers: { Authorization: `Bearer ${decryptCredential(config.accessToken)}` },
       };
 
       const req2 = https.request(options, (res2) => {
@@ -826,6 +839,10 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
 });
 
 // ─── Get WhatsApp Config (ADMIN only) ──────────────────────────────────────
+//
+// #651 — see routes/sms.js GET /config doc-comment. accessToken +
+// webhookVerifyToken are projected to `{ configured, last4 }`; the
+// browser never sees plaintext.
 router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const configs = await prisma.whatsAppConfig.findMany({
@@ -833,11 +850,7 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
 
-    const masked = configs.map((c) => ({
-      ...c,
-      accessToken: c.accessToken ? c.accessToken.slice(0, 10) + "****" : null,
-    }));
-
+    const masked = configs.map((c) => maskConfigRow(c, WA_SECRET_FIELDS));
     res.json(masked);
   } catch (err) {
     console.error("WhatsApp config get error:", err);
@@ -846,10 +859,33 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // ─── Upsert WhatsApp Config (ADMIN only) ───────────────────────────────────
+//
+// #651 — see routes/sms.js PUT /config doc-comment. Masked sentinels are
+// dropped before reaching prisma; any genuine rotation stamps
+// lastRotatedAt + emits a ProviderConfig.ROTATE audit row.
 router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { provider } = req.params;
-    const { phoneNumberId, businessAccountId, accessToken, webhookVerifyToken, isActive, settings } = req.body;
+    const { phoneNumberId, businessAccountId, isActive, settings } = req.body;
+
+    const rotatedFields = [];
+    const cleanSecrets = {};
+    for (const f of WA_SECRET_FIELDS) {
+      const v = req.body[f];
+      if (v === undefined) continue;
+      if (v === null || v === "") {
+        cleanSecrets[f] = null;
+        rotatedFields.push(f);
+        continue;
+      }
+      if (typeof v === "object") continue; // GET shape echoed back
+      if (typeof v !== "string") continue;
+      if (looksLikeMaskedSentinel(v)) continue;
+      cleanSecrets[f] = encryptCredential(v);
+      rotatedFields.push(f);
+    }
+
+    const stampRotation = rotatedFields.length > 0;
 
     const config = await prisma.whatsAppConfig.upsert({
       where: { tenantId_provider: { tenantId: req.user.tenantId, provider } },
@@ -857,19 +893,20 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
         provider,
         phoneNumberId: phoneNumberId || "",
         businessAccountId: businessAccountId || null,
-        accessToken: accessToken || "",
-        webhookVerifyToken: webhookVerifyToken || null,
+        accessToken: cleanSecrets.accessToken !== undefined ? cleanSecrets.accessToken : "",
+        webhookVerifyToken: cleanSecrets.webhookVerifyToken !== undefined ? cleanSecrets.webhookVerifyToken : null,
         isActive: isActive !== undefined ? isActive : true,
         settings: settings || null,
         tenantId: req.user.tenantId,
+        ...(stampRotation && { lastRotatedAt: new Date() }),
       },
       update: {
         ...(phoneNumberId !== undefined && { phoneNumberId }),
         ...(businessAccountId !== undefined && { businessAccountId }),
-        ...(accessToken !== undefined && { accessToken }),
-        ...(webhookVerifyToken !== undefined && { webhookVerifyToken }),
+        ...cleanSecrets,
         ...(isActive !== undefined && { isActive }),
         ...(settings !== undefined && { settings }),
+        ...(stampRotation && { lastRotatedAt: new Date() }),
       },
     });
 
@@ -880,12 +917,16 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
       });
     }
 
+    if (stampRotation) {
+      await writeAudit("ProviderConfig", "ROTATE", config.id, req.user.userId, req.user.tenantId, {
+        provider: `whatsapp:${provider}`,
+        rotatedFields,
+      });
+    }
+
     res.json({
       success: true,
-      config: {
-        ...config,
-        accessToken: config.accessToken ? config.accessToken.slice(0, 10) + "****" : null,
-      },
+      config: maskConfigRow(config, WA_SECRET_FIELDS),
     });
   } catch (err) {
     console.error("WhatsApp config upsert error:", err);
@@ -898,7 +939,8 @@ router.get("/webhook", async (req, res) => {
   try {
     // Match against any active WhatsApp config across all tenants
     const config = await prisma.whatsAppConfig.findFirst({ where: { isActive: true } });
-    const token = config?.webhookVerifyToken || process.env.WHATSAPP_VERIFY_TOKEN || "";
+    // #651 — decrypt on-read; no-op for plaintext / env-var fallback.
+    const token = decryptCredential(config?.webhookVerifyToken) || process.env.WHATSAPP_VERIFY_TOKEN || "";
 
     const result = verifyWebhook(req, token);
     if (result.verified) {
@@ -1034,11 +1076,12 @@ router.post("/webhook", async (req, res) => {
                 const confirmBody =
                   "You have been unsubscribed from WhatsApp messages. Reply START to opt back in.";
                 try {
+                  // #651 — decrypt on-read for the provider HTTP call.
                   const result = await sendText({
                     to: from,
                     body: confirmBody,
                     phoneNumberId: config.phoneNumberId,
-                    accessToken: config.accessToken,
+                    accessToken: decryptCredential(config.accessToken),
                   });
                   await prisma.whatsAppMessage.create({
                     data: {

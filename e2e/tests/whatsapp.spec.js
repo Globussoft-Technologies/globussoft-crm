@@ -79,8 +79,12 @@ test.describe('whatsapp.js — Cloud API messaging + templates + webhook', () =>
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body)).toBe(true);
+    // #651: accessToken projects to {configured, last4} object.
     for (const cfg of body) {
-      if (cfg.accessToken) expect(cfg.accessToken).toMatch(/\*\*\*\*$/);
+      if (cfg.accessToken != null) {
+        expect(typeof cfg.accessToken).toBe('object');
+        expect(cfg.accessToken).toHaveProperty('configured');
+      }
     }
   });
 

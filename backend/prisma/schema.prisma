@@ -148,7 +148,7 @@ model Tenant {
   loyaltyConfig        LoyaltyConfig?
 
   // Subscriptions
-  subscriptions        Subscription[]
+  subscriptions Subscription[]
 
   // #413 batch 1 (wave 17): financial / PHI back-relations. Required because
   // each child model now declares `tenant Tenant @relation`; Prisma rejects
@@ -318,9 +318,9 @@ model User {
   deactivatedAt DateTime?
 
   // Subscription trial + billing
-  trialStartDate    DateTime?
-  trialEndsAt       DateTime?
-  subscriptionStatus String   @default("TRIAL") // TRIAL | ACTIVE | EXPIRED | CANCELLED
+  trialStartDate     DateTime?
+  trialEndsAt        DateTime?
+  subscriptionStatus String    @default("TRIAL") // TRIAL | ACTIVE | EXPIRED | CANCELLED
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1071,17 +1071,17 @@ model EstimateLineItem {
 }
 
 model Notification {
-  id         Int      @id @default(autoincrement())
+  id         Int       @id @default(autoincrement())
   title      String
   message    String
-  type       String   @default("info") // info, success, warning, error, system, deal, task, ticket
-  priority   String   @default("normal") // low, normal, high, critical
-  isRead     Boolean  @default(false)
+  type       String    @default("info") // info, success, warning, error, system, deal, task, ticket
+  priority   String    @default("normal") // low, normal, high, critical
+  isRead     Boolean   @default(false)
   link       String? // optional URL to navigate to
   entityType String? // lead, ticket, approval, expense, leave
   entityId   Int?
   readAt     DateTime?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1290,22 +1290,22 @@ model SmsTemplate {
 }
 
 model SmsConfig {
-  id          Int      @id @default(autoincrement())
-  provider    String // "msg91", "twilio", "fast2sms"
+  id            Int       @id @default(autoincrement())
+  provider      String // "msg91", "twilio", "fast2sms"
   // #651 — credential columns widened to @db.Text so AES-256-GCM ciphertext
   // (ENC:v1:<iv>:<tag>:<ct> wrapper) fits regardless of plaintext length.
-  apiKey      String?  @db.Text
-  authToken   String?  @db.Text
-  senderId    String?
-  dltEntityId String?
-  isActive    Boolean  @default(false)
-  settings    String?  @db.Text
+  apiKey        String?   @db.Text
+  authToken     String?   @db.Text
+  senderId      String?
+  dltEntityId   String?
+  isActive      Boolean   @default(false)
+  settings      String?   @db.Text
   // #651 — Stamp every credential rotation so the admin UI can show
   // "Last rotated <date>" and so the audit chain has a corroborating
   // signal alongside the ProviderConfig.ROTATE row.
   lastRotatedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1417,19 +1417,19 @@ model WhatsAppTemplate {
 }
 
 model WhatsAppConfig {
-  id                 Int      @id @default(autoincrement())
+  id                 Int       @id @default(autoincrement())
   provider           String // "meta_cloud", "twilio_whatsapp", "gupshup"
   phoneNumberId      String?
   businessAccountId  String?
   // #651 — accessToken widened to @db.Text for AES-256-GCM ciphertext.
-  accessToken        String?  @db.Text
+  accessToken        String?   @db.Text
   webhookVerifyToken String?
-  isActive           Boolean  @default(false)
-  settings           String?  @db.Text
+  isActive           Boolean   @default(false)
+  settings           String?   @db.Text
   // #651 — see SmsConfig.lastRotatedAt
   lastRotatedAt      DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1441,19 +1441,19 @@ model WhatsAppConfig {
 // ── Telephony ─────────────────────────────────────────────────────
 
 model TelephonyConfig {
-  id            Int      @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   provider      String // "myoperator", "knowlarity", "twilio"
   // #651 — apiKey + apiSecret widened to @db.Text for AES-256-GCM ciphertext.
-  apiKey        String?  @db.Text
-  apiSecret     String?  @db.Text
+  apiKey        String?   @db.Text
+  apiSecret     String?   @db.Text
   virtualNumber String?
   agentNumber   String?
-  isActive      Boolean  @default(false)
-  settings      String?  @db.Text
+  isActive      Boolean   @default(false)
+  settings      String?   @db.Text
   // #651 — see SmsConfig.lastRotatedAt
   lastRotatedAt DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2497,8 +2497,8 @@ model Service {
   // to the string column for back-compat.
   // TODO: drop the legacy `category` column in v3.6.0 once the React
   //       frontend + the wellness external API consumers have migrated.
-  category   String? // hair, skin, salon, slimming, ayurveda, aesthetics (DEPRECATED — use categoryId)
-  categoryId Int?
+  category        String? // hair, skin, salon, slimming, ayurveda, aesthetics (DEPRECATED — use categoryId)
+  categoryId      Int?
   serviceCategory ServiceCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   ticketTier     String  @default("medium") // low, medium, high
@@ -3755,8 +3755,8 @@ model Drug {
   defaultFrequency String? // "twice daily", "1-0-1", "every 6 hours"
   defaultDuration  String? // "5 days", "till finished", "as needed"
 
-  notes    String?  @db.Text // admin-only — scheduling info, contraindications, etc.
-  isActive Boolean  @default(true)
+  notes    String? @db.Text // admin-only — scheduling info, contraindications, etc.
+  isActive Boolean @default(true)
 
   tenantId  Int      @default(1)
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3771,7 +3771,6 @@ model Drug {
   @@index([tenantId, isActive])
 }
 
-
 // ─────────────────────────────────────────────────────────────────────
 // PRD Gap §1.5 — Commission Profile
 //
@@ -3785,22 +3784,22 @@ model Drug {
 // Either percentage OR flatAmount is set (validated at the route layer).
 // ─────────────────────────────────────────────────────────────────────
 model CommissionProfile {
-  id                 Int      @id @default(autoincrement())
-  tenantId           Int      @default(1)
-  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name               String
+  id                Int      @id @default(autoincrement())
+  tenantId          Int      @default(1)
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name              String
   // Decimal? — % (0-100) when set; null when flatAmount is the rule. Stored as
   // Decimal(8,3) so 12.5% / 0.005% are both representable.
-  percentage         Decimal? @db.Decimal(8, 3)
+  percentage        Decimal? @db.Decimal(8, 3)
   // Decimal? — flat amount in tenant's defaultCurrency. Stored as Decimal(12,2).
-  flatAmount         Decimal? @db.Decimal(12, 2)
+  flatAmount        Decimal? @db.Decimal(12, 2)
   // PER_SERVICE | PER_PRODUCT | REVENUE_PERCENT | FLAT_PER_INVOICE.
-  basis              String   @default("REVENUE_PERCENT")
+  basis             String   @default("REVENUE_PERCENT")
   // Optional Service category filter (e.g. "Aesthetics"). Null = applies to all.
-  appliesToCategory  String?
-  isActive           Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  appliesToCategory String?
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   // Back-relation: every User assigned to this profile.
   users User[]
@@ -3820,26 +3819,26 @@ model CommissionProfile {
 // (e.g. scope=SERVICE + scopeFilter="Aesthetics").
 // ─────────────────────────────────────────────────────────────────────
 model StaffRevenueGoal {
-  id              Int      @id @default(autoincrement())
-  tenantId        Int      @default(1)
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userId          Int
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             Int      @id @default(autoincrement())
+  tenantId       Int      @default(1)
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId         Int
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   // MONTHLY | QUARTERLY | YEARLY. Free-form so future grain (WEEKLY) slots in.
-  period          String   @default("MONTHLY")
-  periodStart     DateTime
-  periodEnd       DateTime
+  period         String   @default("MONTHLY")
+  periodStart    DateTime
+  periodEnd      DateTime
   // Decimal(14,2) so a ₹50 lakh target / $500K target both fit cleanly.
-  targetAmount    Decimal  @db.Decimal(14, 2)
+  targetAmount   Decimal  @db.Decimal(14, 2)
   // Updated by the route's GET handler (computed on read) OR a cron pass.
-  achievedAmount  Decimal  @default(0) @db.Decimal(14, 2)
+  achievedAmount Decimal  @default(0) @db.Decimal(14, 2)
   // ALL | SERVICE | PRODUCT | MEMBERSHIP. Filters the SUM.
-  scope           String   @default("ALL")
+  scope          String   @default("ALL")
   // Optional secondary filter (e.g. specific category name).
-  scopeFilter     String?
-  notes           String?  @db.Text
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  scopeFilter    String?
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@unique([tenantId, userId, period, periodStart])
   @@index([tenantId, userId])
@@ -3847,17 +3846,17 @@ model StaffRevenueGoal {
 }
 
 model SubscriptionPlan {
-  id                  Int            @id @default(autoincrement())
+  id                  Int      @id @default(autoincrement())
   name                String
-  price               Decimal        @db.Decimal(12, 2)
-  currency            String         @default("INR")
+  price               Decimal  @db.Decimal(12, 2)
+  currency            String   @default("INR")
   billingIntervalDays Int? // 30, 90, 365; null = free trial
-  features            String?        @db.Text // JSON array
-  description         String?        @db.Text
-  isActive            Boolean        @default(true)
-  createdAt           DateTime       @default(now())
+  features            String?  @db.Text // JSON array
+  description         String?  @db.Text
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
 
-  subscriptions       Subscription[]
+  subscriptions Subscription[]
 
   @@unique([name, billingIntervalDays])
 }

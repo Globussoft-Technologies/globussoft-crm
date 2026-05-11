@@ -456,9 +456,16 @@ test.describe('SMS API — /config (ADMIN-only)', () => {
     expect(res.status()).toBe(200);
     const rows = await res.json();
     expect(Array.isArray(rows)).toBe(true);
+    // #651: secret fields project to {configured, last4} objects.
     for (const c of rows) {
-      if (c.apiKey) expect(c.apiKey).toMatch(/\*\*\*\*$/);
-      if (c.authToken) expect(c.authToken).toMatch(/\*\*\*\*$/);
+      if (c.apiKey != null) {
+        expect(typeof c.apiKey).toBe('object');
+        expect(c.apiKey).toHaveProperty('configured');
+      }
+      if (c.authToken != null) {
+        expect(typeof c.authToken).toBe('object');
+        expect(c.authToken).toHaveProperty('configured');
+      }
     }
   });
 
@@ -472,7 +479,9 @@ test.describe('SMS API — /config (ADMIN-only)', () => {
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.success).toBe(true);
-    expect(body.config.apiKey).toMatch(/\*\*\*\*$/);
+    // #651: response masks the just-set apiKey as {configured,last4}.
+    expect(typeof body.config.apiKey).toBe('object');
+    expect(body.config.apiKey.configured).toBe(true);
     expect(body.config.senderId).toBe('GLBSE2');
   });
 
@@ -507,7 +516,9 @@ test.describe('SMS API — /config (ADMIN-only)', () => {
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.config.authToken).toMatch(/\*\*\*\*$/);
+    // #651: authToken in the response is the {configured,last4} shape.
+    expect(typeof body.config.authToken).toBe('object');
+    expect(body.config.authToken.configured).toBe(true);
   });
 });
 

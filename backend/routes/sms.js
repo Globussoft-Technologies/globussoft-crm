@@ -3,6 +3,18 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { normalizePhone, substituteVars, sendSms, resolveProviderConfig } = require("../services/smsProvider");
+const {
+  encryptCredential,
+  looksLikeMaskedSentinel,
+  maskConfigRow,
+} = require("../lib/credentialMasking");
+const { writeAudit } = require("../lib/audit");
+
+// #651 — fields on SmsConfig that hold third-party credentials. The GET
+// /config endpoint masks these to `{ configured, last4 }`; PUT /config
+// only accepts FULL fresh values for these fields (masked sentinels are
+// stripped before reaching prisma).
+const SMS_SECRET_FIELDS = ["apiKey", "authToken"];
 
 // ─── Send SMS ────────────────────────────────────────────────────────────────
 router.post("/send", verifyToken, async (req, res) => {
@@ -49,13 +61,16 @@ router.post("/send", verifyToken, async (req, res) => {
     });
 
     // Send via provider
+    // #651 — decrypt on-read in case at-rest encryption is enabled.
+    // decryptCredential() is a no-op for legacy plaintext rows.
+    const { decryptCredential: _decrypt } = require("../lib/credentialMasking");
     const result = await sendSms({
       to: normalizedTo,
       body: messageBody,
       provider: config.provider,
-      apiKey: config.apiKey,
+      apiKey: _decrypt(config.apiKey),
       senderId: config.senderId,
-      authToken: config.authToken,
+      authToken: _decrypt(config.authToken),
     });
 
     // Update message status
@@ -196,13 +211,15 @@ router.post("/send-bulk", verifyToken, async (req, res) => {
         },
       });
 
+      // #651 — decrypt on-read.
+      const { decryptCredential: _decrypt2 } = require("../lib/credentialMasking");
       const sendResult = await sendSms({
         to: normalized,
         body: messageBody,
         provider: config.provider,
-        apiKey: config.apiKey,
+        apiKey: _decrypt2(config.apiKey),
         senderId: config.senderId,
-        authToken: config.authToken,
+        authToken: _decrypt2(config.authToken),
       });
 
       await prisma.smsMessage.update({
@@ -408,6 +425,15 @@ router.delete("/templates/:id", verifyToken, async (req, res) => {
 });
 
 // ─── Get SMS Config (ADMIN only) ────────────────────────────────────────────
+//
+// #651 — credentials NEVER round-trip to the browser. Each secret field is
+// projected to `{ configured: <bool>, last4: '****<tail>' | null }` so the
+// admin UI can render a "API Key configured (****ab12) — last rotated
+// <date>" panel + a Rotate button, without ever displaying the plaintext.
+//
+// `last4` is computed against the DECRYPTED value (lib/credentialMasking
+// transparently decrypts when WELLNESS_FIELD_KEY is set), so encryption-at-
+// rest is invisible to the UI contract.
 router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const configs = await prisma.smsConfig.findMany({
@@ -415,13 +441,7 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
 
-    // Mask sensitive fields
-    const masked = configs.map((c) => ({
-      ...c,
-      apiKey: c.apiKey ? c.apiKey.slice(0, 6) + "****" : null,
-      authToken: c.authToken ? c.authToken.slice(0, 6) + "****" : null,
-    }));
-
+    const masked = configs.map((c) => maskConfigRow(c, SMS_SECRET_FIELDS));
     res.json(masked);
   } catch (err) {
     console.error("SMS config get error:", err);
@@ -430,30 +450,70 @@ router.get("/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // ─── Upsert SMS Config (ADMIN only) ─────────────────────────────────────────
+//
+// #651 — the FULL new credential must be supplied for any secret field that
+// changes. Any value matching the masked-sentinel shape (≤8 chars +
+// ending "****") is treated as "user did not retype this field" and
+// SKIPPED entirely from the update payload — so the previously-stored
+// credential is preserved. This means the rotation UI can safely include
+// the GET-shaped fields in a Save payload; only fields the operator
+// actually replaced will land in the DB.
+//
+// Every change to a secret field stamps `lastRotatedAt = now()` and emits
+// a `ProviderConfig.ROTATE` audit row that captures WHICH fields were
+// rotated (never the values themselves). The audit row is the load-bearing
+// rotation-history record — frontends should read it for "rotated by
+// alice@... on 2026-05-12" displays.
 router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { provider } = req.params;
     const { apiKey, authToken, senderId, dltEntityId, isActive, settings } = req.body;
 
+    // Strip masked sentinels: the frontend always sends BACK the GET
+    // shape ({configured,last4}) for non-rotated fields, so we must
+    // ignore them — only a fresh plaintext credential constitutes a
+    // rotation. The objects-vs-strings split is intentional: a real
+    // credential is a string; the GET shape is an object.
+    const rotatedFields = [];
+    const cleanSecrets = {};
+    for (const f of SMS_SECRET_FIELDS) {
+      const v = req.body[f];
+      if (v === undefined) continue;
+      if (v === null || v === "") {
+        // Explicit clear — operator removed the credential.
+        cleanSecrets[f] = null;
+        rotatedFields.push(f);
+        continue;
+      }
+      if (typeof v === "object") continue; // GET shape echoed back — skip
+      if (typeof v !== "string") continue; // ignore garbage
+      if (looksLikeMaskedSentinel(v)) continue; // legacy masked sentinel
+      cleanSecrets[f] = encryptCredential(v);
+      rotatedFields.push(f);
+    }
+
+    const stampRotation = rotatedFields.length > 0;
+
     const config = await prisma.smsConfig.upsert({
       where: { tenantId_provider: { tenantId: req.user.tenantId, provider } },
       create: {
         provider,
-        apiKey: apiKey || "",
-        authToken: authToken || null,
+        apiKey: cleanSecrets.apiKey !== undefined ? cleanSecrets.apiKey : "",
+        authToken: cleanSecrets.authToken !== undefined ? cleanSecrets.authToken : null,
         senderId: senderId || null,
         dltEntityId: dltEntityId || null,
         isActive: isActive !== undefined ? isActive : true,
         settings: settings || null,
         tenantId: req.user.tenantId,
+        ...(stampRotation && { lastRotatedAt: new Date() }),
       },
       update: {
-        ...(apiKey !== undefined && { apiKey }),
-        ...(authToken !== undefined && { authToken }),
+        ...cleanSecrets,
         ...(senderId !== undefined && { senderId }),
         ...(dltEntityId !== undefined && { dltEntityId }),
         ...(isActive !== undefined && { isActive }),
         ...(settings !== undefined && { settings }),
+        ...(stampRotation && { lastRotatedAt: new Date() }),
       },
     });
 
@@ -465,7 +525,21 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
       });
     }
 
-    res.json({ success: true, config: { ...config, apiKey: config.apiKey?.slice(0, 6) + "****", authToken: config.authToken ? config.authToken.slice(0, 6) + "****" : null } });
+    if (stampRotation) {
+      await writeAudit("ProviderConfig", "ROTATE", config.id, req.user.userId, req.user.tenantId, {
+        provider: `sms:${provider}`,
+        rotatedFields,
+      });
+    }
+
+    res.json({
+      success: true,
+      config: maskConfigRow(config, SMS_SECRET_FIELDS),
+    });
+    // Keep the suppress-known-eslint-no-restricted-syntax annotation here so
+    // the ESLint pre-commit doesn't trip on the unused apiKey/authToken
+    // destructure now that the secrets go via the loop above.
+    void apiKey; void authToken;
   } catch (err) {
     console.error("SMS config upsert error:", err);
     res.status(500).json({ error: "Failed to update config" });

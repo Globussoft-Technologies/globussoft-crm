@@ -168,10 +168,15 @@ async function runMembershipExpiryForTenant(tenantId) {
       // rules can hook in (e.g. send_email to the patient, queue an SMS).
       // Fires AFTER the expiryNotifiedAt stamp so the event is at-most-once
       // per membership row (the next tick filters out marker-stamped rows).
-      // Wrapped in try/catch so a workflow-rule failure never re-throws
-      // and rolls back the loop.
+      //
+      // v3.7.5 — awaited + try/catch so a workflow-rule failure (or, in
+      // unit tests, the absence of DATABASE_URL when emitEvent calls
+      // `prisma.automationRule.findMany`) doesn't surface as an Unhandled
+      // Rejection and trip the vitest run. Without the await, the catch
+      // block only saw synchronous throws — the async rejection bubbled
+      // up uncaught and v3.7.5's unit_tests gate caught it.
       try {
-        require("../lib/eventBus").emitEvent(
+        await require("../lib/eventBus").emitEvent(
           "membership.renewal_due",
           {
             membershipId: m.id,

@@ -23,16 +23,16 @@
  *      misconfiguration that re-enables it (e.g. removing helmetMiddleware
  *      from server.js) trips this assertion.
  *
- *   3. `content-security-policy` (and -Report-Only) is INTENTIONALLY
- *      absent. backend/middleware/security.js sets `contentSecurityPolicy:
- *      false` because (a) the Vite SPA ships inline styles + a small
- *      bootstrap script and a strict CSP without nonce wiring would block
- *      them, and (b) the embed widget at /embed/lead-form.html is loaded
- *      by partner sites (callified.ai, partner CRMs) and frame-ancestors
- *      would refuse those legitimate cross-site embeds. This spec PINS
- *      that architectural decision: when CSP DOES land (with nonce/hash
- *      strategy or a separate route), the dev re-enabling it must update
- *      this spec deliberately, not by accident.
+ *   3. `content-security-policy` is now PRESENT as a TRANSITIONAL CSP
+ *      (#654 / 2026-05): backend/middleware/security.js was flipped from
+ *      `contentSecurityPolicy: false` to a real directive list that
+ *      includes `'unsafe-inline'` on script-src and style-src (legacy
+ *      inline event handlers + Vite/React inline styles can't be
+ *      eliminated without a build-step change — tracked as a follow-up).
+ *      The pinned shape below documents the directive list shipped in
+ *      that PR. Tightening to nonces is filed as a separate follow-up
+ *      issue. CSP-Report-Only stays ABSENT (we don't ship a separate
+ *      report-only header today).
  *
  *   4. Headers are served on BOTH the API root `GET /api/health` AND the
  *      auth gate `POST /api/auth/login` (even on the 401 wrong-password
@@ -67,8 +67,8 @@
  *      header assertions go red on a re-run.
  *   2. Add `app.enable('x-powered-by')` in server.js → the x-powered-by
  *      assertion goes red.
- *   3. Set `contentSecurityPolicy: { directives: { defaultSrc: ["'self'"] } }`
- *      in security.js → the CSP-absent assertion goes red.
+ *   3. Set `contentSecurityPolicy: false` in security.js → the CSP-present
+ *      assertion goes red.
  */
 const { test, expect } = require('@playwright/test');
 
@@ -153,14 +153,14 @@ test.describe('Security headers gate (G-25) — Helmet/CSP regression detection'
         'X-Powered-By header leaked — helmet hidePoweredBy regressed (security.js)'
       ).toBeUndefined();
 
-      // 4. CSP must be ABSENT (intentionally — see security.js comment +
-      // this file's header). Both Content-Security-Policy and
-      // Content-Security-Policy-Report-Only are checked: any future PR
-      // that re-enables CSP must update this spec deliberately.
+      // 4. CSP must be PRESENT (#654 transitional CSP). The directive list
+      // is asserted in the snapshot test below; here we just confirm the
+      // header is emitted at all. CSP-Report-Only stays ABSENT because we
+      // don't ship a parallel report-only header today.
       expect(
         headers['content-security-policy'],
-        'CSP unexpectedly enabled — see security.js: contentSecurityPolicy is set to false on purpose for the embed widget'
-      ).toBeUndefined();
+        'CSP missing — #654 transitional CSP regressed (security.js contentSecurityPolicy turned back off?)'
+      ).toBeTruthy();
       expect(
         headers['content-security-policy-report-only'],
         'CSP-Report-Only unexpectedly enabled — was the helmet config silently changed?'
@@ -206,9 +206,19 @@ test.describe('Security headers gate (G-25) — Helmet/CSP regression detection'
       /max-age=31536000.*includeSubDomains|includeSubDomains.*max-age=31536000/
     );
 
+    // #654 — CSP is now PRESENT. The directive list is asserted by the
+    // dedicated csp-stepup-api.spec.js (which exercises each load-bearing
+    // directive — default-src, object-src, frame-ancestors, form-action,
+    // base-uri). Here we just confirm presence + that the load-bearing
+    // anchors of the transitional config (default-src 'self' and
+    // object-src 'none') appear in the header value.
+    const csp = headers['content-security-policy'];
+    expect(csp, 'CSP missing — #654 transitional CSP regressed').toBeTruthy();
+    expect(csp.toLowerCase()).toContain("default-src 'self'");
+    expect(csp.toLowerCase()).toContain("object-src 'none'");
+
     // Negatives — these should NOT be in the snapshot.
     expect(headers['x-powered-by']).toBeUndefined();
-    expect(headers['content-security-policy']).toBeUndefined();
     expect(headers['content-security-policy-report-only']).toBeUndefined();
   });
 });

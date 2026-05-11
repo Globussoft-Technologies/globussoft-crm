@@ -350,6 +350,10 @@ const pushRoutes = require("./routes/push");
 const { router: landingPagesRoutes, publicRouter: landingPagesPublic } = require("./routes/landing_pages");
 const tenantsRoutes = require("./routes/tenants");
 const auth2faRoutes = require("./routes/auth_2fa");
+// #654 — step-up auth for destructive admin flows (5-min stepUpToken bound
+// to (userId, tenantId)). See backend/routes/auth_stepup.js + the
+// requireStepUp() middleware factory in middleware/auth.js.
+const authStepupRoutes = require("./routes/auth_stepup");
 const ssoRoutes = require("./routes/sso");
 const calendarGoogleRoutes = require("./routes/calendar_google");
 const calendarOutlookRoutes = require("./routes/calendar_outlook");
@@ -527,6 +531,9 @@ app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
 app.use("/api/tenants", tenantsRoutes);
 app.use("/api/auth/2fa", auth2faRoutes);
+// #654 — POST /api/auth/step-up — mints a 5-min stepUpToken for destructive
+// admin flows. Mounted after /api/auth/2fa so the URL space stays tidy.
+app.use("/api/auth/step-up", authStepupRoutes);
 app.use("/api/sso", ssoRoutes);
 app.use("/api/calendar/google", calendarGoogleRoutes);
 app.use("/api/calendar/outlook", calendarOutlookRoutes);

@@ -1,5 +1,5 @@
 const express = require('express');
-const { verifyToken, verifyRole } = require('../middleware/auth');
+const { verifyToken, verifyRole, requireStepUp } = require('../middleware/auth');
 const { writeAudit } = require('../lib/audit');
 
 const router = express.Router();
@@ -339,8 +339,13 @@ router.get('/retention-policies', async (req, res) => {
 // ──────────────────────────────────────────────────────────────────
 // PUT /api/gdpr/retention-policies — upsert policies for tenant
 // Body: [{ entity, retainDays, isActive }, ...]
+//
+// #654 — step-up auth required. Changing retention policy lengths is a
+// destructive op (shortening a policy causes the next retention sweep to
+// delete more rows). The caller must present a fresh stepUpToken via the
+// `x-step-up-token` header (5-min TTL, minted by POST /api/auth/step-up).
 // ──────────────────────────────────────────────────────────────────
-router.put('/retention-policies', async (req, res) => {
+router.put('/retention-policies', requireStepUp(), async (req, res) => {
   try {
     const list = Array.isArray(req.body) ? req.body : [];
     if (list.length === 0) return res.status(400).json({ error: 'Body must be a non-empty array' });
@@ -422,7 +427,7 @@ router.put('/retention-policies', async (req, res) => {
 // must NEVER touch wellness rows (and vice versa). The deleteMany WHERE
 // always carries `tenantId: req.user.tenantId`. A leak here would be a
 // catastrophic mass-deletion bug; the spec asserts this is impossible.
-router.post('/retention/run', verifyRole(['ADMIN']), async (req, res) => {
+router.post('/retention/run', verifyRole(['ADMIN']), requireStepUp(), async (req, res) => {
   // Hard guard #3 — the destructive flag.
   if (req.body?.confirmDestructive !== true) {
     return res.status(400).json({

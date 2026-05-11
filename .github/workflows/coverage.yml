@@ -252,6 +252,8 @@ jobs:
             tests/module-action-permissions-api.spec.js \
             tests/date-range-validation-api.spec.js \
             tests/csrf-defense-api.spec.js \
+            tests/csp-stepup-api.spec.js \
+            tests/pii-masking-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

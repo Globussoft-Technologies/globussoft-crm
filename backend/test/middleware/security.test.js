@@ -89,10 +89,22 @@ describe('helmetMiddleware', () => {
     expect(res.headers['Cross-Origin-Resource-Policy']).toBe('cross-origin');
   });
 
-  test('does NOT set Content-Security-Policy (intentionally disabled)', () => {
+  // #654 — Content-Security-Policy is now ENABLED as a transitional
+  // configuration (still allows 'unsafe-inline' on script-src and style-src
+  // because of Vite/React inline-style emission + legacy inline event
+  // handlers). The directive list includes object-src 'none',
+  // frame-ancestors 'self', form-action 'self', base-uri 'self' — strict
+  // wins. Tightening to nonces is tracked as a follow-up.
+  test('sets a transitional Content-Security-Policy with object-src none + frame-ancestors self', () => {
     const { req, res, next } = makeReqRes();
     helmetMiddleware(req, res, next);
-    expect(res.headers['Content-Security-Policy']).toBeUndefined();
+    const csp = res.headers['Content-Security-Policy'];
+    expect(csp).toBeTruthy();
+    expect(csp.toLowerCase()).toContain("default-src 'self'");
+    expect(csp.toLowerCase()).toContain("object-src 'none'");
+    expect(csp.toLowerCase()).toContain("frame-ancestors 'self'");
+    expect(csp.toLowerCase()).toContain("form-action 'self'");
+    expect(csp.toLowerCase()).toContain("base-uri 'self'");
   });
 });
 

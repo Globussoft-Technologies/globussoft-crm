@@ -1,7 +1,8 @@
 const helmet = require('helmet');
 
 // 1. Helmet with CRM-appropriate config — closes #186 (missing security headers)
-// and #342 (regression: headers not firing in production).
+// and #342 (regression: headers not firing in production) and #654 (CSP enabled,
+// transitional).
 //
 // #342 root cause investigation: the previous config supplied a custom
 // `contentSecurityPolicy` directive block that, combined with the Vite-built
@@ -16,16 +17,81 @@ const helmet = require('helmet');
 // flagged (HSTS, X-Frame-Options, Referrer-Policy, X-Content-Type-Options,
 // X-DNS-Prefetch-Control, X-XSS-Protection) and explicitly DISABLE the two
 // directives that were breaking the SPA + widget:
-//   • contentSecurityPolicy: false  — SPA uses inline styles (Vite/React) and
-//     a strict CSP without nonce wiring would block them. Re-enable later
-//     with a nonce/hash strategy once SSR or CSP-compatible bundling lands.
 //   • crossOriginEmbedderPolicy: false — the embed widget loads from external
 //     partner origins, which COEP=require-corp would refuse.
 //   • crossOriginResourcePolicy: 'cross-origin' — the widget JS is fetched
 //     by partner sites (callified.ai, partner CRMs); 'same-site' rejected
 //     those legitimate cross-origin loads.
+//
+// #654 — CSP TRANSITIONAL ENABLE (2026-05):
+//   Two attack vectors CSP addresses today:
+//     (a) XSS-injected <script> exfiltrating session token from sessionStorage
+//         (we ship credentials there per #343/#344) — bounded by script-src.
+//     (b) Form-action / object-src abuse + frame-ancestor clickjacking on
+//         the admin UI — bounded by form-action / object-src / frame-ancestors.
+//   We CANNOT yet emit a strict nonce-based CSP because:
+//     - The Vite-built SPA ships inline styles (React.createElement style
+//       prop + Recharts inline SVG style tags).
+//     - Legacy components still carry a small number of inline `onclick=`
+//       attributes — migration to event-handler-attach is filed as
+//       a follow-up issue.
+//   So we ship a TRANSITIONAL CSP with `'unsafe-inline'` on script-src and
+//   style-src — it does NOT block inline scripts (and therefore does not yet
+//   close the full XSS exfil surface), but it DOES block:
+//     - third-party origins from loading scripts (only self + jsdelivr CDN)
+//     - third-party origins from injecting connect-src fetches (only self +
+//       payment providers + SendGrid)
+//     - object-src plugins entirely
+//     - external frame embedding (frame-ancestors: 'self')
+//   This is a STRICT IMPROVEMENT over the previous `contentSecurityPolicy:
+//   false` state. The tightening to nonces is filed as a follow-up issue.
 const helmetMiddleware = helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    // useDefaults: false — emit only what we explicitly enumerate. Helmet's
+    // built-in defaults include `upgrade-insecure-requests` which is fine
+    // but we want the directive list visible in code review.
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'self'"],
+      // 'unsafe-inline' on script-src is a TRANSITIONAL allowance.
+      // Follow-up issue: migrate legacy inline event handlers to attached
+      // listeners + emit a nonce per request, then drop 'unsafe-inline'.
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
+      // 'unsafe-inline' on style-src is REQUIRED today because Vite/React
+      // emit inline style attributes (style={{}}). Hash-based or nonce-based
+      // tightening requires a build-step change.
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      // data: + https: img sources — covers QR codes (data:image/png) +
+      // any CDN-hosted asset. blob: needed for client-rendered PDF previews.
+      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+      // connectSrc: the SPA hits its own /api + a small set of third-party
+      // providers (SendGrid, Razorpay, Stripe checkout). wss: needed for the
+      // Socket.io upgrade. *.sentry.io for Sentry browser SDK.
+      connectSrc: [
+        "'self'",
+        'https://api.sendgrid.com',
+        'https://api.razorpay.com',
+        'https://checkout.razorpay.com',
+        'https://api.stripe.com',
+        'https://*.sentry.io',
+        'wss:',
+      ],
+      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+      // object-src 'none' kills <object> / <embed> / Flash. Strict.
+      objectSrc: ["'none'"],
+      // form-action: limit the destination of <form action=> POSTs to self —
+      // bounds CSRF-via-form-submission to the same-origin set.
+      formAction: ["'self'"],
+      // frame-ancestors 'self' replaces X-Frame-Options SAMEORIGIN
+      // semantically and is the modern equivalent. Pinned spec
+      // (security-headers.spec.js) also asserts the legacy header for
+      // browsers that haven't migrated to CSP frame-ancestors.
+      frameAncestors: ["'self'"],
+      // base-uri 'self' blocks an injected <base> tag from rewriting the
+      // document base URL and exfiltrating relative-URL requests.
+      baseUri: ["'self'"],
+    },
+  },
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   // 1-year HSTS, conservative — no preload until we're sure every subdomain

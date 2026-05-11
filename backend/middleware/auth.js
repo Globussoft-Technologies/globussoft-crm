@@ -124,6 +124,134 @@ const verifyRole = (roles) => {
   };
 };
 
+// #654 — Step-up authentication for destructive admin flows.
+//
+// THREAT: a session token (legitimate auth) does not prove that the human
+// IS PRESENT RIGHT NOW. A 30-minute-old token reused after the user walked
+// away from their laptop is enough for an attacker (or curious co-worker)
+// to flip GDPR retention policies, rotate provider credentials, or trigger
+// destructive operations that the session was never explicitly authorised
+// to do.
+//
+// DESIGN: a short-lived `stepUpToken` JWT (5 min TTL by default) minted by
+// POST /api/auth/step-up only after the caller re-presents their password
+// (or TOTP if 2FA is enabled). The stepUpToken is supplied to the
+// destructive endpoint either as the `x-step-up-token` header or as
+// `req.body.stepUpToken`. The middleware below validates it and rejects
+// stale / forged tokens with 401 STEP_UP_REQUIRED.
+//
+// The stepUpToken is BOUND to the user (userId + tenantId in claims) so a
+// token minted by one user cannot satisfy another user's step-up gate.
+// `kind: 'step-up'` distinguishes it from session tokens at decode time.
+//
+// REVIEW: a separate STEP_UP_JWT_SECRET could be used to further compartmentalise
+// the secret material; today we share JWT_SECRET since the token is short-lived
+// and bound to the user. Promote to a separate secret on the next rotation cycle.
+
+function signStepUpToken(payload, ttlSeconds = 300) {
+  // payload should contain { userId, tenantId, method } at minimum.
+  return jwt.sign(
+    { ...payload, kind: 'step-up' },
+    JWT_SECRET,
+    { expiresIn: ttlSeconds }
+  );
+}
+
+/**
+ * Middleware factory: requires the caller to present a valid stepUpToken
+ * matching the current user. Emits 401 STEP_UP_REQUIRED on missing/expired/
+ * invalid/wrong-user tokens so the SPA can prompt for re-auth and retry.
+ *
+ * Must be mounted AFTER verifyToken — relies on req.user being set.
+ *
+ * @param {object} options
+ * @param {number} options.timeoutMs - max age of the step-up token in ms
+ *   (default 5 min). Tokens are also bound by the JWT exp claim; this is
+ *   a defense-in-depth ceiling.
+ */
+function requireStepUp(options = {}) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 5 * 60 * 1000;
+
+  return (req, res, next) => {
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({
+        error: 'Authentication required before step-up check.',
+        code: 'STEP_UP_REQUIRED',
+      });
+    }
+
+    // Accept the token from a dedicated header OR from the body. Header is
+    // preferred — keeps the destructive payload clean and survives request
+    // logs that scrub body fields.
+    const headerToken = req.headers['x-step-up-token'];
+    const bodyToken = req.body && req.body.stepUpToken;
+    const stepToken = headerToken || bodyToken;
+
+    if (!stepToken) {
+      return res.status(401).json({
+        error: 'Step-up authentication required. Re-confirm your password or TOTP code.',
+        code: 'STEP_UP_REQUIRED',
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(stepToken, JWT_SECRET);
+    } catch (err) {
+      if (err && err.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          error: 'Step-up confirmation expired. Re-confirm to proceed.',
+          code: 'STEP_UP_EXPIRED',
+        });
+      }
+      return res.status(401).json({
+        error: 'Invalid step-up token.',
+        code: 'STEP_UP_INVALID',
+      });
+    }
+
+    if (!decoded || decoded.kind !== 'step-up') {
+      return res.status(401).json({
+        error: 'Token is not a step-up confirmation token.',
+        code: 'STEP_UP_INVALID',
+      });
+    }
+    if (decoded.userId !== req.user.userId) {
+      return res.status(401).json({
+        error: 'Step-up token does not match the current user.',
+        code: 'STEP_UP_USER_MISMATCH',
+      });
+    }
+    if (decoded.tenantId !== req.user.tenantId) {
+      return res.status(401).json({
+        error: 'Step-up token tenant mismatch.',
+        code: 'STEP_UP_USER_MISMATCH',
+      });
+    }
+
+    // Defense-in-depth ceiling on top of JWT exp. `iat` is seconds, Date.now()
+    // is ms — normalise.
+    if (decoded.iat && timeoutMs > 0) {
+      const ageMs = Date.now() - decoded.iat * 1000;
+      if (ageMs > timeoutMs) {
+        return res.status(401).json({
+          error: 'Step-up confirmation expired. Re-confirm to proceed.',
+          code: 'STEP_UP_EXPIRED',
+        });
+      }
+    }
+
+    // Make the decoded step-up token available to handlers that want to
+    // audit-log the method ("password" vs "totp") that proved presence.
+    req.stepUp = {
+      method: decoded.method || 'unknown',
+      iat: decoded.iat,
+      exp: decoded.exp,
+    };
+    next();
+  };
+}
+
 module.exports = {
   verifyToken,
   verifyRole,
@@ -132,4 +260,7 @@ module.exports = {
   // re-stating the literal string in two places.
   RBAC_DENIED_MESSAGE,
   RBAC_DENIED_CODE,
+  // #654: step-up auth — sign + verify helpers + middleware factory.
+  signStepUpToken,
+  requireStepUp,
 };

@@ -162,20 +162,36 @@ function authHeader(token) {
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 }
 
-async function authPost(request, token, p, body) {
+async function authPost(request, token, p, body, extraHeaders) {
   return request.post(`${API}${p}`, {
-    headers: authHeader(token),
+    headers: { ...authHeader(token), ...(extraHeaders || {}) },
     data: body ?? {},
     timeout: REQUEST_TIMEOUT,
   });
 }
 
-async function authPut(request, token, p, body) {
+async function authPut(request, token, p, body, extraHeaders) {
   return request.put(`${API}${p}`, {
-    headers: authHeader(token),
+    headers: { ...authHeader(token), ...(extraHeaders || {}) },
     data: body ?? {},
     timeout: REQUEST_TIMEOUT,
   });
+}
+
+// #654 — mint a step-up token. Required by destructive GDPR endpoints
+// (PUT /retention-policies, POST /retention/run). 5-min TTL — we re-mint
+// per call to keep the spec robust under arbitrary execution ordering.
+async function mintStepUp(request, fixture, token) {
+  const r = await request.post(`${API}/auth/step-up`, {
+    headers: authHeader(token),
+    data: { password: fixture.password },
+    timeout: REQUEST_TIMEOUT,
+  });
+  if (!r.ok()) {
+    throw new Error(`mintStepUp ${fixture.email}: ${r.status()} ${await r.text()}`);
+  }
+  const j = await r.json();
+  return j.stepUpToken;
 }
 
 // ─── Direct DB helpers ───────────────────────────────────────────────────
@@ -307,18 +323,29 @@ function deleteAuditLogsForUser(userId, tenantId, sinceIso) {
 // (PUT /api/gdpr/retention-policies — body is an array of upserts).
 // retainDays=30 means rows older than 30d get deleted; we tune the
 // fixtures around that.
-async function setRetentionPolicy(request, token, entity, retainDays, isActive) {
+//
+// #654 — this endpoint now requires a step-up token; we mint one per call
+// from the admin fixture's password (5-min TTL, scoped to caller).
+async function setRetentionPolicy(request, fixture, token, entity, retainDays, isActive) {
+  const stepUpToken = await mintStepUp(request, fixture, token);
   const r = await authPut(request, token, '/gdpr/retention-policies', [{
     entity, retainDays, isActive,
-  }]);
+  }], { 'x-step-up-token': stepUpToken });
   if (!r.ok()) {
     throw new Error(`setRetentionPolicy ${entity}=${retainDays}d: ${r.status()} ${await r.text()}`);
   }
   return r.json();
 }
 
-async function runRetention(request, token, body) {
-  return authPost(request, token, '/gdpr/retention/run', body);
+// #654 — POST /retention/run also requires step-up. Callers that need to
+// EXERCISE the "no step-up" 401 path supply opts.skipStepUp=true.
+async function runRetention(request, fixture, token, body, opts = {}) {
+  const headers = {};
+  if (!opts.skipStepUp) {
+    const stepUpToken = await mintStepUp(request, fixture, token);
+    headers['x-step-up-token'] = stepUpToken;
+  }
+  return authPost(request, token, '/gdpr/retention/run', body, headers);
 }
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────
@@ -364,10 +391,10 @@ test.afterAll(async ({ request }) => {
   //    the demo user isn't surprised by an active policy. PUT with
   //    isActive=false keeps the row but the engine skips it.
   if (tokens.admin) {
-    await setRetentionPolicy(request, tokens.admin, 'EmailMessage', 30, false).catch(() => {});
+    await setRetentionPolicy(request, FIXTURES.admin, tokens.admin, 'EmailMessage', 30, false).catch(() => {});
   }
   if (tokens.wellnessAdmin) {
-    await setRetentionPolicy(request, tokens.wellnessAdmin, 'EmailMessage', 30, false).catch(() => {});
+    await setRetentionPolicy(request, FIXTURES.wellnessAdmin, tokens.wellnessAdmin, 'EmailMessage', 30, false).catch(() => {});
   }
 });
 
@@ -398,13 +425,17 @@ test.describe('POST /api/gdpr/retention/run — auth gate', () => {
 test.describe('POST /api/gdpr/retention/run — RBAC gate', () => {
   test('MANAGER → 403 (no row deleted, no AuditLog written)', async ({ request }) => {
     test.skip(!tokens.manager, 'manager fixture not seeded');
-    const res = await runRetention(request, tokens.manager, { confirmDestructive: true });
+    // verifyRole runs BEFORE requireStepUp in the route chain — so a non-
+    // admin call short-circuits to 403 without ever consulting step-up.
+    // We skip the step-up mint here intentionally to keep the RBAC contract
+    // free of step-up dependencies.
+    const res = await runRetention(request, FIXTURES.manager, tokens.manager, { confirmDestructive: true }, { skipStepUp: true });
     expect(res.status()).toBe(403);
   });
 
   test('USER → 403', async ({ request }) => {
     test.skip(!tokens.user, 'user fixture not seeded');
-    const res = await runRetention(request, tokens.user, { confirmDestructive: true });
+    const res = await runRetention(request, FIXTURES.user, tokens.user, { confirmDestructive: true }, { skipStepUp: true });
     expect(res.status()).toBe(403);
   });
 });
@@ -418,7 +449,7 @@ test.describe('POST /api/gdpr/retention/run — confirmDestructive guard', () =>
     // Seed a definitively-past-window EmailMessage on the generic tenant.
     // Configure a policy that would otherwise eat it. Then call /run
     // WITHOUT the confirmDestructive flag and assert the row survives.
-    await setRetentionPolicy(request, tokens.admin, 'EmailMessage', 30, true);
+    await setRetentionPolicy(request, FIXTURES.admin, tokens.admin, 'EmailMessage', 30, true);
     const recipient = `e2e-retain-noconfirm-${Date.now()}@example.test`;
     createdRecipients.add(recipient);
     const past = new Date(Date.now() - 8 * 365 * 86400000).toISOString();
@@ -426,7 +457,10 @@ test.describe('POST /api/gdpr/retention/run — confirmDestructive guard', () =>
     createdEmailIds.push(id);
 
     // Call /run with NO confirmDestructive — must 400 + no mutation.
-    const res = await runRetention(request, tokens.admin, {});
+    // step-up mint here is intentional: confirmDestructive is checked
+    // AFTER verifyRole + requireStepUp, so we need a valid step-up token
+    // to reach the confirmation guard.
+    const res = await runRetention(request, FIXTURES.admin, tokens.admin, {});
     expect(res.status()).toBe(400);
     const body = await res.json();
     expect(body.code).toBe('CONFIRMATION_REQUIRED');
@@ -436,7 +470,7 @@ test.describe('POST /api/gdpr/retention/run — confirmDestructive guard', () =>
   });
 
   test('confirmDestructive: false → 400 CONFIRMATION_REQUIRED', async ({ request }) => {
-    const res = await runRetention(request, tokens.admin, { confirmDestructive: false });
+    const res = await runRetention(request, FIXTURES.admin, tokens.admin, { confirmDestructive: false });
     expect(res.status()).toBe(400);
     const body = await res.json();
     expect(body.code).toBe('CONFIRMATION_REQUIRED');
@@ -450,7 +484,7 @@ test.describe('Retention Engine — windowing + audit', () => {
     test.skip(!dbAvailable(), 'Prisma client unavailable in backend/ — back-dating impossible');
 
     // Set a 30d retention policy on EmailMessage for the generic tenant.
-    await setRetentionPolicy(request, tokens.admin, 'EmailMessage', 30, true);
+    await setRetentionPolicy(request, FIXTURES.admin, tokens.admin, 'EmailMessage', 30, true);
 
     // Seed an 8-year-old EmailMessage on the generic tenant. The cutoff
     // for retainDays=30 is now-30d — 8y is comfortably outside.
@@ -465,7 +499,7 @@ test.describe('Retention Engine — windowing + audit', () => {
     // never happens, test fails AND we manually clean by adding to the
     // list so the failure doesn't pollute future runs.
 
-    const res = await runRetention(request, tokens.admin, { confirmDestructive: true });
+    const res = await runRetention(request, FIXTURES.admin, tokens.admin, { confirmDestructive: true });
     expect(res.status(), `body: ${await res.text()}`).toBe(200);
     const body = await res.json();
     expect(body.success).toBe(true);
@@ -505,7 +539,7 @@ test.describe('Retention Engine — windowing + audit', () => {
     test.skip(!dbAvailable(), 'Prisma client unavailable in backend/ — back-dating impossible');
 
     // Set the same 30d policy active.
-    await setRetentionPolicy(request, tokens.admin, 'EmailMessage', 30, true);
+    await setRetentionPolicy(request, FIXTURES.admin, tokens.admin, 'EmailMessage', 30, true);
 
     // Seed a 7-day-old row — well inside the 30d window.
     const recipient = `e2e-retain-recent-${Date.now()}@example.test`;
@@ -514,7 +548,7 @@ test.describe('Retention Engine — windowing + audit', () => {
     const recentId = seedEmailMessage(tenantIds.admin, `${RUN_TAG} recent`, recipient, recent);
     createdEmailIds.push(recentId); // preserved → afterAll will scrub.
 
-    await runRetention(request, tokens.admin, { confirmDestructive: true });
+    await runRetention(request, FIXTURES.admin, tokens.admin, { confirmDestructive: true });
 
     expect(emailExists(recentId), `inside-window row must NOT be deleted`).toBe(true);
   });
@@ -531,7 +565,7 @@ test.describe('Retention Engine — tenant isolation', () => {
     // eaten if the policy applied to it. Configure the GENERIC tenant
     // with an aggressive 30d policy. The engine query is
     // `tenantId: req.user.tenantId` — wellness rows must be untouched.
-    await setRetentionPolicy(request, tokens.admin, 'EmailMessage', 30, true);
+    await setRetentionPolicy(request, FIXTURES.admin, tokens.admin, 'EmailMessage', 30, true);
     const recipient = `e2e-retain-wellness-iso-${Date.now()}@example.test`;
     createdRecipients.add(recipient);
     const past = new Date(Date.now() - 8 * 365 * 86400000).toISOString();
@@ -539,7 +573,7 @@ test.describe('Retention Engine — tenant isolation', () => {
     createdWellnessEmailIds.push(wellnessId); // we'll clean this up in afterAll.
 
     // GENERIC admin runs the destructive sweep with full confirmation.
-    const res = await runRetention(request, tokens.admin, { confirmDestructive: true });
+    const res = await runRetention(request, FIXTURES.admin, tokens.admin, { confirmDestructive: true });
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.tenantId).toBe(tenantIds.admin);
@@ -556,7 +590,7 @@ test.describe('Retention Engine — tenant isolation', () => {
 
   test('wellness admin /run scopes deletion to wellness tenant only', async ({ request }) => {
     test.skip(!tokens.wellnessAdmin, 'wellness admin fixture not seeded');
-    const res = await runRetention(request, tokens.wellnessAdmin, { confirmDestructive: true });
+    const res = await runRetention(request, FIXTURES.wellnessAdmin, tokens.wellnessAdmin, { confirmDestructive: true });
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.tenantId).toBe(tenantIds.wellnessAdmin);

@@ -94,17 +94,41 @@ test.describe('gdpr API smoke', () => {
     expect(Array.isArray(body)).toBe(true);
   });
 
-  test('PUT /retention-policies rejects empty/non-array body', async ({ request }) => {
+  // #654 — helper to mint a step-up token for destructive endpoints
+  // (PUT /retention-policies + POST /retention/run). 5-min TTL, scoped to
+  // the calling user.
+  async function mintStepUp(request) {
+    const r = await request.post(`${API}/auth/step-up`, {
+      headers: { ...auth(), 'Content-Type': 'application/json' },
+      data: { password: PASSWORD },
+    });
+    expect(r.ok(), `mintStepUp must succeed: ${await r.text()}`).toBeTruthy();
+    return (await r.json()).stepUpToken;
+  }
+
+  test('PUT /retention-policies without step-up → 401 STEP_UP_REQUIRED (#654)', async ({ request }) => {
     const res = await request.put(`${API}/gdpr/retention-policies`, {
       headers: auth(),
+      data: [{ entity: 'AuditLog', retainDays: 365, isActive: true }],
+    });
+    expect(res.status()).toBe(401);
+    const body = await res.json();
+    expect(body.code).toBe('STEP_UP_REQUIRED');
+  });
+
+  test('PUT /retention-policies rejects empty/non-array body', async ({ request }) => {
+    const stepUpToken = await mintStepUp(request);
+    const res = await request.put(`${API}/gdpr/retention-policies`, {
+      headers: { ...auth(), 'x-step-up-token': stepUpToken },
       data: [],
     });
     expect(res.status()).toBe(400);
   });
 
   test('PUT /retention-policies upserts policies', async ({ request }) => {
+    const stepUpToken = await mintStepUp(request);
     const res = await request.put(`${API}/gdpr/retention-policies`, {
-      headers: auth(),
+      headers: { ...auth(), 'x-step-up-token': stepUpToken },
       data: [{ entity: 'AuditLog', retainDays: 365, isActive: true }],
     });
     expect(res.status()).toBe(200);

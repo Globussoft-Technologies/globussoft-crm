@@ -1,10 +1,17 @@
-# Pending: user + operator blockers (post-v3.7.5)
+# Pending: user + operator blockers (post-2026-05-12 all-issues sweep)
 
-**As of v3.7.5 — 2026-05-12.** Most items from the original v3.7.1 snapshot
-have closed: §2 (#555) / §3 (#558) / §4 (#564) / §5 (WhatsApp DPDP) all
-shipped across v3.7.3 → v3.7.5. The remaining open items are §1 (operator
-SendGrid step) + §6 / §7 (external-team deliverables) + §8 (intentionally
-open). The autonomous engineering backlog is otherwise empty.
+**As of 2026-05-12 evening — HEAD `0a242b6` deploy gate GREEN.** A full
+all-issues sweep closed 52 of the 60 open issues today across Waves A–D.
+The autonomous engineering backlog is empty.
+
+Remaining open items are exclusively:
+- **§1** operator (2-min SendGrid dashboard step)
+- **§6 / §7** external-team deliverables (Callified webhook, AdsGPT SSO)
+- **§8** intentionally-open #457 manual-QA umbrella
+- **§9** product-decision deferrals (#699 routing convention, #702 notification preferences)
+
+Original v3.7.1 snapshot items (§2 #555 / §3 #558 / §4 #564 / §5 WhatsApp DPDP)
+all shipped across v3.7.3 → v3.7.5.
 
 For each item:
 - **Status:** what's currently shipped / what's blocked
@@ -250,7 +257,7 @@ shipped).
 
 ---
 
-**Last updated:** 2026-05-12 (post-v3.7.5 — §3 closure refresh)
+**Last updated:** 2026-05-12 evening (post-all-issues-sweep — 52 issues closed today; §9 deferred items added)
 **Next refresh:** after the next Wave or whenever any of these items
 flips status. Don't manually edit the section headers — engineering
 will move closed items to a "✅ closed" footer block as they land.
@@ -269,3 +276,24 @@ will move closed items to a "✅ closed" footer block as they land.
 | 8 | #457 manual-only QA umbrella | ⚪ intentional-stay-open | — |
 
 **4 of 5 product / design items shipped; only operator + external items remain.**
+
+## 9. PRODUCT — deferred from 2026-05-12 all-issues sweep
+
+Two CRITICAL/MEDIUM items the Wave D audit explicitly flagged as needing
+product input rather than autonomous engineering:
+
+- **#699** Routing — inconsistent URL conventions (mix of `/wellness/*` and bare paths). Audit reads this as a design issue requiring a product call: which convention should be canonical? Options:
+  - (a) **All wellness routes under `/wellness/*`** — current dominant pattern. Migration effort is mostly frontend route table + sidebar links. ~½-day. Most-recognised by demo testers.
+  - (b) **All routes at root, vertical inferred from tenant context** — cleaner URLs but breaks the demo's verbal contract ("/wellness/patients shows patients in clinic mode"). ~1-day; needs Sidebar logic changes.
+  - (c) **Hybrid** — wellness-specific UIs at `/wellness/*`, shared CRM surfaces (Contacts, Tasks, Settings) at root. **★ Recommended** — describes current state with one explicit rule.
+
+  **What unblocks:** pick a letter; engineering ships the routing-convention spec + migration in the same commit.
+
+- **#702** Notifications — no user preferences for channels (email / push / in-app) or muting. PR #669 added the notification rules engine but not the per-user prefs UI. Options:
+  - (a) **Per-user channel toggles** (email on/off, push on/off, in-app on/off) for each event class (visit, payment, message, system). Simple checkbox matrix on Profile page. ~1-day.
+  - (b) **Per-user quiet hours** (no notifications between, e.g., 22:00–07:00) in addition to channel toggles. ~1.5-day.
+  - (c) **Defer entirely** — most operators use the in-app bell; email/push noise hasn't been complained about loudly. **★ Recommended IF you want to ship faster** — file a fresh feature-request issue with explicit acceptance criteria when it becomes a real pain point.
+
+  **What unblocks:** pick a letter; (c) requires zero action.
+
+The all-issues sweep also surfaced **non-actionable phantom-cluster claims** (#683 / #684 / #701 closed with citations to already-shipped code; #700 / #693 / #692 / #690 / #708 / #705 / #703 closed as Wave D phantoms). All visible in the GitHub issue history; no follow-up needed.

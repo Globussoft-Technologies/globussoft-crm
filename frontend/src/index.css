@@ -275,10 +275,75 @@ button {
 }
 
 .btn-primary:disabled,
-.btn-secondary:disabled {
+.btn-secondary:disabled,
+.btn-danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
+}
+
+/* ── #687 — btn-danger variant ───────────────────────────────────────────
+ * Destructive actions (Delete, Archive, Revoke) use `btn-danger` so the
+ * destructive choice is visually distinct from `btn-primary` (safe) and
+ * `btn-secondary` (neutral). Never colour-flip btn-primary to red — the
+ * muscle memory of "primary = safe action" must hold across the app.
+ * See frontend/src/components/ui/README.md for the canonical button
+ * hierarchy convention.
+ */
+.btn-danger {
+  background: var(--danger-color);
+  color: white;
+  border: none;
+  padding: 0.6rem 1.25rem;
+  border-radius: 10px;
+  font-weight: 500;
+  transition: var(--transition);
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+  flex: 0 0 max-content;
+  flex-shrink: 0;
+  min-width: max-content;
+}
+
+.btn-danger:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+  filter: brightness(1.1);
+}
+
+.btn-danger:active {
+  transform: translateY(0);
+}
+
+.btn-danger > svg {
+  flex-shrink: 0;
+  width: auto;
+}
+
+/* ── #689 — Shared loading-state keyframes ───────────────────────────────
+ * Used by frontend/src/components/ui/Spinner.jsx (spin) and
+ * frontend/src/components/ui/Skeleton.jsx (skeleton-pulse). Defined here
+ * once so every instance shares the same definition and the same easing.
+ */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.85; }
+}
+
+/* #686 — Required-field marker (red `*` after label text).
+ * Used by frontend/src/components/ui/FormField.jsx when `required` is set.
+ * Defined as a class so any ad-hoc label that needs the marker without the
+ * full wrapper (e.g. table-row inline edits) can apply it consistently. */
+.required-mark {
+  color: var(--danger-color);
+  margin-left: 0.2rem;
+  font-weight: 600;
 }
 
 .input-field {
@@ -297,6 +362,46 @@ button {
   border-color: var(--accent-color);
   box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
   background-color: var(--input-bg-focus);
+}
+
+/* ── #698 — Global :focus-visible accessibility ring ────────────────────
+ * Keyboard users (Tab navigation) need a visible focus indicator on every
+ * interactive element. Pre-fix, many controls inherited `outline: none`
+ * from inline styles / browser defaults, so Tab focus was invisible.
+ *
+ * The rule below applies a 2px outline + 2px offset on any focusable
+ * element ONLY when reached via keyboard (`:focus-visible`) — mouse
+ * clicks won't show the ring, so the visual chrome stays clean for
+ * pointer users. Uses `--primary-color` (wellness teal) with a fallback
+ * to `--accent-color` so generic and wellness verticals both get a
+ * brand-coherent ring.
+ *
+ * `.input-field:focus` above keeps its custom border + glow treatment
+ * (richer feedback than the bare outline), so we explicitly skip
+ * `.input-field` here. Interactive controls that style their own
+ * focus state (e.g. CommandPalette search) can opt out individually
+ * via `outline: none` on their `:focus-visible` rule.
+ */
+:focus-visible {
+  outline: 2px solid var(--primary-color, var(--accent-color, #2563eb));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--primary-color, var(--accent-color, #2563eb));
+  outline-offset: 2px;
+}
+
+/* Inputs handle their own focus styling via .input-field:focus — skip
+ * the outline so we don't double-render border + outline rings. */
+input.input-field:focus-visible,
+textarea.input-field:focus-visible,
+select.input-field:focus-visible {
+  outline: none;
 }
 
 .nav-link {

@@ -90,6 +90,13 @@ const ALLOWED_ORIGINS = [
   "https://crm.globusdemos.com",
   "http://localhost:5173",
   "http://localhost:5000",
+  // #657 — keep 127.0.0.1 and localhost in lockstep. Some test runners
+  // (Playwright, supertest) resolve BASE_URL through 127.0.0.1 even when
+  // the caller typed `localhost`; without these entries the CORS layer
+  // 500s on legitimate per-push gate runs and the originCheck layer
+  // never gets to run.
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5000",
   "https://globuscrm.globussoft.com",
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
   ...(process.env.CORS_ALLOWED_ORIGINS
@@ -100,7 +107,12 @@ app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (server-to-server, curl, Postman)
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    callback(new Error("CORS: origin not allowed"), false);
+    // #657 — for unknown origins, do NOT error-out (which sends a 500
+    // and breaks the originCheck layer below). Just decline to set the
+    // Access-Control-Allow-Origin response header — the browser will
+    // refuse to read the response, AND the state-changing POSTs are
+    // rejected with a proper 403 by originCheck (next middleware).
+    callback(null, false);
   },
   credentials: true,
 }));
@@ -114,9 +126,16 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 // Security middleware
 const cookieParser = require('cookie-parser');
 const { helmetMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+const { originCheck } = require('./middleware/originCheck');
 app.use(helmetMiddleware);
 app.use(permissionsPolicyMiddleware); // #186 — Permissions-Policy header
 app.use(cookieParser());
+// #657 — CSRF defense layer for browser flows. Mounted EARLY (before
+// rate-limiting + auth) so a forged-origin POST short-circuits to 403
+// without burning rate-limit budget or hitting verifyToken's DB lookup.
+// Webhook + external-API paths bypass internally; non-browser callers
+// (no Origin/Referer headers) pass through.
+app.use(originCheck);
 app.use(sanitizeBody);
 app.use(stripTenantOverride);
 

@@ -140,6 +140,22 @@ router.delete("/product-categories/:id", adminGate, async (req, res) => {
   }
 });
 
+// ── Product read (list for forms) ───────────────────────────────────
+
+router.get("/products", adminGate, async (req, res) => {
+  try {
+    const items = await prisma.product.findMany({
+      where: tenantWhere(req),
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, sku: true, categoryId: true, currentStock: true, lowStockThreshold: true, isActive: true },
+    });
+    res.json(items);
+  } catch (e) {
+    console.error("[inventory] list products error:", e.message);
+    res.status(500).json({ error: "Failed to list products" });
+  }
+});
+
 // ── Vendor CRUD ────────────────────────────────────────────────────
 
 router.get("/vendors", adminGate, async (req, res) => {

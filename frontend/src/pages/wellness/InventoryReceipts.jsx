@@ -31,7 +31,7 @@ export default function InventoryReceipts() {
     if (filter.to) qs.set('to', filter.to);
     Promise.all([
       fetchApi(`/api/wellness/inventory/receipts${qs.toString() ? `?${qs}` : ''}`).catch(() => []),
-      fetchApi('/api/products').catch(() => []),
+      fetchApi('/api/wellness/products').catch(() => []),
       fetchApi('/api/wellness/vendors').catch(() => []),
     ]).then(([recs, prods, vens]) => {
       setReceipts(Array.isArray(recs) ? recs : []);

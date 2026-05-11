@@ -25,7 +25,7 @@ export default function AutoConsumptionRules() {
     Promise.all([
       fetchApi('/api/wellness/auto-consumption-rules').catch(() => []),
       fetchApi('/api/wellness/services').catch(() => []),
-      fetchApi('/api/products').catch(() => []),
+      fetchApi('/api/wellness/products').catch(() => []),
     ]).then(([rs, ss, ps]) => {
       setRules(Array.isArray(rs) ? rs : []);
       setServices(Array.isArray(ss) ? ss : []);

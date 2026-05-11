@@ -7,6 +7,7 @@ const crypto = require("crypto");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 
 const prisma = require("../lib/prisma");
+const { writeAudit } = require("../lib/audit");
 
 const router = express.Router();
 
@@ -254,17 +255,44 @@ router.get("/", async (req, res) => {
 });
 
 // GET /config — surface configuration status (used by Settings UI)
+//
+// #650 — Role-gated disclosure. Previously this returned the razorpay keyId
+// prefix (`<8-char>...`) to every authenticated user, leaking credential shape
+// to operator-non-staff. Now:
+//   - Every authenticated caller sees `{stripe.configured, razorpay.configured}`
+//     — enough for the UI to enable/disable payment-method buttons.
+//   - ADMIN callers ALSO see `stripe.webhookConfigured` + `razorpay.keyId`
+//     prefix for diagnostics.
+// A PaymentConfig.READ audit row records the role + disclosure shape on every
+// call so the disclosure surface is visible in the audit log.
 router.get("/config", async (req, res) => {
-  res.json({
-    stripe: {
-      configured: !!process.env.STRIPE_SECRET_KEY,
-      webhookConfigured: !!process.env.STRIPE_WEBHOOK_SECRET,
-    },
+  const isAdmin = req.user && req.user.role === "ADMIN";
+
+  const body = {
+    stripe: { configured: !!process.env.STRIPE_SECRET_KEY },
     razorpay: {
       configured: !!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
-      keyId: process.env.RAZORPAY_KEY_ID ? `${process.env.RAZORPAY_KEY_ID.slice(0, 8)}...` : null,
     },
-  });
+  };
+
+  if (isAdmin) {
+    body.stripe.webhookConfigured = !!process.env.STRIPE_WEBHOOK_SECRET;
+    body.razorpay.keyId = process.env.RAZORPAY_KEY_ID
+      ? `${process.env.RAZORPAY_KEY_ID.slice(0, 8)}...`
+      : null;
+  }
+
+  // Audit the disclosure surface (fire-and-forget; helper never throws).
+  writeAudit(
+    "PaymentConfig",
+    "READ",
+    null,
+    req.user && req.user.userId,
+    req.user && req.user.tenantId,
+    { role: (req.user && req.user.role) || null, disclosed: isAdmin ? "full" : "masked" }
+  );
+
+  res.json(body);
 });
 
 // GET /:id — payment details

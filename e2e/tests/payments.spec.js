@@ -66,6 +66,44 @@ test.describe('payments API smoke', () => {
     expect(body.razorpay).toHaveProperty('configured');
   });
 
+  // ── #650 — role-gated disclosure ────────────────────────────────
+  // ADMIN sees `keyId` prefix + `webhookConfigured`; non-ADMIN sees the
+  // bare `configured` booleans only. Each call emits a PaymentConfig.READ
+  // audit row recording the disclosure shape.
+  test('#650 GET /config — ADMIN sees the razorpay keyId prefix + webhookConfigured', async ({ request }) => {
+    const res = await request.get(`${API}/payments/config`, { headers: auth() });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // The demo box may or may not have RAZORPAY_KEY_ID set — accept either a
+    // non-empty prefix or `null`, but the field MUST be present for ADMIN.
+    expect(body.razorpay).toHaveProperty('keyId');
+    expect(body.stripe).toHaveProperty('webhookConfigured');
+  });
+
+  test('#650 GET /config — non-ADMIN does NOT receive the keyId prefix', async ({ request }) => {
+    const userLogin = await request.post(`${API}/auth/login`, {
+      data: { email: 'user@crm.com', password: 'password123' },
+    });
+    expect(userLogin.ok(), 'generic USER login must succeed').toBeTruthy();
+    const userToken = (await userLogin.json()).token;
+
+    const res = await request.get(`${API}/payments/config`, {
+      headers: { Authorization: `Bearer ${userToken}` },
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.stripe).toHaveProperty('configured');
+    expect(body.razorpay).toHaveProperty('configured');
+    // The diagnostic-only fields MUST NOT leak to non-ADMIN callers.
+    expect(body.razorpay).not.toHaveProperty('keyId');
+    expect(body.stripe).not.toHaveProperty('webhookConfigured');
+  });
+
+  test('#650 GET /config requires auth (no token → 401/403)', async ({ request }) => {
+    const res = await request.get(`${API}/payments/config`);
+    expect([401, 403]).toContain(res.status());
+  });
+
   test('GET /:id 404s for unknown payment', async ({ request }) => {
     const res = await request.get(`${API}/payments/99999999`, { headers: auth() });
     expect(res.status()).toBe(404);

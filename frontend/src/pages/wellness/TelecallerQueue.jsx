@@ -168,7 +168,7 @@ function DispositionFormModal({ disp, lead, services, onCancel, onSubmit }) {
         onClick={(e) => e.stopPropagation()}
         onSubmit={handleSubmit}
         style={{
-          background: 'var(--surface-bg, #ffffff)',
+          background: 'var(--surface-color, #ffffff)',
           color: 'var(--text-primary, #1f2937)',
           padding: '1.5rem',
           borderRadius: 12,

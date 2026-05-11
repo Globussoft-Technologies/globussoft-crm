@@ -138,13 +138,13 @@ export default function Leave() {
         {loading ? (
           <div>Loading&hellip;</div>
         ) : balances.length === 0 ? (
-          <div style={{ color: '#888' }}>No active leave policies. Ask your admin to set one up.</div>
+          <div style={{ color: 'var(--text-secondary, #888)' }}>No active leave policies. Ask your admin to set one up.</div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 12 }}>
             {balances.map((b) => (
-              <div key={b.policy.id} style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+              <div key={b.policy.id} style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                 <div style={{ fontSize: 14, fontWeight: 600 }}>{b.policy.name}</div>
-                <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>{b.policy.leaveType}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary, #888)', marginBottom: 8 }}>{b.policy.leaveType}</div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
                   <span>Available</span>
                   <strong>{b.balance.available} d</strong>
@@ -157,7 +157,7 @@ export default function Leave() {
                   <span>Pending</span>
                   <strong>{b.balance.pending} d</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#888' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-secondary, #888)' }}>
                   <span>Entitled</span>
                   <span>{b.balance.entitled} d / yr</span>
                 </div>
@@ -168,14 +168,14 @@ export default function Leave() {
       </section>
 
       {/* Request form */}
-      <section style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
+      <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
         <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Send size={20} aria-hidden /> Request Leave
         </h2>
         <form onSubmit={onSubmit}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12 }}>
             <div>
-              <label style={{ fontSize: 12, color: '#888' }}>Policy</label>
+              <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Policy</label>
               <select
                 value={form.policyId}
                 onChange={(e) => setForm({ ...form, policyId: e.target.value })}
@@ -191,7 +191,7 @@ export default function Leave() {
               </select>
             </div>
             <div>
-              <label style={{ fontSize: 12, color: '#888' }}>Start date</label>
+              <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Start date</label>
               <input
                 type="date"
                 value={form.startDate}
@@ -201,7 +201,7 @@ export default function Leave() {
               />
             </div>
             <div>
-              <label style={{ fontSize: 12, color: '#888' }}>End date</label>
+              <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>End date</label>
               <input
                 type="date"
                 value={form.endDate}
@@ -212,7 +212,7 @@ export default function Leave() {
             </div>
           </div>
           <div style={{ marginTop: 12 }}>
-            <label style={{ fontSize: 12, color: '#888' }}>Reason (optional)</label>
+            <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Reason (optional)</label>
             <textarea
               value={form.reason}
               onChange={(e) => setForm({ ...form, reason: e.target.value })}
@@ -237,35 +237,35 @@ export default function Leave() {
       </section>
 
       {/* History */}
-      <section style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+      <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
         <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <ClockIcon size={20} aria-hidden /> {isManager ? 'All Leave Requests' : 'My Leave Requests'}
         </h2>
         {requests.length === 0 ? (
-          <div style={{ color: '#888' }}>No requests yet.</div>
+          <div style={{ color: 'var(--text-secondary, #888)' }}>No requests yet.</div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                {isManager && <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>User</th>}
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Policy</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Start</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>End</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Days</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Status</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Actions</th>
+                {isManager && <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>User</th>}
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Policy</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Start</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>End</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Days</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Status</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {requests.map((r) => (
                 <tr key={r.id}>
-                  {isManager && <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>User #{r.userId}</td>}
-                  <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{r.policy?.name || `#${r.policyId}`}</td>
-                  <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{fmtDate(r.startDate)}</td>
-                  <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{fmtDate(r.endDate)}</td>
-                  <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{r.days}</td>
-                  <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{statusChip(r.status)}</td>
-                  <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>
+                  {isManager && <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>User #{r.userId}</td>}
+                  <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{r.policy?.name || `#${r.policyId}`}</td>
+                  <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtDate(r.startDate)}</td>
+                  <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtDate(r.endDate)}</td>
+                  <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{r.days}</td>
+                  <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{statusChip(r.status)}</td>
+                  <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>
                     {r.status === 'PENDING' && isManager && (
                       <>
                         <button

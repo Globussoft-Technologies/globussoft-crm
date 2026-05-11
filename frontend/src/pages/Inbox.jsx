@@ -328,7 +328,7 @@ export default function Inbox() {
           <button onClick={() => setShowCallDial(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Phone size={18} /> Call Dialer
           </button>
-          <button onClick={() => setShowComposeSms(true)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <button onClick={() => setShowComposeSms(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <MessageSquare size={18} /> Compose SMS
           </button>
           {/* #594 — Compose WhatsApp affordance. Pre-fix the WhatsApp tab
@@ -804,7 +804,7 @@ export default function Inbox() {
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', gap: '1rem' }}>
                 <button type="button" onClick={() => setShowComposeSms(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer', fontWeight: '500' }}>Discard</button>
-                <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#10b981', borderColor: '#10b981' }}>
+                <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Send size={16} /> Send SMS
                 </button>
               </div>

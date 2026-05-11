@@ -15,7 +15,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:strict": "eslint lib middleware services utils test --max-warnings 0",
-    "audit:check": "node scripts/check-audit.js"
+    "audit:check": "node scripts/check-audit.js",
+    "audit:verify": "node scripts/verify-audit-chain.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

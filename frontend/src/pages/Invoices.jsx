@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download, RefreshCw, CreditCard, X } from 'lucide-react';
+import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download, RefreshCw, CreditCard, X, Filter } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -49,6 +49,7 @@ export default function Invoices() {
   const [paymentModal, setPaymentModal] = useState(null);
   const [paymentGateway, setPaymentGateway] = useState('razorpay');
   const [processingPayment, setProcessingPayment] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('ALL');
 
   useEffect(() => {
     loadData();
@@ -104,6 +105,11 @@ export default function Invoices() {
 
     return { totalOutstanding, totalPaidThisMonth, overdueCount };
   }, [invoices]);
+
+  const filteredInvoices = useMemo(() => {
+    if (statusFilter === 'ALL') return invoices;
+    return invoices.filter(inv => inv.status === statusFilter);
+  }, [invoices, statusFilter]);
 
   const nextInvoiceNum = useMemo(() => {
     if (invoices.length === 0) return 'INV-001';
@@ -390,6 +396,38 @@ export default function Invoices() {
         }}>
           {invoices.length} total invoices
         </span>
+
+        <div style={{
+          marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem',
+          padding: '0.25rem 0.75rem', borderRadius: '999px',
+          background: 'var(--subtle-bg-4)', border: '1px solid var(--border-color)',
+        }}>
+          <Filter size={14} color="var(--text-secondary)" />
+          <label htmlFor="invoice-status-filter" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+            Status:
+          </label>
+          <select
+            id="invoice-status-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            aria-label="Filter invoices by status"
+            className="invoice-status-filter-select"
+            style={{
+              background: 'transparent', border: 'none', color: 'var(--text-primary)',
+              fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', outline: 'none',
+              padding: '0.25rem 0.25rem',
+            }}
+          >
+            {/* Options need explicit bg/color — the dropdown popup is rendered
+                by the OS/browser and inherits the select's transparent bg,
+                making the menu unreadable on the generic CRM dark theme. */}
+            <option value="ALL" style={{ background: 'var(--bg-color, #0b0c10)', color: 'var(--text-primary, #fff)' }}>All</option>
+            <option value="PAID" style={{ background: 'var(--bg-color, #0b0c10)', color: 'var(--text-primary, #fff)' }}>Paid</option>
+            <option value="UNPAID" style={{ background: 'var(--bg-color, #0b0c10)', color: 'var(--text-primary, #fff)' }}>Unpaid</option>
+            <option value="OVERDUE" style={{ background: 'var(--bg-color, #0b0c10)', color: 'var(--text-primary, #fff)' }}>Overdue</option>
+            <option value="VOIDED" style={{ background: 'var(--bg-color, #0b0c10)', color: 'var(--text-primary, #fff)' }}>Voided</option>
+          </select>
+        </div>
       </div>
 
       {/* #481: two-column grid (Create | Ledger) collapses to a single column
@@ -519,6 +557,13 @@ export default function Invoices() {
               <Receipt size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
               <p style={{ color: 'var(--text-secondary)' }}>No invoices yet. Create one to get started.</p>
             </div>
+          ) : filteredInvoices.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+              <Filter size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
+              <p style={{ color: 'var(--text-secondary)' }}>
+                No invoices match the “{STATUS_CONFIG[statusFilter]?.label || statusFilter}” filter.
+              </p>
+            </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               {/* #243: table-layout fixed + per-column widths so the Contact
@@ -549,7 +594,7 @@ export default function Invoices() {
                   </tr>
                 </thead>
                 <tbody>
-                  {invoices.map(inv => (
+                  {filteredInvoices.map(inv => (
                     <tr
                       key={inv.id}
                       style={{

@@ -9,12 +9,18 @@ import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import audit from '../../lib/audit.js';
 
-const { writeAudit, diffFields, canonicalize, computeHash } = audit;
+const { writeAudit, diffFields, canonicalize, computeHash, genesisFor, backfillTenantChain } = audit;
 
 beforeAll(() => {
   // #558 — writeAudit now also calls prisma.auditLog.findFirst() to look up
-  // the previous row's hash; mock it alongside .create.
-  prisma.auditLog = { create: vi.fn(), findFirst: vi.fn() };
+  // the previous row's hash; mock it alongside .create. backfillTenantChain
+  // additionally needs findMany + update.
+  prisma.auditLog = {
+    create: vi.fn(),
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    update: vi.fn(),
+  };
 });
 
 beforeEach(() => {
@@ -22,6 +28,10 @@ beforeEach(() => {
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset();
   prisma.auditLog.findFirst.mockResolvedValue(null); // default: empty chain
+  prisma.auditLog.findMany.mockReset();
+  prisma.auditLog.findMany.mockResolvedValue([]);
+  prisma.auditLog.update.mockReset();
+  prisma.auditLog.update.mockResolvedValue({});
 });
 
 describe('lib/audit — module shape', () => {
@@ -275,6 +285,142 @@ describe('lib/audit — computeHash', () => {
 
   test('null prevHash hashes to a stable value', () => {
     expect(computeHash(null, { a: 1 })).toBe(computeHash(null, { a: 1 }));
+  });
+});
+
+describe('lib/audit — genesisFor (per-tenant chain anchor)', () => {
+  test('returns the canonical sentinel for a tenantId', () => {
+    expect(genesisFor(1)).toBe('GENESIS_1');
+    expect(genesisFor(42)).toBe('GENESIS_42');
+  });
+
+  test('different tenants get distinct anchors so a row cannot cross chains', () => {
+    expect(genesisFor(1)).not.toBe(genesisFor(2));
+  });
+});
+
+describe('lib/audit — backfillTenantChain (idempotent retroactive chain fill)', () => {
+  // Helper: build an ordered list of "stored" audit rows. Pass `chained=true`
+  // and the helper fills prevHash + hash using the canonical formula so the
+  // chain validates; `chained=false` leaves both null (simulating pre-#558
+  // legacy rows that the backfill is meant to repair).
+  function buildRows(tenantId, n, chained) {
+    const rows = [];
+    let lastHash = null;
+    for (let i = 0; i < n; i++) {
+      const createdAt = new Date(Date.UTC(2026, 3, i + 1));
+      const expectedPrev = lastHash == null ? `GENESIS_${tenantId}` : lastHash;
+      const expectedHash = computeHash(expectedPrev, {
+        tenantId, entity: 'Contact', action: 'CREATE',
+        entityId: 1000 + i, userId: 5, details: JSON.stringify({ i }),
+        createdAt: createdAt.toISOString(),
+      });
+      rows.push({
+        id: i + 1,
+        action: 'CREATE',
+        entity: 'Contact',
+        entityId: 1000 + i,
+        userId: 5,
+        details: JSON.stringify({ i }),
+        createdAt,
+        prevHash: chained ? expectedPrev : null,
+        hash: chained ? expectedHash : null,
+      });
+      lastHash = expectedHash;
+    }
+    return rows;
+  }
+
+  test('fully unchained tenant — every row gets an update', async () => {
+    const rows = buildRows(9, 3, false);
+    prisma.auditLog.findMany.mockResolvedValueOnce(rows);
+    const r = await backfillTenantChain(9);
+    expect(r.walkedRows).toBe(3);
+    expect(r.updatedRows).toBe(3);
+    expect(r.skippedRows).toBe(0);
+    expect(prisma.auditLog.update).toHaveBeenCalledTimes(3);
+    // First update anchors to GENESIS_<tenantId>.
+    expect(prisma.auditLog.update.mock.calls[0][0].data.prevHash).toBe('GENESIS_9');
+    // Subsequent rows chain off the prior hash.
+    const u1 = prisma.auditLog.update.mock.calls[0][0].data;
+    const u2 = prisma.auditLog.update.mock.calls[1][0].data;
+    expect(u2.prevHash).toBe(u1.hash);
+  });
+
+  test('idempotent: already-chained tenant produces 0 updates', async () => {
+    const rows = buildRows(9, 4, true);
+    prisma.auditLog.findMany.mockResolvedValueOnce(rows);
+    const r = await backfillTenantChain(9);
+    expect(r.walkedRows).toBe(4);
+    expect(r.updatedRows).toBe(0);
+    expect(r.skippedRows).toBe(4);
+    expect(prisma.auditLog.update).not.toHaveBeenCalled();
+    expect(r.head).toBe(rows[3].hash);
+  });
+
+  test('mixed: chained head, then null tail — only tail rows update', async () => {
+    const head = buildRows(9, 2, true);
+    const tail = buildRows(9, 2, false);
+    // Renumber tail ids so they come after head, and adjust createdAt to
+    // keep [createdAt asc, id asc] ordering consistent with what the route
+    // would return from the DB.
+    tail.forEach((row, idx) => {
+      row.id = head.length + idx + 1;
+      row.createdAt = new Date(Date.UTC(2026, 3, head.length + idx + 1));
+    });
+    prisma.auditLog.findMany.mockResolvedValueOnce([...head, ...tail]);
+    const r = await backfillTenantChain(9);
+    expect(r.walkedRows).toBe(4);
+    expect(r.updatedRows).toBe(2);
+    expect(r.skippedRows).toBe(2);
+    // The first tail update must chain off the head's last hash.
+    const firstUpdate = prisma.auditLog.update.mock.calls[0][0].data;
+    expect(firstUpdate.prevHash).toBe(head[head.length - 1].hash);
+  });
+
+  test('throws conflictRowId when a stored hash disagrees with the recomputation', async () => {
+    const rows = buildRows(9, 3, true);
+    // Tamper row 2's stored hash without updating its content → recomputed
+    // won't match. The backfill MUST refuse to silently overwrite.
+    rows[1].hash = 'a'.repeat(64);
+    prisma.auditLog.findMany.mockResolvedValueOnce(rows);
+    let caught = null;
+    try {
+      await backfillTenantChain(9);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught.conflictRowId).toBe(rows[1].id);
+    // No updates should have landed — the run aborts on first conflict.
+    expect(prisma.auditLog.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects invalid tenantId', async () => {
+    await expect(backfillTenantChain('not-a-number')).rejects.toThrow(/invalid tenantId/);
+  });
+
+  test('walks rows in [createdAt asc, id asc] — must match the verifier', async () => {
+    prisma.auditLog.findMany.mockResolvedValueOnce([]);
+    await backfillTenantChain(5);
+    const callArgs = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(callArgs.orderBy).toEqual([{ createdAt: 'asc' }, { id: 'asc' }]);
+    expect(callArgs.where).toEqual({ tenantId: 5 });
+  });
+
+  test('multi-tenant: backfill of tenant A does NOT touch tenant B rows', async () => {
+    // Strict per-tenant scoping — the where clause filters on tenantId, so
+    // a backfill call for tenant 1 never reads tenant 2 rows. Encodes the
+    // multi-tenant-isolation contract called out in the spec.
+    const rowsA = buildRows(1, 2, false);
+    prisma.auditLog.findMany.mockResolvedValueOnce(rowsA);
+    await backfillTenantChain(1);
+    // The findMany was scoped to tenant 1.
+    expect(prisma.auditLog.findMany.mock.calls[0][0].where).toEqual({ tenantId: 1 });
+    // Each update sets a hash anchored on tenant 1's GENESIS sentinel,
+    // not a tenant-2 sentinel — verifying the genesisFor() call is
+    // parameterised correctly.
+    expect(prisma.auditLog.update.mock.calls[0][0].data.prevHash).toBe('GENESIS_1');
   });
 });
 

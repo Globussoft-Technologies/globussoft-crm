@@ -26,9 +26,15 @@ vi.mock('../utils/api', () => ({
   getAuthToken: () => 'test-token',
 }));
 
+// Stable notify object — fresh-per-render objects cause the same
+// re-render storm called out in CLAUDE.md's RTL standing rule (useNotify
+// is referenced by useCallback deps in AuditLog.jsx, so a fresh object
+// each render invalidates the callback identity → useEffect re-fires →
+// setVerifying loops). One object, vi.fn() handles, for the whole run.
 const notifyError = vi.fn();
+const notifyObj = { error: notifyError, info: vi.fn(), success: vi.fn(), confirm: vi.fn() };
 vi.mock('../utils/notify', () => ({
-  useNotify: () => ({ error: notifyError, info: vi.fn(), success: vi.fn() }),
+  useNotify: () => notifyObj,
 }));
 
 import { AuthContext } from '../App';
@@ -118,6 +124,87 @@ describe('<AuditLog /> — hash-chain integrity chip (#558)', () => {
     });
     expect(screen.getByTestId('integrity-chip-broken').textContent).toMatch(/Chain broken/);
     expect(screen.getByTestId('integrity-chip-broken').textContent).toMatch(/1234/);
+  });
+
+  it('admin: null-hash response → yellow "Backfill required" banner with Run backfill button', async () => {
+    // Strict verifier reports `unhashedRows > 0` + reason "null hash …" when
+    // pre-#558 legacy rows haven't been backfilled. The UI must NOT show
+    // the red "contact support" chip in this case — backfill is a routine
+    // operator action, not an incident.
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 1,
+          totalRows: 193,
+          unhashedRows: 193,
+          brokenAt: 109,
+          reason: 'null hash — row was never chained (run backfill)',
+          integrityVerified: false,
+          lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) return Promise.resolve({ total: 0, byAction: {} });
+      return Promise.resolve({ logs: [], pages: 1, total: 0 });
+    });
+    renderAuditLog();
+    await waitFor(() => {
+      expect(screen.getByTestId('integrity-chip-needs-backfill')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('integrity-chip-needs-backfill').textContent).toMatch(/Backfill required/);
+    expect(screen.getByTestId('integrity-chip-needs-backfill').textContent).toMatch(/193 of 193/);
+    // Banner is a distinct surface with a Run backfill action.
+    expect(screen.getByTestId('integrity-backfill-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('run-backfill-btn')).toBeInTheDocument();
+    // The red chip MUST NOT be present — a null-hash break is not a tampering alert.
+    expect(screen.queryByTestId('integrity-chip-broken')).not.toBeInTheDocument();
+  });
+
+  it('admin: Run backfill posts to /api/audit/backfill then re-verifies', async () => {
+    // Initial verify: unhashed → yellow chip. Click Run backfill → POST
+    // /api/audit/backfill → re-verify → green chip.
+    let phase = 'pre-backfill';
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/audit/backfill' && opts?.method === 'POST') {
+        phase = 'post-backfill';
+        return Promise.resolve({ tenantId: 1, walkedRows: 193, updatedRows: 193, skippedRows: 0 });
+      }
+      if (url.startsWith('/api/audit/verify')) {
+        if (phase === 'pre-backfill') {
+          return Promise.resolve({
+            chainLength: 1, totalRows: 193, unhashedRows: 193,
+            brokenAt: 109, reason: 'null hash — row was never chained (run backfill)',
+            integrityVerified: false, lastVerifiedAt: '2026-05-08T10:30:00.000Z',
+          });
+        }
+        return Promise.resolve({
+          chainLength: 193, totalRows: 193, unhashedRows: 0,
+          brokenAt: null, reason: null,
+          integrityVerified: true, lastVerifiedAt: '2026-05-08T10:31:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) return Promise.resolve({ total: 0, byAction: {} });
+      return Promise.resolve({ logs: [], pages: 1, total: 0 });
+    });
+
+    // Stub window.confirm so the "Continue?" prompt auto-accepts.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderAuditLog();
+    await waitFor(() => {
+      expect(screen.getByTestId('run-backfill-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('run-backfill-btn'));
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/audit/backfill', { method: 'POST' });
+    });
+    // After re-verify resolves, the green chip should replace the yellow one.
+    await waitFor(() => {
+      expect(screen.getByTestId('integrity-chip-ok')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('integrity-chip-ok').textContent).toMatch(/193 rows/);
+
+    confirmSpy.mockRestore();
   });
 
   it('non-admin (USER role): integrity row + Verify button are NOT rendered', async () => {

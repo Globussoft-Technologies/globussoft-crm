@@ -4,6 +4,45 @@
 
 ---
 
+## 🏁 SESSION HANDOFF (2026-05-11 — v3.7.2 + v3.7.3 releases: user dispositions + phantom-cluster verification)
+
+**HEAD on origin/main:** `2c22871` (release(v3.7.3) — #555/#564 dispositions + membership.renewal_due event). Deploy gate green on prior commit `32a4bd9`; v3.7.3 gate in flight at write-time.
+
+**Releases shipped today (2026-05-11):**
+- **v3.7.2** (`4b1c602` + tag) — captures the day's heavy arc: PR #669 (Razorpay subscription + expense approvals + notification rules engine) + PR #709 (#558 audit hash-chain tamper-evidence) merged with full lifecycle, plus the WIP audit-chain repair at `4b992a9` + Waves 10/11A/11B/12 (+180 vitest + +577 RTL = ~4,400+ tests per push).
+- **v3.7.3** (`2c22871`) — closes the four user-attention dispositions Sumit set:
+  - **#555 (HI-06)** lock-per-session: LOGIN audit row + `/auth/tenant-switch` always 410 + `TenantChip` read-only widget
+  - **#564** consent staff-tablet handoff + DB BLOB: captureMethod allowlist + capturedByUserId + signedPdfBlob + `POST /consents/:id/archive` (idempotent freeze)
+  - **WhatsApp DPDP §11**: keep current default (no code)
+  - **Phantom-cluster verification** of the 2026-05-10 handoff's 8 "genuinely pending" items: ALL 6 already shipped (POS receipt dispatcher / membership T-7 / leave carry-forward / WhatsApp Chats UI / no-show rules / expiring-membership rules); 1 surfaced genuine extension: new `membership.renewal_due` event emitted at T-7 from wellnessOpsEngine + registered in workflow trigger catalogue (lets users wire email/SMS templates without touching cron code).
+
+**Pen-test user-attention items (#647)** status: §1 SendGrid still operator-blocked (Sumit's 2-min step), §2 #555 ✅ closed v3.7.3, §3 #558 ✅ closed by PR #709 + chain repair `4b992a9`, §4 #564 ✅ closed v3.7.3, §5 WhatsApp DPDP ✅ closed v3.7.3 (no-change), §6 Callified webhook external-blocked, §7 AdsGPT SSO external-blocked, §8 #457 manual-QA umbrella intentional.
+
+### Standing rule confirmed (5th instance)
+
+**Phantom-carry-over**: the 2026-05-10 handoff's "genuinely-pending items" block (lines 26-39 above the previous handoff) was 6/6 phantom (POS receipt / membership reminders / leave cron / WhatsApp UI / no-show / expiring-membership). ~10 min of grepping vs ~16h of dispatched work. Already promoted to CLAUDE.md after v3.7.0 (then 4 instances); this is the 5th. Pattern E in verifying-issue-before-pickup correctly flagged the cluster.
+
+### What's left
+
+**Genuinely open** (verified):
+- **B-03 SendGrid Sender Identity** — operator-blocked (Sumit's 2-min step at https://app.sendgrid.com/settings/sender_auth)
+- **#523** responsive.css 11 brittle attribute selectors → class-based (~2-3h)
+- **#431** Privacy retention silent-revert — ⬜ awaiting fresh repro
+- **#457** manual-only QA umbrella — intentionally open (hardware/device fidelity surfaces)
+- **PRD §14.4 Callified webhook stand-in** — partner-team deliverable
+- **AdsGPT silent SSO + back-link** — external-team deliverable per PRD §14.3
+- **Booking widget pincode-distance travel time** — needs Google Distance Matrix API key (operator-blocked)
+- **Lead_source naming drift** (cosmetic, ~30 min) — UI alignment between dashboard chips + backend field
+- **Mini-website at-store Resource reservation** — needs Booking widget UI surface (~2h)
+
+### Three things to do first next session
+
+1. **Confirm v3.7.3 deploy gate** (`2c22871`) is green and tag the release. If green: `git tag v3.7.3 && git push origin v3.7.3` fires e2e-full.yml release-validation.
+2. **PRD doc reconciliation**: the 8-May 2026 Google Doc still hasn't been re-scored after v3.5.0 + v3.5.2 + v3.6.0 + v3.7.0 + v3.7.1 + v3.7.2 + v3.7.3. Either give edit access OR I write a delta tracker doc the user pastes. The doc currently shows 64% open which is wildly stale.
+3. **Disposition #647 §1 SendGrid**: Sumit's 2-min dashboard step (verify a Single Sender or set up Domain Authentication). After that, engineering SSH-applies `SENDGRID_FROM_EMAIL=<verified>` to demo's `.env` via the `scripts/apply-sendgrid-key.py` pattern.
+
+---
+
 ## 🏁 SESSION HANDOFF (2026-05-10 — v3.6.0 release + Wave 8 phantom audit)
 
 **HEAD on origin/main:** `d1d2eb4` (post-v3.6.0 + scripts/seed-drugs-on-demo.py).

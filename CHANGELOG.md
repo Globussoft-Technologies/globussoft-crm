@@ -1,5 +1,125 @@
 # CHANGELOG
 
+## v3.7.2 — 2026-05-11 — Two external PRs landed + audit chain repair + Waves 10-12 coverage extension
+
+Patch release capturing one day's high-velocity arc: two external PRs merged
+with full pre-merge → merge → post-merge fallout → fix lifecycle, four
+autonomous coverage waves, and the test-infra standing-rule promotions that
+came out of them.
+
+### External PRs merged
+
+- **PR #669** (`4edeb17`, @mohitkumardas-cloud) — Razorpay-backed trial flow +
+  subscription billing + expense approval workflow + notification rules
+  engine. Pre-merge gate green; full per-push gate caught 4 follow-on issues
+  cleared inline at `e09adc8`:
+    - Latent test regex bug in `#344 sessionStorage key safety` spec
+      (false-positive on `setItem('key', 'literalValue')` patterns; PR's
+      `TrialBanner` was the first callsite to expose it)
+    - `SubscriptionPlan` added to `NON_TENANT_MODELS` whitelist (shared
+      catalog, mirrors the `IndustryTemplate` pattern)
+    - `notificationService` test mock updated to `.to(room).emit(...)` chain
+      (PR added per-user socket routing)
+    - `NotificationBell` test wrapped in `MemoryRouter` (PR added
+      `useNavigate`)
+
+- **PR #709** (`96dad53`, @shiksharoy-ai) — closes the design-call from
+  #647 §3 with the recommended option (A. hash-chain). SHA-256 per-row
+  `hash = SHA-256(prev_row.hash + row_data)` with per-tenant
+  `GENESIS_<tenantId>` sentinels. Ships:
+    - `auditIntegrityEngine.js` chain verifier + backfill CLI
+    - `writeAudit` insert path computes + persists `hash` inline
+    - `/api/audit/integrity` endpoint returns `{integrityVerified, chainLength,
+      totalRows, unhashedRows, brokenAt}`
+    - Invoice status filter on `/invoices` (was missing)
+    - Wellness dark-mode CSS fixes (3 cards rendered unreadable in dark)
+  Author's PR-fixup at `e4387b3` regenerated `backend/package-lock.json`
+  (PR's original was missing `@emnapi/core@1.10.0` + `@emnapi/runtime@1.10.0`
+  dev/optional deps; `npm ci` rejected the mismatch).
+
+### PR #709 post-merge fallout — fixed at `4b992a9`
+
+The PR's strict verifier flagged any null-hash row as a chain break. Seven new
+`audit-api.spec.js` tests failed post-merge with `body.integrityVerified ===
+false` after backfill. Pre-merge gate didn't run those e2e tests; failure
+surfaced post-merge.
+
+Two-part fix at `4b992a9`:
+
+- **`writeAudit` fork detection** — when the latest row for a tenant has a
+  null hash (pre-#558 legacy state), the prior fail-soft fallback silently
+  anchored new rows on `genesisFor(tenantId)`, forking the chain. Fix runs
+  inline `backfillTenantChain()` first, re-reads the tail, and only falls
+  back to GENESIS if backfill itself throws.
+
+- **`backfillTenantChain` fork repair** — distinguishes content tampering
+  (recompute under STORED prevHash doesn't match stored hash → 409) from
+  chain re-ordering (content recomputes correctly under stored prevHash but
+  stored prevHash doesn't match the `[createdAt asc, id asc]` walk → safely
+  re-stamp). Backfill now reaches `integrityVerified: true` against
+  freshly-seeded tenants without losing tamper-evidence.
+
+Deploy gate on `4b992a9` ran green (3m47s).
+
+### Coverage extension waves
+
+- **Wave 10** (`30c819c`) — 50 new vitest cases:
+    - `validateNumericId` middleware 0% → 86% lines
+    - `auditIntegrityEngine` 0% → 100%
+    - `dealInsightsEngine` 0% → 86%
+  Plus helper-trap audit (0 new instances of the v3.7.1 shape-preserving-
+  helper + projected-away-column trap) and JSDoc polish on 5 Wave 8b/9 lib
+  helpers.
+
+- **Wave 11 Agent A** (`c0345b5`) — 65 new vitest cases across the 4
+  remaining uncovered cron engines:
+    - `backupEngine` 83%
+    - `marketplaceEngine` 98%
+    - `reportEngine` 87%
+    - `workflowEngine` 100%
+
+- **Wave 11 Agent B** (`cfb5789`) — 33 new RTL tests on high-traffic pages:
+  `AuditLog`, `Approvals`, `Billing`, `Forecasting`.
+
+- **Wave 12** (`f59e91d`) — 32 new RTL tests on the next four high-traffic
+  pages: `Invoices`, `Payments`, `Estimates`, `wellness/Patients`.
+
+- **Test-infra standing-rule promotions** (`6a45a62`) — two second-instance
+  RTL rules promoted to CLAUDE.md (stable hook mocks for `useCallback`
+  dependency arrays; `getAllByText` for filter-chrome-vs-row-badge dual-
+  render). `scrollIntoView` jsdom stub added to `vitest.setup.js` (jsdom
+  doesn't implement it; pages using it for "scroll to error" patterns now
+  no longer throw under test).
+
+### Docs
+
+- **`docs/HANDOFF-2026-05-11.md`** (`1514bce`) — home→office handoff doc
+  capturing today's two PR merges + WIP audit fix.
+- **`docs/HANDOFF-2026-05-10.md`** (`3dd3244`) — session-end state + standing
+  rules + pickup checklist.
+- **`docs/PENDING_USER_AND_OPERATOR.md`** (`fd65bee`) — single canonical doc
+  for items blocked on user/operator/external teams (cross-referenced from
+  GitHub issue #647).
+- **`docs/ZYLU_PRD_ACCOMPLISHED.md`** (`efe7ac2`) — inventory of what's
+  already shipped from the Zylu vs CRM gap PRD.
+
+### Standing rule update
+
+- **PR pre-merge gate is a STRICT SUBSET of per-push gate.** Two PRs in one
+  day landed green at pre-merge then required post-merge fixes (PR #669 → 4
+  fixes; PR #709 → 7 audit-chain test failures + a 2-part chain-repair
+  patch). When merging external PRs, expect a follow-up fix commit
+  inline. Worth flagging this in the next PR-merge skill update — pre-merge
+  green is necessary but not sufficient.
+
+### Stats
+
+- **Backend vitest:** 1,220 → ~2,092 (+50 Wave 10, +65 Wave 11A, +14 PR #709)
+- **Frontend RTL:** 89 → ~666 (+577 across Wave 11B + Wave 12, +89 PR #709)
+- **Per-push gate:** ~4,128 → ~4,400+ tests
+
+---
+
 ## v3.7.1 — 2026-05-10 — Wave 9 user-attention defaults: P&L canonical reconcile + wellness ownership policy + DPDP §11 + ops polish
 
 Patch release closing 4 user-attention items the discovery audit flagged as

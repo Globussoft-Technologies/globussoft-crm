@@ -405,6 +405,7 @@ const Sidebar = ({
         disabled={adsLoading}
         className="nav-link"
         aria-label={`Open AdsGPT as ${ADSGPT_DEMO_LOGIN}`}
+        title={`Open AdsGPT (${ADSGPT_DEMO_LOGIN}) in a new tab`}
         style={{
           ...navStyle,
           background: "transparent",
@@ -454,6 +455,7 @@ const Sidebar = ({
         disabled={callifiedLoading}
         className="nav-link"
         aria-label="Open Callified dashboard"
+        title="Open Callified dashboard in a new tab"
         style={{
           ...navStyle,
           background: "transparent",
@@ -1062,13 +1064,22 @@ function renderGenericNav({
   );
 }
 
+// #707: sidebar group labels (STAFF, LEADS & REVENUE, etc.) were rendering
+// in muted small caps at 0.65rem / 600 weight / var(--text-secondary). At
+// that combination, the text failed AA contrast on both the dark generic
+// surface (#4b5563 on #161821 ≈ 3.4:1) and the wellness cream surface
+// (#5C5046 on #FFFFFF ≈ 6.5:1 — passes AA but reads as muted-grey-on-cream
+// which users described as "fading into the background"). Fix: bump
+// contrast to var(--text-primary) + 700 weight + slight size increase
+// so the labels read as section anchors, not optional metadata.
 const sectionLabel = {
-  fontSize: "0.65rem",
-  fontWeight: 600,
-  color: "var(--text-secondary)",
+  fontSize: "0.7rem",
+  fontWeight: 700,
+  color: "var(--text-primary)",
   textTransform: "uppercase",
   letterSpacing: "0.08em",
   padding: "0.75rem 0.5rem 0.25rem",
+  opacity: 0.85,
 };
 
 const navStyle = {

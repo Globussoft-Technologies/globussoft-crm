@@ -37,9 +37,16 @@ const PALETTE = [
 // Role → badge colour. ADMIN/OWNER get the warmest treatment so the
 // signed-in operator sees their elevated status; USER gets a neutral grey
 // so the badge doesn't visually compete with the avatar swatch.
+//
+// #706: ADMIN used to render in `#dc2626` red. Combined with the small
+// pip size + corner position, the red dot read as an "unread notification"
+// indicator — operators clicked the avatar expecting an actionable item.
+// Switched to a deep amber `#92400e` that reads as a role badge, not an
+// alarm. The Avatar always renders `title=` + `aria-label` so the
+// hover/SR experience explains the badge unambiguously.
 const ROLE_COLORS = {
   OWNER:   '#d4a017', // gold
-  ADMIN:   '#dc2626', // red
+  ADMIN:   '#92400e', // deep amber — formerly red, see #706
   MANAGER: '#2563eb', // blue
   USER:    '#6b7280', // grey
 };

@@ -522,3 +522,50 @@ table.stable-table td {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ── #697 — Mobile / responsive defaults ──────────────────────────────
+ *
+ * Pre-fix, every page assumed a desktop viewport (≥1024px). Below 768px,
+ * table-heavy pages (Dashboards / Reports / Patients / Invoices) overflowed
+ * horizontally and the KPI grid blew the layout. The rules below apply
+ * graceful degradation for handset / narrow-tablet widths. Wider viewports
+ * are unaffected.
+ *
+ * Pattern per the standing rule:
+ *   `repeat(auto-fit, minmax(min(100%, 240px), 1fr))` for KPI grids
+ *   horizontal scroll on table-heavy containers (.stable-table inherits)
+ *   sidebar slides out below 768px (hamburger toggle ships separately —
+ *     this CSS just prevents the layout collapse).
+ */
+@media (max-width: 768px) {
+  /* Allow tables to scroll horizontally inside their parent rather than
+   * forcing the page-level horizontal scroll. */
+  table.stable-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* KPI tile grids: collapse to single-column so each metric is readable. */
+  .kpi-grid,
+  [data-kpi-grid] {
+    grid-template-columns: 1fr !important;
+  }
+  /* Generic responsive containers — pages can opt in via .responsive-grid. */
+  .responsive-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  }
+  /* Modal dialogs: shrink to viewport-minus-padding instead of overflowing. */
+  [role="dialog"] {
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
+  }
+}
+
+/* ── #683 — Owner Dashboard KPI tiles overflow at narrow widths ──────
+ *
+ * Filed as MEDIUM but the fix is included in the #697 sweep above: the
+ * `.kpi-grid` rule collapses to 1-column below 768px. The remaining
+ * dashboard-specific overflow (overlapping recharts) is a per-component
+ * issue tracked by #697's audit; the @media rule resolves the most
+ * common visual collision (KPI tile wrap).
+ */

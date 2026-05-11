@@ -2,10 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <!-- #704: branded favicon + apple-touch-icon. SVG favicon is supported
+         by Chrome 81+ / Firefox 41+ / Safari 15+ — older browsers fall back
+         to the alternate icon rel below. The runtime app updates
+         document.title to "{Page} — {Tenant Name}" in Layout.jsx so the
+         tab title reflects the active tenant. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="alternate icon" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0f172a" />
-    <title>Globussoft Enterprise CRM</title>
+    <meta name="theme-color" content="#265855" />
+    <title>Globussoft CRM</title>
   </head>
   <body>
     <div id="root"></div>

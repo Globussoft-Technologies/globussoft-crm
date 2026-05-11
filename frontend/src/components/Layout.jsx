@@ -129,6 +129,17 @@ const Layout = () => {
     if (token) setupPush(token).catch(() => {});
   }, [token]);
 
+  // #704: tenant-aware document.title so operators with many open tabs can
+  // identify the CRM tab quickly. Falls back to the static "Globussoft CRM"
+  // when tenant hasn't loaded yet (pre-login, splash, transient).
+  useEffect(() => {
+    const brand = tenant?.name?.trim();
+    const next = brand ? `${brand} — CRM` : 'Globussoft CRM';
+    if (document.title !== next) {
+      document.title = next;
+    }
+  }, [tenant?.name]);
+
   // Fetch subscription status to show trial banner and modal
   useEffect(() => {
     const fetchSubStatus = async () => {
@@ -228,6 +239,7 @@ const Layout = () => {
             className="sidebar-toggle"
             onClick={() => setSidebarOpen((v) => !v)}
             aria-label={sidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            title={sidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
             aria-expanded={sidebarOpen}
             aria-controls="app-sidebar"
             style={{

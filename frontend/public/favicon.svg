@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Globussoft CRM favicon — issue #704.
+  Simple GS monogram on the brand teal background so operators with many
+  open tabs can spot the CRM tab quickly. Two-tone (teal #265855 +
+  cream #FAF7F2) mirrors the wellness vertical's primary palette so the
+  same icon coheres with the in-product chrome.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Globussoft CRM">
+  <rect width="64" height="64" rx="12" ry="12" fill="#265855"/>
+  <text x="50%" y="55%" text-anchor="middle" dominant-baseline="middle"
+        font-family="Outfit, system-ui, -apple-system, sans-serif"
+        font-size="34" font-weight="700" fill="#FAF7F2"
+        letter-spacing="-1">GS</text>
+</svg>

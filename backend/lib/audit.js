@@ -243,37 +243,30 @@ async function backfillTenantChain(tenantId) {
     throw new Error(`backfillTenantChain: invalid tenantId ${tenantId}`);
   }
 
-  // v3.7.5 — concurrency-race fix. Pre-fix: `findMany` returns a snapshot at
-  // query time, but the WALK can race against concurrent writeAudit calls
-  // because Prisma's per-call transactions don't serialize against this
-  // long-running mutation. Specifically: if backfill re-stamps row R's hash
-  // from X→Y while a concurrent writeAudit reads R as the chain tail and
-  // creates row R+1 with `prevHash=X`, the next /verify pass sees
-  // R.hash=Y but R+1.prevHash=X — chain break at R+1.
+  // v3.7.5 — partial concurrency-race mitigation via row-id snapshot.
   //
-  // Mitigation has two prongs:
+  // Pre-fix: `findMany` returns a snapshot at query time, but the WALK can
+  // race against concurrent writeAudit calls because Prisma's per-call
+  // transactions don't serialize against this long-running mutation.
+  // Specifically: if backfill re-stamps row R's hash from X→Y while a
+  // concurrent writeAudit reads R as the chain tail and creates row R+1
+  // with `prevHash=X`, the next /verify pass sees R.hash=Y but R+1.prevHash=X
+  // — chain break at R+1.
   //
-  //   (a) Snapshot the row-id ceiling (`maxIdAtStart`) before doing any work
-  //       and restrict the walk to rows whose id ≤ this ceiling. Concurrent
-  //       writeAudit calls landing after this point create rows with id >
-  //       ceiling — they are guaranteed to be OUTSIDE our working set and
-  //       therefore cannot fork against our mutations.
+  // Mitigation: snapshot the row-id ceiling (`maxIdAtStart`) before doing
+  // any work and restrict the walk to rows whose id ≤ this ceiling.
+  // Concurrent writeAudit calls landing AFTER this point create rows with
+  // id > ceiling — they are guaranteed OUTSIDE our working set, so we
+  // can't fork them against our mutations.
   //
-  //   (b) Never re-stamp the snapshot's tail row (`id === maxIdAtStart`).
-  //       That row's hash is what any concurrent writeAudit reads as its
-  //       prevHash anchor. Mutating it under us would fork the just-created
-  //       post-snapshot row's chain link. The snapshot-tail row IS still
-  //       null-filled (the common case — moving null → hashed is a one-way
-  //       transition that writeAudit's inline-backfill path naturally
-  //       reconciles by re-reading). But case-2 fork-repair (a SECOND
-  //       hash overwrite on an already-hashed row) on the tail is deferred
-  //       to the next backfill — by which time the in-flight writes have
-  //       settled.
-  //
-  // Why this is safe: tamper-evidence is preserved because we never
-  // SKIP detecting content tampering (case 1 still throws 409 on the
-  // tail). We only DEFER the cosmetic re-anchoring (case 2). The next
-  // backfill pass catches it once concurrent activity quiesces.
+  // Known limitation (deferred to a future PR): the tail row mutation
+  // itself can still race against a concurrent writeAudit that read the
+  // pre-mutation tail hash. This is a narrower window than pre-fix
+  // (only the tail, not arbitrary rows), but not eliminated. Under heavy
+  // parallel test load (e2e-full 4×2 shards + audit-coverage-api.spec
+  // hammering writeAudit) this still surfaces intermittently. Full
+  // fix requires an advisory lock or a two-phase repair pass — see
+  // CHANGELOG v3.7.5 + #647 §3 follow-up.
   const tailRow = await prisma.auditLog.findFirst({
     where: { tenantId: tenantIdNum },
     orderBy: [{ id: 'desc' }],
@@ -353,16 +346,6 @@ async function backfillTenantChain(tenantId) {
         throw err;
       }
       if (row.prevHash !== expectedPrev) {
-        // v3.7.5 — defer case-2 fork-repair on the snapshot's tail row to
-        // avoid the concurrent-writeAudit race documented above. Any newly-
-        // created post-snapshot row referenced our stable pre-mutation
-        // tail hash; if we restamped it, that reference would dangle. The
-        // next backfill pass will catch this row.
-        if (row.id === maxIdAtStart) {
-          skipped += 1;
-          lastHash = row.hash;
-          continue;
-        }
         // Case 2: chain fork — re-stamp prevHash + hash to integrate the
         // row into the real chain. Tamper-evidence is preserved because we
         // only got here after proving the content is intact.

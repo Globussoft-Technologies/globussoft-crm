@@ -26,27 +26,36 @@ rare. But e2e-full's 4-shard × 2-worker test parallelism plus
 `audit-coverage-api.spec.js`'s heavy writeAudit usage produced a
 predictable break every release-validation run.
 
-### Fix — snapshot row IDs up-front + defer tail re-stamp
+### Fix — snapshot row IDs up-front (partial mitigation)
 
-`backend/lib/audit.js:backfillTenantChain` now:
+`backend/lib/audit.js:backfillTenantChain` now snapshots the row-id
+ceiling (`SELECT MAX(id) FROM AuditLog WHERE tenantId = X`) at the very
+start. The walk's `findMany` is restricted to rows with `id ≤
+maxIdAtStart`. Any concurrent writeAudit landing AFTER this snapshot
+creates rows with `id > maxIdAtStart` — those rows are guaranteed outside
+the working set and cannot fork against our mutations.
 
-1. **Snapshots the row-id ceiling** (`SELECT MAX(id) FROM AuditLog WHERE
-   tenantId = X`) at the very start. The walk's `findMany` is restricted
-   to rows with `id ≤ maxIdAtStart`. Any concurrent writeAudit landing
-   AFTER this snapshot creates rows with `id > maxIdAtStart` — those rows
-   are guaranteed outside the working set and cannot fork against our
-   mutations.
+**Known limitation (deferred to a future PR):** the tail row mutation
+itself can still race against a concurrent writeAudit that read the
+pre-mutation tail hash. This is a narrower window than pre-fix (only
+the tail, not arbitrary rows), but not eliminated. Under heavy parallel
+test load (e2e-full 4×2 shards + audit-coverage-api.spec hammering
+writeAudit) this still surfaces intermittently. Full fix requires an
+advisory lock or a two-phase repair pass — tracked as a #647 §3
+follow-up. Production traffic doesn't hit this (backfill is admin-
+triggered + rare).
 
-2. **Defers case-2 fork-repair on the snapshot's tail row.** The row at
-   `id === maxIdAtStart` is what any concurrent writeAudit reads as its
-   prevHash anchor. Mutating its hash mid-flight would fork the just-
-   created post-snapshot row's chain link. We still null-fill the tail
-   if needed (one-way null → hashed transition is safe), but we never
-   overwrite an already-hashed tail row. The next backfill pass catches
-   any deferred fork-repair once concurrent writes quiesce.
+Tamper-evidence preserved: case 1 (content tampering) still throws 409.
 
-Tamper-evidence is preserved: case 1 (content tampering) on the tail
-row still throws 409. Only the cosmetic case-2 re-anchoring is deferred.
+### Also in v3.7.5: emitEvent unhandled-rejection fix
+
+v3.7.3 added `bus.emit('membership.renewal_due')` in wellnessOpsEngine
+wrapped in a try/catch, but the catch only handled SYNCHRONOUS throws.
+`emitEvent` returns a Promise; async rejections bubbled up uncaught. In
+the test environment (no DATABASE_URL), `prisma.automationRule.findMany`
+inside eventBus throws PrismaClientInitializationError and the
+unhandled rejection failed the vitest run despite 86/86 test files
+passing. Fixed by awaiting the emitEvent so try/catch covers async.
 
 ### Why a new release vs. a hotfix
 

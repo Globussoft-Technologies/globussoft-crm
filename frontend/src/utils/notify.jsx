@@ -344,7 +344,7 @@ function ModalSlot({ modal, close }) {
             autoFocus={modal.kind === 'confirm'}
             style={{
               padding: '0.5rem 1rem',
-              background: modal.destructive ? '#ef4444' : 'var(--accent-color, #3b82f6)',
+              background: modal.destructive ? '#ef4444' : 'var(--primary-color, var(--accent-color, #3b82f6))',
               border: 'none',
               color: '#fff',
               borderRadius: 8,

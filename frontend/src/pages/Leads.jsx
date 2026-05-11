@@ -336,7 +336,7 @@ const Leads = () => {
       `}</style>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <UserPlus size={24} style={{ color: 'var(--accent-color)' }} />
+          <UserPlus size={24} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
           <div>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Leads</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
@@ -349,7 +349,7 @@ const Leads = () => {
       {/* Bulk Assign Bar */}
       {selectedLeads.length > 0 && (
         <div className="card" style={{ padding: '0.75rem 1.25rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', flexWrap: 'wrap' }}>
-          <Users size={18} color="var(--accent-color)" />
+          <Users size={18} color="var(--primary-color, var(--accent-color))" />
           <span style={{ fontWeight: '500', fontSize: '0.875rem' }}>{selectedLeads.length} lead{selectedLeads.length !== 1 ? 's' : ''} selected</span>
           <select
             className="input-field"
@@ -565,7 +565,7 @@ const Leads = () => {
                       borderRadius: '999px',
                       fontSize: '0.75rem',
                       backgroundColor: 'rgba(139, 92, 246, 0.1)',
-                      color: '#8b5cf6',
+                      color: 'var(--primary-color, var(--accent-color, #8b5cf6))',
                       whiteSpace: 'nowrap',
                       display: 'inline-block',
                     }}>

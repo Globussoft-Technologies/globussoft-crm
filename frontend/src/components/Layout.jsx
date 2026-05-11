@@ -291,7 +291,11 @@ const Layout = () => {
             Version is sourced from backend/package.json at build time (see
             vite.config.js define block) so it stays aligned with /api/health.
             Git SHA is git rev-parse --short HEAD at build time, omitted in
-            environments where git isn't available. */}
+            environments where git isn't available.
+            #656: SHA is a recon leak for non-admin viewers (lets an attacker
+            fingerprint the deployed commit and cross-reference vulnerable
+            ranges). Version stays visible to everyone (it's already in the
+            unauthenticated /api/health response). SHA is gated to ADMINs. */}
         <footer
           data-testid="app-build-footer"
           style={{
@@ -307,7 +311,7 @@ const Layout = () => {
         >
           <small>
             v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0'}
-            {typeof __APP_GIT_SHA__ !== 'undefined' && __APP_GIT_SHA__ ? ` · ${__APP_GIT_SHA__}` : ''}
+            {user?.role === 'ADMIN' && typeof __APP_GIT_SHA__ !== 'undefined' && __APP_GIT_SHA__ ? ` · ${__APP_GIT_SHA__}` : ''}
           </small>
         </footer>
       </div>

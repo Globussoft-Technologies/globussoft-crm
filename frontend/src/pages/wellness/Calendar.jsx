@@ -23,7 +23,7 @@ const STATUS_COLOR = {
   cancelled:     'rgba(100,116,139,0.20)',
 };
 const STATUS_BORDER = {
-  booked: '#3b82f6', confirmed: '#6366f1', arrived: '#a855f7',
+  booked: '#3b82f6', confirmed: 'var(--primary-color, var(--accent-color, #6366f1))', arrived: '#a855f7',
   'in-treatment': '#f59e0b', completed: '#10b981',
   'no-show': '#ef4444', cancelled: '#64748b',
 };
@@ -702,7 +702,8 @@ function NewVisitModal({ column, hour, date, patients, services, waitlist, resou
             disabled={(source === 'waitlist' ? !waitlistId : !patientId) || submitting}
             style={{
               padding: '0.5rem 1.25rem',
-              background: ((source === 'waitlist' ? !waitlistId : !patientId) || submitting) ? 'rgba(99,102,241,0.4)' : 'var(--primary-color, var(--accent-color, #6366f1))',
+              background: 'var(--primary-color, var(--accent-color, #6366f1))',
+              opacity: ((source === 'waitlist' ? !waitlistId : !patientId) || submitting) ? 0.4 : 1,
               border: 'none', color: '#fff', borderRadius: 8,
               cursor: ((source === 'waitlist' ? !waitlistId : !patientId) || submitting) ? 'not-allowed' : 'pointer',
               fontWeight: 600,

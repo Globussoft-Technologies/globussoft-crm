@@ -149,11 +149,29 @@ MPLAN_PRED = (
     "OR name LIKE '%E2E|_CSV%' ESCAPE '|'"
     ")"
 )
+# #664 — Estimate pollution: e2e/tests/estimates-api.spec.js stamps title
+# with RUN_TAG = `E2E_EST_${Date.now()}`. Tenant-isolation spec stamps
+# `IsoTest Estimate E2E_ISO_*`. Crashed runs leave the rows behind.
+# CROSS-TENANT scope: most pollution is on the generic CRM tenant (id=1
+# — Demo Admin login), with smaller residue on wellness. The patterns
+# `E2E_*` / `TEST_*` / `IsoTest Estimate E2E_*` / `_teardown_*` are
+# verified absent from prisma/seed.js + prisma/seed-wellness.js, so
+# pattern-match cleanup is safe across both tenants.
+ESTIMATE_PRED = (
+    "("
+    "title LIKE 'E2E|_EST|_%' ESCAPE '|' "
+    "OR title LIKE 'E2E|_%' ESCAPE '|' "
+    "OR title LIKE 'TEST|_%' ESCAPE '|' "
+    "OR title LIKE 'IsoTest Estimate E2E|_%' ESCAPE '|' "
+    "OR title LIKE '|_teardown|_%' ESCAPE '|'"
+    ")"
+)
 
 predicates = [
     ("Patient", PATIENT_PRED, "id, name, phone, createdAt"),
     ("Invoice", INVOICE_PRED, "id, invoiceNum, amount, status, issuedDate"),
     ("MembershipPlan", MPLAN_PRED, "id, name, durationDays, price, createdAt"),
+    ("Estimate", ESTIMATE_PRED, "id, title, totalAmount, status, createdAt"),
 ]
 
 print("\n[3/7] BEFORE counts + samples (no DELETE yet)")
@@ -223,6 +241,15 @@ if before_counts["MembershipPlan"] > 0:
 else:
     print("  -> skipped (count was 0)")
 
+# #664 — DELETE polluted Estimate rows. EstimateLineItem has Cascade on Estimate,
+# so children clean up automatically.
+print("\n[6b/7] DELETE polluted Estimate rows (#664 — ~100 E2E_EST_* seed pollution)")
+if before_counts["Estimate"] > 0:
+    rc, out = mysql_run(ssh, mysql_cmd, f"DELETE FROM Estimate WHERE {ESTIMATE_PRED}")
+    safe_print(f"  -> mysql said: {out.strip()[:300]}")
+else:
+    print("  -> skipped (count was 0)")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 7: AFTER counts — verify 0 rows remain for the Patient + Invoice
 # predicates. MembershipPlan may have residual rows if some plans are FK-
@@ -239,9 +266,10 @@ for table, pred, _cols in predicates:
     deleted[table] = before_counts[table] - n
     print(f"  {table}: {n} rows remaining (deleted {deleted[table]})")
 
-# Hard-fail only if Patient or Invoice didn't go to zero — MembershipPlan
-# may have FK-pinned survivors which we report but don't fail on.
-hard_fail_tables = [t for t in ("Patient", "Invoice") if after_counts[t] != 0]
+# Hard-fail only if Patient or Invoice or Estimate didn't go to zero —
+# MembershipPlan may have FK-pinned survivors which we report but don't
+# fail on (#664 Estimate has no such FK constraint, so it must go to 0).
+hard_fail_tables = [t for t in ("Patient", "Invoice", "Estimate") if after_counts[t] != 0]
 if hard_fail_tables:
     print(f"\n[FAIL] residual pollution remains in: {hard_fail_tables}")
     ssh.close()

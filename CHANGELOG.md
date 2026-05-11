@@ -1,5 +1,90 @@
 # CHANGELOG
 
+## v3.7.5 — 2026-05-11 — Audit-chain backfill concurrency-race fix
+
+The v3.7.2 e2e-full release validation surfaced a real product bug in the
+#558 audit hash-chain feature shipped by PR #709 + WIP repair at `4b992a9`:
+**backfill races against concurrent writeAudit calls**, breaking the chain
+under heavy parallel test load.
+
+### Failure mode
+
+`backfillTenantChain` re-stamps existing rows' hashes when repairing a
+fork (case 2 in the function's own taxonomy — pre-#558 null-hash rows
+that caused new writes to silently anchor on GENESIS). The re-stamp is
+a UPDATE that mutates `hash` from X to Y. If a concurrent writeAudit
+reads that row as the chain tail BETWEEN the SELECT-tail and the UPDATE,
+it captures `prevHash=X` for the new row it creates. Once backfill
+finishes, the next `/verify` walk sees:
+
+- Row N has `hash=Y` (the re-stamped value)
+- Row N+1 has `prevHash=X` (the value the concurrent writeAudit captured)
+- `X !== Y` → break at row N+1, `integrityVerified: false`
+
+Production traffic doesn't hit this — backfill is admin-triggered and
+rare. But e2e-full's 4-shard × 2-worker test parallelism plus
+`audit-coverage-api.spec.js`'s heavy writeAudit usage produced a
+predictable break every release-validation run.
+
+### Fix — snapshot row IDs up-front + defer tail re-stamp
+
+`backend/lib/audit.js:backfillTenantChain` now:
+
+1. **Snapshots the row-id ceiling** (`SELECT MAX(id) FROM AuditLog WHERE
+   tenantId = X`) at the very start. The walk's `findMany` is restricted
+   to rows with `id ≤ maxIdAtStart`. Any concurrent writeAudit landing
+   AFTER this snapshot creates rows with `id > maxIdAtStart` — those rows
+   are guaranteed outside the working set and cannot fork against our
+   mutations.
+
+2. **Defers case-2 fork-repair on the snapshot's tail row.** The row at
+   `id === maxIdAtStart` is what any concurrent writeAudit reads as its
+   prevHash anchor. Mutating its hash mid-flight would fork the just-
+   created post-snapshot row's chain link. We still null-fill the tail
+   if needed (one-way null → hashed transition is safe), but we never
+   overwrite an already-hashed tail row. The next backfill pass catches
+   any deferred fork-repair once concurrent writes quiesce.
+
+Tamper-evidence is preserved: case 1 (content tampering) on the tail
+row still throws 409. Only the cosmetic case-2 re-anchoring is deferred.
+
+### Why a new release vs. a hotfix
+
+The v3.7.4 product code shipped without this fix; release-validation
+caught it in e2e-full. v3.7.5 product code includes the fix. The
+deploy gate's `api_tests` subset doesn't run the strict-verifier specs
+that surface this race, so production was safe but release-validation
+flagged it.
+
+### Diagnostic probe used to confirm
+
+After v3.7.4 deploy stabilized, a direct curl against demo's
+`/api/audit/backfill` followed by `/api/audit/verify` returned:
+
+```json
+{
+  "chainLength": 94683,
+  "totalRows": 94683,
+  "unhashedRows": 0,
+  "brokenAt": null,
+  "reason": null,
+  "integrityVerified": true
+}
+```
+
+— confirming the chain is healthy in isolation; the e2e-full failures
+are concurrency-induced, not steady-state bugs.
+
+### Standing rule candidate
+
+When backfill operations re-stamp existing rows in a chain, they MUST
+either acquire a serialization lock or defer mutations to rows that
+concurrent writers might reference as anchors. The "snapshot row IDs
++ skip-tail-restamp" pattern documented in
+`backend/lib/audit.js:backfillTenantChain` is the reusable shape.
+
+---
+
 ## v3.7.4 — 2026-05-11 — Spec hygiene: revenue-goals periodStart collision + orphan-row cleanup
 
 Test-only patch closing a release-validation false-alarm. v3.7.2 + v3.7.3

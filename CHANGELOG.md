@@ -1,5 +1,62 @@
 # CHANGELOG
 
+## v3.7.4 — 2026-05-11 — Spec hygiene: revenue-goals periodStart collision + orphan-row cleanup
+
+Test-only patch closing a release-validation false-alarm. v3.7.2 + v3.7.3
+shipped with zero product regressions, but the v3.7.2 e2e-full release
+validation surfaced **1 real failure + 3 retry-recovered flakes** that
+turned out to be **spec-pollution**, not a code bug.
+
+### What broke
+
+[e2e/tests/revenue-goals-api.spec.js](e2e/tests/revenue-goals-api.spec.js)
+hardcoded `periodStart = Date.UTC(2099, 0, 1)` for its happy-path POST. The
+schema enforces
+`@@unique([tenantId, userId, period, periodStart])` on `StaffRevenueGoal`
+([backend/prisma/schema.prisma:3819](backend/prisma/schema.prisma#L3819))
+so the route returns 409 P2002
+([backend/routes/staff.js:688](backend/routes/staff.js#L688)) when two runs
+target the same tuple. The afterAll teardown
+([e2e/tests/revenue-goals-api.spec.js:74-83](e2e/tests/revenue-goals-api.spec.js#L74-L83))
+only deletes goals it explicitly tracked in `createdGoalIds`, so a flaky
+run that crashed before push left an orphan row in demo's DB and broke
+every subsequent run.
+
+The v3.7.2 e2e-full's earlier overload-flaky shard left the row; the
+fresh re-run on a clean demo still hit 409 on this orphan.
+
+### The fix
+
+- **Unique periodStart per run:** `farFutureWindow()` now derives the day
+  from `Math.floor(Date.now() / 1000) % 365`, spreading collisions across
+  all 365 days of 2099. End-to-end runs land on different periodStarts on
+  every invocation.
+- **win2 derived from win:** the RBAC test that creates two goals for
+  the same user computes win2's periodStart as win's start + 100 days
+  instead of using its own hardcoded date.
+- **beforeAll orphan cleanup:** the spec's beforeAll now does an
+  authenticated GET of `/api/staff/revenue-goals`, filters rows whose
+  `notes` starts with `_teardown_RG_` (the spec's own RUN_TAG prefix), and
+  DELETEs each. The filter pins the cleanup to spec-created rows only —
+  no risk of touching real demo goals.
+
+### Why a version bump for a test-only change
+
+The e2e-full workflow_dispatch runs against a specific ref (`v3.7.x`).
+Spec fixes on main don't help when re-validating an existing tag. Bumping
+to v3.7.4 lets us tag + re-run e2e-full with the spec fix in place. The
+v3.7.4 product code is byte-identical to v3.7.3 — same release-validation
+applies.
+
+### Standing rule candidate
+
+Specs that POST to endpoints with unique constraints **must** derive their
+collision-bearing fields from a per-run nonce (timestamp, UUID, RUN_TAG).
+Hardcoded values are a latent bug waiting for the first crash that skips
+teardown. Worth a CLAUDE.md one-liner if a third instance lands.
+
+---
+
 ## v3.7.3 — 2026-05-11 — User-attention dispositions: #555 lock-per-session + #564 tablet-handoff+BLOB + phantom-cluster verification
 
 Patch release closing the four user-attention decisions Sumit dispositioned

@@ -69,6 +69,40 @@ test.beforeAll(async ({ request }) => {
   // Cross-tenant probe: wellness admin should not see generic tenant goals.
   const w = await loginAs(request, 'admin@wellness.demo', 'password123');
   wellnessAdminToken = w.token;
+
+  // v3.7.4 spec hygiene — clean up orphan rows from PRIOR runs that
+  // crashed before their afterAll could fire. Without this, a flaky run
+  // (e.g. demo-overload timeout) leaks a row at the hardcoded
+  // periodStart, and the next run's POST hits the
+  // @@unique([tenantId, userId, period, periodStart]) constraint
+  // → 409 → "real failure" alarm on a spec-pollution artifact.
+  // Filter on the notes prefix RUN_TAG uses (`_teardown_RG_`) so we
+  // never touch real goals.
+  if (adminToken) {
+    try {
+      const listRes = await request.get(`${BASE_URL}/api/staff/revenue-goals`, {
+        headers: headers(adminToken),
+        timeout: REQUEST_TIMEOUT,
+      });
+      if (listRes.ok()) {
+        const body = await listRes.json();
+        const items = Array.isArray(body) ? body : (body.goals || body.rows || []);
+        const orphans = items.filter(
+          (g) => g && typeof g.notes === 'string' && g.notes.startsWith('_teardown_RG_'),
+        );
+        for (const g of orphans) {
+          await request
+            .delete(`${BASE_URL}/api/staff/revenue-goals/${g.id}`, {
+              headers: headers(adminToken),
+              timeout: REQUEST_TIMEOUT,
+            })
+            .catch(() => {});
+        }
+      }
+    } catch (_e) {
+      /* fail-soft — the spec still has the unique-periodStart fallback below */
+    }
+  }
 });
 
 test.afterAll(async ({ request }) => {
@@ -84,9 +118,18 @@ test.afterAll(async ({ request }) => {
 });
 
 // Future-window goal (so we don't accidentally pick up real demo sales).
+//
+// v3.7.4 — periodStart is now unique-per-run instead of hardcoded
+// 2099-01-01. The @@unique([tenantId, userId, period, periodStart])
+// constraint on StaffRevenueGoal means any two runs that hit the
+// same admin + same period + same hardcoded start collide on P2002.
+// `Date.now() / 1000 % 365` spreads picks across all days of 2099,
+// effectively eliminating collisions across the ~few-runs-per-day
+// e2e-full cadence. The 30-day period stays inside 2099.
 function farFutureWindow() {
-  const start = new Date(Date.UTC(2099, 0, 1));
-  const end = new Date(Date.UTC(2099, 1, 1));
+  const dayOffset = Math.floor(Date.now() / 1000) % 365; // 0-364
+  const start = new Date(Date.UTC(2099, 0, 1 + dayOffset));
+  const end = new Date(start.getTime() + 30 * 86_400_000);
   return { periodStart: start.toISOString(), periodEnd: end.toISOString() };
 }
 
@@ -255,10 +298,16 @@ test.describe('Revenue Goals — RBAC scoping on GET', () => {
   test('admin creates goals for both admin and USER', async ({ request }) => {
     test.skip(!adminToken || !adminUserId || !userUserId, 'no admin/user');
     const win = farFutureWindow();
-    // Use a slightly-different start date so unique constraint doesn't bite.
+    // v3.7.4 — win2 needs a DIFFERENT periodStart from `win` (we're
+    // creating two goals for the same admin user in this test, and the
+    // @@unique([tenantId, userId, period, periodStart]) constraint would
+    // bite if both used farFutureWindow()'s clock-derived day). Offset
+    // win2 by 100 days from win's start so the two are always distinct.
+    const winStart = new Date(win.periodStart);
+    const win2Start = new Date(winStart.getTime() + 100 * 86_400_000);
     const win2 = {
-      periodStart: new Date(Date.UTC(2099, 2, 1)).toISOString(),
-      periodEnd: new Date(Date.UTC(2099, 3, 1)).toISOString(),
+      periodStart: win2Start.toISOString(),
+      periodEnd: new Date(win2Start.getTime() + 30 * 86_400_000).toISOString(),
     };
     const r1 = await request.post(`${BASE_URL}/api/staff/revenue-goals`, {
       headers: headers(adminToken),

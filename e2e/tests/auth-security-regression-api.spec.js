@@ -707,7 +707,18 @@ test.describe('#344 — sessionStorage key safety (file-grep)', () => {
     test.skip(!HAS_FRONTEND_SRC, 'frontend/src not on disk');
     // Match `sessionStorage.setItem('<key>'...)` where <key> contains
     // a forbidden segment. Quote-aware: ' " or `.
-    const FORBIDDEN_RE = /sessionStorage\.setItem\s*\(\s*(['"`])([^'"`]*(?:'|--|<|>|\bOR\b)[^'"`]*)\1/i;
+    //
+    // 2026-05-11 fix: removed `'` from the alternation. The original regex's
+    // `(?:'|--|<|>|\bOR\b)` could backtrack to consume the CLOSING quote of
+    // the key literal as the alternation match, then anchor `\1` against the
+    // opening quote of a SECOND string-literal arg — producing a false
+    // positive on every `setItem('key', 'literalValue')` callsite. The `'`
+    // alternation was also dead code: a single quote inside a single-quoted
+    // literal would close the string first, so it can't appear there. The
+    // remaining alternation tokens (`--`, `<`, `>`, `\bOR\b`) cover the
+    // genuine #344 injection patterns. Surfaced by PR #669's TrialBanner
+    // (commit 4edeb17).
+    const FORBIDDEN_RE = /sessionStorage\.setItem\s*\(\s*(['"`])([^'"`]*(?:--|<|>|\bOR\b)[^'"`]*)\1/i;
     const violations = [];
     for (const file of listFrontendSourceFiles()) {
       const text = fs.readFileSync(file, 'utf8');

@@ -103,9 +103,16 @@ describe('lib/notificationService — notify', () => {
   });
 
   test('emits socket event when io provided + socket in default channels', async () => {
-    const io = { emit: vi.fn() };
+    // PR #669 changed notificationService.js:120 to `io.to(userId).emit(...)`
+    // for per-user socket routing. Mock both methods on a single object —
+    // `.to(room).emit(...)` is the standard socket.io API for room-scoped
+    // emit. The chain returns `this` so the same mock catches `.emit`.
+    const ioEmit = vi.fn();
+    const ioTo = vi.fn(() => ({ emit: ioEmit }));
+    const io = { to: ioTo, emit: vi.fn() };
     await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', io });
-    expect(io.emit).toHaveBeenCalledWith('notification_new', expect.objectContaining({ userId: 1 }));
+    expect(ioTo).toHaveBeenCalledWith('user:1');
+    expect(ioEmit).toHaveBeenCalledWith('notification_new', expect.objectContaining({ userId: 1 }));
   });
 
   test('does not emit socket when io not provided', async () => {
@@ -114,9 +121,12 @@ describe('lib/notificationService — notify', () => {
   });
 
   test('does not emit socket when channels excludes "socket"', async () => {
-    const io = { emit: vi.fn() };
+    const ioEmit = vi.fn();
+    const ioTo = vi.fn(() => ({ emit: ioEmit }));
+    const io = { to: ioTo, emit: vi.fn() };
     await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', io, channels: ['db'] });
-    expect(io.emit).not.toHaveBeenCalled();
+    expect(ioTo).not.toHaveBeenCalled();
+    expect(ioEmit).not.toHaveBeenCalled();
   });
 
   test('only-db channels: skips push and email', async () => {

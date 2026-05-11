@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { AuthContext } from '../App';
 
 /**
@@ -45,11 +46,16 @@ vi.mock('socket.io-client', () => ({
 import { fetchApi } from '../utils/api';
 import NotificationBell from '../components/NotificationBell';
 
+// PR #669 added `useNavigate()` inside NotificationBell.jsx (probably for
+// link-on-click). The hook requires a Router context, so every render must
+// be wrapped in MemoryRouter — previously the test rendered bare.
 const renderWithAuth = (ui, { user = { id: 1, name: 'Test User', email: 't@x.com' } } = {}) => {
   return render(
-    <AuthContext.Provider value={{ user, setUser: () => {}, loading: false }}>
-      {ui}
-    </AuthContext.Provider>,
+    <MemoryRouter>
+      <AuthContext.Provider value={{ user, setUser: () => {}, loading: false }}>
+        {ui}
+      </AuthContext.Provider>
+    </MemoryRouter>,
   );
 };
 
@@ -208,9 +214,11 @@ describe('<NotificationBell />', () => {
 
     // Simulate role switch / re-login as a different user.
     rerender(
-      <AuthContext.Provider value={{ user: { id: 2, name: 'Bob' }, setUser: () => {}, loading: false }}>
-        <NotificationBell />
-      </AuthContext.Provider>,
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 2, name: 'Bob' }, setUser: () => {}, loading: false }}>
+          <NotificationBell />
+        </AuthContext.Provider>
+      </MemoryRouter>,
     );
 
     // Badge must reset (no carry-over of "5" from user 1) and re-render

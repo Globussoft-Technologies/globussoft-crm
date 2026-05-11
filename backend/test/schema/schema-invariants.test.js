@@ -118,6 +118,12 @@ const NON_TENANT_MODELS = new Set([
   // saas) — seeded once, read by all tenants when they pick an industry.
   // Read-only from a tenant's perspective; no tenant data lives here.
   'IndustryTemplate',
+  // PR #669 — globally-shared subscription plan catalog. Every tenant picks
+  // from the same plans (starter / pro / enterprise + billing-interval
+  // variants). Each tenant's actual Subscription rows ARE tenant-scoped
+  // (Subscription model has tenantId Int @default(1)). The PLAN catalog
+  // intentionally is not.
+  'SubscriptionPlan',
 ]);
 
 // ── Expected AuditLog shape ──────────────────────────────────────────

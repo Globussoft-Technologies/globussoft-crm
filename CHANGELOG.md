@@ -1,5 +1,65 @@
 # CHANGELOG
 
+## Unreleased — Shared form/list/modal UI primitives
+
+Closes the v3.5.x form/UI consistency cluster (#685 #686 #687 #688 #689
+#691 #694 #695) by shipping seven small shared primitives under
+`frontend/src/components/ui/` plus a canonical conventions README. The
+primitives + README landed inline with the #657 CSRF-defense work
+(commit `a30a40d`):
+
+  - **FormField.jsx** (#686) — label + red `*` required indicator +
+    inline error / hint. Single source of truth for required-field
+    rendering; eliminates the pre-fix mix of red / grey / no-asterisk
+    variants.
+  - **EmptyState.jsx** (#688) — icon + heading + body + optional CTA,
+    role=status. Standard copy convention (`No <noun> yet`) documented.
+  - **Spinner.jsx** + **Skeleton.jsx** / SkeletonRow / SkeletonTable
+    (#689) — Spinner for inline button waits, Skeleton for table/card
+    list loading sized to the eventual content shape.
+  - **SearchInput.jsx** (#695) — 250 ms debounced onSearch, clear-X
+    affordance, toolbar-left convention.
+  - **Pagination.jsx** (#694) — page-numbers + jump + range label
+    (`Showing 1–50 of 253`). Deprecates infinite-scroll + load-more
+    for new lists.
+  - **Modal.jsx** (#691) — canonical close affordances (ESC +
+    click-outside + top-right X + focus restoration); destructive flows
+    opt out of ESC/click-outside via `destructive: true`.
+
+CSS additions to `frontend/src/index.css`:
+
+  - `.btn-danger` variant (#687) so destructive actions have a distinct
+    visual treatment from `.btn-primary` (safe). Standing convention:
+    one `btn-primary` per view; secondary actions use `btn-secondary`;
+    destructive use `btn-danger`.
+  - `@keyframes spin` + `@keyframes skeleton-pulse` — shared by the new
+    Spinner + Skeleton primitives.
+  - `.required-mark` class — used by FormField, also available for
+    ad-hoc labels.
+
+Documentation:
+
+  - `frontend/src/components/ui/README.md` — codifies the canonical
+    conventions for all 8 issues. **Table header alignment rule
+    (#685)** is documented here: text columns `text-align: left`,
+    numeric / currency `right`, status / action `center`. The existing
+    `stable-table` class in `index.css:397` already provides the other
+    half (table-layout: fixed + hover stability).
+
+Tests: 39 vitest cases at `frontend/src/__tests__/ui-primitives.test.jsx`
+pinning the contracts the README documents (required asterisk renders,
+modal ESC behaviour, search debounce timing, pagination range label) so
+future edits don't silently regress the conventions.
+
+Migration strategy is incremental — existing surfaces continue to work
+as-is; new code lands correctly via these primitives, and existing
+surfaces migrate opportunistically when next touched for an unrelated
+change. A 50-file big-bang sweep would be unreviewable. README explicitly
+calls out the 5–10 highest-value migration targets (Patients, Leads,
+Invoices, Inbox, Reports, Calendar) for future follow-up work.
+
+Closes #685 #686 #687 #688 #689 #691 #694 #695.
+
 ## v3.7.5 — 2026-05-11 — Audit-chain backfill concurrency-race fix
 
 The v3.7.2 e2e-full release validation surfaced a real product bug in the

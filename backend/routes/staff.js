@@ -2,6 +2,14 @@ const express = require("express");
 const crypto = require("crypto");
 const { verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
+// #682 PII masking — staff directory leaks internal user IDs + full names
+// to non-admin viewers. Helpers gate the role check + mask the row shape.
+const {
+  shouldMaskForViewer,
+  maskRows,
+  maskUserId,
+  auditDisclosureDetails,
+} = require("../lib/piiMask");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -55,6 +63,13 @@ async function sendEmail(toEmail, subject, plainText, html) {
 }
 
 // GET / — list users in current tenant (exclude password)
+//
+// #682: low-trust viewers (USER role / wellness telecaller / helper) see
+// MASKED staff details — internal user IDs hashed to a 3-digit tail, names
+// shown as "F. Last", emails masked to "x****@domain". ADMIN / MANAGER see
+// full directory (operational ground truth — they manage the team).
+// Doctors / professionals on the wellness vertical see full directory
+// (they need to identify peers for referrals / handovers).
 router.get("/", async (req, res) => {
   try {
     const users = await prisma.user.findMany({
@@ -80,7 +95,35 @@ router.get("/", async (req, res) => {
       },
       orderBy: { createdAt: "desc" },
     });
-    res.json(users);
+    // #682: apply PII masking + audit emission.
+    const mustMask = shouldMaskForViewer(req);
+    let out;
+    if (mustMask) {
+      // Replace numeric ids with a 3-digit hashed token so the UI can still
+      // render row keys without revealing the autoincrement (which gives away
+      // signup order + total count). Also mask name + email.
+      out = users.map((u) => ({
+        ...u,
+        id: maskUserId(u.id),
+        name: u.name ? (u.name.split(/\s+/)[0][0] + ". " + u.name.split(/\s+/).slice(1).join(" ")) : u.name,
+        email: u.email ? (u.email[0] + "****@" + (u.email.split("@")[1] || "")) : u.email,
+      }));
+    } else {
+      out = users;
+      if (users.length > 0) {
+        writeAudit(
+          "User",
+          "PII_DISCLOSED",
+          null,
+          req.user.userId,
+          req.user.tenantId,
+          auditDisclosureDetails(req, "staff_list", users, {
+            fields: ["id", "name", "email"],
+          }),
+        ).catch((e) => console.warn("[staff] audit User PII_DISCLOSED failed:", e.message));
+      }
+    }
+    res.json(out);
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch staff." });
   }

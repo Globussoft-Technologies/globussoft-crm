@@ -44,6 +44,16 @@ const {
   looksLikeMaskedSentinel,
   maskConfigRow,
 } = require("../lib/credentialMasking");
+// #681: Unified Inbox / WhatsApp threads expose lead `contactPhone` +
+// `contact.phone` + `contact.email` in list views. Mask for low-trust
+// viewers (USER role on generic / telecaller / helper on wellness).
+const {
+  shouldMaskForViewer,
+  maskPhone,
+  maskName,
+  maskEmail,
+  auditDisclosureDetails,
+} = require("../lib/piiMask");
 
 // #651 — third-party credentials on WhatsAppConfig. GET masks; PUT requires
 // full fresh value; rotation stamps lastRotatedAt + emits audit row.
@@ -347,8 +357,47 @@ router.get("/threads", verifyToken, async (req, res) => {
       prisma.whatsAppThread.count({ where }),
     ]);
 
+    // #681: PII masking on the inbox list. Lead phone (`contactPhone` on the
+    // thread itself + the nested `contact.phone`) is the leak surface; mask
+    // for low-trust viewers and emit a PII_DISCLOSED audit for callers who
+    // see unmasked rows.
+    const mustMask = shouldMaskForViewer(req);
+    const outThreads = mustMask
+      ? threads.map((t) => ({
+          ...t,
+          contactPhone: maskPhone(t.contactPhone),
+          contact: t.contact
+            ? {
+                ...t.contact,
+                name: maskName(t.contact.name),
+                phone: maskPhone(t.contact.phone),
+                email: maskEmail(t.contact.email),
+              }
+            : t.contact,
+          patient: t.patient
+            ? {
+                ...t.patient,
+                name: maskName(t.patient.name),
+                phone: maskPhone(t.patient.phone),
+              }
+            : t.patient,
+        }))
+      : threads;
+    if (!mustMask && threads.length > 0) {
+      writeAudit(
+        "WhatsAppThread",
+        "PII_DISCLOSED",
+        null,
+        req.user.userId,
+        req.user.tenantId,
+        auditDisclosureDetails(req, "whatsapp_threads", threads, {
+          fields: ["contactPhone", "contact.name", "contact.phone", "contact.email"],
+        }),
+      ).catch((e) => console.warn("[whatsapp] audit PII_DISCLOSED failed:", e.message));
+    }
+
     res.json({
-      threads,
+      threads: outThreads,
       pagination: {
         total,
         page: parseInt(page),

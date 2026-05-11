@@ -26,6 +26,18 @@ const {
   renderBrandedInvoicePdf,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
+// #679/#680/#681/#682 PII masking helpers + viewer policy. Used on list views
+// (Locations, Patients list, Telecaller Queue) so low-trust viewers
+// (telecaller / helper / generic USER on wellness tenant) see masked
+// phones / emails / names / DOB, while ADMIN / MANAGER / clinical staff see
+// full PHI. Disclosure events on UNMASKED reads emit a PII_DISCLOSED audit
+// row.
+const {
+  shouldMaskForViewer,
+  maskRow,
+  maskRows,
+  auditDisclosureDetails,
+} = require("../lib/piiMask");
 // #313/#244 datetime callsite-sweep: tenant-aware datetime helpers. The
 // `IST_OFFSET_MS` shortcut + naive `new Date(req.body.visitDate)` constructions
 // in this file pre-date the helper at backend/lib/datetime.js (commit 663bd7c).
@@ -355,10 +367,119 @@ router.get("/patients", phiReadGate, async (req, res) => {
     }).catch((auditErr) => {
       console.warn("[wellness] audit PATIENT_LIST_READ failed:", auditErr.message);
     });
-    res.json({ patients, total });
+    // #680: low-trust viewers (telecaller / helper / generic USER on wellness
+    // tenant) see masked name / phone / email / dob on the list view. Admin /
+    // manager / doctor / professional see full PHI (phiReadGate above already
+    // gates the route; this further narrows what each role sees inside the
+    // payload). Unmasked-disclosure emits a PII_DISCLOSED audit row in
+    // addition to PATIENT_LIST_READ so reviewers can answer "who saw the
+    // unmasked names + phones?" without joining two log tables.
+    const piiFields = ["name", "phone", "email", "dob"];
+    const outPatients = shouldMaskForViewer(req)
+      ? maskRows(patients, piiFields)
+      : patients;
+    if (!shouldMaskForViewer(req) && patients.length > 0) {
+      writeAudit(
+        "Patient",
+        "PII_DISCLOSED",
+        null,
+        req.user.userId,
+        req.user.tenantId,
+        auditDisclosureDetails(req, "patient_list", patients, { fields: piiFields }),
+      ).catch((auditErr) => {
+        console.warn("[wellness] audit Patient PII_DISCLOSED failed:", auditErr.message);
+      });
+    }
+    res.json({ patients: outPatients, total });
   } catch (e) {
     console.error("[wellness] list patients error:", e.message);
     res.status(500).json({ error: "Failed to list patients" });
+  }
+});
+
+// #680: patient list CSV/XLSX export.
+//
+// Policy:
+//   - ADMIN / MANAGER gets full DOB + phone + email unmasked (operator-
+//     triggered export is the canonical staff-facing audit-trail point;
+//     they need the real numbers to call patients / cross-reference an
+//     external system).
+//   - lower-trust viewers (telecaller / helper / generic USER on wellness
+//     tenant) can ONLY trigger the export with `?masked=1`, which forces
+//     masked output even though the role is otherwise gated out of CSV.
+//   - `?masked=1` always wins regardless of role — admin-triggered exports
+//     destined for a third-party (e.g. shared with marketing agency, sent
+//     to print vendor) can be intentionally redacted by toggling the flag.
+//
+// Every unmasked export emits a PII_DISCLOSED audit row with the row count
+// + record IDs (capped at 200) — disclosure has full traceability.
+router.get("/patients.csv", phiReadGate, async (req, res) => {
+  try {
+    const { q, locationId } = req.query;
+    const wantMasked = req.query.masked === "1" || req.query.masked === "true";
+    const where = tenantWhere(req);
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { phone: { contains: q } },
+        { email: { contains: q } },
+      ];
+    }
+    if (locationId) where.locationId = parseInt(locationId);
+    if (req.query.includeDeleted !== "1" && req.query.includeDeleted !== "true") {
+      where.deletedAt = null;
+    }
+    const patients = await prisma.patient.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 5000,
+    });
+    // Decide mask: query flag wins; otherwise role-based.
+    const mustMask = wantMasked || shouldMaskForViewer(req);
+    const piiFields = ["name", "phone", "email", "dob"];
+    const rows = mustMask ? maskRows(patients, piiFields) : patients;
+
+    const headers = ["ID", "Name", "Phone", "Email", "DOB", "Gender", "Created"];
+    const csvRows = rows.map((p) => [
+      p.id,
+      p.name || "",
+      p.phone || "",
+      p.email || "",
+      p.dob ? (typeof p.dob === "string" ? p.dob.slice(0, 10) : new Date(p.dob).toISOString().slice(0, 10)) : "",
+      p.gender || "",
+      p.createdAt ? new Date(p.createdAt).toISOString() : "",
+    ]);
+    const csv = rowsToCsv(headers, csvRows);
+
+    // Audit. Always emit so the export is traceable; flag mask-state in the
+    // details payload.
+    writeAudit(
+      "Patient",
+      mustMask ? "PII_EXPORT_MASKED" : "PII_DISCLOSED",
+      null,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        ...auditDisclosureDetails(req, "patient_export_csv", patients, {
+          fields: piiFields,
+        }),
+        masked: mustMask,
+        query: q || null,
+        locationId: locationId ? parseInt(locationId) : null,
+      },
+    ).catch((e) => console.warn("[wellness] audit Patient export failed:", e.message));
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="patients${mustMask ? "-masked" : ""}-${new Date().toISOString().slice(0, 10)}.csv"`,
+    );
+    // BOM so Excel auto-detects UTF-8.
+    res.write("﻿");
+    res.end(csv);
+  } catch (e) {
+    console.error("[wellness] patients.csv export error:", e.message);
+    res.status(500).json({ error: "Failed to export patients" });
   }
 });
 
@@ -3124,7 +3245,28 @@ router.get("/locations", async (req, res) => {
       where: tenantWhere(req),
       orderBy: { name: "asc" },
     });
-    res.json(locations);
+    // #679: Locations carry clinic-staff phone + email + address. ADMIN /
+    // MANAGER / clinical staff see full contact info (they need it to call
+    // the clinic / route patients). Telecaller / helper / generic USER on a
+    // wellness tenant see masked phone + email (the address itself is OK to
+    // show — it's the clinic's public street address).
+    const fields = ["phone", "email"];
+    const out = shouldMaskForViewer(req)
+      ? maskRows(locations, fields)
+      : locations;
+    if (!shouldMaskForViewer(req) && locations.length > 0) {
+      // Emit PII_DISCLOSED audit for any caller who saw the unmasked rows.
+      // Fire-and-forget; audit failures must not block the response.
+      writeAudit(
+        "Location",
+        "PII_DISCLOSED",
+        null,
+        req.user.userId,
+        req.user.tenantId,
+        auditDisclosureDetails(req, "location_list", locations, { fields }),
+      ).catch((e) => console.warn("[wellness] audit Location PII_DISCLOSED failed:", e.message));
+    }
+    res.json(out);
   } catch (e) {
     console.error("[wellness] list locations error:", e.message);
     res.status(500).json({ error: "Failed to list locations" });
@@ -4983,6 +5125,24 @@ router.get("/telecaller/queue", verifyWellnessRole(["telecaller", "admin", "mana
       },
       take: 200,
     });
+    // #682 / #681: leads in a viewer's own queue are in-scope by definition
+    // (assignedToId === req.user.userId). Telecallers / managers / admins
+    // working their own queue need the FULL phone + name to make the call.
+    // Emit a PII_DISCLOSED audit so the disclosure surface is traceable
+    // (every queue load shows up in the audit viewer; reviewers can detect
+    // a telecaller exfiltrating queue rows via repeated reads).
+    if (leads.length > 0) {
+      writeAudit(
+        "Contact",
+        "PII_DISCLOSED",
+        null,
+        req.user.userId,
+        req.user.tenantId,
+        auditDisclosureDetails(req, "telecaller_queue", leads, {
+          fields: ["name", "phone", "email"],
+        }),
+      ).catch((e) => console.warn("[wellness] audit telecaller queue PII_DISCLOSED failed:", e.message));
+    }
     res.json({ leads, count: leads.length });
   } catch (e) {
     console.error("[wellness] telecaller queue error:", e.message);

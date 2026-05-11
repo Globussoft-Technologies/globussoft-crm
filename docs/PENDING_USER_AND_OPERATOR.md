@@ -1,10 +1,10 @@
-# Pending: user + operator blockers (post-v3.7.1)
+# Pending: user + operator blockers (post-v3.7.5)
 
-**As of v3.7.1 — 2026-05-10.** The autonomous engineering backlog is empty;
-every remaining item needs either an operator action (a few minutes in a
-third-party dashboard or SSH session) or a product / design decision from
-Sumit/Rishu. This document captures both, with concrete options + the
-recommended path so you can pick fast and unblock.
+**As of v3.7.5 — 2026-05-12.** Most items from the original v3.7.1 snapshot
+have closed: §2 (#555) / §3 (#558) / §4 (#564) / §5 (WhatsApp DPDP) all
+shipped across v3.7.3 → v3.7.5. The remaining open items are §1 (operator
+SendGrid step) + §6 / §7 (external-team deliverables) + §8 (intentionally
+open). The autonomous engineering backlog is otherwise empty.
 
 For each item:
 - **Status:** what's currently shipped / what's blocked
@@ -82,44 +82,67 @@ multi-tenant access; the in-session switcher does not return.
 
 ---
 
-## 3. PRODUCT — #558 audit-log tamper-evidence design
+## 3. ✅ CLOSED v3.7.5 — #558 audit-log hash-chain tamper-evidence (option A)
 
-**Status:** AuditLog model + writeAudit calls are everywhere, but the table
-has no integrity check. A DBA could silently UPDATE or DELETE rows and the
-application would never know. The pen-test flagged this as a compliance
-gap (DPDP / SOC 2-adjacent).
+**Decision:** option **A. Hash-chain (SHA-256, per-tenant `GENESIS_<tenantId>` sentinels)**.
 
-**Why I can't do this autonomously:** four design options with materially
-different tradeoffs (replay performance, verify performance, DB
-storage cost, retroactive backfill cost). Picking wrong wastes ~1.5 days
-on the wrong implementation.
+**Author + arc:** shipped by @shiksharoy-ai in PR #709 (merged `96dad53`,
+2026-05-11 post-home-handoff). The strict-verifier-vs-fresh-seed
+interaction surfaced in post-merge api_tests; a 3-iteration repair arc
+landed cleanly at v3.7.5:
 
-**Options (pick one):**
+- **v3.7.2 base** (`4b992a9`, home-session WIP fix) — added writeAudit
+  fork detection (inline backfill when latest row's hash is null) +
+  backfillTenantChain fork repair (distinguishes content tampering
+  from chain re-ordering via "recompute under stored prevHash"
+  probe). 93 unit tests pass; e2e unverified at push time.
+- **v3.7.5** (`5bcc99b`) — fix audit-chain backfill concurrency race
+  by snapshotting row IDs up-front. The fork-repair walked the chain
+  in batches; concurrent writeAudit calls landing between batches
+  broke the chain. Snapshot pattern (capture max(id) before the walk,
+  only operate on the frozen set) eliminates the race window.
+- **`fb9e523`** — also in v3.7.5: `await emitEvent` in wellnessOpsEngine
+  to catch async rejections that the v3.7.3 `membership.renewal_due`
+  emit left dangling (release-validation e2e-full caught this).
 
-- **★ A. Hash-chain (most common for audit trails)** — each row's `hash`
-  column = `SHA-256(prev_row.hash + row_data)`. Insert path stays cheap;
-  verify path is O(N) but only run on demand or by a daily cron.
-  Storage: +32 bytes per row. Retroactive backfill: 1× full table scan.
-  Most defensible to auditors because tampering breaks the chain at the
-  affected row + every subsequent row.
-- **B. HMAC-per-batch** — sign batches of rows hourly with a server-side
-  HMAC key. Cheaper verify (only check batch boundaries) but tampering
-  inside a batch isn't detected. Storage: +1 row per batch.
-- **C. Append-only signed file (S3 Object Lock or similar)** — write
-  audit rows AND append to a daily file in S3 with Object Lock retention.
-  Detection happens at backup-restore time, not in-app. Cheapest in the
-  hot path, costliest in S3 fees.
-- **D. DB-trigger INSERT-only** — Postgres / MySQL trigger that REVOKEs
-  UPDATE / DELETE on AuditLog at the DB level. No application changes
-  needed. Strongest in-DB protection but doesn't detect a DBA who can
-  also drop the trigger.
+**What's shipped (lives in code today):**
 
-**What unblocks:** pick a letter + tell me whether you want the
-verification CLI (separate from the implementation, ~½ day extra) shipped
-in the same PR.
+- `backend/lib/audit.js` — `writeAudit` stamps `prevHash` + `hash` per
+  row. Canonical payload serialization via sorted-key JSON. Per-tenant
+  GENESIS sentinels prevent cross-tenant relocation. Tie-break on
+  `(createdAt desc, id desc)` handles same-ms writes. Inline-repair on
+  fork detection.
+- `backend/lib/audit.js` — `backfillTenantChain()` populates pre-#558
+  legacy rows. Tamper-safe: re-stamps only rows whose CONTENT recomputes
+  correctly under their stored prevHash; throws 409 on real tampering.
+- `backend/routes/audit.js` — `GET /api/audit/verify` (strict walker,
+  returns `integrityVerified` + `brokenAt` + `chainLength`/`totalRows`
+  for the "Backfill required" banner). `POST /api/audit/backfill` (admin
+  trigger).
+- `backend/scripts/verify-audit-chain.js` + `backfill-audit-chain.js` —
+  cross-tenant CLI ops scripts with `--dry-run` / `--json` / `--tenant`
+  flags + structured exit codes.
+- `backend/cron/auditIntegrityEngine.js` — daily sweep using the same
+  strict verifier.
+- `frontend/src/pages/AuditLog.jsx` — integrity chip + "Backfill required"
+  banner + hash/prevHash spot-check.
+- `e2e/tests/audit-api.spec.js` + `backend/test/lib/audit.test.js` +
+  `backend/test/routes/audit-chain.test.js` +
+  `backend/test/scripts/verify-audit-chain.test.js` — full contract pin.
 
-**Cost of NOT doing this:** AuditLog stays trustable-by-convention.
-Material if you pursue SOC 2 / DPDP certification; nice-to-have otherwise.
+**Known limitation (documented in CHANGELOG.md v3.7.5):** the fork-repair
+race window is narrowed but not zero. A writeAudit that lands in the few
+ms between the verifier's snapshot and the response can still observe a
+forked chain. The integrity cron catches it on next run; the operator CLI
+repairs it idempotently. Material if you ever decide it's worth a true
+table-level lock, otherwise nice-to-have.
+
+**Operator next step (optional):** run the cross-tenant CLI on demo to
+backfill any pre-#558 rows accumulated since v3.4.x:
+```bash
+node backend/scripts/backfill-audit-chain.js --dry-run --json
+# then drop --dry-run when you're satisfied with the count
+```
 
 ---
 
@@ -227,7 +250,22 @@ shipped).
 
 ---
 
-**Last updated:** 2026-05-10 (post-v3.7.1)
+**Last updated:** 2026-05-12 (post-v3.7.5 — §3 closure refresh)
 **Next refresh:** after the next Wave or whenever any of these items
 flips status. Don't manually edit the section headers — engineering
 will move closed items to a "✅ closed" footer block as they land.
+
+## Status snapshot
+
+| § | Item | Status | Closed in |
+|---|---|---|---|
+| 1 | SendGrid Sender Identity (operator) | 🟡 OPEN — 2-min dashboard step | — |
+| 2 | #555 tenant-switcher UX | ✅ CLOSED | v3.7.3 (option C lock-per-session) |
+| 3 | #558 audit-log tamper-evidence | ✅ CLOSED | v3.7.5 (option A hash-chain, 3-iteration arc) |
+| 4 | #564 wellness consent surface | ✅ CLOSED | v3.7.3 (option B tablet + blob storage) |
+| 5 | WhatsApp DPDP §11 re-opt-in policy | ✅ CLOSED | v3.7.3 (kept current default) |
+| 6 | Callified.ai webhook auto-post (external) | 🟠 OPEN — partner-team | — |
+| 7 | AdsGPT silent SSO + back-link (external) | 🟠 OPEN — external-team | — |
+| 8 | #457 manual-only QA umbrella | ⚪ intentional-stay-open | — |
+
+**4 of 5 product / design items shipped; only operator + external items remain.**

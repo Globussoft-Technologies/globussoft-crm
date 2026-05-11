@@ -233,14 +233,18 @@ test.describe('#186/#342 — security headers (tightened pins)', () => {
         expect(hsts).toContain('includeSubDomains');
       }
 
-      // CSP is intentionally OFF — pin so a future commit that re-enables
-      // a strict CSP without nonce wiring (and breaks the embed widget)
-      // surfaces here. If you need to re-enable CSP, update this assertion
-      // to the new policy in the SAME commit.
-      expect(
-        headers['content-security-policy'],
-        'CSP intentionally disabled per security.js comment — re-enabling needs nonce strategy + spec update'
-      ).toBeFalsy();
+      // #654 (v3.7.x) — CSP re-enabled in transitional mode. The directive
+      // list permits 'unsafe-inline' for script-src + style-src because the
+      // Vite build emits inline styles and legacy components use inline
+      // event handlers; tightening to nonces is a tracked follow-up. Pin
+      // that CSP is PRESENT + carries the documented directive shape so a
+      // regression that disables it again or drops a key directive
+      // surfaces here.
+      const csp = headers['content-security-policy'] || '';
+      expect(csp, '#654 — CSP must be present (was re-enabled in v3.7.x)').toBeTruthy();
+      expect(csp).toContain("default-src 'self'");
+      expect(csp).toContain("frame-ancestors 'self'");
+      expect(csp).toContain("object-src 'none'");
     });
   }
 

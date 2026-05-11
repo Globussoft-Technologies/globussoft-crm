@@ -82,7 +82,10 @@ import Channels from '../pages/Channels';
 const persistedMsg91 = {
   id: 1,
   provider: 'msg91',
-  apiKey: 'TEST-A****', // masked by GET /sms/config — the route trims to 6 chars + "****"
+  // #651 (v3.7.x) — GET /sms/config returns credentials as { configured, last4 }
+  // object shape instead of a masked string sentinel. The frontend SecretFieldRow
+  // component reads .last4 to render the readonly "**** XYZ7" pill.
+  apiKey: { configured: true, last4: 'A7B9' },
   authToken: null,
   senderId: 'GLBSMS',
   dltEntityId: 'DLT-12345',
@@ -137,8 +140,10 @@ describe('<Channels /> — #586 save-lie regression', () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue('GLBSMS')).toBeInTheDocument();
     });
-    // And the masked apiKey is also rendered (proves the row is bound to the card).
-    expect(screen.getByDisplayValue('TEST-A****')).toBeInTheDocument();
+    // And the last4 of the masked apiKey is rendered (proves the row is bound to the card).
+    // #651 (v3.7.x) replaced the inline credential input with a SecretFieldRow that
+    // shows the readonly pill "**** A7B9". Match on the last4 substring.
+    expect(screen.getByText(/A7B9/)).toBeInTheDocument();
     expect(screen.getByDisplayValue('DLT-12345')).toBeInTheDocument();
   });
 
@@ -168,7 +173,8 @@ describe('<Channels /> — #586 save-lie regression', () => {
 
     // MSG91's persisted senderId must STILL render unchanged (state isolation).
     expect(screen.getByDisplayValue('GLBSMS')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('TEST-A****')).toBeInTheDocument();
+    // #651 — masked credential rendered as pill, not as input; match last4 substring.
+    expect(screen.getByText(/A7B9/)).toBeInTheDocument();
     // And the Twilio Account SID input now holds what we typed.
     expect(twilioSidInput).toHaveValue('AC12345');
   });

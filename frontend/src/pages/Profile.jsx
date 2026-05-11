@@ -18,7 +18,7 @@ function isPractitioner(profile) {
 }
 
 const Profile = () => {
-  const { user: authUser, setUser: setAuthUser } = useContext(AuthContext);
+  const { user: authUser, setUser: setAuthUser, subscription } = useContext(AuthContext);
   const [profile, setProfile] = useState(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -45,6 +45,15 @@ const Profile = () => {
       setProfileMsg({ text: 'Failed to load profile', type: 'error' });
     }
     setLoading(false);
+  };
+
+  const formatDate = (date) => {
+    if (!date) return '';
+    return new Date(date).toLocaleDateString('en-IN', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
   };
 
   const handleUpdateProfile = async (e) => {
@@ -127,6 +136,62 @@ const Profile = () => {
       <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.9rem' }}>
         Manage your account settings and change your password.
       </p>
+
+      {/* Subscription Info Badge */}
+      {subscription?.subscriptionStatus === 'TRIAL' ? (
+        <div style={{
+          background: 'rgba(255, 193, 7, 0.1)',
+          border: '1px solid #ffc107',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          marginBottom: '1.5rem'
+        }}>
+          <div style={{ fontSize: '12px', color: '#ffc107', fontWeight: 'bold', marginBottom: '6px' }}>
+            ⏱ FREE TRIAL
+          </div>
+          <div style={{ fontSize: '14px', color: 'var(--text-primary)', fontWeight: '500', marginBottom: '4px' }}>
+            {subscription.trialDaysRemaining || 0} days remaining
+          </div>
+          {subscription.trialEndsAt && (
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+              Trial ends {formatDate(subscription.trialEndsAt)}
+            </div>
+          )}
+          <a href="/pricing" style={{
+            color: '#ffc107',
+            fontSize: '12px',
+            textDecoration: 'none',
+            fontWeight: '600',
+            display: 'inline-block'
+          }}>
+            Upgrade Now →
+          </a>
+        </div>
+      ) : subscription?.subscriptionStatus === 'ACTIVE' && subscription?.subscription ? (
+        <div style={{
+          background: 'rgba(34, 197, 94, 0.1)',
+          border: '1px solid #22c55e',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          marginBottom: '1.5rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <div>
+            <div style={{ fontSize: '12px', color: '#888' }}>Current Plan</div>
+            <div style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+              {subscription.subscription.planName}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: '12px', color: '#888' }}>Expires</div>
+            <div style={{ fontSize: '16px', color: '#22c55e', fontWeight: '600' }}>
+              {formatDate(subscription.subscription.endDate)}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Profile Info Card */}
       <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>

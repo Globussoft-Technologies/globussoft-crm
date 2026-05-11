@@ -6,6 +6,17 @@ const prisma = require("./prisma");
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
 
+// Global io reference for routes to emit events with socket.io support
+let globalIo = null;
+
+function setIO(io) {
+  globalIo = io;
+}
+
+function getIO() {
+  return globalIo;
+}
+
 // SendGrid email sending (same pattern as communications.js)
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
@@ -173,10 +184,12 @@ function renderTemplate(template, payload) {
  * @param {string} eventName  e.g. "contact.created", "deal.stage_changed"
  * @param {object} payload    event-specific data (contactId, dealId, userId, etc.)
  * @param {number} tenantId   tenant scope
- * @param {object} [io]       Socket.io server instance (optional)
+ * @param {object} [io]       Socket.io server instance (optional, uses global if not provided)
  */
 async function emitEvent(eventName, payload, tenantId, io) {
-  bus.emit(eventName, { payload, tenantId, io });
+  // Use provided io or fall back to global io reference
+  const ioInstance = io || getIO();
+  bus.emit(eventName, { payload, tenantId, io: ioInstance });
 
   // 1. Find matching automation rules
   const rules = await prisma.automationRule.findMany({
@@ -384,4 +397,6 @@ module.exports = {
   evaluateCondition,
   renderTemplate,
   lookupField,
+  setIO,
+  getIO,
 };

@@ -11,9 +11,21 @@
  *
  * Run: cd backend && node prisma/seed-wellness.js
  */
+const path = require("path");
+const dotenv = require("dotenv");
+
+// Load .env file (it's in the project root, 2 levels up from backend/prisma/)
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
+
+// Verify DATABASE_URL is set
+if (!process.env.DATABASE_URL) {
+  console.error("Error: DATABASE_URL not set in .env file");
+  process.exit(1);
+}
 
 const prisma = new PrismaClient();
 

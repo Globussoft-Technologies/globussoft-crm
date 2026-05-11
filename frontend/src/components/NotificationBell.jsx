@@ -6,17 +6,34 @@ import React, {
   useContext,
 } from "react";
 import { Bell, Check, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { io } from "socket.io-client";
 import { fetchApi } from "../utils/api";
 import { AuthContext } from "../App";
 
 const NotificationBell = () => {
+  const navigate = useNavigate();
   const { user } = useContext(AuthContext);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const ref = useRef(null);
+
+  const getPriorityColor = (priority) => {
+    switch (priority) {
+      case 'critical':
+        return '#ef4444';
+      case 'high':
+        return '#f59e0b';
+      case 'normal':
+        return '#3b82f6';
+      case 'low':
+        return '#6b7280';
+      default:
+        return '#3b82f6';
+    }
+  };
 
   const fetchUnreadCount = useCallback(async () => {
     try {
@@ -319,11 +336,17 @@ const NotificationBell = () => {
             notifications.map((n) => (
               <div
                 key={n.id}
-                onClick={() => !n.isRead && markAsRead(n.id)}
+                onClick={() => {
+                  if (!n.isRead) markAsRead(n.id);
+                  if (n.link) {
+                    navigate(n.link);
+                    setOpen(false);
+                  }
+                }}
                 style={{
                   padding: "12px 16px",
                   borderBottom: "1px solid var(--border-color)",
-                  cursor: "pointer",
+                  cursor: n.link ? "pointer" : "default",
                   display: "flex",
                   alignItems: "flex-start",
                   gap: 10,
@@ -341,18 +364,18 @@ const NotificationBell = () => {
                     : "rgba(59,130,246,0.06)")
                 }
               >
-                {/* Unread dot */}
+                {/* Priority indicator dot */}
                 <div style={{ paddingTop: 5, minWidth: 10 }}>
-                  {!n.isRead && (
-                    <div
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        background: "#3b82f6",
-                      }}
-                    />
-                  )}
+                  <div
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: getPriorityColor(n.priority),
+                      opacity: n.isRead ? 0.5 : 1,
+                    }}
+                    title={`Priority: ${n.priority || 'normal'}`}
+                  />
                 </div>
 
                 {/* Content */}

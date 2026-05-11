@@ -12,6 +12,8 @@ import Presence from './Presence';
 import Softphone from './Softphone';
 import NotificationBell from './NotificationBell';
 import Avatar from './Avatar';
+import TrialBanner from './TrialBanner';
+import SubscriptionExpiryModal from './SubscriptionExpiryModal';
 import { AuthContext } from '../App';
 import { fetchApi, setActiveTenantId } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
@@ -186,10 +188,32 @@ const Layout = () => {
   const isStaff = role === 'ADMIN' || role === 'MANAGER';
   const showSmsBanner = isStaff && user?.features?.smsConfigured === false;
 
+  const [daysRemaining, setDaysRemaining] = useState(null);
+  const [trialEndsAt, setTrialEndsAt] = useState(null);
+
   // Auto-register push notifications after login (silent failures OK)
   useEffect(() => {
     if (token) setupPush(token).catch(() => {});
   }, [token]);
+
+  // Fetch subscription status to show trial banner and modal
+  useEffect(() => {
+    const fetchSubStatus = async () => {
+      try {
+        const data = await fetchApi('/api/subscriptions/status', { silent: true });
+        if (data) {
+          setDaysRemaining(data.daysRemaining);
+          setTrialEndsAt(data.trialEndsAt);
+        }
+      } catch (err) {
+        // silently fail
+      }
+    };
+
+    if (user) {
+      fetchSubStatus();
+    }
+  }, [user]);
 
   const handleLogout = async () => {
     // #528 (CRIT-03 fix): revoke the JWT SERVER-SIDE before clearing local
@@ -323,6 +347,10 @@ const Layout = () => {
             <LogOut size={16} />
           </button>
         </header>
+        {daysRemaining && (
+          <TrialBanner daysRemaining={daysRemaining} />
+        )}
+        <SubscriptionExpiryModal daysRemaining={daysRemaining} trialEndsAt={trialEndsAt} />
         <main className="animate-fade-in" style={{ flex: 1, overflowY: 'auto', padding: '0', backgroundColor: 'transparent' }}>
           <Outlet />
         </main>

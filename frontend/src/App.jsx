@@ -108,6 +108,8 @@ const Funnel = lazy(() => import("./pages/Funnel"));
 const Zapier = lazy(() => import("./pages/Zapier"));
 // Public pages
 const SsoReturn = lazy(() => import("./pages/SsoReturn"));
+const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
+const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
   () => import("./pages/wellness/OwnerDashboard"),
@@ -325,6 +327,8 @@ export default function App() {
     if (stored) return stored;
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
+  const [subscription, setSubscription] = useState(null);
+  const [daysRemaining, setDaysRemaining] = useState(null);
 
   useEffect(() => {
     // Token storage is owned by setAuthToken/clearAuthToken in utils/api.js
@@ -359,6 +363,24 @@ export default function App() {
       localStorage.removeItem("tenant");
     }
   }, [tenant]);
+
+  // Fetch subscription status after login
+  useEffect(() => {
+    if (token) {
+      const fetchSubscriptionStatus = async () => {
+        try {
+          const data = await fetch("/api/subscriptions/status", {
+            headers: { "Authorization": `Bearer ${token}` }
+          }).then((res) => res.json());
+          setSubscription(data);
+          setDaysRemaining(data.daysRemaining || 0);
+        } catch (err) {
+          console.error("[Subscription] Fetch status error:", err);
+        }
+      };
+      fetchSubscriptionStatus();
+    }
+  }, [token]);
 
   useEffect(() => {
     let effectiveTheme = theme;
@@ -446,8 +468,9 @@ export default function App() {
       setTenant,
       loading,
       loginWithToken,
+      subscription,
     }),
-    [user, token, tenant, loading, loginWithToken],
+    [user, token, tenant, loading, loginWithToken, subscription],
   );
 
   // #347: while AuthContext is still rehydrating the token from sessionStorage
@@ -504,6 +527,8 @@ export default function App() {
                   />
                   <Route path="/sso/return" element={<SsoReturn />} />
                   <Route path="/pricing" element={<Pricing />} />
+                  <Route path="/payment-success" element={<PaymentSuccess />} />
+                  <Route path="/payment-failed" element={<PaymentFailed />} />
                   <Route path="/portal" element={<Portal />} />
                   <Route
                     path="/book/:slug"

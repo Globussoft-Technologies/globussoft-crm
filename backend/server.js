@@ -252,6 +252,10 @@ app.use("/api", (req, res, next) => {
 const io = new Server(server, { cors: { origin: "*" } });
 const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 
+// Set global io reference for eventBus notifications
+const { setIO } = require('./lib/eventBus');
+setIO(io);
+
 // Attach socket to requests so routes can emit events
 app.use((req, res, next) => {
   req.io = io;
@@ -314,6 +318,7 @@ const supportRoutes = require("./routes/support");
 const reportSchedulesRoutes = require("./routes/report_schedules");
 const pipelineStagesRoutes = require("./routes/pipeline_stages");
 const notificationsRoutes = require("./routes/notifications");
+const subscriptionsRoutes = require("./routes/subscriptions");
 const emailTemplatesRoutes = require("./routes/email_templates");
 const emailRoutes = require("./routes/email");
 const auditRoutes = require("./routes/audit");
@@ -481,6 +486,7 @@ app.use("/api/support", supportRoutes);
 app.use("/api/tasks", tasksRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/expenses", expensesRoutes);
+app.use("/api/subscriptions", subscriptionsRoutes);
 app.use("/api/contracts", contractsRoutes);
 app.use("/api/estimates", estimatesRoutes);
 app.use("/api/projects", projectsRoutes);
@@ -866,6 +872,12 @@ if (process.env.DISABLE_CRONS === '1') {
   // per-(tenant,policy,user,year) basis via LeaveBalance lookups.
   const { initLeavePolicyCron } = require('./cron/leavePolicyEngine');
   initLeavePolicyCron();
+
+  // Initialize Notification Rules Engine — event-driven notifications for
+  // business events (SLA breaches, approvals, expenses, leave requests).
+  // Subscribes to eventBus events and creates notifications via notificationService.
+  const notificationRules = require('./lib/notificationRulesEngine');
+  notificationRules.init(io);
 
 } // end DISABLE_CRONS guard
 

@@ -8,6 +8,7 @@ import { Receipt, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucide
 const CATEGORY_OPTIONS = ['General', 'Travel', 'Software', 'Office', 'Marketing', 'Other'];
 
 const STATUS_CONFIG = {
+  Draft:      { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' },
   Pending:    { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)' },
   Approved:   { color: '#10b981', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)' },
   Rejected:   { color: '#ef4444', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)' },
@@ -72,7 +73,7 @@ export default function Expenses() {
     }
   };
 
-  const createExpense = async (e) => {
+  const createExpense = async (e, status = 'Draft') => {
     e.preventDefault();
     try {
       await fetchApi('/api/expenses', {
@@ -81,12 +82,56 @@ export default function Expenses() {
           ...form,
           amount: parseFloat(form.amount),
           contactId: form.contactId || null,
+          status,
         }),
       });
       setForm({ title: '', amount: '', category: 'General', expenseDate: '', notes: '', contactId: '' });
+      notify.success(`Expense created as ${status}`);
       loadData();
     } catch (err) {
       notify.error('Failed to create expense');
+    }
+  };
+
+  const submitExpense = async (id) => {
+    try {
+      await fetchApi(`/api/expenses/${id}/submit`, {
+        method: 'PATCH',
+      });
+      notify.success('Expense submitted for approval');
+      await loadData();
+    } catch (err) {
+      console.error('[Expenses] Submit error:', err);
+      notify.error(err.message || 'Failed to submit expense');
+    }
+  };
+
+  const approveExpense = async (id) => {
+    try {
+      const result = await fetchApi(`/api/expenses/${id}/approve`, {
+        method: 'PATCH',
+      });
+      notify.success('Expense approved');
+      await loadData();
+    } catch (err) {
+      console.error('[Expenses] Approve error:', err);
+      notify.error(err.message || 'Failed to approve expense');
+    }
+  };
+
+  const rejectExpense = async (id) => {
+    const reason = prompt('Enter rejection reason (optional):');
+    if (reason === null) return; // User cancelled
+    try {
+      const result = await fetchApi(`/api/expenses/${id}/reject`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reason: reason || '' }),
+      });
+      notify.success('Expense rejected');
+      await loadData();
+    } catch (err) {
+      console.error('[Expenses] Reject error:', err);
+      notify.error(err.message || 'Failed to reject expense');
     }
   };
 
@@ -215,9 +260,24 @@ export default function Expenses() {
                 value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
             </div>
 
-            <button type="submit" className="btn-primary" style={{ padding: '1rem' }}>
-              Submit Expense
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                type="button"
+                onClick={(e) => createExpense(e, 'Draft')}
+                className="btn-secondary"
+                style={{ padding: '1rem', flex: 1 }}
+              >
+                Save as Draft
+              </button>
+              <button
+                type="submit"
+                onClick={(e) => createExpense(e, 'Pending')}
+                className="btn-primary"
+                style={{ padding: '1rem', flex: 1 }}
+              >
+                Submit for Approval
+              </button>
+            </div>
           </form>
         </div>
 
@@ -268,10 +328,26 @@ export default function Expenses() {
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
                         <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                          {exp.status === 'Draft' && (
+                            <>
+                              <button
+                                onClick={() => submitExpense(exp.id)}
+                                title="Submit"
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: '0.25rem',
+                                  background: 'rgba(245,158,11,0.15)', color: '#f59e0b',
+                                  border: '1px solid rgba(245,158,11,0.3)', borderRadius: '6px',
+                                  padding: '0.3rem 0.6rem', fontSize: '0.7rem', fontWeight: '600',
+                                  cursor: 'pointer', transition: '0.15s',
+                                }}>
+                                Submit
+                              </button>
+                            </>
+                          )}
                           {exp.status === 'Pending' && (
                             <>
                               <button
-                                onClick={() => updateStatus(exp.id, 'Approved')}
+                                onClick={() => approveExpense(exp.id)}
                                 title="Approve"
                                 style={{
                                   display: 'flex', alignItems: 'center', gap: '0.25rem',
@@ -283,7 +359,7 @@ export default function Expenses() {
                                 <CheckCircle2 size={12} /> Approve
                               </button>
                               <button
-                                onClick={() => updateStatus(exp.id, 'Rejected')}
+                                onClick={() => rejectExpense(exp.id)}
                                 title="Reject"
                                 style={{
                                   display: 'flex', alignItems: 'center', gap: '0.25rem',

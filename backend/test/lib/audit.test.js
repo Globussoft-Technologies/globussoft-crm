@@ -401,22 +401,36 @@ describe('lib/audit — backfillTenantChain (idempotent retroactive chain fill)'
   });
 
   test('walks rows in [createdAt asc, id asc] — must match the verifier', async () => {
+    // v3.7.5 — backfill now snapshots maxId at start (via findFirst) and
+    // restricts the findMany to id <= maxIdAtStart. Mock findFirst with a
+    // concrete tail row so the where clause asserts an explicit ceiling
+    // rather than the empty-chain default of 0.
+    prisma.auditLog.findFirst.mockResolvedValueOnce({ id: 42 });
     prisma.auditLog.findMany.mockResolvedValueOnce([]);
     await backfillTenantChain(5);
     const callArgs = prisma.auditLog.findMany.mock.calls[0][0];
     expect(callArgs.orderBy).toEqual([{ createdAt: 'asc' }, { id: 'asc' }]);
-    expect(callArgs.where).toEqual({ tenantId: 5 });
+    expect(callArgs.where).toEqual({ tenantId: 5, id: { lte: 42 } });
   });
 
   test('multi-tenant: backfill of tenant A does NOT touch tenant B rows', async () => {
     // Strict per-tenant scoping — the where clause filters on tenantId, so
     // a backfill call for tenant 1 never reads tenant 2 rows. Encodes the
     // multi-tenant-isolation contract called out in the spec.
+    //
+    // v3.7.5 — findFirst tail-snapshot also tenant-scoped; both queries
+    // pin tenantId=1 here.
     const rowsA = buildRows(1, 2, false);
+    prisma.auditLog.findFirst.mockResolvedValueOnce({ id: rowsA[rowsA.length - 1].id });
     prisma.auditLog.findMany.mockResolvedValueOnce(rowsA);
     await backfillTenantChain(1);
-    // The findMany was scoped to tenant 1.
-    expect(prisma.auditLog.findMany.mock.calls[0][0].where).toEqual({ tenantId: 1 });
+    // The findFirst (maxId snapshot) was scoped to tenant 1.
+    expect(prisma.auditLog.findFirst.mock.calls[0][0].where).toEqual({ tenantId: 1 });
+    // The findMany was scoped to tenant 1 AND ceiling-bounded.
+    expect(prisma.auditLog.findMany.mock.calls[0][0].where).toEqual({
+      tenantId: 1,
+      id: { lte: rowsA[rowsA.length - 1].id },
+    });
     // Each update sets a hash anchored on tenant 1's GENESIS sentinel,
     // not a tenant-2 sentinel — verifying the genesisFor() call is
     // parameterised correctly.

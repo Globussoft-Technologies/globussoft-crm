@@ -190,7 +190,14 @@ describe('POST /api/audit/backfill — admin-only, tenant-scoped, idempotent', (
   test('fully unchained tenant → 200 with updatedRows count, scoped to caller tenant', async () => {
     // Tenant 7's rows have null hashes; the route must call findMany with
     // where.tenantId === 7 (NOT 1) and run update for every row.
+    //
+    // v3.7.5 — backfill now snapshots maxId via findFirst before findMany,
+    // and findMany's where clause carries an `id: { lte: maxIdAtStart }`
+    // ceiling. Mock findFirst with the chain's tail id so the ceiling
+    // asserts a concrete value rather than the empty-chain default of 0.
     const unchainedRows = buildValidChain(7, 3).map(r => ({ ...r, prevHash: null, hash: null }));
+    const tailId = unchainedRows[unchainedRows.length - 1].id;
+    prisma.auditLog.findFirst.mockResolvedValueOnce({ id: tailId });
     prisma.auditLog.findMany.mockResolvedValueOnce(unchainedRows);
     const res = await request(makeApp())
       .post('/api/audit/backfill')
@@ -201,7 +208,11 @@ describe('POST /api/audit/backfill — admin-only, tenant-scoped, idempotent', (
     expect(res.body.updatedRows).toBe(3);
     expect(res.body.skippedRows).toBe(0);
     expect(typeof res.body.backfilledAt).toBe('string');
-    expect(prisma.auditLog.findMany.mock.calls[0][0].where).toEqual({ tenantId: 7 });
+    expect(prisma.auditLog.findFirst.mock.calls[0][0].where).toEqual({ tenantId: 7 });
+    expect(prisma.auditLog.findMany.mock.calls[0][0].where).toEqual({
+      tenantId: 7,
+      id: { lte: tailId },
+    });
     expect(prisma.auditLog.update).toHaveBeenCalledTimes(3);
   });
 

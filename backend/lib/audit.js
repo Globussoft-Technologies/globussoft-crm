@@ -127,10 +127,24 @@ async function writeAudit(entity, action, entityId, userId, tenantId, details, o
     // when no prior row exists for this tenant — encodes "this is the head
     // of a fresh chain" without leaking a real-looking hash that could
     // collide with a future one.
+    //
+    // Legacy null-hash repair (PR #709 fallout): if the latest row exists
+    // but its `hash` is null, the tenant has pre-#558 legacy rows that
+    // haven't been backfilled yet. The naive fallback (`genesisFor()`)
+    // would silently FORK the chain — the new row would anchor on GENESIS
+    // when there are legacy rows ahead of it in the chain order. Instead,
+    // run an inline backfill to fill the gap, then re-read the tail. The
+    // backfill is tenant-scoped + idempotent (a parallel writeAudit racing
+    // on the same tenant would each kick off a backfill, but only one will
+    // do real work; the others find the chain already filled and no-op).
+    // If backfill itself throws (conflict / lookup error), fall back to
+    // genesisFor() — the chain will fork once, the daily integrity cron
+    // will flag it, and the operator can run the cross-tenant CLI to
+    // repair. This is no worse than pre-fix behavior.
     const tenantIdNum = Number(tenantId);
     let prevHash;
     try {
-      const prev = await prisma.auditLog.findFirst({
+      let prev = await prisma.auditLog.findFirst({
         where: { tenantId: tenantIdNum },
         // Tie-break on id (autoincrement) so a parallel writeAudit landing
         // within the same millisecond doesn't fork the chain by reading a
@@ -139,6 +153,22 @@ async function writeAudit(entity, action, entityId, userId, tenantId, details, o
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         select: { hash: true },
       });
+      if (prev && prev.hash == null) {
+        // Latest row exists but its hash is null — legacy unbackfilled state.
+        // Inline-repair the chain so this new write can anchor correctly.
+        try {
+          await backfillTenantChain(tenantIdNum);
+          prev = await prisma.auditLog.findFirst({
+            where: { tenantId: tenantIdNum },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            select: { hash: true },
+          });
+        } catch (backfillErr) {
+          // Backfill failed (likely tamper-conflict). Fall back to GENESIS;
+          // the integrity cron will surface the resulting fork.
+          console.warn(`[audit] inline backfill failed for tenant ${tenantIdNum}: ${backfillErr.message}`);
+        }
+      }
       prevHash = prev && prev.hash ? prev.hash : genesisFor(tenantIdNum);
     } catch (lookupErr) {
       console.warn(`[audit] prev-hash lookup failed for tenant ${tenantIdNum}: ${lookupErr.message}`);
@@ -195,6 +225,16 @@ async function writeAudit(entity, action, entityId, userId, tenantId, details, o
 // silently overwriting a poisoned chain. Untampered already-hashed rows are
 // re-used as-is so a second backfill run is a no-op (`updatedRows: 0`).
 //
+// Fork repair (PR #709 fallout): writeAudit's fail-soft fallback can anchor a
+// new row on `GENESIS_<tenantId>` even when prior (null-hash) rows exist for
+// the tenant. The result is a "forked" chain — the row's CONTENT is intact
+// (recompute-with-stored-prevHash matches stored-hash) but its `prevHash`
+// doesn't reference the row that actually precedes it in [createdAt asc, id
+// asc] order. The backfill detects this case and re-stamps prevHash+hash to
+// repair the fork. Tamper-evidence is preserved because we only repair rows
+// whose CONTENT recomputes correctly under their stored prevHash; any
+// content-tampered row still 409s.
+//
 // Returns { walkedRows, updatedRows, skippedRows, head }. Throws when a
 // conflict is detected — the route turns that into a 409.
 async function backfillTenantChain(tenantId) {
@@ -227,7 +267,7 @@ async function backfillTenantChain(tenantId) {
   for (const row of rows) {
     walked += 1;
     const expectedPrev = lastHash == null ? genesisFor(tenantIdNum) : lastHash;
-    const recomputed = computeHash(expectedPrev, {
+    const payload = {
       tenantId: tenantIdNum,
       entity: row.entity,
       action: row.action,
@@ -235,11 +275,34 @@ async function backfillTenantChain(tenantId) {
       userId: row.userId,
       details: row.details,
       createdAt: row.createdAt.toISOString(),
-    });
+    };
+    const recomputed = computeHash(expectedPrev, payload);
 
     if (row.hash != null) {
-      // Already chained — refuse to overwrite if recomputed disagrees.
-      if (row.prevHash !== expectedPrev || row.hash !== recomputed) {
+      // The row already carries a hash. Distinguish two cases that can both
+      // surface here against a real-world DB (#558 hardening, PR #709 fallout):
+      //
+      //   (1) Content tampering — someone edited `details` / `entity` /
+      //       `userId` / `createdAt` after the row was written without also
+      //       updating `hash`. Recomputing with the row's OWN stored prevHash
+      //       will therefore disagree with the stored hash. This is a real
+      //       integrity failure and we MUST 409 — never silently re-stamp.
+      //
+      //   (2) Forked chain — writeAudit ran while a legacy null-hash row was
+      //       still the chain tail for this tenant. The fail-soft fallback
+      //       (`genesisFor(tenantId)` when the latest row's hash is null)
+      //       silently anchored the new row on GENESIS instead of the real
+      //       prior row. The row's CONTENT is untouched (recompute-with-
+      //       stored-prevHash matches stored-hash) but its `prevHash` doesn't
+      //       point at the row that actually precedes it in [createdAt asc,
+      //       id asc] order. We can safely re-stamp these — no information
+      //       loss because the content hash is intact.
+      //
+      // The distinguishing probe is `recomputeWithStoredPrev`: if that
+      // equals the stored hash, the row content has not been tampered with.
+      const recomputedWithStoredPrev = computeHash(row.prevHash, payload);
+      if (recomputedWithStoredPrev !== row.hash) {
+        // Case 1: content tampering — refuse to silently overwrite.
         const err = new Error(
           `existing chain disagrees with recomputation (row ${row.id}): ` +
           `stored prevHash=${row.prevHash}, expected=${expectedPrev}; ` +
@@ -248,6 +311,19 @@ async function backfillTenantChain(tenantId) {
         err.conflictRowId = row.id;
         throw err;
       }
+      if (row.prevHash !== expectedPrev) {
+        // Case 2: chain fork — re-stamp prevHash + hash to integrate the
+        // row into the real chain. Tamper-evidence is preserved because we
+        // only got here after proving the content is intact.
+        await prisma.auditLog.update({
+          where: { id: row.id },
+          data: { prevHash: expectedPrev, hash: recomputed },
+        });
+        updated += 1;
+        lastHash = recomputed;
+        continue;
+      }
+      // Already correctly chained — no-op.
       skipped += 1;
       lastHash = row.hash;
       continue;

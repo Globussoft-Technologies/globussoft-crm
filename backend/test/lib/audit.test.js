@@ -422,6 +422,103 @@ describe('lib/audit — backfillTenantChain (idempotent retroactive chain fill)'
     // parameterised correctly.
     expect(prisma.auditLog.update.mock.calls[0][0].data.prevHash).toBe('GENESIS_1');
   });
+
+  test('forked chain (writeAudit anchored on GENESIS over legacy null-hash rows) is repaired', async () => {
+    // Scenario: PR #709 fallout. A fresh seed creates a batch of legacy
+    // null-hash audit rows (prevHash=null, hash=null). After the seed,
+    // routes/contacts.js's POST handler fires writeAudit for a new contact
+    // BEFORE anyone has hit /api/audit/backfill. writeAudit's fail-soft
+    // fallback (when the latest row's hash is null, anchor on
+    // GENESIS_<tenantId>) silently forks the chain: the new row's prevHash
+    // is GENESIS_1 instead of the real prior row's hash. The row's CONTENT
+    // is intact — only the anchor is wrong.
+    //
+    // The backfill MUST repair these forks (re-stamp prevHash + hash) so
+    // the verifier returns integrityVerified=true. The previous strict
+    // semantics 409'd here because it couldn't distinguish "content
+    // tampering" from "wrong anchor on intact content."
+    const t = 1;
+    // 3 legacy seed rows: prevHash=null, hash=null
+    const legacy = buildRows(t, 3, false);
+    // 1 API-written row that forked: anchored on GENESIS instead of legacy[2]'s
+    // future-hash. Content is intact (computeHash(GENESIS, payload) === stored hash).
+    const forkedCreatedAt = new Date(Date.UTC(2026, 3, legacy.length + 1));
+    const forkedPayload = {
+      tenantId: t, entity: 'Contact', action: 'CREATE',
+      entityId: 2000, userId: 5, details: JSON.stringify({ i: 'forked' }),
+      createdAt: forkedCreatedAt.toISOString(),
+    };
+    const forkedHash = computeHash(`GENESIS_${t}`, forkedPayload);
+    const forkedRow = {
+      id: legacy.length + 1,
+      action: 'CREATE',
+      entity: 'Contact',
+      entityId: 2000,
+      userId: 5,
+      details: JSON.stringify({ i: 'forked' }),
+      createdAt: forkedCreatedAt,
+      prevHash: `GENESIS_${t}`,
+      hash: forkedHash,
+    };
+    prisma.auditLog.findMany.mockResolvedValueOnce([...legacy, forkedRow]);
+
+    const r = await backfillTenantChain(t);
+    expect(r.walkedRows).toBe(4);
+    // Legacy rows update (hash was null), forked row also updates (prevHash repaired).
+    expect(r.updatedRows).toBe(4);
+    expect(r.skippedRows).toBe(0);
+    // The forked row's update must use the legacy chain tail's hash as prevHash.
+    const lastUpdate = prisma.auditLog.update.mock.calls.at(-1)[0];
+    expect(lastUpdate.where.id).toBe(forkedRow.id);
+    expect(lastUpdate.data.prevHash).not.toBe(`GENESIS_${t}`);
+    expect(lastUpdate.data.prevHash).toMatch(/^[0-9a-f]{64}$/);
+    // After re-stamping, head equals the recomputed forked-row hash.
+    expect(r.head).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('forked chain: idempotent — a second backfill after fork-repair produces 0 updates', async () => {
+    // Once a forked chain has been repaired, a second backfill run must
+    // recognise it as already-chained (recomputeWithStoredPrev === hash AND
+    // prevHash === expectedPrev) and report updatedRows=0.
+    const t = 1;
+    // Build a 3-row chain with all hashes correct (simulating post-backfill state)
+    const rows = buildRows(t, 3, true);
+    prisma.auditLog.findMany.mockResolvedValueOnce(rows);
+    const r = await backfillTenantChain(t);
+    expect(r.updatedRows).toBe(0);
+    expect(r.skippedRows).toBe(3);
+    expect(prisma.auditLog.update).not.toHaveBeenCalled();
+  });
+
+  test('content tampering on a forked-anchor row is STILL detected as a conflict', async () => {
+    // Defence: the fork-repair path must NOT silently overwrite a row whose
+    // CONTENT has been tampered with. Build a row where prevHash points at
+    // GENESIS (would-be fork) AND the stored hash is wrong for the row's
+    // content under that stored prevHash. The backfill must throw.
+    const t = 1;
+    const tamperedRow = {
+      id: 1,
+      action: 'CREATE',
+      entity: 'Contact',
+      entityId: 1000,
+      userId: 5,
+      details: JSON.stringify({ i: 'tampered' }),
+      createdAt: new Date(Date.UTC(2026, 3, 1)),
+      prevHash: `GENESIS_${t}`,
+      // Stored hash that does NOT match the content under stored prevHash.
+      // This represents "someone forged the hash AND chose the wrong anchor."
+      hash: 'c'.repeat(64),
+    };
+    prisma.auditLog.findMany.mockResolvedValueOnce([tamperedRow]);
+    let caught = null;
+    try {
+      await backfillTenantChain(t);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught.conflictRowId).toBe(tamperedRow.id);
+  });
 });
 
 describe('lib/audit — writeAudit hash chain', () => {

@@ -154,10 +154,34 @@ router.get('/verify', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
 router.post('/backfill', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const result = await backfillTenantChain(tenantId);
+    // Run the backfill. Under concurrent writeAudit traffic from other
+    // requests, new rows may land between findMany() and the loop's last
+    // update — those rows may fork off a row whose hash gets re-stamped
+    // mid-walk. To converge, re-run the backfill up to 2 more times whenever
+    // the previous pass made writes. By pass 2, any racey concurrent write
+    // has either finished (with a prevHash that anchors on the stable
+    // post-pass-1 chain tail) or itself triggers the inline-repair in
+    // writeAudit. Pass 3 is a defensive ceiling — beyond that the system
+    // is under enough write pressure that the next caller can run /backfill
+    // again. The response reports the chain size + clean count from the
+    // FIRST pass (the canonical "what existed when the operator asked"),
+    // the total updates across all passes, and the head from the last pass.
+    const first = await backfillTenantChain(tenantId);
+    let totalUpdated = first.updatedRows;
+    let lastHead = first.head;
+    let lastResult = first;
+    for (let pass = 1; pass < 3 && lastResult.updatedRows > 0; pass++) {
+      const next = await backfillTenantChain(tenantId);
+      totalUpdated += next.updatedRows;
+      lastHead = next.head;
+      lastResult = next;
+    }
     res.json({
       tenantId,
-      ...result,
+      walkedRows: first.walkedRows,
+      updatedRows: totalUpdated,
+      skippedRows: first.skippedRows,
+      head: lastHead,
       backfilledAt: new Date().toISOString(),
     });
   } catch (err) {

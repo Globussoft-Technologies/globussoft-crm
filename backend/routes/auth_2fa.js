@@ -8,6 +8,7 @@ const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { writeAudit } = require("../lib/audit");
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 
 // ---------- Helpers ----------
@@ -218,6 +219,19 @@ router.post("/verify", async (req, res) => {
       JWT_SECRET,
       { expiresIn: "7d" }
     );
+
+    // #555 option C (lock-per-session): emit LOGIN audit row on the
+    // tenantId stamped into the JWT. Mirrors the plain /login path's
+    // audit emission — the LOGIN row is the accountability surface for
+    // tenant access under the lock-per-session policy. Fail-soft: audit
+    // store errors do not block authentication.
+    try {
+      await writeAudit('User', 'LOGIN', user.id, user.id, tenantId, {
+        method: 'password',
+        twoFactor: true,
+        backupCodeUsed: consumedBackupCode,
+      });
+    } catch (_auditErr) { /* fail-soft */ }
 
     res.json({
       token,

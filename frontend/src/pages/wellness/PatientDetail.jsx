@@ -725,6 +725,11 @@ function ConsentTab({ patient, services, onSaved }) {
     setSaving(true);
     try {
       const signatureSvg = canvasRef.current.toDataURL('image/png');
+      // #564 v3.7.3 — staff-tablet-handoff workflow. The PatientDetail
+      // consent canvas is operated by the staff member during patient
+      // intake (staff opens the form, hands tablet to patient, patient
+      // signs, staff submits). captureMethod pins this in the audit log;
+      // the patient-portal path (when it ships) will send 'portal-self-serve'.
       await fetchApi('/api/wellness/consents', {
         method: 'POST',
         body: JSON.stringify({
@@ -732,6 +737,7 @@ function ConsentTab({ patient, services, onSaved }) {
           serviceId: serviceId || null,
           templateName,
           signatureSvg,
+          captureMethod: 'tablet-handoff',
         }),
       });
       clearSig();

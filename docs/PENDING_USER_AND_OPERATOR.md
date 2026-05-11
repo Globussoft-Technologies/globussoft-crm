@@ -56,37 +56,29 @@ delivery will fail.
 
 ---
 
-## 2. PRODUCT — #555 tenant-switcher UX
+## 2. ✅ CLOSED v3.7.3 — #555 tenant access: lock-per-session (option C)
 
-**Status:** Backend is fine — the `tenantId` on the JWT scopes everything
-correctly. The pen-test flagged that on the URL switching alone (between
-Default Org and Enhanced Wellness) there's no visual indicator, no audit
-row, and no confirmation. Privilege confusion surface.
+**Decision (2026-05-11):** option **C. Lock to single tenant per session**.
 
-**Why I can't do this autonomously:** UX decision. I shouldn't pick
-between "explicit switcher with confirmation modal" vs "URL-driven + persistent
-banner" vs "lock to single tenant per session" without product input —
-each has different ergonomics for the people who actually use the CRM
-multi-tenant (mostly Globussoft-internal QA / demos).
+**Shipped in v3.7.3:**
+- `POST /api/auth/login` and `POST /api/auth_2fa/verify` now emit a
+  `LOGIN` audit row stamping the tenantId — the canonical accountability
+  surface under the lock-per-session policy.
+- `POST /api/auth/tenant-switch` always returns **410 Gone** with code
+  `TENANT_SWITCH_DISABLED` (even same-tenant no-op + cross-tenant +
+  empty body). The hint points clients to logout → login.
+- Frontend `Layout.jsx` replaces the in-session `TenantSwitcher` widget
+  with a **read-only `TenantChip`** showing the active tenant's name
+  prominently (Building2 icon + tenant.name + wellness label if
+  applicable). No click handler dispatches a switch.
+- New E2E spec `tenant-switch-disabled-api.spec.js` (5 tests) pins the
+  410 contract across all three rejection paths + asserts a LOGIN audit
+  row is emitted on every successful login.
 
-**Options (pick one):**
-
-- **A. Explicit switcher widget in topbar with confirmation modal**
-  (most common in B2B SaaS — Stripe, Vercel, GitHub Organizations all do
-  this). Shows current tenant prominently, click to dropdown, confirmation
-  modal on switch, audit row written. ~½ day implementation.
-- **B. URL-driven + persistent banner** — keep the current URL behaviour
-  but add a sticky color-coded banner at the top showing "You are viewing:
-  Default Org" / "You are viewing: Enhanced Wellness". Audit row on
-  switch. ~3 hours.
-- **★ C. Lock to single tenant per session** — most secure default. User
-  picks tenant at login, can't switch without logging out. Audit row on
-  every login. ~3 hours, simpler. Recommended because it eliminates the
-  privilege-confusion surface entirely; the cost is "QA testers need to
-  log out + log in to switch tenants" which is a 2-second penalty.
-
-**What unblocks:** reply with the letter (A/B/C) and any nuances. I'll
-ship within the next session.
+Future-proofing: if a `UserTenant` join table ever lands (multi-tenant
+access), the policy stays — pick at login, log out to switch. Only the
+login page would need a tenant-picker dropdown for users with
+multi-tenant access; the in-session switcher does not return.
 
 ---
 
@@ -131,74 +123,46 @@ Material if you pursue SOC 2 / DPDP certification; nice-to-have otherwise.
 
 ---
 
-## 4. PRODUCT — #564 wellness consent-form / signature surface
+## 4. ✅ CLOSED v3.7.3 — #564 wellness consent: staff-tablet handoff + DB BLOB
 
-**Status:** `ConsentForm` Prisma model exists. `pdfRenderer.js` already
-renders consent PDFs with embedded signatures. The patient detail page
-has a `Consent canvas` tab. **The gap is the workflow** — when does a
-consent form appear, who signs it, where the signed PDF lives, how staff
-collect signatures.
+**Decision (2026-05-11):** workflow = **B. Staff-tablet handoff**;
+storage = **Database BLOB**.
 
-**Why I can't do this autonomously:** Rishu-shaped product call. The
-options below have different operational implications for clinic staff
-that I can't judge from outside.
+**Shipped in v3.7.3:**
+- `ConsentForm` model gains `captureMethod` (default `'tablet-handoff'`),
+  `capturedByUserId`, `signedPdfBlob @db.LongBlob`, `signedPdfMime`.
+- `POST /api/wellness/consents` accepts an optional `captureMethod`
+  allowlisted to `{tablet-handoff, portal-self-serve, imported-pdf}`;
+  unknown values fall back to the default. Stamps `capturedByUserId`
+  from the JWT.
+- New `POST /api/wellness/consents/:id/archive` renders the PDF once via
+  `renderConsentPdf` and persists the bytes into `signedPdfBlob`.
+  Idempotent: re-archive returns 200 + `alreadyArchived: true` and does
+  NOT overwrite. RBAC-gated to doctor/professional/admin.
+- `GET /api/wellness/consents/:id/pdf` prefers the frozen BLOB if
+  archived, falls back to on-demand render otherwise. Both paths emit a
+  `CONSENT_PDF_DOWNLOAD` audit row with `servedFromBlob` flag.
+- Frontend `PatientDetail` consent canvas now sends
+  `captureMethod: 'tablet-handoff'` explicitly so the audit row reflects
+  the operational flow.
+- E2E spec: `wellness-consent-archive-api.spec.js` (10 tests) pinning
+  the allowlist, capturedByUserId stamping, archive idempotence, BLOB
+  preference on download, and RBAC denial for telecaller.
 
-**Options (pick one or a combination):**
-
-- **A. Patient-portal-first** — patient gets an SMS link before their
-  visit, opens a mobile-friendly consent form, signs with finger, submits.
-  Staff sees the signed PDF in PatientDetail when patient arrives.
-  Requires solid mobile signature capture (it's already in the consent
-  canvas component).
-- **★ B. Staff-tablet handoff (most common in Indian clinics)** — staff
-  pulls up the consent form on a tablet during patient intake, hands the
-  tablet to the patient, patient signs, staff confirms + submits. PDF
-  generated server-side and stored. Most reliable in clinics with iffy
-  patient-side internet.
-- **C. Both (A is preferred, B is fallback)** — patient gets the SMS link
-  72h before visit; if not signed, staff falls back to tablet handoff.
-- **D. Per-procedure** — separate consent forms for separate procedures
-  (general intake, specific Rx-required signatures, photo-release for
-  before/after pics). Separate from A/B/C above; Rishu likely wants this.
-
-**Where the signed PDF lives** (orthogonal to A/B/C above):
-- **★ Database BLOB** — simplest, GDPR/DPDP-easy because retention rules
-  apply automatically. Slow at scale but a single clinic doesn't hit scale.
-- **S3 / object-storage** — better at scale, more complex retention
-  policy. Worth it only if you expect >1000 consents/day.
-- **Filesystem** — cheapest, hardest to back up correctly. Don't pick this.
-
-**What unblocks:** reply with workflow choice (A/B/C) + storage choice
-(blob vs S3). Per-procedure split (D) can be a follow-up; not blocking.
+**Per-procedure split (D)** stays a follow-up; not blocking.
 
 ---
 
-## 5. PRODUCT — WhatsApp opt-out re-opt-in policy review (DPDP §11)
+## 5. ✅ CLOSED v3.7.3 — WhatsApp opt-out re-opt-in policy (DPDP §11)
 
-**Status:** Shipped in v3.7.1 (`a667d07`) with a defensible default. Admin
-can re-opt-in a contact via `DELETE /api/whatsapp/opt-outs/:id`, **but
-only if `body.reason` is provided (≥10 chars after trim) + an audit row
-is emitted with action `WHATSAPP_OPT_IN_RESET`**. Rejected with 400
-`REASON_REQUIRED` otherwise.
+**Decision (2026-05-11):** **Keep current default** (admin reason +
+audit row, as shipped in v3.7.1). No code change.
 
-**Why this is a user-attention item:** the choice was unilateral
-(no Rishu input). DPDP §11 may prefer a stricter default (e.g. require
-explicit user re-consent capture, not just admin reason + audit) for
-enterprise compliance posture.
-
-**Options (review and decide):**
-
-- **★ Keep current default** (admin reason + audit) — defensible, fast.
-  This is what Indian salon-CRM peers usually do.
-- **Stricter: require explicit user consent capture** — admin can't
-  re-opt-in unilaterally; the contact must reply YES to a templated WA
-  message. Adds friction but is more DPDP-defensible.
-- **In between: require admin reason + send the contact a notification**
-  — admin can re-opt-in, but the contact gets a "you've been re-opted-in
-  by <agent>; reply STOP to opt out again" message. ~1h implementation.
-
-**What unblocks:** reply with current/stricter/in-between. If "current"
-no action needed; otherwise I'll ship.
+`DELETE /api/whatsapp/opt-outs/:id` continues to require `body.reason`
+(≥10 chars after trim) and emits a `WHATSAPP_OPT_IN_RESET` audit action.
+The "stricter explicit consent capture" path is logged here as the
+escalation option if compliance posture tightens later; it is NOT in
+flight.
 
 ---
 

@@ -256,6 +256,20 @@ router.post("/login", async (req, res) => {
     // tenant vertical without an extra DB lookup per request.
     const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId, vertical: user.tenant?.vertical || "generic" });
 
+    // #555 option C (lock-per-session): every successful login emits a
+    // LOGIN audit row stamping the tenantId. This is the accountability
+    // surface for tenant access under the lock-per-session policy — a
+    // user picks their tenant at login and cannot switch without logging
+    // out, so the LOGIN row is the canonical "this user entered this
+    // tenant at this time" record. Fail-soft: writeAudit errors are
+    // swallowed so audit-store outage cannot block authentication.
+    try {
+      await writeAudit('User', 'LOGIN', user.id, user.id, tenantId, {
+        method: 'password',
+        twoFactor: false,
+      });
+    } catch (_auditErr) { /* fail-soft */ }
+
     res.json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
@@ -489,21 +503,30 @@ router.put("/me", verifyToken, async (req, res) => {
   }
 });
 
-// ---------- Issue #555 (HI-06): explicit tenant switcher ----------
+// ---------- Issue #555 (HI-06): tenant access — LOCK PER SESSION ----------
 //
 // Pre-fix, the SPA's tenant context flipped silently based purely on URL
 // pathname (/dashboard vs /wellness) — no switcher in the chrome, no
 // audit entry on the flip, localStorage.tenant could disagree with the
-// rendered shell. The frontend now renders an explicit switcher in the
-// header dropdown; these endpoints back it.
+// rendered shell. Privilege-confusion surface.
 //
-// DATA MODEL CAVEAT: today every user has exactly one tenantId
-// (User.tenantId is an Int @default(1), no UserTenant join table). So
-// /tenants returns a single-element list and /tenant-switch only accepts
-// a no-op switch back to the user's own tenant. The endpoints + the
-// header dropdown are wired so a future UserTenant join table just
-// needs the Prisma query swapped to .findMany — the frontend doesn't
-// have to change.
+// POLICY (v3.7.3): lock-per-session. A user picks their tenant at LOGIN
+// and cannot switch without logging out. Rationale: the JWT's tenantId
+// is the only trustworthy scope boundary for per-tenant data isolation;
+// any in-session switcher creates a window where the JWT and the
+// rendered shell can disagree, and pen-test flagged that window as a
+// privilege-confusion surface. The accountability surface is the LOGIN
+// audit row emitted on every successful authentication.
+//
+// DATA MODEL: today every user has exactly one tenantId (User.tenantId
+// is an Int @default(1), no UserTenant join table). When a UserTenant
+// join table eventually lands, the policy stays the same: pick at login,
+// log out to switch — only the login page would need a tenant-picker
+// dropdown for users with multi-tenant access.
+//
+// /tenants — kept (read-only list, used by the topbar tenant chip).
+// /tenant-switch — DEPRECATED, always returns 410 Gone with code
+// TENANT_SWITCH_DISABLED + hint. Logout + login is the documented path.
 
 // GET /api/auth/tenants — list of tenants the caller can switch into.
 // Today: always [currentTenant]. Documented future-proofing point.
@@ -520,49 +543,17 @@ router.get("/tenants", verifyToken, async (req, res) => {
   }
 });
 
-// POST /api/auth/tenant-switch — explicit switch + audit entry. Body:
-// { toTenantId }. Returns a re-issued JWT with the new tenantId so the
-// SPA can update AuthContext + redirect to the destination's landing.
-//
-// Today the only legal toTenantId is the caller's own tenantId (single-
-// tenant data model). When a UserTenant join table lands, this gate
-// widens to "toTenantId must be in the user's accessible-tenants set."
+// POST /api/auth/tenant-switch — DEPRECATED under the lock-per-session
+// policy. Always returns 410 Gone with code TENANT_SWITCH_DISABLED.
+// Clients that previously called this endpoint should redirect to the
+// logout flow + present the login page; users pick their tenant at login
+// and the JWT's tenantId is fixed for the rest of the session.
 router.post("/tenant-switch", verifyToken, async (req, res) => {
-  try {
-    const toTenantId = parseInt(req.body && req.body.toTenantId, 10);
-    if (!Number.isFinite(toTenantId)) {
-      return res.status(400).json({ error: "toTenantId is required", code: "MISSING_TARGET_TENANT" });
-    }
-    const fromTenantId = req.user.tenantId;
-    if (toTenantId !== fromTenantId) {
-      return res.status(403).json({
-        error: "Cross-tenant switch not permitted for this account",
-        code: "TENANT_NOT_ACCESSIBLE",
-      });
-    }
-
-    const target = await prisma.tenant.findUnique({
-      where: { id: toTenantId },
-      select: { id: true, name: true, slug: true, vertical: true, plan: true, defaultCurrency: true, locale: true, country: true, logoUrl: true, brandColor: true },
-    });
-    if (!target) return res.status(404).json({ error: "Tenant not found" });
-
-    await writeAudit("User", "TENANT_SWITCH", req.user.userId, req.user.userId, fromTenantId, {
-      fromTenantId,
-      toTenantId,
-    });
-
-    const token = signSessionToken({
-      userId: req.user.userId,
-      role: req.user.role,
-      wellnessRole: req.user.wellnessRole || null,
-      tenantId: target.id,
-      vertical: target.vertical || "generic",
-    });
-    return res.json({ ok: true, token, tenant: target });
-  } catch (_e) {
-    return res.status(500).json({ error: "Failed to switch tenant" });
-  }
+  return res.status(410).json({
+    error: "Tenant switching is disabled. Log out and log in again to access a different tenant.",
+    code: "TENANT_SWITCH_DISABLED",
+    hint: "POST /api/auth/logout, then /api/auth/login with the destination tenant's credentials.",
+  });
 });
 
 // ---------- Issue #180: session revocation ----------

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import React from 'react';
 import Layout from '../components/Layout';
@@ -12,14 +12,14 @@ vi.mock('../components/Presence', () => ({ default: () => <div data-testid="pres
 vi.mock('../components/Softphone', () => ({ default: () => <div data-testid="softphone-stub" /> }));
 vi.mock('../components/NotificationBell', () => ({ default: () => <div data-testid="bell-stub" /> }));
 
-// #555: mock fetchApi so the TenantSwitcher's GET /api/auth/tenants
-// resolves predictably. The two helpers (getActiveTenantId,
-// setActiveTenantId) are pass-through no-ops in tests.
+// #555: mock fetchApi (Layout no longer pings /api/auth/tenants under
+// lock-per-session — the chip reads from AuthContext.tenant — but
+// fetchApi is still used by the subscription-status fetch elsewhere in
+// Layout, so the mock stays.).
 const fetchApiMock = vi.fn();
-const setActiveTenantIdMock = vi.fn();
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
-  setActiveTenantId: (...args) => setActiveTenantIdMock(...args),
+  setActiveTenantId: () => {},
   getActiveTenantId: () => null,
 }));
 
@@ -51,12 +51,7 @@ describe('Layout', () => {
   beforeEach(() => {
     setupPushMock.mockClear();
     fetchApiMock.mockReset();
-    setActiveTenantIdMock.mockReset();
-    // Default: single-tenant — switcher should NOT render.
-    fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/auth/tenants') return Promise.resolve({ tenants: [{ id: 1, name: 'Default Org', vertical: 'generic' }], activeTenantId: 1 });
-      return Promise.resolve({});
-    });
+    fetchApiMock.mockResolvedValue({});
   });
 
   it('renders Sidebar + Omnibar + Presence + NotificationBell + outlet', () => {
@@ -117,61 +112,41 @@ describe('Layout', () => {
     expect(screen.getByTestId('avatar-role-badge')).toHaveTextContent('O');
   });
 
-  // #555 (HI-06): explicit tenant switcher — silent no-op when only one
-  // tenant is accessible (today's data model is single-tenant per user
-  // so this is the default branch).
-  it('does NOT render the tenant switcher when only 1 tenant is accessible', async () => {
-    renderLayout();
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/auth/tenants', expect.any(Object)));
+  // #555 (HI-06) — lock-per-session policy. The earlier in-session
+  // switcher widget is gone; in its place is a read-only chip that
+  // shows the active tenant prominently. To switch tenants, users log
+  // out and log back in.
+  it('renders the read-only tenant chip with the tenant name', () => {
+    renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
+    const chip = screen.getByTestId('tenant-chip');
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveTextContent('Default Org');
+  });
+
+  it('marks the chip as wellness when the tenant vertical is wellness', () => {
+    renderLayout({ tenant: { id: 2, name: 'Enhanced Wellness', vertical: 'wellness' } });
+    const chip = screen.getByTestId('tenant-chip');
+    expect(chip).toHaveTextContent('Enhanced Wellness');
+    expect(chip).toHaveTextContent(/wellness/i);
+  });
+
+  it('does NOT render an in-session switcher (lock-per-session policy)', () => {
+    renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
     expect(screen.queryByTestId('tenant-switcher')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /switch tenant/i })).not.toBeInTheDocument();
   });
 
-  it('renders the tenant switcher dropdown when 2+ tenants are accessible', async () => {
-    fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/auth/tenants') return Promise.resolve({
-        tenants: [
-          { id: 1, name: 'Default Org', vertical: 'generic' },
-          { id: 2, name: 'Enhanced Wellness', vertical: 'wellness' },
-        ],
-        activeTenantId: 1,
-      });
-      return Promise.resolve({});
-    });
+  it('chip is non-interactive (no click handler dispatches a switch)', () => {
     renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
-    await waitFor(() => expect(screen.getByTestId('tenant-switcher')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /switch tenant/i }));
-    expect(screen.getByRole('listbox', { name: /available tenants/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Enhanced Wellness/i })).toBeInTheDocument();
-  });
-
-  it('switching dispatches POST /api/auth/tenant-switch and updates active tenant id', async () => {
-    fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/auth/tenants') return Promise.resolve({
-        tenants: [
-          { id: 1, name: 'Default Org', vertical: 'generic' },
-          { id: 2, name: 'Enhanced Wellness', vertical: 'wellness' },
-        ],
-        activeTenantId: 1,
-      });
-      if (url === '/api/auth/tenant-switch' && opts?.method === 'POST') {
-        return Promise.resolve({ ok: true, token: 'new-token-xyz', tenant: { id: 2, name: 'Enhanced Wellness', vertical: 'wellness' } });
-      }
-      if (url === '/api/auth/me') return Promise.resolve({ id: 1, name: 'Alice', role: 'ADMIN' });
-      return Promise.resolve({});
-    });
-    renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
-    await waitFor(() => expect(screen.getByTestId('tenant-switcher')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /switch tenant/i }));
-    // Find the inner <button> for the wellness option (the listbox <li>
-    // wraps a button that dispatches the switch).
-    const wellnessButton = screen.getAllByRole('button').find((b) => /Enhanced Wellness/i.test(b.textContent || ''));
-    expect(wellnessButton).toBeTruthy();
-    await act(async () => { fireEvent.click(wellnessButton); });
-    await waitFor(() => expect(setActiveTenantIdMock).toHaveBeenCalledWith(2));
+    const chip = screen.getByTestId('tenant-chip');
+    fireEvent.click(chip);
+    // No /api/auth/tenant-switch call should ever fire from clicking the chip.
     const calls = fetchApiMock.mock.calls;
-    const switchCall = calls.find((c) => c[0] === '/api/auth/tenant-switch');
-    expect(switchCall).toBeTruthy();
-    expect(switchCall[1].method).toBe('POST');
-    expect(JSON.parse(switchCall[1].body)).toEqual({ toTenantId: 2 });
+    expect(calls.find((c) => c[0] === '/api/auth/tenant-switch')).toBeFalsy();
+  });
+
+  it('renders nothing when tenant is missing', () => {
+    renderLayout({ tenant: null });
+    expect(screen.queryByTestId('tenant-chip')).not.toBeInTheDocument();
   });
 });

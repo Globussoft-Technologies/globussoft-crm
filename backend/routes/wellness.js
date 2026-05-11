@@ -1603,9 +1603,18 @@ router.get("/consents", phiReadGate, async (req, res) => {
 // #207/#216: consent capture is performed by the clinician (doctor) or the
 // professional running the visit; admin owner override allowed. Telecallers
 // and helpers cannot record consent.
+//
+// #564 v3.7.3 — STAFF-TABLET-HANDOFF workflow (chosen disposition). Staff
+// pulls up the form on a tablet during patient intake, hands the tablet to
+// the patient, the patient signs, and staff confirms + submits. The RBAC
+// gate above (doctor/professional/admin only) enforces this — telecallers
+// can't capture consent, and the patient portal does NOT POST here (portal
+// path is separate at routes/portal.js when/if patient-self-serve ships).
+// captureMethod defaults to 'tablet-handoff' to record the workflow at the
+// row level; capturedByUserId stamps the staff member who facilitated.
 router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"]), async (req, res) => {
   try {
-    const { patientId, serviceId, templateName, signatureSvg } = req.body;
+    const { patientId, serviceId, templateName, signatureSvg, captureMethod } = req.body;
     if (!patientId || !templateName) {
       return res.status(400).json({ error: "patientId and templateName are required" });
     }
@@ -1631,6 +1640,13 @@ router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"])
       contentSnapshot = tpl?.body || null;
     } catch (_e) { /* schema/migration race; leave snapshot null */ }
 
+    // #564 v3.7.3 — captureMethod allowlist. Client may set 'tablet-handoff'
+    // (default), 'portal-self-serve' (future), or 'imported-pdf' (data
+    // migration only). Unknown values fall back to the default so a typo
+    // doesn't poison the audit trail.
+    const ALLOWED_METHODS = new Set(["tablet-handoff", "portal-self-serve", "imported-pdf"]);
+    const resolvedCaptureMethod = ALLOWED_METHODS.has(captureMethod) ? captureMethod : "tablet-handoff";
+
     const consent = await prisma.consentForm.create({
       data: {
         patientId: parseInt(patientId),
@@ -1638,6 +1654,8 @@ router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"])
         templateName,
         signatureSvg,
         contentSnapshot,
+        captureMethod: resolvedCaptureMethod,
+        capturedByUserId: req.user.userId,
         tenantId: req.user.tenantId,
       },
     });
@@ -1645,12 +1663,16 @@ router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"])
     // audit blob — it's a few KB, and the row itself holds the canonical copy.
     // #564: emit CONSENT_CAPTURE alongside the legacy CREATE so DPDP / clinical
     // audit reviewers can grep one canonical action verb across the audit log.
+    // v3.7.3: include captureMethod + capturedByUserId so the audit row alone
+    // is sufficient to answer "who facilitated this consent and via which flow".
     await writeAudit('ConsentForm', 'CONSENT_CAPTURE', consent.id, req.user.userId, req.user.tenantId, {
       patientId: consent.patientId,
       serviceId: consent.serviceId,
       templateName: consent.templateName,
       signatureLength: signatureSvg.length,
       hasContentSnapshot: !!contentSnapshot,
+      captureMethod: resolvedCaptureMethod,
+      capturedByUserId: req.user.userId,
     });
 
     // #616: emit consent.signed. Failure here MUST NOT fail the response.
@@ -4811,6 +4833,82 @@ router.get("/consents/:id/pdf", async (req, res) => {
       include: { patient: true, service: true },
     });
     if (!consent) return res.status(404).json({ error: "Consent not found" });
+
+    // #564 v3.7.3 — prefer the frozen BLOB if /archive has already been
+    // called. The BLOB is the canonical bytes the patient saw at archive
+    // time; rendering on-demand is the legacy/back-compat path for rows
+    // signed before BLOB archival shipped. The branch is decided per-row.
+    let buf;
+    let servedFromBlob = false;
+    if (consent.signedPdfBlob && consent.signedPdfBlob.length > 0) {
+      buf = consent.signedPdfBlob;
+      servedFromBlob = true;
+    } else {
+      const clinic = await primaryClinic(req.user.tenantId);
+      buf = await renderConsentPdf(
+        consent,
+        consent.patient,
+        consent.service,
+        clinic,
+        consent.signatureSvg,
+      );
+    }
+    // PRD §11: consent PDF export carries patient PII + signature image; log it.
+    try {
+      await writeAudit('ConsentForm', 'CONSENT_PDF_DOWNLOAD', consent.id, req.user.userId, req.user.tenantId, {
+        consentId: consent.id,
+        patientId: consent.patientId,
+        serviceId: consent.serviceId,
+        templateName: consent.templateName,
+        servedFromBlob,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit CONSENT_PDF_DOWNLOAD failed:", auditErr.message);
+    }
+    res.setHeader("Content-Type", consent.signedPdfMime || "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="consent-${id}.pdf"`);
+    res.setHeader("Content-Length", buf.length);
+    res.send(buf);
+  } catch (e) {
+    console.error("[wellness] consent pdf error:", e.message);
+    res.status(500).json({ error: "Failed to render consent PDF" });
+  }
+});
+
+// #564 v3.7.3 — POST /consents/:id/archive
+// Renders the consent PDF once and persists the exact bytes into
+// ConsentForm.signedPdfBlob. After archival, GET /consents/:id/pdf
+// returns the frozen bytes verbatim — future PDF-renderer or clinic-
+// letterhead changes cannot retroactively alter the document the patient
+// saw. Idempotent: re-archiving a row that already has a BLOB returns
+// 200 with `alreadyArchived: true` and does NOT overwrite (the whole
+// point of the freeze).
+//
+// RBAC: doctor / professional / admin (same as POST /consents). The
+// archive action is a clinical-record finalization, not a patient
+// action; staff initiates it.
+router.post("/consents/:id/archive", verifyWellnessRole(["doctor", "professional", "admin"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "Invalid consent id" });
+    }
+    const consent = await prisma.consentForm.findFirst({
+      where: tenantWhere(req, { id }),
+      include: { patient: true, service: true },
+    });
+    if (!consent) return res.status(404).json({ error: "Consent not found" });
+
+    if (consent.signedPdfBlob && consent.signedPdfBlob.length > 0) {
+      return res.status(200).json({
+        ok: true,
+        alreadyArchived: true,
+        consentId: consent.id,
+        sizeBytes: consent.signedPdfBlob.length,
+        mime: consent.signedPdfMime || "application/pdf",
+      });
+    }
+
     const clinic = await primaryClinic(req.user.tenantId);
     const buf = await renderConsentPdf(
       consent,
@@ -4819,24 +4917,36 @@ router.get("/consents/:id/pdf", async (req, res) => {
       clinic,
       consent.signatureSvg,
     );
-    // PRD §11: consent PDF export carries patient PII + signature image; log it.
+
+    await prisma.consentForm.update({
+      where: { id: consent.id },
+      data: {
+        signedPdfBlob: buf,
+        signedPdfMime: "application/pdf",
+      },
+    });
+
     try {
-      await writeAudit('ConsentForm', 'CONSENT_PDF_DOWNLOAD', consent.id, req.user.userId, req.user.tenantId, {
+      await writeAudit('ConsentForm', 'CONSENT_PDF_ARCHIVED', consent.id, req.user.userId, req.user.tenantId, {
         consentId: consent.id,
         patientId: consent.patientId,
-        serviceId: consent.serviceId,
         templateName: consent.templateName,
+        sizeBytes: buf.length,
       });
     } catch (auditErr) {
-      console.warn("[wellness] audit CONSENT_PDF_DOWNLOAD failed:", auditErr.message);
+      console.warn("[wellness] audit CONSENT_PDF_ARCHIVED failed:", auditErr.message);
     }
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="consent-${id}.pdf"`);
-    res.setHeader("Content-Length", buf.length);
-    res.send(buf);
+
+    return res.status(200).json({
+      ok: true,
+      alreadyArchived: false,
+      consentId: consent.id,
+      sizeBytes: buf.length,
+      mime: "application/pdf",
+    });
   } catch (e) {
-    console.error("[wellness] consent pdf error:", e.message);
-    res.status(500).json({ error: "Failed to render consent PDF" });
+    console.error("[wellness] consent archive error:", e.message);
+    res.status(500).json({ error: "Failed to archive consent PDF" });
   }
 });
 

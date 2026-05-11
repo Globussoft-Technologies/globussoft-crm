@@ -2669,6 +2669,20 @@ model ConsentForm {
   // back-compat with rows captured before the field shipped.
   contentSnapshot String? @db.LongText
 
+  // #564 v3.7.3 — staff-tablet-handoff workflow + DB BLOB storage
+  // disposition. captureMethod pins HOW the consent was collected so
+  // audit reviewers can grep one verb across the audit log; defaults to
+  // 'tablet-handoff' because the wellness staff-tablet flow is the
+  // chosen primary workflow. capturedByUserId records WHO facilitated
+  // the capture (the staff member operating the tablet). signedPdfBlob
+  // is an optional frozen archive — POST /consents/:id/archive renders
+  // the PDF once and persists the exact bytes so future PDF-renderer
+  // upgrades cannot retroactively alter the document the patient saw.
+  captureMethod    String? @default("tablet-handoff") // tablet-handoff | portal-self-serve | imported-pdf
+  capturedByUserId Int?
+  signedPdfBlob    Bytes?  @db.LongBlob
+  signedPdfMime    String? @default("application/pdf")
+
   patientId Int
   patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
 

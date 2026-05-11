@@ -5,7 +5,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 // to /profile. Logout is already a separate sibling button, so the simplest
 // honest fix is to drop the chevron rather than add a dropdown that
 // duplicates the logout button.
-import { LogOut, Menu, Building2, ChevronDown } from 'lucide-react';
+import { LogOut, Menu, Building2 } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Omnibar from './Omnibar';
 import Presence from './Presence';
@@ -15,107 +15,40 @@ import Avatar from './Avatar';
 import TrialBanner from './TrialBanner';
 import SubscriptionExpiryModal from './SubscriptionExpiryModal';
 import { AuthContext } from '../App';
-import { fetchApi, setActiveTenantId } from '../utils/api';
+import { fetchApi } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
 
-// #555 (HI-06): explicit tenant switcher. Pre-fix, the SPA's tenant
-// context flipped silently based on URL pathname (/dashboard vs
-// /wellness) — no switcher in the chrome, no audit trail, localStorage
-// could disagree with the rendered shell. The dropdown below renders
-// when the caller has access to MORE THAN ONE tenant (today: never,
-// because User.tenantId is single-valued; future-proofed for when a
-// UserTenant join table lands). Single-tenant users see no UI.
-function TenantSwitcher({ tenant, setTenant, setUser, setToken }) {
-  const navigate = useNavigate();
-  const [tenants, setTenants] = useState([]);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    fetchApi('/api/auth/tenants', { silent: true })
-      .then((data) => setTenants(Array.isArray(data?.tenants) ? data.tenants : []))
-      .catch(() => setTenants([]));
-  }, []);
-
-  if (!tenants || tenants.length < 2) return null; // single-tenant: no UI
-
-  const switchTo = async (t) => {
-    if (busy) return;
-    if (t.id === tenant?.id) { setOpen(false); return; }
-    setBusy(true);
-    try {
-      const res = await fetchApi('/api/auth/tenant-switch', {
-        method: 'POST',
-        body: JSON.stringify({ toTenantId: t.id }),
-      });
-      if (res?.token) setToken(res.token);
-      if (res?.tenant) {
-        setTenant(res.tenant);
-        setActiveTenantId(res.tenant.id);
-        // Re-fetch /me so user.role + features pick up tenant-scoped values
-        try {
-          const me = await fetchApi('/api/auth/me', { silent: true });
-          if (me) setUser(me);
-        } catch { /* leave the existing user if /me fails */ }
-        navigate(res.tenant.vertical === 'wellness' ? '/wellness' : '/dashboard', { replace: true });
-      }
-    } catch { /* fetchApi already surfaced a toast */ }
-    finally {
-      setBusy(false);
-      setOpen(false);
-    }
-  };
-
+// #555 (HI-06) — lock-per-session policy.
+//
+// Pre-fix, the SPA's tenant context could flip silently based on URL
+// pathname — no switcher in the chrome, no audit trail, localStorage
+// could disagree with the rendered shell (pen-test privilege-confusion
+// surface). The earlier fix shipped an explicit switcher widget; v3.7.2
+// disposition reset the policy to lock-per-session — pick the tenant at
+// login and log out to switch. This component is now a READ-ONLY chip
+// showing the active tenant prominently; there is no in-session switch
+// path. The backend `/api/auth/tenant-switch` endpoint now returns
+// 410 Gone with code TENANT_SWITCH_DISABLED.
+function TenantChip({ tenant }) {
+  if (!tenant?.name) return null;
+  const isWellness = tenant?.vertical === 'wellness';
   return (
-    <div data-testid="tenant-switcher" style={{ position: 'relative' }}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label="Switch tenant"
-        style={{
-          display: 'flex', alignItems: 'center', gap: '6px',
-          background: 'none', border: '1px solid var(--border-color)',
-          color: 'var(--text-primary)', borderRadius: 8,
-          padding: '6px 10px', cursor: 'pointer', fontSize: '0.85rem',
-        }}
-      >
-        <Building2 size={14} />
-        <span>{tenant?.name || 'Tenant'}</span>
-        <ChevronDown size={14} />
-      </button>
-      {open && (
-        <ul
-          role="listbox"
-          aria-label="Available tenants"
-          style={{
-            position: 'absolute', top: 'calc(100% + 4px)', right: 0,
-            background: 'var(--surface-color)', border: '1px solid var(--border-color)',
-            borderRadius: 8, listStyle: 'none', margin: 0, padding: '4px 0',
-            minWidth: 220, boxShadow: '0 8px 20px rgba(0,0,0,0.15)', zIndex: 50,
-          }}
-        >
-          {tenants.map((t) => (
-            <li key={t.id} role="option" aria-selected={t.id === tenant?.id}>
-              <button
-                type="button"
-                onClick={() => switchTo(t)}
-                disabled={busy}
-                style={{
-                  width: '100%', textAlign: 'left',
-                  background: t.id === tenant?.id ? 'rgba(255,255,255,0.05)' : 'none',
-                  border: 'none', color: 'var(--text-primary)',
-                  padding: '8px 12px', cursor: busy ? 'wait' : 'pointer',
-                  fontSize: '0.85rem',
-                }}
-              >
-                {t.name}
-                {t.vertical === 'wellness' && <span style={{ marginLeft: 6, fontSize: '0.7rem', color: 'var(--text-secondary)' }}>(wellness)</span>}
-              </button>
-            </li>
-          ))}
-        </ul>
+    <div
+      data-testid="tenant-chip"
+      title="Tenant is locked for this session. Log out and log back in to switch."
+      style={{
+        display: 'flex', alignItems: 'center', gap: '6px',
+        background: 'transparent', border: '1px solid var(--border-color)',
+        color: 'var(--text-primary)', borderRadius: 8,
+        padding: '6px 10px', fontSize: '0.85rem',
+      }}
+    >
+      <Building2 size={14} aria-hidden="true" />
+      <span>{tenant.name}</span>
+      {isWellness && (
+        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+          (wellness)
+        </span>
       )}
     </div>
   );
@@ -306,7 +239,7 @@ const Layout = () => {
           >
             <Menu size={18} />
           </button>
-          <TenantSwitcher tenant={tenant} setTenant={setTenant} setUser={setUser} setToken={setToken} />
+          <TenantChip tenant={tenant} />
           <NotificationBell />
           <button
             onClick={() => navigate('/profile')}

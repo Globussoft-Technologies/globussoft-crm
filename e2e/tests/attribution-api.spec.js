@@ -386,12 +386,17 @@ test.describe('Attribution API — GET /report', () => {
     expect(src.touchpoints).toBeGreaterThanOrEqual(1);
   });
 
-  test('bad date strings (?from=not-a-date) do not 500 — silently ignored', async ({ request }) => {
+  test('bad date strings (?from=not-a-date) → 400 INVALID_DATE (#665)', async ({ request }) => {
+    // Pre-#665 the route silently swallowed unparseable inputs and returned 200
+    // with an unfiltered aggregation (operator had no signal the typo had been
+    // dropped). Wave B Agent 1 added validateDateRange across the surface;
+    // unparseable / inverted inputs now surface a 400 so the SPA can toast a
+    // useful error.
     const tok = await getGeneric(request);
     const res = await get(request, tok, '/api/attribution/report?from=not-a-date&to=also-bad');
-    expect(res.status()).toBe(200);
+    expect(res.status()).toBe(400);
     const body = await res.json();
-    expect(Array.isArray(body.byChannel)).toBe(true);
+    expect(body.code).toBe('INVALID_DATE');
   });
 
   test('valid from + to range filters return arrays without 500', async ({ request }) => {

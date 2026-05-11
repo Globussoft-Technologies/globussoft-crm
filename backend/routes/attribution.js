@@ -6,6 +6,10 @@ const prisma = require("../lib/prisma");
 // demo bug). Pairs with cleanup-p3-data-quality.js (one-shot remap of
 // existing rows) for durability.
 const { isJunkSource } = require("../lib/junkSourceFilter");
+// #665: shared inverted-date-range guard. Routes that historically returned
+// empty result sets when callers passed to < from now surface a 400 with
+// code=INVERTED_DATE_RANGE.
+const { validateDateRange } = require("../lib/validateDateRange");
 
 const router = express.Router();
 
@@ -100,6 +104,11 @@ router.get("/contact/:id", async (req, res) => {
 // contacts with at least one touchpoint of that channel/source.
 router.get("/report", async (req, res) => {
   try {
+    // #665: reject inverted / invalid date ranges with a 400 before we silently
+    // return an empty aggregation.
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
     const tenantId = tenantOf(req);
     const dateFilter = parseDateRange(req);
     const where = { tenantId };

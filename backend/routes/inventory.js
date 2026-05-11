@@ -34,6 +34,8 @@ const prisma = require("../lib/prisma");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const { generateReceiptNumber } = require("../lib/inventoryReceiptNumber");
+// #665: shared inverted-date-range guard — see lib/validateDateRange.js.
+const { validateDateRange } = require("../lib/validateDateRange");
 
 const router = express.Router();
 
@@ -273,6 +275,10 @@ router.delete("/vendors/:id", adminGate, async (req, res) => {
 
 router.get("/inventory/receipts", adminGate, async (req, res) => {
   try {
+    // #665: reject inverted / invalid date ranges before they silently return empty.
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
     const where = tenantWhere(req);
     if (req.query.productId) where.productId = parseInt(req.query.productId);
     if (req.query.vendorId) where.vendorId = parseInt(req.query.vendorId);
@@ -372,6 +378,10 @@ router.post("/inventory/receipts", adminGate, async (req, res) => {
 
 router.get("/inventory/adjustments", adminGate, async (req, res) => {
   try {
+    // #665: reject inverted / invalid date ranges before they silently return empty.
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
     const where = tenantWhere(req);
     if (req.query.productId) where.productId = parseInt(req.query.productId);
     if (req.query.from || req.query.to) {

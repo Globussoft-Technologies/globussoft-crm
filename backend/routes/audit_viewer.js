@@ -1,6 +1,11 @@
 const router = require('express').Router();
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const { formatInTenantTZ } = require('../lib/datetime');
+// #665: shared inverted-date-range guard. Pre-this, ?from=2026-05-01&to=2026-04-01
+// silently returned an empty audit list because the where-clause built `gte
+// later-than lte` which matches nothing — operators saw an empty trail and
+// believed the audit log itself was empty.
+const { validateDateRange } = require('../lib/validateDateRange');
 
 const prisma = require("../lib/prisma");
 
@@ -85,6 +90,10 @@ function buildWhere(req) {
 // GET / — paginated list of audit logs
 router.get('/', async (req, res) => {
   try {
+    // #665: validate date range BEFORE building the where-clause.
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
     const where = buildWhere(req);
@@ -228,6 +237,10 @@ function csvCell(value) {
 // GET /export.csv — CSV export of filtered audit logs (capped at 10k rows)
 router.get('/export.csv', async (req, res) => {
   try {
+    // #665: validate date range BEFORE building the where-clause.
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
     const where = buildWhere(req);
     const logs = await prisma.auditLog.findMany({
       where,

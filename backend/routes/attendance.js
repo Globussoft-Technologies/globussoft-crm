@@ -28,6 +28,10 @@ const prisma = require("../lib/prisma");
 const crypto = require("crypto");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
+// #665: shared inverted-date-range guard — see lib/validateDateRange.js. Pre-this
+// the three history endpoints (/me /staff/:id /summary) silently returned empty
+// rows when the operator passed to < from.
+const { validateDateRange } = require("../lib/validateDateRange");
 
 const router = express.Router();
 
@@ -210,6 +214,11 @@ router.post("/clock-out", verifyToken, async (req, res) => {
 
 router.get("/me", verifyToken, async (req, res) => {
   try {
+    // #665: reject inverted / invalid date ranges with a 400 instead of silently
+    // returning an empty result.
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
     const from = parseISO(req.query.from);
     const to = parseISO(req.query.to);
     const where = tenantWhere(req, { userId: req.user.userId });
@@ -248,6 +257,10 @@ router.get("/staff/:userId", verifyToken, verifyRole(["ADMIN", "MANAGER"]), asyn
       return res.status(404).json({ error: "User not found in this tenant", code: "USER_NOT_FOUND" });
     }
 
+    // #665: reject inverted / invalid date ranges.
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
     const from = parseISO(req.query.from);
     const to = parseISO(req.query.to);
     const where = { tenantId: req.user.tenantId, userId };
@@ -269,6 +282,12 @@ router.get("/staff/:userId", verifyToken, verifyRole(["ADMIN", "MANAGER"]), asyn
 
 router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
+    // #665: reject inverted / invalid date ranges (this endpoint already requires
+    // both from + to, but the existing DATE_RANGE_REQUIRED check below catches
+    // the absent case; INVERTED_DATE_RANGE is the new behaviour for reversed input).
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
     const from = parseISO(req.query.from);
     const to = parseISO(req.query.to);
     if (!from || !to) {

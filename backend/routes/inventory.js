@@ -147,7 +147,7 @@ router.get("/products", adminGate, async (req, res) => {
     const items = await prisma.product.findMany({
       where: tenantWhere(req),
       orderBy: { name: "asc" },
-      select: { id: true, name: true, sku: true, categoryId: true, currentStock: true, lowStockThreshold: true, isActive: true },
+      select: { id: true, name: true, sku: true, categoryId: true, currentStock: true, threshold: true, price: true },
     });
     res.json(items);
   } catch (e) {

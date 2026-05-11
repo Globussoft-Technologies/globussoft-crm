@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useContext } from 're
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
-import { ScrollText, Filter, Download, ChevronDown, User, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { ScrollText, Filter, Download, ChevronDown, User, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react';
 
 const ACTION_COLOR = {
   CREATE: '#10b981',
@@ -89,12 +89,18 @@ export default function AuditLog() {
   const [expanded, setExpanded] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // #558 — Audit chain integrity. integrity={ chainLength, brokenAt,
-  // integrityVerified, lastVerifiedAt } once /api/audit/verify has run.
-  // Auto-verify on mount for admins so the chip shows the current state
-  // without requiring the operator to click.
+  // #558 — Audit chain integrity. integrity = {
+  //   chainLength,    // rows walked (strict semantics: counts the broken row)
+  //   totalRows,      // total audit rows for this tenant
+  //   unhashedRows,   // rows with null hash (need backfill)
+  //   brokenAt,       // id of first row that fails verification, or null
+  //   reason,         // human-readable explanation of the break
+  //   integrityVerified, lastVerifiedAt,
+  // } once /api/audit/verify has run. Auto-verify on mount for admins so the
+  // chip shows the current state without requiring the operator to click.
   const [integrity, setIntegrity] = useState(null);
   const [verifying, setVerifying] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
 
   const verifyChain = useCallback(async () => {
     if (!isAdmin) return;
@@ -104,12 +110,39 @@ export default function AuditLog() {
       setIntegrity(data);
     } catch (err) {
       console.error('[AuditLog] verify failed', err);
-      setIntegrity({ integrityVerified: false, brokenAt: null, chainLength: 0, error: true });
+      setIntegrity({ integrityVerified: false, brokenAt: null, chainLength: 0, totalRows: 0, unhashedRows: 0, error: true });
       notify.error('Failed to verify audit chain');
     } finally {
       setVerifying(false);
     }
   }, [isAdmin, notify]);
+
+  // Run the backfill endpoint then immediately re-verify so the chip flips
+  // to green if everything got chained successfully. 409 conflict means an
+  // already-hashed row's content doesn't match its recomputation — that's
+  // suspected tampering, surface the row id so ops can investigate.
+  const runBackfill = useCallback(async () => {
+    if (!isAdmin) return;
+    if (!window.confirm('Backfill writes hashes to every unchained audit row for this tenant. Continue?')) return;
+    setBackfilling(true);
+    try {
+      const data = await fetchApi('/api/audit/backfill', { method: 'POST' });
+      notify.success(`Backfill complete — updated ${data.updatedRows} rows, ${data.skippedRows} already chained.`);
+      await verifyChain();
+    } catch (err) {
+      console.error('[AuditLog] backfill failed', err);
+      // fetchApi attaches the parsed error body to err.data (see utils/api.js).
+      // 409 → body.conflictRowId is populated; surface the row id so ops can
+      // open the incident. Other failures get a generic toast — fetchApi
+      // already raised one for the user.
+      const body = err?.data;
+      if (body?.conflictRowId != null) {
+        notify.error(`Backfill aborted: conflict at row #${body.conflictRowId}. Suspected tampering — contact security.`);
+      }
+    } finally {
+      setBackfilling(false);
+    }
+  }, [isAdmin, notify, verifyChain]);
 
   useEffect(() => { verifyChain(); }, [verifyChain]);
 
@@ -290,9 +323,12 @@ export default function AuditLog() {
 
         {/* #558 — Hash-chain integrity chip + Verify button. ADMIN-only:
             verifying walks the entire audit chain and recomputes hashes.
-            Chip is green when the last walk succeeded, red when a row's
-            hash doesn't match the recomputed sha256 (= the row was
-            tampered with). */}
+            Chip is green when every row's stored hash matches the
+            recomputed sha256, red when a row was tampered with, and
+            paired with a yellow "Backfill required" banner when one or
+            more rows are unchained (null hash) — typically right after
+            the v3.7.x hash-chain code first ships against a tenant
+            whose audit history pre-dates the chain. */}
         {isAdmin && (
           <div
             data-testid="integrity-row"
@@ -328,6 +364,30 @@ export default function AuditLog() {
                   ({integrity.chainLength} rows)
                 </span>
               </span>
+            ) : integrity && integrity.unhashedRows > 0 && integrity.reason && /null hash/i.test(integrity.reason) ? (
+              // First break is a null hash → operator just needs to run
+              // backfill, not call security. Yellow chip + dedicated banner
+              // below take care of the call to action.
+              <span
+                data-testid="integrity-chip-needs-backfill"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.3rem 0.7rem',
+                  borderRadius: 999,
+                  background: 'rgba(234, 179, 8, 0.12)',
+                  color: '#eab308',
+                  border: '1px solid rgba(234, 179, 8, 0.4)',
+                  fontWeight: 600,
+                }}
+              >
+                <ShieldQuestion size={14} />
+                Backfill required
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
+                  ({integrity.unhashedRows} of {integrity.totalRows} rows unchained)
+                </span>
+              </span>
             ) : integrity ? (
               <span
                 data-testid="integrity-chip-broken"
@@ -347,7 +407,7 @@ export default function AuditLog() {
                 Chain broken — please contact support
                 {integrity.brokenAt != null && (
                   <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
-                    (row #{integrity.brokenAt})
+                    (row #{integrity.brokenAt}{integrity.reason ? ` — ${integrity.reason}` : ''})
                   </span>
                 )}
               </span>
@@ -366,6 +426,57 @@ export default function AuditLog() {
           </div>
         )}
       </div>
+
+      {/* Backfill banner — only when an admin sees a null-hash break.
+          Surfaces the count of unchained rows + a Run Backfill action
+          that POSTs to /api/audit/backfill (per-tenant, idempotent).
+          Distinct from the red-chip "contact support" path: that's for
+          a row whose recomputed hash disagrees with the stored one,
+          which a backfill MUST NOT silently overwrite. */}
+      {isAdmin && integrity && integrity.unhashedRows > 0 && integrity.reason && /null hash/i.test(integrity.reason) && (
+        <div
+          data-testid="integrity-backfill-banner"
+          className="card"
+          style={{
+            padding: '0.85rem 1.25rem',
+            marginBottom: '1.25rem',
+            background: 'rgba(234, 179, 8, 0.06)',
+            border: '1px solid rgba(234, 179, 8, 0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.85rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <ShieldQuestion size={18} color="#eab308" />
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <div style={{ fontWeight: 600, color: '#eab308' }}>
+              Backfill required — {integrity.unhashedRows} {integrity.unhashedRows === 1 ? 'row is' : 'rows are'} unchained
+            </div>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Audit rows added before tamper-evidence hashing was enabled lack
+              a {`prevHash`}/{`hash`} pair. Run the backfill to chain them — the
+              operation is idempotent and writes nothing if every row already
+              has a valid hash.
+            </div>
+          </div>
+          <button
+            data-testid="run-backfill-btn"
+            onClick={runBackfill}
+            disabled={backfilling}
+            className="btn-primary"
+            style={{
+              fontSize: '0.8rem',
+              padding: '0.5rem 1rem',
+              background: '#eab308',
+              borderColor: '#eab308',
+              opacity: backfilling ? 0.5 : 1,
+            }}
+          >
+            {backfilling ? 'Running backfill...' : 'Run backfill'}
+          </button>
+        </div>
+      )}
 
       {/* Table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -441,6 +552,37 @@ export default function AuditLog() {
                       <tr style={{ background: 'rgba(15,23,42,0.4)' }}>
                         <td></td>
                         <td colSpan={5} style={{ padding: '1rem 1.25rem 1.5rem' }}>
+                          {/* #558 — Display truncated hash + prevHash so an
+                              operator can spot-check chain continuity in the
+                              UI without dropping to the verify endpoint. The
+                              full 64-char hex is rarely useful on screen; the
+                              first 12 chars (48 bits) are plenty for a
+                              human-eye continuity check. */}
+                          {(log.hash || log.prevHash) && (
+                            <div style={{
+                              display: 'flex',
+                              gap: '1.25rem',
+                              fontFamily: 'monospace',
+                              fontSize: '0.72rem',
+                              color: 'var(--text-secondary)',
+                              marginBottom: '0.85rem',
+                            }}>
+                              <span data-testid="row-hash">
+                                hash: <span style={{ color: 'var(--text-primary)' }}>
+                                  {log.hash ? `${log.hash.slice(0, 12)}…` : '(unchained)'}
+                                </span>
+                              </span>
+                              <span data-testid="row-prevhash">
+                                prev: <span style={{ color: 'var(--text-primary)' }}>
+                                  {log.prevHash
+                                    ? log.prevHash.startsWith('GENESIS_')
+                                      ? log.prevHash
+                                      : `${log.prevHash.slice(0, 12)}…`
+                                    : '(unchained)'}
+                                </span>
+                              </span>
+                            </div>
+                          )}
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.04em' }}>
                             Details
                           </div>

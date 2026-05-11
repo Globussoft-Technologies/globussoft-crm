@@ -278,7 +278,7 @@ function ModalSlot({ modal, close }) {
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: 'var(--surface-bg, #ffffff)',
+          background: 'var(--surface-color, #ffffff)',
           color: 'var(--text-primary, #1f2937)',
           padding: '1.5rem',
           borderRadius: 12,

@@ -1,6 +1,6 @@
 const cron = require('node-cron');
 const prisma = require('../lib/prisma');
-const { computeHash } = require('../lib/audit');
+const { computeHash, genesisFor } = require('../lib/audit');
 
 // Daily integrity sweep — for every tenant, walk the audit hash chain and
 // emit an AUDIT_INTEGRITY row recording {chainLength, brokenAt, head}. The
@@ -9,6 +9,12 @@ const { computeHash } = require('../lib/audit');
 // retroactively edited. If a break is detected the row is still emitted
 // (with brokenAt populated) so a human reviewer of /audit-log sees the
 // alarm even if /api/audit/verify hasn't been clicked. #558.
+//
+// Strict semantics (#558 Option A): the walker treats a null hash on ANY
+// row as a chain break — the verifier + CLI + this cron all share that
+// rule so the three agree on what counts as broken. Run the backfill
+// (POST /api/audit/backfill or scripts/backfill-audit-chain.js) to clear
+// pre-#558 legacy rows before relying on the cron's "all clear" signal.
 
 async function runAuditIntegritySweep() {
   const summary = [];
@@ -22,7 +28,11 @@ async function runAuditIntegritySweep() {
     for (const { tenantId } of tenants) {
       const rows = await prisma.auditLog.findMany({
         where: { tenantId },
-        orderBy: { createdAt: 'asc' },
+        // Tie-break on id so the cron's chain walk matches the /api/audit/verify
+        // walker (and the verify-audit-chain CLI) in the rare case where two
+        // writeAudit calls landed within the same millisecond. Without this,
+        // a sweep + an interactive verify could disagree on brokenAt.
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: {
           id: true, action: true, entity: true, entityId: true, userId: true,
           details: true, createdAt: true, prevHash: true, hash: true,
@@ -31,19 +41,32 @@ async function runAuditIntegritySweep() {
 
       let chainLength = 0;
       let brokenAt = null;
+      let reason = null;
       let lastHash = null;
 
       for (const row of rows) {
-        if (row.hash == null) continue;
         chainLength += 1;
-        const expectedPrev = lastHash == null ? `GENESIS_${tenantId}` : lastHash;
-        if (row.prevHash !== expectedPrev) { brokenAt = row.id; break; }
+        if (row.hash == null) {
+          brokenAt = row.id;
+          reason = 'null hash — row was never chained (run backfill)';
+          break;
+        }
+        const expectedPrev = lastHash == null ? genesisFor(tenantId) : lastHash;
+        if (row.prevHash !== expectedPrev) {
+          brokenAt = row.id;
+          reason = `prevHash mismatch (expected ${expectedPrev}, got ${row.prevHash || 'null'})`;
+          break;
+        }
         const recomputed = computeHash(row.prevHash, {
           tenantId, entity: row.entity, action: row.action,
           entityId: row.entityId, userId: row.userId,
           details: row.details, createdAt: row.createdAt.toISOString(),
         });
-        if (recomputed !== row.hash) { brokenAt = row.id; break; }
+        if (recomputed !== row.hash) {
+          brokenAt = row.id;
+          reason = 'hash mismatch (row content tampered)';
+          break;
+        }
         lastHash = row.hash;
       }
 
@@ -55,11 +78,12 @@ async function runAuditIntegritySweep() {
         source: 'AuditIntegrityEngine',
         chainLength,
         brokenAt,
+        reason,
         head: lastHash,
         verifiedAt: new Date().toISOString(),
       });
       const createdAt = new Date();
-      const prevHash = lastHash == null ? `GENESIS_${tenantId}` : lastHash;
+      const prevHash = lastHash == null ? genesisFor(tenantId) : lastHash;
       const hash = computeHash(prevHash, {
         tenantId, entity: 'AuditLog', action: 'AUDIT_INTEGRITY',
         entityId: null, userId: null, details: detailsStr,
@@ -81,9 +105,9 @@ async function runAuditIntegritySweep() {
         console.error(`[AuditIntegrity] Failed to emit row for tenant ${tenantId}:`, err.message);
       });
 
-      summary.push({ tenantId, chainLength, brokenAt });
+      summary.push({ tenantId, chainLength, brokenAt, reason });
       if (brokenAt !== null) {
-        console.error(`[AuditIntegrity] !!! Tenant ${tenantId} chain BROKEN at row id=${brokenAt} (chainLength=${chainLength})`);
+        console.error(`[AuditIntegrity] !!! Tenant ${tenantId} chain BROKEN at row id=${brokenAt} (${reason}, chainLength=${chainLength})`);
       }
     }
   } catch (err) {

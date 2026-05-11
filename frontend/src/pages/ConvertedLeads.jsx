@@ -207,7 +207,7 @@ const ConvertedLeads = () => {
                   padding: '0.75rem 1rem',
                   borderRadius: '8px',
                   border: 'none',
-                  backgroundColor: selectedStatus === status ? 'var(--accent-color)' : 'var(--surface-hover)',
+                  backgroundColor: selectedStatus === status ? 'var(--primary-color, var(--accent-color))' : 'var(--surface-hover)',
                   color: selectedStatus === status ? '#fff' : 'var(--text-primary)',
                   cursor: 'pointer',
                   fontWeight: selectedStatus === status ? '600' : '500',

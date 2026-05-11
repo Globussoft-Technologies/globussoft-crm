@@ -1,9 +1,9 @@
-// @ts-check
 /**
  * Audit API — G-5 from docs/E2E_GAPS.md.
  *
- * Target: routes/audit.js (28 lines, smoke-only). Single endpoint:
- *   GET /api/audit?entity=<Entity>&action=<ACTION>
+ * Target: routes/audit.js. Two endpoints:
+ *   GET /api/audit?entity=<Entity>&action=<ACTION>  — list audit rows
+ *   GET /api/audit/verify                            — #558 hash-chain walk
  *
  * routes/audit.js is a *separate* router from routes/audit_viewer.js —
  * audit_viewer is the rich UI-driven endpoint with pagination, date
@@ -426,5 +426,212 @@ test.describe('Audit API — RBAC contract', () => {
     expect(token, 'user login').toBeTruthy();
     const res = await get(request, token, '/api/audit');
     expect(res.status()).toBe(403);
+  });
+});
+
+// ── /verify — #558 hash-chain tamper-evidence ──────────────────────
+//
+// GET /api/audit/verify walks the requesting tenant's audit hash chain
+// and returns { chainLength, brokenAt, integrityVerified, lastVerifiedAt }.
+// Used by the AuditLog UI's "Verify chain" button + the daily
+// auditIntegrityEngine cron. Pinned here so a future refactor to the
+// envelope shape doesn't silently break the frontend's integrity chip.
+
+test.describe('Audit API — /verify hash-chain', () => {
+  test('GET /api/audit/verify returns the documented envelope', async ({ request }) => {
+    const { token } = await getGenericAdmin(request);
+    // Backfill first so the strict verifier doesn't surface legacy null-hash
+    // rows for this assertion (those are exercised in a dedicated case below).
+    await post(request, token, '/api/audit/backfill');
+    const res = await get(request, token, '/api/audit/verify');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty('chainLength');
+    expect(typeof body.chainLength).toBe('number');
+    expect(body).toHaveProperty('totalRows');
+    expect(typeof body.totalRows).toBe('number');
+    expect(body).toHaveProperty('unhashedRows');
+    expect(typeof body.unhashedRows).toBe('number');
+    expect(body).toHaveProperty('brokenAt'); // null when clean
+    expect(body).toHaveProperty('reason');   // null when clean
+    expect(body).toHaveProperty('integrityVerified');
+    expect(typeof body.integrityVerified).toBe('boolean');
+    expect(body).toHaveProperty('lastVerifiedAt');
+    expect(typeof body.lastVerifiedAt).toBe('string');
+  });
+
+  test('strict verifier — chainLength === totalRows after backfill (#558 acceptance)', async ({ request }) => {
+    // Headline #558 acceptance criterion: after backfill, the badge reads
+    // "Integrity verified (N rows)" where N is the real audit row count for
+    // the tenant — not the post-#558 row count alone. Run backfill (no-op
+    // if already done by a prior test in the suite) and assert.
+    const { token } = await getGenericAdmin(request);
+    await post(request, token, '/api/audit/backfill');
+    const res = await get(request, token, '/api/audit/verify');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.integrityVerified).toBe(true);
+    expect(body.brokenAt).toBeNull();
+    expect(body.reason).toBeNull();
+    expect(body.unhashedRows).toBe(0);
+    expect(body.chainLength).toBe(body.totalRows);
+    expect(body.chainLength).toBeGreaterThan(0);
+  });
+
+  test('a fresh seed extends the chain by ≥1', async ({ request }) => {
+    const { token } = await getGenericAdmin(request);
+    const before = await get(request, token, '/api/audit/verify');
+    const beforeBody = await before.json();
+    const beforeLen = beforeBody.chainLength;
+
+    // Seed a row — writeAudit fires inside the contact create handler.
+    await seedAuditedContact(request, 'generic', 'chain-grow');
+
+    const after = await get(request, token, '/api/audit/verify');
+    const afterBody = await after.json();
+    expect(afterBody.integrityVerified).toBe(true);
+    expect(afterBody.chainLength).toBeGreaterThanOrEqual(beforeLen + 1);
+    expect(afterBody.brokenAt).toBeNull();
+  });
+
+  test('non-ADMIN MANAGER gets 403 on /verify', async ({ request }) => {
+    const { token } = await getGenericManager(request);
+    const res = await get(request, token, '/api/audit/verify');
+    expect(res.status()).toBe(403);
+  });
+
+  test('non-ADMIN USER gets 403 on /verify', async ({ request }) => {
+    const { token } = await getGenericUser(request);
+    const res = await get(request, token, '/api/audit/verify');
+    expect(res.status()).toBe(403);
+  });
+
+  test('no Authorization → 401/403 on /verify', async ({ request }) => {
+    const res = await request.get(`${BASE_URL}/api/audit/verify`, { timeout: REQUEST_TIMEOUT });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test('garbage token → 401/403 on /verify', async ({ request }) => {
+    const res = await request.get(`${BASE_URL}/api/audit/verify`, {
+      headers: { Authorization: 'Bearer not.a.real.jwt.token' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test('hash + prevHash on freshly-inserted row are 64-char hex (or GENESIS for the head)', async ({ request }) => {
+    const { token } = await getGenericAdmin(request);
+    await post(request, token, '/api/audit/backfill');
+    const { contactId } = await seedAuditedContact(request, 'generic', 'hash-format');
+    const list = await get(request, token, `/api/audit?entity=Contact&action=CREATE`);
+    const body = await list.json();
+    const row = body.find((r) => r.entityId === contactId);
+    expect(row, 'seed row visible to its own tenant').toBeTruthy();
+    expect(row.hash, 'row.hash is non-null after backfill + new write').toBeTruthy();
+    expect(row.hash).toMatch(/^[0-9a-f]{64}$/);
+    // prevHash is either the prior row's hash (64-hex) or the GENESIS
+    // sentinel for the chain head. Both are acceptable.
+    expect(row.prevHash).toMatch(/^([0-9a-f]{64}|GENESIS_\d+)$/);
+  });
+});
+
+// ── /backfill — #558 retroactive chain fill ────────────────────────
+
+test.describe('Audit API — /backfill hash-chain', () => {
+  test('POST /api/audit/backfill returns the documented envelope', async ({ request }) => {
+    const { token } = await getGenericAdmin(request);
+    const res = await post(request, token, '/api/audit/backfill');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty('tenantId');
+    expect(typeof body.tenantId).toBe('number');
+    expect(body).toHaveProperty('walkedRows');
+    expect(typeof body.walkedRows).toBe('number');
+    expect(body).toHaveProperty('updatedRows');
+    expect(typeof body.updatedRows).toBe('number');
+    expect(body).toHaveProperty('skippedRows');
+    expect(typeof body.skippedRows).toBe('number');
+    expect(body).toHaveProperty('backfilledAt');
+    expect(typeof body.backfilledAt).toBe('string');
+  });
+
+  test('idempotent: second run produces zero updates', async ({ request }) => {
+    const { token } = await getGenericAdmin(request);
+    // First run — may update many rows (or zero if a prior test ran it).
+    await post(request, token, '/api/audit/backfill');
+    // Second run — must be a no-op.
+    const second = await post(request, token, '/api/audit/backfill');
+    expect(second.status()).toBe(200);
+    const body = await second.json();
+    expect(body.updatedRows).toBe(0);
+    expect(body.walkedRows).toBe(body.skippedRows);
+  });
+
+  test('post-backfill /verify returns chainLength === totalRows', async ({ request }) => {
+    const { token } = await getGenericAdmin(request);
+    await post(request, token, '/api/audit/backfill');
+    const v = await get(request, token, '/api/audit/verify');
+    const body = await v.json();
+    expect(body.integrityVerified).toBe(true);
+    expect(body.unhashedRows).toBe(0);
+    expect(body.chainLength).toBe(body.totalRows);
+  });
+
+  test('backfill is tenant-scoped — does not touch the other tenant\'s rows', async ({ request }) => {
+    const { token: gToken } = await getGenericAdmin(request);
+    const { token: wToken } = await getWellnessAdmin(request);
+    // Snapshot wellness chain length BEFORE generic backfill.
+    await post(request, wToken, '/api/audit/backfill');
+    const wBefore = await get(request, wToken, '/api/audit/verify');
+    const wBeforeBody = await wBefore.json();
+    expect(wBeforeBody.integrityVerified).toBe(true);
+    const wBeforeLen = wBeforeBody.chainLength;
+
+    // Run generic backfill. Must not affect wellness's chainLength
+    // beyond what unrelated concurrent activity might add — at minimum
+    // wellness still verifies cleanly + the chain length is monotonic.
+    await post(request, gToken, '/api/audit/backfill');
+    const wAfter = await get(request, wToken, '/api/audit/verify');
+    const wAfterBody = await wAfter.json();
+    expect(wAfterBody.integrityVerified).toBe(true);
+    expect(wAfterBody.brokenAt).toBeNull();
+    expect(wAfterBody.chainLength).toBeGreaterThanOrEqual(wBeforeLen);
+  });
+
+  test('non-ADMIN MANAGER gets 403 on /backfill', async ({ request }) => {
+    const { token } = await getGenericManager(request);
+    const res = await post(request, token, '/api/audit/backfill');
+    expect(res.status()).toBe(403);
+  });
+
+  test('non-ADMIN USER gets 403 on /backfill', async ({ request }) => {
+    const { token } = await getGenericUser(request);
+    const res = await post(request, token, '/api/audit/backfill');
+    expect(res.status()).toBe(403);
+  });
+
+  test('no Authorization → 401/403 on /backfill', async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/audit/backfill`, { timeout: REQUEST_TIMEOUT });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test('/verify is tenant-scoped — wellness chainLength is independent of generic', async ({ request }) => {
+    // Each tenant has its own chain. Seeding in one tenant must not move
+    // the other tenant's chainLength.
+    const { token: wToken } = await getWellnessAdmin(request);
+    const wBefore = await get(request, wToken, '/api/audit/verify');
+    const wBeforeBody = await wBefore.json();
+
+    await seedAuditedContact(request, 'generic', 'isolation-probe');
+
+    const wAfter = await get(request, wToken, '/api/audit/verify');
+    const wAfterBody = await wAfter.json();
+    // Wellness chain length stayed put OR grew via OTHER wellness activity
+    // (concurrent demo traffic). It must NOT have grown by exactly the same
+    // amount as our generic seed would predict — the assertion is structural:
+    // wellness's chain is its own object, verifies cleanly, and doesn't fail
+    // because we touched generic.
+    expect(wAfterBody.integrityVerified).toBe(true);
+    expect(wAfterBody.brokenAt).toBeNull();
   });
 });

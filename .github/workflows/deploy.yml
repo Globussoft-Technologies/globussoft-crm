@@ -281,7 +281,7 @@ jobs:
           #   - social-api.spec.js           (62 tests: routes/social.js)
           #   - workflows-api.spec.js        (48 tests: routes/workflows.js — G-2)
           #   - integrations-api.spec.js     (30 tests: routes/integrations.js + Callified SSO — G-3)
-          #   - audit-api.spec.js            (20 tests: routes/audit.js compliance — G-5)
+          #   - audit-api.spec.js            (27 tests: routes/audit.js compliance + #558 /verify hash-chain — G-5)
           #   - appointment-reminders-api.spec.js (16 tests: cron/appointmentRemindersEngine.js — G-6)
           #   - security-headers.spec.js     ( 3 tests: helmet/CSP regression detection — G-25)
           #   - ab-tests-api.spec.js         (38 tests: routes/ab_tests.js — R-1)

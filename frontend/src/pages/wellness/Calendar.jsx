@@ -571,7 +571,7 @@ function NewVisitModal({ column, hour, date, patients, services, waitlist, resou
         onSubmit={submit}
         className="glass"
         style={{
-          background: 'var(--surface-bg, #ffffff)', color: 'var(--text-primary)',
+          background: 'var(--surface-color, #ffffff)', color: 'var(--text-primary)',
           padding: '1.5rem', borderRadius: 12, width: '100%', maxWidth: 480,
           border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
           boxShadow: '0 20px 60px rgba(0,0,0,0.35)',

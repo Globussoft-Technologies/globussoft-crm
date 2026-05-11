@@ -89,7 +89,7 @@ describe('cron/auditIntegrityEngine — happy path (chain unbroken)', () => {
 
     const summary = await runAuditIntegritySweep();
 
-    expect(summary).toEqual([{ tenantId, chainLength: 5, brokenAt: null }]);
+    expect(summary).toEqual([{ tenantId, chainLength: 5, brokenAt: null, reason: null }]);
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
     const arg = prisma.auditLog.create.mock.calls[0][0];
     expect(arg.data.action).toBe('AUDIT_INTEGRITY');
@@ -122,7 +122,7 @@ describe('cron/auditIntegrityEngine — happy path (chain unbroken)', () => {
       .mockResolvedValueOnce([{ tenantId }])
       .mockResolvedValueOnce([]);
     const summary = await runAuditIntegritySweep();
-    expect(summary).toEqual([{ tenantId, chainLength: 0, brokenAt: null }]);
+    expect(summary).toEqual([{ tenantId, chainLength: 0, brokenAt: null, reason: null }]);
     // The integrity row carries head:null when the chain was empty.
     const details = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
     expect(details.head).toBeNull();
@@ -143,7 +143,11 @@ describe('cron/auditIntegrityEngine — broken-chain detection', () => {
       .mockResolvedValueOnce(rows);
 
     const summary = await runAuditIntegritySweep();
-    expect(summary).toEqual([{ tenantId, chainLength: 3, brokenAt: rows[2].id }]);
+    expect(summary).toHaveLength(1);
+    expect(summary[0].tenantId).toBe(tenantId);
+    expect(summary[0].chainLength).toBe(3);
+    expect(summary[0].brokenAt).toBe(rows[2].id);
+    expect(summary[0].reason).toMatch(/prevHash mismatch/i);
     // Integrity row still emitted with brokenAt populated.
     const details = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
     expect(details.brokenAt).toBe(rows[2].id);
@@ -191,8 +195,8 @@ describe('cron/auditIntegrityEngine — multi-tenant + edge cases', () => {
 
     const summary = await runAuditIntegritySweep();
     expect(summary).toHaveLength(2);
-    expect(summary).toContainEqual({ tenantId: 1, chainLength: 2, brokenAt: null });
-    expect(summary).toContainEqual({ tenantId: 2, chainLength: 3, brokenAt: null });
+    expect(summary).toContainEqual({ tenantId: 1, chainLength: 2, brokenAt: null, reason: null });
+    expect(summary).toContainEqual({ tenantId: 2, chainLength: 3, brokenAt: null, reason: null });
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
   });
 
@@ -203,19 +207,24 @@ describe('cron/auditIntegrityEngine — multi-tenant + edge cases', () => {
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
-  test('rows with hash:null are skipped (chainLength only counts hashed rows)', async () => {
+  test('rows with hash:null are treated as broken (#558 strict semantics)', async () => {
+    // Pre-strict-refactor the cron silently skipped null-hash rows, which
+    // matched the buggy /verify behaviour: a tenant with 200 legacy
+    // unhashed rows logged "chainLength=0, brokenAt=null" and the UI's
+    // green checkmark misled auditors. Strict semantics flip that: null
+    // hash is a chain break, the cron emits AUDIT_INTEGRITY with
+    // brokenAt populated, and the operator runs the backfill.
     const tenantId = 1;
     const rows = buildValidChain(tenantId, 3);
-    // Insert a hash:null row at the start (simulates a pre-#558 row pre-dating the chain).
     const stale = { ...rows[0], id: 999, hash: null, prevHash: null };
     const withStale = [stale, ...rows];
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId }])
       .mockResolvedValueOnce(withStale);
     const summary = await runAuditIntegritySweep();
-    // chainLength should be 3, not 4 — the hash:null row is skipped silently.
-    expect(summary[0].chainLength).toBe(3);
-    expect(summary[0].brokenAt).toBeNull();
+    expect(summary[0].brokenAt).toBe(999);
+    expect(summary[0].chainLength).toBe(1);
+    expect(summary[0].reason).toMatch(/null hash/i);
   });
 });
 

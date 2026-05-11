@@ -173,13 +173,15 @@ describe('<Invoices /> — page surface', () => {
     // formatMoney mock prefixes "$" + 2dp; assert at least one amount renders.
     expect(screen.getByText('$1234.56')).toBeInTheDocument();
     expect(screen.getByText('$5000.00')).toBeInTheDocument();
-    // Status badges (Paid/Unpaid/Voided). "Unpaid" and "Paid" also appear
-    // as <option> labels in the create-form Status dropdown, so use
-    // getAllByText with length >= 2 for those. "Voided" only renders in
-    // the ledger badge.
+    // Status badges (Paid/Unpaid/Voided). All three labels also appear as
+    // <option> elements — Unpaid + Paid in the create-form Status dropdown,
+    // and Voided in the ledger's status-filter dropdown — so a bare
+    // getByText would trip RTL's "multiple elements found" guard. The
+    // contract here is "at least one row badge with that text exists",
+    // which getAllByText(label).length >= 1 expresses cleanly.
     expect(screen.getAllByText('Unpaid').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Paid').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Voided')).toBeInTheDocument();
+    expect(screen.getAllByText('Voided').length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows the empty-state message when /api/billing returns []', async () => {

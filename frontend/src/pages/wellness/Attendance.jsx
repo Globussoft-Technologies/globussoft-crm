@@ -103,23 +103,23 @@ export default function Attendance() {
       </h1>
 
       {/* Today's punch card */}
-      <section style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
+      <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
         <h2 style={{ marginTop: 0 }}>Today, {new Date().toLocaleDateString()}</h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 16, marginTop: 16 }}>
           <div>
-            <div style={{ fontSize: 12, color: '#888' }}>Clock-in</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Clock-in</div>
             <div style={{ fontSize: 22, fontWeight: 600 }}>{fmtTime(todayRow?.clockInAt)}</div>
           </div>
           <div>
-            <div style={{ fontSize: 12, color: '#888' }}>Clock-out</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Clock-out</div>
             <div style={{ fontSize: 22, fontWeight: 600 }}>{fmtTime(todayRow?.clockOutAt)}</div>
           </div>
           <div>
-            <div style={{ fontSize: 12, color: '#888' }}>Total</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Total</div>
             <div style={{ fontSize: 22, fontWeight: 600 }}>{fmtMinutes(todayRow?.totalMinutes)}</div>
           </div>
           <div>
-            <div style={{ fontSize: 12, color: '#888' }}>Status</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Status</div>
             <div style={{ fontSize: 16, fontWeight: 600 }}>{todayRow?.status || 'Not clocked in'}</div>
           </div>
         </div>
@@ -158,24 +158,24 @@ export default function Attendance() {
       </section>
 
       {/* Last-30-days history */}
-      <section style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
+      <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
         <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Calendar size={20} aria-hidden /> My Last 30 Days
         </h2>
         {loading ? (
           <div>Loading&hellip;</div>
         ) : history.length === 0 ? (
-          <div style={{ color: '#888', padding: 20, textAlign: 'center' }}>No attendance rows yet. Clock in to get started.</div>
+          <div style={{ color: 'var(--text-secondary, #888)', padding: 20, textAlign: 'center' }}>No attendance rows yet. Clock in to get started.</div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Date</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Clock-in</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Clock-out</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Total</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Status</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Source</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Date</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Clock-in</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Clock-out</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Total</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Status</th>
+                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Source</th>
               </tr>
             </thead>
             <tbody>
@@ -183,16 +183,16 @@ export default function Attendance() {
                 const sc = statusClass(r.status);
                 return (
                   <tr key={r.id}>
-                    <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{fmtDate(r.date)}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{fmtTime(r.clockInAt)}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{fmtTime(r.clockOutAt)}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{fmtMinutes(r.totalMinutes)}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtDate(r.date)}</td>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtTime(r.clockInAt)}</td>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtTime(r.clockOutAt)}</td>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtMinutes(r.totalMinutes)}</td>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>
                       <span style={{ background: sc.bg, color: sc.color, padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600 }}>
                         {r.status}
                       </span>
                     </td>
-                    <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5', fontSize: 12, color: '#666' }}>{r.source}</td>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)', fontSize: 12, color: 'var(--text-secondary, #666)' }}>{r.source}</td>
                   </tr>
                 );
               })}
@@ -218,14 +218,14 @@ function ManagerStaffSnapshot() {
       .finally(() => setLoading(false));
   }, []);
   return (
-    <section style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+    <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
       <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
         <Users size={20} aria-hidden /> Today &mdash; All Staff
       </h2>
       {loading ? (
         <div>Loading&hellip;</div>
       ) : !summary ? (
-        <div style={{ color: '#888' }}>No data yet.</div>
+        <div style={{ color: 'var(--text-secondary, #888)' }}>No data yet.</div>
       ) : (
         <div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: 12, marginBottom: 16 }}>
@@ -239,23 +239,23 @@ function ManagerStaffSnapshot() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>User</th>
-                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Days</th>
-                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Minutes</th>
+                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>User</th>
+                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Days</th>
+                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Minutes</th>
                 </tr>
               </thead>
               <tbody>
                 {Object.values(summary.byUser).map((u) => (
                   <tr key={u.userId}>
-                    <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>User #{u.userId}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{u.days}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid #f5f5f5' }}>{u.minutes}</td>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>User #{u.userId}</td>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{u.days}</td>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{u.minutes}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           ) : (
-            <div style={{ color: '#888' }}>Nobody clocked in today yet.</div>
+            <div style={{ color: 'var(--text-secondary, #888)' }}>Nobody clocked in today yet.</div>
           )}
         </div>
       )}
@@ -265,8 +265,8 @@ function ManagerStaffSnapshot() {
 
 function Stat({ label, value }) {
   return (
-    <div style={{ background: '#f7f7f7', borderRadius: 8, padding: 12 }}>
-      <div style={{ fontSize: 11, color: '#888' }}>{label}</div>
+    <div style={{ background: 'var(--subtle-bg, #f7f7f7)', borderRadius: 8, padding: 12 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-secondary, #888)' }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
     </div>
   );

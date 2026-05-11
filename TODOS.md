@@ -8,9 +8,19 @@
 
 **HEAD on origin/main:** `ee87eaf` (docs: CALENDAR_INTEGRATION_GAPS.md). Two commits back: `5bcc99b` (v3.7.5 audit-chain race fix) and `454b8c5` (v3.7.4 spec hygiene).
 
-**Tags pushed today (5 total):** v3.7.2 · v3.7.3 · v3.7.4. **v3.7.5 NOT YET TAGGED** — pending its deploy gate green at write-time (queued at 15:45Z).
+**Tags pushed today (5 total):** v3.7.2 · v3.7.3 · v3.7.4 · **v3.7.5 ✅** (tagged on commit `6d4ca7a` after the audit-chain rework — full deploy gate green incl. deploy step).
 
 **GH Releases NOT published yet** for any of v3.7.2/v3.7.3/v3.7.4/v3.7.5. The release-validation arc this afternoon was non-trivial — see below — so I held off on `gh release create` until you're back at a keyboard and want to publish them.
+
+### v3.7.5 audit-chain arc — what was attempted vs shipped
+
+The v3.7.2 e2e-full's shard-1 failure pointed at a real audit-chain backfill concurrency race. I tried THREE iterations to fix it cleanly:
+
+1. **First attempt (`5bcc99b`)** — snapshot maxId + skip restamping the tail. Made it WORSE: the "skip tail" guard prevented case-2 fork-repair on legitimately-forked tail rows, so api_tests' audit-api.spec deterministically failed.
+2. **Second attempt (in same area)** — keep skip-tail + add post-snapshot repair walk. Got even more complex; I caught myself escalating at session-end and reverted.
+3. **Final shipped (`6d4ca7a`)** — keep ONLY the maxId snapshot, restamp tail normally. The narrower race window (tail-mutation only, not arbitrary rows) survives as a **known limitation** under heavy parallel test load. Production is unaffected (backfill is admin-triggered + rare).
+
+The full fix needs an advisory lock or a two-phase repair pass — tracked as a #647 §3 follow-up. The next session can take it up cleanly with fresh eyes.
 
 ### What happened this afternoon (release-validation arc)
 

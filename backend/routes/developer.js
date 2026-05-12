@@ -81,15 +81,31 @@ router.post("/agent-activity", verifyToken, verifyRole(["ADMIN"]), (req, res) =>
 });
 
 // Generate a new secure API Key for the user
+//
+// #720: `name` is REQUIRED — pre-fix the route silently fell back to
+// "Default Ext-Integration Key" when the client posted an empty / missing
+// label, which let users accidentally accumulate multiple unnamed keys
+// from the Developer UI's Generate Key button. Reject blank / whitespace-
+// only names with 400 + KEY_NAME_REQUIRED so the UI can show an inline
+// validation error and so external API callers can't pollute the
+// credentials list either.
 router.post("/apikeys", verifyToken, async (req, res) => {
   try {
+    const name = typeof req.body.name === "string" ? req.body.name.trim() : "";
+    if (!name) {
+      return res.status(400).json({
+        error: "Key name is required",
+        code: "KEY_NAME_REQUIRED",
+      });
+    }
+
     const rawKey = `glbs_${crypto.randomBytes(24).toString('hex')}`;
 
     // In production, we would hash the key secret before storing it.
     // However, for this dashboard demo context, we'll store it raw.
     const key = await prisma.apiKey.create({
       data: {
-        name: req.body.name || "Default Ext-Integration Key",
+        name,
         keySecret: rawKey,
         userId: req.user.userId,
         tenantId: req.user.tenantId,
@@ -128,13 +144,90 @@ router.delete("/apikeys/:id", verifyToken, async (req, res) => {
   }
 });
 
+// #713: scheme + private-host allowlist for outbound webhook targets.
+//
+// Pre-fix the route accepted any string in `targetUrl` and stored it raw
+// — `javascript:alert(1)`, `data:text/html,…`, `file:///etc/passwd`, plus
+// `http://127.0.0.1/…` / `http://10.0.0.1/…` (SSRF surface). Two concerns:
+//
+//   1. Stored-XSS: any admin UI that ever renders the target as a clickable
+//      link (or a recipient-side log viewer) executes the `javascript:`.
+//   2. SSRF: the webhook dispatcher (lib/webhookDelivery.js) will POST to
+//      whatever is stored, so a private-host target lets a malicious admin
+//      probe the demo box's internal network from the server's perspective.
+//
+// Pattern mirrors landingPageRenderer.safeUrl's scheme allowlist but
+// rejects (400 + INVALID_WEBHOOK_SCHEME / INVALID_WEBHOOK_HOST) instead of
+// silently falling back to a placeholder — for a stored config field the
+// caller has to know the value was bad. Loopback / RFC1918 / link-local /
+// 0.0.0.0 are blocked unconditionally; on the demo box we don't have any
+// legitimate intranet webhook targets, so a blanket block is safer than
+// an opt-in allowlist.
+function validateWebhookUrl(raw) {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return { ok: false, status: 400, error: "Webhook URL is required", code: "WEBHOOK_URL_REQUIRED" };
+  }
+  let u;
+  try {
+    u = new URL(raw.trim());
+  } catch (_e) {
+    return { ok: false, status: 400, error: "Webhook URL is not a valid URL", code: "INVALID_WEBHOOK_URL" };
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    return {
+      ok: false,
+      status: 400,
+      error: "Webhook URL must use http: or https:",
+      code: "INVALID_WEBHOOK_SCHEME",
+    };
+  }
+  const host = u.hostname.toLowerCase();
+  // Block loopback / private / link-local / 0.0.0.0.
+  // Anti-SSRF: same class as #545's pattern (URL → parse → host-check).
+  // IPv4 literals matched explicitly; common IPv6 loopback (::1) and link-
+  // local (fe80::/10) covered. DNS rebinding is not in scope here — the
+  // dispatcher (lib/webhookDelivery.js) re-resolves at send time, so a
+  // future hardening pass could add DNS-resolution-time host check there.
+  if (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "0.0.0.0" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    // 172.16.0.0/12 → 172.16.* through 172.31.*
+    /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host) ||
+    /^fe80:/i.test(host) ||
+    /^fc[0-9a-f]{2}:/i.test(host) ||
+    /^fd[0-9a-f]{2}:/i.test(host)
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Webhook URL host is not allowed (loopback / private network)",
+      code: "INVALID_WEBHOOK_HOST",
+    };
+  }
+  return { ok: true };
+}
+
 // Register Webhook Trigger
 router.post("/webhooks", verifyToken, async (req, res) => {
   try {
+    const check = validateWebhookUrl(req.body.targetUrl);
+    if (!check.ok) {
+      return res.status(check.status).json({ error: check.error, code: check.code });
+    }
+    if (typeof req.body.event !== "string" || req.body.event.trim().length === 0) {
+      return res.status(400).json({ error: "Webhook event is required", code: "WEBHOOK_EVENT_REQUIRED" });
+    }
     const webhook = await prisma.webhook.create({
       data: {
-        event: req.body.event,
-        targetUrl: req.body.targetUrl,
+        event: req.body.event.trim(),
+        targetUrl: req.body.targetUrl.trim(),
         userId: req.user.userId,
         tenantId: req.user.tenantId,
       }

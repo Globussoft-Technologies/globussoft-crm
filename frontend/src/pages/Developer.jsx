@@ -53,9 +53,17 @@ export default function Developer() {
 
   const generateKey = async (e) => {
     e.preventDefault();
-    if (!newKeyName) return;
+    // #720: defense-in-depth — backend rejects empty / whitespace-only names
+    // with 400 KEY_NAME_REQUIRED, but we also block at the client so the
+    // common case (user hits Enter on a blank field, browser autofill
+    // races) produces an inline notify rather than a network round-trip.
+    const trimmed = newKeyName.trim();
+    if (!trimmed) {
+      notify.error("Key name is required.");
+      return;
+    }
     try {
-      const { rawKey } = await fetchApi('/api/developer/apikeys', { method: 'POST', body: JSON.stringify({ name: newKeyName }) });
+      const { rawKey } = await fetchApi('/api/developer/apikeys', { method: 'POST', body: JSON.stringify({ name: trimmed }) });
       notify.success(`ATTENTION: This is the ONLY time this key will be displayed.\n\nSave this in a secure vault immediately:\n\n${rawKey}`, { ttl: 30000 });
       setNewKeyName('');
       loadDevData();
@@ -181,8 +189,22 @@ export default function Developer() {
             <Key size={20} color="var(--accent-color)" /> API Credentials
           </h3>
           <form onSubmit={generateKey} style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
-            <input type="text" className="input-field" style={{ margin: 0, flex: 1 }} placeholder="Key Name (e.g. Zapier Integration)" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} />
-            <button className="btn-primary" type="submit">Generate Key</button>
+            {/* #720: required attribute triggers the browser-native validity
+                tooltip on submit + disables the Generate Key button via the
+                form's :invalid state, so an empty-name submission never even
+                reaches the JS handler. The handler's trim()-check is the
+                second layer (defends against whitespace-only names). */}
+            <input
+              type="text"
+              className="input-field"
+              style={{ margin: 0, flex: 1 }}
+              placeholder="Key Name (e.g. Zapier Integration)"
+              required
+              minLength={1}
+              value={newKeyName}
+              onChange={e => setNewKeyName(e.target.value)}
+            />
+            <button className="btn-primary" type="submit" disabled={!newKeyName.trim()}>Generate Key</button>
           </form>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>

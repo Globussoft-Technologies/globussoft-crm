@@ -5023,12 +5023,14 @@ router.get("/consents/:id/pdf", async (req, res) => {
     // #564: serve from stored BLOB if available (fast path), otherwise
     // generate on-demand (old records pre-BLOB storage).
     let buf;
+    let servedFromBlob = false;
     console.log(`[wellness] GET /consents/${id}/pdf: hasPdfBlob=${consent.hasPdfBlob}, blobSize=${consent.signedPdfBlob?.length || 0}`);
     if (consent.signedPdfBlob && consent.signedPdfBlob.length > 0) {
       // Prisma Bytes type may not be a proper Buffer; ensure conversion
       buf = Buffer.isBuffer(consent.signedPdfBlob)
         ? consent.signedPdfBlob
         : Buffer.from(consent.signedPdfBlob);
+      servedFromBlob = true;
       console.log(`[wellness] Using stored BLOB: ${buf.length} bytes`);
     } else {
       // Fallback: old records without stored PDF

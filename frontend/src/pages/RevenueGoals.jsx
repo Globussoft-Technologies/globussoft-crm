@@ -116,8 +116,16 @@ export default function RevenueGoals() {
     }
     setSaving(true);
     try {
+      // #717 — backend validates `targetUserId` (not `userId`). The global
+      // `stripDangerous` middleware (see CLAUDE.md "Standing rules for new
+      // code") deletes `id`, `userId`, `tenantId`, `createdAt`, `updatedAt`
+      // from EVERY request body BEFORE the route handler reads it — so the
+      // old `userId:` payload key was being silently stripped, leaving the
+      // route to see `req.body.targetUserId === undefined` and 400 with
+      // "targetUserId is required (positive integer)". Sending the
+      // non-stripped name matches what the route actually validates.
       const body = {
-        userId: Number(editing.userId),
+        targetUserId: Number(editing.userId),
         period: editing.period,
         periodStart: new Date(editing.periodStart).toISOString(),
         periodEnd: new Date(editing.periodEnd).toISOString(),
@@ -286,6 +294,19 @@ export default function RevenueGoals() {
                 <X size={18} />
               </button>
             </div>
+            {/* #718 — keep the form grid template stable across the
+                error-state re-render. Pre-fix the 2-column rows used
+                `gridTemplateColumns: '1fr 1fr'` which can degenerate when
+                a flex/grid child overflows its track (a missing
+                `min-width: 0` makes columns shrink unevenly). After the
+                first failed save, the error toast triggered a parent
+                re-render that resolved the grid against the toast's
+                container width — one column would collapse to its intrinsic
+                content size while the other still claimed 1fr. Switching to
+                `repeat(2, minmax(0, 1fr))` + `minWidth: 0` on every Field
+                wrapper pins each track to half the row regardless of child
+                content sizing (CLAUDE.md "ellipsis on flex/grid children
+                needs min-width: 0 at every nesting level"). */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <Field label="Staff member">
                 <select
@@ -302,7 +323,7 @@ export default function RevenueGoals() {
                   ))}
                 </select>
               </Field>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.75rem' }}>
                 <Field label="Period">
                   <select
                     className="input-field"
@@ -328,7 +349,7 @@ export default function RevenueGoals() {
                   />
                 </Field>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.75rem' }}>
                 <Field label="Period start">
                   <input
                     type="date"
@@ -412,8 +433,15 @@ export default function RevenueGoals() {
 }
 
 function Field({ label, children }) {
+  // #718 — `display: block` + `minWidth: 0` keep the wrapper from collapsing
+  // to its intrinsic width when it lands inside a grid cell. A bare <label>
+  // inherits inline-level layout in some browsers and lets the grid track
+  // shrink to the label text width — that's what produced the
+  // "labels disappear / inputs still on the right" symptom after the first
+  // failed save (the parent re-render evaluated the grid against the toast
+  // container and resolved one column to its inline-content size).
   return (
-    <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+    <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', minWidth: 0 }}>
       {label}
       {children}
     </label>

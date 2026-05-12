@@ -92,7 +92,19 @@ export default function Currencies() {
     } catch (e) { notify.error(e.message || 'Failed to update rate'); }
   };
 
+  // #719 — single source of truth for "which currency is base" used by BOTH
+  // the header tile AND each table row's BASE radio. Pre-fix the radio
+  // checked-state read `!!c.isBase` directly, which in preview mode could
+  // visually disagree with the header (the header used a `find || [0]`
+  // fallback so it always had a value; the radios used the raw boolean and
+  // — combined with `disabled={!persisted}` rendering the dot greyed-out —
+  // looked like "no row selected" to the reporter). Deriving both surfaces
+  // from `baseCode` guarantees they show the same currency, and switching
+  // the row check to `c.code === baseCode` keeps the visual selection
+  // accurate even when the underlying row's `isBase` flag is missing or
+  // false on the seed-defaults.
   const baseCurrency = currencies.find((c) => c.isBase) || currencies[0];
+  const baseCode = baseCurrency?.code;
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
@@ -223,13 +235,21 @@ export default function Currencies() {
                       )}
                     </td>
                     <td style={{ ...td, textAlign: 'center' }}>
+                      {/* #719 — radio reads from the same `baseCode` the
+                          header tile uses; this guarantees the two surfaces
+                          can never disagree about which currency is base.
+                          We use `readOnly` (not `disabled`) when the rows
+                          are unpersisted preview defaults — disabled radios
+                          render with a greyed-out dot that reporters
+                          perceived as "no selection". readOnly keeps the
+                          fill visible while still blocking the click. */}
                       <input
                         type="radio"
                         name="baseCurrency"
-                        checked={!!c.isBase}
-                        disabled={!persisted}
+                        checked={c.code === baseCode}
+                        readOnly={!persisted}
                         onChange={() => persisted && handleSetBase(c.id)}
-                        title={persisted ? 'Set as base' : 'Initialize defaults first'}
+                        title={persisted ? 'Set as base' : 'Initialize defaults first to change base'}
                         style={{ cursor: persisted ? 'pointer' : 'not-allowed' }}
                       />
                     </td>

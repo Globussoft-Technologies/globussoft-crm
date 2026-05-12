@@ -520,6 +520,76 @@ test.describe('SMS API — /config (ADMIN-only)', () => {
     expect(typeof body.config.authToken).toBe('object');
     expect(body.config.authToken.configured).toBe(true);
   });
+
+  // #716 — MSG91 senderId must be exactly 6 alphanumeric chars (DLT-registered).
+  // Validate the new server-side enforcement: rejects too-short, too-long, and
+  // non-alphanumeric; accepts exactly 6; allows empty/null (config-not-set).
+  // Twilio's senderId is a phone number, so the rule must NOT apply to it
+  // (`PUT /config/:provider stores authToken when provided` above already
+  // demonstrates Twilio accepts an 11-char phone number — those two together
+  // pin the per-provider scoping.)
+  test('#716 — msg91 senderId of 6 alphanumeric chars accepted', async ({ request }) => {
+    const res = await authPut(request, '/api/sms/config/msg91', {
+      apiKey: `${RUN_TAG}_msg91_xxxxxxxxxxxxxxxxxxxx`,
+      senderId: 'GLBS01',
+      isActive: false,
+    });
+    expect(res.status(), `body: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.config.senderId).toBe('GLBS01');
+  });
+
+  test('#716 — msg91 senderId of 5 chars rejected with INVALID_SENDER_ID_LENGTH', async ({ request }) => {
+    const res = await authPut(request, '/api/sms/config/msg91', {
+      apiKey: `${RUN_TAG}_short_xxxxxxxxxxxxxxxxxxxx`,
+      senderId: 'SHORT',
+      isActive: false,
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_SENDER_ID_LENGTH');
+  });
+
+  test('#716 — msg91 senderId of 7 chars rejected with INVALID_SENDER_ID_LENGTH', async ({ request }) => {
+    const res = await authPut(request, '/api/sms/config/msg91', {
+      apiKey: `${RUN_TAG}_long_xxxxxxxxxxxxxxxxxxxx`,
+      senderId: 'TOOLONG',
+      isActive: false,
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_SENDER_ID_LENGTH');
+  });
+
+  test('#716 — msg91 senderId with special char rejected', async ({ request }) => {
+    const res = await authPut(request, '/api/sms/config/msg91', {
+      apiKey: `${RUN_TAG}_special_xxxxxxxxxxxxxxxxxxxx`,
+      senderId: 'AB-D12',
+      isActive: false,
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_SENDER_ID_LENGTH');
+  });
+
+  test('#716 — msg91 empty senderId accepted (config-not-set)', async ({ request }) => {
+    const res = await authPut(request, '/api/sms/config/msg91', {
+      apiKey: `${RUN_TAG}_empty_xxxxxxxxxxxxxxxxxxxx`,
+      senderId: '',
+      isActive: false,
+    });
+    expect(res.status()).toBe(200);
+  });
+
+  test('#716 — msg91 null senderId accepted (config-not-set)', async ({ request }) => {
+    const res = await authPut(request, '/api/sms/config/msg91', {
+      apiKey: `${RUN_TAG}_null_xxxxxxxxxxxxxxxxxxxx`,
+      senderId: null,
+      isActive: false,
+    });
+    expect(res.status()).toBe(200);
+  });
 });
 
 // ─── /drain (ADMIN-only) ─────────────────────────────────────────────

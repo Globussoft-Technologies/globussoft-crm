@@ -264,7 +264,27 @@ export default function Settings() {
               </div>
               <div style={{ minWidth: 0 }}>
                 <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Slug</label>
-                <input type="text" disabled className="input-field" value={tenant.slug || ''} title="Organization slug is permanent" />
+                {/* #715 — slug is read-only after organization creation. Render
+                    with `readOnly` + muted background + cursor-not-allowed so
+                    the input visibly signals the locked state; pre-fix the
+                    `disabled` attr alone left users typing into a field
+                    whose changes were silently stripped by the backend PUT
+                    handler (routes/tenants.js doesn't accept `slug` in
+                    update bodies). The helper text under the input makes
+                    the read-only state explicit without requiring a hover
+                    tooltip. */}
+                <input
+                  type="text"
+                  readOnly
+                  className="input-field"
+                  value={tenant.slug || ''}
+                  title="Slug is read-only after organization creation."
+                  aria-readonly="true"
+                  style={{ background: 'var(--card-bg-secondary, rgba(255,255,255,0.05))', cursor: 'not-allowed', opacity: 0.75 }}
+                />
+                <p style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  Slug is read-only after organization creation.
+                </p>
               </div>
               {/* #441: surface the public booking URL with a one-click copy
                   button. Pre-fix the owner had to view-source / DOM-inspect

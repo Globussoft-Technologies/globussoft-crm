@@ -469,6 +469,23 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
     const { provider } = req.params;
     const { apiKey, authToken, senderId, dltEntityId, isActive, settings } = req.body;
 
+    // #716 — MSG91 DLT-registered Sender IDs are STRICTLY 6 alphanumeric
+    // characters; the carrier rejects anything else at send time. Pre-fix
+    // the form was labelled "(6 chars)" but neither side enforced it, so
+    // operators saved arbitrary-length strings and only discovered the
+    // problem when MSG91 returned DLT failures on real sends. Allow
+    // null/empty (config-not-set is legitimate during provisioning), but
+    // reject anything set + wrong length. Twilio's `senderId` is a phone
+    // number of variable length, so scope the rule to MSG91 only.
+    if (provider === "msg91" && typeof senderId === "string" && senderId.length > 0) {
+      if (!/^[A-Za-z0-9]{6}$/.test(senderId)) {
+        return res.status(400).json({
+          error: "senderId must be exactly 6 alphanumeric characters",
+          code: "INVALID_SENDER_ID_LENGTH",
+        });
+      }
+    }
+
     // Strip masked sentinels: the frontend always sends BACK the GET
     // shape ({configured,last4}) for non-rotated fields, so we must
     // ignore them — only a fresh plaintext credential constitutes a

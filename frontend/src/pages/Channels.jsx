@@ -320,7 +320,12 @@ export default function Channels() {
       {activeTab === 'sms' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-            {[{ provider: 'msg91', label: 'MSG91', fields: [{ key: 'apiKey', label: 'API Key', secret: true }, { key: 'senderId', label: 'Sender ID (6 chars)' }, { key: 'dltEntityId', label: 'DLT Entity ID' }] },
+            {/* #716 — MSG91 Sender IDs are strictly 6 alphanumeric characters
+                (DLT-registered). Enforce maxLength + pattern client-side AND
+                surface a helper line so operators don't bounce off the 400 on
+                Save. Twilio's senderId is a phone number, so leave it
+                unconstrained. */}
+            {[{ provider: 'msg91', label: 'MSG91', fields: [{ key: 'apiKey', label: 'API Key', secret: true }, { key: 'senderId', label: 'Sender ID (6 chars)', maxLength: 6, pattern: '[A-Za-z0-9]{6}', helper: 'Exactly 6 alphanumeric characters (DLT-registered).' }, { key: 'dltEntityId', label: 'DLT Entity ID' }] },
               { provider: 'twilio', label: 'Twilio', fields: [{ key: 'apiKey', label: 'Account SID' }, { key: 'authToken', label: 'Auth Token', secret: true }, { key: 'senderId', label: 'Phone Number' }] }
             ].map(p => (
               <ConfigCard
@@ -510,14 +515,23 @@ function ConfigCard({ provider, config, onChangeField, onSave, onRotateSecret })
                 onRotate={() => setRotating({ field: f.key, label: f.label })}
               />
             ) : (
-              <input
-                className="input-field"
-                type={f.type || 'text'}
-                placeholder={f.label}
-                value={config[f.key] ?? ''}
-                onChange={e => onChangeField(f.key, e.target.value)}
-                style={{ width: '100%', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
-              />
+              <>
+                <input
+                  className="input-field"
+                  type={f.type || 'text'}
+                  placeholder={f.label}
+                  value={config[f.key] ?? ''}
+                  onChange={e => onChangeField(f.key, e.target.value)}
+                  maxLength={f.maxLength}
+                  pattern={f.pattern}
+                  style={{ width: '100%', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
+                />
+                {f.helper && (
+                  <p style={{ marginTop: '0.25rem', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                    {f.helper}
+                  </p>
+                )}
+              </>
             )}
           </div>
         ))}

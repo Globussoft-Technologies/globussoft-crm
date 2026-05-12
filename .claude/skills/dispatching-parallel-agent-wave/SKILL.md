@@ -215,6 +215,64 @@ git commit --only backend/routes/foo.js e2e/tests/foo.spec.js -F msg.txt
 
 **Empirical confirmation — v3.4.12 closure wave (2026-05-05):** the W1/W2/W3 waves dispatched 7 agents across 27 issues with `-o` baked into the per-agent prompt template from the start (see [AGENT_PROMPT_TEMPLATE.md "Commit hygiene"](AGENT_PROMPT_TEMPLATE.md)). **Zero index-race collisions across the entire wave.** The pattern that bit the 2026-05-05 morning waves twice (Agent F sweeping 7 of Agent J's files; #413 bundling 6 unrelated) didn't recur once the template required `-o`. **Bake the `-o` rule into the per-agent prompt** — relying on the agent to remember the existing skill section is unreliable; making it canned in the template is what converted the pattern from "occasionally bit us" to "zero incidents."
 
+## When `--only` is NOT sufficient — overlapping-file scenarios (added 2026-05-12 after 6 instances)
+
+`git commit --only <pathspec>` solves the **index-race** problem (two agents call `git add` in overlapping windows; the second's commit accidentally captures the first's staged files). It does **not** solve the **working-tree-state problem**: when two agents have *uncommitted local edits* in the SAME file, `--only` captures the full working-tree state of that file at commit time — including the sibling's edits — not just your local diff.
+
+**2026-05-12 saw 6 instances of this in one day** (mostly on shared files like `backend/prisma/schema.prisma`, `.github/workflows/deploy.yml`, `.github/workflows/coverage.yml`, `backend/middleware/security.js`, `frontend/src/index.css`):
+
+- w-B1's `f85dc45` (`#665` date-range validation) committed deploy.yml + coverage.yml — captured sibling w-C's WIP `csp-stepup-api.spec.js` workflow line that hadn't been committed yet. Caused the next CI run to red on "spec not found"; required a follow-up `96ff706` to drop the dangling ref.
+- w-B2's `a30a40d` (`#657` CSRF) swept up w-D1's 10 `frontend/src/components/ui/*` files + `frontend/src/index.css` `btn-danger` + animation hunks. Build still passed (lucky case), but w-D1 had to ship `1364fea` as a docs-only commit to claim the `Closes #N` trailers.
+- w-B3's `ab046d4` (`#653` GiftCard bcrypt) needed `git commit --only <my-5-files>` to isolate around unresolved merge conflicts and sibling WIP in 12+ files.
+- w-D1 was "swept into" w-B2's `a30a40d`; recovered via `git reset --soft` + patch-isolation via `git apply --cached` to extract only the agent's own hunks.
+- w-D2 stalled mid-flight at "wire tenant-aware document.title" with 5 shared frontend files in working tree; parent agent took over the recovery in `feb0fcc`.
+- w-D3's `2a4e21e` (PII masking) was the only Wave-D agent to commit cleanly because by the time it ran, siblings had already drained — the timing-based "luck" pattern.
+
+### What to do instead
+
+For each shared-file category, use the targeted mitigation below INSTEAD of `--only` alone:
+
+**`backend/prisma/schema.prisma` (Prisma model additions):**
+Use a one-shot Node patcher that anchors on grep-locatable insertion points. Write something like `.tmp-apply-<agent>-schema.js` that:
+1. Reads `schema.prisma` content
+2. Finds your insertion point via a deterministic anchor (e.g. end of file, or after a specific known model's closing `}`)
+3. Splices in your new model block
+4. Writes the file
+5. Runs `git add schema.prisma && git commit -m '...' schema.prisma` immediately in the same script
+
+The patcher runs atomically — there's no window where another agent's WIP can land in the file between your splice and your commit. Canonical example: 2026-05-09 Wave 2 Agent II for `schema.prisma`.
+
+**`.github/workflows/deploy.yml` + `coverage.yml` (gate-spec list additions):**
+Use the existing `.claude/skills/wiring-spec-into-gate/wire-in.sh` script — it's idempotent: it greps for your spec name first and no-ops if already present. After `git pull --rebase` on push collision, re-run it to claim your slot. Don't hand-edit the YAML; the script handles ordering + comments.
+
+**`frontend/src/index.css` + shared CSS files:**
+Append your agent's section at the END of the file, fenced with a clear boundary marker so siblings can split them apart later if needed:
+
+```css
+/* === <agent-tag>-<issue#> — <one-line description> === */
+.your-class { ... }
+/* === END <agent-tag>-<issue#> === */
+```
+
+On collision (push rejected after rebase), `git apply --cached <patch-with-your-section>` extracts only your hunk. Don't try to merge — appended sections are commutative.
+
+**`backend/server.js` mount block + middleware-chain edits:**
+These are the riskiest because order matters AND multiple agents append to the same regions. Mitigation: each agent writes a `.tmp-server-patch-<agent>.js` script that does a targeted `String.prototype.replace()` against a specific known anchor line, then commits server.js atomically (same pattern as the prisma patcher).
+
+**General principle:** when in doubt, **dispatch to a single agent serially** rather than parallel. The schema-sweep cost (lost work + recovery commits) usually exceeds the wall-clock savings of parallelism for 3+ agents sharing one file.
+
+### Detection — how to know which scenario you're in
+
+Before dispatching, run:
+
+```bash
+# Will the agents touch any shared files?
+echo "Schema additions:" && grep -lE "schema.prisma" .tmp-agent-plans/*.md 2>/dev/null | wc -l
+echo "Workflow additions:" && grep -lE "deploy.yml|coverage.yml" .tmp-agent-plans/*.md 2>/dev/null | wc -l
+```
+
+If ≥2 agents will edit the same file, **mandate the patcher pattern in those agents' prompts** OR sequence them serially.
+
 ## Verify each issue's auto-close after multi-issue commits (added 2026-05-06)
 
 GitHub's auto-close-on-trailer behavior has TWO silent failure modes that bit the 2026-05-05 5-agent wave:

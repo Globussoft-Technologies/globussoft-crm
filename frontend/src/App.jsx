@@ -40,6 +40,7 @@ const Marketing = lazy(() => import("./pages/Marketing"));
 const Reports = lazy(() => import("./pages/Reports"));
 const AgentReports = lazy(() => import("./pages/AgentReports"));
 const Settings = lazy(() => import("./pages/Settings"));
+const UserSettings = lazy(() => import("./pages/UserSettings"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
@@ -666,6 +667,7 @@ export default function App() {
                     />
                     <Route path="profile" element={<Profile />} />
                     <Route path="profile/2fa" element={<Profile2FA />} />
+                    <Route path="notification-settings" element={<UserSettings />} />
                     {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
                         adminOnly visibility + the "System Admin Required"
                         toast text). Pre-fix, USER + MANAGER navigation to

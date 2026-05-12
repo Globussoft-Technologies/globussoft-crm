@@ -875,6 +875,14 @@ function renderWellnessNav({
           <Link to="/settings" icon={Settings} label="Settings" />
         </>
       )}
+
+      {/* User Notification Settings — only for regular users, not admin/manager */}
+      {!isAdmin && !isManager && (
+        <>
+          <div style={labelStyle}>User</div>
+          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+        </>
+      )}
     </>
   );
 }
@@ -1058,6 +1066,22 @@ function renderGenericNav({
           }}
         >
           <Link to="/settings" icon={Settings} label="Settings" />
+        </div>
+      )}
+
+      {/* User Notification Settings — only for regular users, not admin/manager */}
+      {!isAdmin && !isManager && (
+        <div
+          style={{
+            paddingTop: "0.75rem",
+            marginTop: "0.5rem",
+            borderTop: "1px solid var(--border-color)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.25rem",
+          }}
+        >
+          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
         </div>
       )}
     </>

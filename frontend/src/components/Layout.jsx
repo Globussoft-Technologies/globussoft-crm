@@ -31,7 +31,10 @@ import { setupPush } from '../utils/pushSetup';
 //     Layout test's `chip.toHaveTextContent(/wellness/i)` assertion
 //     resolves against the chip itself, not a sibling element)
 function TenantChip({ tenant }) {
-  const isWellness = tenant?.vertical === 'wellness';
+  // Don't render at all when tenant context is missing (pre-login / splash /
+  // logged-out). Layout.test.jsx pins this contract.
+  if (!tenant) return null;
+  const isWellness = tenant.vertical === 'wellness';
   return (
     <div
       data-testid="tenant-chip"

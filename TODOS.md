@@ -57,7 +57,7 @@ The full fix needs an advisory lock or a two-phase repair pass — tracked as a 
 
 ### Pending operator step
 
-- **B-03 SendGrid Sender Identity** — verify a Single Sender at https://app.sendgrid.com/settings/sender_auth, send me the verified address, I'll SSH-update demo's `backend/.env` via `scripts/apply-sendgrid-key.py`. 2 minutes of your time unblocks real email delivery from demo.
+- ~~**B-03 SendGrid Sender Identity**~~ ✅ **CLOSED 2026-05-13** — Sumit verified `noreply@crm.globusdemos.com` (Single Sender). Smoke-test confirmed: `POST /api/email-scheduling/:id/send-now` returned `success: true, delivered: true, status: SENT` to `sumit@chingari.io`. No `.env` update needed (default matched verified address). Operator-blocked window: 7 days (v3.4.13 → 2026-05-13).
 
 ### Long tail still open
 

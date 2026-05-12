@@ -1,11 +1,11 @@
 # Pending: user + operator blockers (post-2026-05-12 all-issues sweep)
 
-**As of 2026-05-12 evening — HEAD `0a242b6` deploy gate GREEN.** A full
-all-issues sweep closed 52 of the 60 open issues today across Waves A–D.
-The autonomous engineering backlog is empty.
+**As of 2026-05-13 morning — HEAD `762590f` deploy gate GREEN.** A full
+all-issues sweep closed 52 of the 60 open issues yesterday across
+Waves A–D. The autonomous engineering backlog is empty.
 
 Remaining open items are exclusively:
-- **§1** operator (2-min SendGrid dashboard step)
+- ~~**§1** operator (2-min SendGrid dashboard step)~~ ✅ **CLOSED 2026-05-13**
 - **§6 / §7** external-team deliverables (Callified webhook, AdsGPT SSO)
 - **§8** intentionally-open #457 manual-QA umbrella
 - **§9** product-decision deferrals (#699 routing convention, #702 notification preferences)
@@ -21,45 +21,35 @@ For each item:
 
 ---
 
-## 1. OPERATOR — B-03 SendGrid Sender Identity verification
+## 1. ✅ CLOSED 2026-05-13 — B-03 SendGrid Sender Identity verification
 
-**Status:** Code path is shipped. `/send-now` returns
-`{ success: false, hint: "Verify Sender Identity at
-https://app.sendgrid.com/settings/sender_auth" }` whenever SendGrid rejects
-with the unverified-Sender-Identity error. **No real email actually delivers
-from demo until this is verified in the SendGrid dashboard.** Has been
-operator-blocked since v3.4.13 (2026-05-06 SendGrid swap).
+**Resolution:** Sumit verified `noreply@crm.globusdemos.com` via Single
+Sender Verification (option A). No `backend/.env` update was needed —
+demo's `SENDGRID_FROM_EMAIL` default already matches the verified
+address.
 
-**Why I can't do this autonomously:** I don't have SendGrid dashboard
-credentials, and the verification flow requires clicking a link in the
-inbox of whoever owns the verified email address.
+**Smoke-test result (2026-05-13 14:57 UTC):**
 
-**Options (pick one):**
+Created scheduled email `id=314` to `sumit@chingari.io` via
+`POST /api/email-scheduling`, then fired `POST /api/email-scheduling/314/send-now`.
+Response:
 
-- **★ A. Single Sender Verification (~2 min)** — log in at
-  https://app.sendgrid.com/settings/sender_auth, click "Verify a Single
-  Sender", fill the form (name, email = `noreply@crm.globusdemos.com` or
-  whatever address you want), click the link in the inbox. Done.
-- **B. Domain Authentication (~10 min)** — same dashboard, click "Authenticate
-  Your Domain", choose `crm.globusdemos.com`, copy the 3-5 CNAME records
-  it gives you, paste them into the DNS provider for `globusdemos.com`,
-  wait for propagation (~5 min), click verify. More invasive but lets
-  every `*@crm.globusdemos.com` address send.
-- **C. Use a different already-verified address** — if you already have a
-  Single Sender verified for a different address (e.g. `support@globussoft.com`),
-  tell me the verified address and I'll SSH-update demo's `backend/.env`
-  with `SENDGRID_FROM_EMAIL=<that-address>`. The
-  [scripts/apply-sendgrid-key.py](../scripts/apply-sendgrid-key.py) pattern
-  is reusable.
+```json
+{
+  "success": true,
+  "delivered": true,
+  "record": { "status": "SENT", "sentAt": "2026-05-12T14:57:37.945Z", "errorMessage": null }
+}
+```
 
-**What unblocks:** option A is the fastest. After verification, send me a
-quick "B-03 done, sender = X" and I'll smoke-test with a `/send-now` curl
-to confirm a real email lands.
+Operator-blocked since v3.4.13 (2026-05-06 SendGrid swap) → **closed
+~7 days later** with a single 2-minute dashboard step.
 
-**Cost of NOT doing this:** demo can't send real emails — every email-
-dispatch test (~10 specs) currently passes only because the route returns
-`200 + success: false` correctly. Real product demos that show email
-delivery will fail.
+**What this unblocks:** real email delivery from demo. Workflow rules
+with `send_email` actions (Razorpay subscription emails, password reset
+links, scheduled report dispatch, T-7 membership renewal reminders,
+appointment reminders, NPS surveys) will all now reach their
+recipients' inboxes.
 
 ---
 

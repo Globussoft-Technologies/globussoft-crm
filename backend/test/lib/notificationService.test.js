@@ -45,6 +45,10 @@ const NOTIF_ROW = { id: 1, title: 'Hi', message: 'world' };
 beforeAll(() => {
   prisma.notification = { create: vi.fn() };
   prisma.user = { findUnique: vi.fn(), findMany: vi.fn() };
+  // PR #710 / #702 — notify() now reads NotificationPreference before
+  // routing. Default to "no custom prefs row" so the helper falls back
+  // to DEFAULT_PREFERENCES (every category + every channel enabled).
+  prisma.notificationPreference = { findUnique: vi.fn() };
   // pushService exports an object — patch its method directly.
   pushService.sendToUser = vi.fn();
 });
@@ -54,6 +58,9 @@ beforeEach(() => {
   prisma.notification.create.mockResolvedValue(NOTIF_ROW);
   prisma.user.findUnique.mockReset();
   prisma.user.findMany.mockReset();
+  prisma.notificationPreference.findUnique.mockReset();
+  // No custom prefs → use DEFAULT_PREFERENCES (every category + channel ON).
+  prisma.notificationPreference.findUnique.mockResolvedValue(null);
   pushService.sendToUser.mockReset();
   global.fetch = vi.fn();
 });

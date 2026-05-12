@@ -18,10 +18,23 @@ import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
 
-// #555: Simple tenant display chip showing organization name and lock icon
+// #555 (HI-06) — Option C: lock to single tenant per session. The chip is
+// read-only; clicking it does NOT dispatch a tenant switch. To switch
+// tenants, users log out and log back in. The pre-#555 in-session
+// TenantSwitcher widget is gone (and stays gone — Layout.test.jsx
+// pins `queryByTestId('tenant-switcher')` to NOT be in document).
+//
+// The chip surfaces:
+//   - tenant.name (always)
+//   - 🔒 lock icon (always, indicates the lock-per-session policy)
+//   - "wellness" label when tenant.vertical === 'wellness' (so the
+//     Layout test's `chip.toHaveTextContent(/wellness/i)` assertion
+//     resolves against the chip itself, not a sibling element)
 function TenantChip({ tenant }) {
+  const isWellness = tenant?.vertical === 'wellness';
   return (
     <div
+      data-testid="tenant-chip"
       style={{
         display: 'flex', alignItems: 'center', gap: '6px',
         background: 'var(--accent-bg, #f0f4ff)', border: '1px solid var(--accent-color)',
@@ -29,52 +42,16 @@ function TenantChip({ tenant }) {
         padding: '6px 12px', fontSize: '0.85rem',
         fontWeight: 500,
       }}
+      title={`Locked to ${tenant?.name || 'this tenant'} for session — log out to switch`}
     >
       <Building2 size={14} style={{ color: 'var(--accent-color)' }} />
       <span>{tenant?.name || 'Organization'}</span>
-      <span style={{ fontSize: '0.7rem', color: 'var(--accent-color)', marginLeft: '4px' }}>🔒</span>
-    </div>
-  );
-}
-
-// #555: Option C — Lock to single tenant per session. Users cannot switch
-// tenants without logging out. The tenant is locked for the entire session.
-// To switch tenants, user must logout and login again. Tenant name displayed
-// prominently in header with lock icon to indicate no-switching policy.
-function TenantSwitcher({ tenant, setTenant, setUser, setToken }) {
-  const navigate = useNavigate();
-  const [showTooltip, setShowTooltip] = useState(false);
-
-  return (
-    <div data-testid="tenant-switcher" style={{ position: 'relative' }}>
-      <div
-        onMouseEnter={() => setShowTooltip(true)}
-        onMouseLeave={() => setShowTooltip(false)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: '6px',
-          background: 'var(--accent-bg, #f0f4ff)', border: '1px solid var(--accent-color)',
-          color: 'var(--text-primary)', borderRadius: 8,
-          padding: '6px 12px', cursor: 'default', fontSize: '0.85rem',
-          fontWeight: 500, position: 'relative',
-        }}
-      >
-        <Building2 size={14} style={{ color: 'var(--accent-color)' }} />
-        <span>{tenant?.name || 'Organization'}</span>
-        <span style={{ fontSize: '0.7rem', color: 'var(--accent-color)', marginLeft: '4px' }}>🔒</span>
-      </div>
-      {showTooltip && (
-        <div
-          style={{
-            position: 'absolute', top: 'calc(100% + 8px)', right: 0,
-            background: 'var(--surface-color)', border: '1px solid var(--border-color)',
-            borderRadius: 6, padding: '8px 12px', fontSize: '0.8rem',
-            whiteSpace: 'nowrap', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 50,
-            color: 'var(--text-secondary)',
-          }}
-        >
-          Locked to {tenant?.name || 'this tenant'} for session
-        </div>
+      {isWellness && (
+        <span style={{ fontSize: '0.7rem', color: 'var(--accent-color)', marginLeft: '4px', textTransform: 'lowercase' }}>
+          wellness
+        </span>
       )}
+      <span style={{ fontSize: '0.7rem', color: 'var(--accent-color)', marginLeft: '4px' }}>🔒</span>
     </div>
   );
 }

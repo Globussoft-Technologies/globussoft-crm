@@ -1683,10 +1683,12 @@ test.describe('Wellness API — Consents', () => {
     const pdfRes = await authGet(request, `/api/wellness/consents/${consent.id}/pdf`);
     expect(pdfRes.status()).toBe(200);
     expect(pdfRes.headers()['content-type']).toMatch(/application\/pdf/);
-    const pdfBody = await pdfRes.arrayBuffer();
-    expect(pdfBody.byteLength).toBeGreaterThan(0);
-    // PDF files start with %PDF magic bytes
-    expect(new Uint8Array(pdfBody).slice(0, 4).toString()).toMatch(/37,80,68,70/); // %PDF
+    // Playwright's APIResponse exposes body() returning a Node Buffer, not
+    // the browser fetch API's arrayBuffer(). Use body() + check the buffer
+    // length + the %PDF magic bytes at the start.
+    const pdfBody = await pdfRes.body();
+    expect(pdfBody.length).toBeGreaterThan(0);
+    expect(pdfBody.subarray(0, 4).toString('ascii')).toBe('%PDF');
   });
 
   test('GET /consents list excludes heavy fields (signatureSvg, contentSnapshot, signedPdfBlob)', async ({ request }) => {

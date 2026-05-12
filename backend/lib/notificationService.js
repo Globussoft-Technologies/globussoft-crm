@@ -9,6 +9,66 @@
 
 const prisma = require("./prisma");
 
+// Default preferences when no custom row exists
+const DEFAULT_PREFERENCES = {
+  categoryToggles: {
+    deal: true,
+    task: true,
+    ticket: true,
+    lead: true,
+    approval: true,
+    leave: true,
+    expense: true,
+  },
+  channels: {
+    db: true,
+    socket: true,
+    push: false,
+    email: false,
+  },
+  quietHoursStart: null,
+  quietHoursEnd: null,
+  timezone: null,
+};
+
+// Helper: check if current time is within quiet hours (timezone-aware)
+function isInQuietHours(timezone, quietHoursStart, quietHoursEnd) {
+  if (!quietHoursStart || !quietHoursEnd || !timezone) return false;
+
+  try {
+    // Get current time in user's timezone
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(now);
+    const hour = parts.find(p => p.type === 'hour').value;
+    const minute = parts.find(p => p.type === 'minute').value;
+    const currentTime = `${hour}:${minute}`;
+
+    // Parse times (HH:MM format)
+    const [startHour, startMin] = quietHoursStart.split(':').map(Number);
+    const [endHour, endMin] = quietHoursEnd.split(':').map(Number);
+    const [curHour, curMin] = currentTime.split(':').map(Number);
+    const startTotalMin = startHour * 60 + startMin;
+    const endTotalMin = endHour * 60 + endMin;
+    const curTotalMin = curHour * 60 + curMin;
+
+    // Handle wrap-around (e.g., 22:00 to 07:00)
+    if (startTotalMin < endTotalMin) {
+      return curTotalMin >= startTotalMin && curTotalMin < endTotalMin;
+    } else {
+      return curTotalMin >= startTotalMin || curTotalMin < endTotalMin;
+    }
+  } catch (e) {
+    console.warn("[notificationService] quiet hours check failed:", e.message);
+    return false;
+  }
+}
+
 // --------------- SendGrid helper (inline, same pattern as communications.js) ---------------
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
@@ -58,6 +118,7 @@ async function sendSendGrid(to, subject, body) {
 
 /**
  * Send a notification to a single user across multiple channels with deduplication.
+ * Respects user's notification preferences (category toggles, channel selection, quiet hours).
  * @param {Object} opts
  * @param {number} opts.userId       - Target user ID
  * @param {number} opts.tenantId     - Tenant ID for multi-tenancy
@@ -67,14 +128,51 @@ async function sendSendGrid(to, subject, body) {
  * @param {string} [opts.priority=normal] - low | normal | high | critical
  * @param {string} [opts.link]       - Deep-link path (e.g. "/pipeline")
  * @param {string} [opts.entityType] - lead | ticket | approval | expense | leave
+ * @param {string} [opts.category]   - Notification category for preference filtering (deal, task, ticket, lead, approval, leave, expense)
  * @param {number} [opts.entityId]   - ID of the entity
  * @param {number} [opts.dedupWindowHours=24] - Hours to look back for dedup
  * @param {string[]} [opts.channels] - Delivery channels: db, socket, push, email (default: ['db','socket'])
  * @param {Object} [opts.io]         - Socket.io server instance
- * @returns {Promise<Object|null>}   - The created Notification record or null if deduped
+ * @returns {Promise<Object|null>}   - The created Notification record or null if deduped/blocked by prefs
  */
-async function notify({ userId, tenantId, title, message, type, priority, link, entityType, entityId, dedupWindowHours = 24, channels, io }) {
-  const activeChannels = channels || ["db", "socket"];
+async function notify({ userId, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours = 24, channels, io }) {
+  const requestedChannels = channels || ["db", "socket"];
+
+  // Fetch user preferences
+  const userPrefs = await prisma.notificationPreference.findUnique({
+    where: { userId },
+  }).catch(() => null);
+
+  const prefs = userPrefs ? {
+    categoryToggles: userPrefs.categoryToggles || DEFAULT_PREFERENCES.categoryToggles,
+    channels: userPrefs.channels || DEFAULT_PREFERENCES.channels,
+    quietHoursStart: userPrefs.quietHoursStart,
+    quietHoursEnd: userPrefs.quietHoursEnd,
+    timezone: userPrefs.timezone,
+  } : DEFAULT_PREFERENCES;
+
+  // Check if category is enabled (map type to category if category not provided)
+  const notifCategory = category || type || 'info';
+  if (prefs.categoryToggles[notifCategory] === false) {
+    console.log(`[notificationService] Category "${notifCategory}" is disabled for user ${userId}`);
+    return null;
+  }
+
+  // Check if in quiet hours
+  if (isInQuietHours(prefs.timezone, prefs.quietHoursStart, prefs.quietHoursEnd)) {
+    console.log(`[notificationService] User ${userId} is in quiet hours; suppressing notification`);
+    return null;
+  }
+
+  // Determine active channels based on preferences
+  const activeChannels = requestedChannels.filter(ch => {
+    const allowed = prefs.channels[ch];
+    if (allowed === false) {
+      console.log(`[notificationService] Channel "${ch}" is disabled for user ${userId}`);
+      return false;
+    }
+    return true;
+  });
 
   // Deduplication check: look for duplicate within window
   if (entityId && entityType) {

@@ -18,37 +18,62 @@ import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { setupPush } from '../utils/pushSetup';
 
-// #555 (HI-06) — lock-per-session policy.
-//
-// Pre-fix, the SPA's tenant context could flip silently based on URL
-// pathname — no switcher in the chrome, no audit trail, localStorage
-// could disagree with the rendered shell (pen-test privilege-confusion
-// surface). The earlier fix shipped an explicit switcher widget; v3.7.2
-// disposition reset the policy to lock-per-session — pick the tenant at
-// login and log out to switch. This component is now a READ-ONLY chip
-// showing the active tenant prominently; there is no in-session switch
-// path. The backend `/api/auth/tenant-switch` endpoint now returns
-// 410 Gone with code TENANT_SWITCH_DISABLED.
+// #555: Simple tenant display chip showing organization name and lock icon
 function TenantChip({ tenant }) {
-  if (!tenant?.name) return null;
-  const isWellness = tenant?.vertical === 'wellness';
   return (
     <div
-      data-testid="tenant-chip"
-      title="Tenant is locked for this session. Log out and log back in to switch."
       style={{
         display: 'flex', alignItems: 'center', gap: '6px',
-        background: 'transparent', border: '1px solid var(--border-color)',
+        background: 'var(--accent-bg, #f0f4ff)', border: '1px solid var(--accent-color)',
         color: 'var(--text-primary)', borderRadius: 8,
-        padding: '6px 10px', fontSize: '0.85rem',
+        padding: '6px 12px', fontSize: '0.85rem',
+        fontWeight: 500,
       }}
     >
-      <Building2 size={14} aria-hidden="true" />
-      <span>{tenant.name}</span>
-      {isWellness && (
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-          (wellness)
-        </span>
+      <Building2 size={14} style={{ color: 'var(--accent-color)' }} />
+      <span>{tenant?.name || 'Organization'}</span>
+      <span style={{ fontSize: '0.7rem', color: 'var(--accent-color)', marginLeft: '4px' }}>🔒</span>
+    </div>
+  );
+}
+
+// #555: Option C — Lock to single tenant per session. Users cannot switch
+// tenants without logging out. The tenant is locked for the entire session.
+// To switch tenants, user must logout and login again. Tenant name displayed
+// prominently in header with lock icon to indicate no-switching policy.
+function TenantSwitcher({ tenant, setTenant, setUser, setToken }) {
+  const navigate = useNavigate();
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  return (
+    <div data-testid="tenant-switcher" style={{ position: 'relative' }}>
+      <div
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          background: 'var(--accent-bg, #f0f4ff)', border: '1px solid var(--accent-color)',
+          color: 'var(--text-primary)', borderRadius: 8,
+          padding: '6px 12px', cursor: 'default', fontSize: '0.85rem',
+          fontWeight: 500, position: 'relative',
+        }}
+      >
+        <Building2 size={14} style={{ color: 'var(--accent-color)' }} />
+        <span>{tenant?.name || 'Organization'}</span>
+        <span style={{ fontSize: '0.7rem', color: 'var(--accent-color)', marginLeft: '4px' }}>🔒</span>
+      </div>
+      {showTooltip && (
+        <div
+          style={{
+            position: 'absolute', top: 'calc(100% + 8px)', right: 0,
+            background: 'var(--surface-color)', border: '1px solid var(--border-color)',
+            borderRadius: 6, padding: '8px 12px', fontSize: '0.8rem',
+            whiteSpace: 'nowrap', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 50,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          Locked to {tenant?.name || 'this tenant'} for session
+        </div>
       )}
     </div>
   );

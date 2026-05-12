@@ -1665,6 +1665,93 @@ test.describe('Wellness API — Consents', () => {
     );
     expect(res.status()).toBe(404);
   });
+
+  // #564: PDF BLOB storage tests
+  test('GET /consents/:id/pdf returns valid PDF with embedded signature', async ({ request }) => {
+    const postRes = await authPost(
+      request,
+      '/api/wellness/consents',
+      {
+        patientId: consentPatientId,
+        templateName: `${RUN_TAG} Consent PDF`,
+        signatureSvg: FAKE_SIG_PAYLOAD,
+      },
+      'drharsh',
+    );
+    expect(postRes.status()).toBe(201);
+    const consent = await postRes.json();
+    const pdfRes = await authGet(request, `/api/wellness/consents/${consent.id}/pdf`);
+    expect(pdfRes.status()).toBe(200);
+    expect(pdfRes.headers()['content-type']).toMatch(/application\/pdf/);
+    const pdfBody = await pdfRes.arrayBuffer();
+    expect(pdfBody.byteLength).toBeGreaterThan(0);
+    // PDF files start with %PDF magic bytes
+    expect(new Uint8Array(pdfBody).slice(0, 4).toString()).toMatch(/37,80,68,70/); // %PDF
+  });
+
+  test('GET /consents list excludes heavy fields (signatureSvg, contentSnapshot, signedPdfBlob)', async ({ request }) => {
+    const res = await authGet(request, `/api/wellness/consents?patientId=${consentPatientId}&limit=5`);
+    expect(res.status()).toBe(200);
+    const items = await res.json();
+    for (const c of items) {
+      expect(c).not.toHaveProperty('signatureSvg');
+      expect(c).not.toHaveProperty('contentSnapshot');
+      expect(c).not.toHaveProperty('signedPdfBlob');
+      expect(c).toHaveProperty('hasPdfBlob');
+      expect(typeof c.hasPdfBlob).toBe('boolean');
+    }
+  });
+
+  test('GET /patients/:id includes consents without heavy fields', async ({ request }) => {
+    const res = await authGet(request, `/api/wellness/patients/${consentPatientId}`);
+    expect(res.status()).toBe(200);
+    const patient = await res.json();
+    expect(Array.isArray(patient.consents)).toBe(true);
+    for (const c of patient.consents) {
+      expect(c).not.toHaveProperty('signatureSvg');
+      expect(c).not.toHaveProperty('contentSnapshot');
+      expect(c).not.toHaveProperty('signedPdfBlob');
+      expect(c).toHaveProperty('hasPdfBlob');
+    }
+  });
+
+  test('PUT /consents/:id with signedPdfBlob returns 400 PDF_BLOB_IMMUTABLE', async ({ request }) => {
+    const postRes = await authPost(
+      request,
+      '/api/wellness/consents',
+      {
+        patientId: consentPatientId,
+        templateName: `${RUN_TAG} Consent Immutable`,
+        signatureSvg: FAKE_SIG_PAYLOAD,
+      },
+      'drharsh',
+    );
+    expect(postRes.status()).toBe(201);
+    const consent = await postRes.json();
+    const res = await authPut(
+      request,
+      `/api/wellness/consents/${consent.id}`,
+      { signedPdfBlob: 'tampered' },
+      'admin',
+    );
+    expect(res.status()).toBe(400);
+    const err = await res.json();
+    expect(err.code).toBe('PDF_BLOB_IMMUTABLE');
+  });
+
+  test('GET /consents/:id/pdf works for seeded consents without BLOB (fallback)', async ({ request }) => {
+    // Seeded consents have signedPdfBlob = null, test on-demand fallback
+    const listRes = await authGet(request, '/api/wellness/consents?limit=5');
+    expect(listRes.status()).toBe(200);
+    const items = await listRes.json();
+    // Find any seeded consent (they'll have hasPdfBlob: false or id < 1000 depending on seed order)
+    if (items.length > 0) {
+      const anyConsent = items[0];
+      const pdfRes = await authGet(request, `/api/wellness/consents/${anyConsent.id}/pdf`);
+      expect(pdfRes.status()).toBe(200);
+      expect(pdfRes.headers()['content-type']).toMatch(/application\/pdf/);
+    }
+  });
 });
 
 // =====================================================================

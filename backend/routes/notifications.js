@@ -235,26 +235,122 @@ router.post("/", async (req, res) => {
   }
 });
 
-// GET /preferences — defaults from server config (no per-user override yet).
-// A UserNotificationPreference model would let users mute push/email channels
-// individually; that's deferred to the product backlog and is not in MVP scope
-// — frontend gracefully treats this static envelope as the live preferences.
+// Default preferences when no custom row exists
+const DEFAULT_PREFERENCES = {
+  categoryToggles: {
+    deal: true,
+    task: true,
+    ticket: true,
+    lead: true,
+    approval: true,
+    leave: true,
+    expense: true,
+  },
+  channels: {
+    db: true,
+    socket: true,
+    push: false,
+    email: false,
+  },
+  quietHoursStart: null,
+  quietHoursEnd: null,
+  timezone: null,
+};
+
+// GET /preferences — fetch user's notification preferences with defaults
 router.get("/preferences", async (req, res) => {
-  res.json({
-    channels: {
-      db: { enabled: true, configurable: false },
-      socket: { enabled: true, configurable: false },
-      push: { enabled: true, configurable: true },
-      email: { enabled: false, configurable: true },
-    },
-  });
+  try {
+    const prefs = await prisma.notificationPreference.findUnique({
+      where: { userId: req.user.userId },
+    });
+
+    if (!prefs) {
+      return res.json(DEFAULT_PREFERENCES);
+    }
+
+    res.json({
+      categoryToggles: prefs.categoryToggles || DEFAULT_PREFERENCES.categoryToggles,
+      channels: prefs.channels || DEFAULT_PREFERENCES.channels,
+      quietHoursStart: prefs.quietHoursStart,
+      quietHoursEnd: prefs.quietHoursEnd,
+      timezone: prefs.timezone,
+    });
+  } catch (err) {
+    console.error("[Notifications] Get preferences error:", err);
+    res.status(500).json({ error: "Failed to fetch notification preferences" });
+  }
 });
 
-// PUT /preferences — accepts the body and echoes back so the frontend "Save
-// preferences" button surfaces a success toast. No persistence layer until the
-// UserNotificationPreference model is on the roadmap (deferred — see GET note).
+// PUT /preferences — save user's notification preferences
 router.put("/preferences", async (req, res) => {
-  res.json({ status: "ok", code: "PREFERENCES_SAVED", preferences: req.body }); // #550
+  try {
+    const { categoryToggles, channels, quietHoursStart, quietHoursEnd, timezone } = req.body;
+    const userId = req.user.userId;
+    const tenantId = req.user.tenantId;
+
+    // Validate times if provided (HH:MM format)
+    if (quietHoursStart && !/^\d{2}:\d{2}$/.test(quietHoursStart)) {
+      return res.status(400).json({ error: "quietHoursStart must be in HH:MM format" });
+    }
+    if (quietHoursEnd && !/^\d{2}:\d{2}$/.test(quietHoursEnd)) {
+      return res.status(400).json({ error: "quietHoursEnd must be in HH:MM format" });
+    }
+
+    const prefs = await prisma.notificationPreference.upsert({
+      where: { userId },
+      create: {
+        userId,
+        tenantId,
+        categoryToggles: categoryToggles || DEFAULT_PREFERENCES.categoryToggles,
+        channels: channels || DEFAULT_PREFERENCES.channels,
+        quietHoursStart: quietHoursStart || null,
+        quietHoursEnd: quietHoursEnd || null,
+        timezone: timezone || null,
+      },
+      update: {
+        categoryToggles: categoryToggles || DEFAULT_PREFERENCES.categoryToggles,
+        channels: channels || DEFAULT_PREFERENCES.channels,
+        quietHoursStart: quietHoursStart || null,
+        quietHoursEnd: quietHoursEnd || null,
+        timezone: timezone || null,
+      },
+    });
+
+    res.json({
+      status: "ok",
+      code: "PREFERENCES_SAVED",
+      preferences: {
+        categoryToggles: prefs.categoryToggles,
+        channels: prefs.channels,
+        quietHoursStart: prefs.quietHoursStart,
+        quietHoursEnd: prefs.quietHoursEnd,
+        timezone: prefs.timezone,
+      },
+    });
+  } catch (err) {
+    console.error("[Notifications] Save preferences error:", err);
+    res.status(500).json({ error: "Failed to save notification preferences" });
+  }
+});
+
+// POST /preferences/reset — reset to default preferences
+router.post("/preferences/reset", async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    await prisma.notificationPreference.delete({
+      where: { userId },
+    }).catch(() => null); // Ignore if doesn't exist
+
+    res.json({
+      status: "ok",
+      code: "PREFERENCES_RESET",
+      preferences: DEFAULT_PREFERENCES,
+    });
+  } catch (err) {
+    console.error("[Notifications] Reset preferences error:", err);
+    res.status(500).json({ error: "Failed to reset notification preferences" });
+  }
 });
 
 module.exports = router;

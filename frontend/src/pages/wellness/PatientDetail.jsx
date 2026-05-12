@@ -680,6 +680,31 @@ function ConsentTab({ patient, services, onSaved }) {
   // server stores a blank "signature" — a legal/compliance issue (#118).
   const [hasStrokes, setHasStrokes] = useState(false);
 
+  const [downloadingId, setDownloadingId] = useState(null);
+
+  const downloadConsentPdf = async (c) => {
+    setDownloadingId(c.id);
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/wellness/consents/${c.id}/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      console.log(`[PDF Download] Status: ${res.status}, Content-Type: ${res.headers.get('content-type')}`);
+      if (!res.ok) throw new Error(`PDF download failed (${res.status})`);
+      const blob = await res.blob();
+      console.log(`[PDF Download] Blob size: ${blob.size} bytes, type: ${blob.type}`);
+      if (blob.size === 0) throw new Error('PDF blob is empty');
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('[PDF Download Error]', err);
+      notify.error(err.message || 'Failed to download consent PDF.');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const startDraw = (e) => {
     setIsDrawing(true);
     setHasStrokes(true);
@@ -705,10 +730,13 @@ function ConsentTab({ patient, services, onSaved }) {
   };
   const endDraw = () => setIsDrawing(false);
   const getCoords = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: clientX - rect.left, y: clientY - rect.top };
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
   };
   const clearSig = () => {
     const c = canvasRef.current;
@@ -807,6 +835,23 @@ function ConsentTab({ patient, services, onSaved }) {
                     <span style={{ color: 'var(--text-secondary)' }}>{c.service.name}</span>
                   </>
                 )}
+                <button
+                  type="button"
+                  onClick={() => downloadConsentPdf(c)}
+                  disabled={downloadingId === c.id}
+                  title="Download signed consent PDF"
+                  style={{
+                    marginLeft: 'auto', background: 'transparent',
+                    border: '1px solid var(--primary-color, var(--accent-color))',
+                    color: 'var(--primary-color, var(--accent-color))',
+                    padding: '0.2rem 0.6rem', borderRadius: 6, fontSize: '0.75rem',
+                    cursor: downloadingId === c.id ? 'wait' : 'pointer',
+                    display: 'flex', alignItems: 'center', gap: '0.3rem',
+                  }}
+                >
+                  <Download size={12} />
+                  {downloadingId === c.id ? 'Downloading...' : 'PDF'}
+                </button>
               </li>
             ))}
           </ul>

@@ -284,6 +284,9 @@ model Tenant {
   // goals. Both per-tenant scoped, cascade-delete with the tenant.
   commissionProfiles CommissionProfile[]
   staffRevenueGoals  StaffRevenueGoal[]
+
+  // Notification preferences (per-user opt-in/out)
+  notificationPreferences NotificationPreference[]
 }
 
 model User {
@@ -374,6 +377,9 @@ model User {
 
   // Subscriptions
   subscriptions Subscription[]
+
+  // Notification preferences
+  notificationPreference NotificationPreference?
 }
 
 model Contact {
@@ -1518,6 +1524,30 @@ model PushTemplate {
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model NotificationPreference {
+  id                Int      @id @default(autoincrement())
+  userId            Int      @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId          Int
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Per-category toggles: { deal: true, task: false, ticket: true, lead: true, approval: true, leave: true, expense: true, ticket: true }
+  categoryToggles   Json     @default("{\"deal\": true, \"task\": true, \"ticket\": true, \"lead\": true, \"approval\": true, \"leave\": true, \"expense\": true}")
+
+  // Per-channel toggles: { db: true, socket: true, push: true, email: true }
+  channels          Json     @default("{\"db\": true, \"socket\": true, \"push\": false, \"email\": false}")
+
+  // Quiet hours (24h format, e.g. "22:00" to "07:00")
+  quietHoursStart   String?  // "HH:MM"
+  quietHoursEnd     String?  // "HH:MM"
+  timezone          String?  // "Asia/Kolkata"
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 // ── Landing Pages ─────────────────────────────────────────────────
@@ -2692,8 +2722,9 @@ model ConsentForm {
   // upgrades cannot retroactively alter the document the patient saw.
   captureMethod    String? @default("tablet-handoff") // tablet-handoff | portal-self-serve | imported-pdf
   capturedByUserId Int?
-  signedPdfBlob    Bytes?  @db.LongBlob
+  signedPdfBlob    Bytes?  @db.MediumBlob // stored PDF buffer after signing
   signedPdfMime    String? @default("application/pdf")
+  hasPdfBlob       Boolean @default(false) // flag for list queries (avoid loading full BLOB)
 
   patientId Int
   patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)

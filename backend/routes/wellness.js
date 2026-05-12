@@ -34,7 +34,7 @@ const { writeAudit, diffFields } = require("../lib/audit");
 // row.
 const {
   shouldMaskForViewer,
-  maskRow,
+  _maskRow,
   maskRows,
   auditDisclosureDetails,
 } = require("../lib/piiMask");
@@ -505,7 +505,15 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
           // #278: include doctor so the Rx detail modal can show "prescribed by".
           include: { doctor: { select: { id: true, name: true, email: true } } },
         },
-        consents: { orderBy: { signedAt: "desc" }, include: { service: true } },
+        consents: {
+          orderBy: { signedAt: "desc" },
+          select: {
+            id: true, templateName: true, signedAt: true,
+            patientId: true, serviceId: true, hasPdfBlob: true,
+            service: { select: { id: true, name: true } },
+            // EXCLUDED: signatureSvg, contentSnapshot, signedPdfBlob
+          },
+        },
         treatmentPlans: { include: { service: true } },
       },
     });
@@ -618,9 +626,12 @@ router.get("/patients/:id/consents", phiReadGate, async (req, res) => {
     const items = await prisma.consentForm.findMany({
       where: tenantWhere(req, { patientId }),
       orderBy: { signedAt: "desc" },
-      include: {
+      select: {
+        id: true, templateName: true, signedAt: true,
+        patientId: true, serviceId: true, hasPdfBlob: true,
         patient: { select: { id: true, name: true } },
         service: { select: { id: true, name: true } },
+        // EXCLUDED: signatureSvg, contentSnapshot, signedPdfBlob
       },
     });
     // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
@@ -747,6 +758,7 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   // invalid", not silent mutation. Tag-shaped HTML stays as silent-scrub
   // (preserves the long-standing #213 contract + the explicit "scrub is
   // silent" e2e contract test).
+  // eslint-disable-next-line no-control-regex
   if (body.name != null && /[\x00-\x1F\x7F]/.test(String(body.name))) {
     return { status: 400, error: "name contains invalid control characters", code: "INVALID_NAME" };
   }
@@ -1700,9 +1712,12 @@ router.get("/consents", phiReadGate, async (req, res) => {
       where,
       take: Math.min(parseInt(limit), 200),
       orderBy: { signedAt: "desc" },
-      include: {
+      select: {
+        id: true, templateName: true, signedAt: true,
+        patientId: true, serviceId: true, tenantId: true, hasPdfBlob: true,
         patient: { select: { id: true, name: true } },
         service: { select: { id: true, name: true } },
+        // EXCLUDED: signatureSvg, contentSnapshot, signedPdfBlob
       },
     });
     // PRD §11 / T2.2: staff-side consent list is a PHI read
@@ -1807,6 +1822,30 @@ router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"])
       );
     } catch (_e) { /* event bus optional */ }
 
+    // #564: fire-and-forget PDF BLOB generation. Generate the signed PDF
+    // after signing and store it in signedPdfBlob for fast serving via
+    // GET /consents/:id/pdf. Failure here MUST NOT affect the 201 response.
+    (async () => {
+      try {
+        console.log(`[wellness] Starting PDF generation for consent ${consent.id}`);
+        const [patient, service, clinic] = await Promise.all([
+          prisma.patient.findUnique({ where: { id: consent.patientId } }),
+          consent.serviceId ? prisma.service.findUnique({ where: { id: consent.serviceId } }) : null,
+          primaryClinic(req.user.tenantId),
+        ]);
+        console.log(`[wellness] Fetched patient ${patient?.id}, service ${service?.id}, clinic ${clinic?.id}`);
+        const pdfBuf = await renderConsentPdf(consent, patient, service, clinic, signatureSvg);
+        console.log(`[wellness] PDF rendered: ${pdfBuf.length} bytes`);
+        await prisma.consentForm.update({
+          where: { id: consent.id },
+          data: { signedPdfBlob: pdfBuf, hasPdfBlob: true },
+        });
+        console.log(`[wellness] Consent ${consent.id} PDF stored successfully`);
+      } catch (pdfErr) {
+        console.error("[wellness] consent PDF BLOB generation failed:", pdfErr);
+      }
+    })();
+
     res.status(201).json(consent);
   } catch (e) {
     console.error("[wellness] create consent error:", e.message);
@@ -1833,6 +1872,9 @@ router.put("/consents/:id", verifyWellnessRole(["admin"]), async (req, res) => {
     if (req.body.serviceId !== undefined) data.serviceId = req.body.serviceId ? parseInt(req.body.serviceId) : null;
     if (req.body.signatureSvg !== undefined) {
       return res.status(400).json({ error: "signatureSvg cannot be edited after signing", code: "SIGNATURE_IMMUTABLE" });
+    }
+    if (req.body.signedPdfBlob !== undefined) {
+      return res.status(400).json({ error: "signedPdfBlob cannot be edited after signing", code: "PDF_BLOB_IMMUTABLE" });
     }
     const updated = await prisma.consentForm.update({ where: { id }, data });
     // #179: HIPAA / DPDP — consent metadata amendments are PHI-adjacent and
@@ -2463,7 +2505,7 @@ router.post("/membership-plans", verifyWellnessRole(["admin", "manager"]), async
         req.user.tenantId,
         req.io
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json(plan);
   } catch (e) {
     console.error("[wellness] create membership plan error:", e.message);
@@ -2649,7 +2691,7 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json(membership);
   } catch (e) {
     console.error("[wellness] purchase membership error:", e.message);
@@ -2751,7 +2793,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
             req.user.tenantId,
             req.io
           );
-        } catch (_e) {}
+        } catch (_e) { }
       }
       return res.status(410).json({ error: "Membership has expired", code: "MEMBERSHIP_EXPIRED" });
     }
@@ -2816,7 +2858,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io
       );
-    } catch (_e) {}
+    } catch (_e) { }
 
     res.json({
       success: true,
@@ -2934,7 +2976,7 @@ router.post("/memberships/:id/cancel", verifyWellnessRole(["admin", "manager"]),
         req.user.tenantId,
         req.io
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.json({ success: true, membership: updated });
   } catch (e) {
     console.error("[wellness] cancel membership error:", e.message);
@@ -4621,14 +4663,16 @@ function sanitizeUtmInput(utm, referrer) {
     utmTerm: null, utmContent: null, referrer: null,
   };
   if (utm && typeof utm === "object") {
+    // eslint-disable-next-line no-control-regex
     const trim = (v) => (v == null ? null : String(v).replace(/[\x00-\x1f\x7f]/g, "").slice(0, 191).trim() || null);
-    out.utmSource   = trim(utm.utmSource   ?? utm.source);
-    out.utmMedium   = trim(utm.utmMedium   ?? utm.medium);
+    out.utmSource = trim(utm.utmSource ?? utm.source);
+    out.utmMedium = trim(utm.utmMedium ?? utm.medium);
     out.utmCampaign = trim(utm.utmCampaign ?? utm.campaign);
-    out.utmTerm     = trim(utm.utmTerm     ?? utm.term);
-    out.utmContent  = trim(utm.utmContent  ?? utm.content);
+    out.utmTerm = trim(utm.utmTerm ?? utm.term);
+    out.utmContent = trim(utm.utmContent ?? utm.content);
   }
   if (referrer != null) {
+    // eslint-disable-next-line no-control-regex
     out.referrer = String(referrer).replace(/[\x00-\x1f\x7f]/g, "").slice(0, 2000).trim() || null;
   }
   return out;
@@ -4960,6 +5004,9 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="rx-${id}.pdf"`);
     res.setHeader("Content-Length", buf.length);
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     res.send(buf);
   } catch (e) {
     console.error("[wellness] prescription pdf error:", e.message);
@@ -4976,16 +5023,21 @@ router.get("/consents/:id/pdf", async (req, res) => {
     });
     if (!consent) return res.status(404).json({ error: "Consent not found" });
 
-    // #564 v3.7.3 — prefer the frozen BLOB if /archive has already been
-    // called. The BLOB is the canonical bytes the patient saw at archive
-    // time; rendering on-demand is the legacy/back-compat path for rows
-    // signed before BLOB archival shipped. The branch is decided per-row.
+    // #564: serve from stored BLOB if available (fast path), otherwise
+    // generate on-demand (old records pre-BLOB storage).
     let buf;
     let servedFromBlob = false;
+    console.log(`[wellness] GET /consents/${id}/pdf: hasPdfBlob=${consent.hasPdfBlob}, blobSize=${consent.signedPdfBlob?.length || 0}`);
     if (consent.signedPdfBlob && consent.signedPdfBlob.length > 0) {
-      buf = consent.signedPdfBlob;
+      // Prisma Bytes type may not be a proper Buffer; ensure conversion
+      buf = Buffer.isBuffer(consent.signedPdfBlob)
+        ? consent.signedPdfBlob
+        : Buffer.from(consent.signedPdfBlob);
       servedFromBlob = true;
+      console.log(`[wellness] Using stored BLOB: ${buf.length} bytes`);
     } else {
+      // Fallback: old records without stored PDF
+      console.log(`[wellness] No BLOB found, generating on-demand for consent ${id}`);
       const clinic = await primaryClinic(req.user.tenantId);
       buf = await renderConsentPdf(
         consent,
@@ -4994,6 +5046,7 @@ router.get("/consents/:id/pdf", async (req, res) => {
         clinic,
         consent.signatureSvg,
       );
+      console.log(`[wellness] On-demand PDF generated: ${buf.length} bytes`);
     }
     // PRD §11: consent PDF export carries patient PII + signature image; log it.
     try {
@@ -5010,6 +5063,11 @@ router.get("/consents/:id/pdf", async (req, res) => {
     res.setHeader("Content-Type", consent.signedPdfMime || "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="consent-${id}.pdf"`);
     res.setHeader("Content-Length", buf.length);
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    console.log(`[wellness] Sending PDF response: ${buf.length} bytes, type=${buf instanceof Buffer ? 'Buffer' : typeof buf}`);
+    console.log(`[wellness] PDF header check: ${buf.toString('utf8', 0, 4)}`);
     res.send(buf);
   } catch (e) {
     console.error("[wellness] consent pdf error:", e.message);
@@ -6545,7 +6603,7 @@ router.post("/wallet/:walletId/credit", verifyRole(["ADMIN"]), async (req, res) 
         req.user.tenantId,
         req.io
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json(tx);
   } catch (e) {
     console.error("[wellness] wallet credit error:", e.message);
@@ -6589,7 +6647,7 @@ router.post("/wallet/:walletId/debit", verifyRole(["ADMIN"]), async (req, res) =
         req.user.tenantId,
         req.io
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json(tx);
   } catch (e) {
     console.error("[wellness] wallet debit error:", e.message);
@@ -6699,7 +6757,7 @@ router.post("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => 
         req.user.tenantId,
         req.io
       );
-    } catch (_e) {}
+    } catch (_e) { }
     // Return the plaintext ONCE in the response as `code` (back-compat with
     // 48 existing spec assertions) + `oneTimeCode` (explicit alias making
     // the disclosure semantics obvious to API consumers).
@@ -6808,7 +6866,7 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
         req.user.tenantId,
         req.io
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json({ giftCard: updated, transaction: tx });
   } catch (e) {
     console.error("[wellness] giftcard redeem error:", e.message);
@@ -7178,7 +7236,7 @@ router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json({ applied: true, earn: result.earn, ruleId: result.ruleId, transaction: tx });
   } catch (e) {
     console.error("[wellness] cashback apply error:", e.message);

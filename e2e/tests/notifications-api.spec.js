@@ -132,7 +132,7 @@ test.afterAll(async ({ request }) => {
   const { token } = await getAdmin(request);
   if (!token) return;
   for (const id of createdNotificationIds) {
-    await del(request, token, `/api/notifications/${id}`).catch(() => {});
+    await del(request, token, `/api/notifications/${id}`).catch(() => { });
   }
 });
 

@@ -256,19 +256,13 @@ router.post("/login", async (req, res) => {
     // tenant vertical without an extra DB lookup per request.
     const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId, vertical: user.tenant?.vertical || "generic" });
 
-    // #555 option C (lock-per-session): every successful login emits a
-    // LOGIN audit row stamping the tenantId. This is the accountability
-    // surface for tenant access under the lock-per-session policy — a
-    // user picks their tenant at login and cannot switch without logging
-    // out, so the LOGIN row is the canonical "this user entered this
-    // tenant at this time" record. Fail-soft: writeAudit errors are
-    // swallowed so audit-store outage cannot block authentication.
-    try {
-      await writeAudit('User', 'LOGIN', user.id, user.id, tenantId, {
-        method: 'password',
-        twoFactor: false,
-      });
-    } catch (_auditErr) { /* fail-soft */ }
+    // #555: Audit tenant session selection (Option C - single tenant per session)
+    await writeAudit('Auth', 'LOGIN', user.id, user.id, tenantId, {
+      email: user.email,
+      tenantName: user.tenant?.name || 'Unknown',
+      action: 'Tenant session locked',
+      sessionInfo: 'Single tenant per session enforced'
+    });
 
     res.json({
       token,
@@ -364,7 +358,7 @@ router.post("/forgot-password", async (req, res) => {
       // doesn't fire — sendPasswordResetEmail already swallows + logs all
       // errors internally.
       const frontendBase = process.env.FRONTEND_URL || `https://${req.headers.host || "crm.globusdemos.com"}`;
-      sendPasswordResetEmail(user.email, token, frontendBase).catch(() => {});
+      sendPasswordResetEmail(user.email, token, frontendBase).catch(() => { });
     }
 
     // Identical body for known + unknown emails (anti-enumeration). Token

@@ -6,7 +6,7 @@ async function init(io) {
   // SLA Breach - Ticket
   bus.on('sla.breached', async ({ payload, tenantId }) => {
     try {
-      const { ticketId, assigneeId } = payload;
+      const { ticketId, _assigneeId } = payload;
       const ticket = await prisma.ticket.findUnique({
         where: { id: ticketId },
         select: { id: true, subject: true, assignedToId: true }
@@ -27,6 +27,7 @@ async function init(io) {
         await notificationService.notify({
           userId,
           tenantId,
+          category: 'ticket',
           type: 'sla_breach',
           title: '🚨 SLA Breach',
           message: `Ticket "${ticket.subject}" has breached SLA`,
@@ -45,7 +46,7 @@ async function init(io) {
   // Lead SLA Breach
   bus.on('lead.sla_breached', async ({ payload, tenantId }) => {
     try {
-      const { contactId, assigneeId } = payload;
+      const { contactId, _assigneeId } = payload;
       const contact = await prisma.contact.findUnique({
         where: { id: contactId },
         select: { id: true, name: true, assignedToId: true }
@@ -65,6 +66,7 @@ async function init(io) {
         await notificationService.notify({
           userId,
           tenantId,
+          category: 'lead',
           type: 'sla_breach',
           title: '⏰ Lead SLA Breached',
           message: `Lead "${contact.name}" SLA has been breached`,
@@ -93,6 +95,7 @@ async function init(io) {
         await notificationService.notify({
           userId: manager.id,
           tenantId,
+          category: 'approval',
           type: 'pending_approval',
           title: '✋ Approval Needed',
           message: 'New approval request pending your action',
@@ -111,10 +114,11 @@ async function init(io) {
   // Approval Approved
   bus.on('approval.approved', async ({ payload, tenantId }) => {
     try {
-      const { approverId, requesterId } = payload;
+      const { _approverId, requesterId } = payload;
       await notificationService.notify({
         userId: requesterId,
         tenantId,
+        category: 'approval',
         type: 'info',
         title: '✅ Approved',
         message: 'Your approval request has been approved',
@@ -136,6 +140,7 @@ async function init(io) {
       await notificationService.notify({
         userId: requesterId,
         tenantId,
+        category: 'approval',
         type: 'warning',
         title: '❌ Rejected',
         message: 'Your approval request has been rejected',
@@ -174,6 +179,7 @@ async function init(io) {
         const result = await notificationService.notify({
           userId: approver.id,
           tenantId,
+          category: 'expense',
           type: 'expense_pending',
           title: '💰 New Expense for Approval',
           message: `${submitterName} submitted an expense "${title}" for ₹${amount}`,
@@ -210,6 +216,7 @@ async function init(io) {
       const result = await notificationService.notify({
         userId: submitterId,
         tenantId,
+        category: 'expense',
         type: 'success',
         title: '✅ Expense Approved',
         message: `Your expense "${title}" for ₹${amount} has been approved`,
@@ -244,6 +251,7 @@ async function init(io) {
       const result = await notificationService.notify({
         userId: submitterId,
         tenantId,
+        category: 'expense',
         type: 'error',
         title: '❌ Expense Rejected',
         message: `Your expense "${title}" for ₹${amount} was rejected: ${rejectionReason}`,
@@ -262,7 +270,7 @@ async function init(io) {
   // Leave Requested
   bus.on('leave.requested', async ({ payload, tenantId }) => {
     try {
-      const { leaveRequestId, requesterId, reason } = payload;
+      const { leaveRequestId, requesterId, _reason } = payload;
       const requester = await prisma.user.findUnique({
         where: { id: requesterId },
         select: { name: true }
@@ -277,6 +285,7 @@ async function init(io) {
         await notificationService.notify({
           userId: admin.id,
           tenantId,
+          category: 'leave',
           type: 'leave_pending',
           title: '📋 Leave Request',
           message: `${requester?.name} has requested leave`,
@@ -299,6 +308,7 @@ async function init(io) {
       await notificationService.notify({
         userId: requesterId,
         tenantId,
+        category: 'leave',
         type: 'info',
         title: '✅ Leave Approved',
         message: 'Your leave request has been approved',
@@ -320,6 +330,7 @@ async function init(io) {
       await notificationService.notify({
         userId: requesterId,
         tenantId,
+        category: 'leave',
         type: 'warning',
         title: '❌ Leave Denied',
         message: 'Your leave request has been denied',

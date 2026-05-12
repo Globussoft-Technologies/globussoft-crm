@@ -6,7 +6,7 @@ async function init(io) {
   // SLA Breach - Ticket
   bus.on('sla.breached', async ({ payload, tenantId }) => {
     try {
-      const { ticketId, assigneeId } = payload;
+      const { ticketId, _assigneeId } = payload;
       const ticket = await prisma.ticket.findUnique({
         where: { id: ticketId },
         select: { id: true, subject: true, assignedToId: true }
@@ -46,7 +46,7 @@ async function init(io) {
   // Lead SLA Breach
   bus.on('lead.sla_breached', async ({ payload, tenantId }) => {
     try {
-      const { contactId, assigneeId } = payload;
+      const { contactId, _assigneeId } = payload;
       const contact = await prisma.contact.findUnique({
         where: { id: contactId },
         select: { id: true, name: true, assignedToId: true }
@@ -114,7 +114,7 @@ async function init(io) {
   // Approval Approved
   bus.on('approval.approved', async ({ payload, tenantId }) => {
     try {
-      const { approverId, requesterId } = payload;
+      const { _approverId, requesterId } = payload;
       await notificationService.notify({
         userId: requesterId,
         tenantId,
@@ -270,7 +270,7 @@ async function init(io) {
   // Leave Requested
   bus.on('leave.requested', async ({ payload, tenantId }) => {
     try {
-      const { leaveRequestId, requesterId, reason } = payload;
+      const { leaveRequestId, requesterId, _reason } = payload;
       const requester = await prisma.user.findUnique({
         where: { id: requesterId },
         select: { name: true }

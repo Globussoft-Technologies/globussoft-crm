@@ -34,7 +34,7 @@ const { writeAudit, diffFields } = require("../lib/audit");
 // row.
 const {
   shouldMaskForViewer,
-  maskRow,
+  _maskRow,
   maskRows,
   auditDisclosureDetails,
 } = require("../lib/piiMask");
@@ -758,6 +758,7 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   // invalid", not silent mutation. Tag-shaped HTML stays as silent-scrub
   // (preserves the long-standing #213 contract + the explicit "scrub is
   // silent" e2e contract test).
+  // eslint-disable-next-line no-control-regex
   if (body.name != null && /[\x00-\x1F\x7F]/.test(String(body.name))) {
     return { status: 400, error: "name contains invalid control characters", code: "INVALID_NAME" };
   }
@@ -4662,6 +4663,7 @@ function sanitizeUtmInput(utm, referrer) {
     utmTerm: null, utmContent: null, referrer: null,
   };
   if (utm && typeof utm === "object") {
+    // eslint-disable-next-line no-control-regex
     const trim = (v) => (v == null ? null : String(v).replace(/[\x00-\x1f\x7f]/g, "").slice(0, 191).trim() || null);
     out.utmSource = trim(utm.utmSource ?? utm.source);
     out.utmMedium = trim(utm.utmMedium ?? utm.medium);
@@ -4670,6 +4672,7 @@ function sanitizeUtmInput(utm, referrer) {
     out.utmContent = trim(utm.utmContent ?? utm.content);
   }
   if (referrer != null) {
+    // eslint-disable-next-line no-control-regex
     out.referrer = String(referrer).replace(/[\x00-\x1f\x7f]/g, "").slice(0, 2000).trim() || null;
   }
   return out;

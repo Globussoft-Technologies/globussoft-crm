@@ -26,7 +26,12 @@ vi.mock('../utils/api', () => ({
 const setupPushMock = vi.fn(() => Promise.resolve(true));
 vi.mock('../utils/pushSetup', () => ({ setupPush: (...args) => setupPushMock(...args) }));
 
-function renderLayout({ user, tenant, initialRoute = '/' } = {}) {
+function renderLayout(args = {}) {
+  const { user, initialRoute = '/' } = args;
+  // Honor explicit `tenant: null` (the "missing-tenant state" test passes this).
+  // Pre-fix, the `|| { vertical: 'generic' }` fallthrough ate the null and the
+  // test couldn't reach the no-tenant branch.
+  const tenant = 'tenant' in args ? args.tenant : { vertical: 'generic' };
   return render(
     <MemoryRouter initialEntries={[initialRoute]}>
       <AuthContext.Provider value={{
@@ -34,7 +39,7 @@ function renderLayout({ user, tenant, initialRoute = '/' } = {}) {
         setUser: vi.fn(),
         token: 't-abc',
         setToken: vi.fn(),
-        tenant: tenant || { vertical: 'generic' },
+        tenant,
         setTenant: vi.fn(),
       }}>
         <Routes>

@@ -88,6 +88,33 @@ grep -rn "data\.database\|body\.database\|data\.uptime\|body\.uptime\|data\.vers
 
 For each hit, the assertion either needs to (a) authenticate first, or (b) drop the assertion if it's a basic-liveness probe. The `api-health.spec.js` two-tier shape contract covers the full assertion; other specs hitting `/api/health` should only assert `body.status === "healthy"`.
 
+#### Public-response-shape change (e.g. `apiKey: 'TEST****'` → `apiKey: {configured, last4}`) (added 2026-05-12)
+
+The 2026-05-12 all-issues-sweep surfaced two cases where w-B4 (`#651` Channels credential masking, `885645a`) and w-C (`#654` CSP-enable, `b4ea83b`) changed a public response shape but missed a sibling spec that pinned the OLD shape:
+
+- **w-B4 missed `frontend/src/__tests__/Channels.test.jsx`** (frontend RTL — was grepping only `e2e/tests/*-api.spec.js`). The test pinned `getByDisplayValue('TEST-A****')` against the old string sentinel. Caught by `frontend_unit_tests` job in `feb0fcc`'s gate; fixed in `0a242b6` follow-up.
+- **w-C missed `e2e/tests/auth-security-regression-api.spec.js:240`** which asserted `headers['content-security-policy']` was falsy ("CSP intentionally disabled"). Caught by `api_tests` job; fixed in same `0a242b6` follow-up.
+
+Both would have been caught by an extended grep BEFORE push. Add these patterns to your audit:
+
+```bash
+# Frontend RTL pinning the old response field value (string sentinels, masked codes):
+grep -rnE "getByDisplayValue\\(.*['\"]OLD_VALUE" frontend/src/__tests__/
+grep -rnE "toHaveValue\\(.*OLD_VALUE" frontend/src/__tests__/
+
+# E2E specs pinning the old body shape:
+grep -rnE "expect\\(.*body\\.OLD_FIELD" e2e/tests/
+grep -rnE "JSON\\.stringify\\(.*\\)\\.includes\\(.*OLD_VALUE" e2e/tests/
+
+# E2E specs pinning the old HEADER shape (security policy, content-type, etc.):
+grep -rnE "headers\\[['\"]content-security-policy" e2e/tests/
+grep -rnE "expect\\(.*headers\\[.*['\"]\\]\\).toBeFalsy" e2e/tests/   # negative pins flip easily
+```
+
+For each hit, decide: (a) flip the assertion to the new shape, OR (b) the spec is genuinely testing pre-change behaviour and should stay (rare).
+
+**Rule:** every public response shape change runs ALL four grep classes above (frontend RTL + e2e specs + e2e headers + backend route side) before commit. Catching this at commit time saves a deploy-gate red round + a follow-up fix commit.
+
 ### Per-push spec list ≠ e2e-full spec list
 
 Critical to remember: the per-push gate (`.github/workflows/deploy.yml`) runs **~50 specs** (the `*-api.spec.js` variants enumerated in its "Run API-only specs" step). `e2e-full.yml` runs **~200+ specs** including all bare `*.spec.js` smoke tests.

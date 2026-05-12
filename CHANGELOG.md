@@ -1,5 +1,161 @@
 # CHANGELOG
 
+## v3.7.6 — 2026-05-13 — Pen-test wave triage + 2026-05-12 all-issues sweep + B-03 SendGrid closure
+
+Rolls 28 commits of release-validated work into a single tag. Covers:
+(a) yesterday's 60-issue pen-test all-issues sweep (Waves A–D + post-merge
+PR #710 integration), (b) today's morning 10-issue pen-test wave triage
+(#711–#720), and (c) the long-running B-03 SendGrid Sender Identity
+operator-blocker that closed end-to-end today.
+
+### Today's pen-test wave (2026-05-13 morning) — 10 issues / 3 commits
+
+Three parallel agents dispatched on the #711–#720 cluster filed 2026-05-12.
+**Verification first** (per the `verifying-issue-before-pickup` skill) — all
+10 turned out real, zero phantoms.
+
+- **`a29e38d` HIGH cluster (3 issues)** — closes #711 + #712 + #714.
+  - `#711` Profile/change-password + reset-password now call the existing
+    `validatePasswordComplexity()` helper (min 8 chars + letter + digit)
+    plus a 72-byte bcrypt guard. Returns `400 WEAK_PASSWORD` /
+    `400 PASSWORD_TOO_LONG`.
+  - `#712` GDPR `PUT /retention-policies` fail-fast pre-validates every
+    row — rejects negative / NaN / >36500 days with `400 INVALID_RETENTION_DAYS`
+    (entity echoed back). Pre-fix: silent `continue` left users staring at
+    a 401-driven auto-logout with zero feedback.
+  - `#714` Staff `PUT /staff/:id` now uses `ensureStringLength` +
+    `ensureEmail` from `lib/validators.js`, returning `400 NAME_REQUIRED`
+    / `400 INVALID_EMAIL`. Pre-fix: empty `name.trim() || null` corrupted
+    the User row.
+  - 12 new tests at `e2e/tests/security-validation-2026-05-12-api.spec.js`
+    wired into both deploy.yml and coverage.yml.
+
+- **`2ca6f5e` developer.js bundle (2 issues)** — closes #713 + #720.
+  - `#713` Webhook URL schemes — new inline `validateWebhookUrl()` parses
+    via `new URL()`, rejects non-http(s) schemes (`javascript:`, `data:`,
+    `file:`, `ftp:`, `gopher:`) with `400 INVALID_WEBHOOK_SCHEME`, and
+    rejects loopback / RFC1918 / link-local / AWS-metadata hosts with
+    `400 INVALID_WEBHOOK_HOST`. Inlined intentionally — `landingPageRenderer.safeUrl`
+    has fallback-vs-reject semantics so reuse wasn't right. Promoted to
+    `lib/safeWebhookUrl.js` is on the table for a 3rd gate.
+  - `#720` API key generation — backend trims + rejects empty/whitespace
+    name with `400 KEY_NAME_REQUIRED`; frontend `Developer.jsx` adds
+    `required` + `minLength=1` + handler trim. Three-layer defense.
+  - 24 new tests at `e2e/tests/developer-api.spec.js`.
+
+- **`62fc532` MEDIUM/LOW frontend bundle (5 issues)** — closes #715 +
+  #716 + #717 + #718 + #719.
+  - `#715` Settings slug input: `disabled` → `readOnly` + helper text +
+    muted background. Pre-fix: backend silently strips slug changes;
+    frontend gave zero feedback.
+  - `#716` MSG91 senderId — backend rejects length ≠ 6 with
+    `400 INVALID_SENDER_ID_LENGTH`; frontend adds `maxLength=6` +
+    `pattern="[A-Za-z0-9]{6}"` + helper text.
+  - `#717` RevenueGoals POST sent `userId` (stripped by `stripDangerous`
+    middleware) instead of `targetUserId`. Single rename fixed the
+    "targetUserId is required" 400.
+  - `#718` Goal-creation dialog grid: `repeat(2, minmax(0, 1fr))` +
+    `min-width: 0` on Field stabilizes the template across error /
+    no-error states.
+  - `#719` Currencies BASE column — derived `baseCode`; radio reads
+    `c.code === baseCode`; preview-mode swaps `disabled` → `readOnly`
+    so the fill stays visible.
+  - 6 new sender-ID-length tests in `e2e/tests/sms-api.spec.js`.
+
+GitHub's auto-close-trailer cap fired (only `#711` / `#713` / `#715`
+auto-closed); the other 7 were batch-closed with citation comments per
+the `batch-closing-issues-after-multi-fix-commit` skill (encoded
+yesterday after the same cap fired during the all-issues sweep).
+
+### B-03 SendGrid Sender Identity (`96a1337`) — operator-blocked 7 days, closed
+
+Sumit verified `noreply@crm.globusdemos.com` via Single Sender Verification
+in the SendGrid dashboard. Demo's `SENDGRID_FROM_EMAIL` default already
+matched, so no `.env` update was needed.
+
+End-to-end smoke-test: scheduled email `id=314` to `sumit@chingari.io` →
+`POST /api/email-scheduling/314/send-now` returned `success: true,
+delivered: true, status: SENT`. Real email actually landed in the inbox.
+
+Unblocks: workflow `send_email` actions, password reset, scheduled
+reports, T-7 membership reminders, appointment reminders, NPS surveys.
+
+### Yesterday's all-issues sweep (2026-05-12) — 52 issue closures
+
+Already detailed in the 4 wave commits below; rolled into v3.7.6 for
+release-validation continuity:
+
+- **Wave A** (`6cc8887` / `e4980d3` / `8bcd96f` / `822ab9c`) — quick wins
+  + 15 phantom closures + demo DB cleanup (2,632 Estimate / 152 Patient /
+  11 MembershipPlan / 4 VOIDED Invoice rows removed).
+- **Wave B** (`f85dc45` `INVERTED_DATE_RANGE` / `a30a40d` `#657` CSRF/origin /
+  `ab046d4` `#653` GiftCard bcrypt-hash codes / `885645a` `#651` Channels
+  credentials never round-trip).
+- **Wave C** (`b4ea83b` `#654` CSP transitional + step-up auth for
+  destructive ops).
+- **Wave D** (`1364fea` shared UI primitives — FormField / EmptyState /
+  Spinner / Skeleton / SearchInput / Pagination / Modal + canonical
+  conventions README closing #685-#695; `2a4e21e` `#679`+`#680`+`#681`+`#682`
+  PII masking on list views + exports + audit emission; `feb0fcc`
+  `#696`+`#697`+`#704`+`#706`+`#707`+`#683` Wave D2 a11y/theme/responsive).
+- **`0a242b6`** test-shape flip for the v3.5.x CSP-present + Channels
+  `{configured, last4}` shape changes.
+
+### PR #710 integration arc
+
+`dc02453` (@mohitkumardas-cloud) — `#702` notification preferences +
+consent PDF fix. Selectively merged to preserve 4 skill files the PR's
+stale base would have reverted (`b72e6f8` fixup committed to PR branch
+with `git checkout main -- .claude/skills/...`). 4 rounds of fallout
+landed inline: `6301249` Round 1 (Playwright `arrayBuffer()` → `body()`
++ notif test mock + Layout testid) → `62fb8d8` Round 2 (notif test
+default-prefs + Settings defensive guards) → `1940f28` Round 3 (TenantChip
+`if (!tenant) return null`) → `4a3ef9c` Round 4 (Layout.test.jsx
+`'tenant' in args` to honor explicit `null`).
+
+### 2 new skills + 2 extensions (`dbd8f9d`)
+
+554 lines distilled from yesterday's cron-learnings:
+
+- NEW `cleaning-demo-data-via-ssh` — paramiko DB cleanup pattern (used by
+  3 successful scripts).
+- NEW `batch-closing-issues-after-multi-fix-commit` — verify-and-batch-
+  close-manually loop for the GitHub auto-close-trailer cap.
+- EXTEND `dispatching-parallel-agent-wave` — "When `--only` is NOT
+  sufficient" section (6 working-tree-sweep instances yesterday).
+- EXTEND `auditing-cross-cutting-spec-impact` — response-shape grep
+  checklist.
+
+Today's 5th confirmed instance of the auto-close-trailer cap (`#711`
+auto-closed only / `#713` auto-closed only / `#715` auto-closed only)
+applied the new skill on its first canonical use.
+
+### Stats
+
+- **+42 new e2e tests** (12 security-validation + 24 developer-api +
+  6 sms-api senderId)
+- **+~28 commits since v3.7.5**
+- **3 parallel-agent dispatch** with zero cross-agent file conflicts
+  (verified up-front via the file-scope guardrails in each agent prompt)
+- **Per-push gate state:** ~4,450+ tests on every push (cumulative)
+
+### Pen-test user-attention items (#647) status — final pre-v3.7.6
+
+- **§1** SendGrid Sender Identity — ✅ closed today (smoke-tested
+  end-to-end)
+- **§2** `#555` lock-per-session — ✅ closed v3.7.3
+- **§3** `#558` audit hash-chain — ✅ closed v3.7.5 (partial concurrency
+  mitigation; full advisory-lock fix is a deferred #647 §3 follow-up)
+- **§4** `#564` consent surface — ✅ closed v3.7.3
+- **§5** WhatsApp DPDP §11 — ✅ closed v3.7.3 (keep-current)
+- **§6** Callified webhook — external-team blocked
+- **§7** AdsGPT SSO — external-team blocked
+- **§8** `#457` manual-only QA umbrella — intentionally open
+- **§9** `#699` routing convention + `#702` notification preferences
+  product-deferral — `#702` shipped via PR #710 today
+
+---
+
 ## Unreleased — Shared form/list/modal UI primitives
 
 Closes the v3.5.x form/UI consistency cluster (#685 #686 #687 #688 #689

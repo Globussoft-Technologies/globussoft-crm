@@ -375,6 +375,19 @@ router.post("/reset-password", async (req, res) => {
     const { token, newPassword } = req.body;
     if (!token || !newPassword) return res.status(400).json({ error: "Token and new password are required" });
 
+    // #711 (HIGH): apply the same complexity policy to password-reset that
+    // /register and PUT /auth/me enforce — otherwise an attacker who phishes
+    // a reset link could set a 1-char password and the user would never see
+    // an error from the client UI.
+    const pwErr = validatePasswordComplexity(newPassword);
+    if (pwErr) return res.status(400).json({ error: pwErr, code: 'WEAK_PASSWORD' });
+    if (typeof newPassword !== 'string' || newPassword.length > 72) {
+      return res.status(400).json({
+        error: 'Password must be 72 characters or fewer',
+        code: 'PASSWORD_TOO_LONG',
+      });
+    }
+
     const entry = resetTokens.get(token);
     if (!entry) return res.status(400).json({ error: "Invalid or expired reset token" });
     if (Date.now() > entry.expiresAt) {
@@ -458,6 +471,25 @@ router.put("/me", verifyToken, async (req, res) => {
     // Password change requires current password verification
     if (newPassword) {
       if (!currentPassword) return res.status(400).json({ error: "Current password is required to set a new password" });
+
+      // #711 (HIGH): enforce the same password-complexity policy used by
+      // /register, /signup, /reset-password on PUT /auth/me as well. Pre-fix
+      // this endpoint accepted ANY string as newPassword — a 1-char or
+      // all-letters password was a regression of the #526 / #531 auth-
+      // hardening work. Reuses validatePasswordComplexity() defined above.
+      const pwErr = validatePasswordComplexity(newPassword);
+      if (pwErr) return res.status(400).json({ error: pwErr, code: 'WEAK_PASSWORD' });
+
+      // #711 (HIGH): bcrypt silently truncates inputs > 72 bytes, which
+      // means any password longer than 72 chars matches its first-72-bytes
+      // prefix forever — a real footgun, not a theoretical one. Reject
+      // before hashing so the caller gets a clean error message.
+      if (typeof newPassword !== 'string' || newPassword.length > 72) {
+        return res.status(400).json({
+          error: 'Password must be 72 characters or fewer',
+          code: 'PASSWORD_TOO_LONG',
+        });
+      }
 
       const user = await prisma.user.findUnique({ where: { id: req.user.userId } });
       const isMatch = await bcrypt.compare(currentPassword, user.password);

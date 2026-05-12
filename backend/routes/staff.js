@@ -2,6 +2,11 @@ const express = require("express");
 const crypto = require("crypto");
 const { verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
+// #714 (HIGH): server-side validation for Staff edit. Pre-fix PUT /:id
+// allowed empty name and an arbitrary "not-an-email" string for email.
+// `ensureEmail` + `ensureStringLength` are the shared helpers used by
+// other routes; reusing them keeps the error-code contract uniform.
+const { ensureEmail, ensureStringLength } = require("../lib/validators");
 // #682 PII masking — staff directory leaks internal user IDs + full names
 // to non-admin viewers. Helpers gate the role check + mask the row shape.
 const {
@@ -185,13 +190,34 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
     const data = {};
     const changed = {};
 
-    if (typeof name === "string" && name.trim() !== target.name) {
-      data.name = name.trim() || null;
-      changed.name = { from: target.name, to: data.name };
+    // #714 (HIGH): server-side validation. Name is REQUIRED when included
+    // (no clearing-to-empty), email must look like an email when included.
+    // Pre-fix the trim()-falsy path persisted `null` into User.name, and
+    // any non-empty string was accepted as email — pen-test reproduced
+    // with `not-email` and the row was silently corrupted.
+    if (name !== undefined) {
+      const nameErr = ensureStringLength(name, {
+        field: 'name',
+        min: 1,
+        max: 200,
+        required: true,
+        trim: true,
+      });
+      if (nameErr) return res.status(nameErr.status).json(nameErr);
+      const trimmed = String(name).trim();
+      if (trimmed !== target.name) {
+        data.name = trimmed;
+        changed.name = { from: target.name, to: data.name };
+      }
     }
-    if (typeof email === "string" && email.trim() && email.trim() !== target.email) {
-      data.email = email.trim();
-      changed.email = { from: target.email, to: data.email };
+    if (email !== undefined) {
+      const emailErr = ensureEmail(email, { required: true });
+      if (emailErr) return res.status(emailErr.status).json(emailErr);
+      const trimmed = String(email).trim();
+      if (trimmed !== target.email) {
+        data.email = trimmed;
+        changed.email = { from: target.email, to: data.email };
+      }
     }
     if (role !== undefined) {
       if (!VALID_ROLES.includes(role)) {

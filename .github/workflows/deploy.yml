@@ -411,6 +411,7 @@ jobs:
             tests/csp-stepup-api.spec.js \
             tests/pii-masking-api.spec.js \
             tests/developer-api.spec.js \
+            tests/security-validation-2026-05-12-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

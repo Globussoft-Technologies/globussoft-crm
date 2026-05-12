@@ -351,12 +351,50 @@ router.put('/retention-policies', requireStepUp(), async (req, res) => {
     if (list.length === 0) return res.status(400).json({ error: 'Body must be a non-empty array' });
 
     const tenantId = req.user.tenantId;
+
+    // #712 (HIGH): validate every row BEFORE doing any writes. Pre-fix the
+    // loop silently `continue`'d on negative / non-finite retainDays which
+    // (a) gave the user no feedback that their save was a no-op, and
+    // (b) interacted badly with the requireStepUp() gate: when a save
+    // failed for the unrelated step-up-expiry reason, the 401 from the
+    // middleware was indistinguishable from the silent-skip path and
+    // the frontend's fetchApi 401 handler force-logged-out the user
+    // ("Privacy form silently logs out" report).
+    //
+    // Two upper bounds:
+    //   - 36500 days (100 years) is the hard maximum — anything larger is
+    //     either nonsense or an attempt to set a Date that overflows when
+    //     the cron computes `cutoff = now - retainDays * 86400000`.
+    //   - 0 is permitted (means "purge everything older than today" — same
+    //     effective behaviour as `isActive: false` but recorded explicitly).
+    const MAX_RETAIN_DAYS = 36500;
+    for (const item of list) {
+      if (!item || !item.entity) {
+        return res.status(400).json({
+          error: 'Each policy row must include entity',
+          code: 'ENTITY_REQUIRED',
+        });
+      }
+      if (item.retainDays == null) {
+        return res.status(400).json({
+          error: 'Each policy row must include retainDays',
+          code: 'RETAIN_DAYS_REQUIRED',
+        });
+      }
+      const retainDaysRaw = Number(item.retainDays);
+      if (!Number.isFinite(retainDaysRaw) || retainDaysRaw < 0 || retainDaysRaw > MAX_RETAIN_DAYS) {
+        return res.status(400).json({
+          error: `retainDays for "${String(item.entity)}" must be an integer between 0 and ${MAX_RETAIN_DAYS}`,
+          code: 'INVALID_RETENTION_DAYS',
+          entity: String(item.entity),
+        });
+      }
+    }
+
     const results = [];
     for (const item of list) {
-      if (!item || !item.entity || item.retainDays == null) continue;
       const entity = String(item.entity);
       const retainDays = parseInt(item.retainDays);
-      if (isNaN(retainDays) || retainDays < 0) continue;
       const isActive = item.isActive == null ? true : !!item.isActive;
 
       // #576 — capture before-state for the audit-log diff.

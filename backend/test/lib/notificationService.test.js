@@ -59,8 +59,28 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset();
   prisma.user.findMany.mockReset();
   prisma.notificationPreference.findUnique.mockReset();
-  // No custom prefs → use DEFAULT_PREFERENCES (every category + channel ON).
-  prisma.notificationPreference.findUnique.mockResolvedValue(null);
+  // PR #710 (#702) — DEFAULT_PREFERENCES has `channels.email = false` and
+  // `channels.push = false` (sensible opt-in defaults). Most of the legacy
+  // tests in this file pre-date that and assert the SendGrid + push paths
+  // ALWAYS run when the caller specifies channels=['email'] etc. To preserve
+  // the test intent (route-mechanics validation, not opt-in policy), the
+  // default mock here returns a "user opted in to everything" preference row.
+  // The category gate is also fully open. Individual tests that DO want to
+  // exercise the opt-in policy (e.g. "category disabled" / "channel disabled"
+  // / "quiet hours") can override with mockResolvedValueOnce.
+  prisma.notificationPreference.findUnique.mockResolvedValue({
+    userId: 1,
+    tenantId: 1,
+    categoryToggles: {
+      info: true, success: true, warning: true, error: true,
+      system: true, deal: true, task: true, ticket: true, lead: true,
+      approval: true, leave: true, expense: true,
+    },
+    channels: { db: true, socket: true, push: true, email: true },
+    quietHoursStart: null,
+    quietHoursEnd: null,
+    timezone: null,
+  });
   pushService.sendToUser.mockReset();
   global.fetch = vi.fn();
 });

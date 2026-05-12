@@ -98,7 +98,9 @@ export default function UserSettings() {
   };
 
   if (loading) return <div style={{ padding: '2rem' }}>Loading preferences…</div>;
-  if (!prefs) return null;
+  // Defensive: an empty / malformed preference row crashes the categoryOptions
+  // .map below ("Cannot read properties of undefined reading 'deal'").
+  if (!prefs || !prefs.categoryToggles || !prefs.channels) return null;
 
   return (
     <div style={{ padding: 'clamp(1rem, 4vw, 2rem)', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>

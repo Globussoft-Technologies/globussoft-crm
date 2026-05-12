@@ -840,7 +840,14 @@ function NotificationPreferencesCard({ notify }) {
   };
 
   if (loading) return <div className="card" style={{ padding: '1.5rem' }}>Loading preferences…</div>;
-  if (!prefs) return null;
+  // Defensive: existing Settings tests mock fetchApi to return `{}` or
+  // `[]` for unrecognised URLs (most existing settings cards don't read
+  // categoryToggles/channels). Without this guard, the render below
+  // throws "Cannot read properties of undefined (reading 'deal')" inside
+  // the categoryOptions.map. Treating a malformed prefs row as
+  // not-yet-loaded matches the intent — show nothing until a real
+  // preference shape arrives.
+  if (!prefs || !prefs.categoryToggles || !prefs.channels) return null;
 
   return (
     <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>

@@ -194,10 +194,10 @@ export default function KnowledgeBase() {
       tenantSlug = stored?.slug || null;
     } catch (_) { /* malformed JSON — ignore */ }
   }
+  // Frontend article-view page (KbArticleView.jsx). Previously linked directly
+  // to the backend JSON endpoint which dumped raw response in the browser.
   const publicArticleUrl = (slug) =>
-    tenantSlug
-      ? `${window.location.origin.replace(':5173', ':5000')}/api/knowledge-base/public/${tenantSlug}/article/${slug}`
-      : '#';
+    tenantSlug ? `/kb/${tenantSlug}/${slug}` : '#';
 
   return (
     <div

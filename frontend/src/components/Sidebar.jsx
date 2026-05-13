@@ -95,6 +95,7 @@ const Sidebar = ({
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
+  const wellnessRole = user?.wellnessRole || null;
   const isWellness = tenant?.vertical === "wellness";
   const location = useLocation();
 
@@ -343,9 +344,13 @@ const Sidebar = ({
     const tail = current[target.length];
     return tail === "/" || tail === undefined;
   };
-  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, count, matchPaths = [] }) => {
+  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, wellnessRoles, count, matchPaths = [] }) => {
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
+    // wellnessRoles gates a link to specific wellnessRole values. Managers
+    // and admins always pass through (mirrors the server's verifyWellnessRole
+    // gate which whitelists admin/manager alongside the named clinical roles).
+    if (wellnessRoles && !isManager && !wellnessRoles.includes(wellnessRole)) return null;
     return (
       <NavLink
         to={to}
@@ -720,10 +725,17 @@ function renderWellnessNav({
         icon={MessageSquare}
         label="WhatsApp Threads"
       />
+      {/* Telecaller Queue: visible to wellnessRole=telecaller and to
+          managers/admins for oversight. Plain users (and clinical staff
+          without the telecaller wellnessRole) saw a 403 toast on every
+          load, so the link is hidden for them — matches the server's
+          verifyWellnessRole(["telecaller","admin","manager"]) gate on
+          /api/wellness/telecaller/queue + /telecaller/dispose. */}
       <Link
         to="/wellness/telecaller"
         icon={PhoneCall}
         label="Telecaller Queue"
+        wellnessRoles={["telecaller"]}
       />
       <Link
         to="/leads"

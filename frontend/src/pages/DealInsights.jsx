@@ -44,7 +44,6 @@ export default function DealInsights() {
   // isMissing=true). Removing the broken fallback eliminates the regression
   // class entirely.
   const [openDealCount, setOpenDealCount] = useState(0);
-  const [openDealIds, setOpenDealIds] = useState([]);
   const [openDeals, setOpenDeals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -76,12 +75,11 @@ export default function DealInsights() {
         }
       }
       setOpenDealCount(count);
-      // openDeals stores the full deal objects for the OPEN_DEALS view.
-      // openDealIds is just the IDs for the bulk-generate button.
+      // openDeals stores the full deal objects for both the OPEN_DEALS view
+      // and the bulk-generate button's per-deal POST loop.
       const sample = Array.isArray(openSampleRaw) ? openSampleRaw : [];
       const openOnly = sample.filter(d => d.stage !== 'won' && d.stage !== 'lost');
       setOpenDeals(openOnly);
-      setOpenDealIds(openOnly.map(d => d.id));
     } catch (e) {
       console.error(e);
     } finally {
@@ -142,7 +140,7 @@ export default function DealInsights() {
   const generateForAll = async () => {
     setGenerating(true);
     try {
-      const targets = openDealIds.slice(0, 50); // safety cap
+      const targets = openDeals.slice(0, 50); // safety cap
       let success = 0;
       let failed = 0;
       for (const d of targets) {
@@ -192,7 +190,7 @@ export default function DealInsights() {
         </div>
         <button
           onClick={generateForAll}
-          disabled={generating || openDealIds.length === 0}
+          disabled={generating || openDeals.length === 0}
           className="btn-primary"
           style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: generating ? 0.7 : 1 }}
         >

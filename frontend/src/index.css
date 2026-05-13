@@ -7,6 +7,7 @@
   --text-primary: #ffffff;
   --text-secondary: #d1d5db;
   --accent-color: #3b82f6;
+  --accent-bg: rgba(59, 130, 246, 0.15);
   --accent-glow: rgba(59, 130, 246, 0.5);
   --accent-hover: #60a5fa;
   --success-color: #10b981;
@@ -47,6 +48,7 @@
   --text-primary: #1a1a2e;
   --text-secondary: #4b5563;
   --accent-color: #2563eb;
+  --accent-bg: #f0f4ff;
   --accent-glow: rgba(37, 99, 235, 0.3);
   --accent-hover: #3b82f6;
   --success-color: #059669;
@@ -83,6 +85,7 @@
   --text-primary: #ffffff;
   --text-secondary: #d1d5db;
   --accent-color: #3b82f6;
+  --accent-bg: rgba(59, 130, 246, 0.15);
   --accent-glow: rgba(59, 130, 246, 0.5);
   --accent-hover: #60a5fa;
   --success-color: #10b981;
@@ -402,6 +405,41 @@ input.input-field:focus-visible,
 textarea.input-field:focus-visible,
 select.input-field:focus-visible {
   outline: none;
+}
+
+/* ── Native <select> dropdown dark-mode support ──────────────────────────
+ * Without an explicit color-scheme, Chrome/Edge on Windows render the OS
+ * <option> popup with the system light palette regardless of how the
+ * <select> itself is styled — leaving near-invisible white-on-white text
+ * in dark mode (Chatbots flow-node picker, A/B Tests campaign dropdown,
+ * Custom Reports entity/filter/group selects). Three layers ensure the
+ * fix lands across Chrome/Edge/Firefox on every OS:
+ *   1) color-scheme on the document root → native widgets use the matching
+ *      palette where the browser honors it.
+ *   2) color-scheme directly on every <select> → some Chrome builds only
+ *      honor it at the element level, not the root.
+ *   3) explicit option/optgroup background-color + color via CSS vars
+ *      with !important → fallback that wins over any inline overrides
+ *      (e.g. `style={{ color: 'inherit' }}` on the select). */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+[data-theme="light"] {
+  color-scheme: light;
+}
+
+[data-theme="dark"] select {
+  color-scheme: dark;
+}
+[data-theme="light"] select {
+  color-scheme: light;
+}
+
+select option,
+select optgroup {
+  background-color: var(--bg-color) !important;
+  color: var(--text-primary) !important;
 }
 
 .nav-link {

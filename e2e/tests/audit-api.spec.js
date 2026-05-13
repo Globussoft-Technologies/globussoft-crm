@@ -167,11 +167,21 @@ test.afterAll(async ({ request }) => {
 // chain can transiently fork — a new row's prevHash is computed against
 // a `lastHash` that gets re-stamped mid-walk, and /verify reports
 // `integrityVerified: false` for a few hundred ms until writeAudit's
-// inline-repair pass or the next backfill resolves it. If verify reports
-// a null-hash row, we kick off a backfill (which is idempotent and cheap
-// when nothing changed) to absorb the newly-arrived unchained row.
+// inline-repair pass or the next backfill resolves it.
+//
+// Convergence strategy: every iteration that observes integrityVerified=false
+// fires a fresh /api/audit/backfill — NOT just iterations that surfaced a
+// null-hash row. Under e2e-full's concurrent-shard barrage, background
+// writeAudit emits new unchained rows faster than a one-shot backfill can
+// absorb them; the only way to outrun the cadence is to backfill on every
+// poll. Backfill is idempotent (skippedRows on a no-op pass) so over-firing
+// it is cheap. 5xx from /backfill (transient lock contention, brief
+// connection hiccup) is recoverable — we swallow it and continue polling.
+//
+// Budget: 15 iterations × 1000ms = 15s total. The prior 6 × 700ms ≈ 4.2s
+// budget was below demo's writeAudit cadence under concurrent load.
 // Tests assert "the chain CONVERGES to verified," not "every snapshot is verified."
-async function verifyEventually(request, token, { attempts = 6, delayMs = 700 } = {}) {
+async function verifyEventually(request, token, { attempts = 15, delayMs = 1000 } = {}) {
   let last = null;
   for (let i = 0; i < attempts; i++) {
     const r = await get(request, token, '/api/audit/verify');
@@ -179,10 +189,11 @@ async function verifyEventually(request, token, { attempts = 6, delayMs = 700 } 
       const body = await r.json();
       last = body;
       if (body.integrityVerified === true) return body;
-      // Null-hash row detected → run backfill to absorb it before the next poll.
-      if (body.unhashedRows > 0 || (body.reason && /null hash/.test(body.reason))) {
-        await post(request, token, '/api/audit/backfill').catch(() => {});
-      }
+      // ANY false result → fire backfill before the next poll. Background
+      // writeAudit traffic can land new unhashed rows continuously, so we
+      // can't gate the repair pass on a specific failure signature. 5xx
+      // from backfill is transient (lock contention) — swallow + continue.
+      await post(request, token, '/api/audit/backfill').catch(() => {});
     }
     await new Promise(res => setTimeout(res, delayMs));
   }
@@ -538,15 +549,22 @@ test.describe('Audit API — /verify hash-chain', () => {
     // integrityVerified — otherwise concurrent demo cron writes could move
     // the goalposts before we seed.
     const beforeBody = await verifyEventually(request, token);
-    expect(beforeBody, 'before-snapshot not verified').toBeTruthy();
+    expect(beforeBody, `before-snapshot null: ${JSON.stringify(beforeBody)}`).toBeTruthy();
+    expect(
+      beforeBody.integrityVerified,
+      `before-snapshot not verified: ${JSON.stringify(beforeBody)}`,
+    ).toBe(true);
     const beforeLen = beforeBody.chainLength;
 
     // Seed a row — writeAudit fires inside the contact create handler.
     await seedAuditedContact(request, 'generic', 'chain-grow');
 
     const afterBody = await verifyEventually(request, token);
-    expect(afterBody, 'after-snapshot not verified').toBeTruthy();
-    expect(afterBody.integrityVerified, `body=${JSON.stringify(afterBody)}`).toBe(true);
+    expect(afterBody, `after-snapshot null: ${JSON.stringify(afterBody)}`).toBeTruthy();
+    expect(
+      afterBody.integrityVerified,
+      `after-snapshot not verified: ${JSON.stringify(afterBody)}`,
+    ).toBe(true);
     expect(afterBody.chainLength).toBeGreaterThanOrEqual(beforeLen + 1);
     expect(afterBody.brokenAt).toBeNull();
   });

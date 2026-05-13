@@ -154,4 +154,63 @@ describe('Layout', () => {
     renderLayout({ tenant: null });
     expect(screen.queryByTestId('tenant-chip')).not.toBeInTheDocument();
   });
+
+  // #725 — the TenantChip background must come from a CSS variable
+  // (--accent-bg with a theme-aware var-fallback chain), NOT the hardcoded
+  // light-blue hex (`#f0f4ff`) that pre-fix bled through on non-wellness dark
+  // mode. We assert the inline style references the var so a future regression
+  // (re-introducing a hex literal) is caught by this test.
+  it('TenantChip background uses var(--accent-bg) — no hardcoded #f0f4ff fallback', () => {
+    renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
+    const chip = screen.getByTestId('tenant-chip');
+    const inlineBg = chip.getAttribute('style') || '';
+    expect(inlineBg).toMatch(/var\(--accent-bg/);
+    // Defensive: the previous hardcoded fallback was #f0f4ff. If it shows up
+    // anywhere in the inline style, the regression is back.
+    expect(inlineBg).not.toMatch(/#f0f4ff/i);
+  });
+
+  // #730 — `{daysRemaining && <TrialBanner/>}` previously rendered a literal
+  // "0" between the header and main when daysRemaining === 0 (last-day-of-trial
+  // / expired), because `&&` short-circuits to the falsy left-hand numeric.
+  // The fix uses `daysRemaining > 0` which short-circuits to `false`. We pin
+  // the negative contract here: after the subscription fetch resolves with
+  // daysRemaining=0, the .app-main subtree has no stray "0" text node child
+  // before <main>.
+  it('does not render a stray "0" text node when daysRemaining === 0 (#730)', async () => {
+    // Make the subscriptions/status probe return daysRemaining=0 to force
+    // the falsy-numeric path that previously bled through.
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/subscriptions/status') {
+        return Promise.resolve({ daysRemaining: 0, trialEndsAt: null });
+      }
+      return Promise.resolve({});
+    });
+    renderLayout();
+    // Allow the useEffect-driven fetch to settle.
+    await new Promise((r) => setTimeout(r, 10));
+    // Walk the .app-main subtree's immediate children and assert no text node
+    // is exactly "0". The bug surface was a sibling text node between
+    // <header> and <main>, NOT inside any element's textContent.
+    const appMain = document.querySelector('.app-main');
+    expect(appMain).toBeTruthy();
+    const strayZeros = Array.from(appMain.childNodes).filter(
+      (n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim() === '0',
+    );
+    expect(strayZeros).toHaveLength(0);
+  });
+
+  it('still does not render a stray "0" when daysRemaining is null (subscription endpoint silent)', async () => {
+    // The endpoint-silent path (fetchApi resolves to {} so daysRemaining stays
+    // at its null initial state) is the common case — pin it too so a future
+    // refactor that flips the guard back to bare-truthy doesn't slip through.
+    fetchApiMock.mockResolvedValue({});
+    renderLayout();
+    await new Promise((r) => setTimeout(r, 10));
+    const appMain = document.querySelector('.app-main');
+    const strayZeros = Array.from(appMain.childNodes).filter(
+      (n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim() === '0',
+    );
+    expect(strayZeros).toHaveLength(0);
+  });
 });

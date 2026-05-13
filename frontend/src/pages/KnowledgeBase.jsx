@@ -139,10 +139,17 @@ export default function KnowledgeBase() {
       await fetchApi(`/api/knowledge-base/articles/${article.id}/${action}`, {
         method: "POST",
       });
+      // #722 — await the refetch so the header article count + status tabs
+      // are guaranteed in sync before the publishing spinner clears. The
+      // pre-fix code fired loadAll() without await, leaving a window where
+      // the bug report saw "1 articles" alongside "9 Published / 2 Drafts"
+      // (i.e. the header read a stale count while the tabs reflected the
+      // new state). Awaiting closes the race; pluralization is handled in
+      // the header JSX via the totalArticles === 1 guard.
+      await loadAll();
       notify.success(
         `Article ${action === "publish" ? "published" : "unpublished"} successfully`,
       );
-      loadAll();
     } catch (err) {
       // fetchApi auto-toasts the error
     } finally {
@@ -151,7 +158,17 @@ export default function KnowledgeBase() {
   };
 
   const createCategory = async () => {
-    if (!newCategoryName.trim()) return;
+    // #723 — silent no-op on empty input was a UX dead-end (no toast,
+    // no inline error, no disabled state). The `+` button is now also
+    // `disabled={!newCategoryName.trim()}` so the click can't fire in the
+    // empty state at all, but we ALSO keep this guard + a toast for the
+    // Enter-key path (Enter on an empty input is harder to disable via
+    // attribute, and a screen-reader user who can't see the disabled
+    // styling still gets feedback).
+    if (!newCategoryName.trim()) {
+      notify.error("Enter a category name");
+      return;
+    }
     try {
       await fetchApi("/api/knowledge-base/categories", {
         method: "POST",
@@ -482,7 +499,22 @@ export default function KnowledgeBase() {
             <button
               onClick={createCategory}
               className="btn-primary"
-              style={{ padding: "0.4rem 0.7rem", fontSize: "0.8rem" }}
+              // #723 — disabled when input is empty/whitespace so the click
+              // can never fire a silent no-op. Aria-label gives screen
+              // readers the action; title gives sighted users a tooltip.
+              disabled={!newCategoryName.trim()}
+              aria-label="Create category"
+              title={
+                newCategoryName.trim()
+                  ? "Create category"
+                  : "Enter a category name first"
+              }
+              style={{
+                padding: "0.4rem 0.7rem",
+                fontSize: "0.8rem",
+                opacity: newCategoryName.trim() ? 1 : 0.5,
+                cursor: newCategoryName.trim() ? "pointer" : "not-allowed",
+              }}
             >
               <Plus size={14} />
             </button>

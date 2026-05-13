@@ -40,7 +40,17 @@ function TenantChip({ tenant }) {
       data-testid="tenant-chip"
       style={{
         display: 'flex', alignItems: 'center', gap: '6px',
-        background: 'var(--accent-bg, #f0f4ff)', border: '1px solid var(--accent-color)',
+        // #725 — harden the chip background fallback. The previous fallback
+        // (`#f0f4ff`, a light-blue hex) rendered as a white-text-on-light-blue
+        // pill in dark mode on any tenant whose theme block didn't define
+        // `--accent-bg` (e.g. non-wellness Default Org). `--accent-bg` is now
+        // defined in :root + [data-theme="light"|"dark"] in index.css so the
+        // variable resolves on every tenant, but we keep a theme-aware
+        // fallback chain (--subtle-bg-3 is a translucent surface tint that
+        // reads OK in both themes) so a future broken theme block can never
+        // produce light-blue-on-dark again.
+        background: 'var(--accent-bg, var(--subtle-bg-3, rgba(255,255,255,0.08)))',
+        border: '1px solid var(--accent-color)',
         color: 'var(--text-primary)', borderRadius: 8,
         padding: '6px 12px', fontSize: '0.85rem',
         fontWeight: 500,
@@ -297,7 +307,15 @@ const Layout = () => {
             <LogOut size={16} />
           </button>
         </header>
-        {daysRemaining && (
+        {/* #730 — guard with `> 0`, NOT bare `daysRemaining`. The native
+            `&&` short-circuit renders the falsy left-hand operand when it's a
+            number — so `daysRemaining === 0` (last day of trial / expired)
+            previously rendered a literal "0" text node between the header and
+            main, visible on every authenticated page. `daysRemaining > 0`
+            short-circuits to `false`, which React correctly renders as nothing.
+            The reverse intent here is "only render the banner when there's a
+            countdown to show" — a zero-day banner would also be useless. */}
+        {daysRemaining > 0 && (
           <TrialBanner daysRemaining={daysRemaining} />
         )}
         <SubscriptionExpiryModal daysRemaining={daysRemaining} trialEndsAt={trialEndsAt} />

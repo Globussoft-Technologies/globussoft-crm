@@ -327,6 +327,30 @@ function FlowEditor({ bot, tenantId, onClose, onSaved }) {
             color: '#a5b4fc', fontSize: '0.75rem', overflowX: 'auto', margin: 0,
             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
           }}>{snippet}</pre>
+          {/* #728 (item 2) — Privacy caveat. The embed URL carries the
+              numeric tenantId + botId in plain query-string form. Any
+              site that embeds the widget exposes these values to its
+              own visitors (referer leak, network-panel inspection,
+              "view source"). They are not secrets, but they ARE
+              enumerable identifiers that can be used to probe tenant-
+              scoped public endpoints. Opaque signed-token rewrite is
+              tracked separately; for now, surface the threat model so
+              embedding sites can decide where to place the snippet. */}
+          <p
+            data-testid="embed-snippet-privacy-caveat"
+            style={{
+              marginTop: '0.5rem',
+              fontSize: '0.72rem',
+              color: 'var(--text-secondary)',
+              lineHeight: 1.4,
+            }}
+          >
+            <strong>Privacy note:</strong> this snippet contains your numeric tenant
+            and bot IDs. Anyone who can view the embedding page&apos;s source can
+            identify your tenant. Treat the snippet as semi-public — safe to embed
+            on your own marketing site, but don&apos;t paste it into a public forum
+            or share it with untrusted third parties.
+          </p>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>

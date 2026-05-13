@@ -1,5 +1,88 @@
 # CHANGELOG
 
+## v3.7.10 — 2026-05-13 — audit-api concurrency-noise hardening: serial-mode describe + 120s headroom
+
+**Spec-only release** (second in the v3.7.x stabilization arc). Targets the
+2 residual hard failures in v3.7.9's e2e-full release-validation run.
+
+### Root cause (verified)
+
+v3.7.9's e2e-full had 2 hard failures, both in
+`e2e/tests/audit-api.spec.js` (lines 491 + 514, hash-chain `/verify` tests),
+both with the same error signature: `Test timeout of 60000ms exceeded` +
+`Error: apiRequestContext.post: Request context disposed` on calls to
+`POST /api/contacts` (the `seedAuditedContact` helper).
+
+Direct demo probe (5× back-to-back) at the time of triage:
+`integrityVerified=true, chainLength=108679=totalRows, unhashedRows=0`.
+The chain is **functionally healthy** — these were NOT integrity bugs.
+The failures were pure timing: demo backend saturated by the other 3
+shards' concurrent activity → seed POSTs took 10-30s each → playwright's
+60s test timeout fired → in-flight request errored on context disposal.
+
+### Fix
+
+`fdc9075` — single commit, single file (`e2e/tests/audit-api.spec.js`):
+
+- `test.describe.configure({ mode: 'serial', timeout: 120_000 })` at the
+  top of the `Audit API — /verify hash-chain` describe block. Forces
+  tests in that describe to run sequentially within their shard — trades
+  a few seconds of test wall-clock for stability under concurrent-shard
+  load.
+- Removed the per-test `test.setTimeout(60_000)` calls from `c2f3ba7`
+  (they would have clobbered the describe-level 120s ceiling back down
+  to 60s).
+
+### Verification
+
+Local sweep against demo (`BASE_URL=https://crm.globusdemos.com npx
+playwright test --project=chromium tests/audit-api.spec.js -g
+"hash-chain"`): both target tests passed on first attempt under the
+new serial config — line 491 in 6.4s, line 514 in 10.9s.
+
+### Out-of-scope residual
+
+The 2 tests at lines 615+626 (`backfill is tenant-scoped` + `/verify
+is tenant-scoped`) are in the OTHER describe block (`/backfill
+hash-chain`) and continue to flaky-pass-on-retry under the canonical
+wellness-chain background-cron `writeAudit` race — they self-heal within
+a few hundred ms, the framework's `retries: 2` budget absorbs them.
+That's noise, not a regression — left as-is for this release.
+
+### What we explicitly did NOT change
+
+- **No backend code.** Chain is healthy on demo. The fix is purely test
+  infrastructure.
+- **No retry-count bumps.** The framework's existing 2-retry budget is
+  the right ceiling; we're fixing the underlying timing, not papering
+  over it with more retries.
+- **No other specs touched.** Single-file, single-commit. Minimal blast
+  radius.
+
+### v3.7.10 e2e-full prediction (per stabilization agent)
+
+> Clean-or-residual-flaky-on-retry. The 2 hard-failing target tests are
+> now serialized + given 2× timeout headroom. The 2 residual
+> tenant-scoped flakes in the other describe will probably continue to
+> retry-then-pass (same wellness-chain background-cron race as v3.7.9)
+> — that's noise, not a regression. Expectation: 0 hard failures, 2-4
+> flaky-passing-on-retry, ~1,124+ passed.
+
+### Trajectory
+
+| Release | Hard failures | Flaky-passing | Total passed |
+|---------|---------------|---------------|--------------|
+| v3.7.6  | 16            | unknown       | —            |
+| v3.7.8  | 9             | unknown       | —            |
+| v3.7.9  | 2             | 4             | 1,124        |
+| v3.7.10 | 0 (expected)  | 2-4 (residual)| ~1,124+      |
+
+### Stats
+
+- 1 commit (`fdc9075`), 1 file, +5/-6 lines
+- 0 backend / frontend / engine changes
+- Demo binary identical to v3.7.9 (which was identical to v3.7.8)
+
 ## v3.7.9 — 2026-05-13 — e2e-full baseline stabilization: 9 spec-vs-code drifts hardened (zero product change)
 
 **Spec-only release.** No backend / frontend / engine changes. Cuts a fresh

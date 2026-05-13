@@ -1,5 +1,83 @@
 # CHANGELOG
 
+## v3.7.12 — 2026-05-13 — reports.spec.js wait-for-selector before counting (spec-only)
+
+**Fourth in the v3.7.x e2e-full stabilization arc** — and the final
+attempt at a fully-clean release validation.
+
+### Root cause
+
+v3.7.11 e2e-full had 1 hard failure remaining (`reports.spec.js:84 —
+reports page has multiple chart sections`). All 3 retries failed in
+~2-3s each — chart count returned 0.
+
+The test counted `.recharts-wrapper` elements **immediately** after a
+2s `waitForTimeout`. Under e2e-full's concurrent-shard load, demo's
+React + recharts hydration window exceeds 2s, so the count fires before
+charts have rendered → `chartCount === 0` → hard assert tripped.
+
+**Line 32 of the same spec** has the SAME class of test
+(`at least one chart is rendered`) and was always green — because it
+uses `await expect(chartEl).toBeVisible({ timeout: 10000 })` instead
+of an immediate count.
+
+### Fix
+
+`9a05c70` — single 5-line change to `e2e/tests/reports.spec.js:84`:
+
+```diff
+- await page.waitForTimeout(2000);
+- const charts = page.locator(...);
+- const chartCount = await charts.count();
++ const charts = page.locator(...);
++ await charts.first().waitFor({ state: 'visible', timeout: 15000 });
++ const chartCount = await charts.count();
+```
+
+Backports line 32's proper-wait pattern to line 84.
+
+### Verification
+
+Local sweep against demo (`BASE_URL=https://crm.globusdemos.com npx
+playwright test --project=chromium tests/reports.spec.js -g
+"multiple chart sections"`): passed on first attempt in **1.9s**
+(was 2.7s + retries-also-failed pre-fix).
+
+### Standing rule reinforced
+
+The 4-cycle v3.7.x stabilization arc consistently surfaced UI spec
+flakes that used `waitForTimeout(N)` then immediate-count instead of
+the proper `waitFor({ state: 'visible' })` pattern. Worth a cron-learning
+on next pass: **any e2e spec asserting on element COUNT under e2e-full
+concurrent-shard load must use `waitFor({ state: 'visible' })` on the
+selector before counting** — `waitForTimeout()` + immediate count is
+structurally fragile because demo's React hydration window varies with
+concurrent load.
+
+### Trajectory (final-final)
+
+| Release | Hard fails | Flaky-passing | Passed | Shards green |
+|---------|------------|---------------|--------|--------------|
+| v3.7.6  | 16         | unknown       | —      | 1/4          |
+| v3.7.8  | 9          | unknown       | —      | 1/4          |
+| v3.7.9  | 2          | 4             | 1,124  | 3/4          |
+| v3.7.10 | 1          | 2             | 1,125  | 3/4          |
+| v3.7.11 | 1          | 3             | 1,210  | 3/4          |
+| **v3.7.12** | **0 (expected)** | 3-5 | ~1,210+ | **4/4 (expected)** |
+
+### What we explicitly did NOT change
+
+- **No backend code.** All 4 stabilization releases have been spec-only.
+- **No retry-count bumps.**
+- **No `test.skip()`.**
+- **Single file, single commit.**
+
+### Stats
+
+- 1 commit (`9a05c70`), 1 file, +5/-3 lines
+- 0 backend / frontend / engine changes
+- Demo binary identical to v3.7.11 (and v3.7.10 / v3.7.9 / v3.7.8)
+
 ## v3.7.11 — 2026-05-13 — audit-api `verifyEventually` backfill-on-every-poll (spec-only)
 
 **Third in the v3.7.x stabilization arc.** Targets the 1 residual hard

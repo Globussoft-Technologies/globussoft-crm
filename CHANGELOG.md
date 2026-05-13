@@ -1,5 +1,89 @@
 # CHANGELOG
 
+## v3.7.9 — 2026-05-13 — e2e-full baseline stabilization: 9 spec-vs-code drifts hardened (zero product change)
+
+**Spec-only release.** No backend / frontend / engine changes. Cuts a fresh
+e2e-full release-validation cycle now that 9 baseline failures from the
+v3.7.2 → v3.7.8 arc (6 consecutive red e2e-full runs) have been resolved
+in their root cause. Demo is functionally identical to v3.7.8 — the only
+diff is e2e spec hardening + version-string bumps.
+
+### Triage summary
+
+After v3.7.8 e2e-full went red (9 unique failures), demo-probe investigation
+categorized each failure as:
+- **5 spec-rot from intentional code changes** — specs were authored before
+  later hardening / refactor commits and never updated. Code is correct;
+  specs were drifting.
+- **3 demo-state races / UI timing flakes** — specs that assumed quiet
+  demo state, fired during background-cron activity, or relied on UI
+  hydration windows shorter than demo's actual settle time.
+- **1 spec-vs-validator drift** — `channels-credentials-api` was sending
+  a 20-char `senderId` after `routes/sms.js:481` added msg91's 6-char
+  validator. Backend logic correct; spec payload now-invalid.
+
+### Spec fixes (8 commits)
+
+| Commit | Spec | Class | What changed |
+|--------|------|-------|--------------|
+| `12f9539` | `notifications-api.spec.js:520` | A — spec-rot | PR #710 reshaped `channels` from `{db,socket,push,email}` booleans to `{email:{enabled:true}}` per-channel objects. Demo admin's stored row had the new shape, so `body.channels.db` was undefined. Spec now asserts structural shape — accepts either booleans or objects. |
+| `d104883` | `wellness-sms.spec.js:35` | A — spec-rot | `credentialMasking.js` refactor reshaped `apiKey` from `string` to `{configured, last4}`. `toMatch(/\*{4}$/)` blew up on the object. Spec now accepts either shape. |
+| `75d473a` | `eventbus-emit.spec.js:322` | A — spec-rot | PR #713 (`2ca6f5e`) added SSRF defense — `targetUrl: http://127.0.0.1:1/...` now rejected with `INVALID_WEBHOOK_HOST`. Spec switched to `https://example.invalid:1/e2e-stub` — passes the validator, still fails-fast at delivery, test's intent (rule survives webhook failure) preserved without weakening the SSRF guard. |
+| `91d53e6` | `wellness-consent-archive-api.spec.js:123` | A — spec-rot (race) | `POST /wellness/consents` fires-and-forgets PDF blob generation (`wellness.js:1828`). By the time the spec calls `/archive`, the blob is often already persisted → `alreadyArchived: true`. First archive call now accepts boolean either way; idempotency contract (second call returns `true`) still pinned tightly. |
+| `b3e0857` | `channels-credentials-api.spec.js:237` | A — spec-rot | `routes/sms.js:481` added msg91 `senderId` validator: exactly 6 alphanumeric. Spec sent `RUN_TAG-newSender` (~20 chars + hyphen) → 400 blocked the PUT before the masked-sentinel logic could be tested. **Backend logic is correct** — masked-sentinel detection works. Switched spec to `senderId: 'GBSCRM'`. |
+| `c2f3ba7` | `audit-api.spec.js:463, 481, 580, 618` (4 tests) | B — state race | Background-cron `writeAudit` (orchestrator, workflow, sentiment, scheduled-email, sequences) creates a transient null-hash row between spec's `before` and `after` snapshots. Added `verifyEventually()` poll helper: polls `/verify` up to 6 × 700ms, fires idempotent backfill if it observes a null-hash row. Per-test timeouts bumped to 60-90s. |
+| `cb5581e` | `lead-scoring.spec.js:53` | B — UI timing | `page.goto('/lead-scoring')` + `page.evaluate` to read sessionStorage token blew past 30s on demo's SPA hydration. Replaced with direct `request.post` + fresh login. No UI dependency. 60s timeout. |
+| `5a96151` | `deals-api.spec.js:564` | B — state race | `afterAll` hook serially DELETEd ~49 deals; ~250-600ms each against demo > 30s default hook timeout. Test reported as flaky. Parallelized DELETEs in batches of 8. Hook timeout bumped to 120s. |
+
+### What we explicitly did NOT change
+
+- **No backend code changes.** Specifically: did NOT loosen the SSRF guard
+  from #713 to make `eventbus-emit` pass — the SSRF guard is correct; the
+  spec was the drift.
+- **No frontend code changes.** This release is functionally identical to
+  v3.7.8 from a product perspective.
+- **No skipped-test re-enables.** The `IS_LOCAL_STACK`-guarded specs
+  (backup-engine, migration-safety, recurring-invoice, retention,
+  scheduled-email, wellness-ops) stay skipped against demo because they
+  need filesystem-shared access to the backend — a structural constraint,
+  not a test-quality issue.
+
+### Pattern reinforced
+
+**The "spec rot from intentional code changes" class is now the dominant
+failure mode** in the e2e-full arc. The 5-of-9 ratio in this wave (and
+similar ratios in prior waves) suggests that any time a backend route
+adds a validator / hardens a shape / refactors a credential / adds an
+SSRF guard, the per-route api spec gets a paired update — but the
+**cross-cutting bare specs** (`wellness-sms`, `eventbus-emit`,
+`channels-credentials`, etc.) get missed because they're not in the
+per-push gate's spec list. The standing rule in CLAUDE.md
+("cross-cutting shape change → run the audit skill") catches some but
+not all of this class — it's heuristic, not exhaustive.
+
+Worth a follow-up cron-learning entry: **for any backend hardening that
+changes a public response shape OR adds an input validator, grep
+`e2e/tests/` for the field/endpoint name and update every spec that
+touches it, not just the route's primary api spec.** Would have prevented
+all 5 spec-rot failures this wave.
+
+### v3.7.9 e2e-full prediction (per the stabilization agent)
+
+> High confidence (8/9 deterministic fixes; 1/9 race-convergence) — all 9
+> original failure modes are pinned to root cause with verified-green
+> tests against demo. Possible new flakes from 6 transient-network
+> patterns observed in the local sweep, but those existed in v3.7.8 too
+> and retried green within the e2e-full's `retries: 2` budget. Expected
+> outcome: 0-3 transient flakes that auto-retry green, exit 0.
+
+### Stats
+
+- 8 commits, +162/-58 lines across 8 specs
+- 0 backend / frontend / engine code changes
+- 9 failures triaged and pinned to root cause
+- Demo binary identical to v3.7.8 — `/api/health` will show the new
+  version string but every functional surface is unchanged
+
 ## v3.7.8 — 2026-05-13 — Pen-test follow-on wave #2: wellness RBAC + KB UX + theme bugs + Inbox styling + stray "0"
 
 Closes 9 actionable issues filed by the QA pen-test re-verification pass after

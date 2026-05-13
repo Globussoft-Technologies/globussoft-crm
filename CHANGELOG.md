@@ -1,5 +1,125 @@
 # CHANGELOG
 
+## v3.7.8 — 2026-05-13 — Pen-test follow-on wave #2: wellness RBAC + KB UX + theme bugs + Inbox styling + stray "0"
+
+Closes 9 actionable issues filed by the QA pen-test re-verification pass after
+v3.7.7 deployed. Triaged + dispatched in 3 parallel agent waves; all 3 wave
+commits landed deploy-gate green on first push (no post-merge fallout this
+cycle — clean cut compared to PR #710's 4-round chase).
+
+### Wave A — `7e94b21` — wellness RBAC + toast copy (#721 + #727)
+
+- **`frontend/src/components/RoleGuard.jsx`** — enhanced with `feature` /
+  `roles` / `lockedInPlace` props + new `LockedPanel` in-place renderer
+  + auth-loading safety gate. Two modes now coexist:
+  - **strict-redirect** (default — preserves #589 + #574
+    info-disclosure-prevention contract for `/audit-log`, `/staff`,
+    `/field-permissions`, `/settings`, `/channels`)
+  - **lockedInPlace** (new — preserves URL context for manager-access family)
+- **Root cause of #721** was an **AuthContext hydration race**: when `user`
+  is briefly `null` post-mount, `allow.includes(undefined) === false` was
+  firing the manager-access toast spuriously. Fixed by gating the toast on
+  `sessionReady = !loading && !!user && !!role`.
+- **`frontend/src/App.jsx`** — 5 callsites (Marketing + 4 wellness routes)
+  now pass `feature` + `roles="manager (or admin)"` + `lockedInPlace`.
+- **+10 RTL tests** in `RoleGuard.test.jsx` pinning the new contract
+  (21 total tests in file). Full frontend suite green: 72 files / 631 tests.
+- **#727 other items deferred** — the `dealId/invoiceId/contactId` "Invalid X"
+  toast family lives in `fetchApi` error-handling (not RoleGuard); the
+  Telecaller Queue 403 toast loop lives in the TelecallerQueue page-level
+  gate (not RoleGuard). Documented in commit body so next pickup knows scope.
+
+### Wave B — `afbcaed` — KB + theme bugs + stray "0" (#722 / #723 / #724 / #725 / #730)
+
+- **#722 — `KnowledgeBase.jsx` togglePublish count refresh** — `publish`/
+  `unpublish` handlers now `await loadAll()` so the header counter reflects
+  the new state immediately (pre-fix the counter was stale until next nav).
+- **#723 — empty-category validation** — `+` button disabled when input is
+  empty/whitespace-only; toast error if the validation is bypassed via
+  keyboard. +10 KB tests in new `KnowledgeBase.test.jsx`.
+- **#724 — native `<select>` dark-mode hardening** — third defense layer
+  on top of v3.7.7's `color-scheme` rules: `select option` explicit
+  `background-color` + `color !important` so option text never inherits
+  the system's white-on-white default. Affects flow-node pickers, A/B Tests
+  campaign dropdowns, Custom Reports entity/filter/group selects.
+- **#725 — `TenantChip` background var-fallback chain** —
+  `var(--accent-bg, var(--subtle-bg-3, rgba(255,255,255,0.08)))` replaces
+  the hardcoded `#f0f4ff` fallback that pre-fix bled through on non-wellness
+  dark-mode (white text on light-blue tile). Test pins the contract:
+  inline style must reference `var(--accent-bg)` AND must NOT contain
+  `#f0f4ff` (regression guard).
+- **#730 — stray "0" between `<header>` and `<main>`** — `Layout.jsx:300`
+  was `{daysRemaining && <TrialBanner.../>}`. When the subscription endpoint
+  returned `daysRemaining: 0` (last day of trial / expired), `&&`
+  short-circuited to the falsy numeric and React rendered it as literal
+  `0` text. Fixed to `daysRemaining > 0 && ...`. **Canonical falsy-numeric
+  short-circuit class** — the standing rule in CLAUDE.md ("always guard
+  `&&` with `> 0` / `Boolean(x)` / ternary when LHS could be `0`/`''`/`NaN`")
+  caught it but only after one cycle in production; the new Layout test
+  pins the negative contract (no stray "0" text node in `.app-main`'s
+  immediate children).
+- **+13 frontend tests** (10 KB + 3 Layout extensions). Full frontend
+  suite: 644 tests green.
+
+### Wave C — `37099a7` — Inbox WhatsApp styling + privacy review (#726 + #728)
+
+- **#726 — `Inbox.jsx` WhatsApp buttons re-aligned to canonical teal** —
+  lines 336 + 860 swapped from PR #729's `btn-secondary`-with-WA-tint to
+  plain `btn-primary`, matching the canonical Compose/Send button family
+  for the page. Resolves the visual stutter introduced by PR #729's
+  partial revert of the v3.7.7 squash-merge fixup. +2 RTL tests in
+  `Inbox.test.jsx` pinning the teal contract.
+- **#728 item 1 — XSS-string demo seed row scrubbed** —
+  `prisma/seed.js` Campaign loop now guards on new
+  `backend/lib/seedNameGuard.js` helper that rejects
+  `alert(` / `<script` / `onerror=` / `<iframe` / `javascript:` / test
+  prefixes. 15 vitest cases pin the contract. Cleanup script
+  `scripts/cleanup-xss-seed-row.py` (paramiko, mirrors
+  `cleanup-demo-pollution.py`) removed 1 polluted row from demo
+  (`Campaign.id=926`, `tenantId=2`). Idempotent re-run = no-op.
+- **#728 item 2 — chatbot embed snippet privacy caveat** — added inline
+  caveat below the copy-to-clipboard textarea in `Chatbots.jsx` warning
+  that the bot ID + tenant slug embedded in `<script src=...>` are
+  observable by any visitor of the host page; recommends paired
+  rate-limit + tenant-scoping on the public endpoint.
+- **#728 item 3 — free-trial vs role-gate conflation** — REOPENED as
+  follow-up; needs product input (the QA pen-test conflated trial-expiry
+  toast copy with role-gate toast copy, but the two have different
+  business semantics — Rishu/product call needed on whether they should
+  share copy or stay distinct).
+
+### Pattern reinforcement
+
+- **Phantom-carry-over standing rule held the line again** — the 30-second
+  `gh issue view` + commit-grep pre-flight on each of the 10 open issues
+  caught 0 phantoms this wave (all were genuinely open after v3.7.7
+  shipped), but the discipline is now embedded as the default and isn't
+  going away.
+- **Parallel-wave concurrency-group serialization worked cleanly** —
+  3 sibling wave commits pushed within 100s of each other; concurrency
+  group queued them, cancelled the middle one (Wave A) when Wave B
+  landed first, and ran the final gate on the head (`afbcaed`) once.
+  No race conditions on schema/lockfile this wave (Wave A touched only
+  React components + tests; Wave B touched only CSS + components + tests;
+  Wave C touched a new helper + seed.js + scripts/ + Inbox + Chatbots).
+- **Clean cut compared to PR #710's 4-round chase** — every wave commit
+  landed deploy-gate green on first push. The difference: this wave's
+  agents pre-validated by running `npx vitest run` locally before
+  pushing (now standard discipline per the
+  `feedback_local_test_before_push` memory established 2026-05-06),
+  vs PR #710 which inherited an external author's untested changes
+  and discovered the strict-subset-gate problem one round at a time.
+
+### Stats
+
+- **3 commits / 9 issues closed / 1 reopened-as-follow-up** (#728 item 3)
+- **+25 new tests** (+10 RoleGuard / +10 KnowledgeBase / +3 Layout / +2 Inbox)
+- **+15 vitest cases** (seedNameGuard helper)
+- **0 backend route changes** — pure frontend + helper-library wave
+- **1 paramiko cleanup script run against demo** — 1 XSS row removed
+- **Open issues at release:** 2 (#728 item 3 awaiting product input,
+  #457 manual-QA tracking surface — neither is a code defect)
+
 ## v3.7.7 — 2026-05-13 — PR #729: public KB article view + Telecaller sidebar gate + dark-mode select fix
 
 Single-PR release for [PR #729](https://github.com/Globussoft-Technologies/globussoft-crm/pull/729)

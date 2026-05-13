@@ -1,5 +1,88 @@
 # CHANGELOG
 
+## v3.7.7 — 2026-05-13 — PR #729: public KB article view + Telecaller sidebar gate + dark-mode select fix
+
+Single-PR release for [PR #729](https://github.com/Globussoft-Technologies/globussoft-crm/pull/729)
+by @shiksharoy-ai, reviewed + selectively-fixed inline before merge.
+
+### What ships
+
+- **Public Knowledge Base article view** at `/kb/:tenantSlug/:slug` —
+  new `frontend/src/pages/KbArticleView.jsx` (321 lines). Lazy-loaded
+  route mounted outside the auth-required tree (sibling to
+  `/survey/:id`). Replaces the brittle pre-PR pattern of opening the
+  raw backend JSON URL via a `:5173 → :5000` port swap (which exposed
+  raw response payload in the browser tab).
+- **Pure-JSX markdown renderer** inside `KbArticleView.jsx` — supports
+  `##` / `###` / `# ` headers, `- ` / `* ` lists, `**bold**`, paragraphs.
+  No `dangerouslySetInnerHTML` anywhere; React auto-escaping makes XSS
+  via article content not a concern even on this public unauth route.
+- **Telecaller Queue sidebar gate** — `Sidebar.jsx` Link helper gains
+  a `wellnessRoles` prop. The Telecaller Queue link now mirrors the
+  backend's `verifyWellnessRole(["telecaller", "admin", "manager"])`
+  gate at `backend/routes/wellness.js:5167` — managers/admins always
+  pass through, named roles must match. Pre-fix: plain USER and
+  non-telecaller clinical staff saw a 403 toast on every navigation.
+- **Native `<select>` dark-mode fix** in `index.css` — 3-layer
+  `color-scheme` defense (root + `[data-theme=dark/light]` + per-`select`
+  element) plus explicit `option/optgroup` background-color + color !important
+  fallback. Fixes near-invisible white-on-white option text in
+  Chatbots flow-node picker, A/B Tests campaign dropdown, Custom Reports
+  entity/filter/group selects.
+- **`--accent-bg` design token** added across all three theme variants.
+- **`DealInsights.jsx` dead-state cleanup** — removed unused
+  `openDealIds` state; `openDeals` already had the id field.
+
+### What's NOT in this release (despite the diff size)
+
+- **`backend/routes/integrations.js` +184 -66** is **pure Prettier
+  reformatting**. Verified line-by-line during review — zero functional
+  change. Listed here so future audit-cross-cutting passes don't waste
+  cycles scanning it.
+
+### Public-route security review
+
+The frontend hits `GET /api/knowledge-base/public/:tenantSlug/article/:slug`.
+The endpoint **predates this PR** at `backend/routes/knowledge_base.js:84`,
+is correctly allowlisted via `/knowledge-base/public` in
+`backend/server.js:462` openPaths, and is properly gated:
+
+- `isPublished: true` filter at line 90 → drafts never exposed
+- Tenant lookup by slug → filter articles by that tenant's ID → no
+  cross-tenant read
+- Returns 404 for both unknown tenant AND unpublished/missing article
+  → no info-disclosure oracle
+- Existing spec coverage at `e2e/tests/knowledge-base-api.spec.js:62-72`
+  already pins the 404 paths
+
+### Post-review fix folded into the squash merge
+
+Initial PR flipped the Inbox.jsx "Compose WhatsApp" buttons from
+`btn-secondary` (with WA-green tint) to `btn-primary`. Reviewed as a
+nit because (a) the pre-PR styling intentionally differentiated the
+WA action from the other btn-primary Compose buttons in the toolbar
+(Call Dialer / SMS / Email), and (b) the modal submit's WA-green primary
+override also got dropped, making the Send-WhatsApp button visually
+indistinguishable from a generic submit. Reverted both changes
+(commit `a97a8e2` on the PR branch, squash-merged into `cb12681`).
+
+### PR review pattern reinforced
+
+PR pre-merge gate green (build / lint / scan_diff) is a strict subset
+of per-push gate (now 7th+ confirmed instance). Tracking: any post-merge
+fallout on this PR will land as fix commits chained off `cb12681`.
+
+### Stats
+
+- 8 files changed, +572 / -76
+- 1 new lazy-loaded page (`KbArticleView.jsx`)
+- 1 new public route (`/kb/:tenantSlug/:slug`)
+- 1 new design token (`--accent-bg`)
+- Per-push gate unchanged at ~4,450+ tests (no new specs in this PR —
+  RTL test for the new public view is a deferred backlog item)
+
+---
+
 ## v3.7.6 — 2026-05-13 — Pen-test wave triage + 2026-05-12 all-issues sweep + B-03 SendGrid closure
 
 Rolls 28 commits of release-validated work into a single tag. Covers:

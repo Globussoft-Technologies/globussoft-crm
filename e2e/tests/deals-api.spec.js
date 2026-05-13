@@ -123,10 +123,19 @@ async function adel(request, path) { const { token } = await getAdmin(request); 
 const createdDealIds = [];
 
 test.afterAll(async ({ request }) => {
+  // Bump the hook timeout — the default afterAll is 30s, and ~50 serial
+  // network-roundtrip deletes against demo can blow past that under load
+  // (each DELETE is ~250-600ms). Parallelize in batches to keep total
+  // wall-clock within the bumped budget.
+  test.setTimeout(120_000);
   const { token } = await getAdmin(request);
   if (!token) return;
-  for (const id of createdDealIds) {
-    await del(request, token, `/api/deals/${id}`).catch(() => {});
+  const BATCH = 8;
+  for (let i = 0; i < createdDealIds.length; i += BATCH) {
+    const slice = createdDealIds.slice(i, i + BATCH);
+    await Promise.all(
+      slice.map((id) => del(request, token, `/api/deals/${id}`).catch(() => {}))
+    );
   }
 });
 

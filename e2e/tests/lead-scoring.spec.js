@@ -50,29 +50,35 @@ test.describe('Lead Scoring — AI Lead Intelligence', () => {
     await page.screenshot({ path: 'playwright-results/lead-scoring-triggered.png' });
   });
 
-  test('scores are updated via trigger API', async ({ page }) => {
-    // Post-v3.2.5 the JWT lives in sessionStorage, not localStorage.
-    // Pre-fix this test was reading localStorage.getItem('token') which
-    // returns null → the request went out as `Bearer null` → 401 → no
-    // `success` field on the response body → test failed. Fall back to
-    // localStorage so the spec still works against older deployments.
-    const res = await page.evaluate(async () => {
-      const token = sessionStorage.getItem('token') || localStorage.getItem('token');
-      const resp = await fetch('/api/ai_scoring/trigger', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      return resp.json();
+  test('scores are updated via trigger API', async ({ request }) => {
+    // v3.7.x: previously this read via page.evaluate from a Lead Scoring
+    // SPA mount, but the page-load + script-eval round-trip blew past the
+    // 30s default test timeout on demo (slow hydration). Switch to a direct
+    // `request.post` with a fresh admin login token — same backend contract,
+    // no UI dependency. The contract we DO want to pin is:
+    //   { success: true, scored: number, ... } with no NaN/null in `scored`.
+    test.setTimeout(60_000);
+    const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
+    const loginRes = await request.post(`${BASE_URL}/api/auth/login`, {
+      data: { email: 'admin@globussoft.com', password: 'password123' },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 30000,
     });
+    expect(loginRes.ok(), `login: ${loginRes.status()}`).toBeTruthy();
+    const { token } = await loginRes.json();
+
+    const r = await request.post(`${BASE_URL}/api/ai_scoring/trigger`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 30000,
+    });
+    expect(r.ok(), `trigger: ${r.status()}`).toBeTruthy();
+    const res = await r.json();
     expect(res.success).toBe(true);
     expect(typeof res.scored).toBe('number');
-    // The engine only rescores contacts whose aiScoreLastComputedAt is null
-    // OR older than RECOMPUTE_WINDOW_HOURS (24h). A `scored: 0` is a valid,
+    // Engine only rescores contacts whose aiScoreLastComputedAt is null
+    // OR older than RECOMPUTE_WINDOW_HOURS (24h). `scored: 0` is a valid,
     // load-bearing answer when the cron has just run (every 10 min on demo)
-    // — every contact is "fresh", nothing needs work. Pre-fix this asserted
-    // `> 0`, which broke against demo precisely when the cron was healthy.
-    // The contract we DO want to pin is: shape is `{ success: true, scored: number }`
-    // with no NaN/null in `scored`. Negative is impossible from the engine.
+    // — every contact is "fresh", nothing needs work.
     expect(res.scored).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(res.scored)).toBe(true);
   });

@@ -1,0 +1,69 @@
+package com.globussoft.wellness.feature.patients.presentation.detail
+
+import com.globussoft.wellness.core.domain.model.Patient
+import com.globussoft.wellness.core.domain.model.Service
+import com.globussoft.wellness.core.domain.model.Staff
+import com.globussoft.wellness.core.domain.model.Visit
+
+/**
+ * Immutable UI state snapshot for the Patient detail screen.
+ *
+ * [patient] is null during initial load and after a hard error. The screen
+ * uses [isLoading] + [patient] + [error] to switch between shimmer / content /
+ * error render paths.
+ *
+ * [visits], [services], and [doctors] are loaded in parallel with the patient
+ * so the tabs can render without a secondary loading round-trip.
+ *
+ * [selectedTabIndex] is persisted to [SavedStateHandle] by the ViewModel so it
+ * survives configuration changes (screen rotation, multi-window resize).
+ */
+data class PatientDetailUiState(
+    val isLoading: Boolean = false,
+    val patient: Patient? = null,
+    val error: String? = null,
+    val selectedTabIndex: Int = 0,
+    val visits: List<Visit> = emptyList(),
+    val services: List<Service> = emptyList(),
+    val doctors: List<Staff> = emptyList(),
+    /** True while a new visit is being saved via the Log Visit tab. */
+    val isLoggingVisit: Boolean = false,
+    /** Non-null when a log-visit mutation fails. */
+    val logVisitError: String? = null,
+)
+
+// ─── Events ───────────────────────────────────────────────────────────────────
+
+/** User intents for the Patient detail screen. */
+sealed class PatientDetailEvent {
+    /** The user tapped a tab. */
+    data class TabSelected(val index: Int) : PatientDetailEvent()
+
+    /** Pull-to-refresh or retry after error. */
+    data object Refresh : PatientDetailEvent()
+
+    /**
+     * The user submitted the Log Visit form.
+     *
+     * @param serviceId  Selected service UUID.
+     * @param doctorId   Selected doctor UUID (empty string if none selected).
+     * @param date       ISO-8601 date string (e.g. "2026-05-13").
+     * @param bookingType One of "CLINIC_VISIT" | "AT_HOME" | "VIDEO" | "PHONE".
+     * @param notes      Free-text notes (may be blank).
+     */
+    data class LogVisit(
+        val serviceId: String,
+        val doctorId: String,
+        val date: String,
+        val bookingType: String,
+        val notes: String,
+    ) : PatientDetailEvent()
+}
+
+// ─── Effects ──────────────────────────────────────────────────────────────────
+
+/** One-time side effects emitted by [PatientDetailViewModel]. */
+sealed class PatientDetailEffect {
+    /** Show a transient Snackbar message. */
+    data class ShowSnackbar(val message: String) : PatientDetailEffect()
+}

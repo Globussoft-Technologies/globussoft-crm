@@ -466,6 +466,24 @@ test.describe('Audit API — RBAC contract', () => {
 // envelope shape doesn't silently break the frontend's integrity chip.
 
 test.describe('Audit API — /verify hash-chain', () => {
+  // Concurrency-mitigation: v3.7.9 e2e-full (run 25826613805) showed both
+  // `chainLength === totalRows after backfill` and `a fresh seed extends the
+  // chain by ≥1` hard-failing with `apiRequestContext.post: Request context
+  // disposed` at the 60s timeout on POST /api/contacts inside seedAuditedContact.
+  // The chain itself is healthy on demo — direct /verify probes return
+  // integrityVerified=true with chainLength===totalRows. The flake is purely
+  // timing: under the 4-shard concurrent barrage of e2e-full, demo backend
+  // serializes the seed POST + verify poll loop slower than 60s.
+  //
+  // Mitigations applied here:
+  //   1. mode: 'serial' — tests in this describe run sequentially, so two
+  //      hash-chain tests never concurrently POST /api/contacts.
+  //   2. timeout: 120_000 — gives the seed + verifyEventually + assertions
+  //      room to breathe under saturated demo backend load.
+  // Only affects this describe — other audit-api describes / other shards
+  // are unaffected.
+  test.describe.configure({ mode: 'serial', timeout: 120_000 });
+
   test('GET /api/audit/verify returns the documented envelope', async ({ request }) => {
     const { token } = await getGenericAdmin(request);
     // Backfill first so the strict verifier doesn't surface legacy null-hash
@@ -489,7 +507,8 @@ test.describe('Audit API — /verify hash-chain', () => {
   });
 
   test('strict verifier — chainLength === totalRows after backfill (#558 acceptance)', async ({ request }) => {
-    test.setTimeout(60_000);
+    // Timeout inherited from describe-level config (120_000ms) — see the
+    // concurrency-mitigation block at the top of this describe.
     // Headline #558 acceptance criterion: after backfill, the badge reads
     // "Integrity verified (N rows)" where N is the real audit row count for
     // the tenant — not the post-#558 row count alone. Run backfill (no-op
@@ -512,7 +531,8 @@ test.describe('Audit API — /verify hash-chain', () => {
   });
 
   test('a fresh seed extends the chain by ≥1', async ({ request }) => {
-    test.setTimeout(60_000);
+    // Timeout inherited from describe-level config (120_000ms) — see the
+    // concurrency-mitigation block at the top of this describe.
     const { token } = await getGenericAdmin(request);
     // Poll for a stable starting point so the "before" snapshot is itself
     // integrityVerified — otherwise concurrent demo cron writes could move

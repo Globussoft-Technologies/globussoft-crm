@@ -1,5 +1,92 @@
 # CHANGELOG
 
+## v3.7.11 — 2026-05-13 — audit-api `verifyEventually` backfill-on-every-poll (spec-only)
+
+**Third in the v3.7.x stabilization arc.** Targets the 1 residual hard
+failure from v3.7.10's e2e-full release-validation run.
+
+### Root cause (final-form diagnosis)
+
+v3.7.10 e2e-full had 1 hard failure remaining (`audit-api.spec.js:533 —
+a fresh seed extends the chain by ≥1`). Demo's verify response at the
+failure moment:
+
+```json
+{"chainLength":109303,"totalRows":109308,"unhashedRows":6,
+ "brokenAt":154516,"reason":"null hash — row was never chained (run backfill)",
+ "integrityVerified":false}
+```
+
+**Not** chain corruption — 6 rows were "in flight" from background-cron
+`writeAudit` (orchestrator / workflow / sentiment / scheduled-email /
+sequences) writing FASTER than the test's single backfill call could
+process them.
+
+The `verifyEventually()` helper added by `c2f3ba7` polled `/verify`
+6 × 700ms (4.2s total budget) but **fired backfill only on initial
+null-hash observation, then waited for the chain to converge on its own.**
+Under sustained background-cron pressure, new unchained rows appeared
+between polls faster than the static loop could heal.
+
+### Fix
+
+`6f46176` — single commit, single file (`e2e/tests/audit-api.spec.js`):
+
+- `verifyEventually` default attempts: `6` → `15`; delay: `700ms` →
+  `1000ms`. Budget: `4.2s` → `15s`.
+- **Backfill fires on EVERY iteration where `integrityVerified=false`**,
+  not just on iterations that observed `unhashedRows>0` or a null-hash
+  `reason`. The previous gate missed cases where the chain was broken for
+  non-null-hash reasons or where new unchained rows arrived between polls.
+- `.catch(() => {})` on the backfill POST is preserved and now explicitly
+  documented as the "5xx is transient, swallow + continue" path.
+- Test at line 544 (was 533) — both before/after `.toBeTruthy()`
+  assertions now include `JSON.stringify(body)` in their failure messages
+  for debug visibility on exhaustion.
+
+### Verification
+
+Local sweep against demo (`BASE_URL=https://crm.globusdemos.com npx
+playwright test --project=chromium tests/audit-api.spec.js -g "fresh
+seed extends the chain"`): test passed on first attempt in **8.5s**.
+Under the new budget, the chain converges fast enough that the test
+rarely uses more than 2-3 backfill cycles.
+
+### Cron-learning logged (`b18a6c9`)
+
+> "Demo-state convergence helpers need to ACT every iteration, not just
+> observe. Under a demo with continuous background-cron writes,
+> polling-without-acting loses; polling-and-re-acting wins."
+
+Worth promoting to a standing rule on next instance — pairs with the
+existing standing rule on demo-state-aware test assertions.
+
+### Trajectory (final)
+
+| Release | Hard fails | Flaky-passing | Passed | Shards green |
+|---------|------------|---------------|--------|--------------|
+| v3.7.6  | 16         | unknown       | —      | 1/4          |
+| v3.7.8  | 9          | unknown       | —      | 1/4          |
+| v3.7.9  | 2          | 4             | 1,124  | 3/4          |
+| v3.7.10 | 1          | 2             | 1,125  | 3/4          |
+| **v3.7.11** | **0 (expected)** | 2-4 | ~1,125+ | **4/4 (expected)** |
+
+### What we explicitly did NOT change
+
+- **No backend code.** Chain integrity logic is correct; only the test's
+  poll discipline needed hardening.
+- **No retries bumped.** Playwright's existing 2-retry budget stays.
+- **No `test.skip()`.** Goal is "make it pass under load," not "stop
+  running it."
+- **Single file, single commit.** Minimal blast radius.
+
+### Stats
+
+- 1 commit (`6f46176`), 1 file, +29/-11 lines
+- 0 backend / frontend / engine changes
+- Demo binary identical to v3.7.10 (which was identical to v3.7.9 and
+  v3.7.8)
+
 ## v3.7.10 — 2026-05-13 — audit-api concurrency-noise hardening: serial-mode describe + 120s headroom
 
 **Spec-only release** (second in the v3.7.x stabilization arc). Targets the

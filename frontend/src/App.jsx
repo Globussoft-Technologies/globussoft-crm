@@ -601,7 +601,12 @@ export default function App() {
                     <Route
                       path="marketing"
                       element={
-                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Marketing requires manager access.">
+                        <RoleGuard
+                          allow={["ADMIN", "MANAGER"]}
+                          feature="Marketing"
+                          roles="manager (or admin)"
+                          lockedInPlace
+                        >
                           <Marketing />
                         </RoleGuard>
                       }
@@ -845,28 +850,48 @@ export default function App() {
               {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (admin/manager) */}
               <Route path="wellness/wallet" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Wallet ledger requires manager access.">
+                  <RoleGuard
+                    allow={["ADMIN", "MANAGER"]}
+                    feature="Wallet ledger"
+                    roles="manager (or admin)"
+                    lockedInPlace
+                  >
                     <WellnessWallet />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/giftcards" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Gift cards require manager access.">
+                  <RoleGuard
+                    allow={["ADMIN", "MANAGER"]}
+                    feature="Gift Cards"
+                    roles="manager (or admin)"
+                    lockedInPlace
+                  >
                     <WellnessGiftCards />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/coupons" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Coupons require manager access.">
+                  <RoleGuard
+                    allow={["ADMIN", "MANAGER"]}
+                    feature="Coupons"
+                    roles="manager (or admin)"
+                    lockedInPlace
+                  >
                     <WellnessCoupons />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/cashback-rules" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Cashback rules require manager access.">
+                  <RoleGuard
+                    allow={["ADMIN", "MANAGER"]}
+                    feature="Cashback rules"
+                    roles="manager (or admin)"
+                    lockedInPlace
+                  >
                     <WellnessCashbackRules />
                   </RoleGuard>
                 </WellnessOnly>

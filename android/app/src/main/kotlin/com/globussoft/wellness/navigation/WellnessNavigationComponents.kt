@@ -13,10 +13,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -316,7 +319,12 @@ fun WellnessPersistentSidebar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 20.dp),
+                .padding(
+                    start  = 20.dp,
+                    end    = 20.dp,
+                    top    = WindowInsets.safeDrawing.asPaddingValues().calculateTopPadding() + 12.dp,
+                    bottom = 20.dp,
+                ),
         ) {
             Text(
                 text          = "ENHANCED",
@@ -370,7 +378,12 @@ fun WellnessPersistentSidebar(
         Row(
             modifier              = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .padding(
+                    start  = 16.dp,
+                    end    = 16.dp,
+                    top    = 14.dp,
+                    bottom = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding() + 14.dp,
+                ),
             verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {

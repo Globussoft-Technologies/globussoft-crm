@@ -6,18 +6,30 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.globussoft.wellness.core.data.datastore.UserSession
 import com.globussoft.wellness.feature.admin.presentation.AdminScreen
+import com.globussoft.wellness.feature.admin.presentation.autoconsumption.AutoConsumptionScreen
+import com.globussoft.wellness.feature.admin.presentation.cashbackrules.CashbackRulesScreen
 import com.globussoft.wellness.feature.admin.presentation.drugs.DrugsScreen
+import com.globussoft.wellness.feature.admin.presentation.holidays.HolidaysScreen
 import com.globussoft.wellness.feature.admin.presentation.locations.LocationsScreen
+import com.globussoft.wellness.feature.admin.presentation.productcategories.ProductCategoriesScreen
 import com.globussoft.wellness.feature.admin.presentation.resources.ResourcesScreen
+import com.globussoft.wellness.feature.admin.presentation.servicecategories.ServiceCategoriesScreen
+import com.globussoft.wellness.feature.admin.presentation.vendors.VendorsScreen
 
 /**
  * Destination route constants for the admin feature graph.
  */
 object AdminDestinations {
-    const val Admin     = "admin"
-    const val Locations = "locations"
-    const val Drugs     = "drugs"
-    const val Resources = "resources"
+    const val Admin                = "admin"
+    const val Locations            = "locations"
+    const val Drugs                = "drugs"
+    const val Resources            = "resources"
+    const val ServiceCategories    = "service-categories"
+    const val Holidays             = "holidays"
+    const val CashbackRules        = "cashback-rules"
+    const val Vendors              = "vendors"
+    const val ProductCategories    = "product-categories"
+    const val AutoConsumptionRules = "auto-consumption-rules"
 }
 
 /**
@@ -59,5 +71,47 @@ fun NavGraphBuilder.adminGraph(
 
     composable(AdminDestinations.Resources) {
         ResourcesScreen(navController = navController)
+    }
+
+    composable(AdminDestinations.ServiceCategories) {
+        ServiceCategoriesScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.Holidays) {
+        HolidaysScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.CashbackRules) {
+        CashbackRulesScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.Vendors) {
+        VendorsScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.ProductCategories) {
+        ProductCategoriesScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.AutoConsumptionRules) {
+        AutoConsumptionScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
     }
 }

@@ -10,6 +10,7 @@ import com.globussoft.wellness.feature.visits.domain.model.LeaveRequest
 import com.globussoft.wellness.feature.visits.domain.model.PaginatedVisits
 import com.globussoft.wellness.feature.visits.domain.model.StaffAttendance
 import com.globussoft.wellness.feature.visits.domain.repository.VisitsRepository
+import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,15 +22,14 @@ import javax.inject.Singleton
  *
  * ### Endpoint map
  * - Visits:     GET  /wellness/visits
- * - Attendance: GET  /wellness/attendance/today
- *               POST /wellness/attendance/punch-in
- *               POST /wellness/attendance/punch-out
- *               GET  /wellness/attendance/history?days=N
- *               GET  /wellness/attendance/all-today
- * - Leave:      GET  /wellness/leave?myOnly=true|false
- *               POST /wellness/leave
- *               POST /wellness/leave/{id}/approve
- *               POST /wellness/leave/{id}/reject
+ * - Attendance: GET  /attendance/me?from&to   — own history (today = same from/to)
+ *               POST /attendance/clock-in      — punch in
+ *               POST /attendance/clock-out     — punch out
+ *               GET  /attendance/summary?from&to — all-staff summary (MANAGER+)
+ * - Leave:      GET  /leave/requests           — list (managers see all; staff own)
+ *               POST /leave/requests           — create
+ *               POST /leave/requests/{id}/approve
+ *               POST /leave/requests/{id}/reject
  */
 @Singleton
 class VisitsRepositoryImpl @Inject constructor(
@@ -81,8 +81,9 @@ class VisitsRepositoryImpl @Inject constructor(
                 list.filterIsInstance<Map<*, *>>().map { it.toAttendanceRecord() }
             }
 
-    override suspend fun getAllStaffAttendanceToday(): WResult<List<StaffAttendance>> =
-        safeApiCall { api.getAllStaffAttendanceToday() }
+    override suspend fun getAllStaffAttendanceToday(): WResult<List<StaffAttendance>> {
+        val today = LocalDate.now().toString()
+        return safeApiCall { api.getAllStaffAttendanceToday(from = today, to = today) }
             .mapSuccess { data ->
                 @Suppress("UNCHECKED_CAST")
                 val envelope = data as? Map<*, *> ?: return@mapSuccess emptyList()
@@ -97,6 +98,7 @@ class VisitsRepositoryImpl @Inject constructor(
                     )
                 }
             }
+    }
 
     // ─── Leave ────────────────────────────────────────────────────────────────
 
@@ -128,21 +130,21 @@ class VisitsRepositoryImpl @Inject constructor(
 
     private fun Map<*, *>.toAttendanceRecord(): AttendanceRecord = AttendanceRecord(
         date     = this["date"] as? String ?: "",
-        clockIn  = this["clockIn"] as? String,
-        clockOut = this["clockOut"] as? String,
-        duration = this["duration"] as? String,
+        clockIn  = this["clockInAt"] as? String,
+        clockOut = this["clockOutAt"] as? String,
+        duration = (this["totalMinutes"] as? Number)?.toInt()?.let { "$it min" },
         status   = this["status"] as? String ?: "PRESENT",
     )
 
     private fun Map<*, *>.toLeaveRequest(): LeaveRequest = LeaveRequest(
         id           = anyId(this["id"]),
         employeeName = this["employeeName"] as? String,
-        fromDate     = this["fromDate"] as? String ?: "",
-        toDate       = this["toDate"] as? String ?: "",
-        type         = this["type"] as? String ?: "ANNUAL",
+        fromDate     = this["startDate"] as? String ?: "",
+        toDate       = this["endDate"] as? String ?: "",
+        type         = (this["policy"] as? Map<*, *>)?.get("leaveType") as? String ?: "ANNUAL",
         reason       = this["reason"] as? String ?: "",
         status       = this["status"] as? String ?: "PENDING",
-        createdAt    = this["createdAt"] as? String ?: "",
+        createdAt    = this["submittedAt"] as? String ?: this["createdAt"] as? String ?: "",
     )
 }
 

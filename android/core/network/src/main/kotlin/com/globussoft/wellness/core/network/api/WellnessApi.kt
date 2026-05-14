@@ -474,8 +474,10 @@ interface WellnessApi {
     ): Response<List<@JvmSuppressWildcards Any>>
 
     // -------------------------------------------------------------------------
-    // Holidays  (feature/schedule)
-    // GET wellness/holidays — list clinic holidays within a date range
+    // Holidays  (admin)
+    // GET    wellness/holidays          — list within date range
+    // POST   wellness/holidays          — create a holiday
+    // DELETE wellness/holidays/{id}     — remove a holiday
     // -------------------------------------------------------------------------
 
     @GET("wellness/holidays")
@@ -483,4 +485,153 @@ interface WellnessApi {
         @Query("from") from: String,
         @Query("to") to: String,
     ): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("wellness/holidays")
+    suspend fun createHoliday(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @DELETE("wellness/holidays/{id}")
+    suspend fun deleteHoliday(
+        @Path("id") id: String,
+    ): Response<Unit>
+
+    // -------------------------------------------------------------------------
+    // Service Categories  (admin)
+    // GET    wellness/service-categories
+    // POST   wellness/service-categories
+    // PUT    wellness/service-categories/{id}
+    // DELETE wellness/service-categories/{id}
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/service-categories")
+    suspend fun getServiceCategories(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("wellness/service-categories")
+    suspend fun createServiceCategory(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @PUT("wellness/service-categories/{id}")
+    suspend fun updateServiceCategory(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @DELETE("wellness/service-categories/{id}")
+    suspend fun deleteServiceCategory(
+        @Path("id") id: String,
+    ): Response<Unit>
+
+    // -------------------------------------------------------------------------
+    // Cashback Rules  (finance/admin)
+    // GET    wellness/cashback-rules
+    // POST   wellness/cashback-rules
+    // PUT    wellness/cashback-rules/{id}
+    // DELETE wellness/cashback-rules/{id}
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/cashback-rules")
+    suspend fun getCashbackRules(): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    @POST("wellness/cashback-rules")
+    suspend fun createCashbackRule(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @PUT("wellness/cashback-rules/{id}")
+    suspend fun updateCashbackRule(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @DELETE("wellness/cashback-rules/{id}")
+    suspend fun deleteCashbackRule(
+        @Path("id") id: String,
+    ): Response<Unit>
+
+    // -------------------------------------------------------------------------
+    // Vendors  (inventory/admin)
+    // GET    wellness/vendors
+    // POST   wellness/vendors
+    // PUT    wellness/vendors/{id}
+    // DELETE wellness/vendors/{id}
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/vendors")
+    suspend fun getVendors(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("wellness/vendors")
+    suspend fun createVendor(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @PUT("wellness/vendors/{id}")
+    suspend fun updateVendor(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @DELETE("wellness/vendors/{id}")
+    suspend fun deleteVendor(
+        @Path("id") id: String,
+    ): Response<Unit>
+
+    // -------------------------------------------------------------------------
+    // Product Categories  (inventory/admin)
+    // GET    wellness/product-categories
+    // POST   wellness/product-categories
+    // PUT    wellness/product-categories/{id}
+    // DELETE wellness/product-categories/{id}
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/product-categories")
+    suspend fun getProductCategories(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("wellness/product-categories")
+    suspend fun createProductCategory(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @PUT("wellness/product-categories/{id}")
+    suspend fun updateProductCategory(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @DELETE("wellness/product-categories/{id}")
+    suspend fun deleteProductCategory(
+        @Path("id") id: String,
+    ): Response<Unit>
+
+    // -------------------------------------------------------------------------
+    // Auto-consumption Rules  (inventory/admin)
+    // GET    wellness/auto-consumption-rules
+    // POST   wellness/auto-consumption-rules
+    // PUT    wellness/auto-consumption-rules/{id}
+    // DELETE wellness/auto-consumption-rules/{id}
+    // GET    wellness/products  — product list for rule picker
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/auto-consumption-rules")
+    suspend fun getAutoConsumptionRules(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("wellness/auto-consumption-rules")
+    suspend fun createAutoConsumptionRule(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @PUT("wellness/auto-consumption-rules/{id}")
+    suspend fun updateAutoConsumptionRule(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @DELETE("wellness/auto-consumption-rules/{id}")
+    suspend fun deleteAutoConsumptionRule(
+        @Path("id") id: String,
+    ): Response<Unit>
+
+    @GET("wellness/products")
+    suspend fun getProducts(): Response<List<@JvmSuppressWildcards Any>>
 }

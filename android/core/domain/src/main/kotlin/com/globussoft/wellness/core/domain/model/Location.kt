@@ -13,11 +13,11 @@ package com.globussoft.wellness.core.domain.model
 data class Location(
     val id: String,
     val name: String,
-    val addressLine: String,
-    val city: String,
-    val state: String,
-    val pincode: String,
-    val phone: String?,
-    val email: String?,
-    val isActive: Boolean,
+    val addressLine: String? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val pincode: String? = null,
+    val phone: String? = null,
+    val email: String? = null,
+    val isActive: Boolean = true,
 )

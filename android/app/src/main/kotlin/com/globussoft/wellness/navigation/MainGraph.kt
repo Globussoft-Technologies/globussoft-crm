@@ -2,8 +2,12 @@ package com.globussoft.wellness.navigation
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,7 +68,15 @@ fun NavGraphBuilder.mainGraph(
                     navController = innerNavController,
                     userSession   = userSession,
                     onLogout      = onLogout,
-                    modifier      = Modifier.weight(1f),
+                    modifier      = Modifier
+                        .weight(1f)
+                        .windowInsetsPadding(
+                            WindowInsets.safeDrawing.only(
+                                androidx.compose.foundation.layout.WindowInsetsSides.Top +
+                                androidx.compose.foundation.layout.WindowInsetsSides.End +
+                                androidx.compose.foundation.layout.WindowInsetsSides.Bottom
+                            )
+                        ),
                 )
             }
         }
@@ -96,10 +108,8 @@ private fun InnerNavHost(
         settingsGraph(navController, userSession, onLogout)
 
         // ── Clinical stubs ────────────────────────────────────────────────
-        composable("service-categories") { PlaceholderScreen("Service Categories") }
-        composable("memberships")        { PlaceholderScreen("Memberships") }
-        composable("holidays")           { PlaceholderScreen("Holidays") }
-        composable("working-hours")      { PlaceholderScreen("Working Hours") }
+        composable("memberships")   { PlaceholderScreen("Memberships") }
+        composable("working-hours") { PlaceholderScreen("Working Hours") }
 
         // ── Leads & Revenue stubs ─────────────────────────────────────────
         composable("inbox")             { PlaceholderScreen("Unified Inbox") }
@@ -114,8 +124,7 @@ private fun InnerNavHost(
         composable("invoices")       { PlaceholderScreen("Invoices") }
         composable("estimates")      { PlaceholderScreen("Estimates") }
         composable("expenses")       { PlaceholderScreen("Expenses") }
-        composable("payments")       { PlaceholderScreen("Payments") }
-        composable("cashback-rules") { PlaceholderScreen("Cashback Rules") }
+        composable("payments") { PlaceholderScreen("Payments") }
 
         // ── Marketing stubs ───────────────────────────────────────────────
         composable("marketing")     { PlaceholderScreen("SMS / Email Blasts") }
@@ -129,11 +138,8 @@ private fun InnerNavHost(
         composable("knowledge-base") { PlaceholderScreen("Knowledge Base") }
 
         // ── Inventory stubs ───────────────────────────────────────────────
-        composable("product-categories")     { PlaceholderScreen("Inventory Categories") }
-        composable("vendors")                { PlaceholderScreen("Vendors") }
-        composable("inventory-receipts")     { PlaceholderScreen("Inventory Receipts") }
-        composable("inventory-adjustments")  { PlaceholderScreen("Inventory Adjustments") }
-        composable("auto-consumption-rules") { PlaceholderScreen("Auto-consumption Rules") }
+        composable("inventory-receipts")    { PlaceholderScreen("Inventory Receipts") }
+        composable("inventory-adjustments") { PlaceholderScreen("Inventory Adjustments") }
 
         // ── Admin stubs ───────────────────────────────────────────────────
         composable("staff")                { PlaceholderScreen("Staff Management") }

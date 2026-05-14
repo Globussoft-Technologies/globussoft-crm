@@ -24,10 +24,11 @@ import javax.inject.Singleton
  * since financial records must always reflect the server's authoritative state.
  *
  * ### Endpoint conventions
- * - POS:       POST /wellness/pos/shift/open|close, POST /wellness/pos/sale
- * - Wallet:    GET  /wellness/wallet/{patientId}
- * - Gift cards: GET/POST /wellness/gift-cards
- * - Coupons:   GET/POST/PUT/DELETE /wellness/coupons, POST /wellness/coupons/preview
+ * - POS:        GET  /pos/registers, GET /pos/shifts/current
+ *               POST /pos/shifts/open, POST /pos/shifts/{id}/close, POST /pos/sales
+ * - Wallet:     GET  /wellness/patients/{patientId}/wallet  → {patient, wallet, transactions}
+ * - Gift cards: GET/POST /wellness/giftcards
+ * - Coupons:    GET/POST/PUT/DELETE /wellness/coupons, POST /wellness/coupons/preview
  */
 @Singleton
 class FinanceRepositoryImpl @Inject constructor(
@@ -75,9 +76,11 @@ class FinanceRepositoryImpl @Inject constructor(
     override suspend fun getWallet(patientId: String): WResult<WalletData> =
         safeApiCall { api.getWallet(patientId) }
             .mapSuccess { data ->
+                // Backend returns { patient: {...}, wallet: {...}, transactions: [...] }
+                val wallet = data["wallet"] as? Map<*, *>
                 WalletData(
-                    patientId    = data["patientId"] as? String ?: patientId,
-                    balance      = (data["balance"] as? Number)?.toDouble() ?: 0.0,
+                    patientId    = patientId,
+                    balance      = (wallet?.get("balance") as? Number)?.toDouble() ?: 0.0,
                     transactions = (data["transactions"] as? List<*>)
                         ?.filterIsInstance<Map<*, *>>()
                         ?.map { it.toWalletTransaction() }

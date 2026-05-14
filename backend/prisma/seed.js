@@ -491,7 +491,18 @@ async function main() {
     { name: 'Customer Success Story Campaign', status: 'Draft', sent: 0, opened: 0, clicked: 0, budget: 6000 },
   ];
 
+  // #728 (item 1) — Re-seed guard. A pen-test pass found an XSS-string-
+  // named campaign (`alert('xss') UI Test Campaign 🚀`) lingering in
+  // the demo tenant from prior manual test runs. React escapes it so
+  // it's not exploitable, but it's customer-visible chrome. Helper
+  // lives in backend/lib/seedNameGuard.js so any other seed (or bulk
+  // import) can reuse it; covered by backend/test/lib/seedNameGuard.test.js.
+  const { isSuspectSeedName } = require('../lib/seedNameGuard');
   for (const c of campaigns) {
+    if (isSuspectSeedName(c.name)) {
+      console.warn(`[seed] skipping suspect campaign name: ${JSON.stringify(c.name)}`);
+      continue;
+    }
     await prisma.campaign.create({ data: c });
   }
   console.log(`Campaigns: ${campaigns.length} created`);

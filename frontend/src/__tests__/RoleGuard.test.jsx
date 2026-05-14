@@ -262,3 +262,174 @@ describe('<RoleGuard /> — Wave 11 sibling-route sweep (#574 + #589 follow-up)'
     expect(notifyError).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #721 + #727 — Wellness pages + Marketing now use the in-place locked-panel
+ * variant of RoleGuard instead of the strict-redirect variant. The 5 routes
+ * (giftcards, wallet, coupons, cashback-rules, marketing) should:
+ *  - Always pass for ADMIN role even when wellnessRole=null (the issue
+ *    reporter's case).
+ *  - Always pass for MANAGER role.
+ *  - For genuinely-unauthorised roles (USER / telecaller / helper), keep the
+ *    user on the same URL and render a friendly locked panel with the
+ *    new shared copy pattern:
+ *       "You don't have access to <feature>. Required role: <roles>.
+ *        Contact your administrator to request access."
+ *  - Never fire a denial toast while AuthContext is still loading (was the
+ *    most likely repro path for the issue reporter's "ADMIN sees manager-
+ *    access toast" report — a hydration race where user was briefly null).
+ */
+function renderLockedInPlace({ role, wellnessRole = null, loading = false, feature, roles, path = '/wellness/giftcards' }) {
+  const user = role ? { userId: 1, name: 'Test', email: 't@x.test', role, wellnessRole } : null;
+  return render(
+    <AuthContext.Provider value={{ user, token: 'tk', tenant: { vertical: 'wellness' }, loading }}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route
+            path={path}
+            element={
+              <RoleGuard
+                allow={['ADMIN', 'MANAGER']}
+                feature={feature}
+                roles={roles}
+                lockedInPlace
+              >
+                <ProtectedPage />
+              </RoleGuard>
+            }
+          />
+          <Route path="/dashboard" element={<DashboardStub />} />
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
+  );
+}
+
+describe('<RoleGuard /> — #721 + #727 lockedInPlace variant (wellness manager-access family)', () => {
+  beforeEach(() => {
+    notifyError.mockReset();
+  });
+
+  it('ADMIN with wellnessRole=null passes the gate on /wellness/giftcards (the #721 repro)', () => {
+    renderLockedInPlace({ role: 'ADMIN', wellnessRole: null, feature: 'Gift Cards', roles: 'manager (or admin)' });
+    expect(screen.getByTestId('audit-heading')).toBeInTheDocument();
+    expect(screen.queryByTestId('role-guard-locked-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dashboard-landing')).not.toBeInTheDocument();
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it('MANAGER passes the gate on /wellness/wallet without toast', () => {
+    renderLockedInPlace({ role: 'MANAGER', feature: 'Wallet ledger', roles: 'manager (or admin)', path: '/wellness/wallet' });
+    expect(screen.getByTestId('audit-heading')).toBeInTheDocument();
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it('USER (telecaller-like, not in allowlist) sees locked panel ON THE PAGE, NOT a redirect', () => {
+    renderLockedInPlace({ role: 'USER', wellnessRole: 'telecaller', feature: 'Gift Cards', roles: 'manager (or admin)' });
+    // Locked panel rendered in-place
+    expect(screen.getByTestId('role-guard-locked-panel')).toBeInTheDocument();
+    // The protected page's chrome is NOT mounted (no info leakage)
+    expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
+    // The user did NOT get punted to /dashboard — URL context preserved
+    expect(screen.queryByTestId('dashboard-landing')).not.toBeInTheDocument();
+  });
+
+  it('USER sees the new shared toast copy: feature name + required roles + contact-admin guidance', () => {
+    renderLockedInPlace({ role: 'USER', wellnessRole: 'helper', feature: 'Gift Cards', roles: 'manager (or admin)' });
+    expect(notifyError).toHaveBeenCalledTimes(1);
+    expect(notifyError).toHaveBeenCalledWith(
+      "You don't have access to Gift Cards. Required role: manager (or admin). Contact your administrator to request access.",
+    );
+  });
+
+  it('USER on /marketing sees Marketing-labelled copy (each page customises the feature name)', () => {
+    renderLockedInPlace({ role: 'USER', feature: 'Marketing', roles: 'manager (or admin)', path: '/marketing' });
+    expect(notifyError).toHaveBeenCalledWith(
+      "You don't have access to Marketing. Required role: manager (or admin). Contact your administrator to request access.",
+    );
+    // The locked panel renders the Marketing feature label in its heading
+    const panel = screen.getByTestId('role-guard-locked-panel');
+    expect(panel.textContent).toMatch(/Marketing is restricted/);
+    expect(panel.textContent).toMatch(/manager \(or admin\) access/);
+  });
+
+  it('Wallet ledger feature label is reflected in the locked panel heading', () => {
+    renderLockedInPlace({ role: 'USER', feature: 'Wallet ledger', roles: 'manager (or admin)', path: '/wellness/wallet' });
+    const panel = screen.getByTestId('role-guard-locked-panel');
+    expect(panel.textContent).toMatch(/Wallet ledger is restricted/);
+  });
+
+  it('Auth-loading safety: while loading is true, NO denial toast fires (the #721 hydration-race repro)', () => {
+    renderLockedInPlace({ role: null, loading: true, feature: 'Gift Cards', roles: 'manager (or admin)' });
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('role-guard-locked-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
+  });
+
+  it('Auth-loading safety: user=null with token but loading=false renders nothing (NOT a misleading denial)', () => {
+    // Repro of the corrupted-session edge case: token survived sessionStorage
+    // but the user object never landed in localStorage. We render nothing and
+    // let the upstream Layout wrapper redirect to /login on its own pass.
+    renderLockedInPlace({ role: null, loading: false, feature: 'Gift Cards', roles: 'manager (or admin)' });
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('role-guard-locked-panel')).not.toBeInTheDocument();
+  });
+
+  it('Toast does NOT repeat on re-render — toastedRef guards a single emit per mount', () => {
+    const { rerender } = renderLockedInPlace({ role: 'USER', feature: 'Gift Cards', roles: 'manager (or admin)' });
+    expect(notifyError).toHaveBeenCalledTimes(1);
+    // Force a re-render of the SAME RoleGuard component tree (rerender keeps
+    // the React instance, just re-runs the effect-dep array). The toastedRef
+    // guard inside RoleGuard must prevent a second toast.
+    rerender(
+      <AuthContext.Provider value={{ user: { userId: 1, role: 'USER', wellnessRole: null }, token: 'tk', tenant: { vertical: 'wellness' }, loading: false }}>
+        <MemoryRouter initialEntries={['/wellness/giftcards']}>
+          <Routes>
+            <Route
+              path="/wellness/giftcards"
+              element={
+                <RoleGuard allow={['ADMIN', 'MANAGER']} feature="Gift Cards" roles="manager (or admin)" lockedInPlace>
+                  <ProtectedPage />
+                </RoleGuard>
+              }
+            />
+            <Route path="/dashboard" element={<DashboardStub />} />
+          </Routes>
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    // Still exactly 1 — the toastedRef survived the re-render
+    expect(notifyError).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('<RoleGuard /> — humaniseRoles fallback when no `roles` prop supplied', () => {
+  beforeEach(() => {
+    notifyError.mockReset();
+  });
+
+  it('falls back to a humanised form of the allow array when `roles` is not provided', () => {
+    const user = { userId: 1, name: 'Test', email: 't@x.test', role: 'USER' };
+    render(
+      <AuthContext.Provider value={{ user, token: 'tk', tenant: { vertical: 'wellness' }, loading: false }}>
+        <MemoryRouter initialEntries={['/wellness/coupons']}>
+          <Routes>
+            <Route
+              path="/wellness/coupons"
+              element={
+                <RoleGuard allow={['ADMIN', 'MANAGER']} feature="Coupons" lockedInPlace>
+                  <ProtectedPage />
+                </RoleGuard>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    // No `roles` prop → falls back to humaniseRoles(['ADMIN','MANAGER'])
+    // → "admin or manager"
+    expect(notifyError).toHaveBeenCalledWith(
+      "You don't have access to Coupons. Required role: admin or manager. Contact your administrator to request access.",
+    );
+  });
+});

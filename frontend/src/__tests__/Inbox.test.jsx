@@ -332,3 +332,63 @@ describe('<Inbox /> — #594 Compose WhatsApp', () => {
     });
   });
 });
+
+// #726 — Compose WhatsApp + Send WhatsApp must use btn-primary canonical
+// teal, NOT the WhatsApp-brand-green outlined / solid styling. Before
+// the fix, the header button was className="btn-secondary" with inline
+// `background: rgba(37,211,102,0.15)` etc., and the modal submit was
+// className="btn-primary" but with inline `background: #25D366`
+// overriding it. Both rendered out-of-band among 4 sibling teal pills.
+// Pin both buttons here so any future "the WhatsApp button should be
+// green" regression is caught at the unit-test layer, not on a demo
+// click-through.
+describe('<Inbox /> — #726 WhatsApp buttons match canonical teal', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (!opts || !opts.method || opts.method === 'GET') {
+        if (url === '/api/communications/inbox' || url.startsWith('/api/communications/inbox?')) return Promise.resolve([]);
+        if (url === '/api/communications/calls') return Promise.resolve([]);
+        if (url === '/api/contacts') return Promise.resolve([]);
+        if (url === '/api/sms/messages') return Promise.resolve([]);
+        if (url === '/api/whatsapp/messages') return Promise.resolve({ messages: [] });
+      }
+      return Promise.resolve([]);
+    });
+  });
+
+  it('header "Compose WhatsApp" button uses btn-primary with NO inline color overrides', async () => {
+    renderInbox();
+    const btn = await screen.findByRole('button', { name: /compose whatsapp/i });
+
+    // Class is the canonical primary class (not btn-secondary).
+    expect(btn).toHaveClass('btn-primary');
+    expect(btn).not.toHaveClass('btn-secondary');
+
+    // None of the WhatsApp-brand-green inline overrides leak onto the DOM node.
+    // Pre-fix: `background: rgba(37,211,102,0.15); border: 1px solid #25D366; color: #25D366`.
+    // Post-fix: bare btn-primary class — no inline style on background/color/border.
+    const style = btn.getAttribute('style') || '';
+    expect(style).not.toMatch(/37,?\s*211,?\s*102/);  // rgba(37, 211, 102, ...)
+    expect(style).not.toMatch(/#25D366/i);            // solid WhatsApp green
+    expect(style).not.toMatch(/border:\s*1px\s+solid/i); // explicit outline
+  });
+
+  it('modal "Send WhatsApp" submit button uses btn-primary with NO inline #25D366 override', async () => {
+    const user = userEvent.setup();
+    renderInbox();
+    await user.click(await screen.findByRole('button', { name: /compose whatsapp/i }));
+
+    const submit = screen.getByRole('button', { name: /send whatsapp/i });
+    expect(submit).toHaveClass('btn-primary');
+
+    const style = submit.getAttribute('style') || '';
+    // Pre-fix: `background: #25D366; border-color: #25D366`.
+    // Post-fix: btn-primary inherits var(--brand) teal.
+    expect(style).not.toMatch(/#25D366/i);
+    expect(style).not.toMatch(/border-?color/i);
+    expect(style).not.toMatch(/background:\s*(rgb\(37|#25D366)/i);
+  });
+});

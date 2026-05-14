@@ -246,10 +246,15 @@ test.describe('Channels credentials — PUT /config rotation', () => {
 
     // 2. Re-PUT with the MASKED echo (what the frontend would send back
     // if the user didn't retype). Backend must SKIP the field.
+    // v3.7.x: msg91 senderId must be exactly 6 alphanumeric chars
+    // (INVALID_SENDER_ID_LENGTH gate at routes/sms.js:481). Use 'GBSCRM'
+    // (6 char alphanumeric) so the PUT itself passes validation; the
+    // load-bearing assertion is the apiKey-skip, not the senderId echo.
+    const NEW_SENDER = 'GBSCRM';
     const echoRes = await authPut(request, '/api/sms/config/msg91', {
       provider: 'msg91',
       apiKey: '****T00', // looks-like-masked-sentinel (≤8 chars + ends ****)
-      senderId: `${RUN_TAG}-newSender`,
+      senderId: NEW_SENDER,
       isActive: false,
     }, token);
     expect(echoRes.ok()).toBeTruthy();
@@ -259,7 +264,7 @@ test.describe('Channels credentials — PUT /config rotation', () => {
     const row = (await r.json()).find(x => x.provider === 'msg91');
     expect(row.apiKey.configured).toBe(true);
     expect(row.apiKey.last4.endsWith('ST00')).toBe(true);
-    expect(row.senderId).toBe(`${RUN_TAG}-newSender`);
+    expect(row.senderId).toBe(NEW_SENDER);
   });
 
   test('SMS PUT /config with a FRESH apiKey rotates the credential + stamps lastRotatedAt + emits audit row', async ({ request }) => {

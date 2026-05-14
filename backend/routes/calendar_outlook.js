@@ -12,8 +12,8 @@ const MS_CLIENT_SECRET = process.env.MS_CLIENT_SECRET;
 const MS_REDIRECT_URI = process.env.MS_REDIRECT_URI;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
-const TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
-const AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+const TOKEN_URL = `https://login.microsoftonline.com/common/oauth2/v2.0/token`;
+const AUTH_URL = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize`;
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 const SCOPES = "offline_access Calendars.ReadWrite User.Read";
 

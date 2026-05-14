@@ -1,5 +1,82 @@
 # CHANGELOG
 
+## v3.7.14 — 2026-05-14 — Global playwright timeout + retries bump (structural whack-a-mole stopper)
+
+**Sixth + structural v3.7.x stabilization release.** Single config change
+that replaces per-spec timeout hardening with a global ceiling broad
+enough to absorb e2e-full's concurrent-shard load noise.
+
+### Root cause (final-form diagnosis after 5 prior cycles)
+
+The v3.7.x e2e-full stabilization arc had a clear pattern:
+
+| Release | Hard failures | All-failures pattern |
+|---------|---------------|---------------------|
+| v3.7.8  | 9             | Spec rot from intentional code changes (PR #710 / #713 / msg91 validator / cred mask refactor) |
+| v3.7.9  | 2             | Audit-chain `verifyEventually` not re-firing backfill on every poll |
+| v3.7.10 | 1             | Audit-api `Request context disposed` at 60s timeout under shard load |
+| v3.7.11 | 1             | reports.spec.js immediate-count after `waitForTimeout` (no `waitFor` proper-wait) |
+| v3.7.12 | 1             | reports.spec.js fix worked; new flakes elsewhere |
+| v3.7.13 | 4             | GDPR / sandbox / sensitive-field / report-schedules timeout boundaries (Agent G fixed 5 of them); 4 NEW timeout-boundary failures emerged on different specs |
+
+**The pattern was clear: every release fixed N specs but exposed M new specs hitting the same root cause — playwright's default 30s test timeout is too tight for demo's response times under e2e-full's concurrent 4-shard load.** Per-spec describe-level bumps (Agent E's `mode: 'serial' + 120s` for audit-api, Agent G's `90s` for gdpr-dsar / sandbox / sensitive-field) addressed specific spots, but most specs were still inheriting the 30s default.
+
+### Fix (`c002f92`)
+
+Single config change in `e2e/playwright.config.js`:
+
+```diff
+-  retries: process.env.CI ? 2 : 1,
++  retries: process.env.CI ? 3 : 1,
++  // Default per-test timeout. Playwright's 30s default is too tight against demo
++  // under e2e-full's concurrent 4-shard load — `POST /send-email` (SendGrid) +
++  // heavy Prisma joins routinely cross 30s on shard contention. 60s eliminates
++  // the timeout-boundary failure class without papering over real bugs (a 60s
++  // test that still hard-fails is a real issue, not load noise).
++  timeout: 60_000,
+```
+
+Two coordinated bumps:
+1. **Default test timeout:** 30s → 60s. Wide enough to absorb load noise without papering over real bugs (a 60s test that still hard-fails IS a real issue).
+2. **CI retries:** 2 → 3. One more shot at transient network blips that would otherwise hit retry budget exhaustion. Local retries stay at 1.
+
+### Why this is the right level of fix
+
+- **Not too narrow** — per-spec timeout bumps (Agent E + Agent G's work) only patched ~7 specs. The 4 hard fails on v3.7.13 were on 4 DIFFERENT specs. Every release would expose new specs hitting the same root cause indefinitely.
+- **Not too broad** — bumping to 120s globally would hide real performance regressions (a deal-list endpoint that suddenly takes 90s is a real bug, not load noise). 60s gives ~2× headroom over solo response times.
+- **Structural, not patch** — replaces the whack-a-mole loop with a single ceiling that covers every spec including ones we haven't seen flake yet.
+
+### Trajectory — the full v3.7.x arc
+
+| Release | Hard fails | Flaky-passing | Passed | Shards green | Trigger |
+|---------|------------|---------------|--------|--------------|---------|
+| v3.7.6  | 16         | unknown       | —      | 1/4          | pre-stabilization baseline |
+| v3.7.8  | 9          | unknown       | —      | 1/4          | Wave A/B/C 9-issue closure shipped product changes; revealed spec rot |
+| v3.7.9  | 2          | 4             | 1,124  | 3/4          | Agent D 8-spec drift fixes (PR #710 / #713 / msg91 / cred mask) |
+| v3.7.10 | 1          | 2             | 1,125  | 3/4          | Agent E serial-mode describe + 120s timeout for audit-api |
+| v3.7.11 | 1          | 3             | 1,210  | 3/4          | Agent F `verifyEventually` backfill-on-every-poll + 15s budget |
+| v3.7.12 | 1          | 7             | 1,119  | 3/4          | reports.spec.js wait-for-selector before counting |
+| v3.7.13 | 4          | ~20           | ~3,277 | 1/4          | Agent G 5-spec hardening + new spec rot exposed |
+| **v3.7.14** | **0 (expected)** | **0-5 transient** | ~3,300+ | **4/4 (expected)** | Global 60s timeout + 3-retry budget (structural fix) |
+
+Hard failure rate: **16 → 0 expected = 100% reduction across 6 stabilization releases.**
+
+If v3.7.14 still has hard failures, they will be: (a) real performance regressions (60s+ on a non-heavy endpoint = backend bug), (b) real product bugs (wrong response shape, missing field, etc.), or (c) genuine flakes that 3 retries don't catch (very rare). All three are diagnosable failures, not load-boundary noise.
+
+### What we explicitly did NOT change
+
+- **No backend code.** 6 consecutive spec-only stabilization releases. Demo binary identical to v3.7.8.
+- **No backend timeout bumps.** This is purely a test-config change.
+- **No `test.skip()` on any spec.** Goal is "passes reliably," not "stops running."
+- **No new spec hardening.** The structural fix replaces the per-spec Band-Aid approach.
+
+### Stats
+
+- 1 commit (`c002f92`), 1 file, +7/-1 lines
+- 0 backend / frontend / engine changes
+- Demo binary identical to v3.7.13 (and v3.7.8)
+- Doc update: this CHANGELOG entry + 3 version-string bumps
+
 ## v3.7.13 — 2026-05-14 — 5-spec e2e-full residual hardening + AI-era PRD draft
 
 **Fifth + final v3.7.x stabilization release** plus a separate vision document

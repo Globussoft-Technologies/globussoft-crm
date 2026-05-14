@@ -115,6 +115,30 @@ interface AdminRepository {
     // ── Privacy / Retention Policies ───────────────────────────────────────────
 
     suspend fun getRetentionPolicies(): WResult<List<RetentionPolicyItem>>
+
+    // ── Inventory Receipts ─────────────────────────────────────────────────────
+
+    suspend fun getInventoryReceipts(): WResult<List<InventoryReceiptItem>>
+
+    // ── Inventory Adjustments ──────────────────────────────────────────────────
+
+    suspend fun getInventoryAdjustments(): WResult<List<InventoryAdjustmentItem>>
+
+    // ── Revenue Goals ──────────────────────────────────────────────────────────
+
+    suspend fun getRevenueGoals(): WResult<List<RevenueGoalItem>>
+
+    // ── Commission Profiles ────────────────────────────────────────────────────
+
+    suspend fun getCommissionProfiles(): WResult<List<CommissionProfileItem>>
+
+    // ── Working Hours ──────────────────────────────────────────────────────────
+
+    suspend fun getWorkingHours(doctorId: String? = null): WResult<List<WorkingHoursItem>>
+
+    // ── Membership Plans ───────────────────────────────────────────────────────
+
+    suspend fun getMembershipPlans(): WResult<List<MembershipPlanItem>>
 }
 
 /**
@@ -253,4 +277,70 @@ data class RetentionPolicyItem(
     val label: String?,
     val retainDays: Int,
     val isActive: Boolean,
+)
+
+data class InventoryReceiptItem(
+    val id: String,
+    val receiptNumber: String?,
+    val productName: String,
+    val vendorName: String?,
+    val quantity: Double,
+    val unitCost: Double,
+    val totalCost: Double,
+    val batchNumber: String?,
+    val expiryDate: String?,
+    val receivedAt: String,
+    val notes: String?,
+)
+
+data class InventoryAdjustmentItem(
+    val id: String,
+    val productName: String,
+    val quantityDelta: Double,
+    val reason: String,
+    val notes: String?,
+    val createdAt: String,
+)
+
+data class RevenueGoalItem(
+    val id: String,
+    val userName: String?,
+    val userEmail: String?,
+    val period: String,
+    val periodStart: String,
+    val periodEnd: String,
+    val targetAmount: Double,
+    val achievedAmount: Double,
+    val scope: String,
+    val notes: String?,
+)
+
+data class CommissionProfileItem(
+    val id: String,
+    val name: String,
+    val basis: String,
+    val percentage: Double?,
+    val flatAmount: Double?,
+    val appliesToCategory: String?,
+    val isActive: Boolean,
+)
+
+data class WorkingHoursItem(
+    val id: String,
+    val doctorId: String,
+    val dayOfWeek: Int,
+    val startTime: String,
+    val endTime: String,
+    val isActive: Boolean,
+)
+
+data class MembershipPlanItem(
+    val id: String,
+    val name: String,
+    val description: String?,
+    val durationDays: Int,
+    val price: Double,
+    val currency: String,
+    val isActive: Boolean,
+    val entitlements: String?,
 )

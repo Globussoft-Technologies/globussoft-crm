@@ -8,6 +8,12 @@ import com.globussoft.wellness.core.network.util.safeApiCall
 import com.globussoft.wellness.feature.admin.domain.repository.AdminRepository
 import com.globussoft.wellness.feature.admin.domain.repository.AuditLogItem
 import com.globussoft.wellness.feature.admin.domain.repository.AuditLogsPage
+import com.globussoft.wellness.feature.admin.domain.repository.CommissionProfileItem
+import com.globussoft.wellness.feature.admin.domain.repository.InventoryAdjustmentItem
+import com.globussoft.wellness.feature.admin.domain.repository.InventoryReceiptItem
+import com.globussoft.wellness.feature.admin.domain.repository.MembershipPlanItem
+import com.globussoft.wellness.feature.admin.domain.repository.RevenueGoalItem
+import com.globussoft.wellness.feature.admin.domain.repository.WorkingHoursItem
 import com.globussoft.wellness.feature.admin.domain.repository.AutoConsumptionRuleItem
 import com.globussoft.wellness.feature.admin.domain.repository.CashbackRuleItem
 import com.globussoft.wellness.feature.admin.domain.repository.ConvertedLeadItem
@@ -241,6 +247,42 @@ class AdminRepositoryImpl @Inject constructor(
         safeApiCall { api.getRetentionPolicies() }
             .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toRetentionPolicy() } }
 
+    // ── Inventory Receipts ─────────────────────────────────────────────────────
+
+    override suspend fun getInventoryReceipts(): WResult<List<InventoryReceiptItem>> =
+        safeApiCall { api.getInventoryReceipts() }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toInventoryReceipt() } }
+
+    // ── Inventory Adjustments ──────────────────────────────────────────────────
+
+    override suspend fun getInventoryAdjustments(): WResult<List<InventoryAdjustmentItem>> =
+        safeApiCall { api.getInventoryAdjustments() }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toInventoryAdjustment() } }
+
+    // ── Revenue Goals ──────────────────────────────────────────────────────────
+
+    override suspend fun getRevenueGoals(): WResult<List<RevenueGoalItem>> =
+        safeApiCall { api.getRevenueGoals() }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toRevenueGoal() } }
+
+    // ── Commission Profiles ────────────────────────────────────────────────────
+
+    override suspend fun getCommissionProfiles(): WResult<List<CommissionProfileItem>> =
+        safeApiCall { api.getCommissionProfiles() }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toCommissionProfile() } }
+
+    // ── Working Hours ──────────────────────────────────────────────────────────
+
+    override suspend fun getWorkingHours(doctorId: String?): WResult<List<WorkingHoursItem>> =
+        safeApiCall { api.getWorkingHours(doctorId) }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toWorkingHours() } }
+
+    // ── Membership Plans ───────────────────────────────────────────────────────
+
+    override suspend fun getMembershipPlans(): WResult<List<MembershipPlanItem>> =
+        safeApiCall { api.getMembershipPlans() }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toMembershipPlan() } }
+
     // ── Mappers ────────────────────────────────────────────────────────────────
 
     private fun Map<String, Any>.toDrugItem() = DrugItem(
@@ -361,6 +403,84 @@ class AdminRepositoryImpl @Inject constructor(
         label      = this["label"]?.toString(),
         retainDays = (this["retainDays"] as? Number)?.toInt() ?: 0,
         isActive   = this["isActive"] as? Boolean ?: true,
+    )
+
+    private fun Map<*, *>.toInventoryReceipt(): InventoryReceiptItem {
+        val product = this["product"] as? Map<*, *>
+        val vendor  = this["vendor"] as? Map<*, *>
+        val qty     = (this["quantity"] as? Number)?.toDouble() ?: 0.0
+        val unit    = (this["unitCost"] as? Number)?.toDouble() ?: 0.0
+        return InventoryReceiptItem(
+            id            = this["id"]?.toString() ?: "",
+            receiptNumber = this["receiptNumber"]?.toString(),
+            productName   = product?.get("name")?.toString() ?: this["productName"]?.toString() ?: "",
+            vendorName    = vendor?.get("name")?.toString() ?: this["vendorName"]?.toString(),
+            quantity      = qty,
+            unitCost      = unit,
+            totalCost     = (this["totalCost"] as? Number)?.toDouble() ?: (qty * unit),
+            batchNumber   = this["batchNumber"]?.toString(),
+            expiryDate    = this["expiryDate"]?.toString(),
+            receivedAt    = this["receivedAt"]?.toString() ?: this["createdAt"]?.toString() ?: "",
+            notes         = this["notes"]?.toString(),
+        )
+    }
+
+    private fun Map<*, *>.toInventoryAdjustment(): InventoryAdjustmentItem {
+        val product = this["product"] as? Map<*, *>
+        return InventoryAdjustmentItem(
+            id            = this["id"]?.toString() ?: "",
+            productName   = product?.get("name")?.toString() ?: this["productName"]?.toString() ?: "",
+            quantityDelta = (this["quantityDelta"] as? Number)?.toDouble() ?: 0.0,
+            reason        = this["reason"]?.toString() ?: "",
+            notes         = this["notes"]?.toString(),
+            createdAt     = this["createdAt"]?.toString() ?: "",
+        )
+    }
+
+    private fun Map<*, *>.toRevenueGoal(): RevenueGoalItem {
+        val user = this["user"] as? Map<*, *>
+        return RevenueGoalItem(
+            id             = this["id"]?.toString() ?: "",
+            userName       = user?.get("name")?.toString() ?: this["userName"]?.toString(),
+            userEmail      = user?.get("email")?.toString() ?: this["userEmail"]?.toString(),
+            period         = this["period"]?.toString() ?: "MONTHLY",
+            periodStart    = this["periodStart"]?.toString() ?: "",
+            periodEnd      = this["periodEnd"]?.toString() ?: "",
+            targetAmount   = (this["targetAmount"] as? Number)?.toDouble() ?: this["targetAmount"]?.toString()?.toDoubleOrNull() ?: 0.0,
+            achievedAmount = (this["achievedAmount"] as? Number)?.toDouble() ?: 0.0,
+            scope          = this["scope"]?.toString() ?: "ALL",
+            notes          = this["notes"]?.toString(),
+        )
+    }
+
+    private fun Map<*, *>.toCommissionProfile() = CommissionProfileItem(
+        id                 = this["id"]?.toString() ?: "",
+        name               = this["name"]?.toString() ?: "",
+        basis              = this["basis"]?.toString() ?: "REVENUE_PERCENT",
+        percentage         = (this["percentage"] as? Number)?.toDouble() ?: this["percentage"]?.toString()?.toDoubleOrNull(),
+        flatAmount         = (this["flatAmount"] as? Number)?.toDouble() ?: this["flatAmount"]?.toString()?.toDoubleOrNull(),
+        appliesToCategory  = this["appliesToCategory"]?.toString(),
+        isActive           = this["isActive"] as? Boolean ?: true,
+    )
+
+    private fun Map<*, *>.toWorkingHours() = WorkingHoursItem(
+        id         = this["id"]?.toString() ?: "",
+        doctorId   = this["doctorId"]?.toString() ?: "",
+        dayOfWeek  = (this["dayOfWeek"] as? Number)?.toInt() ?: 0,
+        startTime  = this["startTime"]?.toString() ?: "09:00",
+        endTime    = this["endTime"]?.toString() ?: "18:00",
+        isActive   = this["isActive"] as? Boolean ?: true,
+    )
+
+    private fun Map<*, *>.toMembershipPlan() = MembershipPlanItem(
+        id           = this["id"]?.toString() ?: "",
+        name         = this["name"]?.toString() ?: "",
+        description  = this["description"]?.toString(),
+        durationDays = (this["durationDays"] as? Number)?.toInt() ?: 30,
+        price        = (this["price"] as? Number)?.toDouble() ?: 0.0,
+        currency     = this["currency"]?.toString() ?: "INR",
+        isActive     = this["isActive"] as? Boolean ?: true,
+        entitlements = this["entitlements"]?.toString(),
     )
 }
 

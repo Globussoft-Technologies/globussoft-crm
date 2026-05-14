@@ -685,4 +685,64 @@ interface WellnessApi {
 
     @GET("gdpr/retention-policies")
     suspend fun getRetentionPolicies(): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Inventory Receipts  (admin / read-only list)
+    // GET wellness/inventory/receipts?from=&to=&limit=100
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/inventory/receipts")
+    suspend fun getInventoryReceipts(
+        @Query("from")   from:  String? = null,
+        @Query("to")     to:    String? = null,
+        @Query("limit")  limit: Int     = 100,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Inventory Adjustments  (admin / read-only list)
+    // GET wellness/inventory/adjustments?from=&to=&limit=100
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/inventory/adjustments")
+    suspend fun getInventoryAdjustments(
+        @Query("from")   from:  String? = null,
+        @Query("to")     to:    String? = null,
+        @Query("limit")  limit: Int     = 100,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Revenue Goals  (admin / read-only list)
+    // GET staff/revenue-goals
+    // -------------------------------------------------------------------------
+
+    @GET("staff/revenue-goals")
+    suspend fun getRevenueGoals(): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Commission Profiles  (admin / read-only list)
+    // GET staff/commission-profiles
+    // -------------------------------------------------------------------------
+
+    @GET("staff/commission-profiles")
+    suspend fun getCommissionProfiles(): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Working Hours  (admin / read+edit)
+    // GET wellness/working-hours?doctorId=X
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/working-hours")
+    suspend fun getWorkingHours(
+        @Query("doctorId") doctorId: String? = null,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Membership Plans  (admin / read-only list)
+    // GET wellness/membership-plans?includeInactive=1
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/membership-plans")
+    suspend fun getMembershipPlans(
+        @Query("includeInactive") includeInactive: Int = 1,
+    ): Response<List<@JvmSuppressWildcards Any>>
 }

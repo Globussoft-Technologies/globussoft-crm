@@ -9,16 +9,22 @@ import com.globussoft.wellness.feature.admin.presentation.AdminScreen
 import com.globussoft.wellness.feature.admin.presentation.auditlog.AuditLogScreen
 import com.globussoft.wellness.feature.admin.presentation.autoconsumption.AutoConsumptionScreen
 import com.globussoft.wellness.feature.admin.presentation.cashbackrules.CashbackRulesScreen
+import com.globussoft.wellness.feature.admin.presentation.commissionprofiles.CommissionProfilesScreen
 import com.globussoft.wellness.feature.admin.presentation.convertedleads.ConvertedLeadsScreen
 import com.globussoft.wellness.feature.admin.presentation.drugs.DrugsScreen
 import com.globussoft.wellness.feature.admin.presentation.holidays.HolidaysScreen
+import com.globussoft.wellness.feature.admin.presentation.inventoryadjustments.InventoryAdjustmentsScreen
+import com.globussoft.wellness.feature.admin.presentation.inventoryreceipts.InventoryReceiptsScreen
 import com.globussoft.wellness.feature.admin.presentation.locations.LocationsScreen
 import com.globussoft.wellness.feature.admin.presentation.marketplaceleads.MarketplaceLeadsScreen
+import com.globussoft.wellness.feature.admin.presentation.memberships.MembershipsScreen
 import com.globussoft.wellness.feature.admin.presentation.privacy.PrivacyScreen
 import com.globussoft.wellness.feature.admin.presentation.productcategories.ProductCategoriesScreen
 import com.globussoft.wellness.feature.admin.presentation.resources.ResourcesScreen
+import com.globussoft.wellness.feature.admin.presentation.revenuegoals.RevenueGoalsScreen
 import com.globussoft.wellness.feature.admin.presentation.servicecategories.ServiceCategoriesScreen
 import com.globussoft.wellness.feature.admin.presentation.vendors.VendorsScreen
+import com.globussoft.wellness.feature.admin.presentation.workinghours.WorkingHoursScreen
 
 /**
  * Destination route constants for the admin feature graph.
@@ -38,6 +44,12 @@ object AdminDestinations {
     const val MarketplaceLeads     = "marketplace-leads"
     const val ConvertedLeads       = "converted-leads"
     const val Privacy              = "privacy"
+    const val InventoryReceipts    = "inventory-receipts"
+    const val InventoryAdjustments = "inventory-adjustments"
+    const val RevenueGoals         = "revenue-goals"
+    const val CommissionProfiles   = "commission-profiles"
+    const val WorkingHours         = "working-hours"
+    const val Memberships          = "memberships"
 }
 
 /**
@@ -146,6 +158,48 @@ fun NavGraphBuilder.adminGraph(
 
     composable(AdminDestinations.Privacy) {
         PrivacyScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.InventoryReceipts) {
+        InventoryReceiptsScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.InventoryAdjustments) {
+        InventoryAdjustmentsScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.RevenueGoals) {
+        RevenueGoalsScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.CommissionProfiles) {
+        CommissionProfilesScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.WorkingHours) {
+        WorkingHoursScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.Memberships) {
+        MembershipsScreen(
             viewModel      = hiltViewModel(),
             onNavigateBack = { navController.popBackStack() },
         )

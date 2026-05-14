@@ -109,8 +109,6 @@ private fun InnerNavHost(
         settingsGraph(navController, userSession, onLogout)
 
         // ── Clinical stubs ────────────────────────────────────────────────
-        composable("memberships")   { PlaceholderScreen("Memberships") }
-        composable("working-hours") { PlaceholderScreen("Working Hours") }
 
         // ── Leads & Revenue stubs ─────────────────────────────────────────
         composable("inbox")        { PlaceholderScreen("Unified Inbox") }
@@ -135,15 +133,9 @@ private fun InnerNavHost(
         composable("surveys")        { PlaceholderScreen("Patient Surveys") }
         composable("knowledge-base") { PlaceholderScreen("Knowledge Base") }
 
-        // ── Inventory stubs ───────────────────────────────────────────────
-        composable("inventory-receipts")    { PlaceholderScreen("Inventory Receipts") }
-        composable("inventory-adjustments") { PlaceholderScreen("Inventory Adjustments") }
-
         // ── Admin stubs ───────────────────────────────────────────────────
-        composable("staff")               { PlaceholderScreen("Staff Management") }
-        composable("commission-profiles") { PlaceholderScreen("Commission Profiles") }
-        composable("revenue-goals")       { PlaceholderScreen("Revenue Goals") }
-        composable("channels")            { PlaceholderScreen("Channels") }
+        composable("staff")    { PlaceholderScreen("Staff Management") }
+        composable("channels") { PlaceholderScreen("Channels") }
     }
 }
 

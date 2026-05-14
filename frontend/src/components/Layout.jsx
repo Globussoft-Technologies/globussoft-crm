@@ -40,12 +40,13 @@ function TenantChip({ tenant }) {
       data-testid="tenant-chip"
       style={{
         display: 'flex', alignItems: 'center', gap: '6px',
-        background: 'var(--accent-bg, #f0f4ff)', border: '1px solid var(--accent-color)',
+        background: 'var(--accent-bg, var(--subtle-bg-3, rgba(255,255,255,0.08)))', border: '1px solid var(--accent-color)',
         // Under wellness the chip's background resolves to deep teal (--primary-color),
         // so the text must be the canonical accent-on-accent pair (--accent-text =
         // #FFFFFF). The fallback to --text-primary preserves the original behavior
-        // on the generic tenant, where --accent-bg falls back to light blue #f0f4ff
-        // and dark text is correct.
+        // on the generic tenant, where --accent-bg resolves via the :root theme
+        // block in index.css; the var-chain fallback ensures no hex literal can
+        // re-introduce the #725 light-blue-on-dark-mode regression.
         color: 'var(--accent-text, var(--text-primary))', borderRadius: 8,
         padding: '6px 12px', fontSize: '0.85rem',
         fontWeight: 500,

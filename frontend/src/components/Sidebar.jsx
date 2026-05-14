@@ -390,15 +390,31 @@ const Sidebar = ({
   // (network / provider down), degrade to opening the plain dashboard URL
   // so the link is never dead.
   const [adsLoading, setAdsLoading] = useState(false);
+  const [adsgptLogin, setAdsgptLogin] = useState('');
+
+  useEffect(() => {
+    fetchApi('/api/integrations/adsgpt/config')
+      .then((res) => setAdsgptLogin(res.adsgptLogin || ''))
+      .catch(() => setAdsgptLogin(''));
+
+    // Listen for config updates from Settings page
+    const handleConfigUpdate = (event) => {
+      setAdsgptLogin(event.detail?.adsgptLogin || '');
+    };
+    window.addEventListener('adsgpt:config-updated', handleConfigUpdate);
+    return () => window.removeEventListener('adsgpt:config-updated', handleConfigUpdate);
+  }, []);
+
   const AdsGptLink = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
     const handleClick = async (e) => {
       e.preventDefault();
       if (adsLoading) return;
       setAdsLoading(true);
       try {
-        await launchAdsGptAs();
+        await launchAdsGptAs(adsgptLogin);
       } catch (err) {
         console.error("[Sidebar] AdsGPT SSO error:", err.message);
+        notify.error(err.message || 'Failed to open AdsGPT');
       } finally {
         setAdsLoading(false);
       }

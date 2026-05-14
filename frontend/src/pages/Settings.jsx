@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette, Monitor, Mail, FileSignature, Bell } from 'lucide-react';
+import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette, Monitor, Mail, FileSignature, Bell, Eye, EyeOff, Check, X, Loader, PhoneCall } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { ThemeContext, AuthContext } from '../App';
@@ -35,6 +35,14 @@ export default function Settings() {
   const [adsgptLogin, setAdsgptLogin] = useState('');
   const [adsgptSaving, setAdsgptSaving] = useState(false);
   const [adsgptMsg, setAdsgptMsg] = useState('');
+  // Callified integration
+  const [callifiedApiKey, setCallifiedApiKey] = useState('');
+  const [callifiedShowKey, setCallifiedShowKey] = useState(false);
+  const [callifiedLoading, setCallifiedLoading] = useState(true);
+  const [callifiedSaving, setCallifiedSaving] = useState(false);
+  const [callifiedConnected, setCallifiedConnected] = useState(false);
+  const [callifiedMsg, setCallifiedMsg] = useState('');
+  const [callifiedUpdatedAt, setCallifiedUpdatedAt] = useState(null);
 
   useEffect(() => {
     fetchApi('/api/tenants/current')
@@ -49,6 +57,18 @@ export default function Settings() {
     fetchApi('/api/integrations/adsgpt/config')
       .then((res) => setAdsgptLogin(res.adsgptLogin || ''))
       .catch(() => { /* adsgpt config may not be available */ });
+    // Fetch Callified integration status
+    fetchApi('/api/integrations')
+      .then((integrations) => {
+        const callifiedIntegration = integrations.find(i => i.provider === 'callified');
+        if (callifiedIntegration && callifiedIntegration.isActive) {
+          setCallifiedConnected(true);
+          setCallifiedUpdatedAt(callifiedIntegration.updatedAt);
+          setCallifiedApiKey('••••••••••••••••');
+        }
+        setCallifiedLoading(false);
+      })
+      .catch(() => setCallifiedLoading(false));
   }, []);
 
   const handleUploadLogo = async (e) => {
@@ -155,12 +175,65 @@ export default function Settings() {
       });
       notify.success('AdsGPT login updated');
       setAdsgptMsg('✓ Saved');
+      // Notify other components to refetch the config
+      window.dispatchEvent(new CustomEvent('adsgpt:config-updated', { detail: { adsgptLogin: adsgptLogin.trim() } }));
     } catch (err) {
       const msg = err.message || 'Failed to save AdsGPT login';
       setAdsgptMsg(msg);
       notify.error(msg);
     } finally {
       setAdsgptSaving(false);
+    }
+  };
+
+  const handleSaveCallifiedKey = async (e) => {
+    e.preventDefault();
+    if (!callifiedApiKey || callifiedApiKey.length < 10) {
+      setCallifiedMsg('Please enter a valid API key');
+      return;
+    }
+    if (callifiedApiKey === '••••••••••••••••') {
+      setCallifiedMsg('Please enter the actual API key');
+      return;
+    }
+    setCallifiedSaving(true);
+    setCallifiedMsg('');
+    try {
+      await fetchApi('/api/integrations/connect', {
+        method: 'POST',
+        body: JSON.stringify({ provider: 'callified', token: callifiedApiKey }),
+      });
+      notify.success('Callified API key saved successfully');
+      setCallifiedConnected(true);
+      setCallifiedUpdatedAt(new Date().toISOString());
+      setCallifiedApiKey('••••••••••••••••');
+      setCallifiedMsg('✓ Connected to Callified');
+    } catch (err) {
+      const msg = err.message || 'Failed to save API key';
+      setCallifiedMsg(msg);
+      notify.error(msg);
+    } finally {
+      setCallifiedSaving(false);
+    }
+  };
+
+  const handleDisconnectCallified = async () => {
+    if (!window.confirm('Are you sure you want to disconnect Callified?')) return;
+    setCallifiedSaving(true);
+    try {
+      await fetchApi('/api/integrations/disconnect', {
+        method: 'POST',
+        body: JSON.stringify({ provider: 'callified' }),
+      });
+      notify.success('Callified integration disconnected');
+      setCallifiedConnected(false);
+      setCallifiedApiKey('');
+      setCallifiedUpdatedAt(null);
+      setCallifiedMsg('');
+    } catch (err) {
+      notify.error('Failed to disconnect Callified');
+    } finally {
+      setCallifiedSaving(false);
     }
   };
 
@@ -606,6 +679,138 @@ export default function Settings() {
           {adsgptMsg && (
             <p style={{ fontSize: '0.85rem', color: adsgptMsg.includes('✓') ? 'var(--accent-color)' : 'var(--danger-color)' }}>
               {adsgptMsg}
+            </p>
+          )}
+        </div>
+
+        {/* Callified Integration Card */}
+        <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <PhoneCall size={20} color="var(--accent-color)" /> Callified Integration
+          </h3>
+
+          {/* Status Card */}
+          {!callifiedLoading && (
+            <div style={{
+              padding: '1rem',
+              marginBottom: '1.25rem',
+              borderRadius: '8px',
+              background: callifiedConnected ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+              border: `1px solid ${callifiedConnected ? '#10b981' : '#ef4444'}`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem'
+            }}>
+              {callifiedConnected ? (
+                <>
+                  <Check size={20} color="#10b981" />
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontWeight: '500', color: '#10b981', margin: 0 }}>✓ Connected to Callified</p>
+                    {callifiedUpdatedAt && (
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', margin: '0.25rem 0 0 0' }}>
+                        Connected since: {new Date(callifiedUpdatedAt).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <X size={20} color="#ef4444" />
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontWeight: '500', color: '#ef4444', margin: 0 }}>Not Connected</p>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', margin: '0.25rem 0 0 0' }}>
+                      Add your API key to get started
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+            {callifiedConnected
+              ? 'Your Callified account is connected and ready to use.'
+              : 'Enter your Callified API key to enable voice and WhatsApp integration.'}
+          </p>
+
+          <form onSubmit={handleSaveCallifiedKey} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                <input
+                  type={callifiedShowKey ? 'text' : 'password'}
+                  className="input-field"
+                  placeholder="callified_live_..."
+                  value={callifiedApiKey}
+                  onChange={(e) => setCallifiedApiKey(e.target.value)}
+                  disabled={callifiedSaving}
+                  style={{ width: '100%', minWidth: 0, paddingRight: '40px' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setCallifiedShowKey(!callifiedShowKey)}
+                  disabled={callifiedSaving}
+                  style={{
+                    position: 'absolute',
+                    right: '0.75rem',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    padding: '0.25rem',
+                    display: 'flex',
+                    alignItems: 'center'
+                  }}
+                >
+                  {callifiedShowKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={callifiedSaving || !callifiedApiKey.trim()}
+                style={{ whiteSpace: 'nowrap' }}
+              >
+                {callifiedSaving ? (
+                  <>
+                    <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> {callifiedConnected ? 'Updating...' : 'Connecting...'}
+                  </>
+                ) : (
+                  callifiedConnected ? 'Update Key' : 'Connect to Callified'
+                )}
+              </button>
+            </div>
+
+            {callifiedConnected && (
+              <button
+                type="button"
+                onClick={handleDisconnectCallified}
+                disabled={callifiedSaving}
+                style={{
+                  padding: '0.75rem 1rem',
+                  borderRadius: '6px',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  color: '#ef4444',
+                  border: '1px solid #ef4444',
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  fontWeight: '500',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {callifiedSaving ? 'Disconnecting...' : 'Disconnect'}
+              </button>
+            )}
+          </form>
+
+          {callifiedMsg && (
+            <p style={{
+              marginTop: '1rem',
+              fontSize: '0.85rem',
+              color: callifiedMsg.includes('✓') || callifiedMsg.includes('Connected') ? 'var(--accent-color)' : 'var(--danger-color)'
+            }}>
+              {callifiedMsg}
             </p>
           )}
         </div>

@@ -30,7 +30,7 @@ async function main() {
   console.log('Wiping all tables...');
   await prisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 0');
   const tables = [
-    'ReportSchedule', 'Notification', 'AuditLog', 'PipelineStage', 'EmailTemplate',
+    'ReportSchedule', 'Notification', 'AuditLog', 'RevokedToken', 'PipelineStage', 'EmailTemplate',
     'CustomValue', 'CustomRecord', 'CustomField', 'CustomEntity',
     'QuoteLineItem', 'Quote', 'Product',
     'EstimateLineItem', 'Estimate',
@@ -38,7 +38,9 @@ async function main() {
     'Attachment', 'CallLog', 'EmailMessage',
     'Activity', 'Task', 'Expense', 'Invoice', 'Contract', 'Project',
     'Deal', 'Ticket', 'Campaign', 'AutomationRule', 'Integration',
-    'Webhook', 'ApiKey', 'Touchpoint', 'Contact', 'User',
+    'Webhook', 'ApiKey', 'Touchpoint', 'Contact',
+    'UserRole', 'RolePermission', 'Role',
+    'User',
     'Subscription', 'SubscriptionPlan',
     'Tenant',
   ];
@@ -851,6 +853,236 @@ async function main() {
     }
   });
   console.log('Report Schedules: 2 created');
+
+  // ══════════════════════════════════════════════════════════════
+  // STEP 2.5: RBAC — System Roles + Permissions
+  // ══════════════════════════════════════════════════════════════
+  const { PERMISSION_CATALOG } = require('../lib/permissionCatalog');
+
+  // Seed OWNER user (platform admin, no tenant)
+  const ownerUser = await prisma.user.create({
+    data: {
+      email: 'owner@globussoft.com',
+      password: await bcrypt.hash('password123', 10),
+      name: 'Globussoft Owner',
+      userType: 'OWNER',
+      role: 'ADMIN',
+      tenantId: 1, // Platform owner still needs a default tenant
+    },
+  });
+
+  // OWNER role (system, platform-level, tenantId = null)
+  const ownerRole = await prisma.role.create({
+    data: {
+      tenantId: null,
+      key: 'OWNER',
+      name: 'Platform Owner',
+      description: 'Unrestricted access across all organizations',
+      isSystem: true,
+      isActive: true,
+      userType: 'OWNER',
+    },
+  });
+
+  // Assign OWNER user to OWNER role
+  await prisma.userRole.create({
+    data: {
+      userId: ownerUser.id,
+      roleId: ownerRole.id,
+    },
+  });
+
+  // For the NovaCrest tenant (id=1), seed ADMIN, MANAGER, and CUSTOMER system roles
+
+  // ADMIN role (system, tenant-scoped)
+  const adminRole = await prisma.role.create({
+    data: {
+      tenantId: 1,
+      key: 'ADMIN',
+      name: 'Admin',
+      description: 'Full access to all features within the organization',
+      isSystem: true,
+      isActive: true,
+      userType: 'STAFF',
+    },
+  });
+
+  // Grant ADMIN all permissions
+  for (const [module, actions] of Object.entries(PERMISSION_CATALOG)) {
+    for (const action of actions) {
+      await prisma.rolePermission.create({
+        data: {
+          roleId: adminRole.id,
+          module,
+          action,
+        },
+      });
+    }
+  }
+
+  // MANAGER role (custom but seeded, tenant-scoped)
+  const managerRole = await prisma.role.create({
+    data: {
+      tenantId: 1,
+      key: 'MANAGER',
+      name: 'Manager',
+      description: 'Manager role with broad staff access',
+      isSystem: false,
+      isActive: true,
+      userType: 'STAFF',
+    },
+  });
+
+  // Grant MANAGER specific permissions (subset of ADMIN)
+  const managerPermissions = [
+    'contacts.read', 'contacts.write', 'contacts.update',
+    'deals.read', 'deals.write', 'deals.update',
+    'leads.read', 'leads.write', 'leads.update', 'leads.delete', 'leads.export',
+    'tasks.read', 'tasks.write', 'tasks.update',
+    'projects.read', 'projects.write', 'projects.update',
+    'pipeline.read', 'pipeline.write', 'pipeline.update',
+    'quotes.read', 'quotes.write', 'quotes.update',
+    'reports.read', 'reports.export',
+    'dashboards.read',
+    'analytics.read', 'analytics.export',
+    'billing.read',
+    'staff.read',
+    'communications.read', 'communications.write',
+    'email.read', 'email.write',
+    'sms.read', 'sms.write',
+    'marketing.read', 'marketing.write', 'marketing.update',
+    'tickets.read', 'tickets.write', 'tickets.update',
+    'surveys.read', 'surveys.write', 'surveys.update',
+    'documents.read', 'documents.write', 'documents.update',
+    'contracts.read', 'contracts.write', 'contracts.update',
+    'estimates.read', 'estimates.write', 'estimates.update', 'estimates.export',
+  ];
+
+  for (const perm of managerPermissions) {
+    const [module, action] = perm.split('.');
+    await prisma.rolePermission.create({
+      data: {
+        roleId: managerRole.id,
+        module,
+        action,
+      },
+    });
+  }
+
+  // CUSTOMER role (system, tenant-scoped, limited access)
+  const customerRole = await prisma.role.create({
+    data: {
+      tenantId: 1,
+      key: 'CUSTOMER',
+      name: 'Customer',
+      description: 'Customer access to booking and appointments only',
+      isSystem: true,
+      isActive: true,
+      userType: 'CUSTOMER',
+    },
+  });
+
+  // Grant CUSTOMER limited permissions (customer-facing features only)
+  const customerPermissions = [
+    'appointments.read',
+    'services.read',
+    'billing.read',
+    'documents.read',
+    'prescriptions.read',
+    'consents.read',
+  ];
+
+  for (const perm of customerPermissions) {
+    const [module, action] = perm.split('.');
+    await prisma.rolePermission.create({
+      data: {
+        roleId: customerRole.id,
+        module,
+        action,
+      },
+    });
+  }
+
+  // Assign existing users (ADMIN/MANAGER/USER) to their corresponding roles
+  // This bridges the old User.role system with the new UserRole table
+  const adminUser = users[0]; // admin@globussoft.com is ADMIN
+  const managerUsers = [users[1], users[4]]; // manager@crm.com, vikram@globussoft.com are MANAGER
+  const userUsers = [users[2], users[3], users[5]]; // user@crm.com, sneha@globussoft.com, anita@globussoft.com are USER
+
+  // Assign ADMIN user to ADMIN role
+  await prisma.userRole.create({
+    data: {
+      userId: adminUser.id,
+      roleId: adminRole.id,
+    },
+  });
+
+  // Assign MANAGER users to MANAGER role
+  for (const u of managerUsers) {
+    await prisma.userRole.create({
+      data: {
+        userId: u.id,
+        roleId: managerRole.id,
+      },
+    });
+  }
+
+  // USER users get a basic "User" role (created as a custom role matching old USER permissions)
+  const userRole = await prisma.role.create({
+    data: {
+      tenantId: 1,
+      key: 'USER',
+      name: 'User',
+      description: 'Basic user role with limited CRM access',
+      isSystem: false,
+      isActive: true,
+      userType: 'STAFF',
+    },
+  });
+
+  // Grant USER basic READ permissions
+  const userPermissions = [
+    'contacts.read',
+    'deals.read',
+    'leads.read',
+    'tasks.read',
+    'projects.read',
+    'pipeline.read',
+    'quotes.read',
+    'reports.read',
+    'dashboards.read',
+    'analytics.read',
+    'communications.read',
+    'email.read',
+    'sms.read',
+    'tickets.read',
+    'surveys.read',
+    'documents.read',
+    'contracts.read',
+    'estimates.read',
+  ];
+
+  for (const perm of userPermissions) {
+    const [module, action] = perm.split('.');
+    await prisma.rolePermission.create({
+      data: {
+        roleId: userRole.id,
+        module,
+        action,
+      },
+    });
+  }
+
+  for (const u of userUsers) {
+    await prisma.userRole.create({
+      data: {
+        userId: u.id,
+        roleId: userRole.id,
+      },
+    });
+  }
+
+  console.log('RBAC Roles: OWNER + ADMIN + MANAGER + CUSTOMER + USER system roles seeded with permissions');
 
   // ══════════════════════════════════════════════════════════════
   // DONE

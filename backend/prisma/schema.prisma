@@ -288,6 +288,9 @@ model Tenant {
 
   // Notification preferences (per-user opt-in/out)
   notificationPreferences NotificationPreference[]
+
+  // RBAC — roles + permissions
+  roles Role[]
 }
 
 model User {
@@ -295,6 +298,7 @@ model User {
   email     String   @unique
   password  String
   role      String   @default("USER") // ADMIN, USER, MANAGER
+  userType  String   @default("STAFF")   // STAFF | OWNER | CUSTOMER
   name      String?
   createdAt DateTime @default(now())
 
@@ -325,6 +329,9 @@ model User {
   trialStartDate     DateTime?
   trialEndsAt        DateTime?
   subscriptionStatus String    @default("TRIAL") // TRIAL | ACTIVE | EXPIRED | CANCELLED
+
+  // RBAC — multi-role via UserRole junction table
+  userRoles UserRole[]
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3918,4 +3925,53 @@ model Subscription {
   @@index([tenantId, userId, status])
   @@index([tenantId, renewalDate])
   @@index([tenantId, startDate, endDate])
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// RBAC Models — Enterprise Role-Based Access Control System
+// ───────────────────────────────────────────────────────────────────────────
+
+model Role {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int?     // null = platform-level (OWNER role only)
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key         String   // "ADMIN", "CUSTOMER", "doctor", "sales_rep", etc.
+  name        String   // display name
+  description String?
+  isSystem    Boolean  @default(false)  // ADMIN, CUSTOMER, OWNER — immutable key
+  isActive    Boolean  @default(true)
+  userType    String   @default("STAFF")  // which user type this role applies to
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  userRoles   UserRole[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId, isActive])
+}
+
+model UserRole {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleId       Int
+  role         Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedAt   DateTime @default(now())
+  assignedById Int?
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+model RolePermission {
+  id      Int     @id @default(autoincrement())
+  roleId  Int
+  role    Role    @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  module  String  // "contacts", "patients", "billing", etc.
+  action  String  // "read", "write", "update", "delete", "export", "manage"
+
+  @@unique([roleId, module, action])
+  @@index([roleId])
 }

@@ -2,7 +2,7 @@ name: Deploy to demo server (crm.globusdemos.com)
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging_crm]
     paths-ignore:
       # Skip the entire workflow when only docs / operator scripts change.
       # (paths-ignore does NOT support !negation — keep this as a flat list.)
@@ -608,7 +608,8 @@ jobs:
 
   # ── 7. DEPLOY: only runs if every upstream gate passes. ────────────────
   deploy:
-    needs: [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
+    needs:
+      [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
     # All six gates mandatory:
     #   - build               (vite + node syntax)
     #   - api_tests           (Playwright API specs against ephemeral MySQL + seeded backend)

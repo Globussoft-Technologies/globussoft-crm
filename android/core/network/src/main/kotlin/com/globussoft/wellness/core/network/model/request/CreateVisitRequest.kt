@@ -16,4 +16,7 @@ data class CreateVisitRequest(
     val bookingType: String,
     val notes: String?,
     val travelTimeMinutes: Int?,
+    /** Backend requires doctorId when status is "completed" or null.
+     *  Send "booked" when no doctor is assigned so the visit is accepted. */
+    val status: String? = null,
 )

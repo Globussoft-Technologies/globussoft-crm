@@ -239,17 +239,21 @@ class PatientDetailViewModel @Inject constructor(
 
             val visitDate = "${event.date}T10:00:00.000Z"
 
+            val resolvedDoctorId = event.doctorId.ifBlank { null }
             val result = safeApiCall {
                 api.createVisit(
                     CreateVisitRequest(
                         patientId         = patientId,
-                        doctorId          = event.doctorId.ifBlank { null },
+                        doctorId          = resolvedDoctorId,
                         serviceId         = event.serviceId.ifBlank { null },
                         locationId        = null,
                         visitDate         = visitDate,
                         bookingType       = event.bookingType,
                         notes             = event.notes.ifBlank { null },
                         travelTimeMinutes = null,
+                        // Backend rejects completed visits without a doctor.
+                        // Submit as "booked" when no doctor is assigned.
+                        status            = if (resolvedDoctorId != null) "completed" else "booked",
                     )
                 )
             }

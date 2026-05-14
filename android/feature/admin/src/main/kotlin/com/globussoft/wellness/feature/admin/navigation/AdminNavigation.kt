@@ -6,11 +6,15 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.globussoft.wellness.core.data.datastore.UserSession
 import com.globussoft.wellness.feature.admin.presentation.AdminScreen
+import com.globussoft.wellness.feature.admin.presentation.auditlog.AuditLogScreen
 import com.globussoft.wellness.feature.admin.presentation.autoconsumption.AutoConsumptionScreen
 import com.globussoft.wellness.feature.admin.presentation.cashbackrules.CashbackRulesScreen
+import com.globussoft.wellness.feature.admin.presentation.convertedleads.ConvertedLeadsScreen
 import com.globussoft.wellness.feature.admin.presentation.drugs.DrugsScreen
 import com.globussoft.wellness.feature.admin.presentation.holidays.HolidaysScreen
 import com.globussoft.wellness.feature.admin.presentation.locations.LocationsScreen
+import com.globussoft.wellness.feature.admin.presentation.marketplaceleads.MarketplaceLeadsScreen
+import com.globussoft.wellness.feature.admin.presentation.privacy.PrivacyScreen
 import com.globussoft.wellness.feature.admin.presentation.productcategories.ProductCategoriesScreen
 import com.globussoft.wellness.feature.admin.presentation.resources.ResourcesScreen
 import com.globussoft.wellness.feature.admin.presentation.servicecategories.ServiceCategoriesScreen
@@ -30,6 +34,10 @@ object AdminDestinations {
     const val Vendors              = "vendors"
     const val ProductCategories    = "product-categories"
     const val AutoConsumptionRules = "auto-consumption-rules"
+    const val AuditLog             = "audit-log"
+    const val MarketplaceLeads     = "marketplace-leads"
+    const val ConvertedLeads       = "converted-leads"
+    const val Privacy              = "privacy"
 }
 
 /**
@@ -110,6 +118,34 @@ fun NavGraphBuilder.adminGraph(
 
     composable(AdminDestinations.AutoConsumptionRules) {
         AutoConsumptionScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.AuditLog) {
+        AuditLogScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.MarketplaceLeads) {
+        MarketplaceLeadsScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.ConvertedLeads) {
+        ConvertedLeadsScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.Privacy) {
+        PrivacyScreen(
             viewModel      = hiltViewModel(),
             onNavigateBack = { navController.popBackStack() },
         )

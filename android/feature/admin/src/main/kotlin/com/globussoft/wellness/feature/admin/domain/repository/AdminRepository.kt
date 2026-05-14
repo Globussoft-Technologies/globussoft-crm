@@ -99,6 +99,22 @@ interface AdminRepository {
     suspend fun deleteAutoConsumptionRule(id: String): WResult<Unit>
     suspend fun getProducts(): WResult<List<ProductItem>>
     suspend fun getServicesForPicker(): WResult<List<ServiceItem>>
+
+    // ── Audit Log ──────────────────────────────────────────────────────────────
+
+    suspend fun getAuditLogs(page: Int = 1): WResult<AuditLogsPage>
+
+    // ── Marketplace Leads ──────────────────────────────────────────────────────
+
+    suspend fun getMarketplaceLeads(provider: String? = null, status: String? = null, page: Int = 1): WResult<MarketplaceLeadsPage>
+
+    // ── Converted Leads ────────────────────────────────────────────────────────
+
+    suspend fun getConvertedLeads(): WResult<List<ConvertedLeadItem>>
+
+    // ── Privacy / Retention Policies ───────────────────────────────────────────
+
+    suspend fun getRetentionPolicies(): WResult<List<RetentionPolicyItem>>
 }
 
 /**
@@ -182,4 +198,59 @@ data class ProductItem(
 data class ServiceItem(
     val id: String,
     val name: String,
+)
+
+data class AuditLogItem(
+    val id: String,
+    val action: String,
+    val entity: String,
+    val entityId: String?,
+    val userName: String?,
+    val userEmail: String?,
+    val timestamp: String,
+    val details: String?,
+)
+
+data class AuditLogsPage(
+    val logs: List<AuditLogItem>,
+    val pages: Int,
+    val total: Int,
+    val currentPage: Int,
+)
+
+data class MarketplaceLeadItem(
+    val id: String,
+    val name: String?,
+    val email: String?,
+    val phone: String?,
+    val company: String?,
+    val provider: String,
+    val status: String,
+    val createdAt: String,
+)
+
+data class MarketplaceLeadsPage(
+    val leads: List<MarketplaceLeadItem>,
+    val pages: Int,
+    val total: Int,
+    val currentPage: Int,
+)
+
+data class ConvertedLeadItem(
+    val id: String,
+    val name: String?,
+    val email: String?,
+    val phone: String?,
+    val company: String?,
+    val status: String?,
+    val source: String?,
+    val createdAt: String,
+)
+
+data class RetentionPolicyItem(
+    val id: String,
+    val entity: String,
+    val label: String?,
+    val retainDays: Int,
+    val isActive: Boolean,
 )

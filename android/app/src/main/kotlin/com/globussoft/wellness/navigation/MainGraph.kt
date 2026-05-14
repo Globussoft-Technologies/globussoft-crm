@@ -30,6 +30,7 @@ import com.globussoft.wellness.feature.dashboard.navigation.dashboardGraph
 import com.globussoft.wellness.feature.finance.navigation.financeGraph
 import com.globussoft.wellness.feature.patients.navigation.patientsGraph
 import com.globussoft.wellness.feature.reports.navigation.reportsGraph
+import com.globussoft.wellness.feature.reports.presentation.ReportsScreen
 import com.globussoft.wellness.feature.services.navigation.servicesGraph
 import com.globussoft.wellness.feature.settings.navigation.settingsGraph
 import com.globussoft.wellness.feature.telecaller.navigation.telecallerGraph
@@ -112,19 +113,16 @@ private fun InnerNavHost(
         composable("working-hours") { PlaceholderScreen("Working Hours") }
 
         // ── Leads & Revenue stubs ─────────────────────────────────────────
-        composable("inbox")             { PlaceholderScreen("Unified Inbox") }
-        composable("whatsapp")          { PlaceholderScreen("WhatsApp Threads") }
-        composable("leads")             { PlaceholderScreen("All Leads") }
-        composable("converted-leads")   { PlaceholderScreen("Converted Leads") }
-        composable("tasks")             { PlaceholderScreen("Tasks") }
-        composable("marketplace-leads") { PlaceholderScreen("Marketplace Leads") }
-        composable("lead-routing")      { PlaceholderScreen("Routing Rules") }
+        composable("inbox")        { PlaceholderScreen("Unified Inbox") }
+        composable("whatsapp")     { PlaceholderScreen("WhatsApp Threads") }
+        composable("leads")        { PlaceholderScreen("All Leads") }
+        composable("tasks")        { PlaceholderScreen("Tasks") }
+        composable("lead-routing") { PlaceholderScreen("Routing Rules") }
 
         // ── Finance stubs ─────────────────────────────────────────────────
-        composable("invoices")       { PlaceholderScreen("Invoices") }
-        composable("estimates")      { PlaceholderScreen("Estimates") }
-        composable("expenses")       { PlaceholderScreen("Expenses") }
-        composable("payments") { PlaceholderScreen("Payments") }
+        composable("invoices")  { PlaceholderScreen("Invoices") }
+        composable("estimates") { PlaceholderScreen("Estimates") }
+        composable("expenses")  { PlaceholderScreen("Expenses") }
 
         // ── Marketing stubs ───────────────────────────────────────────────
         composable("marketing")     { PlaceholderScreen("SMS / Email Blasts") }
@@ -132,7 +130,7 @@ private fun InnerNavHost(
         composable("landing-pages") { PlaceholderScreen("Landing Pages") }
 
         // ── Reports stubs ─────────────────────────────────────────────────
-        composable("per-location")   { PlaceholderScreen("Per-Location Reports") }
+        composable("per-location")   { ReportsScreen() }
         composable("loyalty")        { PlaceholderScreen("Loyalty + Referrals") }
         composable("surveys")        { PlaceholderScreen("Patient Surveys") }
         composable("knowledge-base") { PlaceholderScreen("Knowledge Base") }
@@ -142,12 +140,10 @@ private fun InnerNavHost(
         composable("inventory-adjustments") { PlaceholderScreen("Inventory Adjustments") }
 
         // ── Admin stubs ───────────────────────────────────────────────────
-        composable("staff")                { PlaceholderScreen("Staff Management") }
-        composable("commission-profiles")  { PlaceholderScreen("Commission Profiles") }
-        composable("revenue-goals")        { PlaceholderScreen("Revenue Goals") }
-        composable("channels")             { PlaceholderScreen("Channels") }
-        composable("audit-log")            { PlaceholderScreen("Audit Log") }
-        composable("privacy")              { PlaceholderScreen("Privacy") }
+        composable("staff")               { PlaceholderScreen("Staff Management") }
+        composable("commission-profiles") { PlaceholderScreen("Commission Profiles") }
+        composable("revenue-goals")       { PlaceholderScreen("Revenue Goals") }
+        composable("channels")            { PlaceholderScreen("Channels") }
     }
 }
 

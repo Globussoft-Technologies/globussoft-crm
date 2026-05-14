@@ -634,4 +634,55 @@ interface WellnessApi {
 
     @GET("wellness/products")
     suspend fun getProducts(): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Audit Log  (admin / read-only)
+    // GET audit-viewer?page=X&limit=25 → { logs:[], pages, total }
+    // -------------------------------------------------------------------------
+
+    @GET("audit-viewer")
+    suspend fun getAuditLogs(
+        @Query("page")  page:  Int = 1,
+        @Query("limit") limit: Int = 25,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Payments  (finance / read-only)
+    // GET payments → { payments:[] }
+    // -------------------------------------------------------------------------
+
+    @GET("payments")
+    suspend fun getPayments(): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Marketplace Leads  (admin / read-only)
+    // GET marketplace-leads?provider=X&status=Y&page=Z&limit=50 → { leads:[], pages, stats }
+    // -------------------------------------------------------------------------
+
+    @GET("marketplace-leads")
+    suspend fun getMarketplaceLeads(
+        @Query("provider") provider: String? = null,
+        @Query("status")   status:   String? = null,
+        @Query("page")     page:     Int     = 1,
+        @Query("limit")    limit:    Int     = 50,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Contacts  (used for Converted Leads list)
+    // GET contacts?status=Converted → array of contact objects
+    // -------------------------------------------------------------------------
+
+    @GET("contacts")
+    suspend fun getContacts(
+        @Query("status") status: String? = null,
+        @Query("limit")  limit:  Int     = 100,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // GDPR / Privacy  (admin / read-only)
+    // GET gdpr/retention-policies → array of { entity, label, retainDays, isActive }
+    // -------------------------------------------------------------------------
+
+    @GET("gdpr/retention-policies")
+    suspend fun getRetentionPolicies(): Response<List<@JvmSuppressWildcards Any>>
 }

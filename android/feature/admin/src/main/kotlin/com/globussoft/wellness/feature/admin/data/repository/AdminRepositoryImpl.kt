@@ -6,12 +6,18 @@ import com.globussoft.wellness.core.domain.model.Location
 import com.globussoft.wellness.core.network.api.WellnessApi
 import com.globussoft.wellness.core.network.util.safeApiCall
 import com.globussoft.wellness.feature.admin.domain.repository.AdminRepository
+import com.globussoft.wellness.feature.admin.domain.repository.AuditLogItem
+import com.globussoft.wellness.feature.admin.domain.repository.AuditLogsPage
 import com.globussoft.wellness.feature.admin.domain.repository.AutoConsumptionRuleItem
 import com.globussoft.wellness.feature.admin.domain.repository.CashbackRuleItem
+import com.globussoft.wellness.feature.admin.domain.repository.ConvertedLeadItem
 import com.globussoft.wellness.feature.admin.domain.repository.DrugItem
 import com.globussoft.wellness.feature.admin.domain.repository.HolidayItem
+import com.globussoft.wellness.feature.admin.domain.repository.MarketplaceLeadItem
+import com.globussoft.wellness.feature.admin.domain.repository.MarketplaceLeadsPage
 import com.globussoft.wellness.feature.admin.domain.repository.ProductCategoryItem
 import com.globussoft.wellness.feature.admin.domain.repository.ProductItem
+import com.globussoft.wellness.feature.admin.domain.repository.RetentionPolicyItem
 import com.globussoft.wellness.feature.admin.domain.repository.ServiceItem
 import com.globussoft.wellness.feature.admin.domain.repository.ServiceCategoryItem
 import com.globussoft.wellness.feature.admin.domain.repository.VendorItem
@@ -193,6 +199,48 @@ class AdminRepositoryImpl @Inject constructor(
         safeApiCall { api.getServices() }
             .mapSuccess { list -> list.map { ServiceItem(it.id, it.name) } }
 
+    // ── Audit Log ──────────────────────────────────────────────────────────────
+
+    override suspend fun getAuditLogs(page: Int): WResult<AuditLogsPage> =
+        safeApiCall { api.getAuditLogs(page = page) }
+            .mapSuccess { envelope ->
+                @Suppress("UNCHECKED_CAST")
+                val rawLogs = (envelope["logs"] ?: envelope["data"]) as? List<*> ?: emptyList<Any>()
+                AuditLogsPage(
+                    logs        = rawLogs.filterIsInstance<Map<*, *>>().map { it.toAuditLogItem() },
+                    pages       = (envelope["pages"] as? Number)?.toInt() ?: 1,
+                    total       = (envelope["total"] as? Number)?.toInt() ?: 0,
+                    currentPage = page,
+                )
+            }
+
+    // ── Marketplace Leads ──────────────────────────────────────────────────────
+
+    override suspend fun getMarketplaceLeads(provider: String?, status: String?, page: Int): WResult<MarketplaceLeadsPage> =
+        safeApiCall { api.getMarketplaceLeads(provider = provider, status = status, page = page) }
+            .mapSuccess { envelope ->
+                @Suppress("UNCHECKED_CAST")
+                val rawLeads = (envelope["leads"] ?: envelope["data"]) as? List<*> ?: emptyList<Any>()
+                MarketplaceLeadsPage(
+                    leads       = rawLeads.filterIsInstance<Map<*, *>>().map { it.toMarketplaceLead() },
+                    pages       = (envelope["pages"] as? Number)?.toInt() ?: 1,
+                    total       = (envelope["total"] as? Number)?.toInt() ?: 0,
+                    currentPage = page,
+                )
+            }
+
+    // ── Converted Leads ────────────────────────────────────────────────────────
+
+    override suspend fun getConvertedLeads(): WResult<List<ConvertedLeadItem>> =
+        safeApiCall { api.getContacts(status = "Converted") }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toConvertedLead() } }
+
+    // ── Privacy / Retention Policies ───────────────────────────────────────────
+
+    override suspend fun getRetentionPolicies(): WResult<List<RetentionPolicyItem>> =
+        safeApiCall { api.getRetentionPolicies() }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toRetentionPolicy() } }
+
     // ── Mappers ────────────────────────────────────────────────────────────────
 
     private fun Map<String, Any>.toDrugItem() = DrugItem(
@@ -269,6 +317,50 @@ class AdminRepositoryImpl @Inject constructor(
         id   = this["id"]?.toString() ?: "",
         name = this["name"]?.toString() ?: "",
         unit = this["unit"]?.toString(),
+    )
+
+    private fun Map<*, *>.toAuditLogItem(): AuditLogItem {
+        val user = this["user"] as? Map<*, *>
+        return AuditLogItem(
+            id         = this["id"]?.toString() ?: "",
+            action     = this["action"]?.toString() ?: "",
+            entity     = this["entity"]?.toString() ?: "",
+            entityId   = this["entityId"]?.toString(),
+            userName   = user?.get("name")?.toString() ?: this["userName"]?.toString(),
+            userEmail  = user?.get("email")?.toString() ?: this["userEmail"]?.toString(),
+            timestamp  = (this["timestamp"] ?: this["createdAt"])?.toString() ?: "",
+            details    = this["details"]?.toString(),
+        )
+    }
+
+    private fun Map<*, *>.toMarketplaceLead() = MarketplaceLeadItem(
+        id        = this["id"]?.toString() ?: "",
+        name      = this["name"]?.toString(),
+        email     = this["email"]?.toString(),
+        phone     = this["phone"]?.toString(),
+        company   = this["company"]?.toString(),
+        provider  = this["provider"]?.toString() ?: "",
+        status    = this["status"]?.toString() ?: "New",
+        createdAt = this["createdAt"]?.toString() ?: "",
+    )
+
+    private fun Map<*, *>.toConvertedLead() = ConvertedLeadItem(
+        id        = this["id"]?.toString() ?: "",
+        name      = this["name"]?.toString(),
+        email     = this["email"]?.toString(),
+        phone     = this["phone"]?.toString(),
+        company   = this["company"]?.toString(),
+        status    = this["status"]?.toString(),
+        source    = this["source"]?.toString(),
+        createdAt = this["createdAt"]?.toString() ?: "",
+    )
+
+    private fun Map<*, *>.toRetentionPolicy() = RetentionPolicyItem(
+        id         = this["id"]?.toString() ?: "",
+        entity     = this["entity"]?.toString() ?: "",
+        label      = this["label"]?.toString(),
+        retainDays = (this["retainDays"] as? Number)?.toInt() ?: 0,
+        isActive   = this["isActive"] as? Boolean ?: true,
     )
 }
 

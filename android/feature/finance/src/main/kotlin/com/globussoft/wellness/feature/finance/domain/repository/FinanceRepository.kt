@@ -4,6 +4,7 @@ import com.globussoft.wellness.core.common.result.WResult
 import com.globussoft.wellness.feature.finance.domain.model.Coupon
 import com.globussoft.wellness.feature.finance.domain.model.CouponPreview
 import com.globussoft.wellness.feature.finance.domain.model.GiftCard
+import com.globussoft.wellness.feature.finance.domain.model.PaymentItem
 import com.globussoft.wellness.feature.finance.domain.model.PosReceiptData
 import com.globussoft.wellness.feature.finance.domain.model.PosSubmitRequest
 import com.globussoft.wellness.feature.finance.domain.model.WalletData
@@ -91,4 +92,9 @@ interface FinanceRepository {
      * order of [amount].
      */
     suspend fun previewCoupon(code: String, amount: Double): WResult<CouponPreview>
+
+    // ─── Payments ─────────────────────────────────────────────────────────────
+
+    /** Returns all payment records for the current tenant. */
+    suspend fun getPayments(): WResult<List<PaymentItem>>
 }

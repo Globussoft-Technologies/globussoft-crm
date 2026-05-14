@@ -114,3 +114,23 @@ data class CouponPreview(
     val discountAmount: Double,
     val finalAmount: Double,
 )
+
+// ─── Payment models ───────────────────────────────────────────────────────────
+
+/**
+ * A payment record returned by GET /api/payments.
+ *
+ * [gateway] — stripe / razorpay / cash / other
+ * [status]  — PENDING / PAID / FAILED / REFUNDED
+ * [paidAt]  — ISO-8601 timestamp; null when status != PAID.
+ */
+data class PaymentItem(
+    val id: String,
+    val invoiceId: String?,
+    val amount: Double,
+    val currency: String,
+    val gateway: String,
+    val status: String,
+    val paidAt: String?,
+    val createdAt: String,
+)

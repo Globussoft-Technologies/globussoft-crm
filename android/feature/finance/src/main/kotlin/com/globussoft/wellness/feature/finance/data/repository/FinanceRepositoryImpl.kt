@@ -6,6 +6,7 @@ import com.globussoft.wellness.core.network.util.safeApiCall
 import com.globussoft.wellness.feature.finance.domain.model.Coupon
 import com.globussoft.wellness.feature.finance.domain.model.CouponPreview
 import com.globussoft.wellness.feature.finance.domain.model.GiftCard
+import com.globussoft.wellness.feature.finance.domain.model.PaymentItem
 import com.globussoft.wellness.feature.finance.domain.model.PosLineItem
 import com.globussoft.wellness.feature.finance.domain.model.PosReceiptData
 import com.globussoft.wellness.feature.finance.domain.model.PosSubmitRequest
@@ -195,6 +196,29 @@ class FinanceRepositoryImpl @Inject constructor(
         expiryDate      = this["expiryDate"] as? String,
         isActive        = this["isActive"] as? Boolean ?: true,
         redemptionCount = (this["redemptionCount"] as? Number)?.toInt() ?: 0,
+    )
+
+    // ─── Payments ─────────────────────────────────────────────────────────────
+
+    override suspend fun getPayments(): WResult<List<PaymentItem>> =
+        safeApiCall { api.getPayments() }
+            .mapSuccess { envelope ->
+                @Suppress("UNCHECKED_CAST")
+                val rows = (envelope["payments"] ?: envelope["data"]) as? List<*>
+                    ?: envelope.values.filterIsInstance<List<*>>().firstOrNull()
+                    ?: emptyList<Any>()
+                rows.filterIsInstance<Map<*, *>>().map { it.toPaymentItem() }
+            }
+
+    private fun Map<*, *>.toPaymentItem(): PaymentItem = PaymentItem(
+        id        = anyId(this["id"]),
+        invoiceId = this["invoiceId"]?.toString(),
+        amount    = (this["amount"] as? Number)?.toDouble() ?: 0.0,
+        currency  = this["currency"] as? String ?: "INR",
+        gateway   = this["gateway"] as? String ?: "",
+        status    = this["status"] as? String ?: "PENDING",
+        paidAt    = this["paidAt"] as? String,
+        createdAt = this["createdAt"] as? String ?: "",
     )
 }
 

@@ -8,6 +8,7 @@ import com.globussoft.wellness.core.data.datastore.UserSession
 import com.globussoft.wellness.feature.finance.presentation.FinanceHubScreen
 import com.globussoft.wellness.feature.finance.presentation.coupons.CouponsScreen
 import com.globussoft.wellness.feature.finance.presentation.giftcards.GiftCardsScreen
+import com.globussoft.wellness.feature.finance.presentation.payments.PaymentsScreen
 import com.globussoft.wellness.feature.finance.presentation.pos.PosScreen
 import com.globussoft.wellness.feature.finance.presentation.wallet.WalletScreen
 
@@ -18,10 +19,11 @@ import com.globussoft.wellness.feature.finance.presentation.wallet.WalletScreen
  * strings to make renames safe and auditable.
  */
 object FinanceDestinations {
-    const val Pos       = "finance"
-    const val Wallet    = "wallet"
+    const val Pos      = "finance"
+    const val Wallet   = "wallet"
     const val GiftCards = "gift-cards"
-    const val Coupons   = "coupons"
+    const val Coupons  = "coupons"
+    const val Payments = "payments"
 }
 
 /**
@@ -59,5 +61,12 @@ fun NavGraphBuilder.financeGraph(
 
     composable(route = FinanceDestinations.Coupons) {
         CouponsScreen(viewModel = hiltViewModel())
+    }
+
+    composable(route = FinanceDestinations.Payments) {
+        PaymentsScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
     }
 }

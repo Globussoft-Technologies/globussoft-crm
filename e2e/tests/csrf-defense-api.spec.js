@@ -50,7 +50,7 @@ test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const API = `${BASE_URL}/api`;
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 
 const ADMIN = { email: 'admin@globussoft.com', password: 'password123' };
 

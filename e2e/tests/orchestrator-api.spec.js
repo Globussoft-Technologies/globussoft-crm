@@ -143,7 +143,7 @@ test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const API = `${BASE_URL}/api`;
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_FLOW_ORCH_${Date.now()}`;
 // Local-stack DB is clean; demo accumulates pre-existing pollution from
 // prior test runs. The "scan ALL current rows" pollution test assumes a

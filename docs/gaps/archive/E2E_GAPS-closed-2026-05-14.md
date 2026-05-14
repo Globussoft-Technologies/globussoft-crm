@@ -69,7 +69,7 @@
 
 Each card below targets a route with zero or smoke-only coverage. **Pattern to copy: [e2e/tests/notifications-api.spec.js](../e2e/tests/notifications-api.spec.js)** (549 lines — clean CRUD + auth gate + tenant scoping).
 
-## ⬜ G-1 — landing-pages-api spec
+## ✅ G-1 — landing-pages-api spec
 
 **File to create:** `e2e/tests/landing-pages-api.spec.js`
 **Target route:** [backend/routes/landing_pages.js](../backend/routes/landing_pages.js) (311 lines, **zero** API coverage today)
@@ -99,7 +99,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-2 — workflows-api spec
+## ✅ G-2 — workflows-api spec
 
 **File to create:** `e2e/tests/workflows-api.spec.js`
 **Target route:** [backend/routes/workflows.js](../backend/routes/workflows.js) (314 lines, smoke-only)
@@ -128,7 +128,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-3 — integrations-api spec
+## ✅ G-3 — integrations-api spec
 
 **File to create:** `e2e/tests/integrations-api.spec.js`
 **Target route:** [backend/routes/integrations.js](../backend/routes/integrations.js) (193 lines, smoke-only)
@@ -153,7 +153,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-4 — search-api spec
+## ✅ G-4 — search-api spec
 
 **File to create:** `e2e/tests/search-api.spec.js`
 **Target route:** [backend/routes/search.js](../backend/routes/search.js) (65 lines, smoke-only)
@@ -174,7 +174,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-5 — audit-api spec
+## ✅ G-5 — audit-api spec
 
 **File to create:** `e2e/tests/audit-api.spec.js`
 **Target route:** [backend/routes/audit.js](../backend/routes/audit.js) (28 lines, smoke-only)
@@ -200,7 +200,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 **Pattern to copy: [e2e/tests/sla-breach-api.spec.js](../e2e/tests/sla-breach-api.spec.js) + [sequence-engine-api.spec.js](../e2e/tests/sequence-engine-api.spec.js)** — both seed fixtures, invoke trigger endpoint, assert side effects.
 
-## ⬜ G-6 — appointment-reminders-engine spec
+## ✅ G-6 — appointment-reminders-engine spec
 
 **File to create:** `e2e/tests/appointment-reminders-api.spec.js`
 **Target:** [backend/cron/appointmentRemindersEngine.js](../backend/cron/appointmentRemindersEngine.js)
@@ -220,7 +220,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-7 — wellness-ops-engine spec
+## ✅ G-7 — wellness-ops-engine spec
 
 **File to create:** `e2e/tests/wellness-ops-api.spec.js`
 **Target:** [backend/cron/wellnessOpsEngine.js](../backend/cron/wellnessOpsEngine.js)
@@ -239,7 +239,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-8 — low-stock-engine spec
+## ✅ G-8 — low-stock-engine spec
 
 **File to create:** `e2e/tests/low-stock-api.spec.js`
 **Target:** [backend/cron/lowStockEngine.js](../backend/cron/lowStockEngine.js)
@@ -257,7 +257,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-9 — recurring-invoice-engine spec
+## ✅ G-9 — recurring-invoice-engine spec
 
 **File to create:** `e2e/tests/recurring-invoice-api.spec.js`
 **Target:** [backend/cron/recurringInvoiceEngine.js](../backend/cron/recurringInvoiceEngine.js)
@@ -276,7 +276,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-10 — scheduled-email-engine spec
+## ✅ G-10 — scheduled-email-engine spec
 
 **File to create:** `e2e/tests/scheduled-email-api.spec.js`
 **Target:** [backend/cron/scheduledEmailEngine.js](../backend/cron/scheduledEmailEngine.js)
@@ -294,7 +294,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-11 — retention-engine spec
+## ✅ G-11 — retention-engine spec
 
 **File to create:** `e2e/tests/retention-api.spec.js`
 **Target:** [backend/cron/retentionEngine.js](../backend/cron/retentionEngine.js) — **GDPR-critical, destructive**
@@ -314,7 +314,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-12 — campaign-engine spec
+## ✅ G-12 — campaign-engine spec
 
 **File to create:** `e2e/tests/campaign-engine-api.spec.js`
 **Target:** [backend/cron/campaignEngine.js](../backend/cron/campaignEngine.js)
@@ -332,7 +332,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-13 — deal-insights-engine spec
+## ✅ G-13 — deal-insights-engine spec
 
 **File to create:** `e2e/tests/deal-insights-engine-api.spec.js`
 **Target:** [backend/cron/dealInsightsEngine.js](../backend/cron/dealInsightsEngine.js) (Gemini AI)
@@ -350,7 +350,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-14 — forecast-snapshot-engine spec
+## ✅ G-14 — forecast-snapshot-engine spec
 
 **File to create:** `e2e/tests/forecast-snapshot-api.spec.js`
 **Target:** [backend/cron/forecastSnapshotEngine.js](../backend/cron/forecastSnapshotEngine.js)
@@ -367,7 +367,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-15 — backup-engine spec
+## ✅ G-15 — backup-engine spec
 
 **File to create:** `e2e/tests/backup-engine-api.spec.js`
 **Target:** [backend/cron/backupEngine.js](../backend/cron/backupEngine.js) — shells `mysqldump`
@@ -388,7 +388,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 # Part 3 — Vitest unit gaps (G-16)
 
-## ⬜ G-16 — whatsappProvider vitest
+## ✅ G-16 — whatsappProvider vitest
 
 **File to create:** `backend/test/services/whatsappProvider.test.js`
 **Target:** [backend/services/whatsappProvider.js](../backend/services/whatsappProvider.js)
@@ -410,7 +410,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 [backend/routes/wellness.js](../backend/routes/wellness.js) is 4,050 lines at 41% coverage. [wellness-clinical-api.spec.js](../e2e/tests/wellness-clinical-api.spec.js) covers patient/visit/Rx/consent/service/location. The remaining surface needs three new specs.
 
-## ⬜ G-17 — wellness-dashboard-api spec
+## ✅ G-17 — wellness-dashboard-api spec
 
 **File to create:** `e2e/tests/wellness-dashboard-api.spec.js`
 **Endpoints:** `GET /api/wellness/dashboard`, owner-dashboard recommendations CRUD, `GET /api/wellness/recommendations*`
@@ -418,14 +418,14 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 **Effort:** 1-2 days
 **Blockers:** none
 
-## ⬜ G-18 — wellness-reports-api spec
+## ✅ G-18 — wellness-reports-api spec
 
 **File to create:** `e2e/tests/wellness-reports-api.spec.js`
 **Endpoints:** `GET /api/wellness/reports/pnl-by-service`, `/per-professional`, `/per-location`, `/attribution`
 
 **Effort:** 1 day
 
-## ⬜ G-19 — wellness-telecaller-api spec
+## ✅ G-19 — wellness-telecaller-api spec
 
 **File to create:** `e2e/tests/wellness-telecaller-api.spec.js`
 **Endpoints:** `GET /api/wellness/telecaller/queue`, `POST /api/wellness/telecaller/:id/dispose` (6 dispositions)
@@ -436,7 +436,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 # Part 5 — High-severity multi-tenant + safety gaps (G-20, G-23, G-24)
 
-## ⬜ G-20 — tenant-isolation-api spec ⭐ **CRITICAL**
+## ✅ G-20 — tenant-isolation-api spec ⭐ **CRITICAL**
 
 **File to create:** `e2e/tests/tenant-isolation-api.spec.js`
 **Why:** Single highest-severity bug class for a multi-tenant CRM. Today only `wellness-rbac-api.spec.js` covers wellness; generic CRM has no systematic cross-tenant assertion.
@@ -472,7 +472,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-24 — Schema invariants vitest
+## ✅ G-24 — Schema invariants vitest
 
 **File to create:** `backend/test/schema/invariants.test.js`
 **Why:** 114 Prisma models. No test asserts that every multi-tenant model has `tenantId`. A missing `tenantId` on one new model = silent cross-tenant data leak.
@@ -491,7 +491,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 # Part 6 — Frontend + integration tier (G-21, G-22, G-25)
 
-## ⬜ G-21 — Frontend vitest + RTL setup
+## ✅ G-21 — Frontend vitest + RTL setup
 
 **Files to create:** `frontend/vitest.config.js`, `frontend/test/setup.js`, first 5 component tests under `frontend/src/components/__tests__/`
 
@@ -507,7 +507,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-22 — Integration test tier (Stripe webhook signing)
+## ✅ G-22 — Integration test tier (Stripe webhook signing)
 
 **Files to create:** `backend/test/integration/`, `backend/test/integration/stripe-webhook.test.js`
 
@@ -523,7 +523,7 @@ Each card below targets a route with zero or smoke-only coverage. **Pattern to c
 
 ---
 
-## ⬜ G-25 — Security headers spec
+## ✅ G-25 — Security headers spec
 
 **File to create:** `e2e/tests/security-headers.spec.js`
 

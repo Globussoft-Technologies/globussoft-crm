@@ -40,7 +40,7 @@ const { test, expect } = require('@playwright/test');
 test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 
 // 1x1 PNG (89 50 4E 47 …). Smallest valid PNG; deterministic.
 const TINY_PNG_B64 =

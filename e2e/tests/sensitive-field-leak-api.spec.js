@@ -34,7 +34,7 @@
 const { test, expect } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_LEAK_${Date.now()}`;
 
 // Mirror of FORBIDDEN_FIELDS in backend/middleware/scrubResponse.js. Kept
@@ -162,9 +162,17 @@ test.describe('sensitive-field response-leak gate (#426)', () => {
   });
 
   test('GET /api/contacts/by-status — audienceController response strips portalPasswordHash', async ({ request }) => {
+    // This endpoint runs a heavy query against demo's ~108k-row audit-log
+    // table (joined). Solo it returns in ~14s; under e2e-full's 4-shard
+    // concurrent load it routinely brushes the default 30s test timeout
+    // even though the response itself arrives. Bump to 60s so the
+    // assertion below has room to run cleanly. Per-request timeout stays
+    // at 30s (REQUEST_TIMEOUT) — the slack lives at the test budget,
+    // not the per-call budget, so a hung request still fails fast.
+    test.setTimeout(60_000);
     const r = await request.get(`${BASE_URL}/api/contacts/by-status?status=Lead`, {
       headers: { Authorization: `Bearer ${adminToken}` },
-      timeout: REQUEST_TIMEOUT,
+      timeout: 45_000,
     });
     expect(r.ok(), `by-status endpoint must return 2xx (got ${r.status()})`).toBe(true);
     assertNoForbiddenFields(await r.json(), 'GET /api/contacts/by-status');

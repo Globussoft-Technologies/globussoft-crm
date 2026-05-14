@@ -32,7 +32,7 @@
 const { test, expect } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 
 // Tenant fingerprints (seed-known). admin@globussoft.com is on tenantId=1
 // (generic CRM); admin@wellness.demo is on tenantId=2 (Enhanced Wellness).

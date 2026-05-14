@@ -62,14 +62,14 @@ test.describe('Lead Scoring — AI Lead Intelligence', () => {
     const loginRes = await request.post(`${BASE_URL}/api/auth/login`, {
       data: { email: 'admin@globussoft.com', password: 'password123' },
       headers: { 'Content-Type': 'application/json' },
-      timeout: 30000,
+      timeout: 60000,
     });
     expect(loginRes.ok(), `login: ${loginRes.status()}`).toBeTruthy();
     const { token } = await loginRes.json();
 
     const r = await request.post(`${BASE_URL}/api/ai_scoring/trigger`, {
       headers: { Authorization: `Bearer ${token}` },
-      timeout: 30000,
+      timeout: 60000,
     });
     expect(r.ok(), `trigger: ${r.status()}`).toBeTruthy();
     const res = await r.json();

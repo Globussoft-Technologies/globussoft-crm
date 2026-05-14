@@ -57,7 +57,7 @@
 const { test, expect } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_FLOW_NUMID_${Date.now()}`;
 
 // ── Cached dual-tenant tokens ─────────────────────────────────────

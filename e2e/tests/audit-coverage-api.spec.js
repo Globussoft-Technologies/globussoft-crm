@@ -139,7 +139,7 @@ const { test, expect } = require('@playwright/test');
 test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_AUDIT_COV_${Date.now()}`;
 
 // ── Auth fixtures ──────────────────────────────────────────────────

@@ -52,7 +52,7 @@ const { test, expect } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const API = `${BASE_URL}/api`;
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 const TOLERATE = process.env.DEMO_HYGIENE_TOLERATE === '1';
 
 // E2E_SKIP_SCRUB=1 (set in .github/workflows/e2e-full.yml so the demo

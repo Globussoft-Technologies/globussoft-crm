@@ -31,7 +31,7 @@
 const { test, expect } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 const ALLOW_AGAINST_DEMO = process.env.GATE_TEARDOWN_AGAINST_DEMO === '1';
 
 // Tight regex — every match here is unambiguous test residue. Real

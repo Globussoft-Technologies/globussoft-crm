@@ -320,9 +320,14 @@ test.describe('eventBus.emitEvent() — entry-point + orchestration', () => {
   // event. Assertion: no crash, and the rule we used to drive the emit
   // produced its audit row (i.e. emitEvent finished both phases).
   test('emitEvent invokes deliverWebhooks; failure on the webhook side does not break rule execution', async ({ request }) => {
+    // PR #713 (2ca6f5e) added SSRF defense to /developer/webhooks — loopback
+    // and RFC1918 targets are now rejected with 400 INVALID_WEBHOOK_HOST. Use
+    // a public-looking but unresolvable .invalid TLD on a closed port; passes
+    // the validator and fails fast at delivery — which is the point of this
+    // test (rule execution survives webhook-side connect failure).
     const wh = await request.post(`${API}/developer/webhooks`, {
       headers: authA(),
-      data: { event: 'invoice.paid', targetUrl: 'http://127.0.0.1:1/e2e-stub' },
+      data: { event: 'invoice.paid', targetUrl: 'https://example.invalid:1/e2e-stub' },
     });
     expect(wh.status()).toBe(201);
     const webhook = await wh.json();

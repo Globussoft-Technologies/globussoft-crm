@@ -43,8 +43,19 @@ test.describe('Fast2SMS — SMS provider integration', () => {
     const active = list.find((c) => c.isActive);
     expect(active, 'expected an active SmsConfig on the wellness tenant — run seed-fast2sms-config.js').toBeDefined();
     expect(active.provider).toBe('fast2sms');
-    // API masks the key — confirm mask format (first 6 chars + ****)
-    expect(active.apiKey).toMatch(/\*{4}$/);
+    // v3.7.x: credentialMasking.js reshaped the masked apiKey from a plain
+    // string ("Abc123****") to a structured `{configured: bool, last4: str}`
+    // object. Accept either shape so the spec rides over the next reshape.
+    if (typeof active.apiKey === 'string') {
+      expect(active.apiKey).toMatch(/\*{4}$/);
+    } else {
+      expect(active.apiKey, 'apiKey shape').toEqual(
+        expect.objectContaining({
+          configured: true,
+          last4: expect.stringMatching(/\*{4}/),
+        })
+      );
+    }
   });
 
   test('S2. POST /api/sms/send with a dummy number returns a structured result (no crash)', async ({ request }) => {

@@ -178,6 +178,9 @@ const WellnessLeave = lazy(() => import("./pages/wellness/Leave"));
 const WellnessPointOfSale = lazy(() => import("./pages/wellness/PointOfSale"));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
+// Public customer-facing knowledge-base article view (no auth, no admin chrome).
+// Replaces the raw-JSON backend response that the KB "View" button used to open.
+const KbArticleView = lazy(() => import("./pages/KbArticleView"));
 // #341: global catch-all 404. Previously unmapped or wrong-prefix URLs
 // (e.g. /loyalty without /wellness/) rendered a blank <main> with HTTP 200
 // because the SPA layout served but nothing inside it matched.
@@ -553,6 +556,12 @@ export default function App() {
                   />
                   {/* #184: customer-facing survey landing page from SMS — no auth, no admin chrome */}
                   <Route path="/survey/:id" element={<SurveyPublic />} />
+                  {/* Public knowledge-base article view (no auth). Replaces the raw
+                      backend JSON URL that the KB "View" button used to open. */}
+                  <Route
+                    path="/kb/:tenantSlug/:slug"
+                    element={<KbArticleView />}
+                  />
                   {/* #240: unauthenticated visitors to `/` should land on /login, not the
                 marketing Landing page. The Landing component is still importable
                 for any explicit /landing CTA but is no longer the implicit root. */}
@@ -592,7 +601,12 @@ export default function App() {
                     <Route
                       path="marketing"
                       element={
-                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Marketing requires manager access.">
+                        <RoleGuard
+                          allow={["ADMIN", "MANAGER"]}
+                          feature="Marketing"
+                          roles="manager (or admin)"
+                          lockedInPlace
+                        >
                           <Marketing />
                         </RoleGuard>
                       }
@@ -836,28 +850,48 @@ export default function App() {
               {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (admin/manager) */}
               <Route path="wellness/wallet" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Wallet ledger requires manager access.">
+                  <RoleGuard
+                    allow={["ADMIN", "MANAGER"]}
+                    feature="Wallet ledger"
+                    roles="manager (or admin)"
+                    lockedInPlace
+                  >
                     <WellnessWallet />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/giftcards" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Gift cards require manager access.">
+                  <RoleGuard
+                    allow={["ADMIN", "MANAGER"]}
+                    feature="Gift Cards"
+                    roles="manager (or admin)"
+                    lockedInPlace
+                  >
                     <WellnessGiftCards />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/coupons" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Coupons require manager access.">
+                  <RoleGuard
+                    allow={["ADMIN", "MANAGER"]}
+                    feature="Coupons"
+                    roles="manager (or admin)"
+                    lockedInPlace
+                  >
                     <WellnessCoupons />
                   </RoleGuard>
                 </WellnessOnly>
               } />
               <Route path="wellness/cashback-rules" element={
                 <WellnessOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Cashback rules require manager access.">
+                  <RoleGuard
+                    allow={["ADMIN", "MANAGER"]}
+                    feature="Cashback rules"
+                    roles="manager (or admin)"
+                    lockedInPlace
+                  >
                     <WellnessCashbackRules />
                   </RoleGuard>
                 </WellnessOnly>

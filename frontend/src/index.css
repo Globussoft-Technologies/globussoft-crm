@@ -7,6 +7,7 @@
   --text-primary: #ffffff;
   --text-secondary: #d1d5db;
   --accent-color: #3b82f6;
+  --accent-bg: rgba(59, 130, 246, 0.15);
   --accent-glow: rgba(59, 130, 246, 0.5);
   --accent-hover: #60a5fa;
   --success-color: #10b981;
@@ -47,6 +48,7 @@
   --text-primary: #1a1a2e;
   --text-secondary: #4b5563;
   --accent-color: #2563eb;
+  --accent-bg: #f0f4ff;
   --accent-glow: rgba(37, 99, 235, 0.3);
   --accent-hover: #3b82f6;
   --success-color: #059669;
@@ -83,6 +85,7 @@
   --text-primary: #ffffff;
   --text-secondary: #d1d5db;
   --accent-color: #3b82f6;
+  --accent-bg: rgba(59, 130, 246, 0.15);
   --accent-glow: rgba(59, 130, 246, 0.5);
   --accent-hover: #60a5fa;
   --success-color: #10b981;
@@ -402,6 +405,63 @@ input.input-field:focus-visible,
 textarea.input-field:focus-visible,
 select.input-field:focus-visible {
   outline: none;
+}
+
+/* ── Native <select> dropdown dark-mode support ──────────────────────────
+ * Without an explicit color-scheme, Chrome/Edge on Windows render the OS
+ * <option> popup with the system light palette regardless of how the
+ * <select> itself is styled — leaving near-invisible white-on-white text
+ * in dark mode (Chatbots flow-node picker, A/B Tests campaign dropdown,
+ * Custom Reports entity/filter/group selects). Four layers ensure the
+ * fix lands across Chrome/Edge/Firefox on every OS:
+ *   1) color-scheme on the document root → native widgets use the matching
+ *      palette where the browser honors it. We use :root[data-theme="dark"]
+ *      (and matching :root[data-theme="light"]) so the rule binds to the
+ *      same attribute that App.jsx writes via
+ *      documentElement.setAttribute("data-theme", …) on mount and on theme
+ *      toggle — there is no <body data-theme> in this codebase.
+ *   2) `select { color-scheme: inherit }` so every <select> picks up the
+ *      root's palette without needing a per-element rule (closes #724:
+ *      `getComputedStyle(select).colorScheme` now resolves to "dark" on
+ *      every <select> in dark mode, not "normal").
+ *   3) [data-theme="dark"] select { color-scheme: dark } as a per-element
+ *      belt-and-braces for Chrome builds that don't propagate the root's
+ *      color-scheme into the popup widget.
+ *   4) explicit option/optgroup background-color + color via CSS vars
+ *      with !important → fallback that wins over any inline overrides
+ *      (e.g. `style={{ color: 'inherit' }}` on the select, CustomReports
+ *      inputStyle's `color: inherit`).
+ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* Inherit color-scheme on every <select> so the popup palette tracks the
+ * document root without per-element overrides. Some Chrome builds only
+ * honour color-scheme at the element level — the [data-theme="dark"]
+ * select rule below keeps them covered. */
+select {
+  color-scheme: inherit;
+}
+
+[data-theme="dark"] select {
+  color-scheme: dark;
+}
+[data-theme="light"] select {
+  color-scheme: light;
+}
+
+/* Per-tag !important wins over inline `color: inherit` on the parent <select>
+ * (CustomReports.jsx applies that via inputStyle). --surface-color is the
+ * theme-aware tint used by cards / popovers; it tracks light vs dark
+ * automatically so the popup never renders as a bare white panel. */
+select option,
+select optgroup {
+  background-color: var(--surface-color) !important;
+  color: var(--text-primary) !important;
 }
 
 .nav-link {

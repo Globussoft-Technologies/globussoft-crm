@@ -139,7 +139,13 @@ test.describe('#564 v3.7.3 — consent captureMethod + BLOB archive', () => {
     expect(archiveRes.status()).toBe(200);
     const archiveBody = await archiveRes.json();
     expect(archiveBody.ok).toBe(true);
-    expect(archiveBody.alreadyArchived).toBe(false);
+    // POST /consents fire-and-forgets PDF blob generation (wellness.js:1828)
+    // so by the time we call /archive, the blob is often already persisted.
+    // alreadyArchived can be true OR false — the load-bearing contract is
+    // "after archive call, the bytes are frozen + the size > 0 + mime is pdf".
+    // The dedicated idempotency test below pins the alreadyArchived=true
+    // semantics with two sequential archive calls.
+    expect(typeof archiveBody.alreadyArchived).toBe('boolean');
     expect(archiveBody.consentId).toBe(consent.id);
     expect(archiveBody.sizeBytes).toBeGreaterThan(0);
     expect(archiveBody.mime).toBe('application/pdf');
@@ -161,7 +167,12 @@ test.describe('#564 v3.7.3 — consent captureMethod + BLOB archive', () => {
       headers: auth(doctorToken),
     });
     expect(first.status()).toBe(200);
-    expect((await first.json()).alreadyArchived).toBe(false);
+    // First call may be alreadyArchived=true (POST /consents fire-and-forget
+    // blob generation can win the race) — what matters is that the SECOND
+    // call is unambiguously idempotent, which we assert below.
+    const firstBody = await first.json();
+    expect(typeof firstBody.alreadyArchived).toBe('boolean');
+    expect(firstBody.sizeBytes).toBeGreaterThan(0);
 
     const second = await request.post(`${API}/wellness/consents/${consent.id}/archive`, {
       headers: auth(doctorToken),

@@ -82,10 +82,12 @@ test.describe('Reports — BI Analytics', () => {
   });
 
   test('reports page has multiple chart sections', async ({ page }) => {
-    await page.waitForTimeout(2000);
-
-    // Count chart containers
+    // Wait for at least one chart to render before counting (mirrors line 32's
+    // proper-wait pattern). Pre-fix, this test counted immediately after a 2s
+    // sleep — under e2e-full's concurrent-shard load, demo's React+recharts
+    // hydration window can exceed 2s, returning 0 and tripping the hard assert.
     const charts = page.locator('.recharts-wrapper, svg[class*="recharts"]');
+    await charts.first().waitFor({ state: 'visible', timeout: 15000 });
     const chartCount = await charts.count();
     expect(chartCount).toBeGreaterThanOrEqual(1);
   });

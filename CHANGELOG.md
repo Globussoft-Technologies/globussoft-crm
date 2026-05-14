@@ -1,5 +1,540 @@
 # CHANGELOG
 
+## v3.7.12 — 2026-05-13 — reports.spec.js wait-for-selector before counting (spec-only)
+
+**Fourth in the v3.7.x e2e-full stabilization arc** — and the final
+attempt at a fully-clean release validation.
+
+### Root cause
+
+v3.7.11 e2e-full had 1 hard failure remaining (`reports.spec.js:84 —
+reports page has multiple chart sections`). All 3 retries failed in
+~2-3s each — chart count returned 0.
+
+The test counted `.recharts-wrapper` elements **immediately** after a
+2s `waitForTimeout`. Under e2e-full's concurrent-shard load, demo's
+React + recharts hydration window exceeds 2s, so the count fires before
+charts have rendered → `chartCount === 0` → hard assert tripped.
+
+**Line 32 of the same spec** has the SAME class of test
+(`at least one chart is rendered`) and was always green — because it
+uses `await expect(chartEl).toBeVisible({ timeout: 10000 })` instead
+of an immediate count.
+
+### Fix
+
+`9a05c70` — single 5-line change to `e2e/tests/reports.spec.js:84`:
+
+```diff
+- await page.waitForTimeout(2000);
+- const charts = page.locator(...);
+- const chartCount = await charts.count();
++ const charts = page.locator(...);
++ await charts.first().waitFor({ state: 'visible', timeout: 15000 });
++ const chartCount = await charts.count();
+```
+
+Backports line 32's proper-wait pattern to line 84.
+
+### Verification
+
+Local sweep against demo (`BASE_URL=https://crm.globusdemos.com npx
+playwright test --project=chromium tests/reports.spec.js -g
+"multiple chart sections"`): passed on first attempt in **1.9s**
+(was 2.7s + retries-also-failed pre-fix).
+
+### Standing rule reinforced
+
+The 4-cycle v3.7.x stabilization arc consistently surfaced UI spec
+flakes that used `waitForTimeout(N)` then immediate-count instead of
+the proper `waitFor({ state: 'visible' })` pattern. Worth a cron-learning
+on next pass: **any e2e spec asserting on element COUNT under e2e-full
+concurrent-shard load must use `waitFor({ state: 'visible' })` on the
+selector before counting** — `waitForTimeout()` + immediate count is
+structurally fragile because demo's React hydration window varies with
+concurrent load.
+
+### Trajectory (final-final)
+
+| Release | Hard fails | Flaky-passing | Passed | Shards green |
+|---------|------------|---------------|--------|--------------|
+| v3.7.6  | 16         | unknown       | —      | 1/4          |
+| v3.7.8  | 9          | unknown       | —      | 1/4          |
+| v3.7.9  | 2          | 4             | 1,124  | 3/4          |
+| v3.7.10 | 1          | 2             | 1,125  | 3/4          |
+| v3.7.11 | 1          | 3             | 1,210  | 3/4          |
+| **v3.7.12** | **0 (expected)** | 3-5 | ~1,210+ | **4/4 (expected)** |
+
+### What we explicitly did NOT change
+
+- **No backend code.** All 4 stabilization releases have been spec-only.
+- **No retry-count bumps.**
+- **No `test.skip()`.**
+- **Single file, single commit.**
+
+### Stats
+
+- 1 commit (`9a05c70`), 1 file, +5/-3 lines
+- 0 backend / frontend / engine changes
+- Demo binary identical to v3.7.11 (and v3.7.10 / v3.7.9 / v3.7.8)
+
+## v3.7.11 — 2026-05-13 — audit-api `verifyEventually` backfill-on-every-poll (spec-only)
+
+**Third in the v3.7.x stabilization arc.** Targets the 1 residual hard
+failure from v3.7.10's e2e-full release-validation run.
+
+### Root cause (final-form diagnosis)
+
+v3.7.10 e2e-full had 1 hard failure remaining (`audit-api.spec.js:533 —
+a fresh seed extends the chain by ≥1`). Demo's verify response at the
+failure moment:
+
+```json
+{"chainLength":109303,"totalRows":109308,"unhashedRows":6,
+ "brokenAt":154516,"reason":"null hash — row was never chained (run backfill)",
+ "integrityVerified":false}
+```
+
+**Not** chain corruption — 6 rows were "in flight" from background-cron
+`writeAudit` (orchestrator / workflow / sentiment / scheduled-email /
+sequences) writing FASTER than the test's single backfill call could
+process them.
+
+The `verifyEventually()` helper added by `c2f3ba7` polled `/verify`
+6 × 700ms (4.2s total budget) but **fired backfill only on initial
+null-hash observation, then waited for the chain to converge on its own.**
+Under sustained background-cron pressure, new unchained rows appeared
+between polls faster than the static loop could heal.
+
+### Fix
+
+`6f46176` — single commit, single file (`e2e/tests/audit-api.spec.js`):
+
+- `verifyEventually` default attempts: `6` → `15`; delay: `700ms` →
+  `1000ms`. Budget: `4.2s` → `15s`.
+- **Backfill fires on EVERY iteration where `integrityVerified=false`**,
+  not just on iterations that observed `unhashedRows>0` or a null-hash
+  `reason`. The previous gate missed cases where the chain was broken for
+  non-null-hash reasons or where new unchained rows arrived between polls.
+- `.catch(() => {})` on the backfill POST is preserved and now explicitly
+  documented as the "5xx is transient, swallow + continue" path.
+- Test at line 544 (was 533) — both before/after `.toBeTruthy()`
+  assertions now include `JSON.stringify(body)` in their failure messages
+  for debug visibility on exhaustion.
+
+### Verification
+
+Local sweep against demo (`BASE_URL=https://crm.globusdemos.com npx
+playwright test --project=chromium tests/audit-api.spec.js -g "fresh
+seed extends the chain"`): test passed on first attempt in **8.5s**.
+Under the new budget, the chain converges fast enough that the test
+rarely uses more than 2-3 backfill cycles.
+
+### Cron-learning logged (`b18a6c9`)
+
+> "Demo-state convergence helpers need to ACT every iteration, not just
+> observe. Under a demo with continuous background-cron writes,
+> polling-without-acting loses; polling-and-re-acting wins."
+
+Worth promoting to a standing rule on next instance — pairs with the
+existing standing rule on demo-state-aware test assertions.
+
+### Trajectory (final)
+
+| Release | Hard fails | Flaky-passing | Passed | Shards green |
+|---------|------------|---------------|--------|--------------|
+| v3.7.6  | 16         | unknown       | —      | 1/4          |
+| v3.7.8  | 9          | unknown       | —      | 1/4          |
+| v3.7.9  | 2          | 4             | 1,124  | 3/4          |
+| v3.7.10 | 1          | 2             | 1,125  | 3/4          |
+| **v3.7.11** | **0 (expected)** | 2-4 | ~1,125+ | **4/4 (expected)** |
+
+### What we explicitly did NOT change
+
+- **No backend code.** Chain integrity logic is correct; only the test's
+  poll discipline needed hardening.
+- **No retries bumped.** Playwright's existing 2-retry budget stays.
+- **No `test.skip()`.** Goal is "make it pass under load," not "stop
+  running it."
+- **Single file, single commit.** Minimal blast radius.
+
+### Stats
+
+- 1 commit (`6f46176`), 1 file, +29/-11 lines
+- 0 backend / frontend / engine changes
+- Demo binary identical to v3.7.10 (which was identical to v3.7.9 and
+  v3.7.8)
+
+## v3.7.10 — 2026-05-13 — audit-api concurrency-noise hardening: serial-mode describe + 120s headroom
+
+**Spec-only release** (second in the v3.7.x stabilization arc). Targets the
+2 residual hard failures in v3.7.9's e2e-full release-validation run.
+
+### Root cause (verified)
+
+v3.7.9's e2e-full had 2 hard failures, both in
+`e2e/tests/audit-api.spec.js` (lines 491 + 514, hash-chain `/verify` tests),
+both with the same error signature: `Test timeout of 60000ms exceeded` +
+`Error: apiRequestContext.post: Request context disposed` on calls to
+`POST /api/contacts` (the `seedAuditedContact` helper).
+
+Direct demo probe (5× back-to-back) at the time of triage:
+`integrityVerified=true, chainLength=108679=totalRows, unhashedRows=0`.
+The chain is **functionally healthy** — these were NOT integrity bugs.
+The failures were pure timing: demo backend saturated by the other 3
+shards' concurrent activity → seed POSTs took 10-30s each → playwright's
+60s test timeout fired → in-flight request errored on context disposal.
+
+### Fix
+
+`fdc9075` — single commit, single file (`e2e/tests/audit-api.spec.js`):
+
+- `test.describe.configure({ mode: 'serial', timeout: 120_000 })` at the
+  top of the `Audit API — /verify hash-chain` describe block. Forces
+  tests in that describe to run sequentially within their shard — trades
+  a few seconds of test wall-clock for stability under concurrent-shard
+  load.
+- Removed the per-test `test.setTimeout(60_000)` calls from `c2f3ba7`
+  (they would have clobbered the describe-level 120s ceiling back down
+  to 60s).
+
+### Verification
+
+Local sweep against demo (`BASE_URL=https://crm.globusdemos.com npx
+playwright test --project=chromium tests/audit-api.spec.js -g
+"hash-chain"`): both target tests passed on first attempt under the
+new serial config — line 491 in 6.4s, line 514 in 10.9s.
+
+### Out-of-scope residual
+
+The 2 tests at lines 615+626 (`backfill is tenant-scoped` + `/verify
+is tenant-scoped`) are in the OTHER describe block (`/backfill
+hash-chain`) and continue to flaky-pass-on-retry under the canonical
+wellness-chain background-cron `writeAudit` race — they self-heal within
+a few hundred ms, the framework's `retries: 2` budget absorbs them.
+That's noise, not a regression — left as-is for this release.
+
+### What we explicitly did NOT change
+
+- **No backend code.** Chain is healthy on demo. The fix is purely test
+  infrastructure.
+- **No retry-count bumps.** The framework's existing 2-retry budget is
+  the right ceiling; we're fixing the underlying timing, not papering
+  over it with more retries.
+- **No other specs touched.** Single-file, single-commit. Minimal blast
+  radius.
+
+### v3.7.10 e2e-full prediction (per stabilization agent)
+
+> Clean-or-residual-flaky-on-retry. The 2 hard-failing target tests are
+> now serialized + given 2× timeout headroom. The 2 residual
+> tenant-scoped flakes in the other describe will probably continue to
+> retry-then-pass (same wellness-chain background-cron race as v3.7.9)
+> — that's noise, not a regression. Expectation: 0 hard failures, 2-4
+> flaky-passing-on-retry, ~1,124+ passed.
+
+### Trajectory
+
+| Release | Hard failures | Flaky-passing | Total passed |
+|---------|---------------|---------------|--------------|
+| v3.7.6  | 16            | unknown       | —            |
+| v3.7.8  | 9             | unknown       | —            |
+| v3.7.9  | 2             | 4             | 1,124        |
+| v3.7.10 | 0 (expected)  | 2-4 (residual)| ~1,124+      |
+
+### Stats
+
+- 1 commit (`fdc9075`), 1 file, +5/-6 lines
+- 0 backend / frontend / engine changes
+- Demo binary identical to v3.7.9 (which was identical to v3.7.8)
+
+## v3.7.9 — 2026-05-13 — e2e-full baseline stabilization: 9 spec-vs-code drifts hardened (zero product change)
+
+**Spec-only release.** No backend / frontend / engine changes. Cuts a fresh
+e2e-full release-validation cycle now that 9 baseline failures from the
+v3.7.2 → v3.7.8 arc (6 consecutive red e2e-full runs) have been resolved
+in their root cause. Demo is functionally identical to v3.7.8 — the only
+diff is e2e spec hardening + version-string bumps.
+
+### Triage summary
+
+After v3.7.8 e2e-full went red (9 unique failures), demo-probe investigation
+categorized each failure as:
+- **5 spec-rot from intentional code changes** — specs were authored before
+  later hardening / refactor commits and never updated. Code is correct;
+  specs were drifting.
+- **3 demo-state races / UI timing flakes** — specs that assumed quiet
+  demo state, fired during background-cron activity, or relied on UI
+  hydration windows shorter than demo's actual settle time.
+- **1 spec-vs-validator drift** — `channels-credentials-api` was sending
+  a 20-char `senderId` after `routes/sms.js:481` added msg91's 6-char
+  validator. Backend logic correct; spec payload now-invalid.
+
+### Spec fixes (8 commits)
+
+| Commit | Spec | Class | What changed |
+|--------|------|-------|--------------|
+| `12f9539` | `notifications-api.spec.js:520` | A — spec-rot | PR #710 reshaped `channels` from `{db,socket,push,email}` booleans to `{email:{enabled:true}}` per-channel objects. Demo admin's stored row had the new shape, so `body.channels.db` was undefined. Spec now asserts structural shape — accepts either booleans or objects. |
+| `d104883` | `wellness-sms.spec.js:35` | A — spec-rot | `credentialMasking.js` refactor reshaped `apiKey` from `string` to `{configured, last4}`. `toMatch(/\*{4}$/)` blew up on the object. Spec now accepts either shape. |
+| `75d473a` | `eventbus-emit.spec.js:322` | A — spec-rot | PR #713 (`2ca6f5e`) added SSRF defense — `targetUrl: http://127.0.0.1:1/...` now rejected with `INVALID_WEBHOOK_HOST`. Spec switched to `https://example.invalid:1/e2e-stub` — passes the validator, still fails-fast at delivery, test's intent (rule survives webhook failure) preserved without weakening the SSRF guard. |
+| `91d53e6` | `wellness-consent-archive-api.spec.js:123` | A — spec-rot (race) | `POST /wellness/consents` fires-and-forgets PDF blob generation (`wellness.js:1828`). By the time the spec calls `/archive`, the blob is often already persisted → `alreadyArchived: true`. First archive call now accepts boolean either way; idempotency contract (second call returns `true`) still pinned tightly. |
+| `b3e0857` | `channels-credentials-api.spec.js:237` | A — spec-rot | `routes/sms.js:481` added msg91 `senderId` validator: exactly 6 alphanumeric. Spec sent `RUN_TAG-newSender` (~20 chars + hyphen) → 400 blocked the PUT before the masked-sentinel logic could be tested. **Backend logic is correct** — masked-sentinel detection works. Switched spec to `senderId: 'GBSCRM'`. |
+| `c2f3ba7` | `audit-api.spec.js:463, 481, 580, 618` (4 tests) | B — state race | Background-cron `writeAudit` (orchestrator, workflow, sentiment, scheduled-email, sequences) creates a transient null-hash row between spec's `before` and `after` snapshots. Added `verifyEventually()` poll helper: polls `/verify` up to 6 × 700ms, fires idempotent backfill if it observes a null-hash row. Per-test timeouts bumped to 60-90s. |
+| `cb5581e` | `lead-scoring.spec.js:53` | B — UI timing | `page.goto('/lead-scoring')` + `page.evaluate` to read sessionStorage token blew past 30s on demo's SPA hydration. Replaced with direct `request.post` + fresh login. No UI dependency. 60s timeout. |
+| `5a96151` | `deals-api.spec.js:564` | B — state race | `afterAll` hook serially DELETEd ~49 deals; ~250-600ms each against demo > 30s default hook timeout. Test reported as flaky. Parallelized DELETEs in batches of 8. Hook timeout bumped to 120s. |
+
+### What we explicitly did NOT change
+
+- **No backend code changes.** Specifically: did NOT loosen the SSRF guard
+  from #713 to make `eventbus-emit` pass — the SSRF guard is correct; the
+  spec was the drift.
+- **No frontend code changes.** This release is functionally identical to
+  v3.7.8 from a product perspective.
+- **No skipped-test re-enables.** The `IS_LOCAL_STACK`-guarded specs
+  (backup-engine, migration-safety, recurring-invoice, retention,
+  scheduled-email, wellness-ops) stay skipped against demo because they
+  need filesystem-shared access to the backend — a structural constraint,
+  not a test-quality issue.
+
+### Pattern reinforced
+
+**The "spec rot from intentional code changes" class is now the dominant
+failure mode** in the e2e-full arc. The 5-of-9 ratio in this wave (and
+similar ratios in prior waves) suggests that any time a backend route
+adds a validator / hardens a shape / refactors a credential / adds an
+SSRF guard, the per-route api spec gets a paired update — but the
+**cross-cutting bare specs** (`wellness-sms`, `eventbus-emit`,
+`channels-credentials`, etc.) get missed because they're not in the
+per-push gate's spec list. The standing rule in CLAUDE.md
+("cross-cutting shape change → run the audit skill") catches some but
+not all of this class — it's heuristic, not exhaustive.
+
+Worth a follow-up cron-learning entry: **for any backend hardening that
+changes a public response shape OR adds an input validator, grep
+`e2e/tests/` for the field/endpoint name and update every spec that
+touches it, not just the route's primary api spec.** Would have prevented
+all 5 spec-rot failures this wave.
+
+### v3.7.9 e2e-full prediction (per the stabilization agent)
+
+> High confidence (8/9 deterministic fixes; 1/9 race-convergence) — all 9
+> original failure modes are pinned to root cause with verified-green
+> tests against demo. Possible new flakes from 6 transient-network
+> patterns observed in the local sweep, but those existed in v3.7.8 too
+> and retried green within the e2e-full's `retries: 2` budget. Expected
+> outcome: 0-3 transient flakes that auto-retry green, exit 0.
+
+### Stats
+
+- 8 commits, +162/-58 lines across 8 specs
+- 0 backend / frontend / engine code changes
+- 9 failures triaged and pinned to root cause
+- Demo binary identical to v3.7.8 — `/api/health` will show the new
+  version string but every functional surface is unchanged
+
+## v3.7.8 — 2026-05-13 — Pen-test follow-on wave #2: wellness RBAC + KB UX + theme bugs + Inbox styling + stray "0"
+
+Closes 9 actionable issues filed by the QA pen-test re-verification pass after
+v3.7.7 deployed. Triaged + dispatched in 3 parallel agent waves; all 3 wave
+commits landed deploy-gate green on first push (no post-merge fallout this
+cycle — clean cut compared to PR #710's 4-round chase).
+
+### Wave A — `7e94b21` — wellness RBAC + toast copy (#721 + #727)
+
+- **`frontend/src/components/RoleGuard.jsx`** — enhanced with `feature` /
+  `roles` / `lockedInPlace` props + new `LockedPanel` in-place renderer
+  + auth-loading safety gate. Two modes now coexist:
+  - **strict-redirect** (default — preserves #589 + #574
+    info-disclosure-prevention contract for `/audit-log`, `/staff`,
+    `/field-permissions`, `/settings`, `/channels`)
+  - **lockedInPlace** (new — preserves URL context for manager-access family)
+- **Root cause of #721** was an **AuthContext hydration race**: when `user`
+  is briefly `null` post-mount, `allow.includes(undefined) === false` was
+  firing the manager-access toast spuriously. Fixed by gating the toast on
+  `sessionReady = !loading && !!user && !!role`.
+- **`frontend/src/App.jsx`** — 5 callsites (Marketing + 4 wellness routes)
+  now pass `feature` + `roles="manager (or admin)"` + `lockedInPlace`.
+- **+10 RTL tests** in `RoleGuard.test.jsx` pinning the new contract
+  (21 total tests in file). Full frontend suite green: 72 files / 631 tests.
+- **#727 other items deferred** — the `dealId/invoiceId/contactId` "Invalid X"
+  toast family lives in `fetchApi` error-handling (not RoleGuard); the
+  Telecaller Queue 403 toast loop lives in the TelecallerQueue page-level
+  gate (not RoleGuard). Documented in commit body so next pickup knows scope.
+
+### Wave B — `afbcaed` — KB + theme bugs + stray "0" (#722 / #723 / #724 / #725 / #730)
+
+- **#722 — `KnowledgeBase.jsx` togglePublish count refresh** — `publish`/
+  `unpublish` handlers now `await loadAll()` so the header counter reflects
+  the new state immediately (pre-fix the counter was stale until next nav).
+- **#723 — empty-category validation** — `+` button disabled when input is
+  empty/whitespace-only; toast error if the validation is bypassed via
+  keyboard. +10 KB tests in new `KnowledgeBase.test.jsx`.
+- **#724 — native `<select>` dark-mode hardening** — third defense layer
+  on top of v3.7.7's `color-scheme` rules: `select option` explicit
+  `background-color` + `color !important` so option text never inherits
+  the system's white-on-white default. Affects flow-node pickers, A/B Tests
+  campaign dropdowns, Custom Reports entity/filter/group selects.
+- **#725 — `TenantChip` background var-fallback chain** —
+  `var(--accent-bg, var(--subtle-bg-3, rgba(255,255,255,0.08)))` replaces
+  the hardcoded `#f0f4ff` fallback that pre-fix bled through on non-wellness
+  dark-mode (white text on light-blue tile). Test pins the contract:
+  inline style must reference `var(--accent-bg)` AND must NOT contain
+  `#f0f4ff` (regression guard).
+- **#730 — stray "0" between `<header>` and `<main>`** — `Layout.jsx:300`
+  was `{daysRemaining && <TrialBanner.../>}`. When the subscription endpoint
+  returned `daysRemaining: 0` (last day of trial / expired), `&&`
+  short-circuited to the falsy numeric and React rendered it as literal
+  `0` text. Fixed to `daysRemaining > 0 && ...`. **Canonical falsy-numeric
+  short-circuit class** — the standing rule in CLAUDE.md ("always guard
+  `&&` with `> 0` / `Boolean(x)` / ternary when LHS could be `0`/`''`/`NaN`")
+  caught it but only after one cycle in production; the new Layout test
+  pins the negative contract (no stray "0" text node in `.app-main`'s
+  immediate children).
+- **+13 frontend tests** (10 KB + 3 Layout extensions). Full frontend
+  suite: 644 tests green.
+
+### Wave C — `37099a7` — Inbox WhatsApp styling + privacy review (#726 + #728)
+
+- **#726 — `Inbox.jsx` WhatsApp buttons re-aligned to canonical teal** —
+  lines 336 + 860 swapped from PR #729's `btn-secondary`-with-WA-tint to
+  plain `btn-primary`, matching the canonical Compose/Send button family
+  for the page. Resolves the visual stutter introduced by PR #729's
+  partial revert of the v3.7.7 squash-merge fixup. +2 RTL tests in
+  `Inbox.test.jsx` pinning the teal contract.
+- **#728 item 1 — XSS-string demo seed row scrubbed** —
+  `prisma/seed.js` Campaign loop now guards on new
+  `backend/lib/seedNameGuard.js` helper that rejects
+  `alert(` / `<script` / `onerror=` / `<iframe` / `javascript:` / test
+  prefixes. 15 vitest cases pin the contract. Cleanup script
+  `scripts/cleanup-xss-seed-row.py` (paramiko, mirrors
+  `cleanup-demo-pollution.py`) removed 1 polluted row from demo
+  (`Campaign.id=926`, `tenantId=2`). Idempotent re-run = no-op.
+- **#728 item 2 — chatbot embed snippet privacy caveat** — added inline
+  caveat below the copy-to-clipboard textarea in `Chatbots.jsx` warning
+  that the bot ID + tenant slug embedded in `<script src=...>` are
+  observable by any visitor of the host page; recommends paired
+  rate-limit + tenant-scoping on the public endpoint.
+- **#728 item 3 — free-trial vs role-gate conflation** — REOPENED as
+  follow-up; needs product input (the QA pen-test conflated trial-expiry
+  toast copy with role-gate toast copy, but the two have different
+  business semantics — Rishu/product call needed on whether they should
+  share copy or stay distinct).
+
+### Pattern reinforcement
+
+- **Phantom-carry-over standing rule held the line again** — the 30-second
+  `gh issue view` + commit-grep pre-flight on each of the 10 open issues
+  caught 0 phantoms this wave (all were genuinely open after v3.7.7
+  shipped), but the discipline is now embedded as the default and isn't
+  going away.
+- **Parallel-wave concurrency-group serialization worked cleanly** —
+  3 sibling wave commits pushed within 100s of each other; concurrency
+  group queued them, cancelled the middle one (Wave A) when Wave B
+  landed first, and ran the final gate on the head (`afbcaed`) once.
+  No race conditions on schema/lockfile this wave (Wave A touched only
+  React components + tests; Wave B touched only CSS + components + tests;
+  Wave C touched a new helper + seed.js + scripts/ + Inbox + Chatbots).
+- **Clean cut compared to PR #710's 4-round chase** — every wave commit
+  landed deploy-gate green on first push. The difference: this wave's
+  agents pre-validated by running `npx vitest run` locally before
+  pushing (now standard discipline per the
+  `feedback_local_test_before_push` memory established 2026-05-06),
+  vs PR #710 which inherited an external author's untested changes
+  and discovered the strict-subset-gate problem one round at a time.
+
+### Stats
+
+- **3 commits / 9 issues closed / 1 reopened-as-follow-up** (#728 item 3)
+- **+25 new tests** (+10 RoleGuard / +10 KnowledgeBase / +3 Layout / +2 Inbox)
+- **+15 vitest cases** (seedNameGuard helper)
+- **0 backend route changes** — pure frontend + helper-library wave
+- **1 paramiko cleanup script run against demo** — 1 XSS row removed
+- **Open issues at release:** 2 (#728 item 3 awaiting product input,
+  #457 manual-QA tracking surface — neither is a code defect)
+
+## v3.7.7 — 2026-05-13 — PR #729: public KB article view + Telecaller sidebar gate + dark-mode select fix
+
+Single-PR release for [PR #729](https://github.com/Globussoft-Technologies/globussoft-crm/pull/729)
+by @shiksharoy-ai, reviewed + selectively-fixed inline before merge.
+
+### What ships
+
+- **Public Knowledge Base article view** at `/kb/:tenantSlug/:slug` —
+  new `frontend/src/pages/KbArticleView.jsx` (321 lines). Lazy-loaded
+  route mounted outside the auth-required tree (sibling to
+  `/survey/:id`). Replaces the brittle pre-PR pattern of opening the
+  raw backend JSON URL via a `:5173 → :5000` port swap (which exposed
+  raw response payload in the browser tab).
+- **Pure-JSX markdown renderer** inside `KbArticleView.jsx` — supports
+  `##` / `###` / `# ` headers, `- ` / `* ` lists, `**bold**`, paragraphs.
+  No `dangerouslySetInnerHTML` anywhere; React auto-escaping makes XSS
+  via article content not a concern even on this public unauth route.
+- **Telecaller Queue sidebar gate** — `Sidebar.jsx` Link helper gains
+  a `wellnessRoles` prop. The Telecaller Queue link now mirrors the
+  backend's `verifyWellnessRole(["telecaller", "admin", "manager"])`
+  gate at `backend/routes/wellness.js:5167` — managers/admins always
+  pass through, named roles must match. Pre-fix: plain USER and
+  non-telecaller clinical staff saw a 403 toast on every navigation.
+- **Native `<select>` dark-mode fix** in `index.css` — 3-layer
+  `color-scheme` defense (root + `[data-theme=dark/light]` + per-`select`
+  element) plus explicit `option/optgroup` background-color + color !important
+  fallback. Fixes near-invisible white-on-white option text in
+  Chatbots flow-node picker, A/B Tests campaign dropdown, Custom Reports
+  entity/filter/group selects.
+- **`--accent-bg` design token** added across all three theme variants.
+- **`DealInsights.jsx` dead-state cleanup** — removed unused
+  `openDealIds` state; `openDeals` already had the id field.
+
+### What's NOT in this release (despite the diff size)
+
+- **`backend/routes/integrations.js` +184 -66** is **pure Prettier
+  reformatting**. Verified line-by-line during review — zero functional
+  change. Listed here so future audit-cross-cutting passes don't waste
+  cycles scanning it.
+
+### Public-route security review
+
+The frontend hits `GET /api/knowledge-base/public/:tenantSlug/article/:slug`.
+The endpoint **predates this PR** at `backend/routes/knowledge_base.js:84`,
+is correctly allowlisted via `/knowledge-base/public` in
+`backend/server.js:462` openPaths, and is properly gated:
+
+- `isPublished: true` filter at line 90 → drafts never exposed
+- Tenant lookup by slug → filter articles by that tenant's ID → no
+  cross-tenant read
+- Returns 404 for both unknown tenant AND unpublished/missing article
+  → no info-disclosure oracle
+- Existing spec coverage at `e2e/tests/knowledge-base-api.spec.js:62-72`
+  already pins the 404 paths
+
+### Post-review fix folded into the squash merge
+
+Initial PR flipped the Inbox.jsx "Compose WhatsApp" buttons from
+`btn-secondary` (with WA-green tint) to `btn-primary`. Reviewed as a
+nit because (a) the pre-PR styling intentionally differentiated the
+WA action from the other btn-primary Compose buttons in the toolbar
+(Call Dialer / SMS / Email), and (b) the modal submit's WA-green primary
+override also got dropped, making the Send-WhatsApp button visually
+indistinguishable from a generic submit. Reverted both changes
+(commit `a97a8e2` on the PR branch, squash-merged into `cb12681`).
+
+### PR review pattern reinforced
+
+PR pre-merge gate green (build / lint / scan_diff) is a strict subset
+of per-push gate (now 7th+ confirmed instance). Tracking: any post-merge
+fallout on this PR will land as fix commits chained off `cb12681`.
+
+### Stats
+
+- 8 files changed, +572 / -76
+- 1 new lazy-loaded page (`KbArticleView.jsx`)
+- 1 new public route (`/kb/:tenantSlug/:slug`)
+- 1 new design token (`--accent-bg`)
+- Per-push gate unchanged at ~4,450+ tests (no new specs in this PR —
+  RTL test for the new public view is a deferred backlog item)
+
+---
+
 ## v3.7.6 — 2026-05-13 — Pen-test wave triage + 2026-05-12 all-issues sweep + B-03 SendGrid closure
 
 Rolls 28 commits of release-validated work into a single tag. Covers:

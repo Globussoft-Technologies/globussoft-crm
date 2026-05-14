@@ -50,7 +50,7 @@ describe('utils/adsgpt — launchAdsGptAs (3-leg SSO)', () => {
   });
 
   it('throws when no login configured (and never calls fetch)', async () => {
-    await expect(launchAdsGptAs('')).rejects.toThrow(/No AdsGPT login configured/);
+    await expect(launchAdsGptAs('')).rejects.toThrow(/AdsGPT login not configured/);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

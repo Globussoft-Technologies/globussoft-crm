@@ -406,63 +406,70 @@ router.get("/callified/sso", verifyToken, async (req, res) => {
 
 // GET /api/integrations/callified/external-transcripts
 // Fetches campaign and transcript data from Callified's external API.
-// Authenticates using a service account's email/password combo, caches the token.
+// Uses API key from database (stored via Settings UI).
 router.get("/callified/external-transcripts", verifyToken, async (req, res) => {
   try {
     const callifiedApiUrl = process.env.CALLIFIED_API_URL;
-    const callifiedServiceEmail = process.env.CALLIFIED_SERVICE_EMAIL;
-    const callifiedServicePassword = process.env.CALLIFIED_SERVICE_PASSWORD;
+    const tenantId = req.user.tenantId;
 
-    if (!callifiedApiUrl || !callifiedServiceEmail || !callifiedServicePassword) {
+    if (!callifiedApiUrl) {
       return res.status(503).json({
-        error: "Callified integration not configured",
-        missing: "Set CALLIFIED_API_URL, CALLIFIED_SERVICE_EMAIL, and CALLIFIED_SERVICE_PASSWORD in .env",
-        help: "Create a service account in Callified (CRM admin role) and add credentials to .env"
+        error: "Callified API URL not configured",
+        help: "Contact your administrator to configure Callified integration"
       });
     }
 
-    console.log(`[integrations] Authenticating with Callified as: ${callifiedServiceEmail}`);
-
-    // Step 1: Login to Callified to get a JWT token
-    const loginResponse = await fetch(`${callifiedApiUrl}/api/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: callifiedServiceEmail,
-        password: callifiedServicePassword,
-      }),
+    // Get API key from database (Integration table)
+    const integration = await prisma.integration.findFirst({
+      where: {
+        tenantId,
+        provider: "callified",
+        isActive: true
+      }
     });
 
-    if (!loginResponse.ok) {
-      const errorText = await loginResponse.text();
-      console.error(`[integrations] Callified login failed: ${loginResponse.status}`, errorText);
-      throw new Error(`Callified login failed: ${loginResponse.status} ${errorText}`);
+    if (!integration?.token) {
+      return res.status(503).json({
+        error: "Callified integration not configured for your organization",
+        help: "Go to Settings → Integrations → Callified and add your Callified API key"
+      });
     }
 
-    const loginData = await loginResponse.json();
-    const accessToken = loginData.access_token;
-    if (!accessToken) {
-      throw new Error("No access token in login response");
-    }
+    const callifiedApiKey = integration.token;
 
-    console.log("[integrations] Callified login successful, using JWT token");
+    console.log(`[integrations] Fetching Callified transcripts for tenant ${tenantId}`);
 
-    // Step 2: Call external transcripts API with the JWT token
+    // Call Callified API with X-API-Key header
     const response = await fetch(`${callifiedApiUrl}/api/external/transcripts`, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        "X-API-Key": callifiedApiKey,
         "Content-Type": "application/json",
       },
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[integrations] Callified external transcripts error: ${response.status}`, errorText);
+      console.error(`[integrations] Callified transcripts error: ${response.status}`, errorText);
+
+      if (response.status === 401) {
+        return res.status(401).json({
+          error: "Callified API key is invalid",
+          help: "Update your API key in Settings → Integrations → Callified"
+        });
+      }
+
       throw new Error(`Callified API returned ${response.status}: ${response.statusText}`);
     }
 
     const data = await response.json();
+
+    // Update lastUsed timestamp
+    await prisma.integration.update({
+      where: { id: integration.id },
+      data: { updatedAt: new Date() }
+    });
+
     res.json(data);
   } catch (err) {
     console.error("[integrations] callified external-transcripts:", err.message);
@@ -473,7 +480,7 @@ router.get("/callified/external-transcripts", verifyToken, async (req, res) => {
 
     res.status(statusCode).json({
       error: "Failed to fetch Callified data",
-      details: process.env.NODE_ENV === "development" ? err.message : "Callified endpoint not available. Please check configuration.",
+      details: process.env.NODE_ENV === "development" ? err.message : "Callified endpoint not available"
     });
   }
 });

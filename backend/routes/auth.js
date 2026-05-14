@@ -212,6 +212,101 @@ router.post("/signup", async (req, res) => {
   }
 });
 
+// Customer Registration — open path for CUSTOMER userType self-registration
+// Creates a new User with userType: 'CUSTOMER' and assigns the tenant's CUSTOMER role
+router.post("/customer/register", async (req, res) => {
+  try {
+    const { email, password, name, tenantId } = req.body || {};
+
+    // Input validation
+    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+      return res.status(400).json({ error: "email, password, and tenantId are required" });
+    }
+    if (!tenantId || typeof tenantId !== "number") {
+      return res.status(400).json({ error: "tenantId must be a valid number" });
+    }
+
+    // Password complexity check
+    const pwErr = validatePasswordComplexity(password);
+    if (pwErr) return res.status(400).json({ error: pwErr });
+
+    // Check tenant exists
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) {
+      return res.status(400).json({ error: "Invalid tenant ID" });
+    }
+
+    // Check email doesn't already exist
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(400).json({ error: "Email already registered" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create CUSTOMER user
+    const user = await prisma.user.create({
+      data: {
+        email,
+        password: hashedPassword,
+        name: name || email.split('@')[0],
+        userType: 'CUSTOMER',
+        role: 'CUSTOMER', // Legacy field for backward compat
+        tenantId,
+      },
+      include: { tenant: true }
+    });
+
+    // Assign CUSTOMER role via UserRole junction
+    // Find the tenant's CUSTOMER system role
+    const customerRole = await prisma.role.findFirst({
+      where: {
+        tenantId: tenantId,
+        key: 'CUSTOMER',
+        isSystem: true
+      }
+    });
+
+    if (customerRole) {
+      await prisma.userRole.create({
+        data: {
+          userId: user.id,
+          roleId: customerRole.id
+        }
+      });
+    }
+
+    // Emit audit log for customer registration
+    await writeAudit('User', 'CUSTOMER_REGISTRATION', user.id, user.id, tenantId, {
+      email: user.email,
+      name: user.name,
+      tenantId: tenantId
+    });
+
+    // Issue JWT
+    const jwtPayload = {
+      userId: user.id,
+      role: 'CUSTOMER',
+      wellnessRole: null,
+      tenantId: tenantId,
+      vertical: user.tenant?.vertical || "generic",
+      userType: 'CUSTOMER',
+      isOwner: false,
+    };
+    const token = signSessionToken(jwtPayload);
+
+    res.status(201).json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, userType: 'CUSTOMER' },
+      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, vertical: user.tenant.vertical || "generic" } : null
+    });
+
+  } catch (error) {
+    console.error("[auth] customer/register error:", error);
+    res.status(500).json({ error: "Customer registration failed" });
+  }
+});
+
 // Login Epic
 // NOTE: Login throttling is handled at the server level via express-rate-limit
 // (1000 req/15min on auth/login per server.js).
@@ -260,7 +355,17 @@ router.post("/login", async (req, res) => {
     // without re-reading the user row on every request.
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId, vertical: user.tenant?.vertical || "generic" });
+    // RBAC: include userType and isOwner for new permission system
+    const jwtPayload = {
+      userId: user.id,
+      role: user.role,
+      wellnessRole: user.wellnessRole || null,
+      tenantId,
+      vertical: user.tenant?.vertical || "generic",
+      userType: user.userType || 'STAFF',
+      isOwner: user.userType === 'OWNER',
+    };
+    const token = signSessionToken(jwtPayload);
 
     // #555: Audit tenant session selection (Option C - single tenant per session)
     await writeAudit('Auth', 'LOGIN', user.id, user.id, tenantId, {
@@ -455,6 +560,53 @@ router.get("/me", verifyToken, async (req, res) => {
     res.json({ ...user, features: { smsConfigured } });
   } catch (_error) {
     res.status(500).json({ error: "Failed to fetch profile" });
+  }
+});
+
+// GET /api/auth/me/permissions — return merged permissions from all assigned roles
+router.get("/me/permissions", verifyToken, async (req, res) => {
+  try {
+    const { getUserPermissions } = require("../middleware/requirePermission");
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      include: {
+        userRoles: {
+          include: { role: true }
+        }
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Build response: OWNER always returns empty permission list (short-circuit)
+    if (req.user.isOwner) {
+      return res.json({
+        isOwner: true,
+        userType: 'OWNER',
+        roles: ['OWNER'],
+        permissions: [] // OWNER bypasses all checks at middleware level
+      });
+    }
+
+    // Load merged permissions for non-OWNER users
+    const permissions = await getUserPermissions(req.user.tenantId, req.user.userId);
+    const permissionArray = Array.from(permissions).sort();
+
+    // Extract role names from userRoles
+    const roleNames = user.userRoles.map(ur => ur.role.key);
+
+    res.json({
+      isOwner: false,
+      userType: user.userType || 'STAFF',
+      roles: roleNames,
+      permissions: permissionArray
+    });
+  } catch (_error) {
+    console.error("[auth/me/permissions] error:", _error);
+    res.status(500).json({ error: "Failed to fetch permissions" });
   }
 });
 

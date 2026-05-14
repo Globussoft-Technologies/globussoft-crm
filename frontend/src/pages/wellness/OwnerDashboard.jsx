@@ -65,7 +65,7 @@ export default function OwnerDashboard() {
   const handleLaunchAdsGpt = async () => {
     setAdsGptStatus({ state: 'loading', msg: 'Signing you into AdsGPT…' });
     try {
-      await launchAdsGptAs();
+      await launchAdsGptAs(adsgptLogin);
       setAdsGptStatus({ state: 'ok', msg: 'Opened AdsGPT dashboard' });
       setTimeout(() => setAdsGptStatus({ state: 'idle', msg: '' }), 3000);
     } catch (err) {
@@ -90,6 +90,13 @@ export default function OwnerDashboard() {
     fetchApi('/api/integrations/adsgpt/config')
       .then((res) => setAdsgptLogin(res.adsgptLogin || ''))
       .catch(() => setAdsgptLogin(''));
+
+    // Listen for config updates from Settings page
+    const handleConfigUpdate = (event) => {
+      setAdsgptLogin(event.detail?.adsgptLogin || '');
+    };
+    window.addEventListener('adsgpt:config-updated', handleConfigUpdate);
+    return () => window.removeEventListener('adsgpt:config-updated', handleConfigUpdate);
   }, []);
 
   useEffect(() => {

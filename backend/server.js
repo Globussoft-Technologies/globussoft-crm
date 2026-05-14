@@ -309,6 +309,7 @@ io.on("connection", (socket) => {
 
 // Import Enterprise Routes
 const authRoutes = require("./routes/auth");
+const rolesRoutes = require("./routes/roles");
 const contactsRoutes = require("./routes/contacts");
 const dealsRoutes = require("./routes/deals");
 const calendarRoutes = require("./routes/calendar");
@@ -459,7 +460,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/uploads/"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
@@ -486,6 +487,7 @@ app.param("id", validateNumericId);
 
 // Map API Endpoints
 app.use("/api/auth", authRoutes);
+app.use("/api/roles", rolesRoutes);
 app.use("/api/contacts", contactsRoutes);
 app.use("/api/deals", dealsRoutes);
 app.use("/api/calendar", calendarRoutes);

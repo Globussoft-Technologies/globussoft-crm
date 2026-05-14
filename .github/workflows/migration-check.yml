@@ -32,7 +32,7 @@ name: Migration safety check (G-23)
 
 on:
   pull_request:
-    branches: [main, staging_crm]
+    branches: [main]
     paths:
       - "backend/prisma/schema.prisma"
       - "backend/scripts/check-migration-safety.js"

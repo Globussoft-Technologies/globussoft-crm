@@ -57,8 +57,7 @@ const Login = () => {
         .catch(() => {})
         .finally(() => {
           window.history.replaceState({}, document.title, window.location.pathname);
-          const destination = parsedTenant?.vertical === 'wellness' ? '/wellness' : '/dashboard';
-          navigate(destination);
+          navigate('/dashboard');
         });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -7,7 +7,6 @@ const Signup = () => {
   const [organizationName, setOrganizationName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [vertical, setVertical] = useState('generic');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { setUser, setToken, setTenant } = useContext(AuthContext);
@@ -23,7 +22,7 @@ const Signup = () => {
       const response = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, organizationName, vertical })
+        body: JSON.stringify({ name, email, password, organizationName })
       });
 
       const data = await response.json();
@@ -32,8 +31,7 @@ const Signup = () => {
         setUser(data.user);
         setToken(data.token);
         if (data.tenant && setTenant) setTenant(data.tenant);
-        const destination = data.tenant?.vertical === 'wellness' ? '/wellness' : '/dashboard';
-        navigate(destination);
+        navigate('/dashboard');
       } else {
         setError(data.message || data.error || 'Registration failed securely. Please verify fields.');
       }
@@ -69,31 +67,6 @@ const Signup = () => {
               onChange={(e) => setOrganizationName(e.target.value)}
               required
             />
-          </div>
-          <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Organization Type</label>
-            <div style={{ display: 'flex', gap: '1rem' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
-                <input
-                  type="radio"
-                  name="vertical"
-                  value="generic"
-                  checked={vertical === 'generic'}
-                  onChange={(e) => setVertical(e.target.value)}
-                />
-                Generic CRM
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
-                <input
-                  type="radio"
-                  name="vertical"
-                  value="wellness"
-                  checked={vertical === 'wellness'}
-                  onChange={(e) => setVertical(e.target.value)}
-                />
-                Wellness (Clinic/Salon)
-              </label>
-            </div>
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Your Full Name</label>

@@ -22,7 +22,7 @@ name: PR pre-merge checks (build + lint)
 
 on:
   pull_request:
-    branches: [main, staging_crm]
+    branches: [main]
     # Skip docs-only / scripts-only / tests-only PRs the same way deploy.yml
     # does on push-to-main, so PRs touching only those don't burn CI minutes
     # on a build that has nothing to verify.

@@ -27,6 +27,7 @@ import { AuthContext } from '../App';
 vi.mock('../utils/adsgpt', () => ({
   launchAdsGptAs: vi.fn(),
   ADSGPT_DASHBOARD: 'https://example.test',
+  ADSGPT_DEMO_LOGIN: 'demo@x.test',
 }));
 vi.mock('../utils/callified', () => ({ launchCallifiedSSO: vi.fn() }));
 vi.mock('../utils/notify', () => ({ useNotify: () => ({ error: vi.fn(), success: vi.fn(), confirm: vi.fn() }) }));

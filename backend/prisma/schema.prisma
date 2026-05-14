@@ -76,7 +76,6 @@ model Tenant {
   emailRetention  Boolean  @default(true)
   isActive        Boolean  @default(true)
   ownerEmail      String?
-  adsgptLogin     String?  // AdsGPT aMember username or email for SSO
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

@@ -4,7 +4,7 @@ import { Activity, AlertTriangle, Calendar, IndianRupee, Sparkles, TrendingUp, U
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
-import { launchAdsGptAs } from '../../utils/adsgpt';
+import { launchAdsGptAs, ADSGPT_DEMO_LOGIN } from '../../utils/adsgpt';
 import { launchCallifiedSSO } from '../../utils/callified';
 import { getGreeting } from '../../utils/greeting';
 
@@ -47,7 +47,6 @@ export default function OwnerDashboard() {
   const [loading, setLoading] = useState(true);
   const [locations, setLocations] = useState([]);
   const [locationId, setLocationId] = useState('');
-  const [adsgptLogin, setAdsgptLogin] = useState('');
   const [adsGptStatus, setAdsGptStatus] = useState({ state: 'idle', msg: '' });
   const [callifiedStatus, setCallifiedStatus] = useState({ state: 'idle', msg: '' });
 
@@ -65,8 +64,8 @@ export default function OwnerDashboard() {
   const handleLaunchAdsGpt = async () => {
     setAdsGptStatus({ state: 'loading', msg: 'Signing you into AdsGPT…' });
     try {
-      await launchAdsGptAs();
-      setAdsGptStatus({ state: 'ok', msg: 'Opened AdsGPT dashboard' });
+      await launchAdsGptAs(ADSGPT_DEMO_LOGIN);
+      setAdsGptStatus({ state: 'ok', msg: `Opened AdsGPT as ${ADSGPT_DEMO_LOGIN}` });
       setTimeout(() => setAdsGptStatus({ state: 'idle', msg: '' }), 3000);
     } catch (err) {
       setAdsGptStatus({ state: 'error', msg: err.message || 'AdsGPT launch failed' });
@@ -86,10 +85,6 @@ export default function OwnerDashboard() {
 
   useEffect(() => {
     fetchApi('/api/wellness/locations').then(setLocations).catch(() => setLocations([]));
-    // Fetch AdsGPT login configuration
-    fetchApi('/api/integrations/adsgpt/config')
-      .then((res) => setAdsgptLogin(res.adsgptLogin || ''))
-      .catch(() => setAdsgptLogin(''));
   }, []);
 
   useEffect(() => {
@@ -220,9 +215,10 @@ export default function OwnerDashboard() {
 
       {/* AdsGPT and Callified SSO cards — one-click access to external tools */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem', marginBottom: '1.5rem' }}>
-        {/* AdsGPT launch — one-click SSO impersonation into the tenant's
-            configured AdsGPT account. Login is fetched from /api/integrations/adsgpt/config
-            and configured in Settings → AdsGPT Configuration. */}
+        {/* AdsGPT launch — one-click SSO impersonation into the linked AdsGPT
+            account (login: sumitgh2050 by default; override with
+            VITE_ADSGPT_DEMO_LOGIN). Uses the real socket.adsgpt.io +
+            dashboard.adsgpt.io flow. */}
         <div className="glass" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <div style={{
@@ -236,7 +232,7 @@ export default function OwnerDashboard() {
             <div>
               <div style={{ fontSize: '1rem', fontWeight: 600 }}>AdsGPT</div>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }}>
-                Linked account: <strong>{adsgptLogin || 'Not configured'}</strong>
+                Linked account: <strong>{ADSGPT_DEMO_LOGIN}</strong>
               </div>
               {adsGptStatus.state !== 'idle' && (
                 <div
@@ -258,7 +254,7 @@ export default function OwnerDashboard() {
             type="button"
             onClick={handleLaunchAdsGpt}
             disabled={adsGptStatus.state === 'loading'}
-            aria-label="Open AdsGPT"
+            aria-label={`Open AdsGPT as ${ADSGPT_DEMO_LOGIN}`}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
               padding: '0.65rem 1rem', borderRadius: 10,

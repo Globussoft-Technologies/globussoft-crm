@@ -105,7 +105,7 @@ function validatePasswordComplexity(password) {
 // Register Epic — creates a new Tenant + first User (org owner)
 router.post("/register", async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical } = req.body;
+    const { email, password, name, organizationName } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
@@ -113,16 +113,13 @@ router.post("/register", async (req, res) => {
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) return res.status(400).json({ error: "User already exists" });
 
-    const validVerticals = ['generic', 'wellness'];
-    const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
-
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical }
+      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL" }
     });
 
     const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);
@@ -160,7 +157,7 @@ router.post("/register", async (req, res) => {
 // Signup alias (matches signup page) — same behavior as register
 router.post("/signup", async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical } = req.body;
+    const { email, password, name, organizationName } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
@@ -168,16 +165,13 @@ router.post("/signup", async (req, res) => {
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) return res.status(400).json({ error: "User already exists" });
 
-    const validVerticals = ['generic', 'wellness'];
-    const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
-
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical }
+      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL" }
     });
 
     const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);

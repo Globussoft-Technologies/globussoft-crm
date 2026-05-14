@@ -114,6 +114,16 @@ const NON_TENANT_MODELS = new Set([
   'SequenceStep',
   'QuoteLineItem',
   'EstimateLineItem',
+  // PR #754 RBAC junction tables. UserRole bridges User↔Role and
+  // RolePermission bridges Role↔(module,action). Tenant isolation flows
+  // through the parents (User.tenantId and Role.tenantId). A redundant
+  // UserRole.tenantId or RolePermission.tenantId would create a
+  // consistency hazard — drift between the column and the parent's
+  // tenantId would silently leak across tenants. The Role model itself
+  // is tenant-scoped (Role.tenantId Int?, nullable only for the
+  // platform-level OWNER role). All RBAC query paths join through Role.
+  'UserRole',
+  'RolePermission',
   // Globally-shared templates (real-estate, healthcare, education, legal,
   // saas) — seeded once, read by all tenants when they pick an industry.
   // Read-only from a tenant's perspective; no tenant data lives here.

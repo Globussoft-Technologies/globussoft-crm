@@ -17,8 +17,13 @@ import com.globussoft.wellness.feature.admin.domain.repository.LeadsPage
 import com.globussoft.wellness.feature.admin.domain.repository.MembershipPlanItem
 import com.globussoft.wellness.feature.admin.domain.repository.RevenueGoalItem
 import com.globussoft.wellness.feature.admin.domain.repository.IntegrationItem
+import com.globussoft.wellness.feature.admin.domain.repository.CampaignItem
+import com.globussoft.wellness.feature.admin.domain.repository.KbArticleItem
 import com.globussoft.wellness.feature.admin.domain.repository.LandingPageItem
+import com.globussoft.wellness.feature.admin.domain.repository.LeaderboardEntry
+import com.globussoft.wellness.feature.admin.domain.repository.LocationKpi
 import com.globussoft.wellness.feature.admin.domain.repository.NotificationItem
+import com.globussoft.wellness.feature.admin.domain.repository.ReferralItem
 import com.globussoft.wellness.feature.admin.domain.repository.RoutingRuleItem
 import com.globussoft.wellness.feature.admin.domain.repository.SequenceItem
 import com.globussoft.wellness.feature.admin.domain.repository.StaffManagementItem
@@ -705,6 +710,88 @@ class AdminRepositoryImpl @Inject constructor(
         isActive          = this["isActive"] as? Boolean ?: true,
         conditions        = this["conditions"]?.toString(),
     )
+
+    // ── Wave 6 ────────────────────────────────────────────────────────────────
+
+    override suspend fun getPerLocationKpis(): WResult<List<LocationKpi>> {
+        val locsResult = safeApiCall { api.getLocations() }
+        if (locsResult is WResult.Error) return locsResult
+        val locs = (locsResult as WResult.Success).data.filter { it.isActive }
+        val kpis = locs.map { loc ->
+            val dash = (safeApiCall { api.getDashboard(locationId = loc.id) } as? WResult.Success)?.data
+            LocationKpi(
+                locationId           = loc.id,
+                locationName         = loc.name,
+                locationCity         = loc.city,
+                todayVisits          = dash?.today?.visits ?: 0,
+                todayCompleted       = dash?.today?.completed ?: 0,
+                todayExpectedRevenue = dash?.today?.expectedRevenue?.toInt() ?: 0,
+                occupancyPct         = dash?.today?.occupancyPct ?: 0,
+                newLeads             = dash?.today?.newLeads ?: 0,
+                totalPatients        = dash?.totals?.patients ?: 0,
+            )
+        }
+        return WResult.Success(kpis)
+    }
+
+    override suspend fun getCampaigns(channel: String?): WResult<List<CampaignItem>> =
+        safeApiCall { api.getCampaigns(channel = channel) }.mapSuccess { list ->
+            list.filterIsInstance<Map<*, *>>().map { c ->
+                CampaignItem(
+                    id        = c["id"]?.toString() ?: "",
+                    name      = c["name"]?.toString() ?: "",
+                    channel   = c["channel"]?.toString() ?: "",
+                    status    = c["status"]?.toString() ?: "",
+                    sent      = (c["sent"]    as? Number)?.toInt() ?: 0,
+                    opened    = (c["opened"]  as? Number)?.toInt() ?: 0,
+                    clicked   = (c["clicked"] as? Number)?.toInt() ?: 0,
+                    createdAt = c["createdAt"]?.toString() ?: "",
+                )
+            }
+        }
+
+    override suspend fun getLoyaltyLeaderboard(): WResult<List<LeaderboardEntry>> =
+        safeApiCall { api.getLoyaltyLeaderboard() }.mapSuccess { list ->
+            list.filterIsInstance<Map<*, *>>().map { entry ->
+                val patient = entry["patient"] as? Map<*, *> ?: emptyMap<String, Any>()
+                LeaderboardEntry(
+                    patientId   = patient["id"]?.toString() ?: "",
+                    patientName = patient["name"]?.toString() ?: "",
+                    phone       = patient["phone"]?.toString(),
+                    earned      = (entry["earned"] as? Number)?.toInt() ?: 0,
+                )
+            }
+        }
+
+    override suspend fun getReferrals(): WResult<List<ReferralItem>> =
+        safeApiCall { api.getReferrals() }.mapSuccess { map ->
+            val list = (map["referrals"] as? List<*>)?.filterIsInstance<Map<*, *>>() ?: emptyList()
+            list.map { r ->
+                val referrer = r["referrer"] as? Map<*, *>
+                ReferralItem(
+                    id            = r["id"]?.toString() ?: "",
+                    referrerName  = referrer?.get("name")?.toString(),
+                    referredName  = r["referredName"]?.toString() ?: "",
+                    referredPhone = r["referredPhone"]?.toString(),
+                    status        = r["status"]?.toString() ?: "",
+                    rewardPoints  = (r["rewardPoints"] as? Number)?.toInt() ?: 0,
+                    createdAt     = r["createdAt"]?.toString() ?: "",
+                )
+            }
+        }
+
+    override suspend fun getKbArticles(): WResult<List<KbArticleItem>> =
+        safeApiCall { api.getKbArticles() }.mapSuccess { list ->
+            list.filterIsInstance<Map<*, *>>().map { a ->
+                KbArticleItem(
+                    id          = a["id"]?.toString() ?: "",
+                    title       = a["title"]?.toString() ?: "",
+                    isPublished = a["isPublished"] as? Boolean ?: false,
+                    views       = (a["views"] as? Number)?.toInt() ?: 0,
+                    createdAt   = a["createdAt"]?.toString() ?: "",
+                )
+            }
+        }
 }
 
 // ─── Local mapping helper ─────────────────────────────────────────────────────

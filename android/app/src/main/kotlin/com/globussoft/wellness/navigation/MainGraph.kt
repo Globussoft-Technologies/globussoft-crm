@@ -30,7 +30,6 @@ import com.globussoft.wellness.feature.dashboard.navigation.dashboardGraph
 import com.globussoft.wellness.feature.finance.navigation.financeGraph
 import com.globussoft.wellness.feature.patients.navigation.patientsGraph
 import com.globussoft.wellness.feature.reports.navigation.reportsGraph
-import com.globussoft.wellness.feature.reports.presentation.ReportsScreen
 import com.globussoft.wellness.feature.services.navigation.servicesGraph
 import com.globussoft.wellness.feature.settings.navigation.settingsGraph
 import com.globussoft.wellness.feature.telecaller.navigation.telecallerGraph
@@ -108,8 +107,6 @@ private fun InnerNavHost(
         adminGraph(navController, userSession) // registers "admin" + "locations" + "drugs" + "resources"
         settingsGraph(navController, userSession, onLogout)
 
-        // ── Reports stubs ─────────────────────────────────────────────────
-        composable("per-location")   { ReportsScreen() }
     }
 }
 

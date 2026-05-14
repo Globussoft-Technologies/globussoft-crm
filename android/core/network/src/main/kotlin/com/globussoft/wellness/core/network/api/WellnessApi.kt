@@ -885,4 +885,29 @@ interface WellnessApi {
     suspend fun getIntegrations(
         @Query("limit") limit: Int = 100,
     ): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Marketing campaigns  (Wave 6) ─────────────────────────────────────────
+    @GET("marketing/campaigns")
+    suspend fun getCampaigns(
+        @Query("channel") channel: String? = null,
+        @Query("limit")   limit:   Int     = 100,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Loyalty  (Wave 6) ─────────────────────────────────────────────────────
+    @GET("wellness/loyalty/leaderboard/month")
+    suspend fun getLoyaltyLeaderboard(): Response<List<@JvmSuppressWildcards Any>>
+
+    @GET("wellness/referrals")
+    suspend fun getReferrals(
+        @Query("limit") limit: Int = 100,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // ── Knowledge Base  (Wave 6) ──────────────────────────────────────────────
+    @GET("knowledge-base/articles")
+    suspend fun getKbArticles(
+        @Query("limit") limit: Int = 100,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @GET("knowledge-base/categories")
+    suspend fun getKbCategories(): Response<List<@JvmSuppressWildcards Any>>
 }

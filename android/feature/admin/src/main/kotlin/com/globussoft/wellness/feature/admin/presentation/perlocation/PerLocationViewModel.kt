@@ -1,10 +1,10 @@
-package com.globussoft.wellness.feature.admin.presentation.knowledgebase
+package com.globussoft.wellness.feature.admin.presentation.perlocation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.globussoft.wellness.core.common.result.WResult
 import com.globussoft.wellness.feature.admin.domain.repository.AdminRepository
-import com.globussoft.wellness.feature.admin.domain.repository.KbArticleItem
+import com.globussoft.wellness.feature.admin.domain.repository.LocationKpi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,19 +13,19 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-data class KnowledgeBaseUiState(
+data class PerLocationUiState(
     val isLoading: Boolean = false,
-    val articles: List<KbArticleItem> = emptyList(),
+    val columns: List<LocationKpi> = emptyList(),
     val error: String? = null,
 )
 
 @HiltViewModel
-class KnowledgeBaseViewModel @Inject constructor(
+class PerLocationViewModel @Inject constructor(
     private val repository: AdminRepository,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(KnowledgeBaseUiState())
-    val state: StateFlow<KnowledgeBaseUiState> = _state.asStateFlow()
+    private val _state = MutableStateFlow(PerLocationUiState())
+    val state: StateFlow<PerLocationUiState> = _state.asStateFlow()
 
     init { load() }
 
@@ -34,10 +34,10 @@ class KnowledgeBaseViewModel @Inject constructor(
     private fun load() {
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
-            when (val r = repository.getKbArticles()) {
-                is WResult.Success -> _state.update { it.copy(isLoading = false, articles = r.data) }
+            when (val r = repository.getPerLocationKpis()) {
+                is WResult.Success -> _state.update { it.copy(isLoading = false, columns = r.data) }
                 is WResult.Error   -> {
-                    val msg = r.message ?: r.exception.message ?: "Failed to load articles"
+                    val msg = r.message ?: r.exception.message ?: "Failed to load"
                     _state.update { it.copy(isLoading = false, error = msg) }
                 }
                 WResult.Loading -> Unit

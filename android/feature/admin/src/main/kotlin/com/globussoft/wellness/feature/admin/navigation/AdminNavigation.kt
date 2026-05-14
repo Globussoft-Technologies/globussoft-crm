@@ -37,6 +37,7 @@ import com.globussoft.wellness.feature.admin.presentation.notifications.InboxScr
 import com.globussoft.wellness.feature.admin.presentation.sequences.SequencesScreen
 import com.globussoft.wellness.feature.admin.presentation.staff.StaffScreen
 import com.globussoft.wellness.feature.admin.presentation.surveys.SurveysScreen
+import com.globussoft.wellness.feature.admin.presentation.perlocation.PerLocationScreen
 import com.globussoft.wellness.feature.admin.presentation.whatsapp.WhatsAppScreen
 import com.globussoft.wellness.feature.admin.presentation.workinghours.WorkingHoursScreen
 
@@ -78,6 +79,7 @@ object AdminDestinations {
     const val Loyalty              = "loyalty"
     const val KnowledgeBase        = "knowledge-base"
     const val Channels             = "channels"
+    const val PerLocation          = "per-location"
 }
 
 /**
@@ -296,5 +298,9 @@ fun NavGraphBuilder.adminGraph(
 
     composable(AdminDestinations.Channels) {
         ChannelsScreen(viewModel = hiltViewModel())
+    }
+
+    composable(AdminDestinations.PerLocation) {
+        PerLocationScreen(viewModel = hiltViewModel())
     }
 }

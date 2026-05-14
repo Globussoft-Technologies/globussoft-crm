@@ -166,6 +166,13 @@ interface AdminRepository {
     suspend fun getLandingPages(): WResult<List<LandingPageItem>>
     suspend fun getSurveys(): WResult<List<SurveyItem>>
     suspend fun getIntegrations(): WResult<List<IntegrationItem>>
+
+    // ── Wave 6: Per-Location, Marketing, Loyalty, Knowledge Base ─────────────
+    suspend fun getPerLocationKpis(): WResult<List<LocationKpi>>
+    suspend fun getCampaigns(channel: String? = null): WResult<List<CampaignItem>>
+    suspend fun getLoyaltyLeaderboard(): WResult<List<LeaderboardEntry>>
+    suspend fun getReferrals(): WResult<List<ReferralItem>>
+    suspend fun getKbArticles(): WResult<List<KbArticleItem>>
 }
 
 /**
@@ -499,4 +506,52 @@ data class IntegrationItem(
     val description: String?,
     val category: String,
     val isActive: Boolean,
+)
+
+data class LocationKpi(
+    val locationId: String,
+    val locationName: String,
+    val locationCity: String?,
+    val todayVisits: Int,
+    val todayCompleted: Int,
+    val todayExpectedRevenue: Int,
+    val occupancyPct: Int,
+    val newLeads: Int,
+    val totalPatients: Int,
+)
+
+data class CampaignItem(
+    val id: String,
+    val name: String,
+    val channel: String,
+    val status: String,
+    val sent: Int,
+    val opened: Int,
+    val clicked: Int,
+    val createdAt: String,
+)
+
+data class LeaderboardEntry(
+    val patientId: String,
+    val patientName: String,
+    val phone: String?,
+    val earned: Int,
+)
+
+data class ReferralItem(
+    val id: String,
+    val referrerName: String?,
+    val referredName: String,
+    val referredPhone: String?,
+    val status: String,
+    val rewardPoints: Int,
+    val createdAt: String,
+)
+
+data class KbArticleItem(
+    val id: String,
+    val title: String,
+    val isPublished: Boolean,
+    val views: Int,
+    val createdAt: String,
 )

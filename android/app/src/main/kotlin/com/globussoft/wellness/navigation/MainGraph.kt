@@ -114,11 +114,6 @@ private fun InnerNavHost(
         composable("inbox")    { PlaceholderScreen("Unified Inbox") }
         composable("whatsapp") { PlaceholderScreen("WhatsApp Threads") }
 
-        // ── Finance stubs ─────────────────────────────────────────────────
-        composable("invoices")  { PlaceholderScreen("Invoices") }
-        composable("estimates") { PlaceholderScreen("Estimates") }
-        composable("expenses")  { PlaceholderScreen("Expenses") }
-
         // ── Marketing stubs ───────────────────────────────────────────────
         composable("marketing")     { PlaceholderScreen("SMS / Email Blasts") }
         composable("sequences")     { PlaceholderScreen("Drip Sequences") }
@@ -131,7 +126,6 @@ private fun InnerNavHost(
         composable("knowledge-base") { PlaceholderScreen("Knowledge Base") }
 
         // ── Admin stubs ───────────────────────────────────────────────────
-        composable("staff")    { PlaceholderScreen("Staff Management") }
         composable("channels") { PlaceholderScreen("Channels") }
     }
 }

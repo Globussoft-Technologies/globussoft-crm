@@ -134,3 +134,43 @@ data class PaymentItem(
     val paidAt: String?,
     val createdAt: String,
 )
+
+// ─── Invoice models (Wave 4) ──────────────────────────────────────────────────
+
+data class InvoiceItem(
+    val id: String,
+    val invoiceNum: String?,
+    val amount: Double,
+    val status: String,
+    val dueDate: String?,
+    val issuedDate: String?,
+    val paidAt: String?,
+    val contactName: String?,
+    val isRecurring: Boolean,
+)
+
+// ─── Estimate models (Wave 4) ─────────────────────────────────────────────────
+
+data class EstimateItem(
+    val id: String,
+    val estimateNum: String?,
+    val title: String?,
+    val status: String,
+    val totalAmount: Double,
+    val validUntil: String?,
+    val contactName: String?,
+    val createdAt: String,
+)
+
+// ─── Expense models (Wave 4) ──────────────────────────────────────────────────
+
+data class ExpenseItem(
+    val id: String,
+    val title: String,
+    val amount: Double,
+    val currency: String,
+    val category: String?,
+    val status: String,
+    val date: String,
+    val notes: String?,
+)

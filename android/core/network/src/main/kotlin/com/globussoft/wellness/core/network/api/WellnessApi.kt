@@ -784,4 +784,43 @@ interface WellnessApi {
 
     @GET("lead-routing")
     suspend fun getLeadRoutingRules(): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Invoices  (Wave 4) — GET billing
+    // -------------------------------------------------------------------------
+
+    @GET("billing")
+    suspend fun getInvoices(
+        @Query("status") status: String? = null,
+        @Query("limit")  limit:  Int     = 50,
+        @Query("page")   page:   Int     = 1,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Estimates  (Wave 4) — GET estimates
+    // -------------------------------------------------------------------------
+
+    @GET("estimates")
+    suspend fun getEstimates(
+        @Query("status") status: String? = null,
+        @Query("limit")  limit:  Int     = 50,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Expenses  (Wave 4) — GET expenses
+    // -------------------------------------------------------------------------
+
+    @GET("expenses")
+    suspend fun getExpenses(
+        @Query("limit") limit: Int = 50,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Staff Management  (Wave 4) — GET staff
+    // -------------------------------------------------------------------------
+
+    @GET("staff")
+    suspend fun getAllStaff(
+        @Query("limit") limit: Int = 100,
+    ): Response<List<@JvmSuppressWildcards Any>>
 }

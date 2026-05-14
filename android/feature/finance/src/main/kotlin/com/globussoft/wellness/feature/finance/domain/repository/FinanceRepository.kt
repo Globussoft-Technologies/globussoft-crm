@@ -4,6 +4,9 @@ import com.globussoft.wellness.core.common.result.WResult
 import com.globussoft.wellness.feature.finance.domain.model.Coupon
 import com.globussoft.wellness.feature.finance.domain.model.CouponPreview
 import com.globussoft.wellness.feature.finance.domain.model.GiftCard
+import com.globussoft.wellness.feature.finance.domain.model.EstimateItem
+import com.globussoft.wellness.feature.finance.domain.model.ExpenseItem
+import com.globussoft.wellness.feature.finance.domain.model.InvoiceItem
 import com.globussoft.wellness.feature.finance.domain.model.PaymentItem
 import com.globussoft.wellness.feature.finance.domain.model.PosReceiptData
 import com.globussoft.wellness.feature.finance.domain.model.PosSubmitRequest
@@ -97,4 +100,16 @@ interface FinanceRepository {
 
     /** Returns all payment records for the current tenant. */
     suspend fun getPayments(): WResult<List<PaymentItem>>
+
+    // ─── Invoices (Wave 4) ────────────────────────────────────────────────────
+
+    suspend fun getInvoices(status: String? = null): WResult<List<InvoiceItem>>
+
+    // ─── Estimates (Wave 4) ───────────────────────────────────────────────────
+
+    suspend fun getEstimates(status: String? = null): WResult<List<EstimateItem>>
+
+    // ─── Expenses (Wave 4) ────────────────────────────────────────────────────
+
+    suspend fun getExpenses(): WResult<List<ExpenseItem>>
 }

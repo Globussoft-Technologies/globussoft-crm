@@ -17,6 +17,7 @@ import com.globussoft.wellness.feature.admin.domain.repository.LeadsPage
 import com.globussoft.wellness.feature.admin.domain.repository.MembershipPlanItem
 import com.globussoft.wellness.feature.admin.domain.repository.RevenueGoalItem
 import com.globussoft.wellness.feature.admin.domain.repository.RoutingRuleItem
+import com.globussoft.wellness.feature.admin.domain.repository.StaffManagementItem
 import com.globussoft.wellness.feature.admin.domain.repository.TaskItem
 import com.globussoft.wellness.feature.admin.domain.repository.TasksPage
 import com.globussoft.wellness.feature.admin.domain.repository.WorkingHoursItem
@@ -327,6 +328,12 @@ class AdminRepositoryImpl @Inject constructor(
         safeApiCall { api.getLeadRoutingRules() }
             .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toRoutingRule() } }
 
+    // ── Staff Management (Wave 4) ──────────────────────────────────────────────
+
+    override suspend fun getAllStaff(): WResult<List<StaffManagementItem>> =
+        safeApiCall { api.getAllStaff() }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toStaffManagementItem() } }
+
     // ── Mappers ────────────────────────────────────────────────────────────────
 
     private fun Map<String, Any>.toDrugItem() = DrugItem(
@@ -582,6 +589,16 @@ class AdminRepositoryImpl @Inject constructor(
                          ?: (this["assignedTo"] as? Map<*, *>)?.get("name")?.toString()
                          ?: this["assignedToName"]?.toString(),
         createdAt      = this["createdAt"]?.toString() ?: "",
+    )
+
+    private fun Map<*, *>.toStaffManagementItem() = StaffManagementItem(
+        id           = this["id"]?.toString() ?: "",
+        name         = this["name"]?.toString() ?: "",
+        email        = this["email"]?.toString() ?: "",
+        role         = this["role"]?.toString() ?: "",
+        wellnessRole = this["wellnessRole"]?.toString(),
+        isActive     = this["deactivatedAt"] == null,
+        createdAt    = this["createdAt"]?.toString() ?: "",
     )
 
     private fun Map<*, *>.toRoutingRule() = RoutingRuleItem(

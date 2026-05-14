@@ -6,6 +6,9 @@ import com.globussoft.wellness.core.network.util.safeApiCall
 import com.globussoft.wellness.feature.finance.domain.model.Coupon
 import com.globussoft.wellness.feature.finance.domain.model.CouponPreview
 import com.globussoft.wellness.feature.finance.domain.model.GiftCard
+import com.globussoft.wellness.feature.finance.domain.model.EstimateItem
+import com.globussoft.wellness.feature.finance.domain.model.ExpenseItem
+import com.globussoft.wellness.feature.finance.domain.model.InvoiceItem
 import com.globussoft.wellness.feature.finance.domain.model.PaymentItem
 import com.globussoft.wellness.feature.finance.domain.model.PosLineItem
 import com.globussoft.wellness.feature.finance.domain.model.PosReceiptData
@@ -219,6 +222,58 @@ class FinanceRepositoryImpl @Inject constructor(
         status    = this["status"] as? String ?: "PENDING",
         paidAt    = this["paidAt"] as? String,
         createdAt = this["createdAt"] as? String ?: "",
+    )
+
+    // ─── Invoices (Wave 4) ────────────────────────────────────────────────────
+
+    override suspend fun getInvoices(status: String?): WResult<List<InvoiceItem>> =
+        safeApiCall { api.getInvoices(status) }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toInvoiceItem() } }
+
+    private fun Map<*, *>.toInvoiceItem() = InvoiceItem(
+        id          = anyId(this["id"]),
+        invoiceNum  = this["invoiceNum"]?.toString(),
+        amount      = (this["amount"] as? Number)?.toDouble() ?: 0.0,
+        status      = this["status"]?.toString() ?: "DRAFT",
+        dueDate     = this["dueDate"]?.toString(),
+        issuedDate  = this["issuedDate"]?.toString(),
+        paidAt      = this["paidAt"]?.toString(),
+        contactName = (this["contact"] as? Map<*, *>)?.get("name")?.toString(),
+        isRecurring = this["isRecurring"] as? Boolean ?: false,
+    )
+
+    // ─── Estimates (Wave 4) ───────────────────────────────────────────────────
+
+    override suspend fun getEstimates(status: String?): WResult<List<EstimateItem>> =
+        safeApiCall { api.getEstimates(status) }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toEstimateItem() } }
+
+    private fun Map<*, *>.toEstimateItem() = EstimateItem(
+        id           = anyId(this["id"]),
+        estimateNum  = this["estimateNum"]?.toString(),
+        title        = this["title"]?.toString(),
+        status       = this["status"]?.toString() ?: "DRAFT",
+        totalAmount  = (this["totalAmount"] as? Number)?.toDouble() ?: 0.0,
+        validUntil   = this["validUntil"]?.toString(),
+        contactName  = (this["contact"] as? Map<*, *>)?.get("name")?.toString(),
+        createdAt    = this["createdAt"]?.toString() ?: "",
+    )
+
+    // ─── Expenses (Wave 4) ────────────────────────────────────────────────────
+
+    override suspend fun getExpenses(): WResult<List<ExpenseItem>> =
+        safeApiCall { api.getExpenses() }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toExpenseItem() } }
+
+    private fun Map<*, *>.toExpenseItem() = ExpenseItem(
+        id       = anyId(this["id"]),
+        title    = this["title"]?.toString() ?: this["description"]?.toString() ?: "",
+        amount   = (this["amount"] as? Number)?.toDouble() ?: 0.0,
+        currency = this["currency"]?.toString() ?: "INR",
+        category = this["category"]?.toString(),
+        status   = this["status"]?.toString() ?: "PENDING",
+        date     = (this["date"] ?: this["createdAt"])?.toString() ?: "",
+        notes    = this["notes"]?.toString(),
     )
 }
 

@@ -7,7 +7,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.globussoft.wellness.core.data.datastore.UserSession
 import com.globussoft.wellness.feature.finance.presentation.FinanceHubScreen
 import com.globussoft.wellness.feature.finance.presentation.coupons.CouponsScreen
+import com.globussoft.wellness.feature.finance.presentation.estimates.EstimatesScreen
+import com.globussoft.wellness.feature.finance.presentation.expenses.ExpensesScreen
 import com.globussoft.wellness.feature.finance.presentation.giftcards.GiftCardsScreen
+import com.globussoft.wellness.feature.finance.presentation.invoices.InvoicesScreen
 import com.globussoft.wellness.feature.finance.presentation.payments.PaymentsScreen
 import com.globussoft.wellness.feature.finance.presentation.pos.PosScreen
 import com.globussoft.wellness.feature.finance.presentation.wallet.WalletScreen
@@ -19,11 +22,14 @@ import com.globussoft.wellness.feature.finance.presentation.wallet.WalletScreen
  * strings to make renames safe and auditable.
  */
 object FinanceDestinations {
-    const val Pos      = "finance"
-    const val Wallet   = "wallet"
+    const val Pos       = "finance"
+    const val Wallet    = "wallet"
     const val GiftCards = "gift-cards"
-    const val Coupons  = "coupons"
-    const val Payments = "payments"
+    const val Coupons   = "coupons"
+    const val Payments  = "payments"
+    const val Invoices  = "invoices"
+    const val Estimates = "estimates"
+    const val Expenses  = "expenses"
 }
 
 /**
@@ -68,5 +74,17 @@ fun NavGraphBuilder.financeGraph(
             viewModel      = hiltViewModel(),
             onNavigateBack = { navController.popBackStack() },
         )
+    }
+
+    composable(route = FinanceDestinations.Invoices) {
+        InvoicesScreen(viewModel = hiltViewModel())
+    }
+
+    composable(route = FinanceDestinations.Estimates) {
+        EstimatesScreen(viewModel = hiltViewModel())
+    }
+
+    composable(route = FinanceDestinations.Expenses) {
+        ExpensesScreen(viewModel = hiltViewModel())
     }
 }

@@ -28,6 +28,7 @@ import com.globussoft.wellness.feature.admin.presentation.resources.ResourcesScr
 import com.globussoft.wellness.feature.admin.presentation.revenuegoals.RevenueGoalsScreen
 import com.globussoft.wellness.feature.admin.presentation.servicecategories.ServiceCategoriesScreen
 import com.globussoft.wellness.feature.admin.presentation.vendors.VendorsScreen
+import com.globussoft.wellness.feature.admin.presentation.staff.StaffScreen
 import com.globussoft.wellness.feature.admin.presentation.workinghours.WorkingHoursScreen
 
 /**
@@ -58,6 +59,7 @@ object AdminDestinations {
     const val LeadDetail           = "lead-detail/{leadId}"
     const val Tasks                = "tasks"
     const val RoutingRules         = "lead-routing"
+    const val Staff                = "staff"
 }
 
 /**
@@ -236,5 +238,9 @@ fun NavGraphBuilder.adminGraph(
             viewModel      = hiltViewModel(),
             onNavigateBack = { navController.popBackStack() },
         )
+    }
+
+    composable(AdminDestinations.Staff) {
+        StaffScreen(viewModel = hiltViewModel())
     }
 }

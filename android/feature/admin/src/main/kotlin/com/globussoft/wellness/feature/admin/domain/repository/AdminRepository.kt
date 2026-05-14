@@ -153,6 +153,10 @@ interface AdminRepository {
     // ── Lead Routing Rules ─────────────────────────────────────────────────────
 
     suspend fun getLeadRoutingRules(): WResult<List<RoutingRuleItem>>
+
+    // ── Staff Management (Wave 4) ──────────────────────────────────────────────
+
+    suspend fun getAllStaff(): WResult<List<StaffManagementItem>>
 }
 
 /**
@@ -421,4 +425,14 @@ data class RoutingRuleItem(
     val serviceCategory: String?,
     val isActive: Boolean,
     val conditions: String?,
+)
+
+data class StaffManagementItem(
+    val id: String,
+    val name: String,
+    val email: String,
+    val role: String,
+    val wellnessRole: String?,
+    val isActive: Boolean,
+    val createdAt: String,
 )

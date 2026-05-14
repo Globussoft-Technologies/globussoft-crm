@@ -103,7 +103,7 @@ class VisitsRepositoryImpl @Inject constructor(
     // ─── Leave ────────────────────────────────────────────────────────────────
 
     override suspend fun getLeaveRequests(myOnly: Boolean): WResult<List<LeaveRequest>> =
-        safeApiCall { api.getLeaveRequests() }
+        safeApiCall { api.getLeaveRequests(myOnly = myOnly) }
             .mapSuccess { data ->
                 @Suppress("UNCHECKED_CAST")
                 val list = when (data) {

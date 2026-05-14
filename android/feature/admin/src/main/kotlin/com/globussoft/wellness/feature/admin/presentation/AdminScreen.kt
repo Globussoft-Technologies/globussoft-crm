@@ -69,25 +69,22 @@ private val ADMIN_SECTIONS = listOf(
         icon     = Icons.Default.Settings,
     ),
     AdminSection(
-        route    = "admin/holidays",
+        route    = AdminDestinations.Holidays,
         title    = "Holidays",
         subtitle = "Public holidays and clinic closures",
         icon     = Icons.Default.CalendarMonth,
-        isStub   = true,
     ),
     AdminSection(
-        route    = "admin/working-hours",
+        route    = AdminDestinations.WorkingHours,
         title    = "Working Hours",
         subtitle = "Default opening and closing times",
         icon     = Icons.Default.AccessTime,
-        isStub   = true,
     ),
     AdminSection(
-        route    = "admin/staff",
+        route    = AdminDestinations.Staff,
         title    = "Staff",
         subtitle = "Manage staff members and roles",
         icon     = Icons.Default.Group,
-        isStub   = true,
     ),
 )
 

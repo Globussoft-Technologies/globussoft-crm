@@ -353,7 +353,8 @@ class AdminRepositoryImpl @Inject constructor(
             msgs.map { m ->
                 WhatsAppMessageItem(
                     id          = m["id"]?.toString() ?: "",
-                    contactName = (m["contact"] as? Map<*, *>)?.get("name")?.toString(),
+                    contactName = (m["contact"] as? Map<*, *>)?.get("name")?.toString()
+                                  ?: m["from"]?.toString()?.takeIf { it.isNotBlank() },
                     body        = m["body"]?.toString() ?: "",
                     direction   = m["direction"]?.toString() ?: "OUTBOUND",
                     status      = m["status"]?.toString() ?: "",

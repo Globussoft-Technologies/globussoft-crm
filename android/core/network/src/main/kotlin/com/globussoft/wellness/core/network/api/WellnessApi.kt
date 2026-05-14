@@ -377,7 +377,9 @@ interface WellnessApi {
     // -------------------------------------------------------------------------
 
     @GET("leave/requests")
-    suspend fun getLeaveRequests(): Response<@JvmSuppressWildcards Any>
+    suspend fun getLeaveRequests(
+        @Query("myOnly") myOnly: Boolean? = null,
+    ): Response<@JvmSuppressWildcards Any>
 
     @GET("leave/balances/me")
     suspend fun getLeaveBalances(): Response<@JvmSuppressWildcards Any>

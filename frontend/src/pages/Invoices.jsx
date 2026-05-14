@@ -348,8 +348,10 @@ export default function Invoices() {
         }
       }
     } catch (err) {
+      // fetchApi has already surfaced the server's message in a toast; a
+      // second "Payment failed: …" toast on top is noise. Just log + clear
+      // the spinner so the modal can be retried.
       console.error('[Payment] Error:', err);
-      notify.error(`Payment failed: ${err.message}`);
       setProcessingPayment(false);
     }
   };
@@ -918,7 +920,7 @@ export default function Invoices() {
                 onClick={processPayment}
                 disabled={processingPayment}
                 style={{
-                  padding: '0.65rem 1.5rem', background: 'var(--accent-color)', color: '#fff', border: 'none',
+                  padding: '0.65rem 1.5rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none',
                   borderRadius: '6px', cursor: processingPayment ? 'not-allowed' : 'pointer', fontWeight: 600,
                   opacity: processingPayment ? 0.7 : 1, display: 'flex', alignItems: 'center', gap: '0.5rem',
                 }}

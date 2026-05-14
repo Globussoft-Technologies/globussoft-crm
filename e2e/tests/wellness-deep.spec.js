@@ -258,7 +258,10 @@ test.describe.serial('Wellness deep — Visit photo upload', () => {
     expect(result.kind).toBe('photosBefore');
     expect(Array.isArray(result.urls)).toBeTruthy();
     expect(result.urls.length).toBeGreaterThan(0);
-    expect(result.urls[result.urls.length - 1]).toMatch(/\/uploads\/wellness\/visits\/\d+\/.+\.png$/i);
+    // Photo URLs are served via `/api/uploads/...` so Nginx/Vite proxy them
+    // through to the backend (bare `/uploads/...` falls through the SPA
+    // catch-all on the frontend host → broken image). Pin the new shape.
+    expect(result.urls[result.urls.length - 1]).toMatch(/\/api\/uploads\/wellness\/visits\/\d+\/.+\.png$/i);
   });
 
   test('13. Visit detail now shows the photo URL', async ({ request }) => {

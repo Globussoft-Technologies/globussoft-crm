@@ -3,8 +3,8 @@
 // Issuing a gift card auto-generates a 16-char Crockford-base32 code and
 // returns it to the issuer (one-time view — display the code prominently
 // so the operator can copy + send to the recipient channel of their choice).
-import { useEffect, useState } from 'react';
-import { Gift, Copy, Plus } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Gift, Copy, Plus, UserPlus, Search } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
@@ -14,6 +14,7 @@ export default function GiftCardsPage() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [issueOpen, setIssueOpen] = useState(false);
+  const [applyTarget, setApplyTarget] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [latestCode, setLatestCode] = useState(null);
   const notify = useNotify();
@@ -87,6 +88,7 @@ export default function GiftCardsPage() {
               <th style={th}>Created</th>
               <th style={th}>Expires</th>
               <th style={th}>Redeemed</th>
+              <th style={th}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -98,6 +100,19 @@ export default function GiftCardsPage() {
                 <td style={td}>{formatDate(g.createdAt)}</td>
                 <td style={td}>{g.expiresAt ? formatDate(g.expiresAt) : '—'}</td>
                 <td style={td}>{g.redeemedAt ? formatDate(g.redeemedAt) : '—'}</td>
+                <td style={td}>
+                  {g.status === 'active' ? (
+                    <button
+                      onClick={() => setApplyTarget(g)}
+                      style={btnRowAction}
+                      title="Apply this gift card to a patient's wallet"
+                    >
+                      <UserPlus size={12} /> Apply to patient
+                    </button>
+                  ) : (
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>—</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -108,6 +123,14 @@ export default function GiftCardsPage() {
         <IssueModal
           onDone={(row) => { setLatestCode(row); setIssueOpen(false); load(); }}
           onCancel={() => setIssueOpen(false)}
+        />
+      )}
+
+      {applyTarget && (
+        <ApplyModal
+          giftCard={applyTarget}
+          onDone={() => { setApplyTarget(null); load(); }}
+          onCancel={() => setApplyTarget(null)}
         />
       )}
     </div>
@@ -164,10 +187,131 @@ function IssueModal({ onDone, onCancel }) {
   );
 }
 
+// Admin / manager apply-direct flow — bypasses the plaintext-code requirement
+// of the recipient redeem path. Uses the by-id `POST /giftcards/:id/apply`
+// endpoint, which trusts the authenticated session instead of a code.
+function ApplyModal({ giftCard, onDone, onCancel }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const notify = useNotify();
+  const debounceRef = useRef(null);
+
+  // Debounced patient search. Mirrors the /api/wellness/patients?q= contract;
+  // empty query renders an empty result list (no autoload — avoids surprising
+  // the operator with a huge default list on big tenants).
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = query.trim();
+    if (!q) { setResults([]); setSearching(false); return; }
+    setSearching(true);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const j = await fetchApi(`/api/wellness/patients?q=${encodeURIComponent(q)}&limit=10`);
+        setResults(j.patients || []);
+      } catch (e) {
+        notify.error(e.message || 'Patient search failed');
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [query]);
+
+  const submit = async () => {
+    if (!selected) return notify.error('Pick a patient first.');
+    setSubmitting(true);
+    try {
+      await fetchApi(`/api/wellness/giftcards/${giftCard.id}/apply`, {
+        method: 'POST',
+        body: JSON.stringify({ patientId: selected.id }),
+      });
+      notify.success(`Applied ${formatMoney(giftCard.amount, { currency: giftCard.currency })} to ${selected.name}'s wallet`);
+      onDone();
+    } catch (e) {
+      notify.error(e.message || 'Failed to apply gift card');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ marginTop: 0 }}>Apply gift card to patient</h3>
+        <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+          Crediting <strong>{formatMoney(giftCard.amount, { currency: giftCard.currency })}</strong>{' '}
+          from card <code>{giftCard.code}</code> to the patient's wallet. This marks the card as redeemed.
+        </div>
+
+        <label style={lbl}>Patient
+          <div style={{ position: 'relative' }}>
+            <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => { setQuery(e.target.value); setSelected(null); }}
+              placeholder="Search by name, phone, or email"
+              autoFocus
+              style={{ ...inp, paddingLeft: '2rem' }}
+            />
+          </div>
+        </label>
+
+        {!selected && query.trim() && (
+          <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 6, marginBottom: '0.75rem' }}>
+            {searching ? (
+              <div style={{ padding: '0.6rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Searching…</div>
+            ) : results.length === 0 ? (
+              <div style={{ padding: '0.6rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No matches.</div>
+            ) : (
+              results.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => { setSelected(p); setQuery(''); setResults([]); }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.5rem 0.75rem', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', fontSize: '0.9rem' }}
+                >
+                  <div style={{ fontWeight: 500 }}>{p.name || `Patient #${p.id}`}</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    {[p.phone, p.email].filter(Boolean).join(' · ') || `id ${p.id}`}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {selected && (
+          <div style={{ padding: '0.6rem 0.75rem', background: 'var(--success-bg, #ecfdf5)', borderRadius: 6, marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontWeight: 500 }}>{selected.name || `Patient #${selected.id}`}</div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                {[selected.phone, selected.email].filter(Boolean).join(' · ') || `id ${selected.id}`}
+              </div>
+            </div>
+            <button type="button" onClick={() => setSelected(null)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.85rem' }}>Change</button>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
+          <button onClick={onCancel} style={btnSecondary} disabled={submitting}>Cancel</button>
+          <button onClick={submit} style={btnPrimary} disabled={submitting || !selected}>
+            {submitting ? 'Applying…' : 'Apply'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const th = { textAlign: 'left', padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' };
 const td = { padding: '0.5rem', fontSize: '0.9rem' };
 const btnPrimary = { padding: '0.6rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' };
 const btnSecondary = { padding: '0.6rem 1rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer' };
+const btnRowAction = { padding: '0.35rem 0.65rem', background: 'transparent', color: 'var(--primary-color, var(--accent-color))', border: '1px solid var(--primary-color, var(--accent-color))', borderRadius: 6, cursor: 'pointer', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' };
 const modalOverlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 };
 const modalCard = { background: 'var(--bg-color, #fff)', padding: '1.5rem', borderRadius: 12, minWidth: 360, maxWidth: 500 };
 const lbl = { display: 'block', marginBottom: '0.75rem', fontSize: '0.9rem' };

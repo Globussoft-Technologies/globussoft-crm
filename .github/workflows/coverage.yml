@@ -234,6 +234,7 @@ jobs:
             tests/deals_documents.spec.js \
             tests/wellness-patient-soft-delete-api.spec.js \
             tests/wallet-giftcard-coupon-api.spec.js \
+            tests/giftcards-apply-api.spec.js \
             tests/memberships-api.spec.js \
             tests/memberships-dashboard-api.spec.js \
             tests/inventory-extension-api.spec.js \

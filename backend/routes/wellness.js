@@ -1457,7 +1457,14 @@ router.post("/visits/:id/photos", phiWriteGate, photoUpload.array("photos", 10),
 
     const which = req.body.kind === "after" ? "photosAfter" : "photosBefore";
     const existing = visit[which] ? JSON.parse(visit[which]) : [];
-    const added = (req.files || []).map((f) => `/uploads/wellness/visits/${id}/${path.basename(f.path)}`);
+    // Return URLs under `/api/uploads/...`, NOT bare `/uploads/...`. The
+    // bare path is not proxied by Nginx on the demo (or by Vite in dev),
+    // so `<img src="/uploads/...">` falls through the SPA catch-all and
+    // renders the React index.html as a broken image. server.js mounts
+    // the static directory at BOTH paths for legacy URLs already stored
+    // in the DB; the photo column on the frontend also normalises old
+    // values defensively.
+    const added = (req.files || []).map((f) => `/api/uploads/wellness/visits/${id}/${path.basename(f.path)}`);
     const merged = [...existing, ...added];
 
     const _updated = await prisma.visit.update({
@@ -6871,6 +6878,97 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
   } catch (e) {
     console.error("[wellness] giftcard redeem error:", e.message);
     res.status(500).json({ error: "Failed to redeem gift card" });
+  }
+});
+
+// Admin-applied gift-card credit. The /giftcards/redeem path above requires
+// the plaintext code (recipient flow — SMS/email/printed card → patient
+// portal). This route is the parallel operator flow: an ADMIN or MANAGER
+// applies a gift card they (or another operator) issued directly to a
+// patient's wallet, by row id. No code/hash check — we trust the
+// authenticated session, the same way we trust admins to issue cards or
+// manually credit wallets via /wallets/:id/credit.
+//
+// Threat model: the #653 bcrypt-hashing protection is specifically aimed
+// at unauthenticated DB-dump attacks (anyone with the SQL dump being able
+// to redeem). This endpoint is gated on JWT + role + audit-logged, so it
+// doesn't undermine that protection. A compromised admin session could
+// apply gift cards, but the same session could already issue arbitrary new
+// cards or credit wallets directly — the ceiling doesn't move.
+//
+// Distinct audit action ("APPLY") + event ("giftcard.applied") so the
+// trail clearly distinguishes operator-applied from code-redeemed entries.
+router.post("/giftcards/:id/apply", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const patientId = parseInt(req.body.patientId, 10);
+    if (!Number.isFinite(patientId) || patientId < 1) {
+      return res.status(400).json({ error: "patientId is required", code: "PATIENT_REQUIRED" });
+    }
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+      select: { id: true, name: true },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+
+    const giftCard = await prisma.giftCard.findFirst({ where: tenantWhere(req, { id }) });
+    if (!giftCard) {
+      return res.status(404).json({ error: "Gift card not found", code: "GIFTCARD_NOT_FOUND" });
+    }
+    if (giftCard.status === "redeemed") {
+      return res.status(409).json({ error: "Gift card already redeemed", code: "GIFTCARD_ALREADY_REDEEMED" });
+    }
+    if (giftCard.status !== "active") {
+      return res.status(409).json({ error: `Gift card status is ${giftCard.status}`, code: "GIFTCARD_INACTIVE" });
+    }
+    if (giftCard.expiresAt && giftCard.expiresAt.getTime() < Date.now()) {
+      await prisma.giftCard.update({ where: { id: giftCard.id }, data: { status: "expired" } });
+      return res.status(410).json({ error: "Gift card has expired", code: "GIFTCARD_EXPIRED" });
+    }
+
+    const wallet = await getOrCreateWallet(req, patientId);
+    let tx;
+    try {
+      tx = await writeWalletTransaction({
+        tenantId: req.user.tenantId, walletId: wallet.id,
+        type: "CREDIT_GIFTCARD", absAmount: giftCard.amount,
+        performedBy: req.user.userId,
+        // Masked code only — never the plaintext (which we don't have anyway).
+        reason: `Gift card ${giftCard.code} applied by operator`,
+        giftCardId: giftCard.id,
+      });
+    } catch (err) {
+      console.error("[wellness] giftcard apply write tx error:", err.message);
+      return res.status(500).json({ error: "Failed to credit wallet" });
+    }
+    const updated = await prisma.giftCard.update({
+      where: { id: giftCard.id },
+      data: { status: "redeemed", redeemedAt: new Date(), redeemedBy: patientId },
+      select: {
+        id: true, tenantId: true, code: true, codeLast4: true,
+        amount: true, currency: true, status: true,
+        expiresAt: true, issuedTo: true, issuedFrom: true,
+        redeemedAt: true, redeemedBy: true,
+        createdAt: true, updatedAt: true,
+      },
+    });
+    await writeAudit("GiftCard", "APPLY", giftCard.id, req.user.userId, req.user.tenantId, {
+      code: giftCard.code, codeLast4: giftCard.codeLast4,
+      amount: giftCard.amount, patientId, transactionId: tx.id,
+      appliedBy: req.user.userId,
+    });
+    try {
+      require("../lib/eventBus").emitEvent(
+        "giftcard.applied",
+        { giftCardId: giftCard.id, code: giftCard.code, codeLast4: giftCard.codeLast4, amount: giftCard.amount, patientId, transactionId: tx.id, walletId: wallet.id, appliedBy: req.user.userId },
+        req.user.tenantId,
+        req.io
+      );
+    } catch (_e) { }
+    res.status(201).json({ giftCard: updated, transaction: tx });
+  } catch (e) {
+    console.error("[wellness] giftcard apply error:", e.message);
+    res.status(500).json({ error: "Failed to apply gift card" });
   }
 });
 

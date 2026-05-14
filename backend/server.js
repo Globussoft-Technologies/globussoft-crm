@@ -459,7 +459,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/uploads/"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
@@ -658,8 +658,20 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
   }
 });
 
-// Server File Uploads Statically
+// Server File Uploads Statically.
+// Mounted at BOTH `/uploads` (legacy, kept for any non-Nginx setups that
+// proxy the bare path) AND `/api/uploads` (canonical). The `/api/uploads`
+// mount is the one that actually works on the deployed demo + the Vite dev
+// server, because Nginx only proxies `/api/*` to the backend (and the Vite
+// dev proxy is configured the same way). Bare `/uploads/*` requests hit
+// the static-frontend host first and fall through the SPA catch-all → the
+// browser renders the React index.html as if it were an image → broken
+// image. New upload routes should return `/api/uploads/...` URLs; the
+// PHI gating remains the route-level concern (filenames are
+// pseudo-random, but the static mount itself is intentionally public so
+// `<img src>` works without an Authorization header).
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
 // Health Check Endpoint
 const prisma = require("./lib/prisma");
 

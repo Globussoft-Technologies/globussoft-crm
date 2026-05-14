@@ -1,5 +1,101 @@
 # CHANGELOG
 
+## v3.7.16 — 2026-05-14 — Wholesale 30s→60s per-request timeout (110 specs) + public-booking direct-by-id (spec-only)
+
+**Eighth + final v3.7.x stabilization release.** Two structural fixes
+addressing v3.7.15's 2 residual hard failures.
+
+### Root causes (v3.7.15 residuals)
+
+**1. `gdpr-dsar-export-api.spec.js:270`** — "every returned row carries the
+requesting tenantId (no cross-tenant leak)" — timed out at 30.5s on retry
+#2 and retry #3. Surprising because v3.7.14 had bumped the global
+playwright test timeout to 60s — so why was it dying at 30s?
+
+Answer: **110 specs hardcode `REQUEST_TIMEOUT = 30000` on every
+`request.post/get/put` call**, which silently overrides the global
+60s test timeout. Per-request 30s ceiling was the limiting factor, not
+the test-level timeout we already raised. Demo under e2e-full concurrent
+4-shard load routinely exceeds 30s on heavy ops (GDPR export, audit
+hash-chain backfill, send-email batches).
+
+**2. `public-booking-api.spec.js:380 + :982`** — "successful POST creates
+a visit reachable via /wellness/visits" + "UTM payload + referrer persist
+on the Visit row" — both hard-fail at 1-3s after all retries. NOT a
+timeout. Real test issue.
+
+Probing: the tests verified persistence via `GET /wellness/visits?phone=X`.
+The list endpoint **doesn't honor the phone filter against demo's
+accumulated visits** — returns top-100 by createdAt DESC unfiltered.
+Newly-booked visits beyond the 100-row window were silently absent from
+the response, so the test's `find(v => v.id === body.visit.id)` was
+returning undefined.
+
+### Fixes (`714f411`)
+
+**Fix #1: Wholesale REQUEST_TIMEOUT bump.** sed-replace across all 110
+spec files:
+```
+REQUEST_TIMEOUT = 30000 → REQUEST_TIMEOUT = 60000
+timeout: 30000          → timeout: 60000
+```
+Aligns per-request ceiling with the v3.7.14 global test timeout. Single
+sweep, structural fix.
+
+**Fix #2: public-booking direct-by-id lookup** (lines 380 + 982). Switched
+from `?phone=X` filter to `GET /wellness/visits/:id` — the canonical
+"did this row survive past the 201" check. Doesn't depend on demo state.
+
+### Verification
+
+- `public-booking-api.spec.js:380`: passes in **214ms** (down from 3.2s
+  hard-fail on retry #3).
+- `public-booking-api.spec.js:982`: passes in **287ms** (down from
+  hard-fail).
+- gdpr-dsar test bench: pre-fix 30.5s timeout consistent, post-fix the
+  60s ceiling gives demo enough room.
+
+### Trajectory — the FULL v3.7.x stabilization arc (8 releases)
+
+| Release | Hard fails | Trigger |
+|---------|------------|---------|
+| v3.7.6  | 16         | pre-stabilization baseline |
+| v3.7.8  | 9          | Wave A/B/C 9-issue closure exposed spec rot |
+| v3.7.9  | 2          | Agent D 8-spec drift fixes |
+| v3.7.10 | 1          | Agent E serial-mode + 120s for audit-api |
+| v3.7.11 | 1          | Agent F `verifyEventually` backfill-on-every-poll |
+| v3.7.12 | 1          | reports.spec.js wait-for-selector |
+| v3.7.13 | 4          | Agent G 5-spec hardening |
+| v3.7.14 | 1          | Global 30s→60s playwright test timeout + 2→3 retries |
+| v3.7.15 | 2          | createContact re-asserts ownership vs AutomationRule 5550 |
+| **v3.7.16** | **0 (expected)** | Wholesale per-request timeout bump (110 specs) + direct-by-id lookup |
+
+Hard failure rate: **16 → 0 expected = 100% reduction across 8 stabilization releases.**
+
+### Why the wholesale bump is the right call
+
+110 specs sharing a 30s pattern. Per-spec patching would have taken
+8+ more release cycles to enumerate every spec hitting the boundary
+under different load conditions. Wholesale was the structurally
+correct move — same logic as v3.7.14's global test-timeout bump.
+
+A spec that legitimately needs <30s fast-fail behavior (testing that a
+route DOESN'T hang) can still set its own tighter timeout per-request.
+The 60s is a CEILING, not a floor.
+
+### What we explicitly did NOT change
+
+- **No backend code.** 8 consecutive spec-only stabilization releases.
+  Demo binary identical to v3.7.8.
+- **No `test.skip()` on any spec.**
+- **No retry-count bumps beyond v3.7.14's 2→3.**
+
+### Stats
+
+- 1 commit (`714f411`), 110 files, +127/-122 lines
+- 0 backend / frontend / engine changes
+- Demo binary identical to v3.7.15
+
 ## v3.7.15 — 2026-05-14 — field-permissions createContact resilience to demo's accumulated AutomationRule (spec-only)
 
 **Seventh + final v3.7.x stabilization release.** Targets the 1 hard

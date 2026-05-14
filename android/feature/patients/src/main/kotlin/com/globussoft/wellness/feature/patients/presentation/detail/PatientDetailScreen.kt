@@ -228,9 +228,9 @@ private fun PatientDetailContent(
         ) { page ->
             when (page) {
                 0 -> CaseHistoryTab(visits = state.visits)
-                1 -> PrescriptionTab(patient = patient)
+                1 -> PrescriptionTab(state = state, onEvent = onEvent)
                 2 -> ConsentTab(patient = patient)
-                3 -> TreatmentPlansTab(patient = patient)
+                3 -> TreatmentPlansTab(state = state, onEvent = onEvent)
                 4 -> LogVisitTab(
                     state   = state,
                     onEvent = onEvent,

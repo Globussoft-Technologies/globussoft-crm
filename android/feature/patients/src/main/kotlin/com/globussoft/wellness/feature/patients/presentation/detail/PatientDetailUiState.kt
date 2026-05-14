@@ -1,8 +1,10 @@
 package com.globussoft.wellness.feature.patients.presentation.detail
 
 import com.globussoft.wellness.core.domain.model.Patient
+import com.globussoft.wellness.core.domain.model.Prescription
 import com.globussoft.wellness.core.domain.model.Service
 import com.globussoft.wellness.core.domain.model.Staff
+import com.globussoft.wellness.core.domain.model.TreatmentPlan
 import com.globussoft.wellness.core.domain.model.Visit
 
 /**
@@ -26,10 +28,20 @@ data class PatientDetailUiState(
     val visits: List<Visit> = emptyList(),
     val services: List<Service> = emptyList(),
     val doctors: List<Staff> = emptyList(),
+    val prescriptions: List<Prescription> = emptyList(),
+    val treatmentPlans: List<TreatmentPlan> = emptyList(),
     /** True while a new visit is being saved via the Log Visit tab. */
     val isLoggingVisit: Boolean = false,
     /** Non-null when a log-visit mutation fails. */
     val logVisitError: String? = null,
+    /** True while a new prescription is being created. */
+    val isCreatingRx: Boolean = false,
+    /** Non-null when prescription creation fails. */
+    val createRxError: String? = null,
+    /** True while a new treatment plan is being created. */
+    val isCreatingPlan: Boolean = false,
+    /** Non-null when treatment plan creation fails. */
+    val createPlanError: String? = null,
     /** True while a gift-card redeem request is in-flight. */
     val isRedeeming: Boolean = false,
 )
@@ -59,6 +71,31 @@ sealed class PatientDetailEvent {
         val date: String,
         val bookingType: String,
         val notes: String,
+    ) : PatientDetailEvent()
+
+    /**
+     * The user submitted the New Prescription form.
+     *
+     * [visitId] must be an existing visit ID — the backend requires it.
+     * [drugName] is the primary drug (the form captures one drug at a time).
+     */
+    data class CreatePrescription(
+        val visitId: String,
+        val drugName: String,
+        val dosage: String,
+        val frequency: String,
+        val duration: String,
+        val instructions: String,
+    ) : PatientDetailEvent()
+
+    /**
+     * The user submitted the New Treatment Plan form.
+     */
+    data class CreateTreatmentPlan(
+        val name: String,
+        val totalSessions: Int,
+        val serviceId: String,
+        val totalPrice: String,
     ) : PatientDetailEvent()
 
     /**

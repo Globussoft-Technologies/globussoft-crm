@@ -1,10 +1,13 @@
 package com.globussoft.wellness.feature.patients.domain.repository
 
 import com.globussoft.wellness.core.common.result.WResult
+import com.globussoft.wellness.core.domain.model.DrugItem
 import com.globussoft.wellness.core.domain.model.Patient
 import com.globussoft.wellness.core.domain.model.PatientForm
+import com.globussoft.wellness.core.domain.model.Prescription
 import com.globussoft.wellness.core.domain.model.Service
 import com.globussoft.wellness.core.domain.model.Staff
+import com.globussoft.wellness.core.domain.model.TreatmentPlan
 import com.globussoft.wellness.core.domain.model.Visit
 import kotlinx.coroutines.flow.Flow
 
@@ -68,6 +71,37 @@ interface PatientsRepository {
      * so the LogVisit form can offer a doctor picker.
      */
     suspend fun getDoctors(): WResult<List<Staff>>
+
+    /** Returns prescriptions for a patient, newest first. */
+    suspend fun getPatientPrescriptions(patientId: String): WResult<List<Prescription>>
+
+    /**
+     * Creates a new prescription tied to [visitId].
+     *
+     * [drugs] must be non-empty — the backend rejects empty lists.
+     */
+    suspend fun createPrescription(
+        patientId: String,
+        visitId: String,
+        drugs: List<DrugItem>,
+        instructions: String?,
+    ): WResult<Prescription>
+
+    /** Returns treatment plans for a patient, newest first. */
+    suspend fun getPatientTreatmentPlans(patientId: String): WResult<List<TreatmentPlan>>
+
+    /**
+     * Creates a new treatment plan for [patientId].
+     *
+     * [totalSessions] must be > 0.
+     */
+    suspend fun createTreatmentPlan(
+        patientId: String,
+        name: String,
+        totalSessions: Int,
+        serviceId: String?,
+        totalPrice: Double?,
+    ): WResult<TreatmentPlan>
 }
 
 /**

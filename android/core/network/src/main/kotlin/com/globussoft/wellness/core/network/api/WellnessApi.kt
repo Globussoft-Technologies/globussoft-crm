@@ -446,8 +446,36 @@ interface WellnessApi {
 
     // -------------------------------------------------------------------------
     // Prescriptions  (feature/patients)
-    // GET wellness/prescriptions/{id}/pdf — download prescription as a PDF stream
+    // GET wellness/patients/{id}/prescriptions — list Rx for a patient
+    // POST wellness/prescriptions              — create a new prescription
+    // GET wellness/prescriptions/{id}/pdf      — download as PDF stream
     // -------------------------------------------------------------------------
+
+    @GET("wellness/patients/{id}/prescriptions")
+    suspend fun getPatientPrescriptions(
+        @Path("id") patientId: String,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("wellness/prescriptions")
+    suspend fun createPrescription(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // -------------------------------------------------------------------------
+    // Treatment Plans  (feature/patients)
+    // GET wellness/patients/{id}/treatment-plans — list plans for a patient
+    // POST wellness/treatment-plans              — create a new plan
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/patients/{id}/treatment-plans")
+    suspend fun getPatientTreatmentPlans(
+        @Path("id") patientId: String,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("wellness/treatment-plans")
+    suspend fun createTreatmentPlan(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
 
     @GET("wellness/prescriptions/{id}/pdf")
     @Streaming

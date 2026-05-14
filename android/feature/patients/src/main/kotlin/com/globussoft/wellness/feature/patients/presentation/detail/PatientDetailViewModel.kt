@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.globussoft.wellness.core.common.result.WResult
+import com.globussoft.wellness.core.domain.model.DrugItem
 import com.globussoft.wellness.core.network.api.WellnessApi
 import com.globussoft.wellness.core.network.model.request.CreateVisitRequest
 import com.globussoft.wellness.core.network.util.safeApiCall
@@ -79,10 +80,12 @@ class PatientDetailViewModel @Inject constructor(
 
     fun onEvent(event: PatientDetailEvent) {
         when (event) {
-            is PatientDetailEvent.TabSelected    -> onTabSelected(event.index)
-            is PatientDetailEvent.Refresh        -> loadAll()
-            is PatientDetailEvent.LogVisit       -> onLogVisit(event)
-            is PatientDetailEvent.RedeemGiftCard -> onRedeemGiftCard(event)
+            is PatientDetailEvent.TabSelected       -> onTabSelected(event.index)
+            is PatientDetailEvent.Refresh           -> loadAll()
+            is PatientDetailEvent.LogVisit          -> onLogVisit(event)
+            is PatientDetailEvent.CreatePrescription -> onCreatePrescription(event)
+            is PatientDetailEvent.CreateTreatmentPlan -> onCreateTreatmentPlan(event)
+            is PatientDetailEvent.RedeemGiftCard    -> onRedeemGiftCard(event)
         }
     }
 
@@ -92,26 +95,32 @@ class PatientDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
 
-            val patientDeferred  = async { repository.getPatient(patientId) }
-            val visitsDeferred   = async { repository.getPatientVisits(patientId) }
-            val servicesDeferred = async { repository.getServices() }
-            val doctorsDeferred  = async { repository.getDoctors() }
+            val patientDeferred       = async { repository.getPatient(patientId) }
+            val visitsDeferred        = async { repository.getPatientVisits(patientId) }
+            val servicesDeferred      = async { repository.getServices() }
+            val doctorsDeferred       = async { repository.getDoctors() }
+            val prescriptionsDeferred = async { repository.getPatientPrescriptions(patientId) }
+            val plansDeferred         = async { repository.getPatientTreatmentPlans(patientId) }
 
-            val patientResult  = patientDeferred.await()
-            val visitsResult   = visitsDeferred.await()
-            val servicesResult = servicesDeferred.await()
-            val doctorsResult  = doctorsDeferred.await()
+            val patientResult       = patientDeferred.await()
+            val visitsResult        = visitsDeferred.await()
+            val servicesResult      = servicesDeferred.await()
+            val doctorsResult       = doctorsDeferred.await()
+            val prescriptionsResult = prescriptionsDeferred.await()
+            val plansResult         = plansDeferred.await()
 
             when (patientResult) {
                 is WResult.Success -> {
                     _state.update { current ->
                         current.copy(
-                            isLoading = false,
-                            patient   = patientResult.data,
-                            visits    = visitsResult.getOrEmpty(),
-                            services  = servicesResult.getOrEmpty(),
-                            doctors   = doctorsResult.getOrEmpty(),
-                            error     = null,
+                            isLoading     = false,
+                            patient       = patientResult.data,
+                            visits        = visitsResult.getOrEmpty(),
+                            services      = servicesResult.getOrEmpty(),
+                            doctors       = doctorsResult.getOrEmpty(),
+                            prescriptions = prescriptionsResult.getOrEmpty(),
+                            treatmentPlans = plansResult.getOrEmpty(),
+                            error         = null,
                         )
                     }
                 }
@@ -129,6 +138,71 @@ class PatientDetailViewModel @Inject constructor(
     private fun onTabSelected(index: Int) {
         savedStateHandle[KEY_SELECTED_TAB] = index
         _state.update { it.copy(selectedTabIndex = index) }
+    }
+
+    private fun onCreatePrescription(event: PatientDetailEvent.CreatePrescription) {
+        val drug = DrugItem(
+            name      = event.drugName,
+            dosage    = event.dosage.ifBlank { null },
+            frequency = event.frequency.ifBlank { null },
+            duration  = event.duration.ifBlank { null },
+        )
+        viewModelScope.launch {
+            _state.update { it.copy(isCreatingRx = true, createRxError = null) }
+            val result = repository.createPrescription(
+                patientId    = patientId,
+                visitId      = event.visitId,
+                drugs        = listOf(drug),
+                instructions = event.instructions.ifBlank { null },
+            )
+            when (result) {
+                is WResult.Success -> {
+                    _state.update { current ->
+                        current.copy(
+                            isCreatingRx  = false,
+                            prescriptions = listOf(result.data) + current.prescriptions,
+                        )
+                    }
+                    _effects.send(PatientDetailEffect.ShowSnackbar("Prescription saved"))
+                }
+                is WResult.Error -> {
+                    val message = result.message ?: result.exception.message ?: "Failed to save prescription"
+                    _state.update { it.copy(isCreatingRx = false, createRxError = message) }
+                    _effects.send(PatientDetailEffect.ShowSnackbar(message))
+                }
+                WResult.Loading -> Unit
+            }
+        }
+    }
+
+    private fun onCreateTreatmentPlan(event: PatientDetailEvent.CreateTreatmentPlan) {
+        viewModelScope.launch {
+            _state.update { it.copy(isCreatingPlan = true, createPlanError = null) }
+            val result = repository.createTreatmentPlan(
+                patientId     = patientId,
+                name          = event.name,
+                totalSessions = event.totalSessions,
+                serviceId     = event.serviceId.ifBlank { null },
+                totalPrice    = event.totalPrice.toDoubleOrNull(),
+            )
+            when (result) {
+                is WResult.Success -> {
+                    _state.update { current ->
+                        current.copy(
+                            isCreatingPlan = false,
+                            treatmentPlans = listOf(result.data) + current.treatmentPlans,
+                        )
+                    }
+                    _effects.send(PatientDetailEffect.ShowSnackbar("Treatment plan created"))
+                }
+                is WResult.Error -> {
+                    val message = result.message ?: result.exception.message ?: "Failed to create plan"
+                    _state.update { it.copy(isCreatingPlan = false, createPlanError = message) }
+                    _effects.send(PatientDetailEffect.ShowSnackbar(message))
+                }
+                WResult.Loading -> Unit
+            }
+        }
     }
 
     private fun onRedeemGiftCard(event: PatientDetailEvent.RedeemGiftCard) {

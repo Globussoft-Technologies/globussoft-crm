@@ -7,10 +7,13 @@ import com.globussoft.wellness.core.data.mapper.toDomain
 import com.globussoft.wellness.core.data.mapper.toRequest
 import com.globussoft.wellness.core.database.dao.PatientDao
 import com.globussoft.wellness.core.database.entity.PatientEntity
+import com.globussoft.wellness.core.domain.model.DrugItem
 import com.globussoft.wellness.core.domain.model.Patient
 import com.globussoft.wellness.core.domain.model.PatientForm
+import com.globussoft.wellness.core.domain.model.Prescription
 import com.globussoft.wellness.core.domain.model.Service
 import com.globussoft.wellness.core.domain.model.Staff
+import com.globussoft.wellness.core.domain.model.TreatmentPlan
 import com.globussoft.wellness.core.domain.model.Visit
 import com.globussoft.wellness.core.network.api.WellnessApi
 import com.globussoft.wellness.core.network.util.safeApiCall
@@ -135,6 +138,60 @@ class PatientsRepositoryImpl @Inject constructor(
         safeApiCall { api.getStaff(wellnessRole = "DOCTOR") }
             .mapSuccess { list -> list.map { it.toDomain() } }
 
+    override suspend fun getPatientPrescriptions(patientId: String): WResult<List<Prescription>> =
+        safeApiCall { api.getPatientPrescriptions(patientId) }
+            .mapSuccess { list ->
+                list.filterIsInstance<Map<*, *>>().map { it.toPrescription() }
+            }
+
+    override suspend fun createPrescription(
+        patientId: String,
+        visitId: String,
+        drugs: List<DrugItem>,
+        instructions: String?,
+    ): WResult<Prescription> {
+        val drugPayload = drugs.map { d ->
+            buildMap<String, Any> {
+                put("name", d.name)
+                d.dosage?.let { put("dosage", it) }
+                d.frequency?.let { put("frequency", it) }
+                d.duration?.let { put("duration", it) }
+            }
+        }
+        val body = buildMap<String, Any> {
+            put("patientId", patientId)
+            put("visitId", visitId)
+            put("drugs", drugPayload)
+            instructions?.let { put("instructions", it) }
+        }
+        return safeApiCall { api.createPrescription(body) }
+            .mapSuccess { raw -> (raw as Map<*, *>).toPrescription() }
+    }
+
+    override suspend fun getPatientTreatmentPlans(patientId: String): WResult<List<TreatmentPlan>> =
+        safeApiCall { api.getPatientTreatmentPlans(patientId) }
+            .mapSuccess { list ->
+                list.filterIsInstance<Map<*, *>>().map { it.toTreatmentPlan() }
+            }
+
+    override suspend fun createTreatmentPlan(
+        patientId: String,
+        name: String,
+        totalSessions: Int,
+        serviceId: String?,
+        totalPrice: Double?,
+    ): WResult<TreatmentPlan> {
+        val body = buildMap<String, Any> {
+            put("patientId", patientId)
+            put("name", name)
+            put("totalSessions", totalSessions)
+            serviceId?.let { put("serviceId", it) }
+            totalPrice?.let { put("totalPrice", it) }
+        }
+        return safeApiCall { api.createTreatmentPlan(body) }
+            .mapSuccess { raw -> (raw as Map<*, *>).toTreatmentPlan() }
+    }
+
     // ─── Private helpers ──────────────────────────────────────────────────────
 
     /**
@@ -219,6 +276,57 @@ private fun PatientEntity.toDomain(): Patient = Patient(
     rxCount            = rxCount,
     treatmentPlanCount = treatmentPlanCount,
 )
+
+private fun Map<*, *>.toPrescription(): Prescription {
+    val rawDrugs = this["drugs"]
+    val drugList: List<DrugItem> = when (rawDrugs) {
+        is List<*> -> rawDrugs.filterIsInstance<Map<*, *>>().map { d ->
+            DrugItem(
+                name      = d["name"]?.toString() ?: "",
+                dosage    = d["dosage"]?.toString(),
+                frequency = d["frequency"]?.toString(),
+                duration  = d["duration"]?.toString(),
+            )
+        }
+        is String -> try {
+            // Backend stores drugs as JSON string in older rows.
+            emptyList()
+        } catch (_: Exception) { emptyList() }
+        else -> emptyList()
+    }
+    val doctor = this["doctor"] as? Map<*, *>
+    return Prescription(
+        id          = anyId(this["id"]),
+        patientId   = anyId(this["patientId"]),
+        visitId     = anyId(this["visitId"]),
+        doctorName  = doctor?.get("name")?.toString(),
+        drugs       = drugList,
+        instructions= this["instructions"]?.toString(),
+        createdAt   = this["createdAt"]?.toString() ?: "",
+    )
+}
+
+private fun Map<*, *>.toTreatmentPlan(): TreatmentPlan {
+    val service = this["service"] as? Map<*, *>
+    return TreatmentPlan(
+        id                = anyId(this["id"]),
+        name              = this["name"]?.toString() ?: "Treatment Plan",
+        patientId         = anyId(this["patientId"]),
+        serviceName       = service?.get("name")?.toString(),
+        totalSessions     = (this["totalSessions"] as? Number)?.toInt() ?: 0,
+        completedSessions = (this["completedSessions"] as? Number)?.toInt() ?: 0,
+        totalPrice        = (this["totalPrice"] as? Number)?.toDouble(),
+        status            = this["status"]?.toString() ?: "ACTIVE",
+        startedAt         = this["startedAt"]?.toString(),
+        nextDueAt         = this["nextDueAt"]?.toString(),
+    )
+}
+
+private fun anyId(raw: Any?): String = when (raw) {
+    is Number -> raw.toLong().toString()
+    is String -> raw
+    else      -> ""
+}
 
 /** Derives approximate age in years from a "YYYY-MM-DD…" dob string. */
 private fun computeAgeFromDob(dob: String): Int? {

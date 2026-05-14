@@ -1,5 +1,100 @@
 # CHANGELOG
 
+## v3.7.15 — 2026-05-14 — field-permissions createContact resilience to demo's accumulated AutomationRule (spec-only)
+
+**Seventh + final v3.7.x stabilization release.** Targets the 1 hard
+failure remaining on v3.7.14 e2e-full.
+
+### Root cause (deepest yet)
+
+`field-permissions-enforcement-api.spec.js:282` —
+"USER list call strips Contact.email when canRead=false rule exists" —
+hard-failed on demo. The 60s global timeout (v3.7.14) wasn't enough
+because **this wasn't a timing issue** — the contact under test was
+genuinely missing from the USER's list.
+
+Probing demo:
+1. `user@crm.com` has `userId=3`. Confirmed via `/auth/me`.
+2. `POST /api/contacts` as USER returns 201 with the contact. The route's
+   `routes/contacts.js:236` rightly defaults `assignedToId = req.user.userId`
+   when null, so the response had `assignedToId=3`.
+3. **But a follow-up GET on the same contact showed `assignedToId=1`** —
+   the contact had been silently reassigned to admin (`userId=1`)
+   between the POST and our GET.
+4. `GET /api/workflows` revealed why: AutomationRule id=5550 on demo has
+   `triggerType: contact.created, actionType: assign_agent`. It fires
+   asynchronously via `lib/eventBus.js:284` after the POST returns 201,
+   overwriting `assignedToId` with the rule's configured `userId`.
+
+This is **accumulated demo state**, not a bug. The rule got created
+during some prior demo session and never got cleaned up. It's been
+silently stealing test-created contacts away from the USER's filter
+(`assignedToId = req.user.userId`) for who knows how long.
+
+### Fix (`ad6f46c`)
+
+Single helper change in `field-permissions-enforcement-api.spec.js`'s
+`createContact`:
+
+1. After the POST returns, wait 300ms for async rules to fire.
+2. Re-fetch the USER's id via `/auth/me`.
+3. PUT the contact with `assignedToId = USER.id` to re-assert ownership.
+
+`routes/contacts.js:236`'s "Explicit body.assignedToId still wins"
+semantic holds for PUT too, so the re-assertion is deterministic.
+
+### Verification
+
+Local against demo: **14/14 field-permissions-enforcement-api tests
+passed in 42.7s.** Specifically the previously-failing line 282
+("USER list call strips Contact.email") passed in 3.0s on first attempt.
+
+### Trajectory — the FULL v3.7.x stabilization arc
+
+| Release | Hard fails | Trigger |
+|---------|------------|---------|
+| v3.7.6  | 16         | pre-stabilization baseline |
+| v3.7.8  | 9          | Wave A/B/C 9-issue closure exposed spec rot |
+| v3.7.9  | 2          | Agent D 8-spec drift fixes |
+| v3.7.10 | 1          | Agent E serial-mode + 120s for audit-api |
+| v3.7.11 | 1          | Agent F `verifyEventually` backfill-on-every-poll |
+| v3.7.12 | 1          | reports.spec.js wait-for-selector |
+| v3.7.13 | 4          | Agent G 5-spec hardening (gdpr / sandbox / report-schedules / sensitive-field / navigation) |
+| v3.7.14 | 1          | Global 30s→60s playwright timeout + 2→3 retries (structural fix) |
+| **v3.7.15** | **0 (expected)** | createContact re-asserts ownership against demo's accumulated AutomationRule |
+
+Hard failure rate: **16 → 0 expected = 100% reduction across 7 stabilization releases.**
+
+### Pattern — demo accumulated state vs test isolation
+
+The final root cause is in a new category: not load timing, not concurrent races,
+not spec rot — **demo accumulated state interfering with test assumptions**.
+The lesson worth pulling out as a cron-learning:
+
+> **Tests that depend on "the route's default behavior" can break silently when
+> demo has AutomationRule rows that fire async on the same trigger.** Specifically:
+> any test that creates a tenant-scoped row and then immediately reads back via
+> a filter that depends on row-level assignment (assignedToId / ownerId / etc.)
+> must either (a) explicitly re-assert the assignment after a settle window,
+> or (b) issue the read as an unscoped role (ADMIN). Pattern matches the
+> "background-cron interferes with test snapshot" cron-learning from
+> 2026-05-13 — same family.
+
+### What we explicitly did NOT change
+
+- **No backend code.** Demo's AutomationRule id=5550 is legitimate state
+  (some prior demo session created it). The fix lives in the test, where
+  resilience to background state belongs.
+- **No demo cleanup script run.** The accumulated rules are inert for
+  production use; they only confuse test isolation.
+- **No timeout bumps.** This wasn't a timing issue.
+
+### Stats
+
+- 1 commit (`ad6f46c`), 1 file, +19/-1 lines
+- 0 backend / frontend / engine changes
+- Demo binary identical to v3.7.14 (and v3.7.8)
+
 ## v3.7.14 — 2026-05-14 — Global playwright timeout + retries bump (structural whack-a-mole stopper)
 
 **Sixth + structural v3.7.x stabilization release.** Single config change

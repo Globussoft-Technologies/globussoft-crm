@@ -50,6 +50,7 @@ const CustomObjectView = lazy(() => import("./pages/CustomObjectView"));
 const Sequences = lazy(() => import("./pages/Sequences"));
 const SequenceBuilder = lazy(() => import("./pages/SequenceBuilder"));
 const Tasks = lazy(() => import("./pages/Tasks"));
+const CallifiedData = lazy(() => import("./pages/CallifiedData"));
 const Tickets = lazy(() => import("./pages/Tickets"));
 const Support = lazy(() => import("./pages/Support"));
 const Staff = lazy(() => import("./pages/Staff"));
@@ -670,6 +671,10 @@ export default function App() {
                     <Route
                       path="converted-leads"
                       element={<ConvertedLeads />}
+                    />
+                    <Route
+                      path="callified-data"
+                      element={<CallifiedData />}
                     />
                     <Route
                       path="staff"

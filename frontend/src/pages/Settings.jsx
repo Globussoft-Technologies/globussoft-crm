@@ -31,6 +31,10 @@ export default function Settings() {
   const [brandingSaving, setBrandingSaving] = useState(false);
   const [logoUploading, setLogoUploading] = useState(false);
   const [brandingMsg, setBrandingMsg] = useState('');
+  // AdsGPT configuration
+  const [adsgptLogin, setAdsgptLogin] = useState('');
+  const [adsgptSaving, setAdsgptSaving] = useState(false);
+  const [adsgptMsg, setAdsgptMsg] = useState('');
 
   useEffect(() => {
     fetchApi('/api/tenants/current')
@@ -41,6 +45,10 @@ export default function Settings() {
     fetchApi('/api/wellness/branding')
       .then((res) => setBranding({ logoUrl: res.logoUrl || null, brandColor: res.brandColor || '' }))
       .catch(() => { /* branding endpoint may be unavailable for non-wellness tenants */ });
+    // Fetch AdsGPT login configuration
+    fetchApi('/api/integrations/adsgpt/config')
+      .then((res) => setAdsgptLogin(res.adsgptLogin || ''))
+      .catch(() => { /* adsgpt config may not be available */ });
   }, []);
 
   const handleUploadLogo = async (e) => {
@@ -131,6 +139,28 @@ export default function Settings() {
       notify.error('Failed to update email retention');
     } finally {
       setEmailRetentionSaving(false);
+    }
+  };
+
+  const handleSaveAdsgptLogin = async () => {
+    setAdsgptSaving(true);
+    setAdsgptMsg('');
+    try {
+      if (!adsgptLogin.trim()) {
+        throw new Error('Username or email is required');
+      }
+      await fetchApi('/api/integrations/adsgpt/config', {
+        method: 'PUT',
+        body: JSON.stringify({ adsgptLogin: adsgptLogin.trim() }),
+      });
+      notify.success('AdsGPT login updated');
+      setAdsgptMsg('✓ Saved');
+    } catch (err) {
+      const msg = err.message || 'Failed to save AdsGPT login';
+      setAdsgptMsg(msg);
+      notify.error(msg);
+    } finally {
+      setAdsgptSaving(false);
     }
   };
 
@@ -542,6 +572,41 @@ export default function Settings() {
 
           {brandingMsg && (
             <p style={{ marginTop: '1rem', fontSize: '0.85rem', color: 'var(--accent-color)' }}>{brandingMsg}</p>
+          )}
+        </div>
+
+        {/* AdsGPT Configuration Card */}
+        <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Key size={20} color="var(--accent-color)" /> AdsGPT Login
+          </h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+            Enter your AdsGPT aMember username or email. Users will be auto-logged in via SSO when accessing AdsGPT.
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }}>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Username or email (e.g. enhanceranchi or user@email.com)"
+              value={adsgptLogin}
+              onChange={(e) => setAdsgptLogin(e.target.value)}
+              disabled={adsgptSaving}
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={adsgptSaving || !adsgptLogin.trim()}
+              onClick={handleSaveAdsgptLogin}
+              style={{ whiteSpace: 'nowrap' }}
+            >
+              {adsgptSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+          {adsgptMsg && (
+            <p style={{ fontSize: '0.85rem', color: adsgptMsg.includes('✓') ? 'var(--accent-color)' : 'var(--danger-color)' }}>
+              {adsgptMsg}
+            </p>
           )}
         </div>
 

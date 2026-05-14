@@ -464,6 +464,38 @@ select optgroup {
   color: var(--text-primary) !important;
 }
 
+/* Dark mode select/option styling for proper visibility */
+select {
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+select option {
+  background-color: var(--surface-color);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] select {
+  background-color: rgba(15, 23, 42, 0.8);
+  color: #ffffff;
+}
+
+[data-theme="dark"] select option {
+  background-color: #0f172a;
+  color: #ffffff;
+}
+
+[data-theme="light"] select {
+  background-color: rgba(255, 255, 255, 0.95);
+  color: #1a1a2e;
+}
+
+[data-theme="light"] select option {
+  background-color: #ffffff;
+  color: #1a1a2e;
+}
+
 .nav-link {
   position: relative;
   overflow: hidden;

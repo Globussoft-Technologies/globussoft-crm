@@ -74,7 +74,7 @@ import {
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
-import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
+import { launchAdsGptAs, ADSGPT_DASHBOARD } from '../utils/adsgpt';
 import { launchCallifiedSSO } from '../utils/callified';
 import { useNotify } from '../utils/notify';
 
@@ -396,7 +396,7 @@ const Sidebar = ({
       if (adsLoading) return;
       setAdsLoading(true);
       try {
-        await launchAdsGptAs(ADSGPT_DEMO_LOGIN);
+        await launchAdsGptAs();
       } catch (err) {
         console.error("[Sidebar] AdsGPT SSO error:", err.message);
       } finally {
@@ -409,8 +409,8 @@ const Sidebar = ({
         onClick={handleClick}
         disabled={adsLoading}
         className="nav-link"
-        aria-label={`Open AdsGPT as ${ADSGPT_DEMO_LOGIN}`}
-        title={`Open AdsGPT (${ADSGPT_DEMO_LOGIN}) in a new tab`}
+        aria-label="Open AdsGPT"
+        title="Open AdsGPT in a new tab"
         style={{
           ...navStyle,
           background: "transparent",
@@ -525,44 +525,29 @@ const Sidebar = ({
             marginBottom: "1rem",
             display: "flex",
             alignItems: "center",
-            gap: "0.75rem",
+            gap: "1rem",
             flexShrink: 0,
           }}
         >
-          {logoUrl ? (
-            <img
-              src={logoUrl}
-              alt={brand}
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 6,
-                objectFit: "cover",
-              }}
-            />
-          ) : (
-            <div
-              style={{
-                width: "32px",
-                height: "32px",
-                backgroundColor: brandColor || "var(--accent-color)",
-                borderRadius: "8px",
-                boxShadow: "0 0 15px var(--accent-glow)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#fff",
-              }}
-            >
-              {isWellness ? <HeartPulse size={18} /> : null}
-            </div>
-          )}
+          <img
+            src="/globussoft-logo.png"
+            alt={brand}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 6,
+              objectFit: "cover",
+              objectPosition: "left",
+              flexShrink: 0,
+            }}
+          />
           <h1
             style={{
               fontSize: "1.1rem",
               fontWeight: "bold",
               fontFamily: "var(--font-family)",
               lineHeight: 1.1,
+              margin: 0,
             }}
           >
             {brand}
@@ -748,6 +733,12 @@ function renderWellnessNav({
         to="/converted-leads"
         icon={UserPlus}
         label="Converted Leads"
+        managerOnly
+      />
+      <Link
+        to="/callified-data"
+        icon={PhoneCall}
+        label="Callified Data"
         managerOnly
       />
       <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} />

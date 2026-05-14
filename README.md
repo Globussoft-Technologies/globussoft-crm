@@ -1,6 +1,32 @@
 # Globussoft Enterprise CRM
 
-> A full-stack enterprise CRM built by Globussoft Technologies. **105 API routes, 121 data models, 94+ UI pages, 17 automation engines** (now incl. demoHygieneEngine; +4 new wellness surfaces in v3.5.0 — POS / Attendance / Leave / WhatsApp Threads). Multi-tenant with vertical configurations (generic / **wellness**). Tenant-driven currency + locale. External partner API for sister products (Callified.ai, AdsGPT). Embeddable lead-capture widget. AI orchestration engine. **GitHub Actions CI/CD** with **6 mandatory deploy gates** (build / lint / api_tests / unit_tests / frontend_unit_tests / migration_check) + dedicated **PR pre-merge checks workflow** (vite build + ESLint on every PR) + commit-message blessings (`[allow-unique]` etc.) for legitimate-but-flagged schema changes + auto-rollback on health-check fail + 30-min demo health-monitor cron. **Mobile-responsive** sidebar drawer + 6 demo-path pages. **~4,128 tests on every push** (~2,680 Playwright + ~1,413 backend vitest + 89 frontend vitest); release-validation full chromium suite on every tag. **14 reusable Claude Skills** + **live agent-activity widget** at /developer for parallel-wave visibility. `docs/gaps/archive/` convention for fully-closed gap-files. **Email delivery via SendGrid (live on demo); CAPTCHA via Cloudflare Turnstile. Canonical `{error, code}` envelope on every JSON failure. Two-tier `/api/health` shape (auth-gated full body).**
+> A full-stack enterprise CRM built by Globussoft Technologies. Multi-tenant
+> with **vertical configurations** (generic B2B / **wellness**). Tenant-driven
+> currency + locale. External partner API for sister products (Callified.ai,
+> AdsGPT). Embeddable lead-capture widget. AI orchestration engine. Mobile-
+> responsive UI. Email delivery via SendGrid. CAPTCHA via Cloudflare Turnstile.
+> Canonical `{error, code}` envelope on every JSON failure.
+
+**At a glance** *(counts auto-derived from the codebase; refresh on every release)*
+
+| Surface | Count |
+|---|---|
+| API routes | 103 (`backend/routes/*.js`) |
+| Data models | 151 (`prisma/schema.prisma`) |
+| UI pages | 122 (`frontend/src/pages/`) |
+| Automation engines | 17 (`backend/cron/`) |
+| Playwright spec files | 234 (`e2e/tests/`) — per-push gate runs a subset, e2e-full runs all |
+| Backend vitest files | 90 (`backend/test/`) |
+| Frontend vitest files | 61 (`frontend/src/__tests__/`) |
+| Reusable Claude Skills | 17 (`.claude/skills/`) |
+
+**Deploy pipeline** *(GitHub Actions)*
+
+- **Per-push gate** — 6 mandatory deploy gates on every `main` push: build / lint / api_tests / unit_tests / frontend_unit_tests / migration_check. Auto-deploy on green with health-check rollback. Concurrency-group-serialized so sibling pushes queue.
+- **PR pre-merge gate** — vite build + ESLint on every PR before squash-merge.
+- **Tag-triggered e2e-full** — full chromium release-validation suite (4-shard parallel) fires on every `git tag v*` push.
+- **Demo monitor** — 30-min health cron against `crm.globusdemos.com`; auto-opens an issue on failure.
+- **Commit-message blessings** (e.g. `[allow-unique]`) waive specific migration-safety detectors for legitimate schema changes.
 
 **Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.7.16
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)

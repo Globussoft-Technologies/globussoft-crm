@@ -112,6 +112,19 @@ async function authPut(request, path, body) {
   });
 }
 
+// Retry-once helper for 5xx — demo's nginx upstream occasionally emits a
+// transient 502 under e2e-full's 4-shard concurrent load. The route itself
+// is healthy (solo PUT returns 200 cleanly); the blip is at the proxy
+// layer. One re-fire after a brief settle is enough to clear it.
+async function authPutWithRetry(request, path, body) {
+  let res = await authPut(request, path, body);
+  if (res.status() >= 500 && res.status() < 600) {
+    await new Promise((r) => setTimeout(r, 500));
+    res = await authPut(request, path, body);
+  }
+  return res;
+}
+
 async function authDelete(request, path) {
   return request.delete(`${API}${path}`, {
     headers: auth(),
@@ -223,7 +236,11 @@ test.describe('Report Schedules API — sanitization (#398/#447 class, v3.4.10 a
     const id = (await create.json()).id;
     createdIds.push(id);
 
-    const res = await authPut(request, `/report-schedules/${id}`, {
+    // v3.7.13 e2e-full hardening: this PUT occasionally hits a transient
+    // 502 from demo's nginx upstream under 4-shard concurrent load. The
+    // retry-once helper swallows the blip without bumping playwright's
+    // 2-retry framework budget.
+    const res = await authPutWithRetry(request, `/report-schedules/${id}`, {
       name: `<a href="javascript:alert(1)">Updated</a>name`,
     });
     expect(res.status()).toBe(200);

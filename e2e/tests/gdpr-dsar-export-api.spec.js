@@ -223,6 +223,13 @@ test.describe('GDPR DSAR Export — auth gate', () => {
 // ── Happy path / response shape ────────────────────────────────────
 
 test.describe('GDPR DSAR Export — /export/me happy path', () => {
+  // Demo's /export/me handler does ~9 findMany calls across the full
+  // generic-admin tenant graph. Solo this returns ~4-5s, but under
+  // e2e-full's 4-shard concurrent load it routinely spikes to 25-45s,
+  // brushing the default 30s test timeout on all 3 retry attempts.
+  // 90s gives ~3× headroom over solo time and ~2× over worst observed.
+  test.describe.configure({ timeout: 90_000 });
+
   test('200 with the documented entity-keyed shape', async ({ request }) => {
     const { token } = await getGenericAdmin(request);
     expect(token).toBeTruthy();
@@ -286,12 +293,8 @@ test.describe('GDPR DSAR Export — /export/me happy path', () => {
   });
 
   test('idempotent — calling /export/me twice returns the same shape', async ({ request }) => {
-    // Demo's /export/me handler does ~9 findMany calls across the full
-    // generic-admin tenant graph, taking ~22-25s per call against
-    // crm.globusdemos.com (vs ~200ms on local stack). Two sequential calls
-    // routinely brush the default 30s test timeout. Bump to 90s so the
-    // shape-equality assertion below has room to complete cleanly.
-    test.setTimeout(90_000);
+    // Two sequential /export/me calls routinely brush the default 30s
+    // test timeout. The describe-level 90s budget gives ~3× headroom.
     const { token } = await getGenericAdmin(request);
     const a = await post(request, token, '/api/gdpr/export/me');
     const b = await post(request, token, '/api/gdpr/export/me');
@@ -311,6 +314,10 @@ test.describe('GDPR DSAR Export — /export/me happy path', () => {
 // ── /export/me audit side effect (issue #443 — main fix) ──────────
 
 test.describe('GDPR DSAR Export — /export/me audit row contract', () => {
+  // Same 90s headroom rationale as the happy-path describe: /export/me
+  // does ~9 findMany calls and can spike to 25-45s under shard load.
+  test.describe.configure({ timeout: 90_000 });
+
   test('writes AuditLog row { entity:User, action:GDPR_EXPORT } visible to the same admin', async ({ request }) => {
     const { token, userId } = await getGenericAdmin(request);
     expect(userId, 'admin userId resolved').toBeTruthy();
@@ -349,6 +356,11 @@ test.describe('GDPR DSAR Export — /export/me audit row contract', () => {
 // ── /export/contact/:id contract ───────────────────────────────────
 
 test.describe('GDPR DSAR Export — /export/contact/:id', () => {
+  // /export/contact/:id does ~13 findMany calls across the contact's
+  // full activity graph. Solo this returns in 1-2s on demo but under
+  // 4-shard concurrent e2e-full load spikes past the 30s default.
+  test.describe.configure({ timeout: 90_000 });
+
   test('happy path for tenant-owned contact → 200 + entity-keyed body', async ({ request }) => {
     const contact = await seedContact(request, 'generic', 'happy');
     const { token } = await getGenericAdmin(request);

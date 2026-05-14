@@ -85,13 +85,20 @@ test.describe('Navigation — Sidebar presence', () => {
     // expected label exists in the DOM (count > 0) rather than requiring
     // them to be in the viewport — `toBeVisible` only checks computed-style
     // visibility, but the explicit count assertion is clearer about intent.
+    //
+    // v3.7.13 e2e-full retry fix: items with a count badge ("Inbox 5",
+    // "Tickets 9") have inner text "Inbox5" / "Tickets9" — a `^\s*Inbox\s*$`
+    // regex won't match. Match against the inner label span/div which
+    // carries ONLY the label text, then ascend to the enclosing <a>/<button>.
     for (const linkLabel of ALL_SIDEBAR_LINKS) {
       // Exact-text regex with word boundaries to avoid "Reports" matching
       // "Agent Reports" / "Custom Reports" before .first() resolves.
       const exact = new RegExp(`^\\s*${linkLabel}\\s*$`, 'i');
       const link = page
         .locator('nav a, aside a, nav button, aside button')
-        .filter({ hasText: exact });
+        .filter({
+          has: page.locator('span, div').filter({ hasText: exact }),
+        });
       await expect(link.first()).toBeAttached({ timeout: 8000 });
     }
   });
@@ -106,14 +113,50 @@ test.describe('Navigation — Sidebar link routing', () => {
       // Click the sidebar link. Use exact-text match with word boundaries so
       // "Reports" doesn't accidentally pick up "Agent Reports"/"Custom Reports"
       // and "Pipeline" doesn't pick up "Pipelines".
+      //
+      // v3.7.13 e2e-full retry fix — two coordinated changes:
+      // (1) hasText alone is wrong for items with a count badge ("Inbox" has
+      //     a "5" sibling so the link's text content is "Inbox5", which a
+      //     `^\s*Inbox\s*$` regex won't match). Match against the inner
+      //     label `<span>` (which carries ONLY the label text) and ascend
+      //     to its enclosing <a> via `..`.
+      // (2) Stale-element guard: the sidebar can re-render between locator
+      //     resolution and scrollIntoView/click when AuthContext settles
+      //     tenant data slightly after domcontentloaded. Wrap find+scroll+
+      //     click in a 3-attempt loop so a fresh handle is acquired if the
+      //     DOM re-renders mid-action; networkidle gives AuthContext a
+      //     chance to settle on the first attempt.
       const exact = new RegExp(`^\\s*${route.label}\\s*$`, 'i');
-      const link = page
-        .locator('nav a, aside a')
-        .filter({ hasText: exact })
-        .first();
-      await expect(link).toBeAttached({ timeout: 8000 });
-      await link.scrollIntoViewIfNeeded();
-      await link.click();
+      const findLink = () =>
+        page
+          .locator('nav a, aside a')
+          .filter({
+            has: page.locator('span, div').filter({ hasText: exact }),
+          })
+          .first();
+
+      await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
+        // networkidle is best-effort — Socket.io keeps a long-poll open in
+        // some envs and never goes idle. Fall through to the locator wait.
+      });
+
+      let lastErr = null;
+      let clicked = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const link = findLink();
+          await link.waitFor({ state: 'attached', timeout: 8000 });
+          await link.scrollIntoViewIfNeeded({ timeout: 5000 });
+          await link.click({ timeout: 5000 });
+          clicked = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          // 250ms breath lets a mid-flight re-render settle before retry.
+          await page.waitForTimeout(250);
+        }
+      }
+      if (!clicked) throw lastErr;
 
       await page.waitForLoadState('domcontentloaded');
 

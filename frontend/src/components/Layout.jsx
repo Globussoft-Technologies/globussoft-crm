@@ -40,31 +40,26 @@ function TenantChip({ tenant }) {
       data-testid="tenant-chip"
       style={{
         display: 'flex', alignItems: 'center', gap: '6px',
-        // #725 — harden the chip background fallback. The previous fallback
-        // (`#f0f4ff`, a light-blue hex) rendered as a white-text-on-light-blue
-        // pill in dark mode on any tenant whose theme block didn't define
-        // `--accent-bg` (e.g. non-wellness Default Org). `--accent-bg` is now
-        // defined in :root + [data-theme="light"|"dark"] in index.css so the
-        // variable resolves on every tenant, but we keep a theme-aware
-        // fallback chain (--subtle-bg-3 is a translucent surface tint that
-        // reads OK in both themes) so a future broken theme block can never
-        // produce light-blue-on-dark again.
-        background: 'var(--accent-bg, var(--subtle-bg-3, rgba(255,255,255,0.08)))',
-        border: '1px solid var(--accent-color)',
-        color: 'var(--text-primary)', borderRadius: 8,
+        background: 'var(--accent-bg, #f0f4ff)', border: '1px solid var(--accent-color)',
+        // Under wellness the chip's background resolves to deep teal (--primary-color),
+        // so the text must be the canonical accent-on-accent pair (--accent-text =
+        // #FFFFFF). The fallback to --text-primary preserves the original behavior
+        // on the generic tenant, where --accent-bg falls back to light blue #f0f4ff
+        // and dark text is correct.
+        color: 'var(--accent-text, var(--text-primary))', borderRadius: 8,
         padding: '6px 12px', fontSize: '0.85rem',
         fontWeight: 500,
       }}
       title={`Locked to ${tenant?.name || 'this tenant'} for session — log out to switch`}
     >
-      <Building2 size={14} style={{ color: 'var(--accent-color)' }} />
+      <Building2 size={14} style={{ color: 'var(--accent-text, var(--accent-color))' }} />
       <span>{tenant?.name || 'Organization'}</span>
       {isWellness && (
-        <span style={{ fontSize: '0.7rem', color: 'var(--accent-color)', marginLeft: '4px', textTransform: 'lowercase' }}>
+        <span style={{ fontSize: '0.7rem', color: 'var(--accent-text, var(--accent-color))', marginLeft: '4px', textTransform: 'lowercase', opacity: 0.85 }}>
           wellness
         </span>
       )}
-      <span style={{ fontSize: '0.7rem', color: 'var(--accent-color)', marginLeft: '4px' }}>🔒</span>
+      <span style={{ fontSize: '0.7rem', color: 'var(--accent-text, var(--accent-color))', marginLeft: '4px', opacity: 0.85 }}>🔒</span>
     </div>
   );
 }

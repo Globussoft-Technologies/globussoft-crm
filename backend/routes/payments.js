@@ -60,6 +60,73 @@ function serialize(payment) {
   return { ...payment, metadata: safeJsonParse(payment.metadata, {}) };
 }
 
+// Strip anything that looks like a Stripe/Razorpay key out of a string. The
+// SDK error message "Invalid API Key provided: sk_test_...qRsT" leaks key
+// shape (prefix + last 4) to the browser, which a tenant user has no business
+// seeing. Belt-and-braces — every code path that surfaces a gateway message
+// also runs this.
+function scrubKeys(s) {
+  if (typeof s !== 'string') return s;
+  return s.replace(/\b(sk|pk|rk|rzp)_(test|live)_[A-Za-z0-9_*]+/g, '[redacted]');
+}
+
+// Extract a clean, user-facing error from a gateway SDK throw. Razorpay's SDK
+// throws `{ statusCode, error: { code, description, field, ... } }`; Stripe's
+// SDK throws an Error with `.statusCode`, `.code`, `.type`, and `.raw.message`.
+// Bubbling the raw `err.message` to the client surfaces JSON blobs, "Server
+// error", or worse — the masked-but-still-leaky API key shape — so we map
+// known error classes to user-facing copy before sending anything back.
+function parseGatewayError(err, gateway) {
+  if (!err) return { status: 500, message: 'Payment gateway error', code: null };
+  const description =
+    (err.error && err.error.description) ||
+    (err.raw && err.raw.message) ||
+    err.message ||
+    'Payment gateway error';
+  const gatewayCode = (err.error && err.error.code) || err.code || null;
+  const gatewayStatus = err.statusCode || (err.raw && err.raw.statusCode) || 0;
+  const errType = err.type || (err.raw && err.raw.type) || null;
+
+  // Auth/config failures — Stripe 'StripeAuthenticationError', Razorpay 401,
+  // or any "Invalid API Key" message. These are operator-side misconfigurations
+  // that the user can't action; surface a friendly "contact support" copy and
+  // never echo the key shape back to the browser.
+  const looksLikeAuthIssue =
+    errType === 'StripeAuthenticationError' ||
+    gatewayStatus === 401 ||
+    /invalid api key|authentication|unauthorized|key_invalid/i.test(description);
+
+  if (looksLikeAuthIssue) {
+    return {
+      status: 503,
+      message: `${gateway} isn't available right now. Please contact support — the payment gateway needs to be reconfigured.`,
+      code: 'GATEWAY_NOT_CONFIGURED',
+    };
+  }
+
+  const looksLikeAmountIssue =
+    /amount|limit|exceeds|maximum|minimum|atleast/i.test(description) ||
+    err.field === 'amount';
+
+  if (looksLikeAmountIssue) {
+    return {
+      status: 400,
+      message: `This payment can't be processed: ${scrubKeys(description)}. Please use a smaller amount or split the invoice.`,
+      code: gatewayCode || 'AMOUNT_NOT_ALLOWED',
+    };
+  }
+
+  if (gatewayStatus >= 400 && gatewayStatus < 500) {
+    return { status: 400, message: scrubKeys(description), code: gatewayCode };
+  }
+
+  return {
+    status: 502,
+    message: `${gateway} is temporarily unavailable. Please try again in a moment.`,
+    code: gatewayCode,
+  };
+}
+
 async function markInvoicePaid(invoiceId, tenantId) {
   if (!invoiceId) return;
   try {
@@ -332,15 +399,22 @@ router.post("/create-stripe-intent", async (req, res) => {
     // Stripe expects integer in smallest currency unit (cents/paise)
     const amountInt = Math.round(Number(amount) * 100);
 
-    const intent = await stripe.paymentIntents.create({
-      amount: amountInt,
-      currency: String(currency).toLowerCase(),
-      automatic_payment_methods: { enabled: true },
-      metadata: {
-        tenantId: String(tenantId),
-        invoiceId: invoiceId ? String(invoiceId) : "",
-      },
-    });
+    let intent;
+    try {
+      intent = await stripe.paymentIntents.create({
+        amount: amountInt,
+        currency: String(currency).toLowerCase(),
+        automatic_payment_methods: { enabled: true },
+        metadata: {
+          tenantId: String(tenantId),
+          invoiceId: invoiceId ? String(invoiceId) : "",
+        },
+      });
+    } catch (gatewayErr) {
+      const parsed = parseGatewayError(gatewayErr, "Stripe");
+      console.error("[Payments] Stripe order rejected:", parsed.code, parsed.message);
+      return res.status(parsed.status).json({ error: parsed.message, code: parsed.code });
+    }
 
     const payment = await prisma.payment.create({
       data: {
@@ -385,15 +459,22 @@ router.post("/create-razorpay-order", async (req, res) => {
     // Razorpay expects integer in paise
     const amountInt = Math.round(Number(amount) * 100);
 
-    const order = await razorpay.orders.create({
-      amount: amountInt,
-      currency: String(currency).toUpperCase(),
-      receipt: invoiceId ? `inv_${invoiceId}_${Date.now()}` : `pay_${Date.now()}`,
-      notes: {
-        tenantId: String(tenantId),
-        invoiceId: invoiceId ? String(invoiceId) : "",
-      },
-    });
+    let order;
+    try {
+      order = await razorpay.orders.create({
+        amount: amountInt,
+        currency: String(currency).toUpperCase(),
+        receipt: invoiceId ? `inv_${invoiceId}_${Date.now()}` : `pay_${Date.now()}`,
+        notes: {
+          tenantId: String(tenantId),
+          invoiceId: invoiceId ? String(invoiceId) : "",
+        },
+      });
+    } catch (gatewayErr) {
+      const parsed = parseGatewayError(gatewayErr, "Razorpay");
+      console.error("[Payments] Razorpay order rejected:", parsed.code, parsed.message);
+      return res.status(parsed.status).json({ error: parsed.message, code: parsed.code });
+    }
 
     const payment = await prisma.payment.create({
       data: {

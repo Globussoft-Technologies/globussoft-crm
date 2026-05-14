@@ -76,7 +76,7 @@ export default function Locations() {
             {locations.length} location{locations.length !== 1 ? 's' : ''} — add new ones as you franchise.
           </p>
         </div>
-        <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+        <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
           <Plus size={16} /> {showAdd ? 'Cancel' : 'New location'}
         </button>
       </header>

@@ -108,25 +108,8 @@ private fun InnerNavHost(
         adminGraph(navController, userSession) // registers "admin" + "locations" + "drugs" + "resources"
         settingsGraph(navController, userSession, onLogout)
 
-        // ── Clinical stubs ────────────────────────────────────────────────
-
-        // ── Leads & Revenue stubs ─────────────────────────────────────────
-        composable("inbox")    { PlaceholderScreen("Unified Inbox") }
-        composable("whatsapp") { PlaceholderScreen("WhatsApp Threads") }
-
-        // ── Marketing stubs ───────────────────────────────────────────────
-        composable("marketing")     { PlaceholderScreen("SMS / Email Blasts") }
-        composable("sequences")     { PlaceholderScreen("Drip Sequences") }
-        composable("landing-pages") { PlaceholderScreen("Landing Pages") }
-
         // ── Reports stubs ─────────────────────────────────────────────────
         composable("per-location")   { ReportsScreen() }
-        composable("loyalty")        { PlaceholderScreen("Loyalty + Referrals") }
-        composable("surveys")        { PlaceholderScreen("Patient Surveys") }
-        composable("knowledge-base") { PlaceholderScreen("Knowledge Base") }
-
-        // ── Admin stubs ───────────────────────────────────────────────────
-        composable("channels") { PlaceholderScreen("Channels") }
     }
 }
 

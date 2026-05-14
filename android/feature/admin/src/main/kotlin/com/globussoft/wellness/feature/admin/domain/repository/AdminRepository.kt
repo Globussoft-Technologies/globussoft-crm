@@ -157,6 +157,15 @@ interface AdminRepository {
     // ── Staff Management (Wave 4) ──────────────────────────────────────────────
 
     suspend fun getAllStaff(): WResult<List<StaffManagementItem>>
+
+    // ── Wave 5: Communication & Marketing ─────────────────────────────────────
+
+    suspend fun getWhatsAppMessages(): WResult<List<WhatsAppMessageItem>>
+    suspend fun getNotifications(): WResult<List<NotificationItem>>
+    suspend fun getSequences(): WResult<List<SequenceItem>>
+    suspend fun getLandingPages(): WResult<List<LandingPageItem>>
+    suspend fun getSurveys(): WResult<List<SurveyItem>>
+    suspend fun getIntegrations(): WResult<List<IntegrationItem>>
 }
 
 /**
@@ -435,4 +444,59 @@ data class StaffManagementItem(
     val wellnessRole: String?,
     val isActive: Boolean,
     val createdAt: String,
+)
+
+// ── Wave 5 domain models ───────────────────────────────────────────────────────
+
+data class WhatsAppMessageItem(
+    val id: String,
+    val contactName: String?,
+    val body: String,
+    val direction: String,
+    val status: String,
+    val isRead: Boolean,
+    val createdAt: String,
+)
+
+data class NotificationItem(
+    val id: String,
+    val title: String,
+    val message: String,
+    val type: String,
+    val isRead: Boolean,
+    val createdAt: String,
+)
+
+data class SequenceItem(
+    val id: String,
+    val name: String,
+    val isActive: Boolean,
+    val enrollmentCount: Int,
+)
+
+data class LandingPageItem(
+    val id: String,
+    val title: String,
+    val slug: String,
+    val status: String,
+    val visits: Int,
+    val submissions: Int,
+)
+
+data class SurveyItem(
+    val id: String,
+    val name: String,
+    val type: String,
+    val isActive: Boolean,
+    val responseCount: Int,
+    val avgScore: Double,
+)
+
+data class IntegrationItem(
+    val id: String,
+    val provider: String,
+    val name: String,
+    val description: String?,
+    val category: String,
+    val isActive: Boolean,
 )

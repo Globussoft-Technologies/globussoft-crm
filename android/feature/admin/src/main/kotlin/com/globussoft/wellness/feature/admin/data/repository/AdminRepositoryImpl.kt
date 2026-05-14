@@ -16,8 +16,14 @@ import com.globussoft.wellness.feature.admin.domain.repository.LeadItem
 import com.globussoft.wellness.feature.admin.domain.repository.LeadsPage
 import com.globussoft.wellness.feature.admin.domain.repository.MembershipPlanItem
 import com.globussoft.wellness.feature.admin.domain.repository.RevenueGoalItem
+import com.globussoft.wellness.feature.admin.domain.repository.IntegrationItem
+import com.globussoft.wellness.feature.admin.domain.repository.LandingPageItem
+import com.globussoft.wellness.feature.admin.domain.repository.NotificationItem
 import com.globussoft.wellness.feature.admin.domain.repository.RoutingRuleItem
+import com.globussoft.wellness.feature.admin.domain.repository.SequenceItem
 import com.globussoft.wellness.feature.admin.domain.repository.StaffManagementItem
+import com.globussoft.wellness.feature.admin.domain.repository.SurveyItem
+import com.globussoft.wellness.feature.admin.domain.repository.WhatsAppMessageItem
 import com.globussoft.wellness.feature.admin.domain.repository.TaskItem
 import com.globussoft.wellness.feature.admin.domain.repository.TasksPage
 import com.globussoft.wellness.feature.admin.domain.repository.WorkingHoursItem
@@ -333,6 +339,93 @@ class AdminRepositoryImpl @Inject constructor(
     override suspend fun getAllStaff(): WResult<List<StaffManagementItem>> =
         safeApiCall { api.getAllStaff() }
             .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toStaffManagementItem() } }
+
+    // ── Wave 5: Communication & Marketing ─────────────────────────────────────
+
+    override suspend fun getWhatsAppMessages(): WResult<List<WhatsAppMessageItem>> =
+        safeApiCall { api.getWhatsAppMessages() }.mapSuccess { map ->
+            val msgs = (map["messages"] as? List<*>)?.filterIsInstance<Map<*, *>>() ?: emptyList()
+            msgs.map { m ->
+                WhatsAppMessageItem(
+                    id          = m["id"]?.toString() ?: "",
+                    contactName = (m["contact"] as? Map<*, *>)?.get("name")?.toString(),
+                    body        = m["body"]?.toString() ?: "",
+                    direction   = m["direction"]?.toString() ?: "OUTBOUND",
+                    status      = m["status"]?.toString() ?: "",
+                    isRead      = m["read"] as? Boolean ?: false,
+                    createdAt   = m["createdAt"]?.toString() ?: "",
+                )
+            }
+        }
+
+    override suspend fun getNotifications(): WResult<List<NotificationItem>> =
+        safeApiCall { api.getNotifications() }.mapSuccess { map ->
+            val notifs = (map["notifications"] as? List<*>)?.filterIsInstance<Map<*, *>>() ?: emptyList()
+            notifs.map { n ->
+                NotificationItem(
+                    id        = n["id"]?.toString() ?: "",
+                    title     = n["title"]?.toString() ?: "",
+                    message   = n["message"]?.toString() ?: "",
+                    type      = n["type"]?.toString() ?: "",
+                    isRead    = n["isRead"] as? Boolean ?: false,
+                    createdAt = n["createdAt"]?.toString() ?: "",
+                )
+            }
+        }
+
+    override suspend fun getSequences(): WResult<List<SequenceItem>> =
+        safeApiCall { api.getSequences() }.mapSuccess { list ->
+            list.filterIsInstance<Map<*, *>>().map { s ->
+                SequenceItem(
+                    id              = s["id"]?.toString() ?: "",
+                    name            = s["name"]?.toString() ?: "",
+                    isActive        = s["isActive"] as? Boolean ?: false,
+                    enrollmentCount = ((s["_count"] as? Map<*, *>)?.get("enrollments") as? Number)?.toInt() ?: 0,
+                )
+            }
+        }
+
+    override suspend fun getLandingPages(): WResult<List<LandingPageItem>> =
+        safeApiCall { api.getLandingPages() }.mapSuccess { list ->
+            list.filterIsInstance<Map<*, *>>().map { p ->
+                LandingPageItem(
+                    id          = p["id"]?.toString() ?: "",
+                    title       = p["title"]?.toString() ?: "",
+                    slug        = p["slug"]?.toString() ?: "",
+                    status      = p["status"]?.toString() ?: "",
+                    visits      = (p["visits"] as? Number)?.toInt() ?: 0,
+                    submissions = (p["submissions"] as? Number)?.toInt() ?: 0,
+                )
+            }
+        }
+
+    override suspend fun getSurveys(): WResult<List<SurveyItem>> =
+        safeApiCall { api.getSurveys() }.mapSuccess { list ->
+            list.filterIsInstance<Map<*, *>>().map { s ->
+                SurveyItem(
+                    id            = s["id"]?.toString() ?: "",
+                    name          = s["name"]?.toString() ?: "",
+                    type          = s["type"]?.toString() ?: "",
+                    isActive      = s["isActive"] as? Boolean ?: false,
+                    responseCount = (s["responseCount"] as? Number)?.toInt() ?: 0,
+                    avgScore      = (s["avgScore"] as? Number)?.toDouble() ?: 0.0,
+                )
+            }
+        }
+
+    override suspend fun getIntegrations(): WResult<List<IntegrationItem>> =
+        safeApiCall { api.getIntegrations() }.mapSuccess { list ->
+            list.filterIsInstance<Map<*, *>>().map { i ->
+                IntegrationItem(
+                    id          = i["id"]?.toString() ?: i["provider"]?.toString() ?: "",
+                    provider    = i["provider"]?.toString() ?: "",
+                    name        = i["name"]?.toString() ?: "",
+                    description = i["description"]?.toString(),
+                    category    = i["category"]?.toString() ?: "",
+                    isActive    = i["isActive"] as? Boolean ?: false,
+                )
+            }
+        }
 
     // ── Mappers ────────────────────────────────────────────────────────────────
 

@@ -823,4 +823,66 @@ interface WellnessApi {
     suspend fun getAllStaff(
         @Query("limit") limit: Int = 100,
     ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // WhatsApp Messages  (Wave 5)
+    // GET whatsapp/messages?limit=50&page=1
+    // -------------------------------------------------------------------------
+
+    @GET("whatsapp/messages")
+    suspend fun getWhatsAppMessages(
+        @Query("limit") limit: Int = 50,
+        @Query("page")  page:  Int = 1,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Notifications / Inbox  (Wave 5)
+    // GET notifications?limit=50&page=1
+    // -------------------------------------------------------------------------
+
+    @GET("notifications")
+    suspend fun getNotifications(
+        @Query("limit") limit: Int = 50,
+        @Query("page")  page:  Int = 1,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Sequences  (Wave 5)
+    // GET sequences?limit=50
+    // -------------------------------------------------------------------------
+
+    @GET("sequences")
+    suspend fun getSequences(
+        @Query("limit") limit: Int = 50,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Landing Pages  (Wave 5)
+    // GET landing-pages?limit=50
+    // -------------------------------------------------------------------------
+
+    @GET("landing-pages")
+    suspend fun getLandingPages(
+        @Query("limit") limit: Int = 50,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Surveys  (Wave 5)
+    // GET surveys?limit=50
+    // -------------------------------------------------------------------------
+
+    @GET("surveys")
+    suspend fun getSurveys(
+        @Query("limit") limit: Int = 50,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Integrations / Channels  (Wave 5)
+    // GET integrations?limit=100
+    // -------------------------------------------------------------------------
+
+    @GET("integrations")
+    suspend fun getIntegrations(
+        @Query("limit") limit: Int = 100,
+    ): Response<List<@JvmSuppressWildcards Any>>
 }

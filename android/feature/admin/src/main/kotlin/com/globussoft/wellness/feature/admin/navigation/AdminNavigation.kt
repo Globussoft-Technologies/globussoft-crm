@@ -28,7 +28,16 @@ import com.globussoft.wellness.feature.admin.presentation.resources.ResourcesScr
 import com.globussoft.wellness.feature.admin.presentation.revenuegoals.RevenueGoalsScreen
 import com.globussoft.wellness.feature.admin.presentation.servicecategories.ServiceCategoriesScreen
 import com.globussoft.wellness.feature.admin.presentation.vendors.VendorsScreen
+import com.globussoft.wellness.feature.admin.presentation.channels.ChannelsScreen
+import com.globussoft.wellness.feature.admin.presentation.knowledgebase.KnowledgeBaseScreen
+import com.globussoft.wellness.feature.admin.presentation.landingpages.LandingPagesScreen
+import com.globussoft.wellness.feature.admin.presentation.loyalty.LoyaltyScreen
+import com.globussoft.wellness.feature.admin.presentation.marketing.MarketingScreen
+import com.globussoft.wellness.feature.admin.presentation.notifications.InboxScreen
+import com.globussoft.wellness.feature.admin.presentation.sequences.SequencesScreen
 import com.globussoft.wellness.feature.admin.presentation.staff.StaffScreen
+import com.globussoft.wellness.feature.admin.presentation.surveys.SurveysScreen
+import com.globussoft.wellness.feature.admin.presentation.whatsapp.WhatsAppScreen
 import com.globussoft.wellness.feature.admin.presentation.workinghours.WorkingHoursScreen
 
 /**
@@ -60,6 +69,15 @@ object AdminDestinations {
     const val Tasks                = "tasks"
     const val RoutingRules         = "lead-routing"
     const val Staff                = "staff"
+    const val WhatsApp             = "whatsapp"
+    const val Inbox                = "inbox"
+    const val Marketing            = "marketing"
+    const val Sequences            = "sequences"
+    const val LandingPages         = "landing-pages"
+    const val Surveys              = "surveys"
+    const val Loyalty              = "loyalty"
+    const val KnowledgeBase        = "knowledge-base"
+    const val Channels             = "channels"
 }
 
 /**
@@ -242,5 +260,41 @@ fun NavGraphBuilder.adminGraph(
 
     composable(AdminDestinations.Staff) {
         StaffScreen(viewModel = hiltViewModel())
+    }
+
+    composable(AdminDestinations.WhatsApp) {
+        WhatsAppScreen(viewModel = hiltViewModel())
+    }
+
+    composable(AdminDestinations.Inbox) {
+        InboxScreen(viewModel = hiltViewModel())
+    }
+
+    composable(AdminDestinations.Marketing) {
+        MarketingScreen()
+    }
+
+    composable(AdminDestinations.Sequences) {
+        SequencesScreen(viewModel = hiltViewModel())
+    }
+
+    composable(AdminDestinations.LandingPages) {
+        LandingPagesScreen(viewModel = hiltViewModel())
+    }
+
+    composable(AdminDestinations.Surveys) {
+        SurveysScreen(viewModel = hiltViewModel())
+    }
+
+    composable(AdminDestinations.Loyalty) {
+        LoyaltyScreen()
+    }
+
+    composable(AdminDestinations.KnowledgeBase) {
+        KnowledgeBaseScreen()
+    }
+
+    composable(AdminDestinations.Channels) {
+        ChannelsScreen(viewModel = hiltViewModel())
     }
 }

@@ -11,8 +11,14 @@ import com.globussoft.wellness.feature.admin.domain.repository.AuditLogsPage
 import com.globussoft.wellness.feature.admin.domain.repository.CommissionProfileItem
 import com.globussoft.wellness.feature.admin.domain.repository.InventoryAdjustmentItem
 import com.globussoft.wellness.feature.admin.domain.repository.InventoryReceiptItem
+import com.globussoft.wellness.feature.admin.domain.repository.LeadDetailItem
+import com.globussoft.wellness.feature.admin.domain.repository.LeadItem
+import com.globussoft.wellness.feature.admin.domain.repository.LeadsPage
 import com.globussoft.wellness.feature.admin.domain.repository.MembershipPlanItem
 import com.globussoft.wellness.feature.admin.domain.repository.RevenueGoalItem
+import com.globussoft.wellness.feature.admin.domain.repository.RoutingRuleItem
+import com.globussoft.wellness.feature.admin.domain.repository.TaskItem
+import com.globussoft.wellness.feature.admin.domain.repository.TasksPage
 import com.globussoft.wellness.feature.admin.domain.repository.WorkingHoursItem
 import com.globussoft.wellness.feature.admin.domain.repository.AutoConsumptionRuleItem
 import com.globussoft.wellness.feature.admin.domain.repository.CashbackRuleItem
@@ -283,6 +289,44 @@ class AdminRepositoryImpl @Inject constructor(
         safeApiCall { api.getMembershipPlans() }
             .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toMembershipPlan() } }
 
+    // ── All Leads ──────────────────────────────────────────────────────────────
+
+    override suspend fun getLeads(search: String?, status: String?, page: Int): WResult<LeadsPage> =
+        safeApiCall { api.getLeads(search, status, page = page) }
+            .mapSuccess { list ->
+                val contacts = list.filterIsInstance<Map<*, *>>()
+                LeadsPage(
+                    leads       = contacts.map { it.toLeadItem() },
+                    total       = contacts.size,
+                    pages       = 1,
+                    currentPage = page,
+                )
+            }
+
+    override suspend fun getLeadDetail(id: String): WResult<LeadDetailItem> =
+        safeApiCall { api.getLeadDetail(id) }
+            .mapSuccess { it.toLeadDetailItem() }
+
+    // ── Tasks ──────────────────────────────────────────────────────────────────
+
+    override suspend fun getTasks(status: String?, page: Int): WResult<TasksPage> =
+        safeApiCall { api.getTasks(status, page = page) }
+            .mapSuccess { list ->
+                val tasks = list.filterIsInstance<Map<*, *>>()
+                TasksPage(
+                    tasks       = tasks.map { it.toTaskItem() },
+                    total       = tasks.size,
+                    pages       = 1,
+                    currentPage = page,
+                )
+            }
+
+    // ── Lead Routing Rules ─────────────────────────────────────────────────────
+
+    override suspend fun getLeadRoutingRules(): WResult<List<RoutingRuleItem>> =
+        safeApiCall { api.getLeadRoutingRules() }
+            .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toRoutingRule() } }
+
     // ── Mappers ────────────────────────────────────────────────────────────────
 
     private fun Map<String, Any>.toDrugItem() = DrugItem(
@@ -481,6 +525,75 @@ class AdminRepositoryImpl @Inject constructor(
         currency     = this["currency"]?.toString() ?: "INR",
         isActive     = this["isActive"] as? Boolean ?: true,
         entitlements = this["entitlements"]?.toString(),
+    )
+
+    private fun Map<*, *>.toLeadItem() = LeadItem(
+        id         = this["id"]?.toString() ?: "",
+        name       = this["name"]?.toString() ?: this["firstName"]?.toString()?.let {
+            "$it ${this["lastName"] ?: ""}".trim()
+        },
+        email      = this["email"]?.toString(),
+        phone      = this["phone"]?.toString(),
+        company    = this["company"]?.toString(),
+        status     = this["status"]?.toString(),
+        source     = this["source"]?.toString(),
+        score      = (this["score"] as? Number)?.toInt(),
+        assignedTo = (this["assignedUser"] as? Map<*, *>)?.get("name")?.toString()
+                     ?: this["assignedToName"]?.toString(),
+        createdAt  = this["createdAt"]?.toString() ?: "",
+    )
+
+    private fun Map<*, *>.toLeadDetailItem(): LeadDetailItem {
+        @Suppress("UNCHECKED_CAST")
+        val rawTags = this["tags"]
+        val tags = when (rawTags) {
+            is List<*> -> rawTags.filterIsInstance<String>()
+            is String  -> if (rawTags.isBlank()) emptyList() else listOf(rawTags)
+            else       -> emptyList()
+        }
+        return LeadDetailItem(
+            id         = this["id"]?.toString() ?: "",
+            name       = this["name"]?.toString() ?: this["firstName"]?.toString()?.let {
+                "$it ${this["lastName"] ?: ""}".trim()
+            },
+            email      = this["email"]?.toString(),
+            phone      = this["phone"]?.toString(),
+            company    = this["company"]?.toString(),
+            status     = this["status"]?.toString(),
+            source     = this["source"]?.toString(),
+            score      = (this["score"] as? Number)?.toInt(),
+            tags       = tags,
+            notes      = this["notes"]?.toString(),
+            assignedTo = (this["assignedUser"] as? Map<*, *>)?.get("name")?.toString()
+                         ?: this["assignedToName"]?.toString(),
+            createdAt  = this["createdAt"]?.toString() ?: "",
+            updatedAt  = this["updatedAt"]?.toString(),
+        )
+    }
+
+    private fun Map<*, *>.toTaskItem() = TaskItem(
+        id             = this["id"]?.toString() ?: "",
+        title          = this["title"]?.toString() ?: "",
+        description    = this["notes"]?.toString() ?: this["description"]?.toString(),
+        status         = this["status"]?.toString() ?: "pending",
+        priority       = this["priority"]?.toString(),
+        dueDate        = this["dueDate"]?.toString(),
+        assignedToName = (this["user"] as? Map<*, *>)?.get("name")?.toString()
+                         ?: (this["assignedTo"] as? Map<*, *>)?.get("name")?.toString()
+                         ?: this["assignedToName"]?.toString(),
+        createdAt      = this["createdAt"]?.toString() ?: "",
+    )
+
+    private fun Map<*, *>.toRoutingRule() = RoutingRuleItem(
+        id                = this["id"]?.toString() ?: "",
+        name              = this["name"]?.toString() ?: "",
+        priority          = (this["priority"] as? Number)?.toInt() ?: 0,
+        assignedUserName  = (this["assignTo"] as? Map<*, *>)?.get("name")?.toString()
+                            ?: (this["assignedUser"] as? Map<*, *>)?.get("name")?.toString()
+                            ?: this["assignedUserName"]?.toString(),
+        serviceCategory   = this["serviceCategory"]?.toString(),
+        isActive          = this["isActive"] as? Boolean ?: true,
+        conditions        = this["conditions"]?.toString(),
     )
 }
 

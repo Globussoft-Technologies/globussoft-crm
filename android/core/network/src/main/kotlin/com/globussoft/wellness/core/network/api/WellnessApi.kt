@@ -745,4 +745,43 @@ interface WellnessApi {
     suspend fun getMembershipPlans(
         @Query("includeInactive") includeInactive: Int = 1,
     ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // All Leads / Contacts  (Wave 3)
+    // GET contacts?search=&status=&limit=50&page=1
+    // GET contacts/{id}
+    // -------------------------------------------------------------------------
+
+    @GET("contacts")
+    suspend fun getLeads(
+        @Query("search") search: String?  = null,
+        @Query("status") status: String?  = null,
+        @Query("limit")  limit:  Int      = 50,
+        @Query("page")   page:   Int      = 1,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @GET("contacts/{id}")
+    suspend fun getLeadDetail(
+        @Path("id") id: String,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Tasks  (Wave 3)
+    // GET tasks?status=&page=1&limit=50
+    // -------------------------------------------------------------------------
+
+    @GET("tasks")
+    suspend fun getTasks(
+        @Query("status") status: String? = null,
+        @Query("page")   page:   Int     = 1,
+        @Query("limit")  limit:  Int     = 50,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Lead Routing Rules  (Wave 3)
+    // GET lead-routing
+    // -------------------------------------------------------------------------
+
+    @GET("lead-routing")
+    suspend fun getLeadRoutingRules(): Response<List<@JvmSuppressWildcards Any>>
 }

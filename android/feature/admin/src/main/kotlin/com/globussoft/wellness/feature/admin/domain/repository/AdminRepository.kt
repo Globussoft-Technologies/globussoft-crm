@@ -139,6 +139,20 @@ interface AdminRepository {
     // ── Membership Plans ───────────────────────────────────────────────────────
 
     suspend fun getMembershipPlans(): WResult<List<MembershipPlanItem>>
+
+    // ── All Leads (Contacts) ───────────────────────────────────────────────────
+
+    suspend fun getLeads(search: String? = null, status: String? = null, page: Int = 1): WResult<LeadsPage>
+
+    suspend fun getLeadDetail(id: String): WResult<LeadDetailItem>
+
+    // ── Tasks ──────────────────────────────────────────────────────────────────
+
+    suspend fun getTasks(status: String? = null, page: Int = 1): WResult<TasksPage>
+
+    // ── Lead Routing Rules ─────────────────────────────────────────────────────
+
+    suspend fun getLeadRoutingRules(): WResult<List<RoutingRuleItem>>
 }
 
 /**
@@ -343,4 +357,68 @@ data class MembershipPlanItem(
     val currency: String,
     val isActive: Boolean,
     val entitlements: String?,
+)
+
+data class LeadItem(
+    val id: String,
+    val name: String?,
+    val email: String?,
+    val phone: String?,
+    val company: String?,
+    val status: String?,
+    val source: String?,
+    val score: Int?,
+    val assignedTo: String?,
+    val createdAt: String,
+)
+
+data class LeadsPage(
+    val leads: List<LeadItem>,
+    val total: Int,
+    val pages: Int,
+    val currentPage: Int,
+)
+
+data class LeadDetailItem(
+    val id: String,
+    val name: String?,
+    val email: String?,
+    val phone: String?,
+    val company: String?,
+    val status: String?,
+    val source: String?,
+    val score: Int?,
+    val tags: List<String>,
+    val notes: String?,
+    val assignedTo: String?,
+    val createdAt: String,
+    val updatedAt: String?,
+)
+
+data class TaskItem(
+    val id: String,
+    val title: String,
+    val description: String?,
+    val status: String,
+    val priority: String?,
+    val dueDate: String?,
+    val assignedToName: String?,
+    val createdAt: String,
+)
+
+data class TasksPage(
+    val tasks: List<TaskItem>,
+    val total: Int,
+    val pages: Int,
+    val currentPage: Int,
+)
+
+data class RoutingRuleItem(
+    val id: String,
+    val name: String,
+    val priority: Int,
+    val assignedUserName: String?,
+    val serviceCategory: String?,
+    val isActive: Boolean,
+    val conditions: String?,
 )

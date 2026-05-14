@@ -11,6 +11,10 @@ import com.globussoft.wellness.feature.admin.presentation.autoconsumption.AutoCo
 import com.globussoft.wellness.feature.admin.presentation.cashbackrules.CashbackRulesScreen
 import com.globussoft.wellness.feature.admin.presentation.commissionprofiles.CommissionProfilesScreen
 import com.globussoft.wellness.feature.admin.presentation.convertedleads.ConvertedLeadsScreen
+import com.globussoft.wellness.feature.admin.presentation.leads.LeadDetailScreen
+import com.globussoft.wellness.feature.admin.presentation.leads.LeadsScreen
+import com.globussoft.wellness.feature.admin.presentation.routingrules.RoutingRulesScreen
+import com.globussoft.wellness.feature.admin.presentation.tasks.TasksScreen
 import com.globussoft.wellness.feature.admin.presentation.drugs.DrugsScreen
 import com.globussoft.wellness.feature.admin.presentation.holidays.HolidaysScreen
 import com.globussoft.wellness.feature.admin.presentation.inventoryadjustments.InventoryAdjustmentsScreen
@@ -50,6 +54,10 @@ object AdminDestinations {
     const val CommissionProfiles   = "commission-profiles"
     const val WorkingHours         = "working-hours"
     const val Memberships          = "memberships"
+    const val Leads                = "leads"
+    const val LeadDetail           = "lead-detail/{leadId}"
+    const val Tasks                = "tasks"
+    const val RoutingRules         = "lead-routing"
 }
 
 /**
@@ -200,6 +208,31 @@ fun NavGraphBuilder.adminGraph(
 
     composable(AdminDestinations.Memberships) {
         MembershipsScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.Leads) {
+        LeadsScreen(
+            viewModel    = hiltViewModel(),
+            onLeadClick  = { id -> navController.navigate("lead-detail/$id") },
+        )
+    }
+
+    composable(AdminDestinations.LeadDetail) {
+        LeadDetailScreen(
+            viewModel      = hiltViewModel(),
+            onNavigateBack = { navController.popBackStack() },
+        )
+    }
+
+    composable(AdminDestinations.Tasks) {
+        TasksScreen(viewModel = hiltViewModel())
+    }
+
+    composable(AdminDestinations.RoutingRules) {
+        RoutingRulesScreen(
             viewModel      = hiltViewModel(),
             onNavigateBack = { navController.popBackStack() },
         )

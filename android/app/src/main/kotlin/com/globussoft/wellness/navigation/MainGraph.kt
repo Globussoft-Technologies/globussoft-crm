@@ -111,11 +111,8 @@ private fun InnerNavHost(
         // ── Clinical stubs ────────────────────────────────────────────────
 
         // ── Leads & Revenue stubs ─────────────────────────────────────────
-        composable("inbox")        { PlaceholderScreen("Unified Inbox") }
-        composable("whatsapp")     { PlaceholderScreen("WhatsApp Threads") }
-        composable("leads")        { PlaceholderScreen("All Leads") }
-        composable("tasks")        { PlaceholderScreen("Tasks") }
-        composable("lead-routing") { PlaceholderScreen("Routing Rules") }
+        composable("inbox")    { PlaceholderScreen("Unified Inbox") }
+        composable("whatsapp") { PlaceholderScreen("WhatsApp Threads") }
 
         // ── Finance stubs ─────────────────────────────────────────────────
         composable("invoices")  { PlaceholderScreen("Invoices") }

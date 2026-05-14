@@ -13,12 +13,13 @@ import com.globussoft.wellness.core.network.model.response.LeadResponse
  * the UI always has a displayable value.
  */
 fun LeadResponse.toDomain(): Lead = Lead(
-    id            = id,
-    contactName   = contactName ?: name ?: "",
-    phone         = phone,
-    leadScore     = leadScore,
-    source        = source,
-    createdAt     = createdAt,
-    nextFollowUp  = nextFollowUp,
-    status        = status,
+    id              = id,
+    contactName     = contactName ?: name ?: "",
+    phone           = phone,
+    leadScore       = leadScore,
+    source          = source,
+    createdAt       = createdAt,
+    nextFollowUp    = nextFollowUp,
+    status          = status,
+    firstResponseAt = firstResponseAt,
 )

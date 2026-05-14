@@ -2,23 +2,43 @@ package com.globussoft.wellness.feature.services.presentation
 
 import com.globussoft.wellness.core.domain.model.Service
 
+// ─── Domain model ─────────────────────────────────────────────────────────────
+
+/**
+ * Lightweight representation of a wellness treatment plan as returned by
+ * `GET /api/wellness/activetreatment`.
+ */
+data class TreatmentPlan(
+    val id: String,
+    val name: String,
+    val status: String,
+    val totalSessions: Int,
+    val completedSessions: Int,
+    val totalPrice: Double?,
+    val nextDueAt: String?,
+    val startedAt: String,
+    val patientName: String?,
+    val serviceName: String?,
+)
+
 // ─── UI State ─────────────────────────────────────────────────────────────────
 
 /**
  * Immutable snapshot of the Services screen state managed by [ServicesViewModel].
  *
- * The screen has three tabs: Catalog, Packages (static placeholder), and
- * Active Treatments (read-only list derived from visit data in a future
- * iteration — currently shows a placeholder).
+ * The screen has three tabs: Catalog, Packages, and Active Treatments.
  *
- * @param isLoading           True while a network operation is in flight.
- * @param services            Full service catalog for the Catalog tab.
- * @param error               Non-null error message shown when set.
- * @param selectedTabIndex    0=Catalog, 1=Packages, 2=Active Treatments.
- * @param showAddForm         True when the add/edit bottom sheet is open.
- * @param editingService      Non-null when the sheet is in edit mode.
- * @param formState           Current state of the add/edit form fields.
- * @param deleteConfirmService Non-null when the delete confirmation dialog is visible.
+ * @param isLoading              True while a services network operation is in flight.
+ * @param services               Full service catalog for the Catalog tab.
+ * @param error                  Non-null error message shown when set.
+ * @param selectedTabIndex       0=Catalog, 1=Packages, 2=Active Treatments.
+ * @param showAddForm            True when the add/edit bottom sheet is open.
+ * @param editingService         Non-null when the sheet is in edit mode.
+ * @param formState              Current state of the add/edit form fields.
+ * @param deleteConfirmService   Non-null when the delete confirmation dialog is visible.
+ * @param treatmentPlans         Treatment plans for the Active Treatments tab.
+ * @param isLoadingTreatments    True while treatment plans are being fetched.
+ * @param treatmentPlansError    Non-null error message for the treatments tab.
  */
 data class ServicesUiState(
     val isLoading: Boolean = false,
@@ -29,6 +49,9 @@ data class ServicesUiState(
     val editingService: Service? = null,
     val formState: ServiceFormState = ServiceFormState(),
     val deleteConfirmService: Service? = null,
+    val treatmentPlans: List<TreatmentPlan> = emptyList(),
+    val isLoadingTreatments: Boolean = false,
+    val treatmentPlansError: String? = null,
 )
 
 /**
@@ -93,4 +116,10 @@ sealed class ServicesEvent {
 
     /** Pull-to-refresh or explicit retry. */
     data object Refresh : ServicesEvent()
+
+    /** User tapped the Pause/Resume action on a treatment plan card. */
+    data class ToggleTreatmentPause(val plan: TreatmentPlan) : ServicesEvent()
+
+    /** User tapped the Cancel action on a treatment plan card. */
+    data class CancelTreatment(val plan: TreatmentPlan) : ServicesEvent()
 }

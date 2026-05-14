@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BeachAccess
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -63,6 +64,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LeaveScreen(
+    onNavigateBack: (() -> Unit)? = null,
     viewModel: LeaveViewModel = hiltViewModel(),
 ) {
     val state        by viewModel.state.collectAsStateWithLifecycle()
@@ -89,6 +91,17 @@ fun LeaveScreen(
                         Text("Leave", fontWeight = FontWeight.SemiBold)
                     }
                 },
+                navigationIcon = {
+                    if (onNavigateBack != null) {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(
+                                imageVector        = Icons.Default.ArrowBack,
+                                contentDescription = "Back",
+                                tint               = WellnessPrimary,
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
                 actions = {
                     WellnessButton(
@@ -109,8 +122,9 @@ fun LeaveScreen(
                 }
             }
             state.error != null && state.myRequests.isEmpty() -> {
+                val errorMsg = state.error ?: ""
                 ErrorState(
-                    message  = state.error,
+                    message  = errorMsg,
                     onRetry  = { viewModel.onEvent(LeaveEvent.Refresh) },
                     modifier = Modifier.fillMaxSize().padding(padding),
                 )
@@ -279,7 +293,7 @@ private fun ApplyLeaveSheet(
     state: LeaveUiState,
     onEvent: (LeaveEvent) -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartialExpansion = true)
+    val sheetState = rememberModalBottomSheetState()
     val form       = state.applyForm
     val typeOptions = listOf(
         "ANNUAL" to "Annual Leave",

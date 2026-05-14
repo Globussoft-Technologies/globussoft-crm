@@ -184,10 +184,10 @@ private fun ProfileCard(session: UserSession) {
                 Spacer(modifier = Modifier.height(Dimens.SpacingSm))
                 Row(horizontalArrangement = Arrangement.spacedBy(Dimens.SpacingXs)) {
                     RoleBadge(label = session.role.name)
-                    if (session.wellnessRole != null) {
+                    session.wellnessRole?.let { wellnessRole ->
                         RoleBadge(
-                            label     = session.wellnessRole.name,
-                            tintColor = WellnessPrimary.copy(alpha = 0.15f),
+                            label     = wellnessRole.name,
+                                tintColor = WellnessPrimary.copy(alpha = 0.15f),
                             textColor = WellnessPrimary,
                         )
                     }

@@ -138,12 +138,14 @@ fun VisitsScreen(
             when {
                 state.isLoading && state.visits.isEmpty() ->
                     ShimmerList(itemCount = 8, modifier = Modifier.fillMaxSize())
-                state.error != null && state.visits.isEmpty() ->
+                state.error != null && state.visits.isEmpty() -> {
+                    val errorMsg = state.error ?: ""
                     ErrorState(
-                        message  = state.error,
+                        message  = errorMsg,
                         onRetry  = { viewModel.onEvent(VisitsEvent.Refresh) },
                         modifier = Modifier.fillMaxSize(),
                     )
+                }
                 state.visits.isEmpty() ->
                     EmptyState(
                         message  = "No visits found for the selected period.",

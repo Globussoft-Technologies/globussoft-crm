@@ -1,5 +1,7 @@
 package com.globussoft.wellness.feature.dashboard.presentation.dashboard
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -51,6 +54,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -136,8 +140,9 @@ fun DashboardScreen(
                     ShimmerList(itemCount = 6, modifier = Modifier.fillMaxSize())
                 }
                 state.error != null && state.data == null -> {
+                    val errorMsg = state.error ?: ""
                     ErrorState(
-                        message  = state.error,
+                        message  = errorMsg,
                         onRetry  = { viewModel.onEvent(DashboardEvent.Refresh) },
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -306,8 +311,8 @@ private fun KpiGrid(data: DashboardData) {
         // The grid is inside a LazyColumn so we disable its own scrolling.
         userScrollEnabled   = false,
         modifier            = Modifier.height(
-            // Calculate fixed height: 2 rows of 110.dp cards + 1 gap row.
-            (110.dp * 2) + Dimens.SpacingMd,
+            // Calculate fixed height: 2 rows of 118.dp cards + 1 gap row.
+            (118.dp * 2) + Dimens.SpacingMd,
         ),
     ) {
         items(items) { kpi ->
@@ -318,37 +323,52 @@ private fun KpiGrid(data: DashboardData) {
 
 @Composable
 private fun KpiCard(kpi: KpiItem) {
-    WellnessCard(modifier = Modifier.height(110.dp)) {
+    // Animate card reveal on composition
+    var visible by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue   = if (visible) 1f else 0.92f,
+        animationSpec = tween(durationMillis = 350),
+        label         = "kpi_scale",
+    )
+    LaunchedEffect(Unit) { visible = true }
+
+    WellnessCard(modifier = Modifier.height(118.dp)) {
+        // Colored accent bar across the top
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(3.dp)
+                .background(kpi.accentColor),
+        )
         Column(
             modifier            = Modifier
                 .fillMaxSize()
-                .padding(Dimens.SpacingMd),
+                .padding(horizontal = Dimens.SpacingMd, vertical = Dimens.SpacingSm),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier          = Modifier
-                        .size(32.dp)
-                        .background(
-                            color = kpi.accentColor.copy(alpha = 0.12f),
-                            shape = MaterialTheme.shapes.small,
-                        ),
-                    contentAlignment  = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector        = kpi.icon,
-                        contentDescription = null,
-                        tint               = kpi.accentColor,
-                        modifier           = Modifier.size(18.dp),
-                    )
-                }
+            // Icon with tinted background
+            Box(
+                modifier         = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(kpi.accentColor.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector        = kpi.icon,
+                    contentDescription = null,
+                    tint               = kpi.accentColor,
+                    modifier           = Modifier.size(18.dp),
+                )
             }
+
+            // Value + label
             Column {
                 Text(
-                    text  = kpi.value,
-                    style = MaterialTheme.typography.headlineMedium,
+                    text       = kpi.value,
+                    style      = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color      = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     text  = kpi.label,
@@ -366,10 +386,10 @@ private fun KpiCard(kpi: KpiItem) {
 private fun YesterdayStrip(data: DashboardData) {
     Column {
         Text(
-            text  = "Yesterday",
-            style = MaterialTheme.typography.titleSmall,
+            text       = "Yesterday at a Glance",
+            style      = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color      = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(Dimens.SpacingSm))
         Row(
@@ -377,11 +397,18 @@ private fun YesterdayStrip(data: DashboardData) {
             horizontalArrangement = Arrangement.spacedBy(Dimens.SpacingMd),
         ) {
             WellnessCard(modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(WellnessPrimary),
+                )
                 Column(modifier = Modifier.padding(Dimens.SpacingMd)) {
                     Text(
-                        text  = formatRevenue(data.yesterdayRevenue),
-                        style = MaterialTheme.typography.titleLarge,
+                        text       = formatRevenue(data.yesterdayRevenue),
+                        style      = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
+                        color      = WellnessPrimary,
                     )
                     Text(
                         text  = "Revenue",
@@ -391,14 +418,42 @@ private fun YesterdayStrip(data: DashboardData) {
                 }
             }
             WellnessCard(modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(WellnessAccent),
+                )
                 Column(modifier = Modifier.padding(Dimens.SpacingMd)) {
                     Text(
-                        text  = data.yesterdayVisits.toString(),
-                        style = MaterialTheme.typography.titleLarge,
+                        text       = data.yesterdayVisits.toString(),
+                        style      = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
+                        color      = WellnessAccent,
                     )
                     Text(
                         text  = "Visits",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            WellnessCard(modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(WellnessSuccess),
+                )
+                Column(modifier = Modifier.padding(Dimens.SpacingMd)) {
+                    Text(
+                        text       = "${data.occupancyPercent.toInt()}%",
+                        style      = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color      = WellnessSuccess,
+                    )
+                    Text(
+                        text  = "Occupancy",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -413,46 +468,68 @@ private fun YesterdayStrip(data: DashboardData) {
 @Composable
 private fun RevenueTrendCard(trendPoints: List<RevenueTrendPoint>) {
     WellnessCard {
+        // Teal accent bar across the top
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(3.dp)
+                .background(WellnessPrimary),
+        )
         Column(modifier = Modifier.padding(Dimens.SpacingLg)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector        = Icons.Default.TrendingUp,
-                    contentDescription = null,
-                    tint               = WellnessPrimary,
-                    modifier           = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(Dimens.SpacingSm))
-                Text(
-                    text  = "30-Day Revenue Trend",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier         = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(WellnessPrimary.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector        = Icons.Default.TrendingUp,
+                        contentDescription = null,
+                        tint               = WellnessPrimary,
+                        modifier           = Modifier.size(18.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.width(Dimens.SpacingMd))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text       = "Revenue Trend",
+                        style      = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text  = "Last 30 days",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(Dimens.SpacingMd))
 
             if (trendPoints.isNotEmpty()) {
-                val modelProducer = remember(trendPoints) {
-                    CartesianChartModelProducer().also { producer ->
-                        producer.runTransaction {
-                            lineSeries { series(trendPoints.map { it.amount.toFloat() }) }
-                        }
+                val modelProducer = remember(trendPoints) { CartesianChartModelProducer() }
+                LaunchedEffect(trendPoints) {
+                    modelProducer.runTransaction {
+                        lineSeries { series(trendPoints.map { it.amount.toFloat() }) }
                     }
                 }
                 CartesianChartHost(
-                    chart = rememberCartesianChart(
-                        rememberLineCartesianLayer(),
-                    ),
+                    chart         = rememberCartesianChart(rememberLineCartesianLayer()),
                     modelProducer = modelProducer,
                     modifier      = Modifier
                         .fillMaxWidth()
-                        .height(160.dp),
+                        .height(180.dp),
                 )
             } else {
                 Box(
                     modifier         = Modifier
                         .fillMaxWidth()
-                        .height(160.dp),
+                        .height(180.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -477,17 +554,19 @@ private data class QuickAction(
 @Composable
 private fun QuickActionsRow(onNavigate: (String) -> Unit) {
     val actions = listOf(
-        QuickAction("Patients",  Icons.Default.Group,          "patients"),
-        QuickAction("Calendar",  Icons.Default.CalendarMonth,  "calendar"),
-        QuickAction("Reports",   Icons.Default.TrendingUp,     "reports"),
+        QuickAction("Patients",   Icons.Default.Group,          "patients"),
+        QuickAction("Calendar",   Icons.Default.CalendarMonth,  "calendar"),
+        QuickAction("Finance",    Icons.Default.TrendingUp,     "finance"),
+        QuickAction("Reports",    Icons.Default.TrendingUp,     "reports"),
+        QuickAction("Telecaller", Icons.Default.PendingActions, "telecaller"),
     )
 
     Column {
         Text(
-            text  = "Quick Actions",
-            style = MaterialTheme.typography.titleSmall,
+            text       = "Quick Navigation",
+            style      = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color      = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(Dimens.SpacingSm))
         Row(
@@ -501,20 +580,30 @@ private fun QuickActionsRow(onNavigate: (String) -> Unit) {
                 ) {
                     Column(
                         modifier            = Modifier
-                            .padding(Dimens.SpacingMd)
+                            .padding(vertical = 14.dp, horizontal = Dimens.SpacingMd)
                             .fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Icon(
-                            imageVector        = action.icon,
-                            contentDescription = null,
-                            tint               = WellnessPrimary,
-                            modifier           = Modifier.size(24.dp),
-                        )
-                        Spacer(modifier = Modifier.height(Dimens.SpacingXs))
+                        Box(
+                            modifier         = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(WellnessPrimary.copy(alpha = 0.10f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector        = action.icon,
+                                contentDescription = null,
+                                tint               = WellnessPrimary,
+                                modifier           = Modifier.size(22.dp),
+                            )
+                        }
                         Text(
-                            text  = action.label,
-                            style = MaterialTheme.typography.labelSmall,
+                            text       = action.label,
+                            style      = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color      = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }

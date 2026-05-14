@@ -1,20 +1,19 @@
 package com.globussoft.wellness.core.network.api
 
-import com.globussoft.wellness.core.network.model.ApiResponse
 import com.globussoft.wellness.core.network.model.request.CreatePatientRequest
 import com.globussoft.wellness.core.network.model.request.CreateVisitRequest
 import com.globussoft.wellness.core.network.model.request.CreateWaitlistRequest
 import com.globussoft.wellness.core.network.model.request.DispositionRequest
 import com.globussoft.wellness.core.network.model.request.LoginRequest
 import com.globussoft.wellness.core.network.model.response.DashboardResponse
-import com.globussoft.wellness.core.network.model.response.LeadResponse
 import com.globussoft.wellness.core.network.model.response.LocationResponse
 import com.globussoft.wellness.core.network.model.response.LoginResponse
-import com.globussoft.wellness.core.network.model.response.PaginatedResponse
+import com.globussoft.wellness.core.network.model.response.PatientsPageResponse
 import com.globussoft.wellness.core.network.model.response.PatientResponse
 import com.globussoft.wellness.core.network.model.response.RecommendationResponse
 import com.globussoft.wellness.core.network.model.response.ServiceResponse
 import com.globussoft.wellness.core.network.model.response.StaffResponse
+import com.globussoft.wellness.core.network.model.response.TelecallerQueueResponse
 import com.globussoft.wellness.core.network.model.response.VisitResponse
 import com.globussoft.wellness.core.network.model.response.WaitlistEntryResponse
 import retrofit2.Response
@@ -26,6 +25,7 @@ import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 
 /**
  * Retrofit interface for all Globussoft Wellness CRM API endpoints consumed
@@ -34,9 +34,9 @@ import retrofit2.http.Query
  * All paths are relative to the base URL configured in [NetworkModule]
  * (e.g. "https://crm.globusdemos.com/api/").
  *
- * Every function is a suspend function returning [Response]<[ApiResponse]<T>>
- * so that [safeApiCall] can inspect both the HTTP status code and the
- * application-level [ApiResponse.success] flag before mapping to [WResult].
+ * Every function is a suspend function returning [Response]<T> directly —
+ * the server returns data without an ApiResponse wrapper. [safeApiCall]
+ * inspects the HTTP status code and maps the result to [WResult].
  */
 interface WellnessApi {
 
@@ -47,7 +47,7 @@ interface WellnessApi {
     @POST("auth/login")
     suspend fun login(
         @Body req: LoginRequest,
-    ): Response<ApiResponse<LoginResponse>>
+    ): Response<LoginResponse>
 
     // -------------------------------------------------------------------------
     // Dashboard
@@ -56,25 +56,25 @@ interface WellnessApi {
     @GET("wellness/dashboard")
     suspend fun getDashboard(
         @Query("locationId") locationId: String? = null,
-    ): Response<ApiResponse<DashboardResponse>>
+    ): Response<DashboardResponse>
 
     @GET("wellness/recommendations")
     suspend fun getRecommendations(
         @Query("status") status: String? = null,
-    ): Response<ApiResponse<List<RecommendationResponse>>>
+    ): Response<List<RecommendationResponse>>
 
     @POST("wellness/recommendations/{id}/approve")
     suspend fun approveRecommendation(
         @Path("id") id: String,
-    ): Response<ApiResponse<RecommendationResponse>>
+    ): Response<RecommendationResponse>
 
     @POST("wellness/recommendations/{id}/reject")
     suspend fun rejectRecommendation(
         @Path("id") id: String,
-    ): Response<ApiResponse<RecommendationResponse>>
+    ): Response<RecommendationResponse>
 
     @POST("wellness/orchestrator/run")
-    suspend fun runOrchestrator(): Response<ApiResponse<Unit>>
+    suspend fun runOrchestrator(): Response<Unit>
 
     // -------------------------------------------------------------------------
     // Patients
@@ -85,23 +85,23 @@ interface WellnessApi {
         @Query("search") search: String? = null,
         @Query("skip") skip: Int = 0,
         @Query("limit") limit: Int = 20,
-    ): Response<ApiResponse<PaginatedResponse<PatientResponse>>>
+    ): Response<PatientsPageResponse>
 
     @GET("wellness/patients/{id}")
     suspend fun getPatient(
         @Path("id") id: String,
-    ): Response<ApiResponse<PatientResponse>>
+    ): Response<PatientResponse>
 
     @POST("wellness/patients")
     suspend fun createPatient(
         @Body req: CreatePatientRequest,
-    ): Response<ApiResponse<PatientResponse>>
+    ): Response<PatientResponse>
 
     @PUT("wellness/patients/{id}")
     suspend fun updatePatient(
         @Path("id") id: String,
         @Body req: CreatePatientRequest,
-    ): Response<ApiResponse<PatientResponse>>
+    ): Response<PatientResponse>
 
     // -------------------------------------------------------------------------
     // Visits / Calendar
@@ -115,18 +115,18 @@ interface WellnessApi {
         @Query("to") to: String? = null,
         @Query("skip") skip: Int = 0,
         @Query("limit") limit: Int = 50,
-    ): Response<ApiResponse<PaginatedResponse<VisitResponse>>>
+    ): Response<List<VisitResponse>>
 
     @POST("wellness/visits")
     suspend fun createVisit(
         @Body req: CreateVisitRequest,
-    ): Response<ApiResponse<VisitResponse>>
+    ): Response<VisitResponse>
 
     @PATCH("wellness/visits/{id}/status")
     suspend fun updateVisitStatus(
         @Path("id") id: String,
         @Body body: Map<String, String>,
-    ): Response<ApiResponse<VisitResponse>>
+    ): Response<VisitResponse>
 
     // -------------------------------------------------------------------------
     // Staff
@@ -135,30 +135,30 @@ interface WellnessApi {
     @GET("wellness/staff")
     suspend fun getStaff(
         @Query("wellnessRole") wellnessRole: String? = null,
-    ): Response<ApiResponse<List<StaffResponse>>>
+    ): Response<List<StaffResponse>>
 
     // -------------------------------------------------------------------------
     // Services
     // -------------------------------------------------------------------------
 
     @GET("wellness/services")
-    suspend fun getServices(): Response<ApiResponse<List<ServiceResponse>>>
+    suspend fun getServices(): Response<List<ServiceResponse>>
 
     @POST("wellness/services")
     suspend fun createService(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<ServiceResponse>>
+    ): Response<ServiceResponse>
 
     @PUT("wellness/services/{id}")
     suspend fun updateService(
         @Path("id") id: String,
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<ServiceResponse>>
+    ): Response<ServiceResponse>
 
     @DELETE("wellness/services/{id}")
     suspend fun deleteService(
         @Path("id") id: String,
-    ): Response<ApiResponse<Unit>>
+    ): Response<Unit>
 
     // -------------------------------------------------------------------------
     // Waitlist
@@ -167,41 +167,41 @@ interface WellnessApi {
     @GET("wellness/waitlist")
     suspend fun getWaitlist(
         @Query("status") status: String? = null,
-    ): Response<ApiResponse<List<WaitlistEntryResponse>>>
+    ): Response<List<WaitlistEntryResponse>>
 
     @POST("wellness/waitlist")
     suspend fun createWaitlistEntry(
         @Body req: CreateWaitlistRequest,
-    ): Response<ApiResponse<WaitlistEntryResponse>>
+    ): Response<WaitlistEntryResponse>
 
     @PATCH("wellness/waitlist/{id}")
     suspend fun updateWaitlistEntry(
         @Path("id") id: String,
         @Body body: Map<String, String>,
-    ): Response<ApiResponse<WaitlistEntryResponse>>
+    ): Response<WaitlistEntryResponse>
 
     // -------------------------------------------------------------------------
     // Locations
     // -------------------------------------------------------------------------
 
     @GET("wellness/locations")
-    suspend fun getLocations(): Response<ApiResponse<List<LocationResponse>>>
+    suspend fun getLocations(): Response<List<LocationResponse>>
 
     @POST("wellness/locations")
     suspend fun createLocation(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<LocationResponse>>
+    ): Response<LocationResponse>
 
     @PUT("wellness/locations/{id}")
     suspend fun updateLocation(
         @Path("id") id: String,
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<LocationResponse>>
+    ): Response<LocationResponse>
 
     @DELETE("wellness/locations/{id}")
     suspend fun deleteLocation(
         @Path("id") id: String,
-    ): Response<ApiResponse<Unit>>
+    ): Response<Unit>
 
     // -------------------------------------------------------------------------
     // Reports
@@ -211,45 +211,45 @@ interface WellnessApi {
     suspend fun getPnlByService(
         @Query("from") from: String,
         @Query("to") to: String,
-    ): Response<ApiResponse<List<Map<String, @JvmSuppressWildcards Any>>>>
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 
     @GET("wellness/reports/per-professional")
     suspend fun getPerProfessional(
         @Query("from") from: String,
         @Query("to") to: String,
-    ): Response<ApiResponse<List<Map<String, @JvmSuppressWildcards Any>>>>
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 
     @GET("wellness/reports/per-location")
     suspend fun getPerLocation(
         @Query("from") from: String,
         @Query("to") to: String,
-    ): Response<ApiResponse<List<Map<String, @JvmSuppressWildcards Any>>>>
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 
     @GET("wellness/reports/attribution")
     suspend fun getAttribution(
         @Query("from") from: String,
         @Query("to") to: String,
-    ): Response<ApiResponse<List<Map<String, @JvmSuppressWildcards Any>>>>
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 
     // -------------------------------------------------------------------------
     // Telecaller Queue
     // -------------------------------------------------------------------------
 
     @GET("wellness/telecaller/queue")
-    suspend fun getTelecallerQueue(): Response<ApiResponse<List<LeadResponse>>>
+    suspend fun getTelecallerQueue(): Response<TelecallerQueueResponse>
 
     @POST("wellness/telecaller/dispose/{leadId}")
     suspend fun disposeLead(
         @Path("leadId") leadId: String,
         @Body req: DispositionRequest,
-    ): Response<ApiResponse<Unit>>
+    ): Response<Unit>
 
     // -------------------------------------------------------------------------
     // Pending Recommendations (alias for getRecommendations with status filter)
     // -------------------------------------------------------------------------
 
     @GET("wellness/recommendations")
-    suspend fun getPendingRecommendations(): Response<ApiResponse<List<RecommendationResponse>>>
+    suspend fun getPendingRecommendations(): Response<List<RecommendationResponse>>
 
     // -------------------------------------------------------------------------
     // POS  (feature/finance)
@@ -258,30 +258,37 @@ interface WellnessApi {
     // POST wellness/pos/sale        — submit a completed sale
     // -------------------------------------------------------------------------
 
-    @POST("wellness/pos/shift/open")
+    @GET("pos/registers")
+    suspend fun getPosRegisters(): Response<List<@JvmSuppressWildcards Any>>
+
+    @GET("pos/shifts/current")
+    suspend fun getCurrentShift(): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    @POST("pos/shifts/open")
     suspend fun openShift(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<Unit>>
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 
-    @POST("wellness/pos/shift/close")
+    @POST("pos/shifts/{shiftId}/close")
     suspend fun closeShift(
+        @Path("shiftId") shiftId: Int,
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<Unit>>
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 
-    @POST("wellness/pos/sale")
+    @POST("pos/sales")
     suspend fun submitPosSale(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<Map<String, @JvmSuppressWildcards Any>>>
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 
     // -------------------------------------------------------------------------
     // Wallet  (feature/finance)
     // GET wellness/wallet/{patientId} — balance + transaction ledger
     // -------------------------------------------------------------------------
 
-    @GET("wellness/wallet/{patientId}")
+    @GET("wellness/patients/{patientId}/wallet")
     suspend fun getWallet(
         @Path("patientId") patientId: String,
-    ): Response<ApiResponse<Map<String, @JvmSuppressWildcards Any>>>
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 
     // -------------------------------------------------------------------------
     // Gift Cards  (feature/finance)
@@ -289,15 +296,15 @@ interface WellnessApi {
     // POST wellness/gift-cards          — issue a new gift card
     // -------------------------------------------------------------------------
 
-    @GET("wellness/gift-cards")
+    @GET("wellness/giftcards")
     suspend fun getGiftCards(
         @Query("status") status: String? = null,
-    ): Response<ApiResponse<List<@JvmSuppressWildcards Any>>>
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 
-    @POST("wellness/gift-cards")
+    @POST("wellness/giftcards")
     suspend fun issueGiftCard(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    ): Response<@JvmSuppressWildcards Any>
 
     // -------------------------------------------------------------------------
     // Coupons  (feature/finance)
@@ -309,28 +316,28 @@ interface WellnessApi {
     // -------------------------------------------------------------------------
 
     @GET("wellness/coupons")
-    suspend fun getCoupons(): Response<ApiResponse<List<@JvmSuppressWildcards Any>>>
+    suspend fun getCoupons(): Response<Map<String, @JvmSuppressWildcards Any>>
 
     @POST("wellness/coupons")
     suspend fun createCoupon(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    ): Response<@JvmSuppressWildcards Any>
 
     @PUT("wellness/coupons/{id}")
     suspend fun updateCoupon(
         @Path("id") id: String,
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    ): Response<@JvmSuppressWildcards Any>
 
     @DELETE("wellness/coupons/{id}")
     suspend fun deleteCoupon(
         @Path("id") id: String,
-    ): Response<ApiResponse<Unit>>
+    ): Response<Unit>
 
     @POST("wellness/coupons/preview")
     suspend fun previewCoupon(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    ): Response<@JvmSuppressWildcards Any>
 
     // -------------------------------------------------------------------------
     // Attendance  (feature/visits)
@@ -341,22 +348,25 @@ interface WellnessApi {
     // GET  wellness/attendance/all-today  — all staff today (MANAGER+)
     // -------------------------------------------------------------------------
 
-    @GET("wellness/attendance/today")
-    suspend fun getAttendanceToday(): Response<ApiResponse<Map<String, @JvmSuppressWildcards Any>>>
+    @GET("attendance/me")
+    suspend fun getAttendanceToday(): Response<List<@JvmSuppressWildcards Any>>
 
-    @POST("wellness/attendance/punch-in")
-    suspend fun punchIn(): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    @POST("attendance/clock-in")
+    suspend fun punchIn(): Response<@JvmSuppressWildcards Any>
 
-    @POST("wellness/attendance/punch-out")
-    suspend fun punchOut(): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    @POST("attendance/clock-out")
+    suspend fun punchOut(): Response<@JvmSuppressWildcards Any>
 
-    @GET("wellness/attendance/history")
+    @GET("attendance/me")
     suspend fun getAttendanceHistory(
-        @Query("days") days: Int = 30,
-    ): Response<ApiResponse<List<@JvmSuppressWildcards Any>>>
+        @Query("from") from: String? = null,
+    ): Response<List<@JvmSuppressWildcards Any>>
 
-    @GET("wellness/attendance/all-today")
-    suspend fun getAllStaffAttendanceToday(): Response<ApiResponse<List<@JvmSuppressWildcards Any>>>
+    @GET("attendance/summary")
+    suspend fun getAllStaffAttendanceToday(
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+    ): Response<@JvmSuppressWildcards Any>
 
     // -------------------------------------------------------------------------
     // Leave  (feature/visits)
@@ -366,25 +376,44 @@ interface WellnessApi {
     // POST wellness/leave/{id}/reject      — reject a leave request (MANAGER+)
     // -------------------------------------------------------------------------
 
-    @GET("wellness/leave")
-    suspend fun getLeaveRequests(
-        @Query("myOnly") myOnly: Boolean = true,
-    ): Response<ApiResponse<List<@JvmSuppressWildcards Any>>>
+    @GET("leave/requests")
+    suspend fun getLeaveRequests(): Response<@JvmSuppressWildcards Any>
 
-    @POST("wellness/leave")
+    @GET("leave/balances/me")
+    suspend fun getLeaveBalances(): Response<@JvmSuppressWildcards Any>
+
+    @GET("leave/policies")
+    suspend fun getLeavePolicies(): Response<@JvmSuppressWildcards Any>
+
+    @POST("leave/requests")
     suspend fun createLeaveRequest(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    ): Response<@JvmSuppressWildcards Any>
 
-    @POST("wellness/leave/{id}/approve")
+    @POST("leave/requests/{id}/approve")
     suspend fun approveLeaveRequest(
         @Path("id") id: String,
-    ): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    ): Response<@JvmSuppressWildcards Any>
 
-    @POST("wellness/leave/{id}/reject")
+    @POST("leave/requests/{id}/reject")
     suspend fun rejectLeaveRequest(
         @Path("id") id: String,
-    ): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    ): Response<@JvmSuppressWildcards Any>
+
+    // -------------------------------------------------------------------------
+    // Treatment Plans  (feature/services)
+    // GET wellness/activetreatment        — list active treatment plans
+    // PUT wellness/treatment-plans/{id}   — update a treatment plan (pause/resume/cancel)
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/activetreatment")
+    suspend fun getActiveTreatments(): Response<List<@JvmSuppressWildcards Any>>
+
+    @PUT("wellness/treatment-plans/{id}")
+    suspend fun updateTreatmentPlan(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
 
     // -------------------------------------------------------------------------
     // Drugs / Formulary  (feature/admin)
@@ -395,21 +424,63 @@ interface WellnessApi {
     // -------------------------------------------------------------------------
 
     @GET("wellness/drugs")
-    suspend fun getDrugs(): Response<ApiResponse<List<@JvmSuppressWildcards Any>>>
+    suspend fun getDrugs(): Response<List<@JvmSuppressWildcards Any>>
 
     @POST("wellness/drugs")
     suspend fun createDrug(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    ): Response<@JvmSuppressWildcards Any>
 
     @PUT("wellness/drugs/{id}")
     suspend fun updateDrug(
         @Path("id") id: String,
         @Body body: Map<String, @JvmSuppressWildcards Any>,
-    ): Response<ApiResponse<@JvmSuppressWildcards Any>>
+    ): Response<@JvmSuppressWildcards Any>
 
     @DELETE("wellness/drugs/{id}")
     suspend fun deleteDrug(
         @Path("id") id: String,
-    ): Response<ApiResponse<Unit>>
+    ): Response<Unit>
+
+    // -------------------------------------------------------------------------
+    // Prescriptions  (feature/patients)
+    // GET wellness/prescriptions/{id}/pdf — download prescription as a PDF stream
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/prescriptions/{id}/pdf")
+    @Streaming
+    suspend fun getPrescriptionPdf(
+        @Path("id") id: String,
+    ): Response<okhttp3.ResponseBody>
+
+    // -------------------------------------------------------------------------
+    // Gift Cards — Redeem  (feature/finance)
+    // POST wellness/giftcards/redeem — redeem a gift card code to a patient wallet
+    // -------------------------------------------------------------------------
+
+    @POST("wellness/giftcards/redeem")
+    suspend fun redeemGiftCard(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Resources  (feature/schedule)
+    // GET wellness/resources — list treatment rooms / equipment
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/resources")
+    suspend fun getResources(
+        @Query("activeOnly") activeOnly: Int = 1,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // -------------------------------------------------------------------------
+    // Holidays  (feature/schedule)
+    // GET wellness/holidays — list clinic holidays within a date range
+    // -------------------------------------------------------------------------
+
+    @GET("wellness/holidays")
+    suspend fun getHolidays(
+        @Query("from") from: String,
+        @Query("to") to: String,
+    ): Response<List<@JvmSuppressWildcards Any>>
 }

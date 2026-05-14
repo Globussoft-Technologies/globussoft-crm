@@ -3,6 +3,9 @@ plugins {
     alias(libs.plugins.wellness.android.compose)
 }
 
+android {
+    namespace = "com.globussoft.wellness.core.designsystem"
+}
 dependencies {
     implementation(project(":core:common"))
     implementation(libs.navigation.compose)

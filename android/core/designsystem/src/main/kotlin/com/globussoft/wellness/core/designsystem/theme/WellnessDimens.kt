@@ -20,8 +20,8 @@ object Dimens {
     val SpacingHuge = 48.dp
 
     // ─── Card / Surface ───────────────────────────────────────────────────────
-    /** Cards use no drop-shadow; border provides separation instead. */
-    val CardElevation = 0.dp
+    /** Subtle shadow matching the web's `box-shadow: 0 2px 12px rgba(38,88,85,0.06)`. */
+    val CardElevation = 1.dp
 
     // ─── Corner radii (mirrors WellnessShapes for non-Shape use-sites) ────────
     val CornerSmall  =  8.dp

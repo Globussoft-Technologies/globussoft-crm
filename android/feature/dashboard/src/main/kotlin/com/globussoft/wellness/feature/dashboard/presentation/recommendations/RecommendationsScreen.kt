@@ -128,8 +128,9 @@ fun RecommendationsScreen(
                             ShimmerList(itemCount = 4, modifier = Modifier.fillMaxSize())
                         }
                         state.error != null && state.recommendations.isEmpty() -> {
+                            val errorMsg = state.error ?: ""
                             ErrorState(
-                                message  = state.error,
+                                message  = errorMsg,
                                 onRetry  = { viewModel.onEvent(RecommendationsEvent.Refresh) },
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -346,7 +347,8 @@ private fun RecommendationCard(
             )
 
             // Expected impact — shown when present.
-            if (!recommendation.expectedImpact.isNullOrBlank()) {
+            val expectedImpact = recommendation.expectedImpact
+            if (!expectedImpact.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(Dimens.SpacingSm))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
@@ -357,7 +359,7 @@ private fun RecommendationCard(
                     )
                     Spacer(modifier = Modifier.width(Dimens.SpacingXs))
                     Text(
-                        text  = recommendation.expectedImpact,
+                        text  = expectedImpact,
                         style = MaterialTheme.typography.labelSmall,
                         color = WellnessPrimary,
                     )

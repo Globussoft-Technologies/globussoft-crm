@@ -45,10 +45,10 @@ class VisitsRepositoryImpl @Inject constructor(
         limit: Int,
     ): WResult<PaginatedVisits> =
         safeApiCall { api.getVisits(from = from, to = to, skip = skip, limit = limit) }
-            .mapSuccess { paginated ->
+            .mapSuccess { list ->
                 PaginatedVisits(
-                    visits = paginated.data.map { it.toDomain() },
-                    total  = paginated.total ?: paginated.data.size,
+                    visits = list.map { it.toDomain() },
+                    total  = list.size,
                 )
             }
 
@@ -56,12 +56,14 @@ class VisitsRepositoryImpl @Inject constructor(
 
     override suspend fun getAttendanceToday(): WResult<AttendanceData> =
         safeApiCall { api.getAttendanceToday() }
-            .mapSuccess { data ->
+            .mapSuccess { list ->
+                val today = list.filterIsInstance<Map<*, *>>()
+                    .maxByOrNull { (it["createdAt"] as? String) ?: "" }
                 AttendanceData(
-                    isClockedIn = data["isClockedIn"] as? Boolean ?: false,
-                    clockInAt   = data["clockInAt"] as? String,
-                    clockOutAt  = data["clockOutAt"] as? String,
-                    duration    = data["duration"] as? String,
+                    isClockedIn = today != null && today["clockOutAt"] == null,
+                    clockInAt   = today?.get("clockInAt") as? String,
+                    clockOutAt  = today?.get("clockOutAt") as? String,
+                    duration    = today?.get("totalMinutes")?.let { "${(it as? Number)?.toInt() ?: 0} min" },
                 )
             }
 
@@ -74,21 +76,24 @@ class VisitsRepositoryImpl @Inject constructor(
             .mapSuccess { data -> (data as Map<*, *>).toAttendanceRecord() }
 
     override suspend fun getAttendanceHistory(days: Int): WResult<List<AttendanceRecord>> =
-        safeApiCall { api.getAttendanceHistory(days) }
+        safeApiCall { api.getAttendanceHistory() }
             .mapSuccess { list ->
                 list.filterIsInstance<Map<*, *>>().map { it.toAttendanceRecord() }
             }
 
     override suspend fun getAllStaffAttendanceToday(): WResult<List<StaffAttendance>> =
         safeApiCall { api.getAllStaffAttendanceToday() }
-            .mapSuccess { list ->
-                list.filterIsInstance<Map<*, *>>().map { m ->
+            .mapSuccess { data ->
+                @Suppress("UNCHECKED_CAST")
+                val envelope = data as? Map<*, *> ?: return@mapSuccess emptyList()
+                val byUser = envelope["byUser"] as? Map<*, *> ?: emptyMap<Any, Any>()
+                byUser.values.filterIsInstance<Map<*, *>>().map { m ->
                     StaffAttendance(
-                        staffName = m["staffName"] as? String ?: "",
+                        staffName = m["name"] as? String ?: m["userId"]?.toString() ?: "",
                         status    = m["status"] as? String ?: "ABSENT",
-                        clockIn   = m["clockIn"] as? String,
-                        clockOut  = m["clockOut"] as? String,
-                        duration  = m["duration"] as? String,
+                        clockIn   = m["clockInAt"] as? String,
+                        clockOut  = m["clockOutAt"] as? String,
+                        duration  = m["totalMinutes"]?.let { "${(it as? Number)?.toInt() ?: 0} min" },
                     )
                 }
             }
@@ -96,8 +101,14 @@ class VisitsRepositoryImpl @Inject constructor(
     // ─── Leave ────────────────────────────────────────────────────────────────
 
     override suspend fun getLeaveRequests(myOnly: Boolean): WResult<List<LeaveRequest>> =
-        safeApiCall { api.getLeaveRequests(myOnly) }
-            .mapSuccess { list ->
+        safeApiCall { api.getLeaveRequests() }
+            .mapSuccess { data ->
+                @Suppress("UNCHECKED_CAST")
+                val list = when (data) {
+                    is List<*> -> data
+                    is Map<*, *> -> (data["requests"] ?: data["data"]) as? List<*> ?: emptyList<Any>()
+                    else -> emptyList<Any>()
+                }
                 list.filterIsInstance<Map<*, *>>().map { it.toLeaveRequest() }
             }
 
@@ -124,7 +135,7 @@ class VisitsRepositoryImpl @Inject constructor(
     )
 
     private fun Map<*, *>.toLeaveRequest(): LeaveRequest = LeaveRequest(
-        id           = this["id"] as? String ?: "",
+        id           = anyId(this["id"]),
         employeeName = this["employeeName"] as? String,
         fromDate     = this["fromDate"] as? String ?: "",
         toDate       = this["toDate"] as? String ?: "",
@@ -133,6 +144,12 @@ class VisitsRepositoryImpl @Inject constructor(
         status       = this["status"] as? String ?: "PENDING",
         createdAt    = this["createdAt"] as? String ?: "",
     )
+}
+
+private fun anyId(raw: Any?): String = when (raw) {
+    is Number -> raw.toLong().toString()
+    is String -> raw
+    else      -> ""
 }
 
 // ─── Private extension ────────────────────────────────────────────────────────

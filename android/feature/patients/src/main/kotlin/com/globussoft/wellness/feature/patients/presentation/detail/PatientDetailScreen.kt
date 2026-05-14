@@ -96,6 +96,10 @@ fun PatientDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    LaunchedEffect(patientId) {
+        viewModel.initialize(patientId)
+    }
+
     LaunchedEffect(Unit) {
         viewModel.effects.collect { effect ->
             when (effect) {
@@ -234,7 +238,11 @@ private fun PatientDetailContent(
                 5 -> PhotosTab(patient = patient)
                 6 -> InventoryTab(visits = state.visits)
                 7 -> TelehealthTab(patient = patient)
-                8 -> WalletTab(patient = patient)
+                8 -> WalletTab(
+                    patient          = patient,
+                    isRedeeming      = state.isRedeeming,
+                    onRedeemGiftCard = { code -> onEvent(PatientDetailEvent.RedeemGiftCard(code)) },
+                )
                 9 -> MembershipsTab(patient = patient)
             }
         }
@@ -259,32 +267,26 @@ private fun PatientHeaderCard(
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                     )
+                    val patientEmail = patient.email
+                    val formattedDob = formatPatientDob(patient.dob, patient.age)
+                    val gender = patient.gender
                     val subtitle = buildString {
-                        if (patient.age != null) append("${patient.age} yrs")
-                        if (patient.dob != null) {
-                            if (isNotEmpty()) append(" · ")
-                            append(patient.dob.take(10))
+                        append(formattedDob)
+                        if (!gender.isNullOrBlank()) {
+                            append(" · ")
+                            append(gender.replaceFirstChar { it.uppercaseChar() })
                         }
-                        if (!patient.gender.isNullOrBlank()) {
-                            if (isNotEmpty()) append(" · ")
-                            append(patient.gender)
-                        }
-                    }
-                    if (subtitle.isNotBlank()) {
-                        Text(
-                            text  = subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = WellnessTextSecondary,
-                        )
+                        append(" · ")
+                        append(patient.phone)
                     }
                     Text(
-                        text  = patient.phone,
+                        text  = subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = WellnessTextSecondary,
                     )
-                    if (!patient.email.isNullOrBlank()) {
+                    if (!patientEmail.isNullOrBlank()) {
                         Text(
-                            text  = patient.email,
+                            text  = patientEmail,
                             style = MaterialTheme.typography.bodySmall,
                             color = WellnessTextSecondary,
                         )
@@ -304,6 +306,16 @@ private fun PatientHeaderCard(
             }
         }
     }
+}
+
+private fun formatPatientDob(dob: String?, age: Int?): String {
+    if (dob.isNullOrBlank()) return age?.let { "${it}y" } ?: "—"
+    return try {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val date = sdf.parse(dob) ?: return dob
+        val display = java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.US).format(date)
+        age?.let { "$display (${it}y)" } ?: display
+    } catch (_: Exception) { dob }
 }
 
 @Composable

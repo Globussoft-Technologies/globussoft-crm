@@ -141,8 +141,9 @@ fun WalletScreen(
                     }
                 }
                 state.error != null -> {
+                    val errorMsg = state.error ?: ""
                     ErrorState(
-                        message = state.error,
+                        message = errorMsg,
                         onRetry = {
                             viewModel.onEvent(
                                 WalletEvent.PatientSelected(state.selectedPatientId, state.selectedPatientName)
@@ -152,13 +153,14 @@ fun WalletScreen(
                     )
                 }
                 state.walletData != null -> {
-                    WalletBalanceCard(balance = state.walletData.balance)
+                    val walletData = state.walletData!!
+                    WalletBalanceCard(balance = walletData.balance)
                     Text(
                         text       = "Transaction History",
                         style      = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    if (state.walletData.transactions.isEmpty()) {
+                    if (walletData.transactions.isEmpty()) {
                         EmptyState(
                             message  = "No transactions yet.",
                             modifier = Modifier.fillMaxWidth().height(120.dp),
@@ -166,7 +168,7 @@ fun WalletScreen(
                     } else {
                         WellnessCard {
                             LazyColumn {
-                                items(state.walletData.transactions, key = { it.id }) { tx ->
+                                items(walletData.transactions, key = { it.id }) { tx ->
                                     TransactionRow(tx = tx)
                                     Divider(thickness = 0.5.dp)
                                 }

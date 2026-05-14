@@ -45,10 +45,16 @@ fun NavGraphBuilder.visitsGraph(navController: NavController) {
     }
 
     composable(route = VisitsDestinations.Attendance) {
-        AttendanceScreen(viewModel = hiltViewModel())
+        AttendanceScreen(
+            onNavigateBack = { navController.popBackStack() },
+            viewModel      = hiltViewModel(),
+        )
     }
 
     composable(route = VisitsDestinations.Leave) {
-        LeaveScreen(viewModel = hiltViewModel())
+        LeaveScreen(
+            onNavigateBack = { navController.popBackStack() },
+            viewModel      = hiltViewModel(),
+        )
     }
 }

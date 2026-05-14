@@ -3,6 +3,9 @@ package com.globussoft.wellness.feature.services.presentation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.globussoft.wellness.core.common.result.WResult
+import com.globussoft.wellness.core.domain.model.Service
+import com.globussoft.wellness.core.network.api.WellnessApi
+import com.globussoft.wellness.core.network.util.safeApiCall
 import com.globussoft.wellness.feature.services.domain.repository.ServicesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -39,6 +42,7 @@ import javax.inject.Inject
 @HiltViewModel
 class ServicesViewModel @Inject constructor(
     private val repository: ServicesRepository,
+    private val api: WellnessApi,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ServicesUiState())
@@ -55,7 +59,12 @@ class ServicesViewModel @Inject constructor(
 
     fun onEvent(event: ServicesEvent) {
         when (event) {
-            is ServicesEvent.TabSelected      -> _state.update { it.copy(selectedTabIndex = event.index) }
+            is ServicesEvent.TabSelected      -> {
+                _state.update { it.copy(selectedTabIndex = event.index) }
+                if (event.index == 2 && _state.value.treatmentPlans.isEmpty()) {
+                    loadTreatmentPlans()
+                }
+            }
             is ServicesEvent.ToggleAddForm    -> onToggleAddForm()
             is ServicesEvent.FormFieldChanged -> onFormFieldChanged(event.field, event.value)
             is ServicesEvent.SubmitForm       -> onSubmitForm()
@@ -64,6 +73,8 @@ class ServicesViewModel @Inject constructor(
             is ServicesEvent.ConfirmDelete    -> onConfirmDelete()
             is ServicesEvent.DismissDelete    -> _state.update { it.copy(deleteConfirmService = null) }
             is ServicesEvent.Refresh          -> { _state.update { it.copy(error = null) }; loadServices() }
+            is ServicesEvent.ToggleTreatmentPause -> onToggleTreatmentPause(event.plan)
+            is ServicesEvent.CancelTreatment      -> onCancelTreatment(event.plan)
         }
     }
 
@@ -79,6 +90,42 @@ class ServicesViewModel @Inject constructor(
                     _state.update { it.copy(isLoading = false, error = msg) }
                 }
                 WResult.Loading    -> Unit
+            }
+        }
+    }
+
+    private fun loadTreatmentPlans() {
+        viewModelScope.launch {
+            _state.update { it.copy(isLoadingTreatments = true, treatmentPlansError = null) }
+            when (val result = safeApiCall { api.getActiveTreatments() }) {
+                is WResult.Success -> {
+                    val plans = result.data.mapNotNull { raw ->
+                        @Suppress("UNCHECKED_CAST")
+                        val map = raw as? Map<String, Any> ?: return@mapNotNull null
+                        val patient = map["patient"] as? Map<*, *>
+                        val service = map["service"] as? Map<*, *>
+                        TreatmentPlan(
+                            id                = map["id"]?.let { if (it is Number) it.toLong().toString() else it as? String } ?: "",
+                            name              = (map["name"] as? String) ?: "Unknown",
+                            status            = (map["status"] as? String) ?: "active",
+                            totalSessions     = (map["totalSessions"] as? Double)?.toInt()
+                                ?: ((map["totalSessions"] as? Int) ?: 0),
+                            completedSessions = (map["completedSessions"] as? Double)?.toInt()
+                                ?: ((map["completedSessions"] as? Int) ?: 0),
+                            totalPrice        = (map["totalPrice"] as? Double),
+                            nextDueAt         = map["nextDueAt"] as? String,
+                            startedAt         = (map["startedAt"] as? String) ?: "",
+                            patientName       = patient?.get("name") as? String,
+                            serviceName       = service?.get("name") as? String,
+                        )
+                    }
+                    _state.update { it.copy(isLoadingTreatments = false, treatmentPlans = plans) }
+                }
+                is WResult.Error -> {
+                    val msg = result.message ?: result.exception.message ?: "Failed to load treatment plans"
+                    _state.update { it.copy(isLoadingTreatments = false, treatmentPlansError = msg) }
+                }
+                WResult.Loading -> Unit
             }
         }
     }
@@ -199,6 +246,29 @@ class ServicesViewModel @Inject constructor(
                     description    = service.description ?: "",
                 ),
             )
+        }
+    }
+
+    // ─── Treatment plan actions ───────────────────────────────────────────────
+
+    private fun onToggleTreatmentPause(plan: TreatmentPlan) {
+        val newStatus = if (plan.status == "paused") "active" else "paused"
+        viewModelScope.launch {
+            when (safeApiCall { api.updateTreatmentPlan(plan.id, mapOf("status" to newStatus)) }) {
+                is WResult.Success -> loadTreatmentPlans()
+                is WResult.Error   -> _effects.send(ServicesEffect.ShowSnackbar("Failed to update treatment plan"))
+                WResult.Loading    -> Unit
+            }
+        }
+    }
+
+    private fun onCancelTreatment(plan: TreatmentPlan) {
+        viewModelScope.launch {
+            when (safeApiCall { api.updateTreatmentPlan(plan.id, mapOf("status" to "cancelled")) }) {
+                is WResult.Success -> loadTreatmentPlans()
+                is WResult.Error   -> _effects.send(ServicesEffect.ShowSnackbar("Failed to cancel treatment plan"))
+                WResult.Loading    -> Unit
+            }
         }
     }
 

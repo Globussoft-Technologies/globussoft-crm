@@ -29,6 +29,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -62,11 +63,10 @@ private val ADMIN_SECTIONS = listOf(
         icon     = Icons.Default.MedicalServices,
     ),
     AdminSection(
-        route    = "admin/resources",
+        route    = AdminDestinations.Resources,
         title    = "Resources",
         subtitle = "Treatment rooms, equipment",
         icon     = Icons.Default.Settings,
-        isStub   = true,
     ),
     AdminSection(
         route    = "admin/holidays",

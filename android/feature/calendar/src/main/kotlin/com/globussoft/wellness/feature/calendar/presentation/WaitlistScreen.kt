@@ -232,6 +232,10 @@ private fun WaitlistEntryCard(
 ) {
     WellnessCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(Dimens.SpacingLg)) {
+            val entryPatientPhone = entry.patientPhone
+            val entryServiceName = entry.serviceName
+            val entryPreferredDateRange = entry.preferredDateRange
+            val entryNotes = entry.notes
             // Header row: name + status badge
             Row(
                 modifier              = Modifier.fillMaxWidth(),
@@ -244,9 +248,9 @@ private fun WaitlistEntryCard(
                         style      = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                     )
-                    if (!entry.patientPhone.isNullOrBlank()) {
+                    if (!entryPatientPhone.isNullOrBlank()) {
                         Text(
-                            text  = entry.patientPhone,
+                            text  = entryPatientPhone,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -258,13 +262,13 @@ private fun WaitlistEntryCard(
             Spacer(Modifier.height(Dimens.SpacingSm))
 
             // Service
-            if (!entry.serviceName.isNullOrBlank()) {
-                LabelValue("Service", entry.serviceName)
+            if (!entryServiceName.isNullOrBlank()) {
+                LabelValue("Service", entryServiceName)
             }
 
             // Preferred dates
-            if (!entry.preferredDateRange.isNullOrBlank()) {
-                LabelValue("Preferred Dates", entry.preferredDateRange)
+            if (!entryPreferredDateRange.isNullOrBlank()) {
+                LabelValue("Preferred Dates", entryPreferredDateRange)
             }
 
             // Estimated wait
@@ -281,8 +285,8 @@ private fun WaitlistEntryCard(
             }
 
             // Notes
-            if (!entry.notes.isNullOrBlank()) {
-                LabelValue("Notes", entry.notes)
+            if (!entryNotes.isNullOrBlank()) {
+                LabelValue("Notes", entryNotes)
             }
 
             // Action buttons

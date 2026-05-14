@@ -129,11 +129,14 @@ fun CouponsScreen(
                 state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = WellnessPrimary, strokeWidth = 2.dp)
                 }
-                state.error != null && state.coupons.isEmpty() -> ErrorState(
-                    message  = state.error,
-                    onRetry  = { viewModel.onEvent(CouponsEvent.Refresh) },
-                    modifier = Modifier.fillMaxSize(),
-                )
+                state.error != null && state.coupons.isEmpty() -> {
+                    val errorMsg = state.error ?: ""
+                    ErrorState(
+                        message  = errorMsg,
+                        onRetry  = { viewModel.onEvent(CouponsEvent.Refresh) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
                 state.coupons.isEmpty() -> EmptyState(
                     message     = "No coupons created yet.",
                     icon        = Icons.Default.LocalOffer,
@@ -277,7 +280,7 @@ private fun CouponFormSheet(
     state: CouponsUiState,
     onEvent: (CouponsEvent) -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartialExpansion = true)
+    val sheetState = rememberModalBottomSheetState()
     val isEditing  = state.editingCoupon != null
     val form       = state.formState
 

@@ -43,9 +43,8 @@ class PatientDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
-    private val patientId: String = checkNotNull(savedStateHandle[KEY_PATIENT_ID]) {
-        "PatientDetailViewModel requires a 'patientId' SavedStateHandle argument"
-    }
+    // Populated either from SavedStateHandle (nav route) or via initialize() (inline two-pane).
+    private var patientId: String = savedStateHandle[KEY_PATIENT_ID] ?: ""
 
     private val _state = MutableStateFlow(
         PatientDetailUiState(
@@ -61,16 +60,29 @@ class PatientDetailViewModel @Inject constructor(
     private val savedStateHandle = savedStateHandle
 
     init {
-        loadAll()
+        if (patientId.isNotEmpty()) loadAll()
+    }
+
+    /**
+     * Called by the screen when the ViewModel is created inline (two-pane layout)
+     * rather than via navigation, so SavedStateHandle has no patientId.
+     * Safe to call multiple times — only acts on the first non-empty id.
+     */
+    fun initialize(id: String) {
+        if (patientId.isEmpty() && id.isNotEmpty()) {
+            patientId = id
+            loadAll()
+        }
     }
 
     // ─── Public event dispatcher ──────────────────────────────────────────────
 
     fun onEvent(event: PatientDetailEvent) {
         when (event) {
-            is PatientDetailEvent.TabSelected -> onTabSelected(event.index)
-            is PatientDetailEvent.Refresh     -> loadAll()
-            is PatientDetailEvent.LogVisit    -> onLogVisit(event)
+            is PatientDetailEvent.TabSelected    -> onTabSelected(event.index)
+            is PatientDetailEvent.Refresh        -> loadAll()
+            is PatientDetailEvent.LogVisit       -> onLogVisit(event)
+            is PatientDetailEvent.RedeemGiftCard -> onRedeemGiftCard(event)
         }
     }
 
@@ -117,6 +129,34 @@ class PatientDetailViewModel @Inject constructor(
     private fun onTabSelected(index: Int) {
         savedStateHandle[KEY_SELECTED_TAB] = index
         _state.update { it.copy(selectedTabIndex = index) }
+    }
+
+    private fun onRedeemGiftCard(event: PatientDetailEvent.RedeemGiftCard) {
+        val code = event.code.trim()
+        if (code.isBlank()) {
+            viewModelScope.launch {
+                _effects.send(PatientDetailEffect.ShowSnackbar("Please enter a gift card code"))
+            }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(isRedeeming = true) }
+            val result = safeApiCall {
+                api.redeemGiftCard(mapOf("code" to code, "patientId" to patientId))
+            }
+            when (result) {
+                is WResult.Success -> {
+                    _state.update { it.copy(isRedeeming = false) }
+                    _effects.send(PatientDetailEffect.ShowSnackbar("Gift card redeemed successfully"))
+                }
+                is WResult.Error -> {
+                    val message = result.message ?: result.exception.message ?: "Failed to redeem gift card"
+                    _state.update { it.copy(isRedeeming = false) }
+                    _effects.send(PatientDetailEffect.ShowSnackbar(message))
+                }
+                WResult.Loading -> Unit
+            }
+        }
     }
 
     private fun onLogVisit(event: PatientDetailEvent.LogVisit) {

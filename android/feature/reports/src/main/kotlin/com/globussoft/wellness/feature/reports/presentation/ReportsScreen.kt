@@ -382,11 +382,10 @@ private fun PnlBarChart(data: List<PnlByService>) {
                 )
             }
             Spacer(modifier = Modifier.height(Dimens.SpacingMd))
-            val modelProducer = remember(data) {
-                CartesianChartModelProducer().also { producer ->
-                    producer.runTransaction {
-                        columnSeries { series(data.map { it.amount.toFloat() }) }
-                    }
+            val modelProducer = remember(data) { CartesianChartModelProducer() }
+            LaunchedEffect(data) {
+                modelProducer.runTransaction {
+                    columnSeries { series(data.map { it.amount.toFloat() }) }
                 }
             }
             CartesianChartHost(
@@ -428,10 +427,11 @@ private fun PnlTableRow(row: PnlByService) {
             modifier  = Modifier.weight(1.2f),
             textAlign = TextAlign.End,
         )
+        val rowMargin = row.margin
         Text(
-            text      = row.margin?.let { "₹${"%.0f".format(it)}" } ?: "—",
+            text      = rowMargin?.let { "${"%.0f".format(it * 100)}%" } ?: "—",
             style     = MaterialTheme.typography.bodySmall,
-            color     = if (row.margin != null && row.margin > 0) WellnessSuccess
+            color     = if (rowMargin != null && rowMargin > 0) WellnessSuccess
                         else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier  = Modifier.weight(1.2f),
             textAlign = TextAlign.End,
@@ -479,11 +479,10 @@ private fun PerProBarChart(data: List<PerProfessional>) {
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(modifier = Modifier.height(Dimens.SpacingMd))
-            val modelProducer = remember(data) {
-                CartesianChartModelProducer().also { producer ->
-                    producer.runTransaction {
-                        columnSeries { series(data.map { it.revenue.toFloat() }) }
-                    }
+            val modelProducer = remember(data) { CartesianChartModelProducer() }
+            LaunchedEffect(data) {
+                modelProducer.runTransaction {
+                    columnSeries { series(data.map { it.revenue.toFloat() }) }
                 }
             }
             CartesianChartHost(
@@ -711,10 +710,11 @@ private fun AttributionTableRow(row: AttributionData) {
             modifier  = Modifier.weight(0.7f),
             textAlign = TextAlign.End,
         )
+        val rowRoi = row.roi
         Text(
-            text      = row.roi?.let { "${"%.1f".format(it)}x" } ?: "—",
+            text      = rowRoi?.let { "${"%.1f".format(it)}x" } ?: "—",
             style     = MaterialTheme.typography.bodySmall,
-            color     = if (row.roi != null && row.roi >= 1.0) WellnessSuccess
+            color     = if (rowRoi != null && rowRoi >= 1.0) WellnessSuccess
                         else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier  = Modifier.weight(0.8f),
             textAlign = TextAlign.End,

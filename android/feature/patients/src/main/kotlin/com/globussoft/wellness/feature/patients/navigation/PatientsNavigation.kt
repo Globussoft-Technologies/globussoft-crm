@@ -8,7 +8,6 @@ import androidx.navigation.navArgument
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.globussoft.wellness.feature.patients.presentation.detail.PatientDetailScreen
 import com.globussoft.wellness.feature.patients.presentation.list.PatientsListScreen
-import androidx.compose.material3.windowsizeclass.WindowSizeClass
 
 /**
  * Destination route constants for the patients feature graph.
@@ -40,16 +39,13 @@ object PatientsDestinations {
  * [SavedStateHandle].
  *
  * @param navController Used to forward navigation events across the graph.
- * @param windowSizeClass Current window size class from [calculateWindowSizeClass]; drives
- *                        the adaptive two-pane behaviour in [PatientsListScreen].
+ *  *                        the adaptive two-pane behaviour in [PatientsListScreen].
  */
 fun NavGraphBuilder.patientsGraph(
     navController: NavController,
-    windowSizeClass: WindowSizeClass,
 ) {
     composable(route = PatientsDestinations.PatientsList) {
         PatientsListScreen(
-            windowSizeClass    = windowSizeClass,
             onNavigateToDetail = { patientId ->
                 navController.navigate(PatientsDestinations.patientDetail(patientId))
             },

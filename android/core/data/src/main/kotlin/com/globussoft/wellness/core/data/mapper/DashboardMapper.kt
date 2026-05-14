@@ -8,23 +8,29 @@ import com.globussoft.wellness.core.network.model.response.RevenueTrendPointResp
 /**
  * Maps a [DashboardResponse] network DTO to the [DashboardData] domain model.
  *
+ * The server returns nested objects (today/yesterday/totals); this mapper
+ * flattens them into the domain model's flat structure for convenience.
+ *
+ * [revenueMonth] is computed as the sum of all points in the [revenueTrend]
+ * list since the server does not return a pre-aggregated monthly total.
+ *
  * The [revenueTrend] list is mapped element-by-element via the companion
  * extension so the transformation stays composable and testable in isolation.
  */
 fun DashboardResponse.toDomain(): DashboardData = DashboardData(
-    todayVisits           = todayVisits,
-    completedVisits       = completedVisits,
-    revenueMonth          = revenueMonth,
-    occupancyPercent      = occupancyPercent,
-    newLeads              = newLeads,
-    pendingApprovals      = pendingApprovals,
-    activeTreatmentPlans  = activeTreatmentPlans,
-    noShowRisk            = noShowRisk,
-    yesterdayRevenue      = yesterdayRevenue,
-    yesterdayVisits       = yesterdayVisits,
-    patientTotal          = patientTotal,
-    serviceTotal          = serviceTotal,
-    revenueTrend          = revenueTrend.map { it.toDomain() },
+    todayVisits          = today.visits,
+    completedVisits      = today.completed,
+    revenueMonth         = revenueTrend.sumOf { it.revenue },
+    occupancyPercent     = today.occupancyPct.toDouble(),
+    newLeads             = today.newLeads,
+    pendingApprovals     = pendingApprovals,
+    activeTreatmentPlans = activeTreatmentPlans,
+    noShowRisk           = today.noShowRisk.count,
+    yesterdayRevenue     = yesterday.revenue,
+    yesterdayVisits      = yesterday.visits,
+    patientTotal         = totals.patients,
+    serviceTotal         = totals.services,
+    revenueTrend         = revenueTrend.map { it.toDomain() },
 )
 
 /**
@@ -32,5 +38,5 @@ fun DashboardResponse.toDomain(): DashboardData = DashboardData(
  */
 fun RevenueTrendPointResponse.toDomain(): RevenueTrendPoint = RevenueTrendPoint(
     date   = date,
-    amount = amount,
+    amount = revenue,
 )

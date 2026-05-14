@@ -21,13 +21,20 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.globussoft.wellness.core.designsystem.components.EmptyState
+import com.globussoft.wellness.core.designsystem.components.WellnessButton
 import com.globussoft.wellness.core.designsystem.components.WellnessCard
+import com.globussoft.wellness.core.designsystem.components.WellnessTextField
 import com.globussoft.wellness.core.designsystem.theme.Dimens
 import com.globussoft.wellness.core.designsystem.theme.WellnessDanger
 import com.globussoft.wellness.core.designsystem.theme.WellnessPrimary
@@ -47,10 +54,16 @@ import com.globussoft.wellness.core.domain.model.Patient
  * visit count so the layout is exercised during development.
  */
 @Composable
-fun WalletTab(patient: Patient) {
+fun WalletTab(
+    patient: Patient,
+    isRedeeming: Boolean = false,
+    onRedeemGiftCard: (String) -> Unit = {},
+) {
     // Derive a synthetic balance from visit count for demo purposes.
     // In production, balance comes from the wallet API endpoint.
     val balance = patient.visitsCount * 500.0
+
+    var giftCardCode by remember { mutableStateOf("") }
 
     if (patient.visitsCount == 0) {
         EmptyState(
@@ -68,6 +81,42 @@ fun WalletTab(patient: Patient) {
     ) {
         item {
             WalletBalanceCard(balance = balance)
+        }
+
+        item {
+            WellnessCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(Dimens.SpacingLg),
+                    verticalArrangement = Arrangement.spacedBy(Dimens.SpacingMd),
+                ) {
+                    Text(
+                        text = "Redeem Gift Card",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Dimens.SpacingMd),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        WellnessTextField(
+                            value = giftCardCode,
+                            onValueChange = { giftCardCode = it },
+                            label = "Gift Card Code",
+                            modifier = Modifier.weight(1f),
+                            imeAction = ImeAction.Done,
+                        )
+                        WellnessButton(
+                            text = "Redeem",
+                            onClick = {
+                                onRedeemGiftCard(giftCardCode)
+                                giftCardCode = ""
+                            },
+                            isLoading = isRedeeming,
+                        )
+                    }
+                }
+            }
         }
 
         item {

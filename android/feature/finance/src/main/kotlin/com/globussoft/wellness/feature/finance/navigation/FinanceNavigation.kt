@@ -5,6 +5,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.globussoft.wellness.core.data.datastore.UserSession
+import com.globussoft.wellness.feature.finance.presentation.FinanceHubScreen
 import com.globussoft.wellness.feature.finance.presentation.coupons.CouponsScreen
 import com.globussoft.wellness.feature.finance.presentation.giftcards.GiftCardsScreen
 import com.globussoft.wellness.feature.finance.presentation.pos.PosScreen
@@ -28,10 +29,10 @@ object FinanceDestinations {
  * [NavGraphBuilder].
  *
  * ### Routes
- * - `"finance"` → [PosScreen] — Point-of-Sale shift + sale entry.
- * - `"wallet"` → [WalletScreen] — Patient wallet balance + ledger.
- * - `"gift-cards"` → [GiftCardsScreen] — Gift card issuance + status list.
- * - `"coupons"` → [CouponsScreen] — Coupon CRUD + discount preview.
+ * - `"finance"` → [FinanceHubScreen] — Tab hub: POS / Gift Cards / Coupons / Wallet.
+ * - `"wallet"` → [WalletScreen] — Patient wallet balance + ledger (deep-link).
+ * - `"gift-cards"` → [GiftCardsScreen] — Gift card issuance + status list (deep-link).
+ * - `"coupons"` → [CouponsScreen] — Coupon CRUD + discount preview (deep-link).
  *
  * [userSession] is threaded through so screens can gate actions behind
  * role checks (e.g. only ADMIN / MANAGER can manage coupons).
@@ -45,7 +46,7 @@ fun NavGraphBuilder.financeGraph(
     userSession: UserSession?,
 ) {
     composable(route = FinanceDestinations.Pos) {
-        PosScreen(viewModel = hiltViewModel())
+        FinanceHubScreen()
     }
 
     composable(route = FinanceDestinations.Wallet) {

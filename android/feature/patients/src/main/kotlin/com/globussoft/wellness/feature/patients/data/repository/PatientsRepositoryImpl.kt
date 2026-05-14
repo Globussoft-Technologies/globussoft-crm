@@ -120,8 +120,8 @@ class PatientsRepositoryImpl @Inject constructor(
     override suspend fun getPatientVisits(patientId: String): WResult<List<Visit>> =
         safeApiCall {
             api.getVisits(skip = 0, limit = 100)
-        }.mapSuccess { paginated ->
-            paginated.data
+        }.mapSuccess { list ->
+            list
                 .filter { it.patientId == patientId }
                 .map { it.toDomain() }
                 .sortedByDescending { it.visitDate }
@@ -156,7 +156,7 @@ class PatientsRepositoryImpl @Inject constructor(
         }
 
         if (result is WResult.Success) {
-            val entities = result.data.data.map { it.toDomain().toEntity(tenantId) }
+            val entities = result.data.patients.map { it.toDomain().toEntity(tenantId) }
             patientDao.insertPatients(entities)
         }
     }
@@ -221,13 +221,15 @@ private fun PatientEntity.toDomain(): Patient = Patient(
 )
 
 /** Derives approximate age in years from a "YYYY-MM-DD…" dob string. */
-private fun computeAgeFromDob(dob: String): Int? = try {
-    val parts = dob.substring(0, 10).split("-")
-    if (parts.size < 3) return null
-    val today = java.util.Calendar.getInstance()
-    var age = today.get(java.util.Calendar.YEAR) - parts[0].toInt()
-    val monthDiff = today.get(java.util.Calendar.MONTH) + 1 - parts[1].toInt()
-    val dayDiff   = today.get(java.util.Calendar.DAY_OF_MONTH) - parts[2].toInt()
-    if (monthDiff < 0 || (monthDiff == 0 && dayDiff < 0)) age--
-    if (age < 0) null else age
-} catch (_: Exception) { null }
+private fun computeAgeFromDob(dob: String): Int? {
+    return try {
+        val parts = dob.substring(0, 10).split("-")
+        if (parts.size < 3) return null
+        val today = java.util.Calendar.getInstance()
+        var age = today.get(java.util.Calendar.YEAR) - parts[0].toInt()
+        val monthDiff = today.get(java.util.Calendar.MONTH) + 1 - parts[1].toInt()
+        val dayDiff   = today.get(java.util.Calendar.DAY_OF_MONTH) - parts[2].toInt()
+        if (monthDiff < 0 || (monthDiff == 0 && dayDiff < 0)) age--
+        if (age < 0) null else age
+    } catch (_: Exception) { null }
+}

@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Phone
@@ -29,7 +30,9 @@ import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,9 +51,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberTimePickerState
-import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
-import androidx.compose.material3.windowsizeclass.WindowSizeClass
-import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,7 +66,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -105,11 +104,10 @@ import kotlinx.coroutines.launch
  *
  * The disposition bottom sheet appears on top in both layouts.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3WindowSizeClassApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TelecallerScreen(
     viewModel: TelecallerViewModel = hiltViewModel(),
-    windowSizeClass: WindowSizeClass = WindowSizeClass.calculateFromSize(DpSize(400.dp, 800.dp)),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -166,7 +164,6 @@ fun TelecallerScreen(
                 }
                 else -> {
                     AdaptiveTwoPaneLayout(
-                        windowSizeClass  = windowSizeClass,
                         showDetailPane   = state.currentLead != null,
                         listPane = {
                             QueueListPane(
@@ -198,6 +195,7 @@ fun TelecallerScreen(
                 DispositionSheet(
                     disposition    = state.selectedDisposition!!,
                     form           = state.dispositionForm,
+                    services       = state.services,
                     isSubmitting   = state.isSubmitting,
                     submitError    = state.submitError,
                     onFieldChanged = { field, value -> viewModel.onEvent(TelecallerEvent.FormFieldChanged(field, value)) },
@@ -279,9 +277,10 @@ private fun QueueLeadCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (lead.source != null) {
+                val leadSource = lead.source
+                if (leadSource != null) {
                     Text(
-                        text  = lead.source,
+                        text  = leadSource,
                         style = MaterialTheme.typography.labelSmall,
                         color = WellnessAccent,
                     )
@@ -365,7 +364,7 @@ private fun LeadCard(lead: Lead) {
                 verticalAlignment     = Alignment.CenterVertically,
             ) {
                 if (lead.source != null) {
-                    StatusBadge(label = lead.source)
+                    StatusBadge(status = lead.source ?: "unknown")
                 }
                 Text(
                     text  = "Added: ${formatRelativeTime(lead.createdAt)}",
@@ -373,6 +372,7 @@ private fun LeadCard(lead: Lead) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.weight(1f))
+                SlaStatusBadge(createdAt = lead.createdAt, firstResponseAt = lead.firstResponseAt)
                 SlaTimer(createdAtIso = lead.createdAt)
             }
         }
@@ -501,6 +501,7 @@ private fun DispositionActionButton(
 private fun DispositionSheet(
     disposition: DispositionType,
     form: DispositionFormState,
+    services: List<ServiceItem>,
     isSubmitting: Boolean,
     submitError: String?,
     onFieldChanged: (String, String) -> Unit,
@@ -553,12 +554,10 @@ private fun DispositionSheet(
                     NotesField(value = form.notes, onValueChange = { onFieldChanged("notes", it) })
                 }
                 DispositionType.BOOKED -> {
-                    OutlinedTextField(
-                        value         = form.appointmentService,
-                        onValueChange = { onFieldChanged("appointmentService", it) },
-                        label         = { Text("Service *") },
-                        modifier      = Modifier.fillMaxWidth(),
-                        singleLine    = true,
+                    ServiceDropdown(
+                        selectedServiceId = form.appointmentServiceId,
+                        services          = services,
+                        onServiceSelected = { onFieldChanged("appointmentServiceId", it) },
                     )
                     OutlinedTextField(
                         value         = form.appointmentTime,
@@ -692,9 +691,149 @@ private fun CallbackDateTimeField(
     }
 }
 
+// ─── SLA status badge ─────────────────────────────────────────────────────────
+
+/**
+ * Stateless SLA status chip that mirrors the web frontend's `slaFor()` logic.
+ *
+ * Status thresholds (from TelecallerQueue.jsx #290):
+ * - **SLA OK**     — lead is < 30 min old, OR [firstResponseAt] is set.
+ * - **SLA WARN**   — 30 min – 4 hours.
+ * - **SLA LATE**   — 4 h – 24 h.
+ * - **SLA BREACH** — 24 h+.
+ *
+ * Because [createdAt] is a static string, the badge does NOT tick live — it
+ * shows the status at the moment of composition. For real-time drift the screen
+ * already has [SlaTimer] ticking next to this badge.
+ *
+ * @param createdAt      ISO-8601 lead creation timestamp.
+ * @param firstResponseAt ISO-8601 first-response timestamp; when non-null the SLA
+ *                        is considered satisfied.
+ */
+@Composable
+private fun SlaStatusBadge(
+    createdAt: String,
+    firstResponseAt: String?,
+) {
+    val status = remember(createdAt, firstResponseAt) {
+        if (!firstResponseAt.isNullOrBlank()) "ok"
+        else {
+            val ageMs = System.currentTimeMillis() - parseIsoToMillis(createdAt)
+            val ageH  = ageMs / 3_600_000.0
+            when {
+                ageH < 0.5  -> "ok"
+                ageH < 4.0  -> "warn"
+                ageH < 24.0 -> "late"
+                else        -> "breach"
+            }
+        }
+    }
+    val (label, color) = when (status) {
+        "ok"     -> "SLA OK"     to WellnessSuccess
+        "warn"   -> "SLA WARN"   to WellnessWarning
+        "late"   -> "SLA LATE"   to Color(0xFFEF4444)
+        else     -> "SLA BREACH" to Color(0xFF7C3AED)
+    }
+    Box(
+        modifier = Modifier
+            .background(color.copy(alpha = 0.12f), shape = RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Text(
+            text       = label,
+            style      = MaterialTheme.typography.labelSmall,
+            color      = color,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+// ─── Service dropdown (Booked disposition) ────────────────────────────────────
+
+/**
+ * Exposed dropdown menu for selecting a service from the catalog.
+ *
+ * Falls back gracefully when [services] is empty (e.g. the catalog hasn't
+ * loaded yet): shows a disabled field with placeholder text so the user
+ * knows to wait rather than see a broken UI.
+ *
+ * @param selectedServiceId The id of the currently selected [ServiceItem], or blank.
+ * @param services          The loaded service catalog items.
+ * @param onServiceSelected Callback invoked with the selected service id.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ServiceDropdown(
+    selectedServiceId: String,
+    services: List<ServiceItem>,
+    onServiceSelected: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedName = services.firstOrNull { it.id == selectedServiceId }?.name
+        ?: if (services.isEmpty()) "Loading services…" else "Select service"
+
+    ExposedDropdownMenuBox(
+        expanded        = expanded,
+        onExpandedChange = { if (services.isNotEmpty()) expanded = it },
+    ) {
+        OutlinedTextField(
+            value         = selectedName,
+            onValueChange = {},
+            readOnly      = true,
+            label         = { Text("Service *") },
+            trailingIcon  = {
+                Icon(
+                    imageVector        = Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    tint               = if (services.isEmpty())
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    else
+                        WellnessPrimary,
+                )
+            },
+            modifier  = Modifier
+                .menuAnchor()
+                .fillMaxWidth(),
+            singleLine = true,
+            enabled    = services.isNotEmpty(),
+        )
+        ExposedDropdownMenu(
+            expanded        = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            services.forEach { service ->
+                DropdownMenuItem(
+                    text    = { Text(service.name, style = MaterialTheme.typography.bodyMedium) },
+                    onClick = {
+                        onServiceSelected(service.id)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Parses an ISO-8601 UTC timestamp (e.g. `"2026-05-13T09:30:00.000Z"`) to epoch
+ * milliseconds.  Returns 0 on any parse error so the SLA badge degrades to
+ * "SLA BREACH" (safe: shows urgency) rather than crashing.
+ */
+private fun parseIsoToMillis(iso: String): Long = try {
+    java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("UTC")
+    }.parse(iso)?.time ?: run {
+        // Fallback: try without milliseconds (e.g. "2026-05-13T09:30:00Z")
+        java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone("UTC")
+        }.parse(iso)?.time ?: 0L
+    }
+} catch (_: Exception) { 0L }
+
 // ─── Preview ──────────────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Preview(name = "TelecallerScreen – queue loaded", showBackground = true)
 @Composable
 private fun TelecallerScreenPreview() {

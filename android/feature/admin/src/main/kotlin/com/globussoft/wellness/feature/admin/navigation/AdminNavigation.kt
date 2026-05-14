@@ -8,6 +8,7 @@ import com.globussoft.wellness.core.data.datastore.UserSession
 import com.globussoft.wellness.feature.admin.presentation.AdminScreen
 import com.globussoft.wellness.feature.admin.presentation.drugs.DrugsScreen
 import com.globussoft.wellness.feature.admin.presentation.locations.LocationsScreen
+import com.globussoft.wellness.feature.admin.presentation.resources.ResourcesScreen
 
 /**
  * Destination route constants for the admin feature graph.
@@ -16,6 +17,7 @@ object AdminDestinations {
     const val Admin     = "admin"
     const val Locations = "locations"
     const val Drugs     = "drugs"
+    const val Resources = "resources"
 }
 
 /**
@@ -53,5 +55,9 @@ fun NavGraphBuilder.adminGraph(
             viewModel      = hiltViewModel(),
             onNavigateBack = { navController.popBackStack() },
         )
+    }
+
+    composable(AdminDestinations.Resources) {
+        ResourcesScreen(navController = navController)
     }
 }

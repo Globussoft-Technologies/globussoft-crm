@@ -1,16 +1,19 @@
 package com.globussoft.wellness.navigation
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.windowsizeclass.WindowSizeClass
-import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.navigation.NavController
-import androidx.navigation.NavGraphBuilder
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -30,93 +33,131 @@ import com.globussoft.wellness.feature.visits.navigation.visitsGraph
 
 fun NavGraphBuilder.mainGraph(
     navController: NavHostController,
-    windowSizeClass: WindowSizeClass,
     userSession: UserSession?,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
 ) {
     navigation(
-        route = MAIN_GRAPH_ROUTE,
-        startDestination = "main_shell"
+        route            = MAIN_GRAPH_ROUTE,
+        startDestination = "main_shell",
     ) {
         composable("main_shell") {
             val innerNavController = rememberNavController()
-            val navBackStackEntry by innerNavController.currentBackStackEntryAsState()
-            val currentRoute = navBackStackEntry?.destination?.route
+            val navBackStackEntry  by innerNavController.currentBackStackEntryAsState()
+            val currentRoute       = navBackStackEntry?.destination?.route
 
-            val isExpandedWidth = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
-
-            if (isExpandedWidth) {
-                Row(Modifier.fillMaxSize()) {
-                    WellnessNavigationRail(
-                        currentRoute = currentRoute,
-                        userSession = userSession,
-                        onNavigate = { route ->
-                            innerNavController.navigate(route) {
-                                popUpTo(innerNavController.graph.startDestinationId) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
+            // Tablet two-pane layout: persistent sidebar left, content right.
+            Row(Modifier.fillMaxSize()) {
+                WellnessPersistentSidebar(
+                    currentRoute = currentRoute,
+                    userSession  = userSession,
+                    onNavigate   = { route ->
+                        innerNavController.navigate(route) {
+                            popUpTo(innerNavController.graph.startDestinationId) {
+                                saveState = true
                             }
+                            launchSingleTop = true
+                            restoreState    = true
                         }
-                    )
-                    InnerNavHost(
-                        navController = innerNavController,
-                        windowSizeClass = windowSizeClass,
-                        userSession = userSession,
-                        onLogout = onLogout,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            } else {
-                Scaffold(
-                    bottomBar = {
-                        WellnessBottomBar(
-                            currentRoute = currentRoute,
-                            userSession = userSession,
-                            onNavigate = { route ->
-                                innerNavController.navigate(route) {
-                                    popUpTo(innerNavController.graph.startDestinationId) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            }
-                        )
-                    }
-                ) { padding ->
-                    InnerNavHost(
-                        navController = innerNavController,
-                        windowSizeClass = windowSizeClass,
-                        userSession = userSession,
-                        onLogout = onLogout,
-                        modifier = Modifier.padding(padding)
-                    )
-                }
+                    },
+                )
+                InnerNavHost(
+                    navController = innerNavController,
+                    userSession   = userSession,
+                    onLogout      = onLogout,
+                    modifier      = Modifier.weight(1f),
+                )
             }
         }
     }
 }
 
-@androidx.compose.runtime.Composable
+@Composable
 private fun InnerNavHost(
     navController: NavHostController,
-    windowSizeClass: WindowSizeClass,
     userSession: UserSession?,
     onLogout: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     NavHost(
-        navController = navController,
+        navController    = navController,
         startDestination = "dashboard",
-        modifier = modifier
+        modifier         = modifier,
     ) {
+        // ── Full feature screens ──────────────────────────────────────────
         dashboardGraph(navController)
-        patientsGraph(navController, windowSizeClass)
-        calendarGraph(navController)
+        patientsGraph(navController)
+        calendarGraph(navController)   // registers "calendar" + "waitlist"
         servicesGraph(navController)
         financeGraph(navController, userSession)
-        visitsGraph(navController)
-        reportsGraph(navController, userSession)
-        telecallerGraph(navController, userSession)
-        adminGraph(navController, userSession)
+        visitsGraph(navController)     // registers "visits" + "attendance" + "leave"
+        reportsGraph()
+        telecallerGraph()
+        adminGraph(navController, userSession) // registers "admin" + "locations" + "drugs" + "resources"
         settingsGraph(navController, userSession, onLogout)
+
+        // ── Clinical stubs ────────────────────────────────────────────────
+        composable("service-categories") { PlaceholderScreen("Service Categories") }
+        composable("memberships")        { PlaceholderScreen("Memberships") }
+        composable("holidays")           { PlaceholderScreen("Holidays") }
+        composable("working-hours")      { PlaceholderScreen("Working Hours") }
+
+        // ── Leads & Revenue stubs ─────────────────────────────────────────
+        composable("inbox")             { PlaceholderScreen("Unified Inbox") }
+        composable("whatsapp")          { PlaceholderScreen("WhatsApp Threads") }
+        composable("leads")             { PlaceholderScreen("All Leads") }
+        composable("converted-leads")   { PlaceholderScreen("Converted Leads") }
+        composable("tasks")             { PlaceholderScreen("Tasks") }
+        composable("marketplace-leads") { PlaceholderScreen("Marketplace Leads") }
+        composable("lead-routing")      { PlaceholderScreen("Routing Rules") }
+
+        // ── Finance stubs ─────────────────────────────────────────────────
+        composable("invoices")       { PlaceholderScreen("Invoices") }
+        composable("estimates")      { PlaceholderScreen("Estimates") }
+        composable("expenses")       { PlaceholderScreen("Expenses") }
+        composable("payments")       { PlaceholderScreen("Payments") }
+        composable("cashback-rules") { PlaceholderScreen("Cashback Rules") }
+
+        // ── Marketing stubs ───────────────────────────────────────────────
+        composable("marketing")     { PlaceholderScreen("SMS / Email Blasts") }
+        composable("sequences")     { PlaceholderScreen("Drip Sequences") }
+        composable("landing-pages") { PlaceholderScreen("Landing Pages") }
+
+        // ── Reports stubs ─────────────────────────────────────────────────
+        composable("per-location")   { PlaceholderScreen("Per-Location Reports") }
+        composable("loyalty")        { PlaceholderScreen("Loyalty + Referrals") }
+        composable("surveys")        { PlaceholderScreen("Patient Surveys") }
+        composable("knowledge-base") { PlaceholderScreen("Knowledge Base") }
+
+        // ── Inventory stubs ───────────────────────────────────────────────
+        composable("product-categories")     { PlaceholderScreen("Inventory Categories") }
+        composable("vendors")                { PlaceholderScreen("Vendors") }
+        composable("inventory-receipts")     { PlaceholderScreen("Inventory Receipts") }
+        composable("inventory-adjustments")  { PlaceholderScreen("Inventory Adjustments") }
+        composable("auto-consumption-rules") { PlaceholderScreen("Auto-consumption Rules") }
+
+        // ── Admin stubs ───────────────────────────────────────────────────
+        composable("staff")                { PlaceholderScreen("Staff Management") }
+        composable("commission-profiles")  { PlaceholderScreen("Commission Profiles") }
+        composable("revenue-goals")        { PlaceholderScreen("Revenue Goals") }
+        composable("channels")             { PlaceholderScreen("Channels") }
+        composable("audit-log")            { PlaceholderScreen("Audit Log") }
+        composable("privacy")              { PlaceholderScreen("Privacy") }
+    }
+}
+
+@Composable
+private fun PlaceholderScreen(title: String) {
+    Box(
+        modifier         = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text      = "$title\n\nThis screen is coming soon.",
+            style     = MaterialTheme.typography.bodyLarge,
+            color     = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }

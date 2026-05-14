@@ -18,7 +18,7 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             isDebuggable = true
-            buildConfigField("String", "BASE_URL", "\"http://10.0.2.2:5000/api/\"")
+            buildConfigField("String", "BASE_URL", "\"https://crm.globusdemos.com/api/\"")
         }
         release {
             isMinifyEnabled = true

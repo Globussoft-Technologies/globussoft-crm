@@ -59,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,6 +84,7 @@ import com.globussoft.wellness.core.domain.model.Staff
 import com.globussoft.wellness.core.domain.model.Visit
 import com.globussoft.wellness.core.domain.model.VisitStatus
 import com.globussoft.wellness.core.domain.model.WaitlistEntry
+import com.globussoft.wellness.core.domain.model.WaitlistStatus
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -378,9 +380,10 @@ private fun CalendarDayGrid(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text  = "Unassigned",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text      = "Unassigned",
+                        style     = MaterialTheme.typography.labelMedium,
+                        fontStyle = FontStyle.Italic,
+                        color     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     )
                 }
             }
@@ -586,9 +589,10 @@ private fun VisitCard(
             )
         }
         // Service name
-        if (!visit.serviceName.isNullOrBlank()) {
+        val visitServiceName = visit.serviceName
+        if (!visitServiceName.isNullOrBlank()) {
             Text(
-                text     = visit.serviceName,
+                text     = visitServiceName,
                 style    = MaterialTheme.typography.labelSmall,
                 color    = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -694,10 +698,11 @@ private fun NewVisitModal(
                 ),
                 modifier = Modifier.weight(1f),
             )
+            val waitingCount = waitlist.count { it.status == WaitlistStatus.WAITING || it.status == WaitlistStatus.OFFERED }
             FilterChip(
                 selected = !modalState.isNewPatient,
                 onClick  = { onEvent(CalendarEvent.ModalFieldChanged("isNewPatient", "false")) },
-                label    = { Text("From Waitlist") },
+                label    = { Text(if (waitingCount > 0) "Waitlist ($waitingCount)" else "Waitlist") },
                 colors   = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = WellnessPrimary,
                     selectedLabelColor     = Color.White,
@@ -737,12 +742,15 @@ private fun NewVisitModal(
                     expanded         = showWaitlistMenu,
                     onDismissRequest = { showWaitlistMenu = false },
                 ) {
-                    waitlist.filter { it.status.name == "WAITING" || it.status.name == "OFFERED" }
+                    waitlist.filter { it.status == WaitlistStatus.WAITING || it.status == WaitlistStatus.OFFERED }
                         .forEach { entry ->
                             DropdownMenuItem(
                                 text = {
                                     Column {
-                                        Text(entry.patientName ?: "Unknown", fontWeight = FontWeight.Medium)
+                                        Text(
+                                            "${entry.patientName ?: "Unknown"} — ${entry.preferredDateRange ?: "Flexible"}",
+                                            fontWeight = FontWeight.Medium,
+                                        )
                                         Text(
                                             entry.serviceName ?: "",
                                             style = MaterialTheme.typography.labelSmall,

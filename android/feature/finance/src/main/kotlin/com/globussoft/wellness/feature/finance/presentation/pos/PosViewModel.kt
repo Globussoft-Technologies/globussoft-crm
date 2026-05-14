@@ -76,7 +76,7 @@ class PosViewModel @Inject constructor(
             _state.update { it.copy(isLoading = true, error = null) }
             when (val result = repository.openShift(registerId, float)) {
                 is WResult.Success -> _state.update {
-                    it.copy(isLoading = false, shiftOpen = true, registerId = registerId)
+                    it.copy(isLoading = false, shiftOpen = true, registerId = registerId, shiftId = result.data)
                 }
                 is WResult.Error -> {
                     val msg = result.message ?: result.exception.message ?: "Failed to open shift"
@@ -90,9 +90,10 @@ class PosViewModel @Inject constructor(
 
     private fun onCloseShift(closingAmount: String) {
         val amount = closingAmount.toDoubleOrNull() ?: 0.0
+        val shiftId = _state.value.shiftId
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
-            when (val result = repository.closeShift(amount, "")) {
+            when (val result = repository.closeShift(shiftId, amount, "")) {
                 is WResult.Success -> _state.update {
                     PosUiState()  // full reset
                 }

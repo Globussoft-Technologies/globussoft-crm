@@ -19,6 +19,8 @@ data class PosUiState(
     val isLoading: Boolean = false,
     /** Whether a shift is currently open on this register. */
     val shiftOpen: Boolean = false,
+    /** Server-assigned shift ID returned by openShift; required for closeShift. */
+    val shiftId: Int = 0,
     /** Display name of the register (informational only — sent with the sale). */
     val registerId: String = "Register 1",
     /** Opening float input for the shift-open form. */

@@ -38,7 +38,7 @@ class CalendarRepositoryImpl @Inject constructor(
         locationId: String?,
     ): WResult<List<Visit>> =
         safeApiCall { api.getVisits(date = date, locationId = locationId, skip = 0, limit = 200) }
-            .mapSuccess { paginated -> paginated.data.map { it.toDomain() } }
+            .mapSuccess { list -> list.map { it.toDomain() } }
 
     override suspend fun createVisit(request: CreateVisitRequest): WResult<Visit> =
         safeApiCall { api.createVisit(request) }

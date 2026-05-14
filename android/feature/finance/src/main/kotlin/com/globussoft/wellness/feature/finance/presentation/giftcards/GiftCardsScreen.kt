@@ -119,9 +119,10 @@ fun GiftCardsScreen(
             verticalArrangement = Arrangement.spacedBy(Dimens.SpacingMd),
         ) {
             // Newly issued card — one-time display
-            if (state.newlyIssuedCard != null) {
+            val newlyIssuedCard = state.newlyIssuedCard
+            if (newlyIssuedCard != null) {
                 NewCardBanner(
-                    card    = state.newlyIssuedCard,
+                    card    = newlyIssuedCard,
                     onCopy  = { code ->
                         clipboard.setText(AnnotatedString(code))
                         scope.launch { snackbarHost.showSnackbar("Code copied to clipboard") }
@@ -151,11 +152,14 @@ fun GiftCardsScreen(
                 state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = WellnessPrimary, strokeWidth = 2.dp)
                 }
-                state.error != null && state.giftCards.isEmpty() -> ErrorState(
-                    message  = state.error,
-                    onRetry  = { viewModel.onEvent(GiftCardsEvent.Refresh) },
-                    modifier = Modifier.fillMaxSize(),
-                )
+                state.error != null && state.giftCards.isEmpty() -> {
+                    val errorMsg = state.error ?: ""
+                    ErrorState(
+                        message  = errorMsg,
+                        onRetry  = { viewModel.onEvent(GiftCardsEvent.Refresh) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
                 state.filteredCards.isEmpty() -> EmptyState(
                     message     = "No gift cards found.",
                     icon        = Icons.Default.CardGiftcard,

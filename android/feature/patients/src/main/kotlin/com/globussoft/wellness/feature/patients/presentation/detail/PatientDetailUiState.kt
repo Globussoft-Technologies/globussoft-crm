@@ -30,6 +30,8 @@ data class PatientDetailUiState(
     val isLoggingVisit: Boolean = false,
     /** Non-null when a log-visit mutation fails. */
     val logVisitError: String? = null,
+    /** True while a gift-card redeem request is in-flight. */
+    val isRedeeming: Boolean = false,
 )
 
 // ─── Events ───────────────────────────────────────────────────────────────────
@@ -58,6 +60,13 @@ sealed class PatientDetailEvent {
         val bookingType: String,
         val notes: String,
     ) : PatientDetailEvent()
+
+    /**
+     * The user tapped "Redeem" in the Wallet tab.
+     *
+     * @param code Gift-card code entered by the user.
+     */
+    data class RedeemGiftCard(val code: String) : PatientDetailEvent()
 }
 
 // ─── Effects ──────────────────────────────────────────────────────────────────

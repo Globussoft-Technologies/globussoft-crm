@@ -33,50 +33,78 @@ class ReportsRepositoryImpl @Inject constructor(
 
     override suspend fun getPnlByService(from: String, to: String): WResult<List<PnlByService>> =
         safeApiCall { api.getPnlByService(from = from, to = to) }
-            .mapSuccess { list -> list.map { it.toPnlByService() } }
+            .mapSuccess { envelope ->
+                @Suppress("UNCHECKED_CAST")
+                val rows = (envelope["rows"] ?: envelope["servicesSummary"]) as? List<*>
+                rows?.filterIsInstance<Map<*, *>>()?.map { it.toRawMap().toPnlByService() } ?: emptyList()
+            }
 
     override suspend fun getPerProfessional(from: String, to: String): WResult<List<PerProfessional>> =
         safeApiCall { api.getPerProfessional(from = from, to = to) }
-            .mapSuccess { list -> list.map { it.toPerProfessional() } }
+            .mapSuccess { envelope ->
+                @Suppress("UNCHECKED_CAST")
+                val rows = envelope["rows"] as? List<*>
+                rows?.filterIsInstance<Map<*, *>>()?.map { it.toRawMap().toPerProfessional() } ?: emptyList()
+            }
 
     override suspend fun getPerLocation(from: String, to: String): WResult<List<PerLocation>> =
         safeApiCall { api.getPerLocation(from = from, to = to) }
-            .mapSuccess { list -> list.map { it.toPerLocation() } }
+            .mapSuccess { envelope ->
+                @Suppress("UNCHECKED_CAST")
+                val rows = envelope["rows"] as? List<*>
+                rows?.filterIsInstance<Map<*, *>>()?.map { it.toRawMap().toPerLocation() } ?: emptyList()
+            }
 
     override suspend fun getAttribution(from: String, to: String): WResult<List<AttributionData>> =
         safeApiCall { api.getAttribution(from = from, to = to) }
-            .mapSuccess { list -> list.map { it.toAttributionData() } }
+            .mapSuccess { envelope ->
+                @Suppress("UNCHECKED_CAST")
+                val rows = envelope["rows"] as? List<*>
+                rows?.filterIsInstance<Map<*, *>>()?.map { it.toRawMap().toAttributionData() } ?: emptyList()
+            }
 
     // -------------------------------------------------------------------------
     // Map helpers
     // -------------------------------------------------------------------------
 
-    private fun Map<String, Any>.toPnlByService() = PnlByService(
-        serviceName = stringOrEmpty("serviceName"),
-        visits      = intOrZero("visits"),
-        amount      = doubleOrZero("amount"),
-        margin      = doubleOrNull("margin"),
-    )
+    // Backend P&L row: {id, name, category, ticketTier, count, revenue, productCost, contribution}
+    private fun Map<String, Any>.toPnlByService(): PnlByService {
+        val revenue = doubleOrZero("revenue")
+        val contribution = doubleOrZero("contribution")
+        val margin = if (revenue > 0) contribution / revenue else null
+        return PnlByService(
+            serviceName = stringOrEmpty("name"),
+            visits      = intOrZero("count"),
+            amount      = revenue,
+            margin      = margin,
+        )
+    }
 
+    // Backend per-professional row: {id, name, role, wellnessRole, visits, revenue}
     private fun Map<String, Any>.toPerProfessional() = PerProfessional(
-        doctorName          = stringOrEmpty("doctorName"),
-        visits              = intOrZero("visits"),
-        revenue             = doubleOrZero("revenue"),
-        utilizationPercent  = doubleOrNull("utilizationPercent"),
+        doctorName         = stringOrEmpty("name"),
+        visits             = intOrZero("visits"),
+        revenue            = doubleOrZero("revenue"),
+        utilizationPercent = null,
     )
 
+    // Backend per-location row: {id, name, city, state, isActive, visits, revenue, patients}
     private fun Map<String, Any>.toPerLocation() = PerLocation(
-        locationName = stringOrEmpty("locationName"),
+        locationName = stringOrEmpty("name"),
         visits       = intOrZero("visits"),
         revenue      = doubleOrZero("revenue"),
     )
 
+    // Backend attribution row: {source, leads, junk, qualified, revenue, junkRate, conversionRate, revenuePerLead}
     private fun Map<String, Any>.toAttributionData() = AttributionData(
-        channel     = stringOrEmpty("channel"),
+        channel     = stringOrEmpty("source"),
         leads       = intOrZero("leads"),
-        conversions = intOrZero("conversions"),
-        roi         = doubleOrNull("roi"),
+        conversions = intOrZero("qualified"),
+        roi         = null,
     )
+
+    private fun Map<*, *>.toRawMap(): Map<String, Any> =
+        entries.associate { (k, v) -> k.toString() to (v ?: "") }
 
     // -------------------------------------------------------------------------
     // Coercion helpers

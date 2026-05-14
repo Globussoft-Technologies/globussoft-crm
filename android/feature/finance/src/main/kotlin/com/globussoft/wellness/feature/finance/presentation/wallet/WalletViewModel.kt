@@ -76,11 +76,11 @@ class WalletViewModel @Inject constructor(
             val result = safeApiCall { api.getPatients(search = query, limit = 10) }
             when (result) {
                 is WResult.Success -> {
-                    val results = result.data.data.map { p ->
+                    val results = result.data.patients.map { p ->
                         PatientSearchResult(
                             id    = p.id,
                             name  = p.name,
-                            phone = p.phone,
+                            phone = p.phone ?: "",
                         )
                     }
                     _state.update { it.copy(searchResults = results, showSearchDropdown = results.isNotEmpty()) }

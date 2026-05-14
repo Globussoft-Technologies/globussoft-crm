@@ -83,8 +83,8 @@ class AuthDataStore @Inject constructor(
 
     /**
      * Persists all fields of [session] to DataStore in a single atomic write.
-     *
-     * Calling this triggers a new emission on [tokenFlow] and [userFlow].
+     * Also mirrors the token to SharedPreferences so the OkHttp AuthInterceptor
+     * (which is synchronous and cannot read DataStore) can attach it.
      */
     suspend fun saveSession(session: UserSession) {
         context.dataStore.edit { prefs ->
@@ -96,24 +96,28 @@ class AuthDataStore @Inject constructor(
             prefs[KEY_TENANT_ID]     = session.tenantId
             prefs[KEY_TENANT_NAME]   = session.tenantName
             prefs[KEY_VERTICAL]      = session.vertical
-            // wellnessRole is optional; remove the key when null so the flow
-            // correctly reconstructs null rather than a stale previous value.
             if (session.wellnessRole != null) {
                 prefs[KEY_WELLNESS_ROLE] = session.wellnessRole.name
             } else {
                 prefs.remove(KEY_WELLNESS_ROLE)
             }
         }
+        // Mirror token to SharedPreferences for the synchronous AuthInterceptor.
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString("access_token", session.accessToken)
+            .apply()
     }
 
     /**
-     * Removes all stored session data.
-     *
-     * After this call [tokenFlow] emits null and [userFlow] emits null,
-     * signalling the app to navigate to the login screen.
+     * Removes all stored session data from both DataStore and SharedPreferences.
      */
     suspend fun clearSession() {
         context.dataStore.edit { it.clear() }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove("access_token")
+            .apply()
     }
 
     /**

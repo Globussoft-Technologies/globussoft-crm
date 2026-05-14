@@ -3,10 +3,20 @@ package com.globussoft.wellness.feature.telecaller.presentation
 import com.globussoft.wellness.core.domain.model.Lead
 
 /**
+ * Lightweight service catalog entry used in the "Booked" disposition dropdown.
+ *
+ * Only [id] and [name] are needed in the telecaller UI — full [Service] domain
+ * model is not imported here to keep the presentation layer lean.
+ */
+data class ServiceItem(val id: String, val name: String)
+
+/**
  * Immutable UI state for the Telecaller Queue screen.
  *
  * [queue]                — ordered list of leads awaiting disposition.
  * [currentLead]          — the lead currently displayed in the detail pane.
+ * [services]             — service catalog for the "Booked" disposition dropdown;
+ *                          empty until loaded, then populated once at init.
  * [showDispositionSheet] — whether the bottom sheet is open.
  * [selectedDisposition]  — which [DispositionType] button was most recently tapped.
  * [dispositionForm]      — form fields for the selected disposition type.
@@ -18,6 +28,7 @@ data class TelecallerUiState(
     val queue: List<Lead> = emptyList(),
     val currentLead: Lead? = null,
     val error: String? = null,
+    val services: List<ServiceItem> = emptyList(),
     val showDispositionSheet: Boolean = false,
     val selectedDisposition: DispositionType? = null,
     val dispositionForm: DispositionFormState = DispositionFormState(),
@@ -32,10 +43,14 @@ data class TelecallerUiState(
  * Only the fields relevant to the selected [DispositionType] are shown in the UI,
  * but all are stored here so the form doesn't reset if the user switches types
  * and comes back.
+ *
+ * [appointmentServiceId] — id of the service selected from the dropdown;
+ *                          replaces the old free-text [appointmentService] field.
  */
 data class DispositionFormState(
     val notes: String = "",
     val callbackDateTime: String = "",
+    val appointmentServiceId: String = "",
     val appointmentService: String = "",
     val appointmentTime: String = "",
 )

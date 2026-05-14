@@ -46,6 +46,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -71,7 +72,6 @@ import com.globussoft.wellness.core.designsystem.theme.WellnessTheme
 import com.globussoft.wellness.core.domain.model.Patient
 import com.globussoft.wellness.feature.patients.presentation.detail.PatientDetailScreen
 import kotlinx.coroutines.launch
-import androidx.compose.material3.windowsizeclass.WindowSizeClass
 
 // ─── Public composable ────────────────────────────────────────────────────────
 
@@ -86,13 +86,15 @@ import androidx.compose.material3.windowsizeclass.WindowSizeClass
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PatientsListScreen(
-    windowSizeClass: WindowSizeClass,
     onNavigateToDetail: (String) -> Unit,
     viewModel: PatientsListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    // Mirror the 840 dp threshold used by AdaptiveTwoPaneLayout.
+    val isExpanded = LocalConfiguration.current.screenWidthDp >= 840
 
     // Track which patient is "selected" in the two-pane tablet layout.
     var selectedPatientId by remember { mutableStateOf<String?>(null) }
@@ -101,8 +103,13 @@ fun PatientsListScreen(
         viewModel.effects.collect { effect ->
             when (effect) {
                 is PatientsListEffect.NavigateToDetail -> {
-                    selectedPatientId = effect.patientId
-                    onNavigateToDetail(effect.patientId)
+                    if (isExpanded) {
+                        // Show detail inline in the right pane — no nav stack push.
+                        selectedPatientId = effect.patientId
+                    } else {
+                        // Compact: push the detail screen onto the nav stack.
+                        onNavigateToDetail(effect.patientId)
+                    }
                 }
                 is PatientsListEffect.ShowSnackbar -> scope.launch {
                     snackbarHostState.showSnackbar(effect.message)
@@ -112,7 +119,6 @@ fun PatientsListScreen(
     }
 
     AdaptiveTwoPaneLayout(
-        windowSizeClass  = windowSizeClass,
         showDetailPane   = selectedPatientId != null,
         listPane = {
             PatientsListPane(
@@ -323,9 +329,11 @@ private fun PatientCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (!patient.email.isNullOrBlank()) {
+                val patientEmail = patient.email
+                val patientSource = patient.source
+                if (!patientEmail.isNullOrBlank()) {
                     Text(
-                        text  = patient.email,
+                        text  = patientEmail,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -335,8 +343,8 @@ private fun PatientCard(
                     horizontalArrangement = Arrangement.spacedBy(Dimens.SpacingXs),
                     verticalAlignment     = Alignment.CenterVertically,
                 ) {
-                    if (!patient.source.isNullOrBlank()) {
-                        StatusBadge(status = patient.source)
+                    if (!patientSource.isNullOrBlank()) {
+                        StatusBadge(status = patientSource)
                     }
                     Text(
                         text  = formatDate(patient.createdAt),
@@ -366,7 +374,7 @@ private fun PatientFormBottomSheet(
     state: PatientsListUiState,
     onEvent: (PatientsListEvent) -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartialExpansion = true)
+    val sheetState = rememberModalBottomSheetState()
     val isEditing  = state.editingPatient != null
     val form       = state.addForm
 

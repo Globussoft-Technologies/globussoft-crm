@@ -9,7 +9,7 @@ package com.globussoft.wellness.core.network.model.response
 data class PatientResponse(
     val id: String,
     val name: String,
-    val phone: String,
+    val phone: String?,
     val email: String?,
     val dob: String?,
     val gender: String?,

@@ -219,9 +219,10 @@ private fun LocationCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (!location.phone.isNullOrBlank()) {
+                val locationPhone = location.phone
+                if (!locationPhone.isNullOrBlank()) {
                     Text(
-                        text  = location.phone,
+                        text  = locationPhone,
                         style = MaterialTheme.typography.bodySmall,
                         color = WellnessPrimary,
                     )

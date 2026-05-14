@@ -19,7 +19,7 @@ import com.globussoft.wellness.core.network.model.response.PatientResponse
 fun PatientResponse.toDomain(): Patient = Patient(
     id               = id,
     name             = name,
-    phone            = phone,
+    phone            = phone ?: "",
     email            = email,
     dob              = dob,
     age              = dob?.let { computeAgeFromDob(it) },

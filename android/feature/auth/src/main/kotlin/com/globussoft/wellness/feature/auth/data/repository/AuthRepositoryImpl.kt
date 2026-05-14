@@ -61,6 +61,7 @@ class AuthRepositoryImpl @Inject constructor(
             is WResult.Success -> {
                 val response = result.data
                 val user = response.user
+                val tenant = response.tenant
 
                 // Map server-returned role strings to typed enums with safe fallbacks.
                 val userRole = runCatching { UserRole.valueOf(user.role.uppercase()) }
@@ -70,14 +71,14 @@ class AuthRepositoryImpl @Inject constructor(
 
                 val session = UserSession(
                     accessToken  = response.token,
-                    userId       = user.userId,
+                    userId       = user.id.toString(),
                     email        = user.email,
                     name         = user.name,
                     role         = userRole,
                     wellnessRole = wellnessRole,
-                    tenantId     = user.tenantId,
-                    tenantName   = user.tenantName,
-                    vertical     = user.vertical,
+                    tenantId     = tenant.id.toString(),
+                    tenantName   = tenant.name,
+                    vertical     = tenant.vertical,
                 )
 
                 authDataStore.saveSession(session)
@@ -86,7 +87,7 @@ class AuthRepositoryImpl @Inject constructor(
 
             is WResult.Error -> result
 
-            WResult.Loading -> result
+            WResult.Loading -> result as WResult<UserSession>
         }
     }
 

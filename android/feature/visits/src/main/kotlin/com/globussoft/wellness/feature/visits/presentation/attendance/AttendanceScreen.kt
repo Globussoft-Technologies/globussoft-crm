@@ -17,11 +17,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -59,6 +61,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AttendanceScreen(
+    onNavigateBack: (() -> Unit)? = null,
     viewModel: AttendanceViewModel = hiltViewModel(),
 ) {
     val state        by viewModel.state.collectAsStateWithLifecycle()
@@ -85,6 +88,17 @@ fun AttendanceScreen(
                         Text("Attendance", fontWeight = FontWeight.SemiBold)
                     }
                 },
+                navigationIcon = {
+                    if (onNavigateBack != null) {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(
+                                imageVector        = Icons.Default.ArrowBack,
+                                contentDescription = "Back",
+                                tint               = WellnessPrimary,
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
             )
         },
@@ -100,8 +114,9 @@ fun AttendanceScreen(
                 }
             }
             state.error != null && state.todayData == null -> {
+                val errorMsg = state.error ?: ""
                 ErrorState(
-                    message  = state.error,
+                    message  = errorMsg,
                     onRetry  = { viewModel.onEvent(AttendanceEvent.Refresh) },
                     modifier = Modifier.fillMaxSize().padding(padding),
                 )

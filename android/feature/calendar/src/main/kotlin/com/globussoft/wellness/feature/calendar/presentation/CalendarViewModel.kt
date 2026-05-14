@@ -226,6 +226,22 @@ class CalendarViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(newVisitModal = it.newVisitModal?.copy(isSubmitting = true)) }
 
+            // When promoting from waitlist, mark the entry as BOOKED first.
+            if (!modal.isNewPatient && !modal.fromWaitlistId.isNullOrBlank()) {
+                when (val patchResult = repository.updateWaitlistEntry(modal.fromWaitlistId, "BOOKED")) {
+                    is WResult.Error -> {
+                        val msg = patchResult.message ?: patchResult.exception.message ?: "Failed to update waitlist entry"
+                        _state.update { it.copy(newVisitModal = it.newVisitModal?.copy(isSubmitting = false, error = msg)) }
+                        return@launch
+                    }
+                    else -> Unit
+                }
+                // Remove the promoted entry from the local waitlist list.
+                _state.update { current ->
+                    current.copy(waitlistEntries = current.waitlistEntries.filter { it.id != modal.fromWaitlistId })
+                }
+            }
+
             // Build the visit date at 09:00 IST for the selected day.
             val visitDate = "${currentDate.format(isoDateFormatter)}T09:00:00.000Z"
 
@@ -243,7 +259,8 @@ class CalendarViewModel @Inject constructor(
             when (val result = repository.createVisit(request)) {
                 is WResult.Success -> {
                     _state.update { it.copy(newVisitModal = null) }
-                    _effects.send(CalendarEffect.ShowSnackbar("Visit booked successfully"))
+                    val snackMsg = if (!modal.isNewPatient) "Waitlist patient booked successfully" else "Visit booked successfully"
+                    _effects.send(CalendarEffect.ShowSnackbar(snackMsg))
                     loadVisitsForDate(currentDate)
                 }
                 is WResult.Error -> {

@@ -1,10 +1,14 @@
 package com.globussoft.wellness.feature.patients.presentation.detail.tabs
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,10 +24,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import com.globussoft.wellness.core.designsystem.components.EmptyState
 import com.globussoft.wellness.core.designsystem.components.StatusBadge
 import com.globussoft.wellness.core.designsystem.components.WellnessCard
 import com.globussoft.wellness.core.designsystem.theme.Dimens
+import com.globussoft.wellness.core.designsystem.theme.WellnessAccent
 import com.globussoft.wellness.core.designsystem.theme.WellnessPrimary
 import com.globussoft.wellness.core.designsystem.theme.WellnessTextSecondary
 import com.globussoft.wellness.core.domain.model.Visit
@@ -64,59 +70,71 @@ fun CaseHistoryTab(visits: List<Visit>) {
 @Composable
 private fun VisitCard(visit: Visit) {
     WellnessCard(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(Dimens.SpacingMd)) {
-            // Top row: date + status badge
-            Row(
-                modifier            = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment   = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text  = formatVisitDate(visit.visitDate),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                StatusBadge(status = visit.status.name)
-            }
-
-            Spacer(Modifier.height(Dimens.SpacingXs))
-
-            // Service name
-            if (!visit.serviceName.isNullOrBlank()) {
-                LabeledValue(label = "Service", value = visit.serviceName)
-            }
-
-            // Doctor
-            if (!visit.doctorName.isNullOrBlank()) {
-                LabeledValue(label = "Doctor", value = visit.doctorName)
-            }
-
-            // Booking type
-            LabeledValue(
-                label = "Type",
-                value = visit.bookingType.name.replace('_', ' ').lowercase()
-                    .replaceFirstChar { it.uppercase() },
+        Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+            // Color-coded left border: visits use the accent (blush) color
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .background(WellnessAccent),
             )
+            Column(modifier = Modifier.padding(Dimens.SpacingMd).weight(1f)) {
+                // Top row: date + status badge
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment     = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text       = formatVisitDate(visit.visitDate),
+                        style      = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    StatusBadge(status = visit.status.name)
+                }
 
-            // Amount
-            if (visit.amount != null) {
-                LabeledValue(
-                    label = "Amount",
-                    value = "₹${"%.0f".format(visit.amount)}",
-                )
-            }
-
-            // Notes
-            if (!visit.notes.isNullOrBlank()) {
                 Spacer(Modifier.height(Dimens.SpacingXs))
-                Text(
-                    text  = visit.notes,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = WellnessTextSecondary,
+
+                // Service name
+                val visitServiceName = visit.serviceName
+                if (!visitServiceName.isNullOrBlank()) {
+                    LabeledValue(label = "Service", value = visitServiceName)
+                }
+
+                // Doctor
+                val visitDoctorName = visit.doctorName
+                if (!visitDoctorName.isNullOrBlank()) {
+                    LabeledValue(label = "Doctor", value = visitDoctorName)
+                }
+
+                // Booking type
+                LabeledValue(
+                    label = "Type",
+                    value = visit.bookingType.name.replace('_', ' ').lowercase()
+                        .replaceFirstChar { it.uppercase() },
                 )
-            }
-        }
-    }
+
+                // Amount
+                if (visit.amount != null) {
+                    LabeledValue(
+                        label = "Amount",
+                        value = "₹${"%.0f".format(visit.amount)}",
+                    )
+                }
+
+                // Notes
+                val visitNotes = visit.notes
+                if (!visitNotes.isNullOrBlank()) {
+                    Spacer(Modifier.height(Dimens.SpacingXs))
+                    Text(
+                        text  = visitNotes,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = WellnessTextSecondary,
+                    )
+                }
+            }   // Column
+        }   // Row (left-border + content)
+    }   // WellnessCard
 }
 
 @Composable

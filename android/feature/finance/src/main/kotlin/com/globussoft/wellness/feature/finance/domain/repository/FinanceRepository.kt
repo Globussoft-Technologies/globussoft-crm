@@ -28,14 +28,14 @@ interface FinanceRepository {
      * Opens a new register shift with the given [openingFloat] cash amount.
      * Returns [WResult.Success] with Unit on success.
      */
-    suspend fun openShift(registerId: String, openingFloat: Double): WResult<Unit>
+    suspend fun openShift(registerId: String, openingFloat: Double): WResult<Int>
 
     /**
-     * Closes the currently open shift.
+     * Closes the shift identified by [shiftId].
      * [closingAmount] is the physical cash counted in the drawer.
      * [notes] captures any end-of-shift remarks.
      */
-    suspend fun closeShift(closingAmount: Double, notes: String): WResult<Unit>
+    suspend fun closeShift(shiftId: Int, closingAmount: Double, notes: String): WResult<Unit>
 
     /**
      * Submits a completed POS sale and returns a [PosReceiptData] with the

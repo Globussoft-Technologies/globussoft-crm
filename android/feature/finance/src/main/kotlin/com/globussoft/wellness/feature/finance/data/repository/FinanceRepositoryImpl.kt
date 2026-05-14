@@ -36,7 +36,7 @@ class FinanceRepositoryImpl @Inject constructor(
 
     // ─── POS ──────────────────────────────────────────────────────────────────
 
-    override suspend fun openShift(registerId: String, openingFloat: Double): WResult<Unit> =
+    override suspend fun openShift(registerId: String, openingFloat: Double): WResult<Int> =
         safeApiCall {
             api.openShift(
                 mapOf(
@@ -44,17 +44,20 @@ class FinanceRepositoryImpl @Inject constructor(
                     "openingFloat" to openingFloat,
                 )
             )
+        }.mapSuccess { data ->
+            (data["id"] as? Number)?.toInt() ?: (data["shiftId"] as? Number)?.toInt() ?: 0
         }
 
-    override suspend fun closeShift(closingAmount: Double, notes: String): WResult<Unit> =
+    override suspend fun closeShift(shiftId: Int, closingAmount: Double, notes: String): WResult<Unit> =
         safeApiCall {
             api.closeShift(
+                shiftId,
                 mapOf(
                     "closingAmount" to closingAmount,
                     "notes"         to notes,
                 )
             )
-        }
+        }.mapSuccess { }
 
     override suspend fun submitSale(sale: PosSubmitRequest): WResult<PosReceiptData> =
         safeApiCall {
@@ -86,8 +89,12 @@ class FinanceRepositoryImpl @Inject constructor(
 
     override suspend fun getGiftCards(status: String?): WResult<List<GiftCard>> =
         safeApiCall { api.getGiftCards(status) }
-            .mapSuccess { list ->
-                list.filterIsInstance<Map<*, *>>().map { it.toGiftCard() }
+            .mapSuccess { envelope ->
+                @Suppress("UNCHECKED_CAST")
+                val rows = (envelope["giftCards"] ?: envelope["data"]) as? List<*>
+                    ?: envelope.values.filterIsInstance<List<*>>().firstOrNull()
+                    ?: emptyList<Any>()
+                rows.filterIsInstance<Map<*, *>>().map { it.toGiftCard() }
             }
 
     override suspend fun issueGiftCard(amount: Double): WResult<GiftCard> =
@@ -108,8 +115,11 @@ class FinanceRepositoryImpl @Inject constructor(
 
     override suspend fun getCoupons(): WResult<List<Coupon>> =
         safeApiCall { api.getCoupons() }
-            .mapSuccess { list ->
-                list.filterIsInstance<Map<*, *>>().map { it.toCoupon() }
+            .mapSuccess { envelope ->
+                @Suppress("UNCHECKED_CAST")
+                val rows = (envelope["data"] ?: envelope["coupons"] ?: envelope["rows"]) as? List<*>
+                    ?: envelope.values.filterIsInstance<List<*>>().firstOrNull()
+                rows?.filterIsInstance<Map<*, *>>()?.map { it.toCoupon() } ?: emptyList()
             }
 
     override suspend fun createCoupon(params: Map<String, Any>): WResult<Coupon> =
@@ -155,7 +165,7 @@ class FinanceRepositoryImpl @Inject constructor(
     }
 
     private fun Map<*, *>.toWalletTransaction(): WalletTransaction = WalletTransaction(
-        id           = this["id"] as? String ?: "",
+        id           = anyId(this["id"]),
         type         = this["type"] as? String ?: "CREDIT",
         amount       = (this["amount"] as? Number)?.toDouble() ?: 0.0,
         notes        = this["notes"] as? String,
@@ -164,7 +174,7 @@ class FinanceRepositoryImpl @Inject constructor(
     )
 
     private fun Map<*, *>.toGiftCard(): GiftCard = GiftCard(
-        id         = this["id"] as? String ?: "",
+        id         = anyId(this["id"]),
         code       = this["code"] as? String ?: "",
         amount     = (this["amount"] as? Number)?.toDouble() ?: 0.0,
         status     = this["status"] as? String ?: "ACTIVE",
@@ -173,7 +183,7 @@ class FinanceRepositoryImpl @Inject constructor(
     )
 
     private fun Map<*, *>.toCoupon(): Coupon = Coupon(
-        id              = this["id"] as? String ?: "",
+        id              = anyId(this["id"]),
         code            = this["code"] as? String ?: "",
         discountType    = this["discountType"] as? String ?: "PERCENT",
         amount          = (this["amount"] as? Number)?.toDouble() ?: 0.0,
@@ -183,6 +193,13 @@ class FinanceRepositoryImpl @Inject constructor(
         isActive        = this["isActive"] as? Boolean ?: true,
         redemptionCount = (this["redemptionCount"] as? Number)?.toInt() ?: 0,
     )
+}
+
+/** Coerces an id field that may be Int, Long, or String to a non-empty String. */
+private fun anyId(raw: Any?): String = when (raw) {
+    is Number -> raw.toLong().toString()
+    is String -> raw
+    else      -> ""
 }
 
 // ─── Private extension for mapSuccess ────────────────────────────────────────

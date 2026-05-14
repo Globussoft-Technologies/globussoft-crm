@@ -1,7 +1,7 @@
 package com.globussoft.wellness.feature.auth.presentation
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,13 +25,11 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
-import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
-import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -351,20 +350,37 @@ private fun FormPanel(
                 .height(52.dp),
         )
 
-        // Debug-only quick-login hint — stripped from release builds by R8.
+        // Debug-only quick-fill buttons — stripped from release builds by R8.
         if (isDebugBuild()) {
             Spacer(modifier = Modifier.height(Dimens.SpacingXl))
             Text(
-                text     = "Demo: rishu@enhancedwellness.in",
-                style    = MaterialTheme.typography.labelSmall,
-                color    = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .clickable {
-                        onEvent(LoginEvent.EmailChanged("rishu@enhancedwellness.in"))
-                        onEvent(LoginEvent.PasswordChanged("password123"))
-                    },
+                text  = "Quick Fill (Debug)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.height(4.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    Triple("Owner",   "rishu@enhancedwellness.in",   "password123"),
+                    Triple("Manager", "manager@enhancedwellness.in", "password123"),
+                    Triple("Doctor",  "drharsh@enhancedwellness.in", "password123"),
+                ).forEach { (label, email, pass) ->
+                    OutlinedButton(
+                        onClick  = {
+                            onEvent(LoginEvent.EmailChanged(email))
+                            onEvent(LoginEvent.PasswordChanged(pass))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        border   = BorderStroke(1.dp, WellnessPrimary.copy(alpha = 0.3f)),
+                    ) {
+                        Text(
+                            text  = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = WellnessPrimary,
+                        )
+                    }
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(Dimens.SpacingHuge))
@@ -375,20 +391,11 @@ private fun FormPanel(
 
 /**
  * Returns true when the window width is Expanded (tablet landscape).
- * Uses [calculateWindowSizeClass] when available; falls back to `false` on
- * preview / headless environments where no Activity is present.
+ * Returns true when the window width is at least tablet width (>= 840 dp).
  */
-@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Composable
 private fun rememberIsWideLayout(): Boolean {
-    val context = LocalContext.current
-    return try {
-        val activity = context as? android.app.Activity ?: return false
-        val wsc = calculateWindowSizeClass(activity)
-        wsc.widthSizeClass == WindowWidthSizeClass.Expanded
-    } catch (_: Exception) {
-        false
-    }
+    return LocalConfiguration.current.screenWidthDp >= 840
 }
 
 /**

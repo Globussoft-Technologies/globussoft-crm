@@ -1,5 +1,7 @@
 package com.globussoft.wellness.core.designsystem.components
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -141,6 +143,7 @@ fun WellnessDropdown(
     val displayLabel = options.firstOrNull { it.first == value }?.second ?: value
 
     Column(modifier = modifier) {
+        Box {
         OutlinedTextField(
             value         = displayLabel,
             onValueChange = {},
@@ -164,6 +167,9 @@ fun WellnessDropdown(
             shape    = MaterialTheme.shapes.small,
             modifier = Modifier.fillMaxWidth(),
         )
+        // Transparent overlay so tapping anywhere on the field opens the menu
+        Box(Modifier.matchParentSize().clickable { expanded = !expanded })
+        } // Box
 
         DropdownMenu(
             expanded        = expanded,

@@ -149,13 +149,31 @@ async function createDeal(request, overrides = {}) {
 // assignedToId is set to USER's userId by the route's default (added to
 // routes/contacts.js in the same commit). ADMIN tests still pass because
 // ADMIN is unscoped and sees all tenant contacts including USER-owned ones.
+//
+// 2026-05-14: demo accumulates AutomationRule rows over time (e.g. rule id=5550
+// `contact.created` → `assign_agent`). These fire async AFTER the POST returns
+// 201, then overwrite the route's default `assignedToId = req.user.userId`
+// with the rule's configured userId — so the contact silently disappears from
+// the USER's list. We get USER's userId from /auth/me + re-assert it via
+// PUT after a short settle delay. The "USER list call strips Contact.email"
+// test (line 282) was a casualty of this and went hard-failing on v3.7.13/14.
 async function createContact(request, overrides = {}) {
   const r = await userPost(request, '/api/contacts', {
     name: `${RUN_TAG} ${overrides.name || 'Anjali Field'}`,
     email: overrides.email || `${RUN_TAG.toLowerCase()}.anjali.${Date.now()}@example.test`,
   });
   expect(r.status(), `create contact: ${await r.text()}`).toBe(201);
-  return r.json();
+  const contact = await r.json();
+  // Let async automation rules settle, then re-assert ownership so background
+  // assign_agent rules don't steal the contact out from under USER's list filter.
+  await new Promise((res) => setTimeout(res, 300));
+  const meRes = await request.get(`${BASE_URL}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${await getUserToken(request)}` },
+    timeout: REQUEST_TIMEOUT,
+  });
+  const me = await meRes.json();
+  await adminPut(request, `/api/contacts/${contact.id}`, { assignedToId: me.id });
+  return { ...contact, assignedToId: me.id };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

@@ -4,6 +4,29 @@
 
 ---
 
+## 🏁 SESSION HANDOFF (2026-05-15 — pen-test cluster cleanup: #756-#768 RBAC-denial UX + #742/#739 + CVE remediation)
+
+**HEAD on origin/main:** `5d3205d`. Latest release tag still **v3.7.16** — today's work is 4 product/security fix commits deployed to demo via the per-push gate; **no new tag cut** (see "first next session" item 1).
+
+**State:** working tree clean, `main` in sync with `origin/main`, deploy gate green on `5d3205d` (all 6 gates + deploy).
+
+### What shipped today
+
+- **`d567ce2` — #756-#768 permission-denial cluster (13 pen-test issues).** Collapsed `RoleGuard.jsx`'s two divergent denial modes (strict redirect+toast / lockedInPlace panel+toast) into ONE canonical pattern: a denied role renders the full-page lock panel **in place** — no toast, no redirect, children never mount (no info-disclosure of page chrome/KPI shapes). Removed `useNotify`/`Navigate`/`useEffect`/`redirectTo`/`lockedInPlace`. Plus 3 small page edits: Sidebar nav-gating (#756), Payments env-var `<details>` admin-gated (#759), Recommendations empty-state copy (#767). `RoleGuard.test.jsx` rewritten — 15 tests pinning the single-behavior contract. All 13 closed (#757 NOT REPRODUCED).
+- **`cf678f7` — sanitize-html 2.17.3 → 2.17.4.** `npm audit` gate caught a new CRITICAL XSS (`GHSA-rpr9-rxv7-x643`, `xmp` raw-text passthrough) — not our code. Remediated per the "remediate, don't allowlist" rule.
+- **`4e24a0d` — #742 (Critical) + #739 (High).** #742: added a tenant-scoped patient-existence guard (`prisma.patient.findFirst` → `404 PATIENT_NOT_FOUND`) on `POST /visits /prescriptions /consents /treatment-plans` — previously accepted writes against deleted/non-existent patients. The frontend half of #742 (stale header card) was a **phantom** — already fixed on current `main`. #739: added `portalVerifyOtpLimiter` (10/10min/IP prod) to `/portal/login` + `/portal/login/verify-otp` which had NO limiter; `/public/book` (named in the issue) was already correctly throttled.
+- **`5d3205d` — test fix.** The #742 guard broke `consent-templates.test.js` (mocked `prisma.patient` had no `findFirst` → 500). Stubbed `findFirst`, defaulted to "patient found" in `beforeEach`.
+
+### Issues closed: #742, #739, and #756-#768 (13). Issues #728-item-3 and #457 remain open (product input / manual-QA umbrella) — unchanged from the 2026-05-14 handoff.
+
+### Three things to do first next session
+
+1. **Consider cutting v3.7.17.** Today's 4 commits are deployed to demo but not release-validated via `e2e-full.yml`. If a clean release marker is wanted, tag a green `5d3205d` and let e2e-full run. Optional — they're already live.
+2. **QA-RBAC sweep #735-#741** — the next recommended cluster. #740 is a free already-closed close; #736 is legacy-403-string cleanup (see RBAC test plan §8). Run `verifying-issue-before-pickup` on each before dispatch.
+3. Carry-over from the 2026-05-14 handoff still stands: PRD stakeholder review, `docs/test-coverage-gaps.md` audit.
+
+---
+
 ## 🏁 SESSION HANDOFF (2026-05-14 home → office — v3.7.x stabilization arc → v3.7.16 fully-clean e2e-full + AI-era PRD + docs cleanup)
 
 **HEAD on origin/main:** _will be the docs/handoff commit pushed at session-end_ (rebased onto `68af89d` docs cleanup sweep). Latest release tag: **v3.7.16** ([GH Release published](https://github.com/Globussoft-Technologies/globussoft-crm/releases/tag/v3.7.16) — **first fully-clean e2e-full validation in the entire v3.7.x arc**).

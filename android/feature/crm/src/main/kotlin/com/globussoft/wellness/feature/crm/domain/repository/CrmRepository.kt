@@ -76,6 +76,8 @@ interface CrmRepository {
 
     // ── Campaigns ─────────────────────────────────────────────────────────────
     suspend fun getCampaigns(channel: String? = null, status: String? = null): WResult<List<Campaign>>
+    suspend fun createCampaign(name: String, channel: String, subject: String, body: String, scheduledAt: String?): WResult<Campaign>
+    suspend fun sendCampaign(id: String): WResult<Unit>
 
     // ── Reports ───────────────────────────────────────────────────────────────
     suspend fun getReports(from: String? = null, to: String? = null): WResult<Map<String, Any>>
@@ -86,6 +88,7 @@ interface CrmRepository {
     suspend fun getWinLoss(from: String? = null, to: String? = null): WResult<Map<String, Any>>
     suspend fun getFunnel(): WResult<Map<String, Any>>
     suspend fun getSequences(): WResult<List<Map<String, Any>>>
+    suspend fun toggleSequence(id: String, isActive: Boolean): WResult<Unit>
     suspend fun getTerritories(): WResult<List<Map<String, Any>>>
     suspend fun getLeadRoutingRules(): WResult<List<Map<String, Any>>>
     suspend fun getStaff(): WResult<List<Map<String, Any>>>

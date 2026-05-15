@@ -1,6 +1,7 @@
 package com.globussoft.wellness.feature.crm.presentation.sequences
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,10 +11,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -93,7 +96,12 @@ fun SequencesScreen(
                         verticalArrangement = Arrangement.spacedBy(Dimens.SpacingSm),
                     ) {
                         items(state.sequences) { seq ->
-                            SequenceRow(seq = seq)
+                            val id = seq["id"] as? String ?: ""
+                            SequenceRow(
+                                seq        = seq,
+                                isToggling = state.togglingId == id,
+                                onToggle   = { viewModel.toggleActive(id, seq["isActive"] as? Boolean ?: false) },
+                            )
                         }
                     }
                 }
@@ -103,7 +111,11 @@ fun SequencesScreen(
 }
 
 @Composable
-private fun SequenceRow(seq: Map<String, Any>) {
+private fun SequenceRow(
+    seq: Map<String, Any>,
+    isToggling: Boolean = false,
+    onToggle: () -> Unit = {},
+) {
     val name            = seq["name"] as? String ?: "Untitled"
     val isActive        = seq["isActive"] as? Boolean ?: false
     val enrollmentCount = seq["enrollmentCount"] as? Int ?: 0
@@ -144,27 +156,40 @@ private fun SequenceRow(seq: Map<String, Any>) {
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
-            ActiveBadge(isActive = isActive)
+            ActiveBadge(isActive = isActive, isToggling = isToggling, onClick = onToggle)
         }
     }
 }
 
 @Composable
-private fun ActiveBadge(isActive: Boolean) {
+private fun ActiveBadge(
+    isActive: Boolean,
+    isToggling: Boolean = false,
+    onClick: () -> Unit = {},
+) {
     val color = if (isActive) GenericAccent else Color(0xFF6B7280)
     val label = if (isActive) "ACTIVE" else "PAUSED"
     Box(
         modifier         = Modifier
             .clip(RoundedCornerShape(4.dp))
             .background(color.copy(alpha = 0.15f))
+            .clickable(enabled = !isToggling) { onClick() }
             .padding(horizontal = 8.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text       = label,
-            style      = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color      = color,
-        )
+        if (isToggling) {
+            CircularProgressIndicator(
+                modifier    = Modifier.size(12.dp),
+                strokeWidth = 1.5.dp,
+                color       = color,
+            )
+        } else {
+            Text(
+                text       = label,
+                style      = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color      = color,
+            )
+        }
     }
 }

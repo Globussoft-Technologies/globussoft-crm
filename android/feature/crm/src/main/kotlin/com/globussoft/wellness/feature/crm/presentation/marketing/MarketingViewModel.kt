@@ -36,11 +36,47 @@ class MarketingViewModel @Inject constructor(
 
     fun refresh() = load()
 
+    fun showCreate() = _state.update { it.copy(showCreateForm = true, formError = null) }
+    fun dismissCreate() = _state.update { it.copy(showCreateForm = false, formError = null) }
+
+    fun setStatus(status: String?) {
+        _state.update { it.copy(selectedStatus = status) }
+        load()
+    }
+
+    fun createCampaign(name: String, channel: String, subject: String, body: String, scheduledAt: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(isCreating = true, formError = null) }
+            val result = repo.createCampaign(
+                name        = name,
+                channel     = channel,
+                subject     = subject,
+                body        = body,
+                scheduledAt = scheduledAt.ifBlank { null },
+            )
+            _state.update { current ->
+                when (result) {
+                    is WResult.Success -> current.copy(isCreating = false, showCreateForm = false)
+                    is WResult.Error   -> current.copy(isCreating = false, formError = result.message ?: result.exception.message)
+                    WResult.Loading    -> current
+                }
+            }
+            if (result is WResult.Success) load()
+        }
+    }
+
+    fun sendNow(id: String) {
+        viewModelScope.launch {
+            val result = repo.sendCampaign(id)
+            if (result is WResult.Success) load()
+        }
+    }
+
     private fun load() {
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
 
-            val result = repo.getCampaigns(channel = _state.value.selectedChannel)
+            val result = repo.getCampaigns(channel = _state.value.selectedChannel, status = _state.value.selectedStatus)
 
             _state.update { current ->
                 when (result) {

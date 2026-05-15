@@ -329,6 +329,21 @@ class CrmRepositoryImpl @Inject constructor(
         safeApiCall { api.getCrmCampaigns(channel = channel, status = status) }
             .mapSuccess { list -> list.map { it.toDomain() } }
 
+    override suspend fun createCampaign(name: String, channel: String, subject: String, body: String, scheduledAt: String?): WResult<Campaign> {
+        val params = buildMap<String, Any> {
+            put("name", name)
+            put("channel", channel)
+            put("subject", subject)
+            put("body", body)
+            scheduledAt?.let { put("scheduledAt", it) }
+        }
+        return safeApiCall { api.createCrmCampaign(params) }.mapSuccess { it.toDomain() }
+    }
+
+    override suspend fun sendCampaign(id: String): WResult<Unit> =
+        safeApiCall { api.sendCrmCampaign(id, mapOf("status" to "SENT")) }
+            .mapSuccess { Unit }
+
     // ── Reports ───────────────────────────────────────────────────────────────
 
     @Suppress("UNCHECKED_CAST")
@@ -356,6 +371,10 @@ class CrmRepositoryImpl @Inject constructor(
     @Suppress("UNCHECKED_CAST")
     override suspend fun getSequences(): WResult<List<Map<String, Any>>> =
         safeApiCall { api.getCrmSequences() } as WResult<List<Map<String, Any>>>
+
+    override suspend fun toggleSequence(id: String, isActive: Boolean): WResult<Unit> =
+        safeApiCall { api.updateCrmSequence(id, mapOf("isActive" to isActive)) }
+            .mapSuccess { Unit }
 
     @Suppress("UNCHECKED_CAST")
     override suspend fun getTerritories(): WResult<List<Map<String, Any>>> =

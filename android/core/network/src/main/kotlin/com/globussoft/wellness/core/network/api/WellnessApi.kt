@@ -1,19 +1,40 @@
 package com.globussoft.wellness.core.network.api
 
+import com.globussoft.wellness.core.network.model.request.CreateContactRequest
+import com.globussoft.wellness.core.network.model.request.CreateCrmTaskRequest
+import com.globussoft.wellness.core.network.model.request.CreateDealRequest
+import com.globussoft.wellness.core.network.model.request.CreateEstimateRequest
+import com.globussoft.wellness.core.network.model.request.CreateExpenseRequest
+import com.globussoft.wellness.core.network.model.request.CreateInvoiceRequest
 import com.globussoft.wellness.core.network.model.request.CreatePatientRequest
+import com.globussoft.wellness.core.network.model.request.CreateTicketRequest
 import com.globussoft.wellness.core.network.model.request.CreateVisitRequest
 import com.globussoft.wellness.core.network.model.request.CreateWaitlistRequest
 import com.globussoft.wellness.core.network.model.request.DispositionRequest
 import com.globussoft.wellness.core.network.model.request.LoginRequest
+import com.globussoft.wellness.core.network.model.response.ApprovalResponse
+import com.globussoft.wellness.core.network.model.response.CampaignResponse
+import com.globussoft.wellness.core.network.model.response.ContactResponse
+import com.globussoft.wellness.core.network.model.response.CrmTaskResponse
 import com.globussoft.wellness.core.network.model.response.DashboardResponse
+import com.globussoft.wellness.core.network.model.response.DealInsightResponse
+import com.globussoft.wellness.core.network.model.response.DealResponse
+import com.globussoft.wellness.core.network.model.response.DealStatsResponse
+import com.globussoft.wellness.core.network.model.response.EstimateResponse
+import com.globussoft.wellness.core.network.model.response.ExpenseResponse
+import com.globussoft.wellness.core.network.model.response.ForecastResponse
+import com.globussoft.wellness.core.network.model.response.InvoiceResponse
 import com.globussoft.wellness.core.network.model.response.LocationResponse
 import com.globussoft.wellness.core.network.model.response.LoginResponse
 import com.globussoft.wellness.core.network.model.response.PatientsPageResponse
 import com.globussoft.wellness.core.network.model.response.PatientResponse
+import com.globussoft.wellness.core.network.model.response.PipelineResponse
 import com.globussoft.wellness.core.network.model.response.RecommendationResponse
 import com.globussoft.wellness.core.network.model.response.ServiceResponse
 import com.globussoft.wellness.core.network.model.response.StaffResponse
 import com.globussoft.wellness.core.network.model.response.TelecallerQueueResponse
+import com.globussoft.wellness.core.network.model.response.PaymentResponse
+import com.globussoft.wellness.core.network.model.response.TicketResponse
 import com.globussoft.wellness.core.network.model.response.VisitResponse
 import com.globussoft.wellness.core.network.model.response.WaitlistEntryResponse
 import retrofit2.Response
@@ -682,7 +703,7 @@ interface WellnessApi {
     // -------------------------------------------------------------------------
 
     @GET("payments")
-    suspend fun getPayments(): Response<Map<String, @JvmSuppressWildcards Any>>
+    suspend fun getPayments(): Response<List<PaymentResponse>>
 
     // -------------------------------------------------------------------------
     // Marketplace Leads  (admin / read-only)
@@ -940,4 +961,399 @@ interface WellnessApi {
 
     @GET("knowledge-base/categories")
     suspend fun getKbCategories(): Response<List<@JvmSuppressWildcards Any>>
+
+    // =========================================================================
+    // Generic CRM endpoints — typed responses for feature modules
+    // =========================================================================
+
+    // ── Contacts ─────────────────────────────────────────────────────────────
+
+    @GET("contacts")
+    suspend fun getCrmContacts(
+        @Query("status") status: String? = null,
+        @Query("search") search: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): Response<List<ContactResponse>>
+
+    @GET("contacts/{id}")
+    suspend fun getCrmContact(
+        @Path("id") id: String,
+    ): Response<ContactResponse>
+
+    @POST("contacts")
+    suspend fun createCrmContact(
+        @Body body: CreateContactRequest,
+    ): Response<ContactResponse>
+
+    @PUT("contacts/{id}")
+    suspend fun updateCrmContact(
+        @Path("id") id: String,
+        @Body body: CreateContactRequest,
+    ): Response<ContactResponse>
+
+    @DELETE("contacts/{id}")
+    suspend fun deleteCrmContact(
+        @Path("id") id: String,
+    ): Response<Unit>
+
+    // ── Deals ─────────────────────────────────────────────────────────────────
+
+    @GET("deals")
+    suspend fun getCrmDeals(
+        @Query("stage") stage: String? = null,
+        @Query("status") status: String? = null,
+        @Query("search") search: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): Response<List<DealResponse>>
+
+    @GET("deals/stats")
+    suspend fun getCrmDealStats(): Response<DealStatsResponse>
+
+    @GET("deals/{id}")
+    suspend fun getCrmDeal(
+        @Path("id") id: String,
+    ): Response<DealResponse>
+
+    @POST("deals")
+    suspend fun createCrmDeal(
+        @Body body: CreateDealRequest,
+    ): Response<DealResponse>
+
+    @PUT("deals/{id}")
+    suspend fun updateCrmDeal(
+        @Path("id") id: String,
+        @Body body: CreateDealRequest,
+    ): Response<DealResponse>
+
+    // ── Pipelines ─────────────────────────────────────────────────────────────
+
+    @GET("pipelines")
+    suspend fun getCrmPipelines(): Response<List<PipelineResponse>>
+
+    @GET("pipelines/{id}")
+    suspend fun getCrmPipeline(
+        @Path("id") id: String,
+    ): Response<PipelineResponse>
+
+    // ── Tickets ───────────────────────────────────────────────────────────────
+
+    @GET("tickets")
+    suspend fun getCrmTickets(
+        @Query("status") status: String? = null,
+        @Query("priority") priority: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): Response<List<TicketResponse>>
+
+    @GET("tickets/{id}")
+    suspend fun getCrmTicket(
+        @Path("id") id: String,
+    ): Response<TicketResponse>
+
+    @POST("tickets")
+    suspend fun createCrmTicket(
+        @Body body: CreateTicketRequest,
+    ): Response<TicketResponse>
+
+    @PUT("tickets/{id}")
+    suspend fun updateCrmTicket(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<TicketResponse>
+
+    // ── CRM Tasks ─────────────────────────────────────────────────────────────
+
+    @GET("tasks")
+    suspend fun getCrmTasks(
+        @Query("status") status: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): Response<List<CrmTaskResponse>>
+
+    @POST("tasks")
+    suspend fun createCrmTask(
+        @Body body: CreateCrmTaskRequest,
+    ): Response<CrmTaskResponse>
+
+    @PATCH("tasks/{id}/complete")
+    suspend fun completeCrmTask(
+        @Path("id") id: String,
+    ): Response<CrmTaskResponse>
+
+    // ── Invoices ──────────────────────────────────────────────────────────────
+
+    @GET("billing")
+    suspend fun getCrmInvoices(
+        @Query("status") status: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): Response<List<InvoiceResponse>>
+
+    @GET("billing/{id}")
+    suspend fun getCrmInvoice(
+        @Path("id") id: String,
+    ): Response<InvoiceResponse>
+
+    @POST("billing")
+    suspend fun createCrmInvoice(
+        @Body body: CreateInvoiceRequest,
+    ): Response<InvoiceResponse>
+
+    @PUT("billing/{id}/send")
+    suspend fun sendCrmInvoice(
+        @Path("id") id: String,
+    ): Response<InvoiceResponse>
+
+    @PUT("billing/{id}/pay")
+    suspend fun markCrmInvoicePaid(
+        @Path("id") id: String,
+    ): Response<InvoiceResponse>
+
+    @GET("billing/{id}/pdf")
+    @Streaming
+    suspend fun getCrmInvoicePdf(
+        @Path("id") id: String,
+    ): Response<okhttp3.ResponseBody>
+
+    // ── Estimates ─────────────────────────────────────────────────────────────
+
+    @GET("estimates")
+    suspend fun getCrmEstimates(
+        @Query("status") status: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): Response<List<EstimateResponse>>
+
+    @GET("estimates/{id}")
+    suspend fun getCrmEstimate(
+        @Path("id") id: String,
+    ): Response<EstimateResponse>
+
+    @POST("estimates")
+    suspend fun createCrmEstimate(
+        @Body body: CreateEstimateRequest,
+    ): Response<EstimateResponse>
+
+    @PUT("estimates/{id}")
+    suspend fun updateCrmEstimate(
+        @Path("id") id: String,
+        @Body body: CreateEstimateRequest,
+    ): Response<EstimateResponse>
+
+    // ── Expenses ──────────────────────────────────────────────────────────────
+
+    @GET("expenses")
+    suspend fun getCrmExpenses(
+        @Query("category") category: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): Response<List<ExpenseResponse>>
+
+    @POST("expenses")
+    suspend fun createCrmExpense(
+        @Body body: CreateExpenseRequest,
+    ): Response<ExpenseResponse>
+
+    @PATCH("expenses/{id}/approve")
+    suspend fun approveCrmExpense(
+        @Path("id") id: String,
+    ): Response<ExpenseResponse>
+
+    @PATCH("expenses/{id}/reject")
+    suspend fun rejectCrmExpense(
+        @Path("id") id: String,
+    ): Response<ExpenseResponse>
+
+    // ── Forecasting ───────────────────────────────────────────────────────────
+
+    @GET("forecasting")
+    suspend fun getCrmForecasting(): Response<List<ForecastResponse>>
+
+    // ── Deal Insights ─────────────────────────────────────────────────────────
+
+    @GET("deal-insights")
+    suspend fun getCrmDealInsights(): Response<List<DealInsightResponse>>
+
+    // ── Approvals ─────────────────────────────────────────────────────────────
+
+    @GET("approvals")
+    suspend fun getCrmApprovals(
+        @Query("status") status: String? = null,
+        @Query("mine") mine: Boolean? = null,
+    ): Response<List<ApprovalResponse>>
+
+    @POST("approvals/{id}/approve")
+    suspend fun approveCrmApproval(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<ApprovalResponse>
+
+    @POST("approvals/{id}/reject")
+    suspend fun rejectCrmApproval(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<ApprovalResponse>
+
+    // ── Marketing Campaigns ───────────────────────────────────────────────────
+
+    @GET("marketing/campaigns")
+    suspend fun getCrmCampaigns(
+        @Query("channel") channel: String? = null,
+        @Query("status") status: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): Response<List<CampaignResponse>>
+
+    @POST("marketing/campaigns")
+    suspend fun createCrmCampaign(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<CampaignResponse>
+
+    @PATCH("marketing/campaigns/{id}")
+    suspend fun sendCrmCampaign(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<CampaignResponse>
+
+    // ── Sequences ─────────────────────────────────────────────────────────────
+
+    @GET("sequences")
+    suspend fun getCrmSequences(
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @GET("sequences/{id}")
+    suspend fun getCrmSequence(
+        @Path("id") id: String,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    @PATCH("sequences/{id}")
+    suspend fun updateCrmSequence(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // ── Reports ───────────────────────────────────────────────────────────────
+
+    @GET("reports")
+    suspend fun getCrmReports(
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    @GET("reports/agent-performance")
+    suspend fun getCrmAgentPerformance(
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Quotas ────────────────────────────────────────────────────────────────
+
+    @GET("quotas")
+    suspend fun getCrmQuotas(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("quotas")
+    suspend fun createCrmQuota(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Win / Loss ────────────────────────────────────────────────────────────
+
+    @GET("win-loss")
+    suspend fun getCrmWinLoss(
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    @GET("funnel")
+    suspend fun getCrmFunnel(): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // ── Territories ───────────────────────────────────────────────────────────
+
+    @GET("territories")
+    suspend fun getCrmTerritories(): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Lead Routing ──────────────────────────────────────────────────────────
+
+    @GET("lead-routing")
+    suspend fun getCrmLeadRoutingRules(): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Staff (CRM admin) ─────────────────────────────────────────────────────
+
+    @GET("staff")
+    suspend fun getCrmStaff(
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 100,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("staff")
+    suspend fun createCrmStaff(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @PUT("staff/{id}")
+    suspend fun updateCrmStaff(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Settings ──────────────────────────────────────────────────────────────
+
+    @GET("settings")
+    suspend fun getCrmSettings(): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    @PUT("settings")
+    suspend fun updateCrmSettings(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // ── Channels (SMS / WhatsApp / Telephony / Push) ──────────────────────────
+
+    @GET("channels")
+    suspend fun getCrmChannels(): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    @PUT("channels")
+    suspend fun updateCrmChannels(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // ── Knowledge Base ────────────────────────────────────────────────────────
+
+    @GET("knowledge-base/articles")
+    suspend fun getCrmKbArticles(
+        @Query("categoryId") categoryId: String? = null,
+        @Query("search") search: String? = null,
+        @Query("limit") limit: Int = 50,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("knowledge-base/articles")
+    suspend fun createCrmKbArticle(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    @PUT("knowledge-base/articles/{id}")
+    suspend fun updateCrmKbArticle(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Surveys (CRM) ─────────────────────────────────────────────────────────
+
+    @GET("surveys")
+    suspend fun getCrmSurveys(
+        @Query("limit") limit: Int = 50,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Audit Log (CRM admin) ─────────────────────────────────────────────────
+
+    @GET("audit-viewer")
+    suspend fun getCrmAuditLogs(
+        @Query("entityType") entityType: String? = null,
+        @Query("action") action: String? = null,
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 25,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 }

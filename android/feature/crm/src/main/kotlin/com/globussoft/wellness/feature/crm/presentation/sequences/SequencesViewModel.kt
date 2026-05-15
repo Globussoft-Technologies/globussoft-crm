@@ -26,6 +26,15 @@ class SequencesViewModel @Inject constructor(
 
     fun refresh() = load()
 
+    fun toggleActive(id: String, currentlyActive: Boolean) {
+        viewModelScope.launch {
+            _state.update { it.copy(togglingId = id) }
+            val result = repo.toggleSequence(id, !currentlyActive)
+            _state.update { it.copy(togglingId = null) }
+            if (result is WResult.Success) load()
+        }
+    }
+
     private fun load() {
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }

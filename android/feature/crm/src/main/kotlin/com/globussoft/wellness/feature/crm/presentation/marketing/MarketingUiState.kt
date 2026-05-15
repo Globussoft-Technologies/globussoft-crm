@@ -8,4 +8,8 @@ data class MarketingUiState(
     val error: String? = null,
     val selectedChannel: String? = null,
     val selectedTab: Int = 0,
+    val showCreateForm: Boolean = false,
+    val isCreating: Boolean = false,
+    val formError: String? = null,
+    val selectedStatus: String? = null,   // null = All
 )

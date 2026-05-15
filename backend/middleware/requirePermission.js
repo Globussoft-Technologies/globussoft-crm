@@ -28,17 +28,31 @@ const CACHE_TTL_MS = 30_000; // 30 seconds
  */
 async function loadUserPermissions(tenantId, userId) {
   try {
-    // Find all roles assigned to this user via UserRole junction table
+    // Find all roles assigned to this user via UserRole junction table.
+    //
+    // FIX: Prisma's `include` on a to-one relation (UserRole→Role via roleId)
+    // does NOT accept a `where` clause — that's a `findMany`-only feature
+    // and is rejected by the validator with PrismaClientValidationError
+    // ("Unknown argument 'where'"). The previous shape silently threw on
+    // every authed non-OWNER call and surfaced as a 500 on the
+    // /api/auth/me/permissions endpoint.
+    //
+    // Tenant scoping is now done via a nested relation filter on the
+    // top-level `where`: Prisma joins UserRole→Role and filters on Role's
+    // tenantId. Same semantic (tenant-scoped roles for this tenant, plus
+    // platform-level OWNER roles where tenantId is null), validator-clean.
     const userRoles = await prisma.userRole.findMany({
-      where: { userId },
+      where: {
+        userId,
+        role: {
+          OR: [
+            { tenantId: tenantId },  // Tenant-scoped roles
+            { tenantId: null },      // Platform-level roles (e.g., OWNER)
+          ],
+        },
+      },
       include: {
         role: {
-          where: {
-            OR: [
-              { tenantId: tenantId },  // Tenant-scoped roles
-              { tenantId: null },      // Platform-level roles (e.g., OWNER)
-            ],
-          },
           include: { permissions: true },
         },
       },

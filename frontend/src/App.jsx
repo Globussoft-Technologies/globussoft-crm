@@ -108,10 +108,23 @@ const Social = lazy(() => import("./pages/Social"));
 const Sandbox = lazy(() => import("./pages/Sandbox"));
 const Funnel = lazy(() => import("./pages/Funnel"));
 const Zapier = lazy(() => import("./pages/Zapier"));
+// RBAC: admin role/permission management + per-user effective-permission view.
+// Both are protected behind auth (Layout wrapper) but use page-internal
+// permission checks (usePermissions) rather than RoleGuard wrap so non-ADMIN
+// users granted `roles.read` through RBAC can also reach the page.
+const RolesAdmin = lazy(() => import("./pages/RolesAdmin"));
+const MyPermissions = lazy(() => import("./pages/MyPermissions"));
+// Per-target user permission view at /staff/:userId/permissions. Reuses the
+// MyPermissions visual layout but is driven by a URL param and the
+// /api/users/:userId/permissions endpoint. Page-level gated on roles.read.
+const StaffPermissions = lazy(() => import("./pages/StaffPermissions"));
 // Public pages
 const SsoReturn = lazy(() => import("./pages/SsoReturn"));
 const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
+// Self-service customer registration. Creates a User with userType='CUSTOMER'
+// — distinct from the wellness patient portal (OTP-based, /wellness/portal).
+const CustomerRegister = lazy(() => import("./pages/CustomerRegister"));
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
   () => import("./pages/wellness/OwnerDashboard"),
@@ -530,6 +543,10 @@ export default function App() {
                     path="/signup"
                     element={!token ? <Signup /> : <Navigate to="/dashboard" />}
                   />
+                  <Route
+                    path="/customer/register"
+                    element={!token ? <CustomerRegister /> : <Navigate to="/portal" />}
+                  />
                   <Route path="/sso/return" element={<SsoReturn />} />
                   <Route path="/pricing" element={<Pricing />} />
                   <Route path="/payment-success" element={<PaymentSuccess />} />
@@ -684,8 +701,25 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
+                    {/* Per-target user permission view. Route is auth-only;
+                        the page rechecks roles.read so non-admin admins
+                        with the RBAC grant can also reach it, and so a
+                        cross-tenant userId hits the backend's tenant guard
+                        rather than a frontend allow-list. */}
+                    <Route
+                      path="staff/:userId/permissions"
+                      element={<StaffPermissions />}
+                    />
                     <Route path="profile" element={<Profile />} />
                     <Route path="profile/2fa" element={<Profile2FA />} />
+                    {/* RBAC: every authed user can view their own effective
+                        permissions. Page is read-only and not gated. */}
+                    <Route path="profile/permissions" element={<MyPermissions />} />
+                    {/* RBAC: role + permission admin. Route is auth-only; the
+                        page renders <AccessDenied /> for users without
+                        roles.read so non-ADMIN admins with the RBAC grant can
+                        still reach it. */}
+                    <Route path="settings/roles" element={<RolesAdmin />} />
                     <Route path="notification-settings" element={<UserSettings />} />
                     {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
                         adminOnly visibility + the "System Admin Required"

@@ -310,6 +310,10 @@ io.on("connection", (socket) => {
 // Import Enterprise Routes
 const authRoutes = require("./routes/auth");
 const rolesRoutes = require("./routes/roles");
+// /api/users — per-target user endpoints (currently just :userId/permissions).
+// Sister surface to /api/auth/me/* but addresses ANY user, with same-tenant +
+// roles.read guards inside the handler.
+const usersRoutes = require("./routes/users");
 const contactsRoutes = require("./routes/contacts");
 const dealsRoutes = require("./routes/deals");
 const calendarRoutes = require("./routes/calendar");
@@ -488,6 +492,7 @@ app.param("id", validateNumericId);
 // Map API Endpoints
 app.use("/api/auth", authRoutes);
 app.use("/api/roles", rolesRoutes);
+app.use("/api/users", usersRoutes);
 app.use("/api/contacts", contactsRoutes);
 app.use("/api/deals", dealsRoutes);
 app.use("/api/calendar", calendarRoutes);

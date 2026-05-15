@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useContext } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { UsersRound, Trash2, Shield, Edit3, UserX, UserCheck, Key, MailPlus, X } from 'lucide-react';
+import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X } from 'lucide-react';
 import { AuthContext } from '../App';
+import { usePermissions } from '../hooks/usePermissions';
 import { formatDate } from '../utils/date';
 
 const ROLE_CONFIG = {
@@ -25,12 +27,16 @@ function displayRole(member) {
 // that matches the action's intent (edit=neutral, deactivate=amber,
 // reset=blue, invite=teal, delete=red).
 const ACTION_PALETTE = {
-  edit:       { fg: 'var(--text-primary)', bg: 'var(--subtle-bg-3)', bd: 'var(--border-color)' },
-  deactivate: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.1)', bd: 'rgba(245,158,11,0.25)' },
-  reactivate: { fg: '#10b981', bg: 'rgba(16,185,129,0.1)', bd: 'rgba(16,185,129,0.25)' },
-  reset:      { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)', bd: 'rgba(59,130,246,0.25)' },
-  invite:     { fg: '#0ea5e9', bg: 'rgba(14,165,233,0.1)', bd: 'rgba(14,165,233,0.25)' },
-  delete:     { fg: '#ef4444', bg: 'rgba(239,68,68,0.1)', bd: 'rgba(239,68,68,0.25)' },
+  edit:        { fg: 'var(--text-primary)', bg: 'var(--subtle-bg-3)', bd: 'var(--border-color)' },
+  deactivate:  { fg: '#f59e0b', bg: 'rgba(245,158,11,0.1)', bd: 'rgba(245,158,11,0.25)' },
+  reactivate:  { fg: '#10b981', bg: 'rgba(16,185,129,0.1)', bd: 'rgba(16,185,129,0.25)' },
+  reset:       { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)', bd: 'rgba(59,130,246,0.25)' },
+  invite:      { fg: '#0ea5e9', bg: 'rgba(14,165,233,0.1)', bd: 'rgba(14,165,233,0.25)' },
+  delete:      { fg: '#ef4444', bg: 'rgba(239,68,68,0.1)', bd: 'rgba(239,68,68,0.25)' },
+  // RBAC per-row "Permissions" button — matches the ADMIN role badge hue at
+  // line 9 above (purple #a855f7) so the action visually signals "admin /
+  // security tooling" without duplicating any other palette entry.
+  permissions: { fg: '#a855f7', bg: 'rgba(168,85,247,0.1)', bd: 'rgba(168,85,247,0.25)' },
 };
 function actionButtonStyle(kind) {
   const p = ACTION_PALETTE[kind] || ACTION_PALETTE.edit;
@@ -73,6 +79,13 @@ export default function Staff() {
   // unless the viewer is an actual ADMIN.
   const { user } = useContext(AuthContext) || {};
   const canManageStaff = user?.role === 'ADMIN';
+  // #618 + RBAC: the Permissions button is gated on the granular roles.read
+  // permission (not the legacy ADMIN role), so a custom non-ADMIN role with
+  // roles.read granted can still view permission sheets. Falls through to
+  // the same AccessDenied card the rest of the RBAC pages use.
+  const { hasPermission } = usePermissions();
+  const canViewPermissions = hasPermission('roles', 'read');
+  const navigate = useNavigate();
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState(null);
@@ -400,51 +413,65 @@ export default function Staff() {
                       )}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem' }} data-testid={`staff-actions-${member.id}`}>
-                      {canManageStaff ? (
+                      {(canManageStaff || canViewPermissions) ? (
                         <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-                          <button
-                            onClick={() => openEdit(member)}
-                            data-testid={`staff-action-edit-${member.id}`}
-                            title="Edit user"
-                            style={actionButtonStyle('edit')}
-                          >
-                            <Edit3 size={13} /> Edit
-                          </button>
-                          {member.role !== 'ADMIN' && (
-                            <button
-                              onClick={() => toggleActive(member)}
-                              data-testid={`staff-action-deactivate-${member.id}`}
-                              title={member.deactivatedAt ? 'Reactivate user' : 'Deactivate user'}
-                              style={actionButtonStyle(member.deactivatedAt ? 'reactivate' : 'deactivate')}
-                            >
-                              {member.deactivatedAt ? <UserCheck size={13} /> : <UserX size={13} />}
-                              {member.deactivatedAt ? 'Reactivate' : 'Deactivate'}
-                            </button>
+                          {canManageStaff && (
+                            <>
+                              <button
+                                onClick={() => openEdit(member)}
+                                data-testid={`staff-action-edit-${member.id}`}
+                                title="Edit user"
+                                style={actionButtonStyle('edit')}
+                              >
+                                <Edit3 size={13} /> Edit
+                              </button>
+                              {member.role !== 'ADMIN' && (
+                                <button
+                                  onClick={() => toggleActive(member)}
+                                  data-testid={`staff-action-deactivate-${member.id}`}
+                                  title={member.deactivatedAt ? 'Reactivate user' : 'Deactivate user'}
+                                  style={actionButtonStyle(member.deactivatedAt ? 'reactivate' : 'deactivate')}
+                                >
+                                  {member.deactivatedAt ? <UserCheck size={13} /> : <UserX size={13} />}
+                                  {member.deactivatedAt ? 'Reactivate' : 'Deactivate'}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => resetPassword(member)}
+                                data-testid={`staff-action-reset-password-${member.id}`}
+                                title="Send password reset link"
+                                style={actionButtonStyle('reset')}
+                              >
+                                <Key size={13} /> Reset Password
+                              </button>
+                              <button
+                                onClick={() => resendInvite(member)}
+                                data-testid={`staff-action-resend-invite-${member.id}`}
+                                title="Re-send the original invite email"
+                                style={actionButtonStyle('invite')}
+                              >
+                                <MailPlus size={13} /> Resend Invite
+                              </button>
+                              {member.role !== 'ADMIN' && (
+                                <button
+                                  onClick={() => deleteUser(member.id, member.name || member.email)}
+                                  data-testid={`staff-action-delete-${member.id}`}
+                                  title="Delete user"
+                                  style={actionButtonStyle('delete')}
+                                >
+                                  <Trash2 size={13} /> Delete
+                                </button>
+                              )}
+                            </>
                           )}
-                          <button
-                            onClick={() => resetPassword(member)}
-                            data-testid={`staff-action-reset-password-${member.id}`}
-                            title="Send password reset link"
-                            style={actionButtonStyle('reset')}
-                          >
-                            <Key size={13} /> Reset Password
-                          </button>
-                          <button
-                            onClick={() => resendInvite(member)}
-                            data-testid={`staff-action-resend-invite-${member.id}`}
-                            title="Re-send the original invite email"
-                            style={actionButtonStyle('invite')}
-                          >
-                            <MailPlus size={13} /> Resend Invite
-                          </button>
-                          {member.role !== 'ADMIN' && (
+                          {canViewPermissions && (
                             <button
-                              onClick={() => deleteUser(member.id, member.name || member.email)}
-                              data-testid={`staff-action-delete-${member.id}`}
-                              title="Delete user"
-                              style={actionButtonStyle('delete')}
+                              onClick={() => navigate(`/staff/${member.id}/permissions`)}
+                              data-testid={`staff-action-permissions-${member.id}`}
+                              title="View effective permissions for this user"
+                              style={actionButtonStyle('permissions')}
                             >
-                              <Trash2 size={13} /> Delete
+                              <ShieldCheck size={13} /> Permissions
                             </button>
                           )}
                         </div>

@@ -164,7 +164,7 @@ function LockedPanel({ feature, rolesText }) {
           width: 64,
           height: 64,
           borderRadius: '50%',
-          background: 'var(--surface-elevated, rgba(0,0,0,0.05))',
+          background: 'var(--subtle-bg-3)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',

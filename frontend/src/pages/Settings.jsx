@@ -344,8 +344,11 @@ export default function Settings() {
 
       {/* #479/#484: outer two-column grid uses auto-fit + minmax so the
           right column collapses below the second card under ~700px viewports
-          rather than squeezing both columns until labels/buttons clip. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1.5rem', maxWidth: '1400px' }}>
+          rather than squeezing both columns until labels/buttons clip.
+          alignItems:'start' keeps each column at its natural height so the
+          shorter column's cards don't get spread apart vertically to match
+          the taller column's stretch height. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1.5rem', maxWidth: '1400px', alignItems: 'start' }}>
 
         {/* Left Column */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem', minWidth: 0 }}>
@@ -648,6 +651,112 @@ export default function Settings() {
           )}
         </div>
 
+        {/* Pipeline Stages Card */}
+        <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Layers size={20} color="var(--accent-color)" /> Pipeline Stages
+          </h3>
+
+          {stagesLoading ? <p>Loading stages...</p> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+              {pipelineStages.length === 0 && (
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No custom stages configured. The pipeline uses default stages.</p>
+              )}
+              {pipelineStages.map((stage, index) => (
+                <div key={stage.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-color)', border: '1px solid var(--border-color)', padding: '1rem 1.25rem', borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ width: '20px', height: '20px', borderRadius: '6px', backgroundColor: stage.color, flexShrink: 0 }} />
+                    <span style={{ fontWeight: '500' }}>{stage.name}</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Position {index + 1}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <button onClick={() => handleMoveStage(index, -1)} disabled={index === 0} style={{ background: 'none', border: 'none', color: index === 0 ? 'var(--border-color)' : 'var(--text-secondary)', cursor: index === 0 ? 'default' : 'pointer', padding: '0.25rem' }}>
+                      <ArrowUp size={16} />
+                    </button>
+                    <button onClick={() => handleMoveStage(index, 1)} disabled={index === pipelineStages.length - 1} style={{ background: 'none', border: 'none', color: index === pipelineStages.length - 1 ? 'var(--border-color)' : 'var(--text-secondary)', cursor: index === pipelineStages.length - 1 ? 'default' : 'pointer', padding: '0.25rem' }}>
+                      <ArrowDown size={16} />
+                    </button>
+                    <button onClick={() => handleDeleteStage(stage.id)} style={{ background: 'none', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', padding: '0.25rem' }}>
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* #479: flexWrap so the color picker + Add button drop below the
+              stage-name input on narrow viewports rather than truncating it. */}
+          <form onSubmit={handleAddStage} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <input type="text" placeholder="Stage name" required className="input-field" style={{ flex: '1 1 180px', minWidth: 0 }} value={newStage.name} onChange={e => setNewStage({ ...newStage, name: e.target.value })} />
+            <input type="color" value={newStage.color} onChange={e => setNewStage({ ...newStage, color: e.target.value })} style={{ width: '40px', height: '40px', border: '1px solid var(--border-color)', borderRadius: '8px', cursor: 'pointer', padding: '2px', background: 'var(--input-bg)' }} />
+            <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', whiteSpace: 'nowrap' }}>
+              <Plus size={16} /> Add Stage
+            </button>
+          </form>
+        </div>
+        </div>
+
+        {/* Right Column - Roster */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem', minWidth: 0 }}>
+        {/* User Roster */}
+        <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)', height: 'fit-content' }}>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Shield size={20} color="var(--success-color)" /> Access Control Roster
+          </h3>
+
+          {loading ? <p>Loading team...</p> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxHeight: '700px', overflowY: 'auto' }}>
+              {users.map(u => (
+                // #479: roster row wraps on narrow viewports so the role
+                // dropdown + delete button drop below the name/email block
+                // instead of squeezing the email into truncation.
+                <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-color)', border: '1px solid var(--border-color)', padding: '1.25rem', borderRadius: '8px', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <div style={{ minWidth: 0, flex: '1 1 180px' }}>
+                    <h4 style={{ fontWeight: '600', fontSize: '1.1rem', wordBreak: 'break-word' }}>{u.name || 'Unknown User'} <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', background: u.role === 'ADMIN' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(59, 130, 246, 0.2)', color: u.role === 'ADMIN' ? '#ef4444' : '#3b82f6', borderRadius: '12px', marginLeft: '0.5rem' }}>{u.role}</span></h4>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '0.25rem', wordBreak: 'break-all' }}>{u.email}</p>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <select value={u.role} onChange={(e) => handleChangeRole(u.id, e.target.value)} style={{ padding: '0.5rem', borderRadius: '4px', background: 'var(--input-bg)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+                      <option value="USER">Standard Rep</option>
+                      <option value="MANAGER">Manager</option>
+                      <option value="ADMIN">Admin</option>
+                    </select>
+                    {u.role !== 'ADMIN' ? (
+                      <button onClick={() => handleDelete(u.id)} style={{ background: 'transparent', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', padding: '0.5rem' }}>
+                        <Trash2 size={18} />
+                      </button>
+                    ) : (
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>—</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Invite User Card */}
+        <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <UserPlus size={20} color="var(--accent-color)" /> Invite Team Member
+          </h3>
+          {/* #484: Invite form uses auto-fit + minmax so fields stack on
+              narrow viewports rather than truncating placeholders/values. */}
+          <form onSubmit={handleCreateUser} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '1rem' }}>
+             <input type="text" placeholder="Full Name" required className="input-field" style={{ minWidth: 0 }} value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} />
+             <input type="email" placeholder="Email Address" required className="input-field" style={{ minWidth: 0 }} value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} />
+             <input type="password" placeholder="Temporary Password" required className="input-field" style={{ minWidth: 0 }} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} />
+             <select className="input-field" value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} style={{ background: 'var(--input-bg)', minWidth: 0 }}>
+               <option value="USER">Standard Rep</option>
+               <option value="MANAGER">Sales Manager</option>
+               <option value="ADMIN">System Administrator</option>
+             </select>
+             <button type="submit" className="btn-primary" style={{ gridColumn: '1 / -1' }}>Send Invitation & Create Account</button>
+          </form>
+        </div>
+
         {/* AdsGPT Configuration Card */}
         <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -813,112 +922,6 @@ export default function Settings() {
               {callifiedMsg}
             </p>
           )}
-        </div>
-
-        {/* Pipeline Stages Card */}
-        <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>
-          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Layers size={20} color="var(--accent-color)" /> Pipeline Stages
-          </h3>
-
-          {stagesLoading ? <p>Loading stages...</p> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
-              {pipelineStages.length === 0 && (
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No custom stages configured. The pipeline uses default stages.</p>
-              )}
-              {pipelineStages.map((stage, index) => (
-                <div key={stage.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-color)', border: '1px solid var(--border-color)', padding: '1rem 1.25rem', borderRadius: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <div style={{ width: '20px', height: '20px', borderRadius: '6px', backgroundColor: stage.color, flexShrink: 0 }} />
-                    <span style={{ fontWeight: '500' }}>{stage.name}</span>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Position {index + 1}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <button onClick={() => handleMoveStage(index, -1)} disabled={index === 0} style={{ background: 'none', border: 'none', color: index === 0 ? 'var(--border-color)' : 'var(--text-secondary)', cursor: index === 0 ? 'default' : 'pointer', padding: '0.25rem' }}>
-                      <ArrowUp size={16} />
-                    </button>
-                    <button onClick={() => handleMoveStage(index, 1)} disabled={index === pipelineStages.length - 1} style={{ background: 'none', border: 'none', color: index === pipelineStages.length - 1 ? 'var(--border-color)' : 'var(--text-secondary)', cursor: index === pipelineStages.length - 1 ? 'default' : 'pointer', padding: '0.25rem' }}>
-                      <ArrowDown size={16} />
-                    </button>
-                    <button onClick={() => handleDeleteStage(stage.id)} style={{ background: 'none', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', padding: '0.25rem' }}>
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* #479: flexWrap so the color picker + Add button drop below the
-              stage-name input on narrow viewports rather than truncating it. */}
-          <form onSubmit={handleAddStage} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <input type="text" placeholder="Stage name" required className="input-field" style={{ flex: '1 1 180px', minWidth: 0 }} value={newStage.name} onChange={e => setNewStage({ ...newStage, name: e.target.value })} />
-            <input type="color" value={newStage.color} onChange={e => setNewStage({ ...newStage, color: e.target.value })} style={{ width: '40px', height: '40px', border: '1px solid var(--border-color)', borderRadius: '8px', cursor: 'pointer', padding: '2px', background: 'var(--input-bg)' }} />
-            <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', whiteSpace: 'nowrap' }}>
-              <Plus size={16} /> Add Stage
-            </button>
-          </form>
-        </div>
-        </div>
-
-        {/* Right Column - Roster */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem', minWidth: 0 }}>
-        {/* User Roster */}
-        <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)', height: 'fit-content' }}>
-          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Shield size={20} color="var(--success-color)" /> Access Control Roster
-          </h3>
-
-          {loading ? <p>Loading team...</p> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxHeight: '700px', overflowY: 'auto' }}>
-              {users.map(u => (
-                // #479: roster row wraps on narrow viewports so the role
-                // dropdown + delete button drop below the name/email block
-                // instead of squeezing the email into truncation.
-                <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-color)', border: '1px solid var(--border-color)', padding: '1.25rem', borderRadius: '8px', flexWrap: 'wrap', gap: '0.75rem' }}>
-                  <div style={{ minWidth: 0, flex: '1 1 180px' }}>
-                    <h4 style={{ fontWeight: '600', fontSize: '1.1rem', wordBreak: 'break-word' }}>{u.name || 'Unknown User'} <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', background: u.role === 'ADMIN' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(59, 130, 246, 0.2)', color: u.role === 'ADMIN' ? '#ef4444' : '#3b82f6', borderRadius: '12px', marginLeft: '0.5rem' }}>{u.role}</span></h4>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '0.25rem', wordBreak: 'break-all' }}>{u.email}</p>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <select value={u.role} onChange={(e) => handleChangeRole(u.id, e.target.value)} style={{ padding: '0.5rem', borderRadius: '4px', background: 'var(--input-bg)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
-                      <option value="USER">Standard Rep</option>
-                      <option value="MANAGER">Manager</option>
-                      <option value="ADMIN">Admin</option>
-                    </select>
-                    {u.role !== 'ADMIN' ? (
-                      <button onClick={() => handleDelete(u.id)} style={{ background: 'transparent', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', padding: '0.5rem' }}>
-                        <Trash2 size={18} />
-                      </button>
-                    ) : (
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>—</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Invite User Card */}
-        <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>
-          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <UserPlus size={20} color="var(--accent-color)" /> Invite Team Member
-          </h3>
-          {/* #484: Invite form uses auto-fit + minmax so fields stack on
-              narrow viewports rather than truncating placeholders/values. */}
-          <form onSubmit={handleCreateUser} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '1rem' }}>
-             <input type="text" placeholder="Full Name" required className="input-field" style={{ minWidth: 0 }} value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} />
-             <input type="email" placeholder="Email Address" required className="input-field" style={{ minWidth: 0 }} value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} />
-             <input type="password" placeholder="Temporary Password" required className="input-field" style={{ minWidth: 0 }} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} />
-             <select className="input-field" value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} style={{ background: 'var(--input-bg)', minWidth: 0 }}>
-               <option value="USER">Standard Rep</option>
-               <option value="MANAGER">Sales Manager</option>
-               <option value="ADMIN">System Administrator</option>
-             </select>
-             <button type="submit" className="btn-primary" style={{ gridColumn: '1 / -1' }}>Send Invitation & Create Account</button>
-          </form>
         </div>
 
         {/* Notification Preferences Card */}

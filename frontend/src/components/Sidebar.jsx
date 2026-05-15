@@ -38,6 +38,7 @@ import {
   PanelTop,
   Calendar,
   Shield,
+  ShieldCheck,
   ScrollText,
   GitBranch,
   TrendingUp,
@@ -77,6 +78,7 @@ import { fetchApi } from "../utils/api";
 import { launchAdsGptAs, ADSGPT_DASHBOARD } from '../utils/adsgpt';
 import { launchCallifiedSSO } from '../utils/callified';
 import { useNotify } from '../utils/notify';
+import { usePermissions } from '../hooks/usePermissions';
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -96,6 +98,15 @@ const Sidebar = ({
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
   const wellnessRole = user?.wellnessRole || null;
+  // RBAC: fine-grained permission gate for new sidebar entries. Legacy
+  // adminOnly / managerOnly / wellnessRoles continue to work as before;
+  // requiredPermission stacks on top — only hides an entry once permissions
+  // have RESOLVED (permissionsReady) so admin users don't see a flash of an
+  // empty sidebar during the first 100ms of /auth/me/permissions resolving.
+  const {
+    hasPermission,
+    isReady: permissionsReady,
+  } = usePermissions();
   const isWellness = tenant?.vertical === "wellness";
   const location = useLocation();
 
@@ -344,13 +355,26 @@ const Sidebar = ({
     const tail = current[target.length];
     return tail === "/" || tail === undefined;
   };
-  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, wellnessRoles, count, matchPaths = [] }) => {
+  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, wellnessRoles, requiredPermission, count, matchPaths = [] }) => {
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
     // wellnessRoles gates a link to specific wellnessRole values. Managers
     // and admins always pass through (mirrors the server's verifyWellnessRole
     // gate which whitelists admin/manager alongside the named clinical roles).
     if (wellnessRoles && !isManager && !wellnessRoles.includes(wellnessRole)) return null;
+    // RBAC permission gate. Only HIDE once permissions have resolved so admin
+    // users don't see a flash of an empty sidebar during the first frame of
+    // /auth/me/permissions resolving. After the answer arrives, an entry with
+    // `requiredPermission={{module, action}}` is hidden when the user lacks
+    // that grant. Stacks ON TOP of the legacy gates above — if a link sets
+    // both `adminOnly` and `requiredPermission`, both must pass.
+    if (
+      requiredPermission &&
+      permissionsReady &&
+      !hasPermission(requiredPermission.module, requiredPermission.action)
+    ) {
+      return null;
+    }
     return (
       <NavLink
         to={to}
@@ -868,6 +892,14 @@ function renderWellnessNav({
           <Link to="/wellness/inventory-adjustments" icon={Receipt} label="Adjustments" managerOnly />
           <Link to="/wellness/auto-consumption-rules" icon={Recycle} label="Auto-consumption" managerOnly />
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
+          {/* RBAC role + permission admin. Shown to anyone with `roles.read`
+              granted via RBAC (typically ADMIN). The page itself rechecks. */}
+          <Link
+            to="/settings/roles"
+            icon={ShieldCheck}
+            label="Roles"
+            requiredPermission={{ module: 'roles', action: 'read' }}
+          />
           {/* PRD Gap §1.5 / §1.6 — wellness admins also manage payroll. */}
           <Link
             to="/commission-profiles"
@@ -1031,6 +1063,14 @@ function renderGenericNav({
           }}
         >
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
+          {/* RBAC role + permission admin. Shown to anyone with `roles.read`
+              granted via RBAC (typically ADMIN). The page itself rechecks. */}
+          <Link
+            to="/settings/roles"
+            icon={ShieldCheck}
+            label="Roles"
+            requiredPermission={{ module: 'roles', action: 'read' }}
+          />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
           <Link

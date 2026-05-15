@@ -386,6 +386,12 @@ const Login = () => {
             Sign up
           </Link>
         </div>
+        <div style={{ marginTop: '0.5rem', textAlign: 'center', fontSize: '0.8rem' }}>
+          <span style={{ color: 'var(--text-secondary)' }}>Are you a customer? </span>
+          <Link to="/customer/register" style={{ color: 'var(--primary-color, var(--accent-color))', textDecoration: 'none', fontWeight: '500' }}>
+            Create a customer account
+          </Link>
+        </div>
         </>
         )}
       </div>

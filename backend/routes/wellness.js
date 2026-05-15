@@ -1210,6 +1210,15 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     // Wave 11 Agent GG: resourceId + locationId added to destructure for the booking gate below.
     const { patientId, serviceId, doctorId, visitDate, status, vitals, notes, amountCharged, treatmentPlanId, resourceId, locationId } = req.body;
     if (!patientId) return res.status(400).json({ error: "patientId is required" });
+    // #742 — the patient must exist AND not be soft-deleted. Pre-fix the
+    // write trusted a client-supplied patientId; a soft-deleted patient's
+    // row physically survives (FK passes), so visits + the loyalty accrual
+    // landed against a patient that GET /patients/:id 404s. Mirrors the
+    // existing check at POST /patients/:id/memberships.
+    {
+      const _p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: parseInt(patientId), deletedAt: null }), select: { id: true } });
+      if (!_p) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+    }
     // #170: visitDate must be a valid date in [now-5y, now+1y]. Pre-fix the
     // route accepted year 1800 / 3000 (silent 201) and 500'd on bogus strings.
     if (visitDate !== undefined) {
@@ -1617,6 +1626,12 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
     if (!visitId || !patientId) {
       return res.status(400).json({ error: "visitId and patientId are required" });
     }
+    // #742 — reject a soft-deleted / non-existent patient (FK alone doesn't
+    // catch a soft-deleted row; GET /patients/:id 404s it but writes didn't).
+    {
+      const _p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: parseInt(patientId), deletedAt: null }), select: { id: true } });
+      if (!_p) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+    }
     // #114: drugs must be a non-empty array with at least one named drug.
     // Pre-fix, the UI sent `drugs: []` (filtered empty) and `!drugs` was false
     // (empty array is truthy), so phantom prescriptions saved with no medication.
@@ -1753,6 +1768,12 @@ router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"])
     const { patientId, serviceId, templateName, signatureSvg, captureMethod } = req.body;
     if (!patientId || !templateName) {
       return res.status(400).json({ error: "patientId and templateName are required" });
+    }
+    // #742 — reject a soft-deleted / non-existent patient before capturing
+    // a consent against them.
+    {
+      const _p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: parseInt(patientId), deletedAt: null }), select: { id: true } });
+      if (!_p) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
     }
     // Defense-in-depth (#118): reject blank/missing signatures even if the UI
     // is bypassed. A blank 600x180 PNG data-URL is ~220 chars; a real signature
@@ -2093,6 +2114,12 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
     const { name, totalSessions, totalPrice, patientId, serviceId, nextDueAt } = req.body;
     if (!name || !totalSessions || !patientId) {
       return res.status(400).json({ error: "name, totalSessions, patientId required" });
+    }
+    // #742 — reject a soft-deleted / non-existent patient before creating
+    // a treatment plan against them.
+    {
+      const _p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: parseInt(patientId), deletedAt: null }), select: { id: true } });
+      if (!_p) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
     }
     const plan = await prisma.treatmentPlan.create({
       data: {
@@ -5272,13 +5299,30 @@ router.get("/portal/health", (req, res) => {
   res.json({ smsConfigured });
 });
 
+// #739 — OTP-verify brute-force throttle. The OTP-SEND surface
+// (/portal/login/request-otp) is already rate-limited; the OTP-VERIFY
+// surfaces (/portal/login + /portal/login/verify-otp) had NO limiter, so an
+// attacker could brute-force the 4-digit OTP (10^4 space) at unlimited rate.
+// IP-keyed (phone is attacker-controlled, so a phone key wouldn't throttle a
+// real attack). 10 verify attempts / 10 min / IP in prod; loose in test so
+// the e2e gate's repeated logins don't trip it.
+const _otpVerifyIpMax = process.env.NODE_ENV === "test" ? 5000 : 10;
+const portalVerifyOtpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: _otpVerifyIpMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: { error: "Too many login attempts from this network. Try again in 10 minutes.", code: "RATE_LIMITED" },
+});
+
 // POST /portal/login  body: {phone, otp}
 // SECURITY: previously accepted any 4-digit OTP without verification — anyone
 // who knew a patient's phone could mint a 30-day portal JWT. Now validates
 // the OTP against the PatientOtp table the same way /verify-otp does.
 // Callers should already be using /portal/login/request-otp + /verify-otp;
 // this endpoint stays for backwards compat with older mobile builds.
-router.post("/portal/login", async (req, res) => {
+router.post("/portal/login", portalVerifyOtpLimiter, async (req, res) => {
   try {
     const { phone, otp } = req.body || {};
     if (!phone || !otp) {
@@ -6398,7 +6442,7 @@ router.post(
     }
   });
 
-router.post("/portal/login/verify-otp", async (req, res) => {
+router.post("/portal/login/verify-otp", portalVerifyOtpLimiter, async (req, res) => {
   try {
     const { phone, otp } = req.body || {};
     if (!phone || !otp) return res.status(400).json({ error: "phone and otp are required" });

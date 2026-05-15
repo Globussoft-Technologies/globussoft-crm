@@ -93,5 +93,9 @@ interface CrmRepository {
     suspend fun getChannels(): WResult<Map<String, Any>>
     suspend fun getKbArticles(search: String? = null): WResult<List<Map<String, Any>>>
     suspend fun getSurveys(): WResult<List<Map<String, Any>>>
-    suspend fun getAuditLogs(page: Int = 1): WResult<Map<String, Any>>
+    suspend fun getAuditLogs(page: Int = 1, entityType: String? = null, action: String? = null): WResult<Map<String, Any>>
+    suspend fun createStaff(name: String, email: String, role: String): WResult<Map<String, Any>>
+    suspend fun updateStaff(id: String, params: Map<String, Any>): WResult<Map<String, Any>>
+    suspend fun createKbArticle(title: String, category: String, body: String): WResult<Map<String, Any>>
+    suspend fun saveSettings(params: Map<String, Any>): WResult<Map<String, Any>>
 }

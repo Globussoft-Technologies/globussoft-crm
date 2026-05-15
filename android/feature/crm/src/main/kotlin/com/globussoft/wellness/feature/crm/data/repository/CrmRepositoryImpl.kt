@@ -369,6 +369,14 @@ class CrmRepositoryImpl @Inject constructor(
     override suspend fun getStaff(): WResult<List<Map<String, Any>>> =
         safeApiCall { api.getCrmStaff() } as WResult<List<Map<String, Any>>>
 
+    override suspend fun createStaff(name: String, email: String, role: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createCrmStaff(mapOf("name" to name, "email" to email, "role" to role)) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun updateStaff(id: String, params: Map<String, Any>): WResult<Map<String, Any>> =
+        safeApiCall { api.updateCrmStaff(id, params) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
     @Suppress("UNCHECKED_CAST")
     override suspend fun getSettings(): WResult<Map<String, Any>> =
         safeApiCall { api.getCrmSettings() } as WResult<Map<String, Any>>
@@ -381,13 +389,21 @@ class CrmRepositoryImpl @Inject constructor(
     override suspend fun getKbArticles(search: String?): WResult<List<Map<String, Any>>> =
         safeApiCall { api.getCrmKbArticles(search = search) } as WResult<List<Map<String, Any>>>
 
+    override suspend fun createKbArticle(title: String, category: String, body: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createCrmKbArticle(mapOf("title" to title, "category" to category, "body" to body, "isPublished" to true)) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
     @Suppress("UNCHECKED_CAST")
     override suspend fun getSurveys(): WResult<List<Map<String, Any>>> =
         safeApiCall { api.getCrmSurveys() } as WResult<List<Map<String, Any>>>
 
     @Suppress("UNCHECKED_CAST")
-    override suspend fun getAuditLogs(page: Int): WResult<Map<String, Any>> =
-        safeApiCall { api.getCrmAuditLogs(page = page) } as WResult<Map<String, Any>>
+    override suspend fun getAuditLogs(page: Int, entityType: String?, action: String?): WResult<Map<String, Any>> =
+        safeApiCall { api.getCrmAuditLogs(entityType = entityType, action = action, page = page) } as WResult<Map<String, Any>>
+
+    override suspend fun saveSettings(params: Map<String, Any>): WResult<Map<String, Any>> =
+        safeApiCall { api.updateCrmSettings(params) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 

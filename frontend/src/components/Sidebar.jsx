@@ -644,14 +644,19 @@ function renderWellnessNav({
       <AdsGptLink icon={Sparkles} label="AdsGPT" />
       <CallifiedLink icon={PhoneCall} label="Callified" />
 
-      {/* Clinical — Patients, Calendar, Waitlist visible to all wellness staff
-          (clinical staff need their patients + day grid). Service Catalog is a
-          pricing/duration config — clinical staff read it but only managers
-          edit it, so we hide the nav link for non-management. */}
+      {/* #756 — Clinical nav (Patients / Calendar / Waitlist) is gated to
+          clinical wellnessRoles. The backend PHI-read gate
+          (verifyWellnessRole(["doctor","professional","telecaller","admin",
+          "manager"])) rejects a USER with no wellnessRole — pre-fix these
+          links rendered for the Demo User account and only revealed the
+          denial on click. The Link helper's `wellnessRoles` prop hides them
+          for non-clinical roles; managers/admins auto-pass (isManager check
+          inside Link). Service Catalog stays managerOnly — clinical staff
+          read it via the API but only managers get the nav link. */}
       <div style={labelStyle}>Clinical</div>
-      <Link to="/wellness/patients" icon={HeartPulse} label="Patients" />
-      <Link to="/wellness/calendar" icon={Calendar} label="Calendar" />
-      <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" />
+      <Link to="/wellness/patients" icon={HeartPulse} label="Patients" wellnessRoles={["doctor", "professional", "telecaller"]} />
+      <Link to="/wellness/calendar" icon={Calendar} label="Calendar" wellnessRoles={["doctor", "professional", "telecaller"]} />
+      <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" wellnessRoles={["doctor", "professional", "telecaller"]} />
       <Link
         to="/wellness/services"
         icon={Stethoscope}

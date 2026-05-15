@@ -605,7 +605,6 @@ export default function App() {
                           allow={["ADMIN", "MANAGER"]}
                           feature="Marketing"
                           roles="manager (or admin)"
-                          lockedInPlace
                         >
                           <Marketing />
                         </RoleGuard>
@@ -854,7 +853,6 @@ export default function App() {
                     allow={["ADMIN", "MANAGER"]}
                     feature="Wallet ledger"
                     roles="manager (or admin)"
-                    lockedInPlace
                   >
                     <WellnessWallet />
                   </RoleGuard>
@@ -866,7 +864,6 @@ export default function App() {
                     allow={["ADMIN", "MANAGER"]}
                     feature="Gift Cards"
                     roles="manager (or admin)"
-                    lockedInPlace
                   >
                     <WellnessGiftCards />
                   </RoleGuard>
@@ -878,7 +875,6 @@ export default function App() {
                     allow={["ADMIN", "MANAGER"]}
                     feature="Coupons"
                     roles="manager (or admin)"
-                    lockedInPlace
                   >
                     <WellnessCoupons />
                   </RoleGuard>
@@ -890,7 +886,6 @@ export default function App() {
                     allow={["ADMIN", "MANAGER"]}
                     feature="Cashback rules"
                     roles="manager (or admin)"
-                    lockedInPlace
                   >
                     <WellnessCashbackRules />
                   </RoleGuard>

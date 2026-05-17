@@ -15,7 +15,7 @@ When a gap / backlog / regression-tracking file is **fully closed** (every entry
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.7.16 — see [CHANGELOG.md](CHANGELOG.md) for the full release history. Per-push gate runs across 6 mandatory deploy gates + a separate PR pre-merge checks workflow (vite build + ESLint). Counts (`e2e/tests/` Playwright, `backend/test/` vitest, `frontend/src/__tests__/` vitest, `.claude/skills/`) are surfaced in [README.md](README.md)'s "At a glance" table so they don't rot here.
+- **Version:** v3.8.0 — see [CHANGELOG.md](CHANGELOG.md) for the full release history. Per-push gate runs across 6 mandatory deploy gates + a separate PR pre-merge checks workflow (vite build + ESLint). Counts (`e2e/tests/` Playwright, `backend/test/` vitest, `frontend/src/__tests__/` vitest, `.claude/skills/`) are surfaced in [README.md](README.md)'s "At a glance" table so they don't rot here.
 - **Branch:** main (single-branch workflow)
 - **Deploy:** GitHub Actions auto-deploy on push to main ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) — health-check + rollback to HEAD~1 on fail. Local `ssh_deploy_*.py` scripts are legacy.
 

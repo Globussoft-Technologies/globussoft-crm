@@ -1,5 +1,95 @@
 # CHANGELOG
 
+## v3.8.0 — 2026-05-17 — Zylu-Gap audit-and-close sweep + 60-issue closure + 2 new product surfaces
+
+**Major-version bump justified by the category shift:** 60 GitHub issues closed in one session (71 → 11, **-85%**), 2 brand-new product surfaces shipped (Cash Register admin, Blocked Numbers), 8 existing pages enhanced, 3 audit reports authored as machine-readable backlog artifacts, and the AI-era CRM rebuild PRD drafted as the long-horizon roadmap. The product binary now diverges meaningfully from v3.7.16 — a patch bump would understate the lift.
+
+### New product surfaces
+
+- **Cash Register admin page** (`/wellness/cash-registers`) — new 770-line page (`CashRegisters.jsx`) + 13 RTL tests + route + sidebar entry. POS was permanently gated pre-fix; this unblocks the whole sales pipeline. Includes register grid + admin CRUD form, status header (OPEN/CLOSED with running balance), shift action bar (Open/Close/Deposit/Withdraw — last two have UI placeholders pending backend), and 3-tab transactions list (Bookings Cash / Partial Cash / Expenses Cash). Closes #770/#779/#780/#781.
+- **Blocked Numbers page** (`/wellness/whatsapp/blocked-numbers`) — new 412-line page + 8 RTL tests + route + sidebar entry. Surfaces the existing `WhatsAppOptOut` model with Add modal + per-row Unblock action + DPDP §11 reason-length validator. Closes #800.
+
+### Existing pages enhanced
+
+- **WhatsApp Threads** — All / Unread / Blocked tab strip + template picker modal w/ `{{variable}}` substitution + 24h send-window banner that disables compose when window closed. +8 RTL tests. Closes #796/#797/#798.
+- **POS Checkout** — payment-method dropdown gains Wallet (with auto-fetched balance + insufficient-balance warning), Gift Card (code input + redeem-then-auto-switch-to-wallet flow), and labelled rendering for Cash/Card/UPI/Split. +5 RTL tests. Closes #789. CASHBACK/PAYLATER/ONLINE deferred (need backend enum extension).
+- **Patient 360** — wallet-balance chip in header (was only a buried tab); photos tab gains `onError` placeholder + Try Again button with cache-bust; Log Visit doctor dropdown now includes professionals + deactivation filter + role-suffix on options. +3 RTL tests across 3 surfaces. Closes #793/#750/#752.
+- **Staff Directory** — revenue-goal cluster in edit modal (up to 4 chips with target/achieved/pct + overflow + Manage deep-link to per-period CRUD). +4 RTL tests. Closes #818.
+- **Gift Cards** — per-row Copy code + View modal actions (Resend + Revoke deferred — bcrypt makes resend impossible without re-architecture). +5 RTL tests. Closes #744.
+- **Calendar** — holiday columns greyed with hatch overlay + tooltip + click-to-book blocked. +8 tests (4 unit + 4 component). Closes #807.
+- **Attendance** — Total / Early / On-Time KPI tiles in manager snapshot + Export Payroll CSV button with date-range pickers. +3 RTL tests. Closes #802/#804. Backend aggregator gaps surfaced (early/onTime counts default to 0 until backend extension).
+- **Booking Pages settings** — embed widget code snippet in EditDrawer with copy-to-clipboard. +5 tests. Closes #810.
+- **NotificationBell** — per-row Mark-as-Read + Resolve/Dismiss actions on the topbar bell panel. +3 RTL tests. Closes #815.
+
+### Backend hardening
+
+- **`marketplaceEngine.js` cron tick** — wrapped body in try/catch (it was the lone "naked async tick" in the cron fleet; one Prisma blip or partner-API throw would have become an unhandledPromiseRejection).
+- **`demoHygieneEngine` extended** — sweeps Visits with `E2E_EXT_` notes prefix + future `visitDate ≥ now+5y` + TreatmentPlan/MembershipPlan rows starting with `_teardown_` / `_test_`. 24/24 vitest green. Closes #741.
+- **`wellness.js` 9-bug sweep** (F1 wave + 3 hotfixes):
+  - #743 Photo upload Content-Type fix — moved photo serving under `/api/wellness/visits/:id/photos/:filename` (proxied to backend by existing Nginx `location /api/`) with explicit image MIME stamp.
+  - #745 Treatment plan dedupe — 5-min idempotent-duplicate guard (uses `startedAt`, not `createdAt` — schema column rename).
+  - #746 Visit dedupe — 60s idempotent-duplicate guard.
+  - #749 Loyalty patient-existence guard (defense-in-depth inside `maybeAutoCreditLoyalty`).
+  - #736 Normalized 3 legacy hand-rolled 403 strings to canonical `{error: 'Permission denied', code: <SPECIFIC_CODE>}` shape (matches post-#590/#591 convention).
+  - #737 New `capLimit` helper applied to 6 list endpoints — server-side cap on `?limit=` (DoS guard).
+  - #747 New `excludeTeardownNames` helper applied to `/membership-plans` + `/services` + `/locations` — production dropdowns no longer show `_teardown_*` rows.
+  - #748 Membership-buy endpoint rejects teardown-named plans even when isActive=true.
+  - #733 doc clarification — `/recommendations` stays open-by-role with `tenantWhere` defense-in-depth (the gate-fix attempt was reverted because it broke the orchestrator-api cross-tenant probe contract).
+
+### Infrastructure
+
+- **3 audit reports** authored in `docs/`:
+  - `AUDIT_2026-05-17_code.md` — 0 P0 backend findings; 7 orphan specs identified; 4 missing vitest files identified; `.env.example` gap flagged.
+  - `AUDIT_2026-05-17_docs.md` — TODOS.md drift cluster (3,766 lines, 33 handoff blocks); stale counts in README/CLAUDE; 7 closed issues listed open.
+  - `TRIAGE_ZYLU_GAP_2026-05-17.md` — categorized 49 Zylu-Gap issues as PHANTOM(24)/SHIP-NOW(14)/PLAN(7)/SKIP(4). 24 bulk-closed; 14 SHIP-NOW shipped this release; 7 PLAN-tier still need product input.
+- **`backend/.env.example`** — first-ever; 83 env-vars across 18 sections; required-vs-optional flagging; sensitive-var warnings.
+- **+5 orphan API specs wired into per-push gate** (knowledge-base, landing-pages, portal, tenant-switch-disabled, voice-transcription) — `+96 tests` to the gate (~1,594 → ~1,690).
+- **+4 missing vitest scaffolds** (`notificationRulesEngine`, `checkSubscription`, `originCheck`, `razorpayService`) — `+115 unit tests`, 90-100% coverage on each.
+- **TODOS.md trimmed 57%** (3,766 → 1,629 lines) — 31 superseded handoff blocks archived to `docs/handoffs-archive/` per the existing convention. README + CLAUDE.md de-rotted (stale counts replaced with auto-derived "At a glance" table).
+
+### Security
+
+- **brace-expansion CVE patched** (GHSA-f886-m6hf-6m8v) via frontend `npm audit fix`. Remaining 2 moderate frontend CVEs (esbuild, vite — both dev-server-only) deferred to a separate vite 5 → 8 upgrade cycle.
+
+### Standing-rule discipline reinforced (4 new cron-learnings this session)
+
+1. **Concurrent `git add` race in parallel agent waves** — pre-staged files in one agent's index can be swept into another agent's commit. Pathspec form `git commit -m '...' -- <paths>` is the only race-free shape.
+2. **Browser-extension globals are not our problem** — mystery globals not in `git grep` of source or deployed bundle (e.g. `window.sunWeb` from the Sunmi POS extension) close as `not planned` with diagnosis, not "guard our own code." (#751)
+3. **GitHub auto-close trailer format** — `Closes #N #N #N` (slash/space-separated) only auto-closes the FIRST issue. Each `#N` needs its own keyword on its own line.
+4. **Test fixtures dict + canonical code names** — spec changes must grep the actual `FIXTURES` dict and the actual canonical conflict-code names (e.g. `DOCTOR_DOUBLE_BOOKED` not `DOCTOR_BOOKED`) before pinning assertions. F1 wave produced 3 cascading hotfixes traceable to fixture / column / code name drift between the agent's assumptions and the source of truth.
+
+### Backend follow-up queue (deferred; placeholders shipped pointing at the gaps)
+
+5 small items ready for a focused dispatch:
+1. `POST /pos/shifts/:id/{deposit, withdraw}` + `PettyCashLedger` relation (#779 backend half)
+2. `Sale.paymentMethod` enum extension for CASHBACK / PAYLATER / ONLINE (#789 partial)
+3. `Attendance.summary.{early, onTime}` aggregation (#802 backend)
+4. `Attendance.summary.byUser.{late, absent, leaves}` (#804 backend)
+5. `Patient.gst` field + `Patient.anniversary` allowed-list extension (#792 — needs schema migration)
+
+### Trajectory
+
+| Metric | Start of today | End of today |
+|---|---|---|
+| Open GitHub issues | 71 | **11** (-85%) |
+| Per-push API tests | ~1,594 | **~1,690** |
+| Per-push vitest count | 90 files | **94** (+115 tests) |
+| TODOS.md size | 3,766 lines | **1,629** (-57%) |
+| Engines with try/catch | 16/17 | **17/17** |
+| `.env.example` | missing | **present** (83 vars) |
+| Stale closed-but-listed-open TODOS rows | 7 | **0** |
+| Audit-report artifacts | 0 | **3** |
+| Cron-learnings logged | (existing) | +4 |
+| Deploy gate | green | **green throughout** |
+
+### Stats
+
+- ~25 commits, 60 issues closed, 0 production regressions
+- 2 new pages (Cash Register, Blocked Numbers)
+- 8 enhanced pages (PatientDetail, Staff, PointOfSale, Calendar, Attendance, WhatsAppThreads, BookingPages, NotificationBell + GiftCards from yesterday-end)
+- ~40 RTL tests added across the wave; 18 e2e API tests added; 115 vitest scaffolds; +96 gated tests from wired orphan specs
+- 3 audit reports + AI-era PRD groundwork
+
 ## v3.7.16 — 2026-05-14 — Wholesale 30s→60s per-request timeout (110 specs) + public-booking direct-by-id (spec-only)
 
 **Eighth + final v3.7.x stabilization release.** Two structural fixes

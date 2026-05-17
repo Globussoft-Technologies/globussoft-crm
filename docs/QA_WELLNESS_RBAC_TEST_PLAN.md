@@ -3,7 +3,7 @@
 > **Audience:** QA engineers + agents writing/maintaining RBAC regression specs.
 > **Scope:** every authenticated route under `/api/wellness/*` plus the patient portal and public booking surfaces.
 > **Source of truth:** [backend/routes/wellness.js](../backend/routes/wellness.js), [backend/middleware/wellnessRole.js](../backend/middleware/wellnessRole.js), [backend/middleware/auth.js](../backend/middleware/auth.js), [backend/prisma/seed-wellness.js](../backend/prisma/seed-wellness.js) (seed accounts).
-> **Last refreshed:** 2026-05-13 (v3.7.7).
+> **Last refreshed:** 2026-05-17 (v3.7.16) — #732 doc-correction: `admin@wellness.demo` is same-tenant to `rishu@enhancedwellness.in`; cross-tenant probe uses `admin@globussoft.com` (generic) instead.
 > **Companions:** [QA_README.md](QA_README.md), [QA_WELLNESS_PROMPT.md](QA_WELLNESS_PROMPT.md), [PENDING_USER_AND_OPERATOR.md](PENDING_USER_AND_OPERATOR.md).
 
 ---
@@ -85,7 +85,7 @@ Every test case below uses one of these accounts (all password `password123`). S
 | Email | role | wellnessRole | Use for testing |
 |---|---|---|---|
 | `rishu@enhancedwellness.in` | ADMIN | null | Tenant owner / ADMIN override / branding writes |
-| `admin@wellness.demo` | ADMIN | null | Sibling ADMIN — cross-tenant probe baseline |
+| `admin@wellness.demo` | ADMIN | null | Same-tenant co-ADMIN (tenantId=2) — useful for same-tenant ADMIN-vs-OWNER privilege probes and as the "wellness ADMIN" token in cross-vertical probes against generic-tenant admin |
 | `manager@enhancedwellness.in` | MANAGER | null | MANAGER override / ops endpoints |
 | `drharsh@enhancedwellness.in` | USER | `doctor` | Clinical writes, Rx, consents |
 | `drmeena@enhancedwellness.in` | USER | `doctor` | Cross-doctor isolation (alt doctor) |
@@ -100,9 +100,11 @@ Every test case below uses one of these accounts (all password `password123`). S
 
 | Email | role | wellnessRole | Use for testing |
 |---|---|---|---|
-| `admin@globussoft.com` | ADMIN | null | Cross-vertical probe — must get `WELLNESS_TENANT_REQUIRED` on every wellness route |
+| `admin@globussoft.com` | ADMIN | null | Cross-vertical probe — must get `WELLNESS_TENANT_REQUIRED` on every wellness route. Also the **cross-tenant probe baseline** for §5.1 — paired with `rishu@enhancedwellness.in` (or `admin@wellness.demo`) to assert that no wellness-route tenant-scoped query leaks Tenant A → Tenant B data. |
 | `manager@crm.com` | MANAGER | null | Same — cross-vertical MANAGER probe |
 | `user@crm.com` | USER | null | Same — cross-vertical USER probe |
+
+> **Note on cross-tenant probes (#732):** Earlier revisions of this doc described `admin@wellness.demo` as a "sibling ADMIN — cross-tenant probe baseline", implying it lived on a **separate** wellness tenant. In reality both `rishu@enhancedwellness.in` and `admin@wellness.demo` are seeded onto **the same tenant** (`tenantId=2`, Enhanced Wellness). There is currently no second wellness tenant in the demo seed. Cross-tenant data-isolation probes (§5.1) therefore use the generic-vs-wellness pairing instead: `admin@globussoft.com` (tenantId=1, generic) as the **Tenant A** baseline and any wellness-tenant ADMIN (`rishu@enhancedwellness.in` or `admin@wellness.demo`, both tenantId=2) as the **Tenant B** counterpart. This is the pattern already used by `e2e/tests/tenant-isolation-api.spec.js`, `attribution-api.spec.js`, `audit-api.spec.js`, and `auth-revocation-api.spec.js`. Same-tenant ADMIN-vs-OWNER privilege probes (e.g. is the owner-only flag truly owner-only, or does any co-ADMIN pass?) still use the `rishu` + `admin@wellness.demo` pair, since they share `tenantId=2` but only `rishu@` matches `Tenant.ownerEmail`.
 
 ### Patient portal
 
@@ -430,11 +432,14 @@ Test:
 
 For every authenticated route in §4, run a **cross-tenant probe**:
 
-1. Log in as `rishu@enhancedwellness.in` (tenant: enhanced-wellness). Create a Patient — record its id `P_W`.
-2. Log in as `admin@wellness.demo` (different wellness tenant). Attempt `GET /api/wellness/patients/${P_W}`.
-3. Expected: **404 "Patient not found"** — NOT 200 with cross-tenant leak. Every route MUST scope by `tenantId` from JWT.
+1. Log in as `rishu@enhancedwellness.in` (Tenant B — enhanced-wellness, tenantId=2). Create a Patient — record its id `P_W`.
+2. Log in as `admin@globussoft.com` (Tenant A — generic, tenantId=1). Attempt `GET /api/wellness/patients/${P_W}`.
+3. Expected: **403 WELLNESS_TENANT_REQUIRED** (the wellness-vertical gate fires first) OR **404 "Patient not found"** for any non-wellness-gated route that's tenant-scoped. Never 200 with cross-tenant leak. Every route MUST scope by `tenantId` from JWT, and every wellness-gated route MUST first reject the cross-vertical caller.
+4. For routes that do NOT carry the wellness-vertical gate (the `verifyRole(["ADMIN"])`-only routes in §4.9, the wallet credit/debit endpoints in §4.9, the loyalty reads in §4.13, the waitlist routes in §4.14), the expected outcome is **404 "not found"** because the generic-tenant ADMIN passes the role gate but the route's `where: { tenantId }` clause yields nothing. Spec covers both: a generic-tenant ADMIN gets a 200-empty / 404-not-found, never a 200 with Tenant B data.
 
-Reference: existing spec `e2e/tests/tenant-isolation-api.spec.js` covers many of these via the FK chain (Patient → Visit → Rx → Consent → TreatmentPlan).
+> Note: `admin@wellness.demo` lives on the SAME tenant as `rishu@enhancedwellness.in` (tenantId=2 — see §2). Using it as the "Tenant B → probes Tenant A" leg is a false-positive — it sees rishu's data legitimately. The cross-tenant probe MUST use a caller from a different tenant. The only second tenant seeded today is the generic one, so `admin@globussoft.com` is the load-bearing counterparty. If a future seed adds a second wellness tenant (e.g. `wellness-demo-org`), update this section and `e2e/tests/tenant-isolation-api.spec.js` to use it as a true wellness-to-wellness sibling probe (#732 follow-up).
+
+Reference: existing spec `e2e/tests/tenant-isolation-api.spec.js` already pairs `admin@globussoft.com` (Tenant A, generic) with `admin@wellness.demo` (Tenant B, wellness) and probes both directions — covers Contact/Patient/Visit/Rx/Consent/TreatmentPlan via the FK chain.
 
 ### 5.2 Cross-vertical tenant guard
 
@@ -542,6 +547,7 @@ These are NOT real bugs to fix immediately — they're observations to either fi
 5. **PDF endpoints (§4.17)** render without auth — guessable integer id is the only secret. File as security concern if not already on the backlog.
 6. **`/wallet/:walletId/credit` and `/wallet/:walletId/debit`** use `verifyRole(["ADMIN"])` without an explicit wellness-vertical gate. A generic-tenant ADMIN passes the role gate; verify the tenant-scoped Prisma query catches the cross-tenant cases (404 not 200).
 7. **Step-up auth for wellness destructive flows** — verify whether `DELETE /patients/:id` + wallet `/credit` + `/debit` require step-up; if not, file gap (§5.7).
+8. **No second wellness tenant in seed (#732 follow-up)** — current seed provisions exactly two tenants: generic (tenantId=1) and Enhanced Wellness (tenantId=2). True wellness-to-wellness cross-tenant probes (e.g. `Tenant.ownerEmail` is honoured per-tenant, branding doesn't bleed across wellness siblings) cannot be exercised. If product wants this surface tested, file an issue to add a second wellness tenant to `prisma/seed-wellness.js` (suggested slug `wellness-demo-org`) and provision a separate sibling ADMIN there. Until then, §5.1 uses the generic-vs-wellness pair as the load-bearing cross-tenant probe.
 
 ---
 
@@ -633,5 +639,5 @@ Run this checklist before merging any new wellness route into `main`.
 
 ---
 
-**Last reviewed:** 2026-05-13 (v3.7.7)
+**Last reviewed:** 2026-05-17 (v3.7.16)
 **Maintained by:** engineering — update on every route addition that touches `verifyRole`, `verifyWellnessRole`, `requireClinicalRole`, `requireTenantAdmin`, `requireManagerPlus`, or `verifyPatientToken`.

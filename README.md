@@ -28,7 +28,7 @@
 - **Demo monitor** — 30-min health cron against `crm.globusdemos.com`; auto-opens an issue on failure.
 - **Commit-message blessings** (e.g. `[allow-unique]`) waive specific migration-safety detectors for legitimate schema changes.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.8.1
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.8.2
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
 

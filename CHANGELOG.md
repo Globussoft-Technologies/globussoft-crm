@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v3.8.2 — 2026-05-18 — CI-only: e2e-full per-shard timeout 30m → 45m
+
+Single config change. No product code touched; bumps the v3.8.x release-validation suite from the old 30-min per-shard ceiling to 45 min so shards 1+2 don't silently truncate at the 30-min mark.
+
+**Why:** v3.8.0 + v3.8.1 e2e-full tag runs both cancelled shards 1+2 at exactly 30:18 — the workflow timeout, not a test failure. Shards 3+4 finished clean in 17-23 min. The test list distribution is unbalanced (audit-api serial-mode + heavy specs concentrate in shards 1+2), so the slower shards need real headroom.
+
+**Followup:** rebalance the shard test list in a separate cycle so all 4 shards finish in similar wall-clock. The 45-min ceiling is the new "do not exceed without justification" line; further creep means a genuine perf regression to investigate.
+
 ## v3.8.1 — 2026-05-18 — Backend follow-up queue closure (5 issues): petty-cash ledger + payment-methods + attendance + Patient.gst
 
 Backend half of the v3.8.0 release. Yesterday's frontend waves shipped placeholders pointing at 5 backend gaps; this release lands those backends so every placeholder turns into a real working feature. Same product binary as v3.8.0 from a UX shape, but the backing routes / aggregator fields / schema columns now exist.

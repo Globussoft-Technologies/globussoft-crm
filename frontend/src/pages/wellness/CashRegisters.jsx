@@ -44,20 +44,6 @@
  *   │  Transactions list (3 tabs: Bookings / Partial / Expenses) │
  *   └────────────────────────────────────────────────────────────┘
  *
- * Known backend gap (deposit + withdrawal)
- * ----------------------------------------
- * The Deposit and Withdrawal buttons are wired to call
- *   POST /api/pos/shifts/:id/deposit { amount, notes }
- *   POST /api/pos/shifts/:id/withdraw { amount, notes }
- * but those routes are NOT yet in `routes/pos.js` (verified
- * 2026-05-17). The triage report flagged this as #779 backend
- * work — a follow-up dispatch will ship the route handlers + an
- * Expense.shiftId or PettyCashLedger column. Until then, clicking
- * Deposit/Withdrawal surfaces a tooltip + "Backend route pending"
- * notify.info — the UI is in place so wiring the route is a 1-line
- * follow-up commit. This deliberate gap is documented per the
- * dispatch's "don't touch backend routes" rule.
- *
  * Backend endpoints consumed
  * --------------------------
  *   GET    /api/pos/registers              — list (cashier+)
@@ -69,8 +55,9 @@
  *   GET    /api/pos/shifts/:id             — shift detail + sales (cashier+)
  *   POST   /api/pos/shifts/open            — open shift (cashier+)
  *   POST   /api/pos/shifts/:id/close       — close shift (cashier+)
- *   POST   /api/pos/shifts/:id/deposit     — TODO #779 backend
- *   POST   /api/pos/shifts/:id/withdraw    — TODO #779 backend
+ *   POST   /api/pos/shifts/:id/deposit     — petty-cash deposit (#779)
+ *   POST   /api/pos/shifts/:id/withdraw    — petty-cash withdrawal (#779)
+ *   GET    /api/pos/shifts/:id/petty-cash  — ledger entries for Expenses tab
  */
 
 import { useEffect, useMemo, useState, useContext } from 'react';
@@ -91,7 +78,6 @@ import {
   CircleDollarSign,
   UserCircle2,
   UserX,
-  AlertCircle,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -360,29 +346,40 @@ export default function CashRegisters() {
     setClosingShift(false);
   };
 
-  // Deposit / Withdrawal — UI in place; backend route not yet shipped.
-  // Clicking surfaces a friendly notice + does NOT issue a broken POST.
-  // When backend ships POST /shifts/:id/deposit + /withdraw, swap the
-  // notify.info branch for the actual fetchApi call below.
-  const handleDeposit = async () => {
+  // #779 — Deposit / Withdrawal against the open shift's drawer. Each
+  // movement is a PettyCashLedger row; close-shift expectedCash now
+  // includes (DEPOSIT - WITHDRAWAL) so variance reflects only true
+  // under/over-counts. Both routes are admin/manager only.
+  const handlePettyCashEntry = async (action) => {
     if (!selectedShift?.id) return;
-    notify.info(
-      'Deposit flow is wired in the UI; backend route POST /api/pos/shifts/:id/deposit ships in a follow-up commit (Zylu-Gap #779 backend half).',
-    );
-    // Future:
-    // const amount = await notify.prompt('Deposit amount?');
-    // await fetchApi(`/api/pos/shifts/${selectedShift.id}/deposit`, {
-    //   method: 'POST',
-    //   body: JSON.stringify({ amount: parseFloat(amount) }),
-    // });
+    const verb = action === 'deposit' ? 'Deposit' : 'Withdrawal';
+    const amountStr = window.prompt(`${verb} amount?`);
+    if (amountStr == null) return; // cancelled
+    const amount = parseFloat(amountStr);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      notify.error('Amount must be a positive number');
+      return;
+    }
+    const reason = window.prompt(`Reason for ${verb.toLowerCase()}?`);
+    if (reason == null) return; // cancelled
+    if (!reason.trim()) {
+      notify.error('Reason is required');
+      return;
+    }
+    try {
+      await fetchApi(`/api/pos/shifts/${selectedShift.id}/${action}`, {
+        method: 'POST',
+        body: JSON.stringify({ amount, reason: reason.trim() }),
+      });
+      notify.success(`${verb} of ${amount} recorded`);
+      await loadRegisters();
+    } catch (_err) {
+      /* fetchApi already toasted */
+    }
   };
 
-  const handleWithdrawal = async () => {
-    if (!selectedShift?.id) return;
-    notify.info(
-      'Withdrawal flow is wired in the UI; backend route POST /api/pos/shifts/:id/withdraw ships in a follow-up commit (Zylu-Gap #779 backend half).',
-    );
-  };
+  const handleDeposit = () => handlePettyCashEntry('deposit');
+  const handleWithdrawal = () => handlePettyCashEntry('withdraw');
 
   // ── Computed views ────────────────────────────────────────────────
   const selectedRegister = useMemo(
@@ -885,37 +882,6 @@ export default function CashRegisters() {
                   {closingShift ? 'Closing…' : 'Close shift'}
                 </button>
               </form>
-            </div>
-          )}
-
-          {/* Backend gap notice */}
-          {selectedShift && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.5rem',
-                padding: '0.6rem 0.75rem',
-                marginBottom: '1rem',
-                background: 'rgba(245,158,11,0.08)',
-                border: '1px solid rgba(245,158,11,0.25)',
-                borderRadius: 8,
-                fontSize: '0.8rem',
-                color: 'var(--text-secondary)',
-              }}
-              role="note"
-            >
-              <AlertCircle
-                size={14}
-                style={{ flexShrink: 0, marginTop: '0.15rem' }}
-              />
-              <span>
-                Deposit + Withdrawal UI is wired; backend routes{' '}
-                <code>POST /api/pos/shifts/:id/deposit</code> and{' '}
-                <code>/withdraw</code> ship in a follow-up commit (Zylu-Gap
-                #779 backend half). Cash drawer additions/removals are
-                recorded by the cashier on shift close until then.
-              </span>
             </div>
           )}
 

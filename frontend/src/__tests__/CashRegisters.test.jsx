@@ -11,8 +11,9 @@
  *   #779 — clicking a closed register surfaces the "Open shift" form;
  *          submit POSTs /api/pos/shifts/open with { registerId, openingFloat };
  *          the close-shift form POSTs /api/pos/shifts/:id/close.
- *          Deposit + Withdrawal buttons render but surface a notify.info
- *          (backend route is documented-pending — see #779 backend half).
+ *          Deposit + Withdrawal buttons POST to /api/pos/shifts/:id/deposit
+ *          and /withdraw with { amount, reason } — PettyCashLedger backend
+ *          shipped 2026-05-18 with this commit.
  *   #781 — selected register's transactions bucket into three tabs
  *          (Bookings Cash / Partial Cash / Expenses Cash); switching
  *          tabs swaps the visible rows; CASH+patientId → bookings;
@@ -378,7 +379,7 @@ describe('CashRegisters — #779 shift lifecycle', () => {
     expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Shift closed/i));
   });
 
-  it('Deposit + Withdrawal buttons render on an open shift and surface a notify.info (backend pending)', async () => {
+  it('Deposit button POSTs to /api/pos/shifts/:id/deposit with { amount, reason } (#779)', async () => {
     fetchApiMock.mockImplementation(makeMock());
     renderPage();
 
@@ -388,21 +389,47 @@ describe('CashRegisters — #779 shift lifecycle', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Deposit cash/i })).toBeInTheDocument(),
     );
+    // window.prompt called twice — once for amount, once for reason.
+    const promptSpy = vi.spyOn(window, 'prompt')
+      .mockReturnValueOnce('2000')
+      .mockReturnValueOnce('Owner brought change');
     fireEvent.click(screen.getByRole('button', { name: /Deposit cash/i }));
-    expect(notify.info).toHaveBeenCalledWith(
-      expect.stringMatching(/Deposit flow is wired in the UI/i),
-    );
 
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => /\/deposit$/.test(url) && opts?.method === 'POST',
+      );
+      expect(calls.length).toBe(1);
+      const body = JSON.parse(calls[0][1].body);
+      expect(body).toEqual({ amount: 2000, reason: 'Owner brought change' });
+    });
+    promptSpy.mockRestore();
+  });
+
+  it('Withdraw button POSTs to /api/pos/shifts/:id/withdraw with { amount, reason } (#779)', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Withdraw cash/i })).toBeInTheDocument(),
+    );
+    const promptSpy = vi.spyOn(window, 'prompt')
+      .mockReturnValueOnce('250')
+      .mockReturnValueOnce('Courier fee');
     fireEvent.click(screen.getByRole('button', { name: /Withdraw cash/i }));
-    expect(notify.info).toHaveBeenCalledWith(
-      expect.stringMatching(/Withdrawal flow is wired in the UI/i),
-    );
 
-    // Confirm no broken POST was issued for either flow.
-    const depositPost = fetchApiMock.mock.calls.find(
-      ([url, opts]) => /\/deposit$/.test(url) && opts?.method === 'POST',
-    );
-    expect(depositPost).toBeUndefined();
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => /\/withdraw$/.test(url) && opts?.method === 'POST',
+      );
+      expect(calls.length).toBe(1);
+      const body = JSON.parse(calls[0][1].body);
+      expect(body).toEqual({ amount: 250, reason: 'Courier fee' });
+    });
+    promptSpy.mockRestore();
   });
 });
 

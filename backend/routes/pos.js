@@ -390,7 +390,12 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
     if (!Number.isFinite(closing) || closing < 0) {
       return res.status(400).json({ error: "closingTotal must be a non-negative number", code: "INVALID_CLOSING_TOTAL" });
     }
-    // expectedCash = openingFloat + sum(CASH sales during shift)
+    // expectedCash = openingFloat + sum(CASH sales) + sum(DEPOSIT) - sum(WITHDRAWAL).
+    // #779: petty-cash ledger now contributes to expected drawer balance.
+    // Pre-#779 deposits/withdrawals lived in a paper notebook; close-shift
+    // variance silently absorbed them. With ledger rows persisted, the
+    // expected count is the precise drawer math, and variance reflects
+    // only true under/over-counts.
     const cashSales = await prisma.sale.aggregate({
       where: {
         tenantId: req.user.tenantId,
@@ -401,7 +406,18 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
       _sum: { paidAmount: true },
     });
     const cashTaken = cashSales._sum.paidAmount || 0;
-    const expectedCash = shift.openingFloat + cashTaken;
+    const deposits = await prisma.pettyCashLedger.aggregate({
+      where: { tenantId: req.user.tenantId, shiftId: shift.id, type: "DEPOSIT" },
+      _sum: { amount: true },
+    });
+    const withdrawals = await prisma.pettyCashLedger.aggregate({
+      where: { tenantId: req.user.tenantId, shiftId: shift.id, type: "WITHDRAWAL" },
+      _sum: { amount: true },
+    });
+    const depositsTotal = deposits._sum.amount || 0;
+    const withdrawalsTotal = withdrawals._sum.amount || 0;
+    const expectedCash =
+      shift.openingFloat + cashTaken + depositsTotal - withdrawalsTotal;
     const variance = closing - expectedCash;
     const closed = await prisma.shift.update({
       where: { id },
@@ -518,6 +534,125 @@ router.get("/shifts/:id", cashierGate, async (req, res) => {
   } catch (e) {
     console.error("[pos] get shift error:", e.message);
     res.status(500).json({ error: "Failed to load shift" });
+  }
+});
+
+// ── Petty-cash ledger: deposit / withdraw against an OPEN shift (#779) ─
+//
+// Cashier-level work happens on the drawer mid-shift — owner brings ₹2k
+// change, a courier needs to be paid cash, staff lunch float gets pulled.
+// Pre-#779 those movements lived only in a paper notebook; close-shift
+// variance silently absorbed them. This pair of endpoints persists each
+// movement as a PettyCashLedger row so:
+//
+//   1. The close-shift variance computation can subtract WITHDRAWAL and
+//      add DEPOSIT to the expected-cash math (no longer "everything that
+//      isn't a CASH sale is variance").
+//   2. The cashier's UI can render an Expenses tab on the shift detail
+//      with each movement (#781 transaction split).
+//   3. Audit chain captures who-deposited-what-when for compliance.
+//
+// Append-only — no PUT/DELETE. Both routes are admin/manager only because
+// a clinical-staff cashier was the most common source of paper-notebook
+// drift; the deposit/withdraw button is gated to the same role-set that
+// owns the register CRUD.
+//
+// Deposits require amount > 0. Withdrawals likewise require amount > 0 but
+// CAN exceed the running cash balance — under-drawer states are tracked
+// at close, not silently rejected (the cashier may need to record an IOU
+// that pays back tomorrow).
+
+const VALID_PETTY_TYPES = new Set(["DEPOSIT", "WITHDRAWAL"]);
+
+async function recordPettyCashEntry(req, res, type) {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+    }
+    const shift = await prisma.shift.findFirst({ where: tenantWhere(req, { id }) });
+    if (!shift) return res.status(404).json({ error: "Shift not found" });
+    if (shift.status !== "OPEN") {
+      return res.status(409).json({
+        error: "Cannot record a petty-cash entry against a closed shift",
+        code: "SHIFT_CLOSED",
+      });
+    }
+    const { amount, reason } = req.body || {};
+    const amt = parseFloat(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res.status(400).json({
+        error: "amount must be a positive number",
+        code: "INVALID_AMOUNT",
+      });
+    }
+    if (!reason || typeof reason !== "string" || !reason.trim()) {
+      return res.status(400).json({
+        error: "reason is required",
+        code: "REASON_REQUIRED",
+      });
+    }
+    const entry = await prisma.pettyCashLedger.create({
+      data: {
+        tenantId: req.user.tenantId,
+        shiftId: shift.id,
+        type,
+        amount: amt,
+        reason: reason.trim().slice(0, 1000),
+        userId: req.user.userId,
+      },
+    });
+    await writeAudit("Shift", "CASH_LEDGER", shift.id, req.user.userId, req.user.tenantId, {
+      ledgerId: entry.id,
+      type,
+      amount: amt,
+      reason: entry.reason,
+    });
+    res.status(201).json(entry);
+  } catch (e) {
+    console.error(`[pos] petty-cash ${type} error:`, e.message);
+    res.status(500).json({ error: `Failed to record ${type.toLowerCase()}` });
+  }
+}
+
+router.post("/shifts/:id/deposit", adminGate, (req, res) =>
+  recordPettyCashEntry(req, res, "DEPOSIT")
+);
+
+router.post("/shifts/:id/withdraw", adminGate, (req, res) =>
+  recordPettyCashEntry(req, res, "WITHDRAWAL")
+);
+
+// GET /api/pos/shifts/:id/petty-cash — list ledger entries for a shift.
+// Used by the CashRegisters UI to render the Expenses tab. Cashier scope:
+// shift's own cashier or admin/manager — same gate as GET /shifts/:id.
+router.get("/shifts/:id/petty-cash", cashierGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+    }
+    const shift = await prisma.shift.findFirst({ where: tenantWhere(req, { id }) });
+    if (!shift) return res.status(404).json({ error: "Shift not found" });
+    if (
+      req.user.role !== "ADMIN" &&
+      req.user.role !== "MANAGER" &&
+      shift.userId !== req.user.userId
+    ) {
+      return res.status(403).json({
+        error: "Cannot view another cashier's shift ledger",
+        code: "SHIFT_NOT_OWNER",
+      });
+    }
+    const entries = await prisma.pettyCashLedger.findMany({
+      where: tenantWhere(req, { shiftId: shift.id }),
+      orderBy: { createdAt: "asc" },
+      take: 500,
+    });
+    res.json(entries);
+  } catch (e) {
+    console.error("[pos] list petty-cash error:", e.message);
+    res.status(500).json({ error: "Failed to list petty-cash entries" });
   }
 });
 

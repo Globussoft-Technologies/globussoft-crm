@@ -2326,13 +2326,15 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
     // use case while killing the rapid-fire dup explosion. Mirrors the
     // visit-side guard added in the same wave (#746).
     {
+      // TreatmentPlan has no `createdAt` column — `startedAt DateTime @default(now())`
+      // serves the same purpose. Query on startedAt for the 5-min dedupe window.
       const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
       const dupe = await prisma.treatmentPlan.findFirst({
         where: tenantWhere(req, {
           patientId: parseInt(patientId),
           name: name,
           totalSessions: parseInt(totalSessions),
-          createdAt: { gte: fiveMinAgo },
+          startedAt: { gte: fiveMinAgo },
         }),
         select: { id: true },
       });

@@ -58,6 +58,32 @@ const isoDay = (d) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(
 const fmtHour = (h) => `${String(h).padStart(2, '0')}:00`;
 const UNASSIGNED_KEY = '__unassigned__';
 
+// #807 (Zylu-Gap CAL-002): match a Holiday row against a column. A holiday
+// applies to a column when:
+//   - holiday.locationId is null AND holiday.doctorId is null → tenant-wide
+//   - holiday.doctorId === column.id → personal day-off for that practitioner
+//   - holiday.locationId === <column's location> → all-staff at that location
+//
+// The column today is keyed by user.id (practitioner) or the synthetic
+// UNASSIGNED_KEY. Location-scoped holidays grey out EVERY practitioner column
+// since the day-view doesn't yet split by location (column granularity is
+// per-staff, not per-staff-per-location). When holiday-scope ambiguity is
+// removed by a future location filter on the calendar, this helper becomes
+// stricter without breaking the unscoped-holiday case.
+export function isHolidayForColumn(holidays, column) {
+  if (!Array.isArray(holidays) || holidays.length === 0) return null;
+  for (const h of holidays) {
+    // Tenant-wide holiday (no location, no doctor): applies to everyone.
+    if (!h.locationId && !h.doctorId) return h;
+    // Practitioner-specific day-off.
+    if (h.doctorId && column && h.doctorId === column.id) return h;
+    // Location-scoped holiday — without per-column location, grey out all
+    // non-Unassigned columns. (Unassigned column gets a banner-only signal.)
+    if (h.locationId && column && !column.isUnassigned) return h;
+  }
+  return null;
+}
+
 // #615: dynamic hour range — start with the default 9..19, then expand to
 // include the earliest and latest actual visit on the loaded day. Without
 // this every visit at 7 AM clamped to 9 AM and every visit at 8 PM clamped
@@ -259,10 +285,15 @@ export default function CalendarGrid() {
 
       {loading && <div>Loading…</div>}
 
-      {/* Wave 11 Agent GG: red banner when the selected day has any holidays. */}
+      {/* Wave 11 Agent GG: red banner when the selected day has any holidays.
+          #807 (Zylu-Gap CAL-002): banner now exposes the holiday name list to
+          the calendar grid below so each practitioner column can grey out and
+          a "Holiday" tooltip + diagonal hatch fills the hour cells. See
+          isHolidayForColumn() below for the per-column gating logic. */}
       {!loading && holidays.length > 0 && (
         <div
           className="glass"
+          data-testid="holiday-banner"
           style={{
             padding: '0.85rem 1rem',
             marginBottom: '1rem',
@@ -294,8 +325,32 @@ export default function CalendarGrid() {
               and line 230 hour cell, both have minWidth:0. */}
           <div className="calendar-grid" style={{ display: 'grid', gridTemplateColumns: `80px repeat(${columns.length}, minmax(0, 1fr))`, gap: '4px', minWidth: `${80 + columns.length * 120}px` }}>
             <div style={{ ...colHead, background: 'transparent' }}></div>
-            {columns.map((c) => (
-              <div key={c.id} style={{ ...colHead, opacity: c.isUnassigned ? 0.7 : 1, minWidth: 0, overflow: 'hidden' }} title={c.role ? `${c.name} · ${c.role}` : c.name}>
+            {columns.map((c) => {
+              // #807: per-column holiday badge in the header. The matching
+              // helper returns the Holiday row or null; non-null means this
+              // column is greyed out + the holiday name appears in the
+              // header tooltip + as a small "Holiday" tag below the name.
+              const colHoliday = isHolidayForColumn(holidays, c);
+              return (
+              <div
+                key={c.id}
+                data-testid={colHoliday ? `column-holiday-${c.id}` : undefined}
+                style={{
+                  ...colHead,
+                  opacity: c.isUnassigned ? 0.7 : 1,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  // #807: tinted background on the column header when a
+                  // holiday applies. Greyscale + slight red wash makes it
+                  // unambiguous from the regular practitioner-column tint.
+                  background: colHoliday ? 'rgba(239,68,68,0.10)' : 'rgba(255,255,255,0.02)',
+                }}
+                title={
+                  colHoliday
+                    ? `Holiday: ${colHoliday.name}${c.role ? ` · ${c.name} unavailable` : ''}`
+                    : (c.role ? `${c.name} · ${c.role}` : c.name)
+                }
+              >
                 {c.isUnassigned ? (
                   <UserIcon size={14} style={{ verticalAlign: 'middle', marginRight: '0.4rem', opacity: 0.7, flexShrink: 0 }} />
                 ) : (
@@ -311,31 +366,60 @@ export default function CalendarGrid() {
                       {c.role}
                     </span>
                   )}
+                  {colHoliday && (
+                    <span
+                      style={{ display: 'block', fontSize: '0.6rem', color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}
+                    >
+                      Holiday — {colHoliday.name}
+                    </span>
+                  )}
                 </span>
               </div>
-            ))}
+              );
+            })}
 
             {HOURS.map((h) => (
               <React.Fragment key={h}>
                 <div style={hourLabel}>{fmtHour(h)}</div>
                 {columns.map((c) => {
                   const cell = grid[c.id]?.[h] || [];
+                  // #807: per-column holiday gate. Greys out the cell + blocks
+                  // click-to-book. Pre-existing visits already on the calendar
+                  // still render (an admin booked it before the holiday was
+                  // declared); they're visible but the cell can't accept a new
+                  // booking. Holiday backend gate also returns HOLIDAY_BLOCKED
+                  // on POST /visits, so this is purely a UX surface — server
+                  // is the source of truth.
+                  const cellHoliday = isHolidayForColumn(holidays, c);
                   // #270: empty slots are clickable when the column belongs to a
                   // real practitioner (not the synthetic Unassigned column —
                   // a fresh booking should always be assigned to someone).
-                  const isCreatable = !c.isUnassigned && cell.length === 0;
+                  const isCreatable = !c.isUnassigned && cell.length === 0 && !cellHoliday;
                   return (
                     <div
                       key={`${c.id}-${h}`}
+                      data-testid={cellHoliday ? `holiday-cell-${c.id}-${h}` : undefined}
                       style={{
                         ...hourCell,
                         cursor: isCreatable ? 'pointer' : 'default',
                         position: 'relative',
                         minWidth: 0,
                         overflow: 'hidden',
+                        // #807: hatched grey background + lowered opacity on
+                        // holiday cells. Diagonal stripes pattern reads as
+                        // "unavailable" without printing a label on every
+                        // cell. The hour-label column (h-axis) stays normal.
+                        background: cellHoliday
+                          ? 'repeating-linear-gradient(45deg, rgba(239,68,68,0.06), rgba(239,68,68,0.06) 6px, rgba(239,68,68,0.14) 6px, rgba(239,68,68,0.14) 12px)'
+                          : undefined,
+                        opacity: cellHoliday && cell.length === 0 ? 0.65 : 1,
                       }}
                       onClick={isCreatable ? () => setNewVisit({ columnId: c.id, hour: h }) : undefined}
-                      title={isCreatable ? `Book ${fmtHour(h)} with ${c.name}` : undefined}
+                      title={
+                        cellHoliday
+                          ? `Holiday: ${cellHoliday.name} — not bookable`
+                          : (isCreatable ? `Book ${fmtHour(h)} with ${c.name}` : undefined)
+                      }
                       onMouseEnter={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0.8'); } : undefined}
                       onMouseLeave={isCreatable ? (e) => { e.currentTarget.querySelector('[data-empty-affordance]')?.style.setProperty('opacity', '0'); } : undefined}
                     >

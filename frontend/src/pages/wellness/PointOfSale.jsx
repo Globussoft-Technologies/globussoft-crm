@@ -43,6 +43,8 @@ import {
   UserX,
   Tag,
   ShieldAlert,
+  Wallet as WalletIcon,
+  Gift,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -57,7 +59,21 @@ const LINE_TYPES = [
   { value: 'PACKAGE', label: 'Package' },
 ];
 
-const PAYMENT_METHODS = ['CASH', 'CARD', 'UPI', 'WALLET', 'GIFTCARD', 'COMBINED'];
+// #789 / WAL-002 — payment methods exposed at POS. Backend
+// (routes/pos.js → VALID_PAYMENT_METHODS) accepts CASH | CARD | UPI |
+// WALLET | GIFTCARD | COMBINED — labels here are friendlier user-facing
+// strings; the `value` is the enum the backend expects on /api/pos/sales.
+// CASHBACK / PAYLATER / ONLINE / OTHER from the Zylu reference aren't on
+// the backend enum yet — they're tracked separately and will need the
+// backend route + schema migration before they can land here.
+const PAYMENT_METHODS = [
+  { value: 'CASH', label: 'Cash' },
+  { value: 'CARD', label: 'Card' },
+  { value: 'UPI', label: 'UPI' },
+  { value: 'WALLET', label: 'Wallet' },
+  { value: 'GIFTCARD', label: 'Gift Card' },
+  { value: 'COMBINED', label: 'Split / combined' },
+];
 
 export default function PointOfSale() {
   const { user } = useContext(AuthContext) || {};
@@ -100,6 +116,16 @@ export default function PointOfSale() {
   const [overrideEnabled, setOverrideEnabled] = useState(false);
   const [overrideAmount, setOverrideAmount] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
+
+  // #789 / WAL-002 — Wallet + Gift Card flow state.
+  // When paymentMethod=WALLET we fetch the patient's wallet balance so the
+  // cashier can see what's available before completing the sale. When
+  // paymentMethod=GIFTCARD we surface a redeem mini-form — redeeming credits
+  // the patient's wallet, and the cashier then switches to WALLET to charge.
+  const [walletBalance, setWalletBalance] = useState(null);
+  const [walletBusy, setWalletBusy] = useState(false);
+  const [giftCardCode, setGiftCardCode] = useState('');
+  const [giftCardBusy, setGiftCardBusy] = useState(false);
 
   const loadRegisters = async () => {
     try {
@@ -209,6 +235,89 @@ export default function PointOfSale() {
       notify.error(e.message || 'Failed to validate coupon');
     } finally {
       setCouponBusy(false);
+    }
+  };
+
+  // ── Wallet balance fetch (#789 / WAL-002) ───────────────────────────
+  // Auto-loads the patient's wallet balance whenever the cashier picks
+  // Wallet OR Gift Card as the payment method AND a non-empty patientId is
+  // resolvable (guest checkout has no wallet — explicitly skip). Re-runs
+  // when patientId changes or guestCheckout toggles. The balance is shown
+  // under the payment-method dropdown so the cashier sees what's available
+  // before completing the sale.
+  const loadWalletBalance = async () => {
+    const pid = guestCheckout
+      ? null
+      : (patientId && Number.isFinite(parseInt(patientId)) ? parseInt(patientId) : null);
+    if (!pid) {
+      setWalletBalance(null);
+      return;
+    }
+    setWalletBusy(true);
+    try {
+      const data = await fetchApi(`/api/wellness/patients/${pid}/wallet`);
+      if (data && data.wallet) {
+        setWalletBalance(Number(data.wallet.balance || 0));
+      } else {
+        setWalletBalance(0);
+      }
+    } catch (e) {
+      // Patient may not have a wallet yet (404) — surface 0 rather than
+      // an error toast; backend auto-creates on first credit/debit.
+      setWalletBalance(0);
+    } finally {
+      setWalletBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (paymentMethod === 'WALLET' || paymentMethod === 'GIFTCARD') {
+      loadWalletBalance();
+    } else {
+      setWalletBalance(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadWalletBalance is stable enough; deps are the inputs that affect its result.
+  }, [paymentMethod, patientId, guestCheckout]);
+
+  // #789 / WAL-002 — Gift card redeem flow.
+  // POST /api/wellness/giftcards/redeem with { code, patientId } credits the
+  // patient's wallet by the gift card's value (server-side: gift card status
+  // → redeemed, walletTransaction CREDIT_GIFTCARD). After a successful
+  // redeem, refresh the wallet balance + switch the cashier to WALLET so
+  // they can actually charge the sale against the now-funded wallet.
+  const redeemGiftCard = async () => {
+    if (!giftCardCode.trim()) {
+      notify.error('Enter a gift card code');
+      return;
+    }
+    const pid = guestCheckout
+      ? null
+      : (patientId && Number.isFinite(parseInt(patientId)) ? parseInt(patientId) : null);
+    if (!pid) {
+      notify.error('Gift card redemption requires a patient — disable guest checkout and enter a patient ID');
+      return;
+    }
+    setGiftCardBusy(true);
+    try {
+      const result = await fetchApi('/api/wellness/giftcards/redeem', {
+        method: 'POST',
+        body: JSON.stringify({ code: giftCardCode.trim(), patientId: pid }),
+      });
+      const amount = result?.giftCard?.amount;
+      notify.success(
+        amount
+          ? `Gift card redeemed — ${formatMoney(amount, 'INR', 'en-IN')} credited to wallet`
+          : 'Gift card redeemed',
+      );
+      setGiftCardCode('');
+      // Switch to WALLET so the cashier charges against the now-credited
+      // wallet. The wallet-balance fetch below picks up the new value.
+      setPaymentMethod('WALLET');
+      await loadWalletBalance();
+    } catch (e) {
+      notify.error(e.message || 'Failed to redeem gift card');
+    } finally {
+      setGiftCardBusy(false);
     }
   };
 
@@ -363,6 +472,9 @@ export default function PointOfSale() {
       setOverrideEnabled(false);
       setOverrideAmount('');
       setOverrideReason('');
+      // #789 — clear wallet/giftcard state so the next sale starts fresh.
+      setWalletBalance(null);
+      setGiftCardCode('');
       notify.success(`Sale complete: ${sale.invoiceNumber}`);
     } catch (e) {
       notify.error(e.message || 'Failed to complete sale');
@@ -828,9 +940,10 @@ export default function PointOfSale() {
                   style={inputStyle}
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value)}
+                  aria-label="Payment method"
                 >
                   {PAYMENT_METHODS.map((p) => (
-                    <option key={p} value={p}>{p}</option>
+                    <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
                 </select>
               </div>
@@ -846,6 +959,93 @@ export default function PointOfSale() {
                 />
               </div>
             </div>
+
+            {/* #789 / WAL-002 — Wallet balance hint + Gift card redeem mini-form.
+              * Rendered when the cashier picks WALLET (show balance) or
+              * GIFTCARD (show redeem form). For COMBINED + other methods we
+              * leave the grid alone. */}
+            {(paymentMethod === 'WALLET' || paymentMethod === 'GIFTCARD') && (
+              <div
+                role="region"
+                aria-label={paymentMethod === 'WALLET' ? 'Wallet balance' : 'Gift card redemption'}
+                style={{
+                  marginTop: '0.75rem',
+                  padding: '0.75rem 0.9rem',
+                  background: 'var(--surface-2, #f7f7f8)',
+                  border: '1px dashed var(--border-color)',
+                  borderRadius: 8,
+                }}
+              >
+                {paymentMethod === 'WALLET' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <WalletIcon size={16} />
+                    {guestCheckout ? (
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                        Wallet payments need a registered patient — disable Guest checkout above.
+                      </span>
+                    ) : !patientId ? (
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                        Enter a Patient ID in the Customer card above to load the wallet balance.
+                      </span>
+                    ) : walletBusy ? (
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading wallet…</span>
+                    ) : walletBalance === null ? (
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Wallet balance unavailable.</span>
+                    ) : (
+                      <>
+                        <span style={{ fontSize: '0.95rem' }}>
+                          Wallet balance:{' '}
+                          <strong data-testid="wallet-balance">{formatMoney(walletBalance, 'INR', 'en-IN')}</strong>
+                        </span>
+                        {walletBalance < grandTotal && (
+                          <span style={{ color: 'var(--warning-color, #b16a00)', fontSize: '0.85rem' }}>
+                            Insufficient wallet balance for this sale ({formatMoney(grandTotal, 'INR', 'en-IN')}). Top up first or use Split / combined.
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+                {paymentMethod === 'GIFTCARD' && (
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      <Gift size={16} />
+                      <strong style={{ fontSize: '0.95rem' }}>Redeem gift card</strong>
+                    </div>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.5rem 0' }}>
+                      Redeeming credits the patient's wallet; we then charge this sale against Wallet automatically.
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.5rem', alignItems: 'end' }}>
+                      <div>
+                        <label style={labelStyle}>Gift card code</label>
+                        <input
+                          type="text"
+                          style={inputStyle}
+                          value={giftCardCode}
+                          onChange={(e) => setGiftCardCode(e.target.value)}
+                          placeholder="e.g. GIFT-XXXX-1234"
+                          aria-label="Gift card code"
+                        />
+                      </div>
+                      <div>
+                        <button
+                          onClick={redeemGiftCard}
+                          disabled={giftCardBusy || !giftCardCode.trim()}
+                          style={primaryBtnStyle}
+                        >
+                          <Gift size={14} /> {giftCardBusy ? 'Redeeming…' : 'Redeem'}
+                        </button>
+                      </div>
+                      {walletBalance !== null && !guestCheckout && patientId && (
+                        <div style={{ gridColumn: '1 / -1', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                          Current wallet balance: <strong>{formatMoney(walletBalance, 'INR', 'en-IN')}</strong>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
               <div>

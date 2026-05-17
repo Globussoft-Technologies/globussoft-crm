@@ -176,6 +176,11 @@ const WellnessAttendance = lazy(() => import("./pages/wellness/Attendance"));
 const WellnessLeave = lazy(() => import("./pages/wellness/Leave"));
 // Wave 2 Agent II — POS / Cash Register / Shift / Sale MVP UI.
 const WellnessPointOfSale = lazy(() => import("./pages/wellness/PointOfSale"));
+// Zylu-Gap Cash Register admin page — closes #770/#779/#780/#781.
+// Lists registers (admin+ create/edit), drills into per-register shift +
+// transactions panel. Without this surface POS is permanently gated since
+// the backend requires an OPEN shift on a Register before /pos/sales accepts.
+const WellnessCashRegisters = lazy(() => import("./pages/wellness/CashRegisters"));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
 // Public customer-facing knowledge-base article view (no auth, no admin chrome).
@@ -982,6 +987,18 @@ export default function App() {
                 <WellnessOnly>
                   <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="POS requires staff access.">
                     <WellnessPointOfSale />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              {/* Zylu-Gap #770/#779/#780/#781 — Cash Register admin page.
+                  Lists registers, drills into per-register shift detail
+                  (status header + open/close/deposit/withdraw + transactions).
+                  Same role envelope as POS so a cashier can open their own
+                  shift here without leaving the staff role bucket. */}
+              <Route path="wellness/cash-registers" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="Cash Registers requires staff access.">
+                    <WellnessCashRegisters />
                   </RoleGuard>
                 </WellnessOnly>
               } />

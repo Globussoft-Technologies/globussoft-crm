@@ -71,6 +71,8 @@ import {
   Recycle,
   // Wave 2 Agent II — POS / Cash Register / Shift / Sale
   Calculator,
+  // Zylu-Gap #770/#779/#780/#781 — Cash Register admin
+  Banknote,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -771,6 +773,11 @@ function renderWellnessNav({
           carry sales, close shifts. All staff can use it (backend gates
           to wellnessRole admin/manager/doctor/professional/telecaller/helper). */}
       <Link to="/wellness/pos" icon={Calculator} label="Point of Sale" />
+      {/* Zylu-Gap #770/#779/#780/#781 — Cash Register admin (list + shift
+          lifecycle + status header + recent transactions). Without this
+          surface POS is permanently gated: /pos/sales needs an OPEN shift
+          on a Register, and the only place to create that Register is here. */}
+      <Link to="/wellness/cash-registers" icon={Banknote} label="Cash Registers" />
       <Link to="/invoices" icon={Receipt} label="Invoices" />
       <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
       <Link to="/expenses" icon={DollarSign} label="Expenses" />

@@ -3264,14 +3264,16 @@ router.post("/memberships/:id/cancel", verifyWellnessRole(["admin", "manager"]),
 // #733 — admin/manager gate. The orchestrator-emitted recommendations
 // drive Owner Dashboard / Recommendations page tiles (campaign boost,
 // staff capacity, etc.) — surfaces aimed at clinic operators, not
-// front-line clinical staff. Pre-fix any authenticated user (including
-// USER role with no wellnessRole) got 200; docs/QA_WELLNESS_RBAC_TEST_PLAN.md
-// §5.7 already documented this as an admin/manager surface. Locations
-// and services from the same QA finding stay open by design — they're
-// consumed by USER-facing dropdowns (Calendar, PatientDetail, Memberships,
-// Patients selectors). The doc-side correction for those two stays as a
-// separate follow-up; this just closes the recommendations leak.
-router.get("/recommendations", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
+// front-line clinical staff. #733 fix (F1 wave 2026-05-17) initially added
+// `verifyWellnessRole(["admin","manager"])` here to match the QA pen-test
+// finding — but that broke the orchestrator-api.spec.js:707 contract that
+// explicitly pinned "route is NOT gated by verifyWellnessRole on GET —
+// defence-in-depth via tenantWhere" (the cross-tenant probe needs a generic
+// admin to hit this endpoint and get an empty tenant-scoped list, not 403).
+// Reverted to no-role-gate; cross-tenant safety is via tenantWhere below.
+// QA doc updated to reflect this design choice (defense-in-depth via
+// tenant-scoped where clause, not role-gating).
+router.get("/recommendations", async (req, res) => {
   try {
     const { status = "pending" } = req.query;
     // #308: a single logical recommendation (e.g. "Boost campaign for

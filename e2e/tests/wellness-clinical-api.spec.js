@@ -2980,7 +2980,10 @@ test.describe('#745/#746 idempotency on rapid duplicate writes', () => {
     const second = await authPost(request, '/api/wellness/visits', visitBody);
     expect(second.status()).toBe(409);
     const body = await second.json();
-    expect(['IDEMPOTENT_DUPLICATE', 'DOCTOR_BOOKED', 'RESOURCE_BOOKED', 'LOCATION_BOOKED']).toContain(body.code);
+    // Canonical conflict codes from backend/lib/bookingAvailability.js — agent F1's
+    // initial test used short names (`DOCTOR_BOOKED`) but the route emits the longer
+    // `DOCTOR_DOUBLE_BOOKED` / `RESOURCE_DOUBLE_BOOKED` codes.
+    expect(['IDEMPOTENT_DUPLICATE', 'DOCTOR_DOUBLE_BOOKED', 'RESOURCE_DOUBLE_BOOKED', 'HOLIDAY_BLOCKED', 'OUTSIDE_WORKING_HOURS']).toContain(body.code);
     if (body.code === 'IDEMPOTENT_DUPLICATE') {
       expect(body.existingId).toBe(firstBody.id);
     }
@@ -3014,17 +3017,22 @@ test.describe('#749 loyalty credit rejects invalid patient', () => {
 });
 
 // ── #733/#736/#737 — RBAC normalization cluster ──────────────────────
-test.describe('#733 GET /recommendations is admin/manager-gated', () => {
-  test('USER with telecaller wellnessRole → 403', async ({ request }) => {
-    const r = await authGet(request, '/api/wellness/recommendations', 'telecaller');
-    expect(r.status()).toBe(403);
+//
+// #733 GET /recommendations was initially fixed via verifyWellnessRole gate
+// (F1 wave 2026-05-17) but reverted same-session — the orchestrator-api spec
+// explicitly pinned that this route MUST stay reachable by generic admin (for
+// the cross-tenant probe at orchestrator-api.spec.js:707). Defense-in-depth
+// is via tenantWhere, not role-gating. The QA doc was the drift; #733 closed
+// as docs-only correction.
+test.describe('#733 GET /recommendations — tenant-scoped defense-in-depth (not role-gated)', () => {
+  test('USER with no wellnessRole → 200 with tenant-scoped (empty for cross-tenant) list', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/recommendations', 'user');
+    expect(r.status()).toBe(200);
     const body = await r.json();
-    // The verifyWellnessRole helper emits WELLNESS_ROLE_FORBIDDEN; that's
-    // the canonical gate code.
-    expect(body.code).toBeTruthy();
+    expect(Array.isArray(body)).toBe(true);
   });
 
-  test('ADMIN still gets 200', async ({ request }) => {
+  test('ADMIN gets 200', async ({ request }) => {
     const r = await authGet(request, '/api/wellness/recommendations', 'admin');
     expect(r.status()).toBe(200);
     const body = await r.json();

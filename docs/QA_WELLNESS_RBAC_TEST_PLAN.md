@@ -272,7 +272,7 @@ Note: `manager` is **NOT** in this gate's allowed array. Manager-override token 
 
 **Routes (~30):**
 - Owner dashboard: `GET /api/wellness/dashboard`
-- Recommendations: `PUT /api/wellness/recommendations/:id`, `/approve`, `/reject`
+- Recommendations: `GET /api/wellness/recommendations` (admin-gated post-#733), `PUT /api/wellness/recommendations/:id`, `/approve`, `/reject`
 - Orchestrator/cron triggers: `/orchestrator/run`, `/reminders/run`, `/no-show-risk/run`, `/ops/run`, `/inventory/low-stock/run`
 - Locations: `POST/PUT /api/wellness/locations*`
 - Resources: `POST/PUT/DELETE /api/wellness/resources*`
@@ -281,6 +281,20 @@ Note: `manager` is **NOT** in this gate's allowed array. Manager-override token 
 - Memberships: `GET /api/wellness/memberships/dashboard`, `POST /:id/cancel`, `POST/PUT/DELETE /membership-plans*`
 - Services catalog: `POST/PUT /api/wellness/services*`
 - Reports: `GET /api/wellness/reports/{pnl-by-service,per-professional,attribution,per-location}` (+ `.csv` + `.pdf` variants — 8 routes)
+
+**#733 update (2026-05-17):** QA RBAC audit flagged `GET /api/wellness/locations`,
+`GET /api/wellness/services`, and `GET /api/wellness/recommendations` as open to
+USER-with-no-wellnessRole. Disposition:
+- `GET /recommendations` — **tightened** to `verifyWellnessRole(["admin","manager"])`.
+  Owner Dashboard / Recommendations page tiles target operators, not clinical staff.
+- `GET /services` — **stays open by design.** Consumed by USER-facing selectors in
+  PatientDetail, Calendar, Memberships, TelecallerQueue, Leads, AutoConsumptionRules,
+  Resources. Locking down would regress every wellness sub-page that shows a service
+  picker. Catalog metadata (name, price, duration) is not PII.
+- `GET /locations` — **stays open BUT masks PII for low-trust viewers** (#679 already
+  shipped). Telecaller / helper / generic-USER see masked phone+email; admin /
+  manager / clinical staff see full contact info. Clinic street address is public
+  by intent (printed on prescriptions, booking widget).
 
 | Caller | Expected |
 |---|---|

@@ -3012,3 +3012,106 @@ test.describe('#749 loyalty credit rejects invalid patient', () => {
     expect(body.error).toMatch(/not found/i);
   });
 });
+
+// ── #733/#736/#737 — RBAC normalization cluster ──────────────────────
+test.describe('#733 GET /recommendations is admin/manager-gated', () => {
+  test('USER with telecaller wellnessRole → 403', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/recommendations', 'telecaller');
+    expect(r.status()).toBe(403);
+    const body = await r.json();
+    // The verifyWellnessRole helper emits WELLNESS_ROLE_FORBIDDEN; that's
+    // the canonical gate code.
+    expect(body.code).toBeTruthy();
+  });
+
+  test('ADMIN still gets 200', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/recommendations', 'admin');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body)).toBe(true);
+  });
+});
+
+test.describe('#736 hand-rolled 403 strings normalized', () => {
+  test('PUT /branding/color from non-ADMIN MANAGER → 403 with neutral copy + TENANT_ADMIN_REQUIRED', async ({ request }) => {
+    const r = await authPut(request, '/api/wellness/branding/color', { brandColor: '#265855' }, 'manager');
+    expect(r.status()).toBe(403);
+    const body = await r.json();
+    expect(body.code).toBe('TENANT_ADMIN_REQUIRED');
+    // Neutral copy — no taxonomy leakage. Pre-fix: "Tenant ADMIN required".
+    expect(body.error).not.toMatch(/Tenant ADMIN required/i);
+    expect(body.error).toMatch(/permission/i);
+  });
+
+  test('POST /loyalty/:id/credit from USER role → 403 with neutral copy + MANAGER_ROLE_REQUIRED', async ({ request }) => {
+    // Find a real patient first so we exercise requireManagerPlus and
+    // NOT the body-validation 400.
+    const list = await authGet(request, '/api/wellness/patients?limit=1', 'admin');
+    const listBody = await list.json();
+    const patientId = listBody.patients && listBody.patients[0] && listBody.patients[0].id;
+    if (!patientId) test.skip(true, 'no patient seeded');
+    // telecaller fixture has RBAC role USER + wellnessRole=telecaller —
+    // not manager/admin, so requireManagerPlus 403s.
+    const r = await authPost(request, `/api/wellness/loyalty/${patientId}/credit`, {
+      points: 10,
+      reason: 'E2E RBAC normalize test',
+    }, 'telecaller');
+    expect(r.status()).toBe(403);
+    const body = await r.json();
+    expect(body.code).toBe('MANAGER_ROLE_REQUIRED');
+    // Neutral copy — no taxonomy leakage. Pre-fix: "Manager or admin role required".
+    expect(body.error).not.toMatch(/Manager or admin role required/i);
+    expect(body.error).toMatch(/permission/i);
+  });
+
+  test('POST /prescriptions from non-clinical telecaller → 403 with neutral copy + CLINICAL_ROLE_REQUIRED', async ({ request }) => {
+    const r = await authPost(request, '/api/wellness/prescriptions', {
+      visitId: 1,
+      patientId: 1,
+      drugs: [{ name: 'aspirin' }],
+    }, 'telecaller');
+    expect(r.status()).toBe(403);
+    const body = await r.json();
+    expect(body.code).toBe('CLINICAL_ROLE_REQUIRED');
+    // Neutral copy — no taxonomy leakage.
+    expect(body.error).not.toMatch(/Only clinical staff/i);
+    expect(body.error).toMatch(/permission/i);
+  });
+});
+
+test.describe('#737 limit param cap (DoS-resistant)', () => {
+  test('GET /patients?limit=999999 clamped to 200', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/patients?limit=999999');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body.patients)).toBe(true);
+    expect(body.patients.length).toBeLessThanOrEqual(200);
+  });
+
+  test('GET /patients?limit=1&limit=999999 (polluted param) clamped to 200', async ({ request }) => {
+    // Polluted query string — Express puts both in req.query.limit as an
+    // array; capLimit picks the last entry and clamps it.
+    const r = await authGet(request, '/api/wellness/patients?limit=1&limit=999999');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.patients.length).toBeLessThanOrEqual(200);
+  });
+
+  test('GET /visits?limit=99999 clamped to 500 (route-specific cap)', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/visits?limit=99999');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBeLessThanOrEqual(500);
+  });
+
+  test('GET /patients?limit=notanumber falls back to default 50 (not NaN take)', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/patients?limit=notanumber');
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    // Default is 50. Some tenants may have <50 patients seeded so we
+    // only assert the upper bound — non-numeric MUST NOT translate to
+    // an unbounded query.
+    expect(body.patients.length).toBeLessThanOrEqual(50);
+  });
+});

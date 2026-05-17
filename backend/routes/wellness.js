@@ -60,7 +60,7 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 // generic role enum ADMIN/MANAGER/USER from the JWT, not the wellnessRole
 // axis). Used by DELETE /patients/:id and other admin-only operations
 // added to this file.
-const { verifyRole } = require("../middleware/auth");
+const { verifyRole, RBAC_DENIED_MESSAGE } = require("../middleware/auth");
 
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
@@ -124,6 +124,27 @@ router.param("id", (req, res, next, id) => {
 });
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
+
+// #737 — server-side limit clamp for list endpoints. Pre-fix
+// `?limit=999999` (or `?limit=1&limit=999999` — Express's duplicate-key
+// last-wins semantics put the array form in req.query.limit) flowed to
+// `Math.min(parseInt(limit), <cap>)` where some specific routes had a
+// per-route cap baked in but others (e.g. the 5000-row patients CSV
+// export) had only a hardcoded literal upstream. The pollution case
+// `Math.min(parseInt(["1","999999"]), 200)` yields NaN — Prisma then
+// receives `take: NaN` and falls back to its default (no upper bound on
+// some adapter versions). This helper hardens every list call site:
+//   - Coalesces array-form to the last entry (matches Express's
+//     "last param wins" intuition + makes the pollution explicit).
+//   - parseInt(NaN | non-numeric) → falls back to the caller's default.
+//   - Math.min against the route's specific max (200 / 500 / 1000).
+// Mirrors backend/routes/contacts.js:167's pattern.
+function capLimit(raw, { def = 50, max = 200 } = {}) {
+  const v = Array.isArray(raw) ? raw[raw.length - 1] : raw;
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 1) return def;
+  return Math.min(n, max);
+}
 
 // #527 / #533 (CRIT-02 + HI-04): PHI access gates.
 //
@@ -364,8 +385,9 @@ router.get("/patients", phiReadGate, async (req, res) => {
     const [patients, total] = await Promise.all([
       prisma.patient.findMany({
         where,
-        take: Math.min(parseInt(limit), 200),
-        skip: parseInt(offset),
+        // #737 — clamp via capLimit (handles ?limit=N&limit=M pollution).
+        take: capLimit(limit, { def: 50, max: 200 }),
+        skip: parseInt(offset) || 0,
         orderBy: { createdAt: "desc" },
       }),
       prisma.patient.count({ where }),
@@ -1153,8 +1175,9 @@ router.get("/visits", phiReadGate, async (req, res) => {
 
     const visits = await prisma.visit.findMany({
       where,
-      take: Math.min(parseInt(limit), 500),
-      skip: parseInt(offset),
+      // #737 — clamp via capLimit (handles pollution).
+      take: capLimit(limit, { def: 100, max: 500 }),
+      skip: parseInt(offset) || 0,
       orderBy: { visitDate: "desc" },
       include: {
         patient: { select: { id: true, name: true, phone: true } },
@@ -1713,8 +1736,10 @@ function requireClinicalRole(req, res, next) {
   if (!req.user) return res.status(401).json({ error: "Authentication required" });
   if (req.user.role === "ADMIN") return next();
   if (req.user.wellnessRole === "doctor") return next();
+  // #736 — normalize the error string to the canonical neutral copy.
+  // The CLINICAL_ROLE_REQUIRED code is the differentiator and stays.
   return res.status(403).json({
-    error: "Only clinical staff (doctor) may write prescriptions",
+    error: RBAC_DENIED_MESSAGE,
     code: "CLINICAL_ROLE_REQUIRED",
   });
 }
@@ -1726,7 +1751,8 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const items = await prisma.prescription.findMany({
       where,
-      take: Math.min(parseInt(limit), 200),
+      // #737 — clamp via capLimit (handles pollution).
+      take: capLimit(limit, { def: 50, max: 200 }),
       orderBy: { createdAt: "desc" },
       include: {
         patient: { select: { id: true, name: true } },
@@ -1857,7 +1883,8 @@ router.get("/consents", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const items = await prisma.consentForm.findMany({
       where,
-      take: Math.min(parseInt(limit), 200),
+      // #737 — clamp via capLimit (handles pollution).
+      take: capLimit(limit, { def: 50, max: 200 }),
       orderBy: { signedAt: "desc" },
       select: {
         id: true, templateName: true, signedAt: true,
@@ -3173,7 +3200,17 @@ router.post("/memberships/:id/cancel", verifyWellnessRole(["admin", "manager"]),
 
 // ── Agent recommendations ──────────────────────────────────────────
 
-router.get("/recommendations", async (req, res) => {
+// #733 — admin/manager gate. The orchestrator-emitted recommendations
+// drive Owner Dashboard / Recommendations page tiles (campaign boost,
+// staff capacity, etc.) — surfaces aimed at clinic operators, not
+// front-line clinical staff. Pre-fix any authenticated user (including
+// USER role with no wellnessRole) got 200; docs/QA_WELLNESS_RBAC_TEST_PLAN.md
+// §5.7 already documented this as an admin/manager surface. Locations
+// and services from the same QA finding stay open by design — they're
+// consumed by USER-facing dropdowns (Calendar, PatientDetail, Memberships,
+// Patients selectors). The doc-side correction for those two stays as a
+// separate follow-up; this just closes the recommendations leak.
+router.get("/recommendations", verifyWellnessRole(["admin", "manager"]), async (req, res) => {
   try {
     const { status = "pending" } = req.query;
     // #308: a single logical recommendation (e.g. "Boost campaign for
@@ -5849,7 +5886,14 @@ const brandingLogoUpload = multer({
 
 function requireTenantAdmin(req, res, next) {
   if (!req.user || req.user.role !== "ADMIN") {
-    return res.status(403).json({ error: "Tenant ADMIN required" });
+    // #736 — neutral copy + distinct code. Pre-fix the error string
+    // leaked the role taxonomy ("Tenant ADMIN required"); the post-#590/
+    // #591 convention is the canonical RBAC_DENIED message + a unique
+    // code so callers switch on code (not error).
+    return res.status(403).json({
+      error: RBAC_DENIED_MESSAGE,
+      code: "TENANT_ADMIN_REQUIRED",
+    });
   }
   next();
 }
@@ -5929,7 +5973,11 @@ router.get("/branding", async (req, res) => {
 function requireManagerPlus(req, res, next) {
   const role = req.user?.role;
   if (role === "ADMIN" || role === "MANAGER") return next();
-  return res.status(403).json({ error: "Manager or admin role required" });
+  // #736 — neutral copy + distinct code. Mirrors requireTenantAdmin.
+  return res.status(403).json({
+    error: RBAC_DENIED_MESSAGE,
+    code: "MANAGER_ROLE_REQUIRED",
+  });
 }
 
 // #614 — Loyalty rules (earn / burn config). Per-tenant row in LoyaltyConfig.
@@ -6148,13 +6196,14 @@ router.post("/loyalty/:patientId/redeem", async (req, res) => {
 
 router.get("/referrals", requireManagerPlus, async (req, res) => {
   try {
-    const { status, limit = 100, offset = 0 } = req.query;
+    const { status, limit, offset = 0 } = req.query;
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
     const [referrals, total] = await Promise.all([
       prisma.referral.findMany({
         where,
-        take: Math.min(parseInt(limit, 10) || 100, 500),
+        // #737 — clamp via capLimit (handles pollution).
+        take: capLimit(limit, { def: 100, max: 500 }),
         skip: parseInt(offset, 10) || 0,
         orderBy: { createdAt: "desc" },
         include: {
@@ -6865,13 +6914,14 @@ router.post("/wallet/:walletId/debit", verifyRole(["ADMIN"]), async (req, res) =
 // ("ending in WXYZ") and explicitly omit `codeHash`.
 router.get("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const { status, limit = 100, offset = 0 } = req.query;
+    const { status, limit, offset = 0 } = req.query;
     const where = tenantWhere(req);
     if (status) where.status = String(status);
     const [giftCards, total] = await Promise.all([
       prisma.giftCard.findMany({
         where, orderBy: { createdAt: "desc" },
-        take: Math.min(parseInt(limit, 10) || 100, 500),
+        // #737 — clamp via capLimit (handles pollution).
+        take: capLimit(limit, { def: 100, max: 500 }),
         skip: parseInt(offset, 10) || 0,
         select: {
           id: true, tenantId: true, code: true, codeLast4: true,

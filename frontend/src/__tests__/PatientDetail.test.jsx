@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
@@ -188,6 +188,74 @@ describe('<PatientDetail />', () => {
       expect(priorSection.textContent).toMatch(/botox-fillers/);
       // empty-state should NOT render when there is at least one prior consent
       expect(priorSection.textContent).not.toMatch(/No prior consents on file/i);
+    });
+  });
+
+  // #750 — Photos tab: img onError must swap to a "Failed to load" placeholder
+  // + Try again button. Pre-fix the broken-image tile was visually indistinguishable
+  // from a successful upload because there was no error state — a clinician
+  // browsing later couldn't tell which patients had unviewable photos. The fix
+  // adds `<img onError={...}>` per thumbnail with a Retry action that forces a
+  // cache-busting re-fetch. Counters above (BEFORE/AFTER (n)) intentionally stay
+  // unchanged because the photo records DO exist server-side; only the render
+  // surface differentiates loaded vs failed tiles.
+  describe('Photos tab — failed image placeholder (#750)', () => {
+    it('renders a "Failed to load" placeholder with Try again when img.onError fires', async () => {
+      const patientWithPhotos = {
+        ...patient,
+        visits: [
+          {
+            id: 11,
+            visitDate: '2026-04-10T09:00:00Z',
+            service: { name: 'Consultation' },
+            notes: 'First visit',
+            amountCharged: 1500,
+            photosBefore: JSON.stringify(['/uploads/before-1.jpg']),
+            photosAfter:  JSON.stringify(['/uploads/after-1.jpg']),
+          },
+        ],
+      };
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patientWithPhotos);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      const { container } = renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Photos/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Photos/i }));
+
+      // Wait for the photo thumbnails to render. <img alt=""> is hidden from
+      // RTL's role queries (decorative), so query the DOM directly.
+      const imgs = await waitFor(() => {
+        const list = container.querySelectorAll('img');
+        expect(list.length).toBeGreaterThanOrEqual(2);
+        return Array.from(list);
+      });
+
+      // Happy path — no placeholders rendered yet.
+      expect(screen.queryAllByTestId('photo-failed-placeholder').length).toBe(0);
+
+      // Simulate the network/MIME failure: fire onError on every <img>.
+      // (The Photos tab renders 1 before + 1 after thumbnail for this fixture.)
+      await act(async () => {
+        imgs.forEach((img) => fireEvent.error(img));
+      });
+
+      // Both tiles swap to the placeholder + Try again button.
+      const placeholders = await waitFor(() => {
+        const list = screen.getAllByTestId('photo-failed-placeholder');
+        expect(list.length).toBe(2);
+        return list;
+      });
+      placeholders.forEach((p) => {
+        expect(p.textContent).toMatch(/Failed to load/i);
+      });
+      const retryButtons = screen.getAllByRole('button', { name: /Try again/i });
+      expect(retryButtons.length).toBe(2);
     });
   });
 

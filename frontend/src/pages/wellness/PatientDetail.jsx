@@ -1244,6 +1244,63 @@ function PhotosTab({ patient, onSaved }) {
   );
 }
 
+// #750 — render a "failed to load" placeholder when the image source returns
+// a non-image (the historic backend bug was Content-Type text/html via the
+// SPA fallback — fixed in #743 — but a future regression, an expired signed
+// URL, or a deleted blob would silently render a black tile that the clinician
+// can't distinguish from a successful upload). We track per-URL error state
+// + expose a Retry action that forces a re-fetch by appending a cache-busting
+// query string. Counters above still claim BEFORE (n) / AFTER (n) but the
+// failed-to-load tiles are unambiguous now.
+function PhotoThumb({ url, onRemove }) {
+  const [errored, setErrored] = useState(false);
+  const [bust, setBust] = useState(0);
+  const src = bust ? `${url}${url.includes('?') ? '&' : '?'}_r=${bust}` : url;
+  const retry = () => {
+    setErrored(false);
+    setBust(Date.now());
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      {errored ? (
+        <div
+          data-testid="photo-failed-placeholder"
+          style={{
+            width: '100%', height: 100, borderRadius: 6,
+            background: 'rgba(239,68,68,0.08)', border: '1px dashed rgba(239,68,68,0.4)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            gap: '0.25rem', padding: '0.25rem', color: 'var(--text-secondary)', fontSize: '0.7rem',
+            textAlign: 'center',
+          }}
+        >
+          <span style={{ color: '#ef4444', fontWeight: 600 }}>Failed to load</span>
+          <button
+            type="button"
+            onClick={retry}
+            style={{
+              background: 'transparent', border: '1px solid rgba(239,68,68,0.5)',
+              color: '#ef4444', borderRadius: 4, padding: '1px 6px', fontSize: '0.7rem',
+              cursor: 'pointer',
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      ) : (
+        <img
+          src={src}
+          alt=""
+          onError={() => setErrored(true)}
+          style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }}
+        />
+      )}
+      <button onClick={() => onRemove(url)} style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.7)', border: 'none', color: '#fff', borderRadius: 4, padding: '2px 4px', cursor: 'pointer' }}>
+        <Trash2 size={10} />
+      </button>
+    </div>
+  );
+}
+
 function PhotoColumn({ title, urls, onRemove }) {
   return (
     <div>
@@ -1251,12 +1308,7 @@ function PhotoColumn({ title, urls, onRemove }) {
       {urls.length === 0 && <div style={{ padding: '1rem', textAlign: 'center', background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: 8, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No photos yet.</div>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '0.5rem' }}>
         {urls.map((u) => (
-          <div key={u} style={{ position: 'relative' }}>
-            <img src={u} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }} />
-            <button onClick={() => onRemove(u)} style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.7)', border: 'none', color: '#fff', borderRadius: 4, padding: '2px 4px', cursor: 'pointer' }}>
-              <Trash2 size={10} />
-            </button>
-          </div>
+          <PhotoThumb key={u} url={u} onRemove={onRemove} />
         ))}
       </div>
     </div>

@@ -169,6 +169,10 @@ const WellnessHolidays = lazy(() => import("./pages/wellness/Holidays"));
 const WellnessWorkingHours = lazy(() => import("./pages/wellness/WorkingHoursEditor"));
 // Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox).
 const WellnessWhatsAppThreads = lazy(() => import("./pages/wellness/WhatsAppThreads"));
+// Zylu-Gap #800 (WA-005) — Blocked Numbers admin page. Manages
+// /api/whatsapp/opt-outs rows with Add + Unblock affordances. Paired
+// with the All/Unread/Blocked tab strip on WhatsAppThreads (#796).
+const WellnessBlockedNumbers = lazy(() => import("./pages/wellness/BlockedNumbers"));
 // Wave 2 Agent JJ — Staff Attendance + Leave Management. Open to all roles
 // (everyone needs to clock in/out + manage their own leave); manager+
 // surfaces appear inline based on AuthContext.role.
@@ -899,6 +903,17 @@ export default function App() {
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
+              {/* Zylu-Gap #800 — Blocked Numbers admin (manages /opt-outs).
+                  Add is ADMIN+MANAGER (backend gate), Unblock is ADMIN-only
+                  (DPDP §11). The page hides the Unblock button for
+                  non-admins so the modal never fires a 403 round-trip. */}
+              <Route path="wellness/whatsapp/blocked-numbers" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Blocked Numbers requires admin or manager access.">
+                    <WellnessBlockedNumbers />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
               <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
               {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}

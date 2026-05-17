@@ -73,6 +73,8 @@ import {
   Calculator,
   // Zylu-Gap #770/#779/#780/#781 — Cash Register admin
   Banknote,
+  // Zylu-Gap #800 (WA-005) — Blocked WhatsApp numbers admin entry
+  Ban,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -731,6 +733,15 @@ function renderWellnessNav({
         to="/wellness/whatsapp"
         icon={MessageSquare}
         label="WhatsApp Threads"
+      />
+      {/* Zylu-Gap #800 — Blocked WhatsApp numbers admin (opt-outs).
+          managerOnly because /opt-outs POST is ADMIN+MANAGER (DELETE is
+          ADMIN-only; the page hides Unblock for non-admins inside). */}
+      <Link
+        to="/wellness/whatsapp/blocked-numbers"
+        icon={Ban}
+        label="Blocked Numbers"
+        managerOnly
       />
       {/* Telecaller Queue: visible to wellnessRole=telecaller and to
           managers/admins for oversight. Plain users (and clinical staff

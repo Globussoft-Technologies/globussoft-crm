@@ -3025,8 +3025,8 @@ test.describe('#749 loyalty credit rejects invalid patient', () => {
 // is via tenantWhere, not role-gating. The QA doc was the drift; #733 closed
 // as docs-only correction.
 test.describe('#733 GET /recommendations — tenant-scoped defense-in-depth (not role-gated)', () => {
-  test('USER with no wellnessRole → 200 with tenant-scoped (empty for cross-tenant) list', async ({ request }) => {
-    const r = await authGet(request, '/api/wellness/recommendations', 'user');
+  test('telecaller wellnessRole → 200 (cross-tenant safety is via tenantWhere, not role-gate)', async ({ request }) => {
+    const r = await authGet(request, '/api/wellness/recommendations', 'telecaller');
     expect(r.status()).toBe(200);
     const body = await r.json();
     expect(Array.isArray(body)).toBe(true);

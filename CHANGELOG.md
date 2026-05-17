@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## v3.8.1 — 2026-05-18 — Backend follow-up queue closure (5 issues): petty-cash ledger + payment-methods + attendance + Patient.gst
+
+Backend half of the v3.8.0 release. Yesterday's frontend waves shipped placeholders pointing at 5 backend gaps; this release lands those backends so every placeholder turns into a real working feature. Same product binary as v3.8.0 from a UX shape, but the backing routes / aggregator fields / schema columns now exist.
+
+### Closed issues
+
+- **#779 — POS petty cash deposit / withdraw + `PettyCashLedger` model.** New Prisma model (shiftId / type / amount / reason / userId / tenantId — append-only). New routes: `POST /api/pos/shifts/:id/deposit`, `POST /api/pos/shifts/:id/withdraw`, `GET /api/pos/shifts/:id/petty-cash`. Admin/manager-gated, OPEN-shift only, audit-emitting. `POST /shifts/:id/close` `expectedCash` math now adds `sum(DEPOSIT) − sum(WITHDRAWAL)` so the variance reflects only true under/over-counts. Frontend `CashRegisters.jsx` Deposit / Withdrawal buttons now POST the real routes (yellow gap banner removed). +15 vitest cases.
+- **#789 — `Sale.paymentMethod` enum extended.** `VALID_PAYMENT_METHODS` now includes `CASHBACK`, `PAYLATER`, `ONLINE`. No schema migration (column is `String`). Frontend `PointOfSale.jsx` dropdown gains the 3 new options. +11 vitest cases. Column gaps for follow-up: `Sale.paid` (Boolean) + `Sale.paymentDueAt` (for PAYLATER AR aging) + `Sale.externalPaymentRef` (for ONLINE gateway txn-id) — surfaced in commit body.
+- **#792 — Patient `gst` field + `anniversary` allowed-list extension.** New schema column `Patient.gst String? @db.VarChar(15)`. POST + PUT handlers in `routes/wellness.js` now persist `anniversary` (was silently dropped by the PUT allowed-list pre-fix) and `gst` (new). Validators: `INVALID_ANNIVERSARY` (unparseable date), `INVALID_GST` (not `[0-9A-Z]{15}`). GST canonicalised to uppercase server-side. Frontend forms updated: `Patients.jsx` edit form gains date input + GSTIN text input; `PatientDetail.jsx` header subline surfaces `Anniv DD-MM-YYYY` + `GST <id>` chips. +12 vitest cases.
+- **#802 — `Attendance.summary.early` + `.onTime` aggregation.** New `classifyPunctuality(row)` helper at `routes/attendance.js:~58` returns `EARLY | ON_TIME | AFTER | null`. Aggregator extended to compute counts. Env-tunable thresholds: `ATTENDANCE_SHIFT_START_HOUR` (default 9), `ATTENDANCE_SHIFT_START_MINUTE` (default 0), `ATTENDANCE_ON_TIME_TOLERANCE_MIN` (default 15). Top-level response gains `policy{shiftStartHour, shiftStartMinute, onTimeToleranceMin}`. No `ShiftPolicy` model — env vars are the contract for now; per-shift policies are the natural follow-up.
+- **#804 — `Attendance.summary.byUser.{late, absent, leaves}`.** Per-user breakdown extended with `late` (status==='LATE'), `absent` (status==='ABSENT'), `leaves` (APPROVED LeaveRequest overlap count). LeaveRequest model verified at `schema.prisma:3560`. Graceful fallback if `leaveRequest.findMany` throws (no LeaveRequest table → leaves degrade to 0, no 500). Synthetic byUser entries for users with leaves but no attendance rows. Payroll CSV (#804 frontend, shipped v3.8.0) now emits real numbers. +16 vitest cases.
+
+### Cron-learning surfaced + fixed inline
+
+- **`emitEvent` is fire-and-forget, but the dispatcher trips vitest's unhandled-rejection guard.** J1's 3 new test files mocked the route's local prisma surfaces but not `prisma.automationRule.findMany` (called by `eventBus.js:195`). The route's emit is fire-and-forget per #616 ("Failure here MUST NOT fail the response") so the route response stays 201, but vitest's process-level unhandled-rejection handler fails the workflow. Hotfix at `4602e2d`: every test file that POSTs a wellness/pos endpoint now stubs `prisma.automationRule.findMany = vi.fn().mockResolvedValue([])`. The pre-existing `consent-templates.test.js` already had this pattern at lines 63-68; J1's 3 files inherited it now.
+
+### Stats
+
+- 4 commits (`7c689c1` + `ff5e0a9` + `7e3ddcd` + `ed42b19`) + 1 hotfix (`4602e2d`) = 5 commits
+- 5 issues closed (#779 / #789 / #792 / #802 / #804)
+- 1 new Prisma model (`PettyCashLedger`)
+- 1 new Prisma column (`Patient.gst`)
+- 3 new routes (`POST /shifts/:id/deposit`, `POST /shifts/:id/withdraw`, `GET /shifts/:id/petty-cash`)
+- +54 new vitest cases across 4 new test files (38 from J1 + 16 from J2)
+- Per-push gate: ~1,690 → ~1,690 (no new e2e specs — backend-only release)
+- Open issues: 11 → 6
+
+### Follow-up gaps (still queued, not blocking)
+
+- `Sale.paid` + `Sale.paymentDueAt` columns for PAYLATER AR aging
+- `Sale.externalPaymentRef` for ONLINE gateway txn-id capture
+- `ShiftPolicy` model for per-staff/per-shift schedules (today's punctuality uses tenant-wide env defaults)
+- Tenant-timezone-aware punctuality (today's comparison happens in UTC)
+
 ## v3.8.0 — 2026-05-17 — Zylu-Gap audit-and-close sweep + 60-issue closure + 2 new product surfaces
 
 **Major-version bump justified by the category shift:** 60 GitHub issues closed in one session (71 → 11, **-85%**), 2 brand-new product surfaces shipped (Cash Register admin, Blocked Numbers), 8 existing pages enhanced, 3 audit reports authored as machine-readable backlog artifacts, and the AI-era CRM rebuild PRD drafted as the long-horizon roadmap. The product binary now diverges meaningfully from v3.7.16 — a patch bump would understate the lift.

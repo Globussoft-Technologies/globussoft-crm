@@ -3705,7 +3705,10 @@ model Sale {
   paidAmount           Float     @default(0)
   // DRAFT | COMPLETED | REFUNDED | CANCELLED.
   status               String    @default("COMPLETED")
-  // CASH | CARD | UPI | WALLET | GIFTCARD | COMBINED.
+  // CASH | CARD | UPI | WALLET | GIFTCARD | COMBINED |
+  // CASHBACK | PAYLATER | ONLINE (#789 — extended 2026-05-18). String column
+  // (not enum) so future additions are additive — route-layer
+  // VALID_PAYMENT_METHODS in routes/pos.js is the source of truth.
   paymentMethod        String    @default("CASH")
   paymentBreakdownJson String?   @db.Text
   refundedAt           DateTime?

@@ -59,13 +59,15 @@ const LINE_TYPES = [
   { value: 'PACKAGE', label: 'Package' },
 ];
 
-// #789 / WAL-002 — payment methods exposed at POS. Backend
+// #789 — payment methods exposed at POS. Backend
 // (routes/pos.js → VALID_PAYMENT_METHODS) accepts CASH | CARD | UPI |
-// WALLET | GIFTCARD | COMBINED — labels here are friendlier user-facing
-// strings; the `value` is the enum the backend expects on /api/pos/sales.
-// CASHBACK / PAYLATER / ONLINE / OTHER from the Zylu reference aren't on
-// the backend enum yet — they're tracked separately and will need the
-// backend route + schema migration before they can land here.
+// WALLET | GIFTCARD | COMBINED | CASHBACK | PAYLATER | ONLINE. Labels here
+// are friendlier user-facing strings; the `value` is the enum the backend
+// expects on /api/pos/sales.
+// CASHBACK/PAYLATER/ONLINE were added 2026-05-18 — see the comment block
+// above VALID_PAYMENT_METHODS in routes/pos.js for the per-method
+// treatment + deferred-column notes (Sale.paid / Sale.paymentDueAt /
+// Sale.externalPaymentRef are tracked for follow-up).
 const PAYMENT_METHODS = [
   { value: 'CASH', label: 'Cash' },
   { value: 'CARD', label: 'Card' },
@@ -73,6 +75,9 @@ const PAYMENT_METHODS = [
   { value: 'WALLET', label: 'Wallet' },
   { value: 'GIFTCARD', label: 'Gift Card' },
   { value: 'COMBINED', label: 'Split / combined' },
+  { value: 'CASHBACK', label: 'Cashback' },
+  { value: 'PAYLATER', label: 'Pay later' },
+  { value: 'ONLINE', label: 'Online (payment link)' },
 ];
 
 export default function PointOfSale() {

@@ -659,7 +659,40 @@ router.get("/shifts/:id/petty-cash", cashierGate, async (req, res) => {
 // ── Sale create / list / get / refund ────────────────────────────────
 
 const VALID_LINE_TYPES = ["SERVICE", "PRODUCT", "MEMBERSHIP", "GIFTCARD", "PACKAGE"];
-const VALID_PAYMENT_METHODS = ["CASH", "CARD", "UPI", "WALLET", "GIFTCARD", "COMBINED"];
+// #789 — payment methods accepted at POS. CASHBACK / PAYLATER / ONLINE
+// were added 2026-05-18 to match the Zylu reference set + the PointOfSale
+// dropdown options. Treatment differs per method:
+//   CASH / CARD / UPI / WALLET / GIFTCARD / COMBINED — existing; no behavioural
+//     change. WALLET assumes the cashier debited the patient's wallet via a
+//     separate /wallet flow BEFORE checkout (sibling of GIFTCARD redeem).
+//   CASHBACK — same shape as WALLET; the cashier debits the patient's
+//     cashback balance via the wallet ledger (CASHBACK_REDEEM
+//     WalletTransaction) before checkout. The enum value is the tender tag
+//     so reports + audits surface the distinction. No additional side
+//     effects in this route — wallet already enforces non-negative balance.
+//   PAYLATER — sale is recorded as COMPLETED but the cashier intends to
+//     collect later (open invoice / credit terms). DEFERRED column work:
+//     a Sale.paid (Boolean) + Sale.paymentDueAt (DateTime?) pair would let
+//     the AR engine surface unpaid PAYLATER sales for follow-up. For now
+//     the enum value rides as a tender tag only — reports filter by
+//     paymentMethod=PAYLATER to find them. Tracked: ship the columns
+//     once the AR aging UI lands.
+//   ONLINE — generic online payment (Razorpay/Stripe/external link).
+//     DEFERRED column work: Sale.externalPaymentRef (String?) to capture
+//     the gateway transaction id. For now the cashier records the
+//     reference in paymentBreakdownJson by hand. Tracked: ship the column
+//     when the inline-payment-link UI lands.
+const VALID_PAYMENT_METHODS = [
+  "CASH",
+  "CARD",
+  "UPI",
+  "WALLET",
+  "GIFTCARD",
+  "COMBINED",
+  "CASHBACK",
+  "PAYLATER",
+  "ONLINE",
+];
 
 router.post("/sales", cashierGate, async (req, res) => {
   try {

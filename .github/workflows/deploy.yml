@@ -300,7 +300,12 @@ jobs:
           #   - public-booking-api.spec.js   (24 tests: regression pin for #208/#218/#219/#279/#283/#291/#297/#378 — public booking + embed widget gate, P1 from regression-coverage-backlog item #14)
           #   - services-api.spec.js         (33 tests: regression pin for #115/#161/#209/#274/#364 — wellness service catalog validation + RBAC + structured-error contract, P2 from regression-coverage-backlog item #13)
           #   - deals_documents.spec.js      (10 tests: routes/deals_documents.js — upload + list + #585 binary-PDF generate-quote contract)
-          # Total: ~1594 API tests run on every push.
+          #   - knowledge-base-api.spec.js   (15 tests: routes/knowledge_base.js public + authed CRUD — orphan-wave 2026-05-17)
+          #   - landing-pages-api.spec.js    (41 tests: routes/landing_pages.js admin CRUD + duplicate + analytics — G-1 orphan-wave 2026-05-17)
+          #   - portal-api.spec.js           (16 tests: routes/portal.js public + auth gates + #238 verify-otp — orphan-wave 2026-05-17)
+          #   - tenant-switch-disabled-api.spec.js (5 tests: #555 lock-per-session policy contract — orphan-wave 2026-05-17)
+          #   - voice-transcription-api.spec.js (19 tests: routes/voice_transcription.js coverage push — orphan-wave 2026-05-17)
+          # Total: ~1690 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -412,6 +417,11 @@ jobs:
             tests/pii-masking-api.spec.js \
             tests/developer-api.spec.js \
             tests/security-validation-2026-05-12-api.spec.js \
+            tests/knowledge-base-api.spec.js \
+            tests/landing-pages-api.spec.js \
+            tests/portal-api.spec.js \
+            tests/tenant-switch-disabled-api.spec.js \
+            tests/voice-transcription-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

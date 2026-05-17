@@ -191,6 +191,22 @@ router.all("/audit/*", wellnessNamespacedRedirect("/api/audit"));
 async function maybeAutoCreditLoyalty(visit, tenantId) {
   try {
     if (!visit || visit.status !== "completed") return;
+    // #749 — defense-in-depth: the visit-create route already 404s on a
+    // soft-deleted / non-existent patient (#742). This re-checks at the
+    // loyalty-credit boundary so any future call path that bypasses the
+    // route handler (e.g. a workflow rule, a cron sweep, or a future
+    // module that ports this helper) cannot inflate loyalty totals for a
+    // patient that GET /patients/:id 404s. The pen-test repro showed
+    // loyalty going 300→550 (+250) after writes against a missing patient.
+    if (!visit.patientId) return;
+    const patient = await prisma.patient.findFirst({
+      where: { tenantId, id: visit.patientId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!patient) {
+      console.warn("[wellness] maybeAutoCreditLoyalty skipped: patient", visit.patientId, "not found / soft-deleted");
+      return;
+    }
     // Load tenant's earn rules; if no row, fall back to historic 10% rule.
     let cfg;
     try {
@@ -1259,6 +1275,35 @@ router.post("/visits", phiWriteGate, async (req, res) => {
       return res.status(409).json({ error: slotCheck.detail, code: slotCheck.code, detail: slotCheck.detail });
     }
 
+    // #746 — duplicate-prevention guard. Pre-fix a double-clicked Save +
+    // an over-zealous seed-script loop wrote 111+ identical visit rows
+    // for one patient (Kavita Reddy patient 433 on demo). The
+    // assertVisitSlotAvailable check above only catches doctor / resource
+    // / location collisions — same patient + same time + same doctor +
+    // same service slipped through if doctorId was null OR the
+    // collision logic ignored the patient axis. This 60-second window
+    // catches rapid-fire client retries. Mirrors #745 on treatment-plans.
+    if (visitDate) {
+      const aMinuteAgo = new Date(Date.now() - 60 * 1000);
+      const parsedVisitDate = parseTenantDateInput(visitDate);
+      const dupe = await prisma.visit.findFirst({
+        where: tenantWhere(req, {
+          patientId: parseInt(patientId),
+          visitDate: parsedVisitDate,
+          ...(serviceId ? { serviceId: parseInt(serviceId) } : {}),
+          createdAt: { gte: aMinuteAgo },
+        }),
+        select: { id: true },
+      });
+      if (dupe) {
+        return res.status(409).json({
+          error: "An identical visit was created in the last minute",
+          code: "IDEMPOTENT_DUPLICATE",
+          existingId: dupe.id,
+        });
+      }
+    }
+
     const visit = await prisma.visit.create({
       data: {
         patientId: parseInt(patientId),
@@ -1458,15 +1503,102 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
 
 // ── Visit photos (before/after) ────────────────────────────────────
 
+// #743 — content-type whitelist for photo serving + upload validation.
+// Pre-fix, photos uploaded via POST /visits/:id/photos stored their URL as
+// `/uploads/wellness/visits/<id>/<file>`. That path is served by
+// `app.use("/uploads", express.static(...))` in server.js. On the deployed
+// box, Nginx (and Cloudflare in front) handle requests path-routing — the
+// SPA fallback handler catches `/uploads/...` because no upstream Nginx
+// `location /uploads/` block exists, so every <img src> for a stored photo
+// returned `200 + Content-Type: text/html` (the SPA index shell) and the
+// browser rendered a broken-image tile. The fix:
+//   - Move serving under `/api/wellness/visits/:id/photos/:filename` which
+//     IS proxied to the backend by the existing Nginx `location /api/`
+//     block. No infra change needed.
+//   - Stamp the explicit image Content-Type on the response (jpg/jpeg/png/
+//     webp/gif) instead of letting express.static's mime sniffing decide.
+//   - Validate the upload's mime + reject non-image multipart parts at
+//     ingestion (no more "uploaded a PDF, served back as text/html").
+//   - Tenant-scope the read so a malicious caller can't poke other
+//     tenants' visit folders.
+const PHOTO_MIME_BY_EXT = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+function photoContentType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  return PHOTO_MIME_BY_EXT[ext] || null;
+}
+
+router.get("/visits/:id/photos/:filename", phiReadGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const filename = req.params.filename || "";
+    // Defense-in-depth path-traversal guard. multer.diskStorage above
+    // already sanitises uploaded filenames via the safe-name regex, but
+    // a manually crafted GET request could try `..%2F..%2F/etc/passwd`.
+    if (!/^[a-zA-Z0-9._-]+$/.test(filename) || filename.includes("..")) {
+      return res.status(400).json({ error: "invalid filename", code: "INVALID_FILENAME" });
+    }
+    const mime = photoContentType(filename);
+    if (!mime) {
+      return res.status(415).json({ error: "unsupported image type", code: "UNSUPPORTED_MEDIA" });
+    }
+    // Tenant-scope: the visit must belong to the caller's tenant. Without
+    // this, knowing a visitId from another tenant would expose their
+    // visit photos.
+    const visit = await prisma.visit.findFirst({
+      where: tenantWhere(req, { id }),
+      select: { id: true },
+    });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+
+    const filePath = path.join(__dirname, "..", "uploads", "wellness", "visits", String(id), filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Photo not found" });
+    }
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.sendFile(filePath);
+  } catch (e) {
+    console.error("[wellness] photo serve error:", e.message);
+    res.status(500).json({ error: "Photo serve failed" });
+  }
+});
+
 router.post("/visits/:id/photos", phiWriteGate, photoUpload.array("photos", 10), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const visit = await prisma.visit.findFirst({ where: tenantWhere(req, { id }) });
     if (!visit) return res.status(404).json({ error: "Visit not found" });
 
+    // #743 — reject non-image uploads at the API layer. Pre-fix multer
+    // accepted any mime; e.g. a PDF or .txt landed on disk and a later
+    // GET served it back as text/html. Mirror the brandingLogoUpload
+    // image-only filter pattern (~line 5680).
+    const files = req.files || [];
+    for (const f of files) {
+      const mime = photoContentType(f.originalname || f.filename || "");
+      if (!mime) {
+        // Best-effort: drop the file on disk before bailing so we don't
+        // leave a non-image artefact behind. multer already wrote it.
+        try { fs.unlinkSync(f.path); } catch (_e) {}
+        return res.status(415).json({
+          error: "photos must be image/jpeg, image/png, image/webp or image/gif",
+          code: "UNSUPPORTED_MEDIA",
+        });
+      }
+    }
+
     const which = req.body.kind === "after" ? "photosAfter" : "photosBefore";
     const existing = visit[which] ? JSON.parse(visit[which]) : [];
-    const added = (req.files || []).map((f) => `/uploads/wellness/visits/${id}/${path.basename(f.path)}`);
+    // #743 — store the API path, not the bare /uploads/* path. The /api/
+    // namespace is reverse-proxied to the backend by Nginx; /uploads/* on
+    // demo falls through to the SPA catch-all and returns text/html.
+    const added = files.map((f) => `/api/wellness/visits/${id}/photos/${path.basename(f.path)}`);
     const merged = [...existing, ...added];
 
     const _updated = await prisma.visit.update({
@@ -2120,6 +2252,34 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
     {
       const _p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: parseInt(patientId), deletedAt: null }), select: { id: true } });
       if (!_p) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+    }
+    // #745 — duplicate-prevention. Pre-fix the route accepted unlimited
+    // retries of the same (patient, plan name, totalSessions) payload, so
+    // a double-clicked Save or a retried seed-script loop generated
+    // hundreds of identical rows (Kavita Reddy patient 433 had 183
+    // duplicate plans on demo). Reject an exact-match plan created in
+    // the last 5 minutes with 409 IDEMPOTENT_DUPLICATE — preserves the
+    // legitimate "create two plans with the same name 6 months apart"
+    // use case while killing the rapid-fire dup explosion. Mirrors the
+    // visit-side guard added in the same wave (#746).
+    {
+      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const dupe = await prisma.treatmentPlan.findFirst({
+        where: tenantWhere(req, {
+          patientId: parseInt(patientId),
+          name: name,
+          totalSessions: parseInt(totalSessions),
+          createdAt: { gte: fiveMinAgo },
+        }),
+        select: { id: true },
+      });
+      if (dupe) {
+        return res.status(409).json({
+          error: "An identical treatment plan was created in the last 5 minutes",
+          code: "IDEMPOTENT_DUPLICATE",
+          existingId: dupe.id,
+        });
+      }
     }
     const plan = await prisma.treatmentPlan.create({
       data: {

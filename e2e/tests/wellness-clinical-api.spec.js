@@ -2820,3 +2820,195 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
     expect(body.error).not.toMatch(/normalizedPhone/);
   });
 });
+
+// ── #743 — Visit photos: serving + content-type contract ─────────────
+//
+// Pre-fix the upload route stored URLs as `/uploads/wellness/visits/<id>/<f>`
+// and relied on `app.use("/uploads", express.static(...))` for serving.
+// On the deployed box, Nginx / Cloudflare routed `/uploads/*` to the SPA
+// catch-all so every <img src> returned 200 + text/html (the SPA index
+// shell), thumbnails were broken on /wellness/patients/<id> → Photos tab.
+//
+// The fix: store + serve under `/api/wellness/visits/<id>/photos/<file>`
+// (proxied to the backend by the existing Nginx `location /api/` block),
+// and stamp the explicit image Content-Type. These tests pin:
+//   1. The stored URL shape carries the /api/ prefix.
+//   2. The GET serves with `Content-Type: image/png` (NOT text/html).
+//   3. Non-image uploads are rejected with 415 UNSUPPORTED_MEDIA.
+//   4. Path-traversal / cross-tenant visit IDs return 4xx.
+test.describe('#743 visit photos — content-type + URL shape', () => {
+  let visitForPhotos = null;
+
+  test.beforeAll(async ({ request }) => {
+    // Spin up a fresh patient + visit just for this describe block.
+    // Visit must be in a state where photo upload is allowed; the route
+    // doesn't gate on status, so any status works.
+    const p = await createPatient(request, { suffix: 'photo-743' });
+    const v = await authPost(request, '/api/wellness/visits', {
+      patientId: p.id,
+      serviceId: seededServiceId,
+      doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
+      status: 'booked',
+      notes: 'Photo route — content-type contract test',
+    });
+    expect(v.status(), `visit-create: ${await v.text()}`).toBe(201);
+    visitForPhotos = await v.json();
+  });
+
+  test('#743a uploaded photo URL uses /api/wellness/ prefix (not /uploads/)', async ({ request }) => {
+    // 1x1 transparent PNG; smallest valid bytes.
+    const pngHex = '89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D4944415478DA63F8FFFFFF3F0005FE02FED2D9A2240000000049454E44AE426082';
+    const buffer = Buffer.from(pngHex, 'hex');
+    const { token } = await login(request, 'admin');
+    const upload = await request.post(`${BASE_URL}/api/wellness/visits/${visitForPhotos.id}/photos`, {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        kind: 'before',
+        photos: { name: 'test.png', mimeType: 'image/png', buffer },
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(upload.status(), await upload.text()).toBe(201);
+    const result = await upload.json();
+    expect(Array.isArray(result.urls)).toBe(true);
+    expect(result.urls.length).toBeGreaterThan(0);
+    const last = result.urls[result.urls.length - 1];
+    // Pin the new URL shape — `/api/wellness/visits/<id>/photos/<filename>`.
+    expect(last).toMatch(/^\/api\/wellness\/visits\/\d+\/photos\/.+\.png$/i);
+    // And explicitly NOT the legacy /uploads/ shape that fell through to SPA.
+    expect(last).not.toMatch(/^\/uploads\//);
+
+    // 2. GET the served URL and check Content-Type.
+    const served = await request.get(`${BASE_URL}${last}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(served.status()).toBe(200);
+    const ct = served.headers()['content-type'] || '';
+    // The whole point of #743 — must be image/png (or generic image/*),
+    // never text/html (the SPA fallback symptom).
+    expect(ct).toMatch(/^image\//);
+    expect(ct).not.toMatch(/text\/html/);
+  });
+
+  test('#743b non-image upload rejected with 415 UNSUPPORTED_MEDIA', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    const upload = await request.post(`${BASE_URL}/api/wellness/visits/${visitForPhotos.id}/photos`, {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        kind: 'before',
+        photos: { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') },
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(upload.status()).toBe(415);
+    const body = await upload.json();
+    expect(body.code).toBe('UNSUPPORTED_MEDIA');
+  });
+
+  test('#743c GET /visits/:id/photos/:filename with path-traversal returns 400', async ({ request }) => {
+    const { token } = await login(request, 'admin');
+    // Express normalises `..` in path segments before route matching, so
+    // the cleanest path-traversal repro is via the encoded form. We get
+    // either 400 (filename validator) or 404 (file doesn't exist) — both
+    // are correct refusals; the wrong answer is a 200 with a non-image
+    // file's contents.
+    const r = await request.get(`${BASE_URL}/api/wellness/visits/${visitForPhotos.id}/photos/..%2Fpasswd`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([400, 404]).toContain(r.status());
+    const ct = r.headers()['content-type'] || '';
+    expect(ct).not.toMatch(/text\/html/);
+  });
+});
+
+// ── #745/#746 — Idempotency guard on duplicate treatment-plan + visit ─
+//
+// Pre-fix: a double-clicked Save or a retried seed-script loop generated
+// hundreds of identical rows (patient 433 had 183 treatment plans + 111
+// visits on demo). Fix is server-side dedupe: reject an exact-match
+// payload created within the last few minutes with 409 IDEMPOTENT_DUPLICATE.
+test.describe('#745/#746 idempotency on rapid duplicate writes', () => {
+  let patientForDupes = null;
+  test.beforeAll(async ({ request }) => {
+    const p = await createPatient(request, { suffix: 'dupe-guard' });
+    patientForDupes = p;
+  });
+
+  test('#745 POST /treatment-plans rejects identical follow-up within 5 min', async ({ request }) => {
+    const planBody = {
+      name: `E2E ${RUN_TAG} dupe-plan`,
+      totalSessions: 6,
+      totalPrice: 12000,
+      patientId: patientForDupes.id,
+      serviceId: seededServiceId,
+    };
+    const first = await authPost(request, '/api/wellness/treatment-plans', planBody);
+    expect(first.status(), await first.text()).toBe(201);
+    const firstBody = await first.json();
+    expect(firstBody.id).toBeTruthy();
+
+    // Second identical POST within the 5-min window → 409.
+    const second = await authPost(request, '/api/wellness/treatment-plans', planBody);
+    expect(second.status()).toBe(409);
+    const body = await second.json();
+    expect(body.code).toBe('IDEMPOTENT_DUPLICATE');
+    expect(body.existingId).toBe(firstBody.id);
+  });
+
+  test('#746 POST /visits rejects identical follow-up within 60s', async ({ request }) => {
+    const visitBody = {
+      patientId: patientForDupes.id,
+      serviceId: seededServiceId,
+      doctorId: drHarshUserId,
+      visitDate: nextVisitDate(),
+      status: 'booked',
+      notes: 'dupe-guard',
+    };
+    const first = await authPost(request, '/api/wellness/visits', visitBody);
+    expect(first.status(), await first.text()).toBe(201);
+    const firstBody = await first.json();
+
+    // Same payload, same visitDate → caught by either the existing
+    // booking-conflict gate (409 SLOT_CONFLICT) OR the new
+    // IDEMPOTENT_DUPLICATE guard. Both 409s; we accept either since
+    // the slot-conflict gate was already in place pre-#746 and only
+    // catches the doctor/resource/location-axis duplicate. The new
+    // guard adds patient-axis coverage.
+    const second = await authPost(request, '/api/wellness/visits', visitBody);
+    expect(second.status()).toBe(409);
+    const body = await second.json();
+    expect(['IDEMPOTENT_DUPLICATE', 'DOCTOR_BOOKED', 'RESOURCE_BOOKED', 'LOCATION_BOOKED']).toContain(body.code);
+    if (body.code === 'IDEMPOTENT_DUPLICATE') {
+      expect(body.existingId).toBe(firstBody.id);
+    }
+  });
+});
+
+// ── #749 — Loyalty auto-credit defense-in-depth ──────────────────────
+//
+// The visit-create route already 404s on a soft-deleted patient (#742).
+// This test pins the contract that a manual /loyalty/:patientId/credit
+// against a non-existent patient ID returns 404 — the existing guard at
+// line ~5905 — AND that the response shape carries error="Patient not
+// found" so the QA matrix in #749 stays stable. The defense-in-depth
+// inside maybeAutoCreditLoyalty itself is internal; testing it from
+// the route surface only would require simulating a write that bypasses
+// the visit-create guard. The 404 contract on the manual-credit surface
+// is what an integration test can pin.
+test.describe('#749 loyalty credit rejects invalid patient', () => {
+  test('POST /loyalty/<nonexistent>/credit returns 404', async ({ request }) => {
+    // Pick a patient ID that definitely doesn't exist on demo. 99999999
+    // is well above current seed IDs (low thousands).
+    const bogusId = 99999999;
+    const r = await authPost(request, `/api/wellness/loyalty/${bogusId}/credit`, {
+      points: 50,
+      reason: 'E2E #749 nonexistent patient',
+    });
+    expect(r.status()).toBe(404);
+    const body = await r.json();
+    expect(body.error).toMatch(/not found/i);
+  });
+});

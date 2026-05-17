@@ -258,7 +258,10 @@ test.describe.serial('Wellness deep — Visit photo upload', () => {
     expect(result.kind).toBe('photosBefore');
     expect(Array.isArray(result.urls)).toBeTruthy();
     expect(result.urls.length).toBeGreaterThan(0);
-    expect(result.urls[result.urls.length - 1]).toMatch(/\/uploads\/wellness\/visits\/\d+\/.+\.png$/i);
+    // #743 — photo URLs now route through /api/wellness/* so Nginx proxies
+    // them to the backend (the /uploads/* path was falling through to the
+    // SPA catch-all on demo and serving text/html).
+    expect(result.urls[result.urls.length - 1]).toMatch(/\/api\/wellness\/visits\/\d+\/photos\/.+\.png$/i);
   });
 
   test('13. Visit detail now shows the photo URL', async ({ request }) => {

@@ -191,6 +191,63 @@ describe('<PatientDetail />', () => {
     });
   });
 
+  // #752 — Log Visit "Doctor" dropdown was filtering wellnessRole === 'doctor'
+  // only, so the 12 professionals (stylists, aestheticians, slimming
+  // therapists, Ayurveda practitioners) couldn't be assigned to a visit even
+  // though Calendar.jsx (#262) and WorkingHoursEditor already include both
+  // roles. Fix: include 'doctor' + 'professional' and drop deactivated rows.
+  describe('Log Visit Doctor dropdown — includes professionals (#752)', () => {
+    it('lists both doctor and professional wellnessRoles, excluding deactivated', async () => {
+      const mixedStaff = [
+        { id: 1, name: 'Dr. Meena Sharma', wellnessRole: 'doctor', deactivatedAt: null },
+        { id: 2, name: 'Dr. Harsh Kumar',  wellnessRole: 'doctor', deactivatedAt: null },
+        { id: 3, name: 'Anjali Verma',     wellnessRole: 'professional', deactivatedAt: null },
+        { id: 4, name: 'Priya Rao',        wellnessRole: 'professional', deactivatedAt: null },
+        // Telecaller / helper / deactivated rows must NOT appear in the dropdown.
+        { id: 5, name: 'Telecaller Tina',  wellnessRole: 'telecaller',   deactivatedAt: null },
+        { id: 6, name: 'Helper Hari',      wellnessRole: 'helper',       deactivatedAt: null },
+        { id: 7, name: 'Dr. Retired',      wellnessRole: 'doctor',       deactivatedAt: '2026-01-01T00:00:00Z' },
+      ];
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(mixedStaff);
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Log visit/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Log visit/i }));
+
+      // Doctor select is the second <select> on the page (Service first,
+      // Doctor second). Easier: scope by label text "Doctor *".
+      const doctorLabel = await screen.findByText(/^Doctor/, { selector: 'label' });
+      const doctorSelect = doctorLabel.parentElement.querySelector('select');
+      expect(doctorSelect).not.toBeNull();
+
+      // Doctor + Professional included, telecaller/helper/deactivated excluded.
+      const optionTexts = Array.from(doctorSelect.querySelectorAll('option')).map((o) => o.textContent);
+      expect(optionTexts).toEqual(expect.arrayContaining([
+        expect.stringMatching(/Dr\. Meena Sharma/),
+        expect.stringMatching(/Dr\. Harsh Kumar/),
+        expect.stringMatching(/Anjali Verma/),
+        expect.stringMatching(/Priya Rao/),
+      ]));
+      // Professionals get a role suffix to disambiguate; doctors do not.
+      const anjali = optionTexts.find((t) => t.includes('Anjali Verma'));
+      expect(anjali).toMatch(/professional/);
+      const meena = optionTexts.find((t) => t.includes('Dr. Meena Sharma'));
+      expect(meena).not.toMatch(/doctor\)/);
+
+      // Exclusions.
+      expect(optionTexts.some((t) => /Telecaller Tina/.test(t))).toBe(false);
+      expect(optionTexts.some((t) => /Helper Hari/.test(t))).toBe(false);
+      expect(optionTexts.some((t) => /Dr\. Retired/.test(t))).toBe(false);
+    });
+  });
+
   // #750 — Photos tab: img onError must swap to a "Failed to load" placeholder
   // + Try again button. Pre-fix the broken-image tile was visually indistinguishable
   // from a successful upload because there was no error state — a clinician

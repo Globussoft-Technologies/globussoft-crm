@@ -70,7 +70,20 @@ export default function PatientDetail() {
     ]).then(([p, s, staff]) => {
       setPatient(p);
       setServices(s);
-      setDoctors((Array.isArray(staff) ? staff : []).filter((u) => u.wellnessRole === 'doctor'));
+      // #752 — "Doctor" dropdown was filtering wellnessRole === 'doctor' only,
+      // so professionals (stylists, aestheticians, slimming therapists,
+      // Ayurveda practitioners — 12 of them on demo) couldn't be assigned to
+      // a visit. The Calendar grid (#262) and the WorkingHoursEditor already
+      // include both roles for the same reason; align the Log Visit dropdown
+      // with that convention. Filters out deactivated rows so the list stays
+      // current (the Staff directory keeps inactive rows but flags them).
+      setDoctors(
+        (Array.isArray(staff) ? staff : []).filter(
+          (u) =>
+            (u.wellnessRole === 'doctor' || u.wellnessRole === 'professional') &&
+            !u.deactivatedAt
+        )
+      );
     }).catch(() => setPatient(null)).finally(() => setLoading(false));
   };
 
@@ -1126,10 +1139,19 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
           </select>
         </div>
         <div>
+          {/* #752 — label kept as "Doctor" for clinical familiarity but the
+              dropdown now includes professionals (stylists, aestheticians,
+              etc.) so any wellness practitioner can be assigned to a visit.
+              Role is appended in parens so the staff member can disambiguate
+              when names collide. */}
           <label style={labelStyle}>Doctor <span style={{ color: '#ef4444' }}>*</span></label>
           <select required value={doctorId} onChange={(e) => setDoctorId(e.target.value)} style={inputStyle}>
             <option value="">— select —</option>
-            {doctors.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            {doctors.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}{d.wellnessRole && d.wellnessRole !== 'doctor' ? ` (${d.wellnessRole})` : ''}
+              </option>
+            ))}
           </select>
         </div>
       </div>

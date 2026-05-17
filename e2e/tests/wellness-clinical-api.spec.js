@@ -3115,3 +3115,102 @@ test.describe('#737 limit param cap (DoS-resistant)', () => {
     expect(body.patients.length).toBeLessThanOrEqual(50);
   });
 });
+
+// ── #747/#748 — Production data hygiene: teardown filter + archive guard
+//
+// Pre-fix the Memberships → Select a plan dropdown surfaced
+// `_teardown_csv_<ts> Good Plan` rows alongside real plans. A staff
+// user could click Confirm purchase against one and post a real charge
+// against an internal test fixture (#748). Two paired fixes:
+//   1. GET /membership-plans + /services + /locations filter out names
+//      starting with `_teardown_` / `_test_` from default lists.
+//   2. POST /patients/:id/memberships rejects a plan whose name still
+//      matches the teardown taxonomy even if isActive=true slipped
+//      through.
+async function authDelete(request, path, who = 'admin') {
+  const headers = await authHdr(request, who);
+  return request.delete(`${BASE_URL}${path}`, { headers, timeout: REQUEST_TIMEOUT });
+}
+
+test.describe('#747 teardown rows hidden from list endpoints', () => {
+  test('GET /membership-plans excludes _teardown_*-named rows', async ({ request }) => {
+    // Create a teardown-named active plan via the admin POST path
+    // (planet-of-the-apes scenario: the spec authoring environment is
+    // tagged the same as a teardown row).
+    const teardownName = `_teardown_csv_${Date.now()} HygieneTest Plan`;
+    const created = await authPost(request, '/api/wellness/membership-plans', {
+      name: teardownName,
+      durationDays: 90,
+      price: 5000,
+      currency: 'INR',
+      entitlements: JSON.stringify([{ serviceId: seededServiceId, quantity: 5 }]),
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const planId = (await created.json()).id;
+
+    // 1. Default list must NOT include it.
+    const list = await authGet(request, '/api/wellness/membership-plans');
+    expect(list.status()).toBe(200);
+    const visible = await list.json();
+    expect(visible.find((p) => p.id === planId), 'teardown plan must be hidden from default list').toBeUndefined();
+
+    // 2. With ?includeTeardown=1 (admin override), it MUST be visible.
+    const adminList = await authGet(request, '/api/wellness/membership-plans?includeTeardown=1');
+    expect(adminList.status()).toBe(200);
+    const adminVisible = await adminList.json();
+    expect(adminVisible.find((p) => p.id === planId), 'admin override must surface teardown plan').toBeTruthy();
+
+    // Cleanup — soft-delete the plan (no DELETE endpoint flips isActive).
+    await authDelete(request, `/api/wellness/membership-plans/${planId}`).catch(() => {});
+  });
+});
+
+test.describe('#748 archive guard on membership purchase', () => {
+  test('POST /patients/:id/memberships rejects teardown-named plan even when active', async ({ request }) => {
+    // Same setup as #747 — create a teardown plan that's flagged active.
+    const teardownName = `_teardown_csv_${Date.now()} BuyGuard Plan`;
+    const created = await authPost(request, '/api/wellness/membership-plans', {
+      name: teardownName,
+      durationDays: 90,
+      price: 5000,
+      currency: 'INR',
+      entitlements: JSON.stringify([{ serviceId: seededServiceId, quantity: 5 }]),
+    });
+    expect(created.status()).toBe(201);
+    const plan = await created.json();
+
+    // Spin up a real patient and try to buy the teardown plan.
+    const p = await createPatient(request, { suffix: 'buy-guard' });
+    const r = await authPost(request, `/api/wellness/patients/${p.id}/memberships`, {
+      planId: plan.id,
+    });
+    expect(r.status()).toBe(410);
+    const body = await r.json();
+    expect(body.code).toBe('PLAN_ARCHIVED_OR_TEST');
+
+    // Cleanup
+    await authDelete(request, `/api/wellness/membership-plans/${plan.id}`).catch(() => {});
+  });
+
+  test('POST /patients/:id/memberships rejects a soft-deleted (isActive=false) plan with PLAN_INACTIVE', async ({ request }) => {
+    // Pre-existing guard, re-pinned alongside the #748 fix for symmetry.
+    const created = await authPost(request, '/api/wellness/membership-plans', {
+      name: `${RUN_TAG} #748 InactivePlan`,
+      durationDays: 30,
+      price: 1000,
+      currency: 'INR',
+      entitlements: JSON.stringify([{ serviceId: seededServiceId, quantity: 1 }]),
+    });
+    expect(created.status()).toBe(201);
+    const plan = await created.json();
+    // Soft-delete to flip isActive=false.
+    await authDelete(request, `/api/wellness/membership-plans/${plan.id}`);
+
+    const p = await createPatient(request, { suffix: 'inactive-buy' });
+    const r = await authPost(request, `/api/wellness/patients/${p.id}/memberships`, {
+      planId: plan.id,
+    });
+    expect(r.status()).toBe(409);
+    expect((await r.json()).code).toBe('PLAN_INACTIVE');
+  });
+});

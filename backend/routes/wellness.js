@@ -125,6 +125,42 @@ router.param("id", (req, res, next, id) => {
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
+// #747 — teardown / fixture data filter. E2E suite teardown writes
+// renamed rows with names like `_teardown_csv_<ts>` /
+// `_teardown_wc_loc_<id>` so the next run's REGEXP scrub doesn't catch
+// the cleaned row. On busy demo boxes, those rows pile up and show in
+// customer-facing dropdowns (Memberships → Select a plan, Services
+// list, Locations list). A staff user could accidentally sell a
+// teardown plan to a real patient.
+// This helper appends a Prisma `name NOT startsWith` clause that hides
+// them from end-user lists; admin/manager can still opt in with
+// `?includeTeardown=1` for cleanup tooling. We DELIBERATELY do NOT
+// include `E2E_*` or `E2E ` in the prefix list — those are live-spec
+// fixtures that the same spec grep-reads its own creations during the
+// test run; filtering them would break in-suite `find(s => s.id === N)`
+// assertions across services-api, memberships-api, etc. The teardown
+// rename to `_teardown_<spec>_<id>` is the LATCH that makes a fixture
+// row dropdown-invisible going forward, mirroring the wellness-clinical-api
+// teardown pattern at line ~196.
+const TEARDOWN_NAME_PREFIXES = ["_teardown_", "_test_"];
+function excludeTeardownNames(req, where) {
+  if (req.query.includeTeardown === "1" || req.query.includeTeardown === "true") {
+    return where; // admin override for cleanup tools
+  }
+  // Prisma accepts an array of conditions under NOT — each is excluded
+  // (logical AND NOT each). Equivalent to `name NOT LIKE '_teardown_%'
+  // AND name NOT LIKE '_test_%' AND name NOT LIKE 'E2E %'` etc.
+  const teardownConditions = TEARDOWN_NAME_PREFIXES.map((p) => ({
+    name: { startsWith: p },
+  }));
+  const existingNOT = Array.isArray(where.NOT)
+    ? where.NOT
+    : where.NOT
+    ? [where.NOT]
+    : [];
+  return { ...where, NOT: [...existingNOT, ...teardownConditions] };
+}
+
 // #737 — server-side limit clamp for list endpoints. Pre-fix
 // `?limit=999999` (or `?limit=1&limit=999999` — Express's duplicate-key
 // last-wins semantics put the array form in req.query.limit) flowed to
@@ -2374,8 +2410,13 @@ router.all("/treatments/*", treatmentsGone);
 
 router.get("/services", async (req, res) => {
   try {
+    // #747 — hide teardown fixtures (`_teardown_csv_*` etc.) from the
+    // public service catalog. The Memberships → Select a plan dropdown
+    // had similar pollution; same filter applied here for symmetry.
+    // Admin tooling can pass ?includeTeardown=1 for cleanup work.
+    const where = excludeTeardownNames(req, tenantWhere(req, { isActive: true }));
     const services = await prisma.service.findMany({
-      where: tenantWhere(req, { isActive: true }),
+      where,
       orderBy: [{ ticketTier: "desc" }, { name: "asc" }],
     });
     res.json(services);
@@ -2644,8 +2685,13 @@ async function validateEntitlementServices(req, entitlements) {
 router.get("/membership-plans", async (req, res) => {
   try {
     const includeInactive = req.query.includeInactive === "1" || req.query.includeInactive === "true";
+    // #747 — strip teardown / E2E fixture rows from this customer-facing
+    // dropdown so staff don't accidentally sell `_teardown_csv_<ts>
+    // Good Plan` to a real patient. Admin tooling can opt in with
+    // ?includeTeardown=1.
+    const where = excludeTeardownNames(req, tenantWhere(req, includeInactive ? {} : { isActive: true }));
     const plans = await prisma.membershipPlan.findMany({
-      where: tenantWhere(req, includeInactive ? {} : { isActive: true }),
+      where,
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
     });
     res.json(plans);
@@ -2829,6 +2875,19 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
     if (!plan) return res.status(404).json({ error: "Membership plan not found" });
     if (!plan.isActive) {
       return res.status(409).json({ error: "Membership plan is inactive", code: "PLAN_INACTIVE" });
+    }
+    // #748 — reject purchases against teardown / E2E fixture plans even
+    // if they're somehow flagged isActive=true (a stranded teardown that
+    // never got its isActive=false update). Without this, a staff user
+    // could sell a `_teardown_csv_<ts> Good Plan` to a real patient and
+    // a real wallet charge would land against an internal fixture row
+    // that gets wiped on the next teardown run. Mirrors the #747 list
+    // filter — same prefix taxonomy.
+    if (plan.name && TEARDOWN_NAME_PREFIXES.some((p) => plan.name.startsWith(p))) {
+      return res.status(410).json({
+        error: "Membership plan is a test/teardown fixture and cannot be purchased",
+        code: "PLAN_ARCHIVED_OR_TEST",
+      });
     }
 
     const start = startDate ? new Date(startDate) : new Date();
@@ -3507,8 +3566,12 @@ router.post("/recommendations/:id/reject", verifyWellnessRole(["admin", "manager
 
 router.get("/locations", async (req, res) => {
   try {
+    // #747 — hide teardown fixtures (`_teardown_wc_loc_*` etc.) from the
+    // customer-facing location list. Admin tooling can pass
+    // ?includeTeardown=1 for cleanup work.
+    const where = excludeTeardownNames(req, tenantWhere(req));
     const locations = await prisma.location.findMany({
-      where: tenantWhere(req),
+      where,
       orderBy: { name: "asc" },
     });
     // #679: Locations carry clinic-staff phone + email + address. ADMIN /

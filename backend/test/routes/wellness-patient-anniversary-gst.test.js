@@ -40,6 +40,14 @@ prisma.loyaltyTransaction = prisma.loyaltyTransaction || {
   findFirst: vi.fn(), aggregate: vi.fn(), findMany: vi.fn(), create: vi.fn(),
 };
 prisma.auditLog = { create: vi.fn().mockResolvedValue({ id: 1 }), findFirst: vi.fn().mockResolvedValue(null) };
+// emitEvent inside route handlers calls automationRule.findMany — if unmocked
+// the call hits an unconfigured Prisma client and produces an unhandled rejection
+// (the route does fire-and-forget on the emit per #616). Mock with empty array
+// so the event-bus dispatcher finds no matching rules and exits cleanly.
+prisma.automationRule = prisma.automationRule || { findMany: vi.fn().mockResolvedValue([]) };
+if (!prisma.automationRule.findMany || !prisma.automationRule.findMany._isMockFunction) {
+  prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
+}
 
 import express from 'express';
 import request from 'supertest';

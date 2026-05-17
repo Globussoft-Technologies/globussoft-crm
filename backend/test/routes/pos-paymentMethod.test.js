@@ -48,6 +48,11 @@ prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({});
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
+// emitEvent inside POST /sales (sale.completed) calls automationRule.findMany.
+// Without this mock the unhandled rejection from the fire-and-forget event
+// dispatcher trips vitest's exit-on-rejection.
+prisma.automationRule = prisma.automationRule || {};
+prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
 // $transaction passes (tx) — call the function with the prisma client itself.
 prisma.$transaction = vi.fn((fn) => fn(prisma));
 

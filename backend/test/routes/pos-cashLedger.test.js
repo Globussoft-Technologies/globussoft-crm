@@ -50,6 +50,12 @@ prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({});
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
+// emitEvent inside route handlers calls automationRule.findMany — if unmocked
+// the call hits an unconfigured Prisma client and produces an unhandled
+// rejection (the route does fire-and-forget on the emit per #616). Stub with
+// empty array so the dispatcher exits cleanly.
+prisma.automationRule = prisma.automationRule || {};
+prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
 
 import express from 'express';
 import request from 'supertest';

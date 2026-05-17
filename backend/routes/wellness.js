@@ -873,6 +873,31 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   }
   const dobErr = ensureDob(body.dob);
   if (dobErr) return dobErr;
+  // #792 — anniversary is an optional date. Reuse ensureDob's same Date()
+  // parse + "must be a real date" semantics but allow nulls / empty strings
+  // (anniversary is OPTIONAL — patient may be unmarried). Only validate
+  // when the field is present + non-empty.
+  if (body.anniversary != null && String(body.anniversary).trim() !== "") {
+    const d = new Date(body.anniversary);
+    if (!Number.isFinite(d.getTime())) {
+      return { status: 400, error: "anniversary is not a valid date", code: "INVALID_ANNIVERSARY" };
+    }
+  }
+  // #792 — GSTIN format check. India's GSTIN is exactly 15 characters:
+  //   2-digit state code + 10-char PAN + 1-char entity number + Z + 1 check digit.
+  // We accept the loose 15-char alphanumeric shape (route handler upper-cases
+  // before validating) — a strict regex would reject valid edge cases the
+  // Govt portal accepts. Empty / null is allowed (gst is OPTIONAL).
+  if (body.gst != null && String(body.gst).trim() !== "") {
+    const cleaned = String(body.gst).trim().toUpperCase();
+    if (!/^[0-9A-Z]{15}$/.test(cleaned)) {
+      return {
+        status: 400,
+        error: "gst must be a 15-character alphanumeric GSTIN",
+        code: "INVALID_GST",
+      };
+    }
+  }
   return null;
 }
 
@@ -911,7 +936,13 @@ router.post("/patients", phiWriteGate, async (req, res) => {
     // validator and the route saved the raw `<img onerror=…>` payload.
     const inputErr = validatePatientInput(req.body, { isUpdate: false });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
-    const { name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId } = req.body;
+    // #792 — anniversary + gst added to the destructured allow-list.
+    // anniversary is validated by validatePatientInput (date shape);
+    // gst is validated by validateGstin (15-char alphanumeric).
+    const {
+      name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId,
+      anniversary, gst,
+    } = req.body;
     // #337: persist the trimmed name. validatePatientInput's ensureStringLength
     // now rejects whitespace-only names; this normalises the saved value so
     // the Patients list, search index, prescriptions, and SMS templates all
@@ -940,6 +971,9 @@ router.post("/patients", phiWriteGate, async (req, res) => {
         notes,
         source,
         contactId: contactId ? parseInt(contactId) : null,
+        // #792 — anniversary + gst persisted on create.
+        anniversary: anniversary ? new Date(anniversary) : null,
+        gst: gst ? String(gst).trim().toUpperCase() : null,
         tenantId: req.user.tenantId,
       },
     });
@@ -1010,9 +1044,19 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const data = {};
+    // #792 — anniversary + gst added to the allowed list. Pre-fix, anniversary
+    // existed in the schema but was silently dropped here; gst didn't exist
+    // at all. Both are now PUT-able (anniversary as Date | null; gst as a
+    // trimmed-and-uppercased 15-char string | null).
     const allowed = ["name", "email", "phone", "gender", "bloodGroup", "allergies", "notes", "source", "photoUrl"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.dob !== undefined) data.dob = req.body.dob ? new Date(req.body.dob) : null;
+    if (req.body.anniversary !== undefined) {
+      data.anniversary = req.body.anniversary ? new Date(req.body.anniversary) : null;
+    }
+    if (req.body.gst !== undefined) {
+      data.gst = req.body.gst ? String(req.body.gst).trim().toUpperCase() : null;
+    }
 
     // #401: keep normalizedPhone in sync with phone on every PUT that
     // touches phone. Without this, an edit-phone flow would leave the

@@ -2455,6 +2455,11 @@ model Patient {
   //                     the DB (writes are dropped by the route handler).
   anniversary   DateTime?
   walletBalance Float?
+  // #792 — GSTIN (Goods & Services Tax Identification Number). 15-char
+  // alphanumeric (e.g. "27ABCDE1234F1Z5"). Stored as-typed (route-layer
+  // upper-cases for canonicality). Surfaced on invoices for B2B billing
+  // (corporate-account patients, salon-on-salon recharge, etc.).
+  gst           String?   @db.VarChar(15)
 
   // #413 — Restrict (not Cascade) on Tenant deletion. Patient is PHI
   // (medical history, allergies, photos, prescriptions cascade-from-here).

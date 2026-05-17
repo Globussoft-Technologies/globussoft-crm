@@ -135,6 +135,18 @@ export default function PatientDetail() {
               if (patient.phone) parts.push(patient.phone);
               if (patient.email) parts.push(patient.email);
               if (patient.bloodGroup) parts.push(`Blood ${patient.bloodGroup}`);
+              // #792 — surface anniversary alongside DOB for the
+              // anniversary-marketing operator workflow.
+              if (patient.anniversary) {
+                const aDate = new Date(patient.anniversary);
+                if (!Number.isNaN(aDate.getTime())) {
+                  parts.push(`Anniv ${formatDate(patient.anniversary)}`);
+                }
+              }
+              // #792 — GSTIN visible for B2B / corporate patients so the
+              // doctor doesn't have to dig into Profile to confirm the
+              // invoice will carry it.
+              if (patient.gst) parts.push(`GST ${patient.gst}`);
               return parts.length ? parts.join(' · ') : '—';
             })()}
           </div>

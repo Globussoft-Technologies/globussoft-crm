@@ -12,6 +12,18 @@
 //   PUT  /api/attendance/devices/:id             -- admin: edit (name/isActive)
 //   DELETE /api/attendance/devices/:id           -- admin: deregister
 //
+// /summary response shape (extended for #802 + #804 — additive, back-compat):
+//   {
+//     totalRows, present, halfDay, late, absent, holiday, totalMinutes,
+//     early,         // #802 — clock-in strictly before (start - tolerance)
+//     onTime,        // #802 — clock-in within ±tolerance of scheduled start
+//     policy: { shiftStartHour, shiftStartMinute, onTimeToleranceMin },
+//     byUser: { [userId]: { userId, days, minutes, present, halfDay,
+//                            late, absent, leaves, early?, onTime? } }
+//   }
+// `leaves` is the count of APPROVED LeaveRequest rows overlapping the
+// period for the user (the LeaveRequest model exists in schema.prisma).
+//
 // Security:
 //   - All routes except /biometric/webhook require verifyToken (mounted under /api).
 //   - Manager-only routes use verifyRole(["ADMIN", "MANAGER"]).
@@ -54,6 +66,60 @@ function parseISO(s) {
   if (!s) return null;
   const dt = new Date(s);
   return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+// #802 — Early / On-Time derivation for the /summary aggregator.
+//
+// No ShiftPolicy model exists yet, so we apply a single tenant-wide default
+// scheduled-start (09:00 UTC) and a tolerance window. The constants are
+// env-overridable so demo / production operators can tune them without a
+// schema migration:
+//   - ATTENDANCE_SHIFT_START_HOUR (0-23, default 9)        -- the scheduled
+//     clock-in hour, UTC. Attendance.date is anchored to 00:00 UTC of the
+//     calendar day, so we apply this hour to that anchor for the comparison.
+//   - ATTENDANCE_SHIFT_START_MINUTE (0-59, default 0)
+//   - ATTENDANCE_ON_TIME_TOLERANCE_MIN (default 15)        -- a clock-in
+//     within ±tolerance of the scheduled start counts as ON_TIME. Earlier
+//     than (start - tolerance) counts as EARLY. Later than (start +
+//     tolerance) counts as neither (and the LATE flag is set elsewhere; we
+//     don't re-derive it here, we just count rows where status === 'LATE').
+//
+// These three counters (`early`, `onTime`) are derived purely from
+// clockInAt — they're orthogonal to the Attendance.status enum and don't
+// need schema changes. Rows with no clockInAt (ABSENT / HOLIDAY) contribute
+// to neither bucket.
+const SHIFT_START_HOUR = (() => {
+  const v = parseInt(process.env.ATTENDANCE_SHIFT_START_HOUR, 10);
+  return Number.isFinite(v) && v >= 0 && v <= 23 ? v : 9;
+})();
+const SHIFT_START_MINUTE = (() => {
+  const v = parseInt(process.env.ATTENDANCE_SHIFT_START_MINUTE, 10);
+  return Number.isFinite(v) && v >= 0 && v <= 59 ? v : 0;
+})();
+const ON_TIME_TOLERANCE_MIN = (() => {
+  const v = parseInt(process.env.ATTENDANCE_ON_TIME_TOLERANCE_MIN, 10);
+  return Number.isFinite(v) && v >= 0 ? v : 15;
+})();
+
+// Returns "EARLY" | "ON_TIME" | "AFTER" | null. null means the row has no
+// clockInAt (ABSENT / HOLIDAY / un-punched-in).
+function classifyPunctuality(row) {
+  if (!row || !row.clockInAt) return null;
+  const dayAnchor = row.date instanceof Date ? row.date : new Date(row.date);
+  const scheduled = new Date(Date.UTC(
+    dayAnchor.getUTCFullYear(),
+    dayAnchor.getUTCMonth(),
+    dayAnchor.getUTCDate(),
+    SHIFT_START_HOUR,
+    SHIFT_START_MINUTE,
+    0,
+    0
+  ));
+  const clockIn = row.clockInAt instanceof Date ? row.clockInAt : new Date(row.clockInAt);
+  const deltaMin = (clockIn.getTime() - scheduled.getTime()) / 60000;
+  if (deltaMin < -ON_TIME_TOLERANCE_MIN) return "EARLY";
+  if (deltaMin <= ON_TIME_TOLERANCE_MIN) return "ON_TIME";
+  return "AFTER";
 }
 
 // ==============================================================
@@ -304,6 +370,58 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
 
     const rows = await prisma.attendance.findMany({ where });
 
+    // #804 — fetch approved leave-requests overlapping the period so the
+    // per-user breakdown can surface a leaves count. Filter to APPROVED only
+    // (PENDING / REJECTED don't count against the staff member's payroll).
+    // Overlap rule: leave.startDate <= period.to AND leave.endDate >= period.from
+    // (any leave that intersects the period at all). We don't try to clip the
+    // count to days-inside-the-period — `days` on LeaveRequest is authoritative
+    // for the request as a whole, and the count we surface is "number of
+    // approved leave-requests overlapping the period," matching how the
+    // payroll-CSV row consumer wants to enumerate them. If the operator wants
+    // day-clipped sums later, that's an additive field, not a breaking change.
+    const leaveWhere = {
+      tenantId: req.user.tenantId,
+      status: "APPROVED",
+      startDate: { lte: to },
+      endDate: { gte: from },
+    };
+    if (req.query.userId) {
+      const uid = parseInt(req.query.userId);
+      if (Number.isFinite(uid)) leaveWhere.userId = uid;
+    }
+    let leaves = [];
+    try {
+      leaves = await prisma.leaveRequest.findMany({
+        where: leaveWhere,
+        select: { userId: true, days: true },
+      });
+    } catch (_e) {
+      // LeaveRequest model exists in schema but if the table is missing in a
+      // tenant-stripped environment, fall back to empty rather than 500.
+      leaves = [];
+    }
+
+    // #802 — punctuality buckets derived from clockInAt vs a tenant-wide
+    // scheduled-start (env-tunable). Independent of Attendance.status — a
+    // PRESENT row can be EARLY, ON_TIME, or neither; an ABSENT row (no
+    // clockInAt) is classified as null and contributes to neither counter.
+    let earlyCount = 0;
+    let onTimeCount = 0;
+    const punctualityByUser = new Map(); // userId -> { early, onTime }
+    for (const r of rows) {
+      const bucket = classifyPunctuality(r);
+      if (bucket === "EARLY") earlyCount += 1;
+      else if (bucket === "ON_TIME") onTimeCount += 1;
+      if (bucket === "EARLY" || bucket === "ON_TIME") {
+        const k = r.userId;
+        const acc = punctualityByUser.get(k) || { early: 0, onTime: 0 };
+        if (bucket === "EARLY") acc.early += 1;
+        else acc.onTime += 1;
+        punctualityByUser.set(k, acc);
+      }
+    }
+
     const summary = {
       totalRows: rows.length,
       present: rows.filter((r) => r.status === "PRESENT").length,
@@ -311,16 +429,78 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
       late: rows.filter((r) => r.status === "LATE").length,
       absent: rows.filter((r) => r.status === "ABSENT").length,
       holiday: rows.filter((r) => r.status === "HOLIDAY").length,
+      // #802 — Early / On-Time KPI tiles. Derived from clockInAt; see
+      // classifyPunctuality + the SHIFT_START_HOUR/_MINUTE/_TOLERANCE
+      // env-tunable constants at the top of this file.
+      early: earlyCount,
+      onTime: onTimeCount,
       totalMinutes: rows.reduce((acc, r) => acc + (r.totalMinutes || 0), 0),
+      // #802 — surface the policy values used so a frontend tooltip can
+      // explain why a particular row was bucketed the way it was. Cheap
+      // additive metadata — clients that don't read these are unaffected.
+      policy: {
+        shiftStartHour: SHIFT_START_HOUR,
+        shiftStartMinute: SHIFT_START_MINUTE,
+        onTimeToleranceMin: ON_TIME_TOLERANCE_MIN,
+      },
       byUser: {},
     };
     for (const r of rows) {
       const k = String(r.userId);
-      if (!summary.byUser[k]) summary.byUser[k] = { userId: r.userId, days: 0, minutes: 0, present: 0, halfDay: 0 };
+      if (!summary.byUser[k]) summary.byUser[k] = {
+        userId: r.userId,
+        days: 0,
+        minutes: 0,
+        present: 0,
+        halfDay: 0,
+        // #804 — additive per-user counters for the payroll CSV.
+        late: 0,
+        absent: 0,
+        leaves: 0,
+      };
       summary.byUser[k].days += 1;
       summary.byUser[k].minutes += r.totalMinutes || 0;
       if (r.status === "PRESENT") summary.byUser[k].present += 1;
       if (r.status === "HALF_DAY") summary.byUser[k].halfDay += 1;
+      if (r.status === "LATE") summary.byUser[k].late += 1;
+      if (r.status === "ABSENT") summary.byUser[k].absent += 1;
+    }
+    // #804 — overlay approved leaves onto the per-user buckets. A user with
+    // an approved leave but no attendance row in the period still gets a row
+    // in byUser (so payroll CSV emits them with leaves > 0). days/minutes
+    // remain 0 for these synthetic rows — leaves are NOT counted as days
+    // present.
+    for (const lr of leaves) {
+      const k = String(lr.userId);
+      if (!summary.byUser[k]) summary.byUser[k] = {
+        userId: lr.userId,
+        days: 0,
+        minutes: 0,
+        present: 0,
+        halfDay: 0,
+        late: 0,
+        absent: 0,
+        leaves: 0,
+      };
+      summary.byUser[k].leaves += 1;
+    }
+    // #802 — overlay per-user punctuality counters (early / onTime) so the
+    // payroll-CSV consumer (and any future per-user KPI grid) gets the same
+    // breakdown the top-level counters surface.
+    for (const [userId, p] of punctualityByUser.entries()) {
+      const k = String(userId);
+      if (!summary.byUser[k]) summary.byUser[k] = {
+        userId,
+        days: 0,
+        minutes: 0,
+        present: 0,
+        halfDay: 0,
+        late: 0,
+        absent: 0,
+        leaves: 0,
+      };
+      summary.byUser[k].early = p.early;
+      summary.byUser[k].onTime = p.onTime;
     }
     res.json(summary);
   } catch (e) {

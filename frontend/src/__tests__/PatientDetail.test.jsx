@@ -316,6 +316,88 @@ describe('<PatientDetail />', () => {
     });
   });
 
+  // #793 — wallet balance is buried under a tab today. QA finding: front-desk
+  // operators want a prominent chip in the Patient 360 header so the prepaid
+  // balance is visible at a glance without drilling into the Wallet tab.
+  // Chip is sourced from /api/wellness/patients/:id/wallet and silently
+  // skipped when the endpoint is unreachable (cross-tenant / non-wellness).
+  describe('Patient header wallet chip (#793)', () => {
+    it('renders a wallet chip in the header when /wallet returns a wallet object', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url === '/api/wellness/patients/1/wallet') {
+          return Promise.resolve({
+            patient: { id: 1, name: patient.name },
+            wallet: { id: 9, balance: 2450, currency: 'INR' },
+            transactions: [],
+          });
+        }
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      renderPage();
+      const chip = await screen.findByTestId('patient-header-wallet-chip');
+      expect(chip).toBeInTheDocument();
+      // Amount formatted with INR (₹) symbol — formatMoney(2450, INR).
+      const amount = screen.getByTestId('patient-header-wallet-amount');
+      // formatMoney renders "₹2,450" / "₹2,450.00" depending on locale fmt;
+      // assert on the digit sequence so we don't bind to ICU rounding.
+      expect(amount.textContent).toMatch(/2[,.]?450/);
+      // Chip carries the "wallet" label so operators see it as a wallet
+      // surface, not just a money tile.
+      expect(chip.textContent.toLowerCase()).toContain('wallet');
+    });
+
+    it('renders no chip when the wallet endpoint returns no wallet (e.g. cross-tenant 404)', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url === '/api/wellness/patients/1/wallet') {
+          // Simulate the rejected case — fetchApi-shaped error.
+          return Promise.reject(new Error('Patient not found'));
+        }
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      renderPage();
+      // Wait for the page to land — header subline is a stable anchor.
+      await waitFor(() => expect(screen.getByTestId('patient-header-subline')).toBeInTheDocument());
+      // Chip is conditional; the failed wallet fetch leaves walletInfo null
+      // and the chip block is not rendered.
+      expect(screen.queryByTestId('patient-header-wallet-chip')).not.toBeInTheDocument();
+    });
+
+    it('renders a zero-balance chip when wallet is fresh / empty', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url === '/api/wellness/patients/1/wallet') {
+          return Promise.resolve({
+            patient: { id: 1, name: patient.name },
+            wallet: { id: 9, balance: 0, currency: 'INR' },
+            transactions: [],
+          });
+        }
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      renderPage();
+      // Even a zero-balance wallet renders the chip — the front-desk operator
+      // needs to know whether the patient has ANY wallet, not just non-zero.
+      const chip = await screen.findByTestId('patient-header-wallet-chip');
+      expect(chip).toBeInTheDocument();
+      const amount = screen.getByTestId('patient-header-wallet-amount');
+      expect(amount.textContent).toMatch(/0/);
+    });
+  });
+
   // #564 — DPDP §15 plain-language clauses must be visible to the patient
   // AT POINT OF CAPTURE. Pre-fix the tab rendered only the dropdown +
   // signature canvas; the QA retest 2026-05-07 flagged that the patient

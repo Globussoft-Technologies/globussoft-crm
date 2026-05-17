@@ -26,6 +26,11 @@ export default function PatientDetail() {
   const [patient, setPatient] = useState(null);
   const [services, setServices] = useState([]);
   const [doctors, setDoctors] = useState([]);
+  // #793 — surface wallet balance as a header chip on Patient 360 so
+  // front-desk operators see prepaid balance without drilling into the
+  // Wallet tab. Loaded independently from the patient core so a wallet
+  // 404 / non-wellness-tenant fetch failure does not red the whole page.
+  const [walletInfo, setWalletInfo] = useState(null);
   // #344 [SECURITY]: sessionStorage was being polluted with attacker-controlled
   // URL segments (e.g. `gbs.tab.patient.1' OR '1'='1`) because we interpolated
   // useParams().id directly into the storage key. Patient ids in this app are
@@ -63,6 +68,13 @@ export default function PatientDetail() {
 
   const load = () => {
     setLoading(true);
+    // #793 — fetch wallet alongside patient core. Defaulted to null on any
+    // error (lazy-create endpoint returns 404 only on cross-tenant access;
+    // a fresh patient with no transactions still gets a zero-balance wallet
+    // from getOrCreateWallet on the backend).
+    fetchApi(`/api/wellness/patients/${id}/wallet`)
+      .then((w) => setWalletInfo(w && w.wallet ? w.wallet : null))
+      .catch(() => setWalletInfo(null));
     Promise.all([
       fetchApi(`/api/wellness/patients/${id}`),
       fetchApi('/api/wellness/services'),
@@ -127,6 +139,30 @@ export default function PatientDetail() {
             })()}
           </div>
         </div>
+        {/* #793 — wallet balance chip. Appears between the subline and the
+            counts column so it sits at eye-level next to the patient's name.
+            Skipped silently when the wallet endpoint is unavailable (e.g.
+            generic-tenant Patient row that predates the wallet model). */}
+        {walletInfo && (
+          <div
+            data-testid="patient-header-wallet-chip"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+              padding: '0.4rem 0.75rem', borderRadius: 999,
+              background: 'rgba(38,88,85,0.08)',
+              border: '1px solid rgba(38,88,85,0.2)',
+              color: 'var(--primary-color, var(--accent-color))',
+              fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap',
+            }}
+            title={`Wallet balance — ${formatMoney(walletInfo.balance, { currency: walletInfo.currency })}`}
+          >
+            <WalletIcon size={14} />
+            <span data-testid="patient-header-wallet-amount">
+              {formatMoney(walletInfo.balance, { currency: walletInfo.currency })}
+            </span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', fontWeight: 500 }}>wallet</span>
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           <span>Source: <strong style={{ color: 'var(--text-primary)' }}>{patient.source || '—'}</strong></span>
           <span>{patient.visits.length} visits • {patient.prescriptions.length} Rx • {patient.treatmentPlans.length} treatment plans</span>

@@ -1397,6 +1397,20 @@ interface WellnessApi {
         @Body body: Map<String, @JvmSuppressWildcards Any>,
     ): Response<@JvmSuppressWildcards Any>
 
+    // ── Communications / Activities ───────────────────────────────────────────
+
+    @GET("communications")
+    suspend fun getCrmActivities(
+        @Query("contactId") contactId: String? = null,
+        @Query("dealId")    dealId:    String? = null,
+        @Query("limit")     limit:     Int     = 30,
+    ): Response<List<Map<String, @JvmSuppressWildcards Any>>>
+
+    @POST("communications")
+    suspend fun createCrmActivity(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
     // ── Email Inbox ───────────────────────────────────────────────────────────
 
     @GET("email")

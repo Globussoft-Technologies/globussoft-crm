@@ -150,4 +150,8 @@ interface CrmRepository {
     suspend fun getLeadScores(): WResult<List<Map<String, Any>>>
     suspend fun getAbTests(): WResult<List<Map<String, Any>>>
     suspend fun createAbTest(name: String, variantA: String, variantB: String): WResult<Map<String, Any>>
+
+    // ── Activities / Communications ──────────────────────────────────────────
+    suspend fun getActivities(contactId: String? = null, dealId: String? = null): WResult<List<Map<String, Any>>>
+    suspend fun logActivity(type: String, subject: String, body: String?, contactId: String?, dealId: String?): WResult<Map<String, Any>>
 }

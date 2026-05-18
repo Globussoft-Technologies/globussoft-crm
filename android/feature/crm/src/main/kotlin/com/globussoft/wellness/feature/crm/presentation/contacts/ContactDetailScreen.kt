@@ -1,8 +1,11 @@
 package com.globussoft.wellness.feature.crm.presentation.contacts
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -11,13 +14,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -109,7 +116,10 @@ fun ContactDetailScreen(
                 ) { page ->
                     when (page) {
                         0 -> ContactOverviewTab(state.contact)
-                        1 -> ContactActivitiesTab()
+                        1 -> ContactActivitiesTab(
+                            activities = state.activities,
+                            onLogNote  = { viewModel.showLogActivity() },
+                        )
                         2 -> ContactDealsTab(state.deals)
                         3 -> ContactTasksTab(state.tasks)
                         else -> Box(Modifier.fillMaxSize())
@@ -133,55 +143,103 @@ fun ContactDetailScreen(
             )
         }
     }
+
+    if (state.showLogActivity) {
+        LogActivitySheet(
+            isLogging = state.isLoggingActivity,
+            onDismiss = { viewModel.dismissLogActivity() },
+            onSave    = { type, subject, body -> viewModel.logActivity(type, subject, body) },
+        )
+    }
 }
 
 @Composable
 private fun ContactDetailHeader(contact: com.globussoft.wellness.core.domain.model.Contact) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
+    val context = LocalContext.current
+    Column(Modifier.fillMaxWidth()) {
+        Row(
             Modifier
-                .size(56.dp)
-                .background(GenericPrimary, CircleShape),
-            contentAlignment = Alignment.Center,
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = contact.name.take(2).uppercase(),
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        Spacer(Modifier.width(16.dp))
-        Column {
-            Text(
-                contact.name,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold
-            )
-            val company = contact.company
-            if (!company.isNullOrBlank()) {
+            Box(
+                Modifier
+                    .size(56.dp)
+                    .background(GenericPrimary, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
-                    company,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = contact.name.take(2).uppercase(),
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
                 )
             }
-            val status = contact.status
-            if (status != null) {
-                AssistChip(
-                    onClick = {},
-                    label = { Text(status, style = MaterialTheme.typography.labelSmall) },
-                    modifier = Modifier.padding(top = 4.dp),
+            Spacer(Modifier.width(16.dp))
+            Column {
+                Text(
+                    contact.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold
                 )
+                val company = contact.company
+                if (!company.isNullOrBlank()) {
+                    Text(
+                        company,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                val status = contact.status
+                if (status != null) {
+                    AssistChip(
+                        onClick = {},
+                        label = { Text(status, style = MaterialTheme.typography.labelSmall) },
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
         }
+        // Quick action row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val phone = contact.phone
+            if (!phone.isNullOrBlank()) {
+                OutlinedButton(
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Call", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            val email = contact.email
+            if (!email.isNullOrBlank()) {
+                OutlinedButton(
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:$email"))
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Email", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+        HorizontalDivider()
     }
-    HorizontalDivider()
 }
 
 @Composable
@@ -219,9 +277,139 @@ private fun ContactInfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun ContactActivitiesTab() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("No activities recorded yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun ContactActivitiesTab(
+    activities: List<Map<String, Any>>,
+    onLogNote:  () -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        // Log note button
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Button(
+                onClick = onLogNote,
+                colors  = ButtonDefaults.buttonColors(containerColor = GenericPrimary),
+            ) {
+                Icon(Icons.Default.NoteAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Log Note")
+            }
+        }
+        if (activities.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No activities yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(
+                contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier            = Modifier.fillMaxSize(),
+            ) {
+                items(activities) { activity ->
+                    ActivityCard(activity)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActivityCard(activity: Map<String, Any>) {
+    val type      = activity["type"] as? String ?: "NOTE"
+    val subject   = activity["subject"] as? String ?: ""
+    val body      = activity["body"] as? String
+    val createdAt = (activity["createdAt"] as? String)?.take(10) ?: ""
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment     = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text       = type,
+                    style      = MaterialTheme.typography.labelSmall,
+                    color      = GenericPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(createdAt, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (subject.isNotBlank()) {
+                Text(subject, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            }
+            if (!body.isNullOrBlank()) {
+                Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LogActivitySheet(
+    isLogging: Boolean,
+    onDismiss: () -> Unit,
+    onSave:    (String, String, String?) -> Unit,
+) {
+    val activityTypes = listOf("NOTE", "CALL", "EMAIL", "MEETING")
+    var type    by remember { mutableStateOf("NOTE") }
+    var subject by remember { mutableStateOf("") }
+    var body    by remember { mutableStateOf("") }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier            = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Log Activity", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Type", style = MaterialTheme.typography.labelLarge)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(activityTypes) { t ->
+                    FilterChip(
+                        selected = type == t,
+                        onClick  = { type = t },
+                        label    = { Text(t) },
+                        colors   = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = GenericPrimary,
+                            selectedLabelColor     = Color.White,
+                        ),
+                    )
+                }
+            }
+            OutlinedTextField(
+                value         = subject,
+                onValueChange = { subject = it },
+                label         = { Text("Subject *") },
+                modifier      = Modifier.fillMaxWidth(),
+                singleLine    = true,
+            )
+            OutlinedTextField(
+                value         = body,
+                onValueChange = { body = it },
+                label         = { Text("Notes (optional)") },
+                modifier      = Modifier.fillMaxWidth(),
+                minLines      = 2,
+                maxLines      = 4,
+            )
+            Button(
+                onClick  = { if (subject.isNotBlank()) onSave(type, subject, body.ifBlank { null }) },
+                enabled  = subject.isNotBlank() && !isLogging,
+                modifier = Modifier.fillMaxWidth(),
+                colors   = ButtonDefaults.buttonColors(containerColor = GenericPrimary),
+            ) {
+                Text(if (isLogging) "Saving…" else "Log Activity")
+            }
+            TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                Text("Cancel")
+            }
+        }
     }
 }
 

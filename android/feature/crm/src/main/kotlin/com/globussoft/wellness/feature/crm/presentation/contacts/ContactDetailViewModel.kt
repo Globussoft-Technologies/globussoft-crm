@@ -28,6 +28,27 @@ class ContactDetailViewModel @Inject constructor(
     fun showEdit() = _state.update { it.copy(showEditForm = true, formError = null) }
     fun dismissEdit() = _state.update { it.copy(showEditForm = false, formError = null) }
 
+    fun showLogActivity() = _state.update { it.copy(showLogActivity = true) }
+    fun dismissLogActivity() = _state.update { it.copy(showLogActivity = false) }
+
+    fun logActivity(type: String, subject: String, body: String?) {
+        viewModelScope.launch {
+            _state.update { it.copy(isLoggingActivity = true) }
+            val result = repo.logActivity(type, subject, body, contactId, null)
+            _state.update { current ->
+                when (result) {
+                    is WResult.Success -> current.copy(
+                        isLoggingActivity = false,
+                        showLogActivity = false,
+                        activities = listOf(result.data) + current.activities,
+                    )
+                    is WResult.Error   -> current.copy(isLoggingActivity = false)
+                    WResult.Loading    -> current
+                }
+            }
+        }
+    }
+
     fun saveContact(name: String, email: String, phone: String, company: String) {
         viewModelScope.launch {
             _state.update { it.copy(isUpdating = true, formError = null) }
@@ -83,6 +104,12 @@ class ContactDetailViewModel @Inject constructor(
             launch {
                 when (val r = repo.getTasks()) {
                     is WResult.Success -> _state.update { it.copy(tasks = r.data.take(10)) }
+                    else -> Unit
+                }
+            }
+            launch {
+                when (val r = repo.getActivities(contactId = contactId)) {
+                    is WResult.Success -> _state.update { it.copy(activities = r.data) }
                     else -> Unit
                 }
             }

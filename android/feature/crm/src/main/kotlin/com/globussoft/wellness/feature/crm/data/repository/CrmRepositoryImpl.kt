@@ -608,6 +608,23 @@ class CrmRepositoryImpl @Inject constructor(
         safeApiCall { api.createAbTest(buildMap { put("name", name); put("variantA", variantA); put("variantB", variantB) }) }
             .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
 
+    // ── Activities / Communications ───────────────────────────────────────────
+
+    override suspend fun getActivities(contactId: String?, dealId: String?): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getCrmActivities(contactId = contactId, dealId = dealId) }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun logActivity(type: String, subject: String, body: String?, contactId: String?, dealId: String?): WResult<Map<String, Any>> =
+        safeApiCall {
+            api.createCrmActivity(buildMap {
+                put("type", type)
+                put("subject", subject)
+                if (body != null)      put("body", body)
+                if (contactId != null) put("contactId", contactId)
+                if (dealId != null)    put("dealId", dealId)
+            })
+        }.mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private suspend fun tenantId(): String =

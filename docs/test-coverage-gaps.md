@@ -64,7 +64,7 @@ This doc is designed to be picked from top-down by parallel-agent waves (per the
 | **API-6** | `routes/sso.js` | api spec | 4-6h | High — SSO config + login surface | ⬜ open |
 | **API-7** | `routes/email_inbound.js` | api spec | 3-4h | High — webhook ingestion (Mailgun/SendGrid); often unauthenticated | ⬜ open |
 | **API-8** | `routes/marketplace_leads.js` | api spec | 3-4h | High — webhook ingestion from IndiaMART/JustDial/TradeIndia (unauthenticated per server.js global guard exception) | ⬜ open |
-| **API-9** | `routes/developer.js` | api spec | 3-4h | High — API key creation/revocation; auth bypass surface | ⬜ open |
+| **API-9** | `routes/developer.js` | api spec | 3-4h | High — API key creation/revocation; auth bypass surface | ☑ shipped — e2e/tests/developer-api.spec.js |
 | **API-10** | `routes/sandbox.js` | api spec | 2-3h | High — destructive admin tooling (snapshot/restore) | ⬜ open |
 | **API-11** | `routes/calendar_google.js` | api spec | 3-4h | Med — OAuth flow + token storage | ⬜ open |
 | **API-12** | `routes/calendar_outlook.js` | api spec | 3-4h | Med — OAuth flow + token storage | ⬜ open |
@@ -102,16 +102,16 @@ This doc is designed to be picked from top-down by parallel-agent waves (per the
 | **API-44** | `routes/territories.js` | api spec | 2-3h | Low — territory mgmt | ⬜ open |
 | **API-45** | `routes/tenants.js` | api spec | 3-4h | Low — tenant CRUD (admin-only) | ⬜ open |
 | **API-46** | `routes/sla.js` (CRUD layer) | api spec | 2-3h | Low — sla-breach engine has spec, policy CRUD does not | ⬜ open |
-| **CRON-1** | `cron/workflowEngine.js` | vitest | 4-6h | High — automation backbone, event-driven core | ⬜ open |
-| **CRON-2** | `cron/sequenceEngine.js` | vitest | 4-6h | High — drip sequences (sequence-engine-api spec exists for trigger; logic untested) | ⬜ open |
-| **CRON-3** | `cron/reportEngine.js` | vitest | 3-4h | High — scheduled report generation + email dispatch | ⬜ open |
-| **CRON-4** | `cron/marketplaceEngine.js` | vitest | 3-4h | Med — IndiaMART/JustDial/TradeIndia polling logic | ⬜ open |
-| **CRON-5** | `cron/scheduledEmailEngine.js` | vitest | 3-4h | Med — engine logic (api spec covers trigger only) | ⬜ open |
-| **CRON-6** | `cron/dealInsightsEngine.js` | vitest | 3-4h | Med — AI insight gen (api spec covers trigger only) | ⬜ open |
-| **CRON-7** | `cron/backupEngine.js` | vitest | 2-3h | Med — mysqldump invocation (api spec covers trigger only) | ⬜ open |
-| **CRON-8** | `cron/lowStockEngine.js` | vitest | 2-3h | Low — inventory alerts (api spec covers trigger only) | ⬜ open |
-| **CRON-9** | `cron/leadSlaEngine.js` | vitest | 2-3h | Low — lead SLA enforcement | ⬜ open |
-| **FE-1** | Frontend RTL setup + first 5 page tests | infra + tests | 3-5 days | Med — 94 of 97 pages untested at component level | ⬜ open (= G-21) |
+| **CRON-1** | `cron/workflowEngine.js` | vitest | 4-6h | High — automation backbone, event-driven core | ☑ shipped — test/cron/workflowEngine.test.js |
+| **CRON-2** | `cron/sequenceEngine.js` | vitest | 4-6h | High — drip sequences (sequence-engine-api spec exists for trigger; logic untested) | ☑ shipped — test/cron/sequenceEngine-wellness-triggers.test.js |
+| **CRON-3** | `cron/reportEngine.js` | vitest | 3-4h | High — scheduled report generation + email dispatch | ☑ shipped — test/cron/reportEngine.test.js |
+| **CRON-4** | `cron/marketplaceEngine.js` | vitest | 3-4h | Med — IndiaMART/JustDial/TradeIndia polling logic | ☑ shipped — test/cron/marketplaceEngine.test.js |
+| **CRON-5** | `cron/scheduledEmailEngine.js` | vitest | 3-4h | Med — engine logic (api spec covers trigger only) | ☑ shipped — test/cron/scheduledEmailEngine.test.js |
+| **CRON-6** | `cron/dealInsightsEngine.js` | vitest | 3-4h | Med — AI insight gen (api spec covers trigger only) | ☑ shipped — test/cron/dealInsightsEngine-tick.test.js |
+| **CRON-7** | `cron/backupEngine.js` | vitest | 2-3h | Med — mysqldump invocation (api spec covers trigger only) | ☑ shipped — test/cron/backupEngine.test.js |
+| **CRON-8** | `cron/lowStockEngine.js` | vitest | 2-3h | Low — inventory alerts (api spec covers trigger only) | ☑ shipped — test/cron/lowStockEngine.test.js |
+| **CRON-9** | `cron/leadSlaEngine.js` | vitest | 2-3h | Low — lead SLA enforcement | ☑ shipped — test/cron/leadSlaEngine.test.js |
+| **FE-1** | Frontend RTL setup + first 5 page tests | infra + tests | 3-5 days | Med — 94 of 97 pages untested at component level | ☑ shipped — 76 files in frontend/src/__tests__/; frontend_unit_tests is a mandatory deploy gate |
 | **FE-2** | `components/Sidebar.jsx` | RTL test | 4-6h | Med — affects every page; nav failure silent | ⬜ open |
 | **FE-3** | `components/Omnibar.jsx` | RTL test | 3-4h | Low — global search bar | ⬜ open |
 | **FE-4** | `components/RouteErrorBoundary.jsx` | RTL test | 2-3h | Med — silent-fail surface for entire SPA | ⬜ open |
@@ -306,7 +306,7 @@ This section EXPANDS the existing G-21 ("Frontend vitest + RTL setup + first 5 c
 ## Current state
 
 - ✅ vitest + jsdom + @testing-library/react + jest-dom installed (per `frontend/package.json`)
-- ✅ 24 frontend vitest files exist (NOT 6 as CLAUDE.md says — outdated)
+- ✅ 76 frontend vitest files exist (as of 2026-05-18)
 - ✅ 8 of 12 components have RTL tests
 - ✅ 11 of 13 utils/hooks have unit tests
 - ❌ 94 of ~97 pages have ZERO component-level tests (only `OwnerDashboard`, `PatientDetail`, `Services` — all wellness)

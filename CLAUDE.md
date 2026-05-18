@@ -43,7 +43,7 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 | Files | Multer (uploads), PDFKit, pdf-lib, xlsx, QRCode |
 | Monitoring | Sentry (@sentry/node) |
 | Production | PM2, Nginx reverse proxy, Certbot SSL |
-| Testing | Playwright E2E (e2e/ directory, 40 spec files) |
+| Testing | Playwright E2E (e2e/, 234 spec files) + vitest unit tests (98 backend + 76 frontend) — see README "At a glance" for live counts |
 
 ## Architecture
 
@@ -55,7 +55,7 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 - **middleware/validateInput.js** -- express-validator input sanitization
 - **middleware/fieldFilter.js** -- Field-level permission filtering
 - **middleware/sendLimiter.js** -- Email/SMS send rate limiting
-- **prisma/schema.prisma** -- MySQL via Prisma ORM (DATABASE_URL env var), 114 models
+- **prisma/schema.prisma** -- MySQL via Prisma ORM (DATABASE_URL env var), 152 models
 - **DISABLE_CRONS=1** env switch (v3.2.2) — server.js skips cron init when set; for side-by-side coverage instances
 - **Graceful SIGTERM/SIGINT shutdown** (v3.2.2) — required for c8 V8 coverage data to flush before exit
 - **prisma/seed.js** -- Seeds all models with demo data
@@ -64,7 +64,7 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 - Global auth guard protects all routes except /auth/login, /auth/signup, /auth/register, /health, /marketplace-leads/webhook
 - Rate limiting: 5000 req/15min general, 1000 req/15min on auth/login
 
-### Cron Engines (backend/cron/) -- 19 engines
+### Cron Engines (backend/cron/) -- 22 engines
 
 | Engine | File | Purpose |
 |--------|------|---------|
@@ -84,9 +84,15 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 | **Orchestrator** (v3.1) | orchestratorEngine.js | Wellness AI orchestration — daily 07:00 IST, generates Owner Dashboard recommendation cards |
 | **Appointment Reminders** (v3.1) | appointmentRemindersEngine.js | Every 15 min, queue SMS T-24h + T-1h before each booked wellness visit |
 | **Wellness Ops** (v3.1) | wellnessOpsEngine.js | Hourly, NPS survey 72h post-visit + 90-day junk-lead retention purge |
+| SLA Breach | slaBreachEngine.js | Every 5 min, ticket SLA breach detection |
+| Lead SLA | leadSlaEngine.js | Every 2 min, lead-response SLA breach detection |
+| Low Stock | lowStockEngine.js | Daily 09:00 IST, wellness inventory low-stock alerts |
+| Leave Policy | leavePolicyEngine.js | Daily 02:30, leave accrual / policy processing (wellness) |
+| Demo Hygiene | demoHygieneEngine.js | Hourly, purges E2E / test-data pollution from the demo box |
+| Audit Integrity | auditIntegrityEngine.js | Daily 04:00, audit hash-chain integrity sweep |
 
 
-### Libraries (backend/lib/) -- 8 modules
+### Libraries (backend/lib/) -- 28 modules (key modules below)
 
 - **prisma.js** -- Shared Prisma client instance
 - **eventBus.js** -- In-process event bus for decoupled modules
@@ -97,7 +103,7 @@ Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `ren
 - **leadAutoRouter.js** (v3.1) -- Keyword → service category → assigned specialist (doctor / professional / telecaller)
 - **fieldEncryption.js** (v3.1) -- AES-256-GCM helper for patient PII fields. Opt-in via `WELLNESS_FIELD_KEY` env var
 
-### Services (backend/services/) -- 6 services
+### Services (backend/services/) -- 7 services
 
 - **smsProvider.js** -- SMS delivery via MSG91/Twilio
 - **whatsappProvider.js** -- WhatsApp Cloud API messaging
@@ -114,7 +120,9 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 - **routes/external.js** -- `/health`, `/me`, `/leads` (POST + GET poll), `/calls` (POST + PATCH for late transcripts), `/messages`, `/appointments`, `/contacts/lookup`, `/patients/lookup`, `/services`, `/staff`, `/locations`
 - Docs: docs/wellness-client/EXTERNAL_API.md
 
-### Routes (backend/routes/) -- 91 route files
+### Routes (backend/routes/) -- 103 route files
+
+> The grouped list below is a representative map. ~12 newer route files (pos, memberships, attendance, leave, drugs, inventory, service_categories, csv_io, v1_invoices, subscriptions, etc.) landed across v3.4–v3.8 and are not all enumerated here — see `backend/routes/` for the authoritative set.
 
 **Sales & Pipeline:** deals.js, pipelines.js, pipeline_stages.js, deal_insights.js, forecasting.js, quotas.js, win_loss.js, playbooks.js, funnel.js, cpq.js
 
@@ -146,14 +154,14 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 
 ### Frontend (frontend/src/)
 
-- **App.jsx** -- AuthContext provider, React Router, Suspense + React.lazy() for 80 page components (code-split)
+- **App.jsx** -- AuthContext provider, React Router, Suspense + React.lazy() for 124 page components (code-split)
 - **utils/api.js** -- `fetchApi` helper with auto Bearer token and 401 redirect
 
-### Frontend Components (frontend/src/components/) -- 11 components
+### Frontend Components (frontend/src/components/) -- 16 components (key components below)
 
 CPQBuilder, CommandPalette, DealModal, EmailSignatureEditor, LanguageSwitcher, Layout, NotificationBell, Omnibar, Presence, Sidebar, Softphone
 
-### Frontend Pages (frontend/src/pages/) -- 80 pages
+### Frontend Pages (frontend/src/pages/) -- 124 pages
 
 **Sales:** Dashboard, Pipeline, Pipelines, Forecasting, Quotas, WinLoss, Playbooks, Funnel, DealInsights, CPQ
 
@@ -187,7 +195,9 @@ CPQBuilder, CommandPalette, DealModal, EmailSignatureEditor, LanguageSwitcher, L
 
 **Wellness theme (v3.1):** theme/wellness.css — scoped under `[data-vertical="wellness"]`. Activated in App.jsx by setting `data-vertical` on body based on tenant.vertical.
 
-### Prisma Models (114 total)
+### Prisma Models (152 total)
+
+> The enumeration below is the v3.1-era baseline (108 models). ~44 more landed across v3.4–v3.8 — POS (Register, Shift, Sale, PettyCashLedger), Attendance/Leave, Wallet/Cashback/GiftCard/Coupon, Resource/Holiday, inventory (ProductCategory, Vendor, InventoryReceipt, InventoryAdjustment), WhatsAppThread, and more. See [prisma/schema.prisma](backend/prisma/schema.prisma) for the authoritative list.
 
 Generic (99): AbTest, AccountingSync, Activity, ApiKey, ApprovalRequest, Attachment, AuditLog, AutomationRule, Booking, BookingPage, CalendarEvent, CalendarIntegration, CallLog, Campaign, CannedResponse, Chatbot, ChatbotConversation, ConsentRecord, Contact, ContactAttachment, Contract, Currency, CustomEntity, CustomField, CustomRecord, CustomReport, CustomValue, Dashboard, DataExportRequest, Deal, DealInsight, DocumentTemplate, DocumentView, EmailMessage, EmailTemplate, EmailTracking, Estimate, EstimateLineItem, Expense, FieldPermission, Forecast, IndustryTemplate, Integration, Invoice, KbArticle, KbCategory, LandingPage, LandingPageAnalytics, LeadRoutingRule, LiveChatMessage, LiveChatSession, MarketplaceConfig, MarketplaceLead, Notification, Payment, Pipeline, PipelineStage, Playbook, PlaybookProgress, Product, Project, PushNotification, PushSubscription, PushTemplate, Quota, Quote, QuoteLineItem, ReportSchedule, RetentionPolicy, SandboxSnapshot, ScheduledEmail, ScimToken, Sequence, SequenceEnrollment, SharedInbox, SignatureRequest, SlaPolicy, SmsConfig, SmsMessage, SmsTemplate, SocialMention, SocialPost, SsoConfig, Survey, SurveyResponse, Task, TelephonyConfig, Tenant, Territory, Ticket, Touchpoint, User, VoiceSession, WebVisitor, Webhook, WhatsAppConfig, WhatsAppMessage, WhatsAppTemplate, WinLossReason
 
@@ -232,12 +242,14 @@ Plus 12 professionals, 2 helpers, 1 telecaller (see `prisma/seed-wellness.js`).
 - **SSL:** Certbot (Let's Encrypt)
 - **PM2:** `globussoft-crm-backend` only (frontend served by Nginx directly)
 - **Monitoring:** Sentry (@sentry/node) for error tracking
-- **Deploy flow (canonical):** GitHub Actions workflow `.github/workflows/deploy.yml` — fires on push to `main` (skipping doc/test/script-only changes via `paths-ignore`) plus manual `workflow_dispatch`. Four mandatory parallel gates → deploy:
+- **Deploy flow (canonical):** GitHub Actions workflow `.github/workflows/deploy.yml` — fires on push to `main` (skipping doc/test/script-only changes via `paths-ignore`) plus manual `workflow_dispatch`. Six mandatory parallel gates → deploy:
   1. **build** — `npm ci` + `prisma generate` + `node --check` parse-check on every backend `.js` + frontend `vite build`
   2. **lint** — ESLint flat config (`backend/eslint.config.js`) + `npm audit` gate via `backend/scripts/check-audit.js` (allowlist at `backend/.audit-allowlist.json`). Project-specific rule blocks bare `req.user.id` (the JWT key is `userId`)
-  3. **api_tests** — MySQL 8 container + seed both tenants + boot backend on :5000 + 23 Playwright API specs / ~1,084 tests (the gate spec list lives in `deploy.yml`'s "Run API-only specs" step)
-  4. **unit_tests** — vitest over 22 backend test files / 674 tests covering `lib/`, `middleware/`, `services/`, `utils/`. ~1.2s test runtime
-  Deploy runs only if all four pass. Steps: SSH pull → npm install → prisma generate → pm2 restart → poll `/api/health` (auto-rollback to `HEAD~1` if unhealthy) → vite build → sudo rsync to `/var/www` → chown www-data → smoke check `/` + `/api/health`. Hotfix bypass via `workflow_dispatch.skip_tests=true` (manual UI only — a regular push can never bypass).
+  3. **api_tests** — MySQL 8 container + seed both tenants + boot backend on :5000 + the gated Playwright API specs (the gate spec list lives in `deploy.yml`'s "Run API-only specs" step — see README "At a glance" for current spec/test counts)
+  4. **unit_tests** — vitest over the `backend/test/` suite covering `lib/`, `middleware/`, `services/`, `utils/`, `cron/`
+  5. **frontend_unit_tests** — vitest + jsdom over the `frontend/src/__tests__/` component suite
+  6. **migration_check** — Prisma schema-safety detector (UNIQUE / NOT NULL / column-drop / type-narrow) with commit-message bless markers (`[allow-unique]` etc.)
+  Deploy runs only if all six pass. Steps: SSH pull → npm install → prisma generate → pm2 restart → poll `/api/health` (auto-rollback to `HEAD~1` if unhealthy) → vite build → sudo rsync to `/var/www` → chown www-data → smoke check `/` + `/api/health`. Hotfix bypass via `workflow_dispatch.skip_tests=true` (manual UI only — a regular push can never bypass).
 - **Release validation:** GitHub Actions workflow `.github/workflows/e2e-full.yml` — runs the full Playwright chromium + auth-tests + api-health suites (UI flows, wellness deep, a11y, integration) against the deployed demo on git tag push (`v*`), GitHub Release publish, or manual trigger. Per-commit pipeline stays fast; the heavy suite is opt-in by tagging a green main commit.
 - **Coverage measurement:** GitHub Actions workflow `.github/workflows/coverage.yml` — workflow_dispatch only. Spins an ephemeral backend with c8 instrumentation, runs the 23 gated API specs, reports lines/branches/functions/statements % + top-10 under-covered files. Replaces the old SSH cheat-sheet for the gate-spec methodology. Last measurement (commit `868b227`): 40.52% lines / 73.30% branches / 33.68% functions for routes; 79.01% lines for backend helpers (vitest c8).
 - **Secret scanning:** GitHub Actions workflow `.github/workflows/secret-scan.yml` — gitleaks runs on every push + PR (incremental diff, ~10-20s) + scheduled full-history scan Mondays at 06:30 UTC. Allowlist for known intentional demo creds + dev-fallback constants in `.gitleaks.toml` at repo root.
@@ -350,7 +362,7 @@ cd e2e && BASE_URL=https://crm.globusdemos.com npx playwright test --project=chr
 - `tests/demo-health.spec.js` + `tests/demo-hygiene-api.spec.js` + `tests/teardown-completeness.spec.js` — closed-loop demo cleanliness assertions backed by [demo-monitor.yml](.github/workflows/demo-monitor.yml) cron (every 30 min, opens a tracker issue on failure)
 - Plus ~150 module-level api specs (each `routes/*.js` has a `tests/<route>-api.spec.js` partner). Latest additions: `landing-pages-api`, `workflows-api`, `integrations-api`, `audit-api`, `search-api`, `email-api`.
 
-**~1,665 API tests on every push** (deploy.yml api_tests gate, **50 specs**) **+ 803 vitest unit tests** (deploy.yml unit_tests gate, **30 files**) = **~2,468 total per-push**. Plus ~2,500 broader UI/wellness/a11y tests on every release tag (e2e-full.yml). Demo-monitor cron polls the deployed box every 2 hours; auto-issue on failure (filed against a stable-title issue so re-runs comment instead of spamming).
+**Thousands of tests run on every push** across the 6 deploy gates (api_tests + unit_tests + frontend_unit_tests) — see README's "At a glance" table for current spec / file counts. Plus the broader UI / wellness / a11y suite on every release tag (e2e-full.yml). Demo-monitor cron polls the deployed box every 30 min; auto-issue on failure (filed against a stable-title issue so re-runs comment instead of spamming).
 
 ## GitHub
 

@@ -26,6 +26,9 @@ class SequencesViewModel @Inject constructor(
 
     fun refresh() = load()
 
+    fun selectSequence(seq: Map<String, Any>) = _state.update { it.copy(selectedSequence = seq) }
+    fun dismissSequence() = _state.update { it.copy(selectedSequence = null) }
+
     fun toggleActive(id: String, currentlyActive: Boolean) {
         viewModelScope.launch {
             _state.update { it.copy(togglingId = id) }

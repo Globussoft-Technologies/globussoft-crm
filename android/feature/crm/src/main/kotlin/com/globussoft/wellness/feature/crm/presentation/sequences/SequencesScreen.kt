@@ -10,16 +10,21 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -101,12 +106,20 @@ fun SequencesScreen(
                                 seq        = seq,
                                 isToggling = state.togglingId == id,
                                 onToggle   = { viewModel.toggleActive(id, seq["isActive"] as? Boolean ?: false) },
+                                onClick    = { viewModel.selectSequence(seq) },
                             )
                         }
                     }
                 }
             }
         }
+    }
+
+    state.selectedSequence?.let { seq ->
+        SequenceDetailSheet(
+            seq       = seq,
+            onDismiss = { viewModel.dismissSequence() },
+        )
     }
 }
 
@@ -115,6 +128,7 @@ private fun SequenceRow(
     seq: Map<String, Any>,
     isToggling: Boolean = false,
     onToggle: () -> Unit = {},
+    onClick: () -> Unit = {},
 ) {
     val name            = seq["name"] as? String ?: "Untitled"
     val isActive        = seq["isActive"] as? Boolean ?: false
@@ -126,7 +140,7 @@ private fun SequenceRow(
         else       -> 0
     }
 
-    WellnessCard(modifier = Modifier.fillMaxWidth()) {
+    WellnessCard(modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
         Row(
             modifier          = Modifier
                 .fillMaxWidth()
@@ -192,4 +206,96 @@ private fun ActiveBadge(
             )
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SequenceDetailSheet(
+    seq: Map<String, Any>,
+    onDismiss: () -> Unit,
+) {
+    val name            = seq["name"] as? String ?: "Sequence"
+    val enrollmentCount = seq["enrollmentCount"] as? Int ?: 0
+    @Suppress("UNCHECKED_CAST")
+    val steps = (seq["steps"] as? List<Map<String, Any>>) ?: emptyList()
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+        ) {
+            Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "$enrollmentCount enrolled",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, bottom = 16.dp),
+            )
+            if (steps.isEmpty()) {
+                Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                    Text("No steps defined", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                steps.forEachIndexed { index, step ->
+                    SequenceStepRow(index = index + 1, step = step, isLast = index == steps.lastIndex)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SequenceStepRow(index: Int, step: Map<String, Any>, isLast: Boolean) {
+    val type    = step["type"]?.toString() ?: "EMAIL"
+    val subject = step["subject"]?.toString() ?: step["message"]?.toString() ?: ""
+    val delay   = step["delayDays"]?.toString()?.let { "$it day(s)" } ?: ""
+
+    val typeColor = when (type.uppercase()) {
+        "EMAIL"   -> GenericPrimary
+        "SMS"     -> Color(0xFF8B5CF6)
+        "WAIT"    -> Color(0xFFF59E0B)
+        else      -> GenericAccent
+    }
+
+    Row(Modifier.fillMaxWidth()) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .background(typeColor.copy(alpha = 0.15f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    index.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = typeColor,
+                )
+            }
+            if (!isLast) {
+                Box(
+                    Modifier
+                        .width(2.dp)
+                        .height(32.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f).padding(top = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(shape = RoundedCornerShape(4.dp), color = typeColor.copy(alpha = 0.12f)) {
+                    Text(type, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall, color = typeColor, fontWeight = FontWeight.Bold)
+                }
+                if (delay.isNotBlank()) {
+                    Text("Wait $delay", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (subject.isNotBlank()) {
+                Text(subject, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp, bottom = if (isLast) 0.dp else 8.dp))
+            }
+        }
+    }
+    if (!isLast) HorizontalDivider(Modifier.padding(vertical = 4.dp), color = Color.Transparent)
 }

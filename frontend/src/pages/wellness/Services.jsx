@@ -22,6 +22,8 @@ import { formatDate } from '../../utils/date';
 // #316: NumberInput strips the `<oldValue><newTyped>` concatenation artifact
 // users hit when doing Ctrl+A → Delete → retype on number fields.
 import { NumberInput } from '../../utils/numberInput';
+// Issue #816: Reusable CSV import/export toolbar for the Catalog + Packages tabs.
+import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 
 const tierColor = { high: '#ef4444', medium: '#f59e0b', low: '#64748b' };
 const statusColor = { active: '#10b981', completed: '#6366f1', paused: '#f59e0b', cancelled: '#ef4444' };
@@ -79,23 +81,33 @@ export default function Services() {
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Each service has a price, duration, and target marketing radius.</p>
         </div>
         {tab === 'catalog' && (
-          <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
-            <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Issue #816: services CSV. No active filter, so we pass an empty
+                filters object — the export reflects the same all-active view
+                as the catalog tab. */}
+            <CsvImportExportToolbar entity="services" label="Services" onImported={load} />
+            <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+              <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
+            </button>
+          </div>
         )}
         {/* #365: Packages tab needs its own primary CTA. The package builder is
             already rendered inline below, so this just scrolls to the form
             anchor — no modal needed. */}
         {tab === 'packages' && (
-          <button
-            onClick={() => {
-              const el = document.getElementById('package-builder-anchor');
-              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
-          >
-            <Plus size={16} /> Create Package
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Issue #816: packages CSV. */}
+            <CsvImportExportToolbar entity="packages" label="Packages" />
+            <button
+              onClick={() => {
+                const el = document.getElementById('package-builder-anchor');
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+            >
+              <Plus size={16} /> Create Package
+            </button>
+          </div>
         )}
       </header>
 

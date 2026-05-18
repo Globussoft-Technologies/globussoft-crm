@@ -212,6 +212,26 @@ router.post("/signup", async (req, res) => {
   }
 });
 
+// GET /api/auth/customer/tenants — public list of active tenants for the
+// customer self-registration dropdown. Returns minimal display fields only
+// (id, name, vertical) — no plan, owner, billing, or branding metadata.
+// Used by the CustomerRegister page to populate its Organization dropdown
+// so new tenants created via /api/auth/signup show up automatically without
+// a frontend redeploy.
+router.get("/customer/tenants", async (req, res) => {
+  try {
+    const tenants = await prisma.tenant.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, vertical: true },
+      orderBy: { name: "asc" },
+    });
+    res.json(tenants);
+  } catch (error) {
+    console.error("[auth] customer/tenants error:", error);
+    res.status(500).json({ error: "Failed to fetch tenants" });
+  }
+});
+
 // Customer Registration — open path for CUSTOMER userType self-registration
 // Creates a new User with userType: 'CUSTOMER' and assigns the tenant's CUSTOMER role
 router.post("/customer/register", async (req, res) => {

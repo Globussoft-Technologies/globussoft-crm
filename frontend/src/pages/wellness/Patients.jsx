@@ -5,6 +5,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { formatDate } from "../../utils/date";
+import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
 
 export default function Patients() {
   const notify = useNotify();
@@ -245,35 +246,44 @@ export default function Patients() {
             {total.toLocaleString()} total
           </p>
         </div>
-        <button
-          onClick={() => {
-            setShowAdd(!showAdd);
-            if (showAdd) {
-              setEditingId(null);
-              setForm({
-                name: "",
-                phone: "",
-                email: "",
-                gender: "",
-                source: "walk-in",
-                locationId: locations[0]?.id || "",
-              });
-            }
-          }}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "0.3rem",
-            padding: "0.5rem 1rem",
-            background: "var(--accent-color)",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            cursor: "pointer",
-          }}
-        >
-          <Plus size={16} /> {showAdd ? "Cancel" : "New patient"}
-        </button>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+          {/* Issue #816: CSV Import / Export — respects the current `q` filter. */}
+          <CsvImportExportToolbar
+            entity="customers"
+            label="Patients"
+            filters={{ q }}
+            onImported={() => setReloadTick((t) => t + 1)}
+          />
+          <button
+            onClick={() => {
+              setShowAdd(!showAdd);
+              if (showAdd) {
+                setEditingId(null);
+                setForm({
+                  name: "",
+                  phone: "",
+                  email: "",
+                  gender: "",
+                  source: "walk-in",
+                  locationId: locations[0]?.id || "",
+                });
+              }
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.3rem",
+              padding: "0.5rem 1rem",
+              background: "var(--accent-color)",
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              cursor: "pointer",
+            }}
+          >
+            <Plus size={16} /> {showAdd ? "Cancel" : "New patient"}
+          </button>
+        </div>
       </header>
 
       {showAdd && (

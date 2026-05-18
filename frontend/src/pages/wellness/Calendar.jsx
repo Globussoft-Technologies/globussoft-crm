@@ -5,6 +5,8 @@ import React from 'react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { tenantLocale } from '../../utils/date';
+// Issue #816: Reusable CSV import/export toolbar — bookings entity.
+import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 
 // #615: default visible window is 9 AM → 7 PM, but visits scheduled outside
 // that window (early/late shifts, walk-ins booked for 8 AM) are NOT clamped
@@ -254,6 +256,17 @@ export default function CalendarGrid() {
           <button onClick={() => shift(-1)} className="glass" style={navBtn}><ChevronLeft size={16} /></button>
           <button onClick={() => setDate(new Date())} className="glass" style={{ ...navBtn, padding: '0.4rem 0.9rem', fontSize: '0.85rem', width: 'auto' }}>Today</button>
           <button onClick={() => shift(1)} className="glass" style={navBtn}><ChevronRight size={16} /></button>
+          {/* Issue #816: CSV Import / Export of bookings. Export reflects the
+              currently-visible day window (server filters on `from`/`to`). */}
+          <CsvImportExportToolbar
+            entity="bookings"
+            label="Bookings"
+            filters={{
+              from: `${isoDay(date)}T00:00:00+05:30`,
+              to: `${isoDay(date)}T23:59:59+05:30`,
+            }}
+            onImported={load}
+          />
         </div>
       </header>
 

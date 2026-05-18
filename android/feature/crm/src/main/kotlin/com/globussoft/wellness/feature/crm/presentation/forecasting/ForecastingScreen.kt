@@ -10,8 +10,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -27,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.globussoft.wellness.core.designsystem.components.EmptyState
@@ -80,6 +84,7 @@ fun ForecastingScreen(
                     )
                 }
                 else -> {
+                    val periods = listOf("All", "Monthly", "Quarterly", "Yearly")
                     val totalWeighted = state.entries.sumOf { it.weightedValue }
                     val totalPipeline = state.entries.sumOf { it.totalValue }
 
@@ -88,6 +93,26 @@ fun ForecastingScreen(
                         verticalArrangement = Arrangement.spacedBy(Dimens.SpacingMd),
                         modifier = Modifier.fillMaxSize(),
                     ) {
+                        // Period filter chips
+                        item {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                contentPadding = PaddingValues(horizontal = 0.dp),
+                            ) {
+                                items(periods) { period ->
+                                    FilterChip(
+                                        selected = state.selectedPeriod == period,
+                                        onClick  = { viewModel.setPeriod(period) },
+                                        label    = { Text(period, style = MaterialTheme.typography.labelMedium) },
+                                        colors   = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = GenericPrimary,
+                                            selectedLabelColor     = Color.White,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+
                         // Summary row
                         item {
                             Row(

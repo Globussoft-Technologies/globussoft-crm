@@ -26,6 +26,10 @@ class ForecastingViewModel @Inject constructor(
 
     fun refresh() = load()
 
+    fun setPeriod(period: String) {
+        _state.update { it.copy(selectedPeriod = period) }
+    }
+
     private fun load() {
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }

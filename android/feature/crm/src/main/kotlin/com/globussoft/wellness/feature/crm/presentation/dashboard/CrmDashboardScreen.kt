@@ -33,7 +33,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +45,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
+import com.patrykandpatrick.vico.compose.cartesian.layer.rememberColumnCartesianLayer
+import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
+import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
+import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
 import com.globussoft.wellness.core.designsystem.components.EmptyState
 import com.globussoft.wellness.core.designsystem.components.ErrorState
 import com.globussoft.wellness.core.designsystem.components.ShimmerList
@@ -127,6 +134,11 @@ private fun DashboardContent(
             item { KpiRow(stats = stats) }
         }
 
+        // Deals by stage chart
+        if (recentDeals.isNotEmpty()) {
+            item { DealsByStageChart(deals = recentDeals) }
+        }
+
         // Section header
         item {
             Text(
@@ -147,6 +159,70 @@ private fun DashboardContent(
         } else {
             items(recentDeals) { deal ->
                 DealCard(deal = deal)
+            }
+        }
+    }
+}
+
+// ─── Deals by Stage Chart ─────────────────────────────────────────────────────
+
+@Composable
+private fun DealsByStageChart(deals: List<Deal>) {
+    val stageCounts = remember(deals) {
+        deals.groupBy { it.stage }.mapValues { it.value.size }
+    }
+    val stages  = remember(stageCounts) { stageCounts.keys.toList() }
+    val counts  = remember(stageCounts) { stageCounts.values.map { it.toFloat() } }
+    val producer = remember(deals) { CartesianChartModelProducer() }
+
+    LaunchedEffect(deals) {
+        if (counts.isNotEmpty()) {
+            producer.runTransaction { columnSeries { series(counts) } }
+        }
+    }
+
+    WellnessCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Dimens.SpacingMd),
+            verticalArrangement = Arrangement.spacedBy(Dimens.SpacingSm),
+        ) {
+            Text(
+                text       = "Deals by Stage",
+                style      = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            CartesianChartHost(
+                chart         = rememberCartesianChart(rememberColumnCartesianLayer()),
+                modelProducer = producer,
+                modifier      = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp),
+            )
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                stages.forEachIndexed { i, stage ->
+                    Row(
+                        verticalAlignment     = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .height(8.dp)
+                                .width(8.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(stageColor(stage)),
+                        )
+                        Text(
+                            text  = "$stage (${stageCounts[stage]})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
     }

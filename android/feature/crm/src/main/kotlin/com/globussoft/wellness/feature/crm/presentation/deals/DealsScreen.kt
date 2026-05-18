@@ -16,11 +16,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import android.content.Intent
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.TrendingUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,6 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -95,6 +101,24 @@ fun DealsScreen(
     onDealClick: (String) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    fun exportCsv() {
+        val header = "Title,Amount,Stage,Status,Pipeline,Contact,Owner,Probability,Close Date"
+        val rows = state.deals.joinToString("\n") { d ->
+            listOf(d.title, "%.0f".format(d.amount), d.stage, d.status,
+                   d.pipelineName ?: "", d.contactName ?: "", d.ownerName ?: "",
+                   d.probability.toString(), d.expectedClose ?: "")
+                .joinToString(",") { f -> "\"${f.replace("\"", "\"\"")}\"" }
+        }
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/csv"
+            putExtra(Intent.EXTRA_TEXT, "$header\n$rows")
+            putExtra(Intent.EXTRA_SUBJECT, "Deals Export")
+        }
+        context.startActivity(Intent.createChooser(intent, "Export Deals"))
+    }
 
     Scaffold(
         topBar = {
@@ -113,6 +137,20 @@ fun DealsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More options")
+                    }
+                    DropdownMenu(
+                        expanded         = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text    = { Text("Export CSV") },
+                            onClick = { menuExpanded = false; exportCsv() },
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

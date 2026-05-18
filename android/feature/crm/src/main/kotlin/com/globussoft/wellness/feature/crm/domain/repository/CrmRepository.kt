@@ -124,6 +124,20 @@ interface CrmRepository {
     suspend fun getBookingPages(): WResult<List<Map<String, Any>>>
     suspend fun createBookingPage(name: String, description: String): WResult<Map<String, Any>>
 
+    // ── Wave 15 gaps ──────────────────────────────────────────────────────────
+    suspend fun getChatbots(): WResult<List<Map<String, Any>>>
+    suspend fun getSignatures(): WResult<List<Map<String, Any>>>
+    suspend fun createSignatureRequest(documentName: String, signerEmail: String): WResult<Map<String, Any>>
+    suspend fun getSlaList(): WResult<List<Map<String, Any>>>
+    suspend fun createSlaPolicy(name: String, responseHours: Int, resolutionHours: Int): WResult<Map<String, Any>>
+    suspend fun getSocialMentions(): WResult<List<Map<String, Any>>>
+    suspend fun getLandingPages(): WResult<List<Map<String, Any>>>
+    suspend fun createLandingPage(name: String, slug: String): WResult<Map<String, Any>>
+    suspend fun getMarketplaceLeads(): WResult<List<Map<String, Any>>>
+
+    // ── Wave 20 ───────────────────────────────────────────────────────────────
+    suspend fun globalSearch(query: String): WResult<Map<String, Any>>
+
     // ── Wave 18 ───────────────────────────────────────────────────────────────
     suspend fun getCustomReports(): WResult<List<Map<String, Any>>>
     suspend fun createCustomReport(name: String, entityType: String): WResult<Map<String, Any>>

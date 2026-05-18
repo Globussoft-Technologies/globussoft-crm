@@ -516,6 +516,54 @@ class CrmRepositoryImpl @Inject constructor(
         safeApiCall { api.createBookingPage(buildMap { put("name", name); put("description", description) }) }
             .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
 
+    // ── Wave 15 gaps ──────────────────────────────────────────────────────────
+
+    override suspend fun getChatbots(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getChatbots() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun getSignatures(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getSignatures() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun createSignatureRequest(documentName: String, signerEmail: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createSignatureRequest(buildMap { put("documentName", documentName); put("signerEmail", signerEmail) }) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun getSlaList(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getSlaList() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun createSlaPolicy(name: String, responseHours: Int, resolutionHours: Int): WResult<Map<String, Any>> =
+        safeApiCall { api.createSlaPolicy(buildMap { put("name", name); put("responseHours", responseHours); put("resolutionHours", resolutionHours) }) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun getSocialMentions(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getSocialMentions() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun getLandingPages(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getLandingPages() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun createLandingPage(name: String, slug: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createLandingPage(buildMap { put("name", name); put("slug", slug) }) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    @Suppress("UNCHECKED_CAST")
+    override suspend fun getMarketplaceLeads(): WResult<List<Map<String, Any>>> {
+        val result = safeApiCall { api.getMarketplaceLeads() } as WResult<Map<String, Any>>
+        return result.mapSuccess { raw ->
+            (raw["leads"] as? List<*>)?.mapNotNull { it as? Map<String, Any> } ?: emptyList()
+        }
+    }
+
+    // ── Wave 20 ───────────────────────────────────────────────────────────────
+
+    @Suppress("UNCHECKED_CAST")
+    override suspend fun globalSearch(query: String): WResult<Map<String, Any>> =
+        safeApiCall { api.globalSearch(query) } as WResult<Map<String, Any>>
+
     // ── Wave 18 ───────────────────────────────────────────────────────────────
 
     override suspend fun getCustomReports(): WResult<List<Map<String, Any>>> =

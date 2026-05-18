@@ -25,7 +25,9 @@ paths = [
     '''backend/prisma/seed\.js''',
     '''backend/prisma/seed-wellness\.js''',
     # Auth dev-fallback secret string is documented + flagged in
-    # CLAUDE.md "Known Security Notes" — production must set JWT_SECRET
+    # CLAUDE.md "Known Security Notes" — production must set JWT_SECRET.
+    # Canonical home is backend/config/secrets.js (P1.3 centralization).
+    '''backend/config/secrets\.js''',
     '''backend/middleware/auth\.js''',
     # Routes that reference the demo password in test/quick-login flows
     '''backend/routes/auth\.js''',

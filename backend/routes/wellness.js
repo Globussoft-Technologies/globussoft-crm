@@ -65,10 +65,7 @@ const { verifyRole, RBAC_DENIED_MESSAGE } = require("../middleware/auth");
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
 // can't forge staff tokens; fall back to JWT_SECRET when unset for transition.
-const PORTAL_JWT_SECRET =
-  process.env.PORTAL_JWT_SECRET ||
-  process.env.JWT_SECRET ||
-  "enterprise_super_secret_key_2026";
+const { PORTAL_JWT_SECRET } = require("../config/secrets");
 
 // Patient-portal inline JWT middleware — used by /portal/* endpoints.
 // Portal endpoints bypass the global user-JWT guard (see server.js openPaths)

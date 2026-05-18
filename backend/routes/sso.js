@@ -15,7 +15,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 
-const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+const { JWT_SECRET } = require("../config/secrets");
 
 // ── Configuration helpers ─────────────────────────────────────────
 

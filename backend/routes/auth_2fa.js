@@ -9,7 +9,7 @@ const { verifyToken } = require("../middleware/auth");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
-const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+const { JWT_SECRET } = require("../config/secrets");
 
 // ---------- Helpers ----------
 

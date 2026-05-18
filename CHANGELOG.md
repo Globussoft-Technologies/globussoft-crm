@@ -1,5 +1,55 @@
 # CHANGELOG
 
+## v3.8.3 — 2026-05-18 — Shard-2 e2e-full stabilization: GDPR bounded queries + 5xx retry on flake-prone specs
+
+Closes the 4-day release-validation gap. v3.8.2's e2e-full had shard 2 red with 4 hard failures + 5 flakies; this release fixes both.
+
+### #1 — GDPR `/export/me` perf fix (`8dfa87c`)
+
+Real cause turned out NOT to be yesterday's `Patient.gst` column — Patient isn't in `/export/me`'s query graph. The actual bottleneck was 9 unindexed `findMany` calls against `(userId, tenantId)` predicates on tables with no composite index. Demo's AuditLog has 108k+ rows; the full-tenant scan + JS filter returned EVERY column including wide `@db.Text` blobs like `AuditLog.details`.
+
+**Fix shape (Path B + light Path A):**
+- All 9 `findManys` gain `take: HEAVY_TABLE_CAP=5000` + `orderBy: { createdAt: 'desc' }` — return the most-recent slice instead of the whole table.
+- `AuditLog` gets an explicit `select` projection (id, action, entity, entityId, details, createdAt, userId, tenantId) — same columns the existing `/api/audit` endpoint returns. Drops the row width significantly.
+- Other tables keep full row shape (the spec at line 287 asserts `row.tenantId === requestor.tenantId` on every collection, so they must include tenantId).
+
+**Response shape changes (all additive — back-compat):**
+- New top-level `truncated: { deals, tasks, expenses, activities, emails, callLogs, smsMessages, whatsappMessages, auditLogs }` — booleans, `true` when the slice hit the cap.
+- New top-level `cap: 5000` — documents the per-entity bound for compliance reviewers.
+- `writeAudit('User','GDPR_EXPORT',...)` details now include `truncated` + `cap` so a DSAR can be flagged as capped vs complete in the audit chain.
+
+**Long-term followup (not in this release):** add composite `@@index([userId, tenantId])` on Task / Expense / Activity / EmailMessage / CallLog / SmsMessage / WhatsAppMessage / AuditLog. Multi-table migration; queue separately.
+
+### #2 — Shard-2 5xx flake-absorption (`338c172`)
+
+v3.8.2's "5 flaky" cluster on shard 2 (eventbus-emit:166, eventbus-conditions:234, estimates-api:406, email-threading-api:548, notifications-api:628) was a single incident: **Cloudflare 502 Bad Gateway window at 2026-05-17 19:55:07 UTC** (Ray-ID `9fd52d673a868e10`). All 5 retry-passed against a now-healthy demo.
+
+**Fix shape:**
+- 5 specs get a shared `retryOn5xx` wrapper around their auth helpers (`get`/`post`/`put`/`del`). Single attempt on first call → if 5xx, retry once after 500ms settle.
+- `eventbus-emit.spec.js` beforeAll login also wrapped in `loginWithRetry` (3-attempt, 5xx-only).
+- `notifications-api.spec.js` afterAll cleanup gets a 40s deadline bound — the actual failure was "afterAll hook timeout 60000ms exceeded" because cleanup looped through too many rows under the 502 window.
+
+**Important framing correction from the v3.8.2 release notes:** the 5 were FLAKY (retry-passed), not hard-failed. The 4 hard failures on shard 2 were ALL GDPR-only (the issue above). Updated this CHANGELOG entry to be accurate.
+
+### Why this should close the validation gap
+
+Pre-fix shard-2 layout:
+- 4 hard fails: GDPR/export (4 timeouts)
+- 5 flakies: 502-blip casualties
+
+Post-fix expected layout:
+- 0 hard fails: GDPR runs in <30s now (bounded), well under the 60s ceiling
+- 0 flakies: 502 absorbed by retry helpers
+- Shards 1+3+4 already green on v3.8.2 → 4/4 expected
+
+### Stats
+
+- 2 commits (`8dfa87c` + `338c172`)
+- 1 backend file (`backend/routes/gdpr.js`) — additive response-shape change
+- 5 e2e spec files — `retryOn5xx` wrapper insertion
+- 0 schema changes
+- 0 product binary changes (other than the GDPR-response shape additions)
+
 ## v3.8.2 — 2026-05-18 — CI-only: e2e-full per-shard timeout 30m → 45m
 
 Single config change. No product code touched; bumps the v3.8.x release-validation suite from the old 30-min per-shard ceiling to 45 min so shards 1+2 don't silently truncate at the 30-min mark.

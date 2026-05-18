@@ -1571,4 +1571,10 @@ interface WellnessApi {
     suspend fun getMarketplaceLeadsAll(
         @Query("limit") limit: Int = 100,
     ): Response<List<@JvmSuppressWildcards Any>>
+
+    @PUT("marketplace-leads/{id}")
+    suspend fun updateMarketplaceLead(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
 }

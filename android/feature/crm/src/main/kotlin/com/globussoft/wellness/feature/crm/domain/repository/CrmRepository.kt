@@ -136,6 +136,7 @@ interface CrmRepository {
     suspend fun getLandingPages(): WResult<List<Map<String, Any>>>
     suspend fun createLandingPage(name: String, slug: String): WResult<Map<String, Any>>
     suspend fun getMarketplaceLeads(): WResult<List<Map<String, Any>>>
+    suspend fun updateMarketplaceLead(id: String, params: Map<String, Any>): WResult<Map<String, Any>>
 
     // ── Wave 20 ───────────────────────────────────────────────────────────────
     suspend fun globalSearch(query: String): WResult<Map<String, Any>>

@@ -83,8 +83,14 @@ fun MarketplaceLeadsScreen(
                         contentPadding      = PaddingValues(horizontal = Dimens.SpacingLg, vertical = Dimens.SpacingSm),
                         verticalArrangement = Arrangement.spacedBy(Dimens.SpacingSm),
                     ) {
-                        items(state.leads) { lead ->
-                            MarketplaceLeadCard(lead = lead)
+                        items(state.leads, key = { it["id"]?.toString() ?: it.hashCode().toString() }) { lead ->
+                            val id = lead["id"]?.toString() ?: ""
+                            MarketplaceLeadCard(
+                                lead         = lead,
+                                onQualify    = { viewModel.qualifyLead(id) },
+                                onDisqualify = { viewModel.disqualifyLead(id) },
+                                onConvert    = { viewModel.convertLead(id) },
+                            )
                         }
                     }
             }
@@ -93,7 +99,12 @@ fun MarketplaceLeadsScreen(
 }
 
 @Composable
-private fun MarketplaceLeadCard(lead: Map<String, Any>) {
+private fun MarketplaceLeadCard(
+    lead: Map<String, Any>,
+    onQualify: () -> Unit = {},
+    onDisqualify: () -> Unit = {},
+    onConvert: () -> Unit = {},
+) {
     val name   = lead["name"] as? String
         ?: lead["contactName"] as? String
         ?: lead["leadName"] as? String
@@ -136,21 +147,26 @@ private fun MarketplaceLeadCard(lead: Map<String, Any>) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.padding(top = 8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick  = { /* Qualify — non-functional UI */ },
-                    colors   = ButtonDefaults.buttonColors(containerColor = GenericPrimary),
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(vertical = 6.dp),
-                ) {
-                    Text("Qualify", style = MaterialTheme.typography.labelMedium)
-                }
-                OutlinedButton(
-                    onClick  = { /* Convert — non-functional UI */ },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(vertical = 6.dp),
-                ) {
-                    Text("Convert", style = MaterialTheme.typography.labelMedium)
+            val isQualified   = status.equals("QUALIFIED", ignoreCase = true)
+            val isConverted   = status.equals("CONVERTED", ignoreCase = true)
+            val isDisqualified = status.equals("DISQUALIFIED", ignoreCase = true)
+            if (!isConverted && !isDisqualified) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick  = if (isQualified) onConvert else onQualify,
+                        colors   = ButtonDefaults.buttonColors(containerColor = GenericPrimary),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(vertical = 6.dp),
+                    ) {
+                        Text(if (isQualified) "Convert" else "Qualify", style = MaterialTheme.typography.labelMedium)
+                    }
+                    OutlinedButton(
+                        onClick  = onDisqualify,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(vertical = 6.dp),
+                    ) {
+                        Text("Disqualify", style = MaterialTheme.typography.labelMedium)
+                    }
                 }
             }
         }

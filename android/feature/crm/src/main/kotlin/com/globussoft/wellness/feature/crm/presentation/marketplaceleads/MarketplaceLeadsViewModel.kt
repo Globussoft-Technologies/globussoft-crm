@@ -24,6 +24,27 @@ class MarketplaceLeadsViewModel @Inject constructor(
 
     fun refresh() = load()
 
+    fun qualifyLead(id: String) {
+        viewModelScope.launch {
+            repo.updateMarketplaceLead(id, mapOf("status" to "QUALIFIED"))
+            load()
+        }
+    }
+
+    fun disqualifyLead(id: String) {
+        viewModelScope.launch {
+            repo.updateMarketplaceLead(id, mapOf("status" to "DISQUALIFIED"))
+            load()
+        }
+    }
+
+    fun convertLead(id: String) {
+        viewModelScope.launch {
+            repo.updateMarketplaceLead(id, mapOf("status" to "CONVERTED"))
+            load()
+        }
+    }
+
     private fun load() {
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }

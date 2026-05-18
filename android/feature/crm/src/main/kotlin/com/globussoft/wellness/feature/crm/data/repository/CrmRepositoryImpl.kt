@@ -564,6 +564,10 @@ class CrmRepositoryImpl @Inject constructor(
         }
     }
 
+    @Suppress("UNCHECKED_CAST")
+    override suspend fun updateMarketplaceLead(id: String, params: Map<String, Any>): WResult<Map<String, Any>> =
+        safeApiCall { api.updateMarketplaceLead(id, params) } as WResult<Map<String, Any>>
+
     // ── Wave 20 ───────────────────────────────────────────────────────────────
 
     @Suppress("UNCHECKED_CAST")

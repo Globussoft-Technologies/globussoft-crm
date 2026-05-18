@@ -104,7 +104,7 @@ const { execFileSync } = require('child_process');
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const API = `${BASE_URL}/api`;
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 
 const RUN_TAG = `E2E_FLOW_RETENTION_${Date.now()}`;
 

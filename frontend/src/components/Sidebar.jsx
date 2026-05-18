@@ -71,6 +71,10 @@ import {
   Recycle,
   // Wave 2 Agent II — POS / Cash Register / Shift / Sale
   Calculator,
+  // Zylu-Gap #770/#779/#780/#781 — Cash Register admin
+  Banknote,
+  // Zylu-Gap #800 (WA-005) — Blocked WhatsApp numbers admin entry
+  Ban,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -644,14 +648,19 @@ function renderWellnessNav({
       <AdsGptLink icon={Sparkles} label="AdsGPT" />
       <CallifiedLink icon={PhoneCall} label="Callified" />
 
-      {/* Clinical — Patients, Calendar, Waitlist visible to all wellness staff
-          (clinical staff need their patients + day grid). Service Catalog is a
-          pricing/duration config — clinical staff read it but only managers
-          edit it, so we hide the nav link for non-management. */}
+      {/* #756 — Clinical nav (Patients / Calendar / Waitlist) is gated to
+          clinical wellnessRoles. The backend PHI-read gate
+          (verifyWellnessRole(["doctor","professional","telecaller","admin",
+          "manager"])) rejects a USER with no wellnessRole — pre-fix these
+          links rendered for the Demo User account and only revealed the
+          denial on click. The Link helper's `wellnessRoles` prop hides them
+          for non-clinical roles; managers/admins auto-pass (isManager check
+          inside Link). Service Catalog stays managerOnly — clinical staff
+          read it via the API but only managers get the nav link. */}
       <div style={labelStyle}>Clinical</div>
-      <Link to="/wellness/patients" icon={HeartPulse} label="Patients" />
-      <Link to="/wellness/calendar" icon={Calendar} label="Calendar" />
-      <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" />
+      <Link to="/wellness/patients" icon={HeartPulse} label="Patients" wellnessRoles={["doctor", "professional", "telecaller"]} />
+      <Link to="/wellness/calendar" icon={Calendar} label="Calendar" wellnessRoles={["doctor", "professional", "telecaller"]} />
+      <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" wellnessRoles={["doctor", "professional", "telecaller"]} />
       <Link
         to="/wellness/services"
         icon={Stethoscope}
@@ -725,6 +734,15 @@ function renderWellnessNav({
         icon={MessageSquare}
         label="WhatsApp Threads"
       />
+      {/* Zylu-Gap #800 — Blocked WhatsApp numbers admin (opt-outs).
+          managerOnly because /opt-outs POST is ADMIN+MANAGER (DELETE is
+          ADMIN-only; the page hides Unblock for non-admins inside). */}
+      <Link
+        to="/wellness/whatsapp/blocked-numbers"
+        icon={Ban}
+        label="Blocked Numbers"
+        managerOnly
+      />
       {/* Telecaller Queue: visible to wellnessRole=telecaller and to
           managers/admins for oversight. Plain users (and clinical staff
           without the telecaller wellnessRole) saw a 403 toast on every
@@ -766,6 +784,11 @@ function renderWellnessNav({
           carry sales, close shifts. All staff can use it (backend gates
           to wellnessRole admin/manager/doctor/professional/telecaller/helper). */}
       <Link to="/wellness/pos" icon={Calculator} label="Point of Sale" />
+      {/* Zylu-Gap #770/#779/#780/#781 — Cash Register admin (list + shift
+          lifecycle + status header + recent transactions). Without this
+          surface POS is permanently gated: /pos/sales needs an OPEN shift
+          on a Register, and the only place to create that Register is here. */}
+      <Link to="/wellness/cash-registers" icon={Banknote} label="Cash Registers" />
       <Link to="/invoices" icon={Receipt} label="Invoices" />
       <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
       <Link to="/expenses" icon={DollarSign} label="Expenses" />

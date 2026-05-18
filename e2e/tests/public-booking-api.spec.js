@@ -124,7 +124,7 @@ test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const API = `${BASE_URL}/api`;
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_PB_${Date.now()}`;
 
 // Embed-gate route is registered ONLY on the local Express stack — Nginx
@@ -410,17 +410,23 @@ test.describe('#279 — public booking persists Patient + Visit atomically', () 
     // Verify the visit is reachable from the wellness-admin's view —
     // i.e. it actually persisted past the response, didn't roll back
     // post-201 (the original #279 silent-data-loss bug).
+    //
+    // 2026-05-14: direct GET /wellness/visits/:id rather than the prior
+    // ?phone= filter lookup. The list endpoint doesn't honor the phone
+    // filter against demo's accumulated visits (returns top-100 by
+    // createdAt DESC unfiltered), so newly-booked visits beyond the
+    // window were silently absent — the test was hard-failing on
+    // v3.7.13 / .14 / .15. Direct-by-id is the canonical "persisted past
+    // the 201" check anyway.
     const lookup = await request.get(
-      `${API}/wellness/visits?phone=${encodeURIComponent(phone)}`,
+      `${API}/wellness/visits/${body.visit.id}`,
       { headers: authHdr(tokens.wellnessAdmin), timeout: REQUEST_TIMEOUT }
     );
     expect(lookup.status()).toBe(200);
-    const lookupBody = await lookup.json();
-    const visits = Array.isArray(lookupBody) ? lookupBody : (lookupBody.visits || lookupBody.data || []);
-    const found = visits.find((v) => v.id === body.visit.id);
+    const found = await lookup.json();
     expect(
-      found,
-      `visit ${body.visit.id} (the just-booked one) is not reachable on /wellness/visits — silent data loss regression`
+      found && found.id === body.visit.id,
+      `visit ${body.visit.id} (the just-booked one) is not reachable on /wellness/visits/:id — silent data loss regression`
     ).toBeTruthy();
   });
 
@@ -1005,15 +1011,14 @@ test.describe('Wave 2 Agent LL — bookingType + at-home + UTM capture', () => {
     createdVisitIds.push(body.visit.id);
 
     // Read back via wellness-admin to confirm the UTM fields landed on the row.
-    const lookup = await request.get(`${API}/wellness/visits?phone=${encodeURIComponent(phone)}`, {
+    // 2026-05-14: direct-by-id, same reason as the line 380 fix above.
+    const lookup = await request.get(`${API}/wellness/visits/${body.visit.id}`, {
       headers: authHdr(tokens.wellnessAdmin),
       timeout: REQUEST_TIMEOUT,
     });
     expect(lookup.status()).toBe(200);
-    const visits = (await lookup.json());
-    const arr = Array.isArray(visits) ? visits : (visits.visits || visits.data || []);
-    const found = arr.find((v) => v.id === body.visit.id);
-    expect(found, 'visit not reachable in admin view').toBeTruthy();
+    const found = await lookup.json();
+    expect(found && found.id === body.visit.id, 'visit not reachable in admin view').toBeTruthy();
     expect(found.utmSource).toBe(utm.utmSource);
     expect(found.utmMedium).toBe(utm.utmMedium);
     expect(found.utmCampaign).toBe(utm.utmCampaign);

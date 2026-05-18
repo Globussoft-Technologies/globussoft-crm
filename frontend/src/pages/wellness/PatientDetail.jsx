@@ -26,6 +26,11 @@ export default function PatientDetail() {
   const [patient, setPatient] = useState(null);
   const [services, setServices] = useState([]);
   const [doctors, setDoctors] = useState([]);
+  // #793 — surface wallet balance as a header chip on Patient 360 so
+  // front-desk operators see prepaid balance without drilling into the
+  // Wallet tab. Loaded independently from the patient core so a wallet
+  // 404 / non-wellness-tenant fetch failure does not red the whole page.
+  const [walletInfo, setWalletInfo] = useState(null);
   // #344 [SECURITY]: sessionStorage was being polluted with attacker-controlled
   // URL segments (e.g. `gbs.tab.patient.1' OR '1'='1`) because we interpolated
   // useParams().id directly into the storage key. Patient ids in this app are
@@ -63,6 +68,13 @@ export default function PatientDetail() {
 
   const load = () => {
     setLoading(true);
+    // #793 — fetch wallet alongside patient core. Defaulted to null on any
+    // error (lazy-create endpoint returns 404 only on cross-tenant access;
+    // a fresh patient with no transactions still gets a zero-balance wallet
+    // from getOrCreateWallet on the backend).
+    fetchApi(`/api/wellness/patients/${id}/wallet`)
+      .then((w) => setWalletInfo(w && w.wallet ? w.wallet : null))
+      .catch(() => setWalletInfo(null));
     Promise.all([
       fetchApi(`/api/wellness/patients/${id}`),
       fetchApi('/api/wellness/services'),
@@ -70,7 +82,20 @@ export default function PatientDetail() {
     ]).then(([p, s, staff]) => {
       setPatient(p);
       setServices(s);
-      setDoctors((Array.isArray(staff) ? staff : []).filter((u) => u.wellnessRole === 'doctor'));
+      // #752 — "Doctor" dropdown was filtering wellnessRole === 'doctor' only,
+      // so professionals (stylists, aestheticians, slimming therapists,
+      // Ayurveda practitioners — 12 of them on demo) couldn't be assigned to
+      // a visit. The Calendar grid (#262) and the WorkingHoursEditor already
+      // include both roles for the same reason; align the Log Visit dropdown
+      // with that convention. Filters out deactivated rows so the list stays
+      // current (the Staff directory keeps inactive rows but flags them).
+      setDoctors(
+        (Array.isArray(staff) ? staff : []).filter(
+          (u) =>
+            (u.wellnessRole === 'doctor' || u.wellnessRole === 'professional') &&
+            !u.deactivatedAt
+        )
+      );
     }).catch(() => setPatient(null)).finally(() => setLoading(false));
   };
 
@@ -110,10 +135,46 @@ export default function PatientDetail() {
               if (patient.phone) parts.push(patient.phone);
               if (patient.email) parts.push(patient.email);
               if (patient.bloodGroup) parts.push(`Blood ${patient.bloodGroup}`);
+              // #792 — surface anniversary alongside DOB for the
+              // anniversary-marketing operator workflow.
+              if (patient.anniversary) {
+                const aDate = new Date(patient.anniversary);
+                if (!Number.isNaN(aDate.getTime())) {
+                  parts.push(`Anniv ${formatDate(patient.anniversary)}`);
+                }
+              }
+              // #792 — GSTIN visible for B2B / corporate patients so the
+              // doctor doesn't have to dig into Profile to confirm the
+              // invoice will carry it.
+              if (patient.gst) parts.push(`GST ${patient.gst}`);
               return parts.length ? parts.join(' · ') : '—';
             })()}
           </div>
         </div>
+        {/* #793 — wallet balance chip. Appears between the subline and the
+            counts column so it sits at eye-level next to the patient's name.
+            Skipped silently when the wallet endpoint is unavailable (e.g.
+            generic-tenant Patient row that predates the wallet model). */}
+        {walletInfo && (
+          <div
+            data-testid="patient-header-wallet-chip"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+              padding: '0.4rem 0.75rem', borderRadius: 999,
+              background: 'rgba(38,88,85,0.08)',
+              border: '1px solid rgba(38,88,85,0.2)',
+              color: 'var(--primary-color, var(--accent-color))',
+              fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap',
+            }}
+            title={`Wallet balance — ${formatMoney(walletInfo.balance, { currency: walletInfo.currency })}`}
+          >
+            <WalletIcon size={14} />
+            <span data-testid="patient-header-wallet-amount">
+              {formatMoney(walletInfo.balance, { currency: walletInfo.currency })}
+            </span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem', fontWeight: 500 }}>wallet</span>
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           <span>Source: <strong style={{ color: 'var(--text-primary)' }}>{patient.source || '—'}</strong></span>
           <span>{patient.visits.length} visits • {patient.prescriptions.length} Rx • {patient.treatmentPlans.length} treatment plans</span>
@@ -1126,10 +1187,19 @@ function LogVisitTab({ patient, services, doctors, onSaved }) {
           </select>
         </div>
         <div>
+          {/* #752 — label kept as "Doctor" for clinical familiarity but the
+              dropdown now includes professionals (stylists, aestheticians,
+              etc.) so any wellness practitioner can be assigned to a visit.
+              Role is appended in parens so the staff member can disambiguate
+              when names collide. */}
           <label style={labelStyle}>Doctor <span style={{ color: '#ef4444' }}>*</span></label>
           <select required value={doctorId} onChange={(e) => setDoctorId(e.target.value)} style={inputStyle}>
             <option value="">— select —</option>
-            {doctors.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            {doctors.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}{d.wellnessRole && d.wellnessRole !== 'doctor' ? ` (${d.wellnessRole})` : ''}
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -1244,6 +1314,63 @@ function PhotosTab({ patient, onSaved }) {
   );
 }
 
+// #750 — render a "failed to load" placeholder when the image source returns
+// a non-image (the historic backend bug was Content-Type text/html via the
+// SPA fallback — fixed in #743 — but a future regression, an expired signed
+// URL, or a deleted blob would silently render a black tile that the clinician
+// can't distinguish from a successful upload). We track per-URL error state
+// + expose a Retry action that forces a re-fetch by appending a cache-busting
+// query string. Counters above still claim BEFORE (n) / AFTER (n) but the
+// failed-to-load tiles are unambiguous now.
+function PhotoThumb({ url, onRemove }) {
+  const [errored, setErrored] = useState(false);
+  const [bust, setBust] = useState(0);
+  const src = bust ? `${url}${url.includes('?') ? '&' : '?'}_r=${bust}` : url;
+  const retry = () => {
+    setErrored(false);
+    setBust(Date.now());
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      {errored ? (
+        <div
+          data-testid="photo-failed-placeholder"
+          style={{
+            width: '100%', height: 100, borderRadius: 6,
+            background: 'rgba(239,68,68,0.08)', border: '1px dashed rgba(239,68,68,0.4)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            gap: '0.25rem', padding: '0.25rem', color: 'var(--text-secondary)', fontSize: '0.7rem',
+            textAlign: 'center',
+          }}
+        >
+          <span style={{ color: '#ef4444', fontWeight: 600 }}>Failed to load</span>
+          <button
+            type="button"
+            onClick={retry}
+            style={{
+              background: 'transparent', border: '1px solid rgba(239,68,68,0.5)',
+              color: '#ef4444', borderRadius: 4, padding: '1px 6px', fontSize: '0.7rem',
+              cursor: 'pointer',
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      ) : (
+        <img
+          src={src}
+          alt=""
+          onError={() => setErrored(true)}
+          style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }}
+        />
+      )}
+      <button onClick={() => onRemove(url)} style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.7)', border: 'none', color: '#fff', borderRadius: 4, padding: '2px 4px', cursor: 'pointer' }}>
+        <Trash2 size={10} />
+      </button>
+    </div>
+  );
+}
+
 function PhotoColumn({ title, urls, onRemove }) {
   return (
     <div>
@@ -1251,12 +1378,7 @@ function PhotoColumn({ title, urls, onRemove }) {
       {urls.length === 0 && <div style={{ padding: '1rem', textAlign: 'center', background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: 8, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No photos yet.</div>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '0.5rem' }}>
         {urls.map((u) => (
-          <div key={u} style={{ position: 'relative' }}>
-            <img src={u} alt="" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }} />
-            <button onClick={() => onRemove(u)} style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.7)', border: 'none', color: '#fff', borderRadius: 4, padding: '2px 4px', cursor: 'pointer' }}>
-              <Trash2 size={10} />
-            </button>
-          </div>
+          <PhotoThumb key={u} url={u} onRemove={onRemove} />
         ))}
       </div>
     </div>

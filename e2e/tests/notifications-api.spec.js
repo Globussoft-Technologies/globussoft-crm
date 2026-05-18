@@ -61,7 +61,7 @@ const { test, expect } = require('@playwright/test');
 test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_NOTIF_${Date.now()}`;
 
 // ── Dual-token auth ────────────────────────────────────────────────
@@ -112,17 +112,39 @@ async function getUser(request) {
 
 const headers = (token) => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' });
 
+// Cloudflare-fronted demo occasionally surfaces transient 5xx during origin
+// restarts / health-flap windows (Ray-ID 9fd52d673a868e10 on 2026-05-17 ran
+// 502 for a few seconds and red-balled the afterAll cleanup loop here,
+// reporting as "afterAll hook timeout of 60000ms exceeded" against the test
+// that was running at the time). Retry transient 5xx with a short backoff;
+// 4xx bails immediately so genuine RBAC/validator regressions still surface.
+async function retryOn5xx(fn) {
+  let r;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    r = await fn();
+    if (r.status() < 500) return r;
+    await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+  }
+  return r;
+}
+
 async function get(request, token, path) {
-  return request.get(`${BASE_URL}${path}`, { headers: headers(token), timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(() => request.get(`${BASE_URL}${path}`, { headers: headers(token), timeout: REQUEST_TIMEOUT }));
 }
 async function post(request, token, path, body) {
-  return request.post(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(() =>
+    request.post(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT }),
+  );
 }
 async function put(request, token, path, body) {
-  return request.put(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(() =>
+    request.put(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT }),
+  );
 }
 async function del(request, token, path) {
-  return request.delete(`${BASE_URL}${path}`, { headers: headers(token), timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(() =>
+    request.delete(`${BASE_URL}${path}`, { headers: headers(token), timeout: REQUEST_TIMEOUT }),
+  );
 }
 
 // ── Cleanup tracking ───────────────────────────────────────────────
@@ -131,7 +153,14 @@ const createdNotificationIds = new Set();
 test.afterAll(async ({ request }) => {
   const { token } = await getAdmin(request);
   if (!token) return;
+  // Bound the cleanup loop to 40s so a partial demo outage during teardown
+  // can never blow the 60s afterAll hook budget. Each DELETE inside del() now
+  // retries on 5xx (up to ~7s/call under bad weather); ~5 retries-worth of
+  // budget is the upper bound, after which we drop the rest on the floor —
+  // demo-hygiene will sweep them on its next 30-min tick.
+  const deadline = Date.now() + 40_000;
   for (const id of createdNotificationIds) {
+    if (Date.now() > deadline) break;
     await del(request, token, `/api/notifications/${id}`).catch(() => { });
   }
 });

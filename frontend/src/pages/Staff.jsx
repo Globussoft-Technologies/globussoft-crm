@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useContext } from 'react';
+import { Link } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { UsersRound, Trash2, Shield, Edit3, UserX, UserCheck, Key, MailPlus, X } from 'lucide-react';
+import { UsersRound, Trash2, Shield, Edit3, UserX, UserCheck, Key, MailPlus, X, Target, ExternalLink } from 'lucide-react';
 import { AuthContext } from '../App';
 import { formatDate } from '../utils/date';
+import { formatMoney } from '../utils/money';
 
 const ROLE_CONFIG = {
   ADMIN:   { color: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
@@ -84,6 +86,15 @@ export default function Staff() {
   // dropdown so admins can assign payroll rules per staff member.
   const [commissionProfiles, setCommissionProfiles] = useState([]);
 
+  // #818 — surface the staff member's active revenue goals inside the edit
+  // modal. Revenue goals are a separate per-period entity (StaffRevenueGoal
+  // is one-to-many on User) managed at /revenue-goals; we show a read-only
+  // summary chip here + a deep-link to manage in place. Lazily fetched
+  // when the modal opens so the directory list itself stays a single
+  // GET /api/staff round-trip.
+  const [editingGoals, setEditingGoals] = useState([]);
+  const [editingGoalsLoading, setEditingGoalsLoading] = useState(false);
+
   useEffect(() => { loadStaff(); loadCommissionProfiles(); }, []);
 
   const loadCommissionProfiles = async () => {
@@ -131,6 +142,17 @@ export default function Staff() {
       // PRD Gap §1.5 — current commission-profile assignment (null = unassigned).
       commissionProfileId: member.commissionProfileId == null ? '' : String(member.commissionProfileId),
     });
+    // #818 — fetch this staff member's revenue goals when the modal opens.
+    // StaffRevenueGoal is per-period (MONTHLY/QUARTERLY/YEARLY), so we list
+    // the current/active periods in a read-only chip cluster and link out
+    // to /revenue-goals for full CRUD. Errors are non-fatal — the rest of
+    // the modal stays usable.
+    setEditingGoals([]);
+    setEditingGoalsLoading(true);
+    fetchApi(`/api/staff/revenue-goals?userId=${member.id}`)
+      .then((rows) => setEditingGoals(Array.isArray(rows) ? rows : []))
+      .catch(() => setEditingGoals([]))
+      .finally(() => setEditingGoalsLoading(false));
   };
 
   const saveEdit = async () => {
@@ -548,6 +570,87 @@ export default function Staff() {
                   ))}
                 </select>
               </label>
+
+              {/* #818 — Revenue goals summary. StaffRevenueGoal is one-to-many on
+                  User (each goal pins a period like Q1/2026), so the Staff form
+                  surfaces the CURRENT active goals as read-only chips with a
+                  deep-link to /revenue-goals for full CRUD. This closes the
+                  zylu-gap "verify revenue_goal settable from Staff Directory" by
+                  acknowledging the data shape (goals are per-period entities,
+                  not a single FK) and routing the admin to the right surface. */}
+              <div data-testid="staff-edit-revenue-goals" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                  <span>Revenue goals <span style={{ fontWeight: 400 }}>(per-period)</span></span>
+                  <Link
+                    to={`/revenue-goals?userId=${editing.id}`}
+                    data-testid="staff-edit-manage-revenue-goals"
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                      color: 'var(--primary-color, var(--accent-color))',
+                      textDecoration: 'none', fontSize: '0.75rem', fontWeight: 500,
+                    }}
+                  >
+                    Manage <ExternalLink size={11} />
+                  </Link>
+                </div>
+                {editingGoalsLoading ? (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>Loading goals…</div>
+                ) : editingGoals.length === 0 ? (
+                  <div
+                    data-testid="staff-edit-revenue-goals-empty"
+                    style={{
+                      padding: '0.5rem 0.65rem', borderRadius: 6,
+                      background: 'var(--subtle-bg-3)',
+                      border: '1px dashed var(--border-color)',
+                      fontSize: '0.75rem', color: 'var(--text-secondary)',
+                    }}
+                  >
+                    No revenue goals set. Use <strong>Manage</strong> to add one.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    {editingGoals.slice(0, 4).map((g) => {
+                      const target = Number(g.targetAmount || 0);
+                      const achieved = Number(g.achievedAmount || 0);
+                      const pct = target > 0 ? Math.min(999, Math.round((achieved / target) * 100)) : 0;
+                      return (
+                        <div
+                          key={g.id}
+                          data-testid={`staff-edit-revenue-goal-${g.id}`}
+                          title={`${g.period} • target ${target} • achieved ${achieved}`}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                            padding: '0.35rem 0.6rem', borderRadius: 999,
+                            background: 'rgba(38,88,85,0.08)',
+                            border: '1px solid rgba(38,88,85,0.2)',
+                            color: 'var(--text-primary)',
+                            fontSize: '0.72rem', fontWeight: 500,
+                          }}
+                        >
+                          <Target size={11} />
+                          <span>{g.period}</span>
+                          <span style={{ color: 'var(--text-secondary)' }}>
+                            {formatMoney(achieved)} / {formatMoney(target)}
+                          </span>
+                          <span style={{
+                            padding: '0.05rem 0.35rem', borderRadius: 999,
+                            background: pct >= 100 ? 'rgba(34,197,94,0.15)' : pct >= 75 ? 'rgba(234,179,8,0.15)' : 'rgba(59,130,246,0.15)',
+                            color: pct >= 100 ? '#22c55e' : pct >= 75 ? '#eab308' : '#3b82f6',
+                            fontSize: '0.65rem', fontWeight: 600,
+                          }}>
+                            {pct}%
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {editingGoals.length > 4 && (
+                      <div style={{ alignSelf: 'center', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        +{editingGoals.length - 4} more
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
               <button

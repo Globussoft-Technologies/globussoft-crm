@@ -269,10 +269,12 @@ model Tenant {
   leaveRequests    LeaveRequest[]
 
   // Wave 2 Agent II — POS / cash register / shift / sale backbone.
-  registers     Register[]
-  shifts        Shift[]
-  sales         Sale[]
-  saleLineItems SaleLineItem[]
+  registers       Register[]
+  shifts          Shift[]
+  sales           Sale[]
+  saleLineItems   SaleLineItem[]
+  // #779 — petty-cash deposits/withdrawals against open shifts.
+  pettyCashLedger PettyCashLedger[]
 
   // Wave 7 Agent A — Service Catalogue depth (PRD Gap §10):
   //   ServiceCategory — hierarchical taxonomy for Service.
@@ -1527,25 +1529,25 @@ model PushTemplate {
 }
 
 model NotificationPreference {
-  id                Int      @id @default(autoincrement())
-  userId            Int      @unique
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenantId          Int
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       Int    @id @default(autoincrement())
+  userId   Int    @unique
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Per-category toggles: { deal: true, task: false, ticket: true, lead: true, approval: true, leave: true, expense: true, ticket: true }
-  categoryToggles   Json     @default("{\"deal\": true, \"task\": true, \"ticket\": true, \"lead\": true, \"approval\": true, \"leave\": true, \"expense\": true}")
+  categoryToggles Json @default("{\"deal\": true, \"task\": true, \"ticket\": true, \"lead\": true, \"approval\": true, \"leave\": true, \"expense\": true}")
 
   // Per-channel toggles: { db: true, socket: true, push: true, email: true }
-  channels          Json     @default("{\"db\": true, \"socket\": true, \"push\": false, \"email\": false}")
+  channels Json @default("{\"db\": true, \"socket\": true, \"push\": false, \"email\": false}")
 
   // Quiet hours (24h format, e.g. "22:00" to "07:00")
-  quietHoursStart   String?  // "HH:MM"
-  quietHoursEnd     String?  // "HH:MM"
-  timezone          String?  // "Asia/Kolkata"
+  quietHoursStart String? // "HH:MM"
+  quietHoursEnd   String? // "HH:MM"
+  timezone        String? // "Asia/Kolkata"
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId])
 }
@@ -2453,6 +2455,11 @@ model Patient {
   //                     the DB (writes are dropped by the route handler).
   anniversary   DateTime?
   walletBalance Float?
+  // #792 — GSTIN (Goods & Services Tax Identification Number). 15-char
+  // alphanumeric (e.g. "27ABCDE1234F1Z5"). Stored as-typed (route-layer
+  // upper-cases for canonicality). Surfaced on invoices for B2B billing
+  // (corporate-account patients, salon-on-salon recharge, etc.).
+  gst           String?   @db.VarChar(15)
 
   // #413 — Restrict (not Cascade) on Tenant deletion. Patient is PHI
   // (medical history, allergies, photos, prescriptions cascade-from-here).
@@ -3644,11 +3651,42 @@ model Shift {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  sales Sale[]
+  sales           Sale[]
+  // #779 — Petty-cash deposits/withdrawals against the open drawer. Each
+  // entry is appended once and never edited; the running drawer balance is
+  // openingFloat + sum(CASH sales) + sum(DEPOSIT) - sum(WITHDRAWAL).
+  pettyCashLedger PettyCashLedger[]
 
   @@index([tenantId, registerId, status])
   @@index([tenantId, userId, status])
   @@index([tenantId, openedAt])
+}
+
+// #779 — Petty-cash drawer ledger. Records ad-hoc deposits (cashier topping
+// up the drawer mid-shift, e.g. owner brings ₹2,000 change) and
+// withdrawals (cashier removes cash for an expense — e.g. courier payment,
+// staff lunch float). Append-only — no UPDATE / DELETE endpoints. The
+// running drawer balance computation in /shifts/:id/close uses the sum of
+// these entries alongside CASH sales + openingFloat. Tenant-scoped + admin/
+// manager-gated.
+model PettyCashLedger {
+  id        Int      @id @default(autoincrement())
+  shiftId   Int
+  shift     Shift    @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  // DEPOSIT | WITHDRAWAL. Free-text would be a footgun for the balance
+  // computation; route-layer validates against this 2-value enum.
+  type      String
+  amount    Float
+  reason    String   @db.Text
+  // Cashier id of who recorded the row — kept as a raw int (not an FK)
+  // mirroring Sale.cashierId so audit trail survives a User-row delete.
+  userId    Int
+  tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, shiftId])
+  @@index([tenantId, createdAt])
 }
 
 model Sale {
@@ -3672,7 +3710,10 @@ model Sale {
   paidAmount           Float     @default(0)
   // DRAFT | COMPLETED | REFUNDED | CANCELLED.
   status               String    @default("COMPLETED")
-  // CASH | CARD | UPI | WALLET | GIFTCARD | COMBINED.
+  // CASH | CARD | UPI | WALLET | GIFTCARD | COMBINED |
+  // CASHBACK | PAYLATER | ONLINE (#789 — extended 2026-05-18). String column
+  // (not enum) so future additions are additive — route-layer
+  // VALID_PAYMENT_METHODS in routes/pos.js is the source of truth.
   paymentMethod        String    @default("CASH")
   paymentBreakdownJson String?   @db.Text
   refundedAt           DateTime?

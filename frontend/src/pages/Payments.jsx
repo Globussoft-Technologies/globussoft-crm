@@ -215,28 +215,37 @@ export default function Payments() {
               <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.2rem' }}>
                 Stripe / Razorpay not configured
               </div>
+              {/* #759 — the env-var NAMES + "restart the backend" ops
+                  instructions are server/devops detail. Show the full
+                  setup detail only to ADMIN; a non-admin staff user gets a
+                  plain "contact your administrator" line with no internal
+                  config surface. */}
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Payment-gateway keys are configured server-side as environment variables (not via this UI). Ask your administrator to set the variables below and restart the backend. Activating either gateway will enable the payment table + the per-invoice Pay-Now flow.
+                {isAdmin
+                  ? 'Payment-gateway keys are configured server-side as environment variables (not via this UI). Set the variables below and restart the backend. Activating either gateway will enable the payment table + the per-invoice Pay-Now flow.'
+                  : 'Online payments are not available yet. Contact your administrator to enable a payment gateway.'}
               </div>
             </div>
           </div>
-          <div style={{ marginLeft: '2.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
-              <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Stripe — required env vars</summary>
-              <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+          {isAdmin && (
+            <div style={{ marginLeft: '2.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
+                <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Stripe — required env vars</summary>
+                <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
 {`STRIPE_SECRET_KEY=sk_live_...        # from dashboard.stripe.com → Developers → API keys
 STRIPE_WEBHOOK_SECRET=whsec_...     # from dashboard.stripe.com → Developers → Webhooks
                                       # endpoint URL: <BASE_URL>/api/payments/webhook/stripe`}</pre>
-            </details>
-            <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
-              <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Razorpay — required env vars</summary>
-              <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+              </details>
+              <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
+                <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Razorpay — required env vars</summary>
+                <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
 {`RAZORPAY_KEY_ID=rzp_live_...        # from dashboard.razorpay.com → Settings → API Keys
 RAZORPAY_KEY_SECRET=...
 RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings → Webhooks
                                       # endpoint URL: <BASE_URL>/api/payments/webhook/razorpay`}</pre>
-            </details>
-          </div>
+              </details>
+            </div>
+          )}
         </div>
       )}
 

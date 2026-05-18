@@ -5,7 +5,7 @@ import React, {
   useCallback,
   useContext,
 } from "react";
-import { Bell, Check, X } from "lucide-react";
+import { Bell, Check, CheckCheck, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { io } from "socket.io-client";
 import { fetchApi } from "../utils/api";
@@ -425,23 +425,64 @@ const NotificationBell = () => {
                   </p>
                 </div>
 
-                {/* Delete button */}
-                <button
-                  onClick={(e) => deleteNotification(e, n.id)}
+                {/* Per-row actions (#815 / NOT-002):
+                  *   - Mark as Read (CheckCheck): only rendered for unread rows.
+                  *     Fires PUT /api/notifications/:id/read; the row paints as
+                  *     read but stays in the panel so the user can still see
+                  *     what was just acknowledged.
+                  *   - Resolve / Dismiss (X): rendered on every row. Fires
+                  *     DELETE /api/notifications/:id and removes the row.
+                  * Both are stopPropagation'd so clicking them does NOT also
+                  * fire the row-level navigate/markAsRead. */}
+                <div
                   style={{
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    color: "var(--text-secondary)",
-                    padding: 4,
-                    opacity: 0.5,
-                    transition: "opacity 0.15s",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-                  onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.5")}
                 >
-                  <X size={14} />
-                </button>
+                  {!n.isRead && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        markAsRead(n.id);
+                      }}
+                      aria-label={`Mark "${n.title}" as read`}
+                      title="Mark as read"
+                      style={{
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "var(--accent-color)",
+                        padding: 4,
+                        opacity: 0.7,
+                        transition: "opacity 0.15s",
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                      onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.7")}
+                    >
+                      <CheckCheck size={14} />
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => deleteNotification(e, n.id)}
+                    aria-label={`Resolve "${n.title}"`}
+                    title="Resolve / dismiss"
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "var(--text-secondary)",
+                      padding: 4,
+                      opacity: 0.5,
+                      transition: "opacity 0.15s",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.5")}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
               </div>
             ))
           )}

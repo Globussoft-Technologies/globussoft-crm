@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
@@ -188,6 +188,213 @@ describe('<PatientDetail />', () => {
       expect(priorSection.textContent).toMatch(/botox-fillers/);
       // empty-state should NOT render when there is at least one prior consent
       expect(priorSection.textContent).not.toMatch(/No prior consents on file/i);
+    });
+  });
+
+  // #752 — Log Visit "Doctor" dropdown was filtering wellnessRole === 'doctor'
+  // only, so the 12 professionals (stylists, aestheticians, slimming
+  // therapists, Ayurveda practitioners) couldn't be assigned to a visit even
+  // though Calendar.jsx (#262) and WorkingHoursEditor already include both
+  // roles. Fix: include 'doctor' + 'professional' and drop deactivated rows.
+  describe('Log Visit Doctor dropdown — includes professionals (#752)', () => {
+    it('lists both doctor and professional wellnessRoles, excluding deactivated', async () => {
+      const mixedStaff = [
+        { id: 1, name: 'Dr. Meena Sharma', wellnessRole: 'doctor', deactivatedAt: null },
+        { id: 2, name: 'Dr. Harsh Kumar',  wellnessRole: 'doctor', deactivatedAt: null },
+        { id: 3, name: 'Anjali Verma',     wellnessRole: 'professional', deactivatedAt: null },
+        { id: 4, name: 'Priya Rao',        wellnessRole: 'professional', deactivatedAt: null },
+        // Telecaller / helper / deactivated rows must NOT appear in the dropdown.
+        { id: 5, name: 'Telecaller Tina',  wellnessRole: 'telecaller',   deactivatedAt: null },
+        { id: 6, name: 'Helper Hari',      wellnessRole: 'helper',       deactivatedAt: null },
+        { id: 7, name: 'Dr. Retired',      wellnessRole: 'doctor',       deactivatedAt: '2026-01-01T00:00:00Z' },
+      ];
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(mixedStaff);
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Log visit/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Log visit/i }));
+
+      // Doctor select is the second <select> on the page (Service first,
+      // Doctor second). Easier: scope by label text "Doctor *".
+      const doctorLabel = await screen.findByText(/^Doctor/, { selector: 'label' });
+      const doctorSelect = doctorLabel.parentElement.querySelector('select');
+      expect(doctorSelect).not.toBeNull();
+
+      // Doctor + Professional included, telecaller/helper/deactivated excluded.
+      const optionTexts = Array.from(doctorSelect.querySelectorAll('option')).map((o) => o.textContent);
+      expect(optionTexts).toEqual(expect.arrayContaining([
+        expect.stringMatching(/Dr\. Meena Sharma/),
+        expect.stringMatching(/Dr\. Harsh Kumar/),
+        expect.stringMatching(/Anjali Verma/),
+        expect.stringMatching(/Priya Rao/),
+      ]));
+      // Professionals get a role suffix to disambiguate; doctors do not.
+      const anjali = optionTexts.find((t) => t.includes('Anjali Verma'));
+      expect(anjali).toMatch(/professional/);
+      const meena = optionTexts.find((t) => t.includes('Dr. Meena Sharma'));
+      expect(meena).not.toMatch(/doctor\)/);
+
+      // Exclusions.
+      expect(optionTexts.some((t) => /Telecaller Tina/.test(t))).toBe(false);
+      expect(optionTexts.some((t) => /Helper Hari/.test(t))).toBe(false);
+      expect(optionTexts.some((t) => /Dr\. Retired/.test(t))).toBe(false);
+    });
+  });
+
+  // #750 — Photos tab: img onError must swap to a "Failed to load" placeholder
+  // + Try again button. Pre-fix the broken-image tile was visually indistinguishable
+  // from a successful upload because there was no error state — a clinician
+  // browsing later couldn't tell which patients had unviewable photos. The fix
+  // adds `<img onError={...}>` per thumbnail with a Retry action that forces a
+  // cache-busting re-fetch. Counters above (BEFORE/AFTER (n)) intentionally stay
+  // unchanged because the photo records DO exist server-side; only the render
+  // surface differentiates loaded vs failed tiles.
+  describe('Photos tab — failed image placeholder (#750)', () => {
+    it('renders a "Failed to load" placeholder with Try again when img.onError fires', async () => {
+      const patientWithPhotos = {
+        ...patient,
+        visits: [
+          {
+            id: 11,
+            visitDate: '2026-04-10T09:00:00Z',
+            service: { name: 'Consultation' },
+            notes: 'First visit',
+            amountCharged: 1500,
+            photosBefore: JSON.stringify(['/uploads/before-1.jpg']),
+            photosAfter:  JSON.stringify(['/uploads/after-1.jpg']),
+          },
+        ],
+      };
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patientWithPhotos);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      const { container } = renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Photos/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Photos/i }));
+
+      // Wait for the photo thumbnails to render. <img alt=""> is hidden from
+      // RTL's role queries (decorative), so query the DOM directly.
+      const imgs = await waitFor(() => {
+        const list = container.querySelectorAll('img');
+        expect(list.length).toBeGreaterThanOrEqual(2);
+        return Array.from(list);
+      });
+
+      // Happy path — no placeholders rendered yet.
+      expect(screen.queryAllByTestId('photo-failed-placeholder').length).toBe(0);
+
+      // Simulate the network/MIME failure: fire onError on every <img>.
+      // (The Photos tab renders 1 before + 1 after thumbnail for this fixture.)
+      await act(async () => {
+        imgs.forEach((img) => fireEvent.error(img));
+      });
+
+      // Both tiles swap to the placeholder + Try again button.
+      const placeholders = await waitFor(() => {
+        const list = screen.getAllByTestId('photo-failed-placeholder');
+        expect(list.length).toBe(2);
+        return list;
+      });
+      placeholders.forEach((p) => {
+        expect(p.textContent).toMatch(/Failed to load/i);
+      });
+      const retryButtons = screen.getAllByRole('button', { name: /Try again/i });
+      expect(retryButtons.length).toBe(2);
+    });
+  });
+
+  // #793 — wallet balance is buried under a tab today. QA finding: front-desk
+  // operators want a prominent chip in the Patient 360 header so the prepaid
+  // balance is visible at a glance without drilling into the Wallet tab.
+  // Chip is sourced from /api/wellness/patients/:id/wallet and silently
+  // skipped when the endpoint is unreachable (cross-tenant / non-wellness).
+  describe('Patient header wallet chip (#793)', () => {
+    it('renders a wallet chip in the header when /wallet returns a wallet object', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url === '/api/wellness/patients/1/wallet') {
+          return Promise.resolve({
+            patient: { id: 1, name: patient.name },
+            wallet: { id: 9, balance: 2450, currency: 'INR' },
+            transactions: [],
+          });
+        }
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      renderPage();
+      const chip = await screen.findByTestId('patient-header-wallet-chip');
+      expect(chip).toBeInTheDocument();
+      // Amount formatted with INR (₹) symbol — formatMoney(2450, INR).
+      const amount = screen.getByTestId('patient-header-wallet-amount');
+      // formatMoney renders "₹2,450" / "₹2,450.00" depending on locale fmt;
+      // assert on the digit sequence so we don't bind to ICU rounding.
+      expect(amount.textContent).toMatch(/2[,.]?450/);
+      // Chip carries the "wallet" label so operators see it as a wallet
+      // surface, not just a money tile.
+      expect(chip.textContent.toLowerCase()).toContain('wallet');
+    });
+
+    it('renders no chip when the wallet endpoint returns no wallet (e.g. cross-tenant 404)', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url === '/api/wellness/patients/1/wallet') {
+          // Simulate the rejected case — fetchApi-shaped error.
+          return Promise.reject(new Error('Patient not found'));
+        }
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      renderPage();
+      // Wait for the page to land — header subline is a stable anchor.
+      await waitFor(() => expect(screen.getByTestId('patient-header-subline')).toBeInTheDocument());
+      // Chip is conditional; the failed wallet fetch leaves walletInfo null
+      // and the chip block is not rendered.
+      expect(screen.queryByTestId('patient-header-wallet-chip')).not.toBeInTheDocument();
+    });
+
+    it('renders a zero-balance chip when wallet is fresh / empty', async () => {
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url) => {
+        if (url === '/api/wellness/patients/1/wallet') {
+          return Promise.resolve({
+            patient: { id: 1, name: patient.name },
+            wallet: { id: 9, balance: 0, currency: 'INR' },
+            transactions: [],
+          });
+        }
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        return Promise.resolve([]);
+      });
+
+      renderPage();
+      // Even a zero-balance wallet renders the chip — the front-desk operator
+      // needs to know whether the patient has ANY wallet, not just non-zero.
+      const chip = await screen.findByTestId('patient-header-wallet-chip');
+      expect(chip).toBeInTheDocument();
+      const amount = screen.getByTestId('patient-header-wallet-amount');
+      expect(amount.textContent).toMatch(/0/);
     });
   });
 

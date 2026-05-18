@@ -132,9 +132,20 @@ test.describe('eventBus.evaluateCondition() — operator matrix', () => {
     expect(res.ok(), `fire failed: ${res.status()} ${await res.text()}`).toBeTruthy();
 
     async function findOurRow() {
-      const r = await request.get(`${API}/audit?entity=AutomationRule&action=WORKFLOW`, {
-        headers: auth(),
-      });
+      // Cloudflare-fronted demo flaps 5xx briefly during origin restarts
+      // (Ray-ID 9fd52d673a868e10 on 2026-05-17 ran 502 for ~few seconds and
+      // killed every spec that hit the audit endpoint in the window). Retry
+      // transient 5xx with a short backoff before failing — 4xx still bails
+      // immediately so genuine contract regressions surface fast.
+      let r;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        r = await request.get(`${API}/audit?entity=AutomationRule&action=WORKFLOW`, {
+          headers: auth(),
+        });
+        if (r.ok()) break;
+        if (r.status() < 500) break;
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+      }
       expect(r.ok(), `audit list: ${r.status()}`).toBeTruthy();
       const rows = await r.json();
       return (rows || []).find(

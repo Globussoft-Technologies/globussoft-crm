@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, Copy, Edit, Trash2, Clock, Check, X as XIcon, Link as LinkIcon, Image, Upload, GripVertical, Phone, Mail } from 'lucide-react';
+import { Calendar, Plus, Copy, Edit, Trash2, Clock, Check, X as XIcon, Link as LinkIcon, Image, Upload, GripVertical, Phone, Mail, Code2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -25,6 +25,25 @@ const DEFAULT_AVAIL = {
 
 function publicUrl(slug) {
   return `${window.location.origin}/api/booking-pages/public/${slug}`;
+}
+
+// #810 (Zylu-Gap MINI-002) — embeddable widget snippet builder. The widget
+// itself ships at /embed/widget.js (frontend/public/embed/widget.js) and
+// auto-mounts an iframe targeting /embed/lead-form.html for any element with
+// `data-gbs-form` + `data-slug` (booking) or `data-key` (partner API).
+// The Settings surface here gives the operator the exact <div> + <script>
+// to paste into their site.
+export function embedSnippetForSlug(slug, origin) {
+  // Default to the demo origin when window.location is not available (SSR
+  // path / unit tests with a stripped window object). The script-src URL
+  // must point at the same CRM that serves /api/booking-pages/public/<slug>,
+  // otherwise CORS + iframe origin won't match.
+  const base = origin || (typeof window !== 'undefined' && window.location && window.location.origin) || 'https://crm.globusdemos.com';
+  return [
+    '<!-- Globussoft CRM booking widget -->',
+    `<div data-gbs-form data-slug="${slug}" data-title="Book an appointment"></div>`,
+    `<script async src="${base}/embed/widget.js"></script>`,
+  ].join('\n');
 }
 
 function parseAvail(raw) {
@@ -664,6 +683,51 @@ function EditDrawer({ page, bookings, onClose, onSaved, onCancelBooking, onCopyU
                 Plain-text or a JSON object like <code>{'{"monday":"9-19"}'}</code>. Surfaced on the public booking page.
               </p>
             </div>
+          </div>
+        </div>
+
+        {/* #810 (Zylu-Gap MINI-002) — embeddable widget snippet. The widget
+            (frontend/public/embed/widget.js) already shipped; what was missing
+            was a Settings-side surface so the operator can grab the snippet
+            without poking around the file tree. Read-only <textarea> + a
+            one-click "Copy snippet" button. */}
+        <div style={{ marginBottom: '1.25rem' }}>
+          <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Code2 size={16} aria-hidden="true" /> Embed Widget Code
+          </h4>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '0 0 0.5rem 0' }}>
+            Paste this snippet into any website to embed your booking form. The widget mounts an iframe pointed at this page&apos;s public slug.
+          </p>
+          <textarea
+            data-testid="embed-snippet"
+            readOnly
+            rows={4}
+            value={embedSnippetForSlug(page.slug)}
+            style={{ ...inputStyle, fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical' }}
+            onFocus={(e) => e.target.select()}
+            aria-label="Embed widget code"
+          />
+          <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              data-testid="copy-embed-snippet"
+              onClick={async () => {
+                const snippet = embedSnippetForSlug(page.slug);
+                try {
+                  await navigator.clipboard.writeText(snippet);
+                  notify.success('Embed snippet copied to clipboard');
+                } catch {
+                  await notify.prompt('Copy this snippet:', snippet);
+                }
+              }}
+              style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >
+              <Copy size={14} /> Copy snippet
+            </button>
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+              Works in any HTML page. Mobile-responsive. No build step required.
+            </span>
           </div>
         </div>
 

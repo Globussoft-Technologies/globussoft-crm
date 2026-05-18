@@ -222,10 +222,21 @@ function formatIndiaMARTDate(date) {
  */
 function initMarketplaceCron(io) {
   cron.schedule("*/5 * * * *", async () => {
-    console.log("[MarketplaceEngine] Running sync cycle...");
-    const configs = await prisma.marketplaceConfig.findMany({ where: { isActive: true } });
-    for (const config of configs) {
-      await syncMarketplace(config.provider, io);
+    // Wrap the tick body in try/catch so a partner-API throw or a Prisma blip
+    // doesn't surface as an unhandledPromiseRejection (strict Node settings
+    // could kill the process). Mirrors every other engine in backend/cron/.
+    try {
+      console.log("[MarketplaceEngine] Running sync cycle...");
+      const configs = await prisma.marketplaceConfig.findMany({ where: { isActive: true } });
+      for (const config of configs) {
+        try {
+          await syncMarketplace(config.provider, io);
+        } catch (perProviderErr) {
+          console.error(`[MarketplaceEngine] provider=${config.provider} sync error:`, perProviderErr && perProviderErr.message);
+        }
+      }
+    } catch (tickErr) {
+      console.error("[MarketplaceEngine] tick error:", tickErr && tickErr.message);
     }
   });
   console.log("[MarketplaceEngine] Cron scheduled: every 5 minutes");

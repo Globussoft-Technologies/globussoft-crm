@@ -227,6 +227,87 @@ describe('<NotificationBell />', () => {
     expect(btn).toBeInTheDocument();
   });
 
+  it('#815: per-row "Mark as read" affordance fires PUT /api/notifications/:id/read', async () => {
+    const user = userEvent.setup();
+    fetchApi
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({
+        notifications: [
+          { id: 77, title: 'Unread row', message: 'pending', type: 'info', isRead: false, createdAt: new Date().toISOString() },
+        ],
+      })
+      .mockResolvedValueOnce({ ok: true }); // PUT /:id/read
+
+    renderWithAuth(<NotificationBell />);
+
+    const bell = await screen.findByRole('button', { name: /Notifications \(1 unread\)/ });
+    await user.click(bell);
+
+    // Per-row "Mark as read" button uses aria-label `Mark "<title>" as read`.
+    const markBtn = await screen.findByRole('button', { name: /^Mark "Unread row" as read$/ });
+    await user.click(markBtn);
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(
+        ([url, opts]) => url === '/api/notifications/77/read' && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+    });
+  });
+
+  it('#815: per-row "Mark as read" button is absent on already-read rows', async () => {
+    const user = userEvent.setup();
+    fetchApi
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({
+        notifications: [
+          { id: 88, title: 'Already read', message: 'done', type: 'info', isRead: true, createdAt: new Date().toISOString() },
+        ],
+      });
+
+    renderWithAuth(<NotificationBell />);
+
+    const bell = await screen.findByRole('button', { name: /notifications/i });
+    await user.click(bell);
+
+    await screen.findByText('Already read');
+    // No "Mark as read" affordance — only the Resolve (X) button.
+    expect(screen.queryByRole('button', { name: /^Mark "Already read" as read$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Resolve "Already read"$/ })).toBeInTheDocument();
+  });
+
+  it('#815: per-row "Resolve" fires DELETE /api/notifications/:id and removes the row', async () => {
+    const user = userEvent.setup();
+    fetchApi
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({
+        notifications: [
+          { id: 55, title: 'Dismiss me', message: 'gone soon', type: 'info', isRead: false, createdAt: new Date().toISOString() },
+        ],
+      })
+      .mockResolvedValueOnce({ ok: true }); // DELETE
+
+    renderWithAuth(<NotificationBell />);
+
+    const bell = await screen.findByRole('button', { name: /Notifications \(1 unread\)/ });
+    await user.click(bell);
+
+    const resolveBtn = await screen.findByRole('button', { name: /^Resolve "Dismiss me"$/ });
+    await user.click(resolveBtn);
+
+    await waitFor(() => {
+      const delCall = fetchApi.mock.calls.find(
+        ([url, opts]) => url === '/api/notifications/55' && opts?.method === 'DELETE',
+      );
+      expect(delCall).toBeTruthy();
+    });
+
+    // Row gone + badge decrements (unread row was removed).
+    await waitFor(() => {
+      expect(screen.queryByText('Dismiss me')).not.toBeInTheDocument();
+    });
+  });
+
   it('tolerates legacy array-shape notifications response (#113 regression guard)', async () => {
     const user = userEvent.setup();
     fetchApi

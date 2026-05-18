@@ -67,11 +67,18 @@ test.describe('Sandbox Snapshots API — smoke (non-destructive only)', () => {
   });
 
   test('POST /api/sandbox creates a snapshot, GET /:id, GET /:id/download, DELETE /:id', async ({ request }) => {
-    test.setTimeout(60_000); // capture iterates several models
+    // Capture iterates several models. Under e2e-full's 4-shard concurrent
+    // load each sub-request can take 4-5s (vs 0.5-2s solo); the 4 chained
+    // calls + the global 15s actionTimeout default in playwright.config.js
+    // collide on the boundary. Bump both the test budget AND the per-call
+    // timeout so any single slow operation has room to finish.
+    test.setTimeout(90_000);
+    const PER_CALL_TIMEOUT = 45_000;
     const tag = `E2E_AUDIT_${Date.now()}`;
     const create = await request.post(`${API}/sandbox`, {
       headers: auth(),
       data: { name: tag, description: 'Captured by Vivaan Kapoor E2E suite' },
+      timeout: PER_CALL_TIMEOUT,
     });
     expect(create.status()).toBe(201);
     const snap = await create.json();
@@ -81,14 +88,20 @@ test.describe('Sandbox Snapshots API — smoke (non-destructive only)', () => {
     createdIds.push(snap.id);
 
     // GET /:id
-    const meta = await request.get(`${API}/sandbox/${snap.id}`, { headers: auth() });
+    const meta = await request.get(`${API}/sandbox/${snap.id}`, {
+      headers: auth(),
+      timeout: PER_CALL_TIMEOUT,
+    });
     expect(meta.status()).toBe(200);
     const metaBody = await meta.json();
     expect(metaBody.id).toBe(snap.id);
     expect(metaBody.name).toBe(tag);
 
     // GET /:id/download
-    const dl = await request.get(`${API}/sandbox/${snap.id}/download`, { headers: auth() });
+    const dl = await request.get(`${API}/sandbox/${snap.id}/download`, {
+      headers: auth(),
+      timeout: PER_CALL_TIMEOUT,
+    });
     expect(dl.status()).toBe(200);
     expect(dl.headers()['content-disposition']).toContain('attachment');
     const text = await dl.text();

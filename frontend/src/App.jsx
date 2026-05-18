@@ -169,6 +169,10 @@ const WellnessHolidays = lazy(() => import("./pages/wellness/Holidays"));
 const WellnessWorkingHours = lazy(() => import("./pages/wellness/WorkingHoursEditor"));
 // Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox).
 const WellnessWhatsAppThreads = lazy(() => import("./pages/wellness/WhatsAppThreads"));
+// Zylu-Gap #800 (WA-005) — Blocked Numbers admin page. Manages
+// /api/whatsapp/opt-outs rows with Add + Unblock affordances. Paired
+// with the All/Unread/Blocked tab strip on WhatsAppThreads (#796).
+const WellnessBlockedNumbers = lazy(() => import("./pages/wellness/BlockedNumbers"));
 // Wave 2 Agent JJ — Staff Attendance + Leave Management. Open to all roles
 // (everyone needs to clock in/out + manage their own leave); manager+
 // surfaces appear inline based on AuthContext.role.
@@ -176,6 +180,11 @@ const WellnessAttendance = lazy(() => import("./pages/wellness/Attendance"));
 const WellnessLeave = lazy(() => import("./pages/wellness/Leave"));
 // Wave 2 Agent II — POS / Cash Register / Shift / Sale MVP UI.
 const WellnessPointOfSale = lazy(() => import("./pages/wellness/PointOfSale"));
+// Zylu-Gap Cash Register admin page — closes #770/#779/#780/#781.
+// Lists registers (admin+ create/edit), drills into per-register shift +
+// transactions panel. Without this surface POS is permanently gated since
+// the backend requires an OPEN shift on a Register before /pos/sales accepts.
+const WellnessCashRegisters = lazy(() => import("./pages/wellness/CashRegisters"));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
 // Public customer-facing knowledge-base article view (no auth, no admin chrome).
@@ -605,7 +614,6 @@ export default function App() {
                           allow={["ADMIN", "MANAGER"]}
                           feature="Marketing"
                           roles="manager (or admin)"
-                          lockedInPlace
                         >
                           <Marketing />
                         </RoleGuard>
@@ -854,7 +862,6 @@ export default function App() {
                     allow={["ADMIN", "MANAGER"]}
                     feature="Wallet ledger"
                     roles="manager (or admin)"
-                    lockedInPlace
                   >
                     <WellnessWallet />
                   </RoleGuard>
@@ -866,7 +873,6 @@ export default function App() {
                     allow={["ADMIN", "MANAGER"]}
                     feature="Gift Cards"
                     roles="manager (or admin)"
-                    lockedInPlace
                   >
                     <WellnessGiftCards />
                   </RoleGuard>
@@ -878,7 +884,6 @@ export default function App() {
                     allow={["ADMIN", "MANAGER"]}
                     feature="Coupons"
                     roles="manager (or admin)"
-                    lockedInPlace
                   >
                     <WellnessCoupons />
                   </RoleGuard>
@@ -890,7 +895,6 @@ export default function App() {
                     allow={["ADMIN", "MANAGER"]}
                     feature="Cashback rules"
                     roles="manager (or admin)"
-                    lockedInPlace
                   >
                     <WellnessCashbackRules />
                   </RoleGuard>
@@ -899,6 +903,17 @@ export default function App() {
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
+              {/* Zylu-Gap #800 — Blocked Numbers admin (manages /opt-outs).
+                  Add is ADMIN+MANAGER (backend gate), Unblock is ADMIN-only
+                  (DPDP §11). The page hides the Unblock button for
+                  non-admins so the modal never fires a 403 round-trip. */}
+              <Route path="wellness/whatsapp/blocked-numbers" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Blocked Numbers requires admin or manager access.">
+                    <WellnessBlockedNumbers />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
               <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
               {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
@@ -987,6 +1002,18 @@ export default function App() {
                 <WellnessOnly>
                   <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="POS requires staff access.">
                     <WellnessPointOfSale />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              {/* Zylu-Gap #770/#779/#780/#781 — Cash Register admin page.
+                  Lists registers, drills into per-register shift detail
+                  (status header + open/close/deposit/withdraw + transactions).
+                  Same role envelope as POS so a cashier can open their own
+                  shift here without leaving the staff role bucket. */}
+              <Route path="wellness/cash-registers" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="Cash Registers requires staff access.">
+                    <WellnessCashRegisters />
                   </RoleGuard>
                 </WellnessOnly>
               } />

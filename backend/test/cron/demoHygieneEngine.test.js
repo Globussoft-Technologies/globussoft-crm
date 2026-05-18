@@ -44,9 +44,12 @@ import prisma from '../../lib/prisma.js';
 import {
   runDemoHygiene,
   QA_NAME_PREFIXES,
+  TEARDOWN_NAME_PREFIXES,
+  VISIT_NOTES_MARKERS,
+  FAR_FUTURE_VISITDATE_YEARS,
 } from '../../cron/demoHygieneEngine.js';
 
-// All 12 models the engine sweeps. Field column tracks WHICH text field
+// All 15 models the engine sweeps. Field column tracks WHICH text field
 // the engine searches on for that model — this MUST match the
 // purgeNamedModel(...textField) call sites in the engine.
 const SWEPT_MODELS = [
@@ -66,6 +69,10 @@ const SWEPT_MODELS = [
   // marketplaceLead has a special-case (name OR email) shape — covered
   // separately below.
   { model: 'marketplaceLead', field: '__special__' },
+  // #741 widening — 3 wellness clinical surfaces from the RBAC audit
+  { model: 'visit', field: '__special__' }, // notes-contains + visitDate future
+  { model: 'treatmentPlan', field: 'name' }, // _teardown_/_test_ prefix
+  { model: 'membershipPlan', field: 'name' }, // _teardown_/_test_ prefix
 ];
 
 beforeAll(() => {
@@ -258,7 +265,7 @@ describe('cron/demoHygieneEngine — purge behavior', () => {
     expect(() => new Date(summary.cutoff)).not.toThrow();
   });
 
-  test('empty candidate sets → no delete calls, summary all zero across 12 models', async () => {
+  test('empty candidate sets → no delete calls, summary all zero across 15 models', async () => {
     const summary = await runDemoHygiene();
     for (const { model } of SWEPT_MODELS) {
       expect(prisma[model].delete).not.toHaveBeenCalled();
@@ -276,6 +283,10 @@ describe('cron/demoHygieneEngine — purge behavior', () => {
     expect(summary.task.deleted).toBe(0);
     expect(summary.agentRecommendation.deleted).toBe(0);
     expect(summary.emailMessage.deleted).toBe(0);
+    // #741 new surfaces
+    expect(summary.visit.deleted).toBe(0);
+    expect(summary.treatmentPlan.deleted).toBe(0);
+    expect(summary.membershipPlan.deleted).toBe(0);
   });
 
   test('#578 — sla policy / ticket / landing page / task / recommendation / email each delete their candidates', async () => {
@@ -317,5 +328,148 @@ describe('cron/demoHygieneEngine — purge behavior', () => {
     });
     const summary = await runDemoHygiene();
     expect(summary.marketplaceLead).toEqual({ deleted: 0, skipped: 1, candidates: 1 });
+  });
+});
+
+describe('cron/demoHygieneEngine — #741 marker contract (Visit notes + teardown name)', () => {
+  // 2026-05-14 RBAC audit (#741) reported three distinct kinds of
+  // wellness clinical residue that the original 12-model engine didn't
+  // touch. Pin the new exports + the OR-shape so future refactors don't
+  // silently drop any of them.
+
+  test('VISIT_NOTES_MARKERS contains E2E_EXT_ (external-partner-API marker)', () => {
+    expect(VISIT_NOTES_MARKERS).toContain('E2E_EXT_');
+  });
+
+  test('TEARDOWN_NAME_PREFIXES mirrors wellness.js excludeTeardownNames', () => {
+    // Source of truth: backend/routes/wellness.js TEARDOWN_NAME_PREFIXES.
+    // The two arrays MUST stay in sync — the cron HARD-DELETES rows
+    // that the runtime filter merely hides.
+    expect(TEARDOWN_NAME_PREFIXES).toEqual(
+      expect.arrayContaining(['_teardown_', '_test_']),
+    );
+    expect(TEARDOWN_NAME_PREFIXES).toHaveLength(2);
+  });
+
+  test('FAR_FUTURE_VISITDATE_YEARS is 5 (matches the 3000-01-01 sentinel filter)', () => {
+    // Bumping this lets fixture data live longer in the demo; lowering
+    // it risks deleting real long-term-prescheduled visits. 5 is the
+    // sweet spot — no clinic books beyond 5y out today.
+    expect(FAR_FUTURE_VISITDATE_YEARS).toBe(5);
+  });
+});
+
+describe('cron/demoHygieneEngine — #741 Visit sweep (notes-contains OR far-future visitDate)', () => {
+  test('visit findMany OR-joins notes-contains-E2E_EXT_ with visitDate>=now+5y', async () => {
+    await runDemoHygiene();
+    expect(prisma.visit.findMany).toHaveBeenCalledTimes(1);
+    const arg = prisma.visit.findMany.mock.calls[0][0];
+    expect(arg.where).toHaveProperty('AND');
+    expect(arg.where.AND).toHaveLength(2);
+
+    // Cutoff predicate on createdAt
+    expect(arg.where.AND[0]).toEqual({ createdAt: { lt: expect.any(Date) } });
+
+    // OR predicate: notes-contains markers PLUS far-future visitDate
+    const orList = arg.where.AND[1].OR;
+    expect(Array.isArray(orList)).toBe(true);
+    expect(orList).toHaveLength(VISIT_NOTES_MARKERS.length + 1);
+
+    // Every notes marker present
+    for (const marker of VISIT_NOTES_MARKERS) {
+      expect(orList).toContainEqual({ notes: { contains: marker } });
+    }
+
+    // Far-future visitDate clause — threshold ≥ now + 5y (within minute fuzz)
+    const visitDateClause = orList.find((c) => c.visitDate);
+    expect(visitDateClause).toBeDefined();
+    expect(visitDateClause.visitDate).toHaveProperty('gte');
+    const threshold = visitDateClause.visitDate.gte.getTime();
+    const expected =
+      new Date(
+        new Date().getFullYear() + FAR_FUTURE_VISITDATE_YEARS,
+        new Date().getMonth(),
+        new Date().getDate(),
+      ).getTime();
+    // Within 5 seconds — the two Date constructions can straddle a tick.
+    expect(Math.abs(threshold - expected)).toBeLessThan(5000);
+  });
+
+  test('candidate visits hard-delete one at a time', async () => {
+    prisma.visit.findMany.mockResolvedValue([
+      { id: 347 }, // the sentinel-3000 visit from the #741 pen-test repro
+      { id: 1042 }, // an E2E_EXT_ visit
+    ]);
+    const summary = await runDemoHygiene();
+    expect(prisma.visit.delete).toHaveBeenCalledWith({ where: { id: 347 } });
+    expect(prisma.visit.delete).toHaveBeenCalledWith({ where: { id: 1042 } });
+    expect(summary.visit).toEqual({ deleted: 2, skipped: 0, candidates: 2 });
+  });
+
+  test('P2003 on a Visit → skipped, sibling continues', async () => {
+    prisma.visit.findMany.mockResolvedValue([
+      { id: 1 },
+      { id: 2 },
+    ]);
+    prisma.visit.delete.mockImplementation(async ({ where }) => {
+      if (where.id === 1) {
+        const err = new Error('FK restrict');
+        err.code = 'P2003';
+        throw err;
+      }
+      return {};
+    });
+    const summary = await runDemoHygiene();
+    expect(summary.visit).toEqual({ deleted: 1, skipped: 1, candidates: 2 });
+  });
+});
+
+describe('cron/demoHygieneEngine — #741 TreatmentPlan + MembershipPlan teardown sweep', () => {
+  test('treatmentPlan findMany sweeps on _teardown_/_test_ name prefix', async () => {
+    await runDemoHygiene();
+    expect(prisma.treatmentPlan.findMany).toHaveBeenCalledTimes(1);
+    const arg = prisma.treatmentPlan.findMany.mock.calls[0][0];
+    expect(arg.where.AND[0]).toEqual({ createdAt: { lt: expect.any(Date) } });
+    const orList = arg.where.AND[1].OR;
+    expect(orList).toHaveLength(TEARDOWN_NAME_PREFIXES.length);
+    for (const prefix of TEARDOWN_NAME_PREFIXES) {
+      expect(orList).toContainEqual({ name: { startsWith: prefix } });
+    }
+    // Field must be `name` — TreatmentPlan has no `title`/`subject` column
+    for (const clause of orList) {
+      expect(Object.keys(clause)).toEqual(['name']);
+    }
+  });
+
+  test('membershipPlan findMany sweeps on _teardown_/_test_ name prefix', async () => {
+    await runDemoHygiene();
+    expect(prisma.membershipPlan.findMany).toHaveBeenCalledTimes(1);
+    const arg = prisma.membershipPlan.findMany.mock.calls[0][0];
+    expect(arg.where.AND[0]).toEqual({ createdAt: { lt: expect.any(Date) } });
+    const orList = arg.where.AND[1].OR;
+    expect(orList).toHaveLength(TEARDOWN_NAME_PREFIXES.length);
+    // Spot-check the #741 repro fixture name
+    // `_teardown_csv_1778704044716 Good Plan` matches startsWith _teardown_
+    expect(orList).toContainEqual({ name: { startsWith: '_teardown_' } });
+    expect(orList).toContainEqual({ name: { startsWith: '_test_' } });
+  });
+
+  test('#741 — treatmentPlan + membershipPlan each delete their candidates', async () => {
+    prisma.treatmentPlan.findMany.mockResolvedValue([{ id: 800 }]);
+    prisma.membershipPlan.findMany.mockResolvedValue([{ id: 73 }]); // #741 repro id
+    const summary = await runDemoHygiene();
+    expect(prisma.treatmentPlan.delete).toHaveBeenCalledWith({ where: { id: 800 } });
+    expect(prisma.membershipPlan.delete).toHaveBeenCalledWith({ where: { id: 73 } });
+    expect(summary.treatmentPlan.deleted).toBe(1);
+    expect(summary.membershipPlan.deleted).toBe(1);
+  });
+
+  test('QA_NAME_PREFIXES vs TEARDOWN_NAME_PREFIXES are disjoint — no caller confusion', () => {
+    // The two prefix lists serve different purposes; if they ever
+    // accidentally overlapped, future refactors could silently widen
+    // teardown scope to QA-probe rows or vice-versa.
+    for (const qa of QA_NAME_PREFIXES) {
+      expect(TEARDOWN_NAME_PREFIXES).not.toContain(qa);
+    }
   });
 });

@@ -33,6 +33,11 @@ export default function Patients() {
     gender: "",
     source: "walk-in",
     locationId: "",
+    // #792 — anniversary + GST. Anniversary feeds marketing automations
+    // (anniversary-day campaigns); GST is required on the invoice surface
+    // for B2B / corporate-account patients.
+    anniversary: "",
+    gst: "",
   });
 
   // #331: search box dropped the first character of a fresh query.
@@ -149,9 +154,14 @@ export default function Patients() {
       name: patient.name || "",
       phone: patient.phone || "",
       email: patient.email || "",
+      dob: patient.dob ? String(patient.dob).slice(0, 10) : "",
       gender: patient.gender || "",
       source: patient.source || "walk-in",
       locationId: patient.locationId || "",
+      // #792 — anniversary stored as ISO string in API, sliced to YYYY-MM-DD
+      // for the native date-picker input. GST already stored uppercase.
+      anniversary: patient.anniversary ? String(patient.anniversary).slice(0, 10) : "",
+      gst: patient.gst || "",
     });
     setEditingId(patient.id);
     setShowAdd(true);
@@ -202,9 +212,12 @@ export default function Patients() {
         name: "",
         phone: "",
         email: "",
+        dob: "",
         gender: "",
         source: "walk-in",
         locationId: locations[0]?.id || "",
+        anniversary: "",
+        gst: "",
       });
       setShowAdd(false);
       // #331: bump reloadTick instead of calling load() directly so the
@@ -254,9 +267,12 @@ export default function Patients() {
                 name: "",
                 phone: "",
                 email: "",
+                dob: "",
                 gender: "",
                 source: "walk-in",
                 locationId: locations[0]?.id || "",
+                anniversary: "",
+                gst: "",
               });
             }
           }}
@@ -375,6 +391,29 @@ export default function Patients() {
               ))}
             </select>
           )}
+          {/* #792 — anniversary feeds anniversary-day marketing
+              automations. Optional (patient may be unmarried). */}
+          <input
+            placeholder="Anniversary"
+            type="date"
+            value={form.anniversary}
+            onChange={(e) => setForm({ ...form, anniversary: e.target.value })}
+            style={inputStyle}
+            aria-label="Anniversary"
+          />
+          {/* #792 — GSTIN for B2B / corporate-account invoicing. 15-char
+              alphanumeric. Optional. */}
+          <input
+            placeholder="GSTIN (15 chars)"
+            type="text"
+            maxLength={15}
+            value={form.gst}
+            onChange={(e) =>
+              setForm({ ...form, gst: e.target.value.toUpperCase() })
+            }
+            style={inputStyle}
+            aria-label="GSTIN"
+          />
           <button
             type="submit"
             style={{

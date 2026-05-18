@@ -21,7 +21,7 @@ const { test, expect } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const API = `${BASE_URL}/api`;
-const REQUEST_TIMEOUT = 30000;
+const REQUEST_TIMEOUT = 60000;
 
 // Real-strokes signature: ~800 chars of base64 (well above the 500-char
 // floor enforced by SIGNATURE_REQUIRED).

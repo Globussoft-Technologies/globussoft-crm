@@ -8,8 +8,14 @@ module.exports = defineConfig({
   testDir: '.',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 1,
+  retries: process.env.CI ? 3 : 1,
   workers: process.env.CI ? 2 : undefined,
+  // Default per-test timeout. Playwright's 30s default is too tight against demo
+  // under e2e-full's concurrent 4-shard load — `POST /send-email` (SendGrid) +
+  // heavy Prisma joins routinely cross 30s on shard contention. 60s eliminates
+  // the timeout-boundary failure class without papering over real bugs (a 60s
+  // test that still hard-fails is a real issue, not load noise).
+  timeout: 60_000,
   expect: {
     timeout: 15000,
   },

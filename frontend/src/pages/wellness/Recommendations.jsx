@@ -192,11 +192,13 @@ export default function Recommendations() {
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <AlertCircle size={24} style={{ marginBottom: '0.5rem' }} />
           {/* #360: empty stages used to render a blank panel — now they
-              tell the operator why the queue is empty (orchestrator runs
-              once a day at 7 AM IST, so a fresh-rejected list will stay
-              empty until the next batch). */}
+              tell the operator why the queue is empty.
+              #767: the user-facing copy no longer names the internal
+              "orchestrator" engine or its cron schedule (7 AM IST) —
+              that's infra detail. "Updated daily" conveys the cadence
+              without leaking the implementation. */}
           <div>
-            No recommendations in this stage yet — the orchestrator runs at 7 AM IST daily.
+            No recommendations in this stage yet — new suggestions are generated daily.
           </div>
         </div>
       )}

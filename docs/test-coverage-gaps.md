@@ -1,9 +1,21 @@
 # Test Coverage Gaps — 2026-05-06 audit
 
+> **⚠️ Snapshot is 2026-05-06. Counts and item-status are stale (8+ days
+> of active work since).** Before picking up any card here:
+>
+> 1. Run [`.claude/skills/verifying-issue-before-pickup/SKILL.md`](../.claude/skills/verifying-issue-before-pickup/SKILL.md) — many cards have shipped since the audit.
+> 2. Cross-check the [README.md "At a glance" table](../README.md) for current spec / vitest file counts.
+> 3. E2E_GAPS.md (G-1..G-25) is **fully closed** as of 2026-05-14 — archived
+>    under [docs/gaps/archive/](gaps/archive/). The G-XX system this doc
+>    cross-references is therefore historical.
+>
+> **Phantom-carry-over warning** ([CLAUDE.md standing rule](../CLAUDE.md#standing-rules-for-new-code-do-not-skip-these)): 7+ confirmed instances where TODOS / gap-doc rows
+> were dispatched on already-shipped scope. Verify before dispatch.
+
 > **Audience:** any dev / agent who wants to grab a coverage gap and ship it.
-> **Snapshot date:** 2026-05-06
-> **Companions:** [E2E_GAPS.md](./E2E_GAPS.md) (G-1..G-25 — only G-21 still open), [regression-coverage-backlog.md](./regression-coverage-backlog.md), [TODOS.md](../TODOS.md)
-> **Source of truth:** 68 `*-api.spec.js` files in [e2e/tests/](../e2e/tests/) + 42 vitest files in [backend/test/](../backend/test/) + 24 frontend vitest files under [frontend/src/](../frontend/src/) + the gate-spec list in [.github/workflows/deploy.yml](../.github/workflows/deploy.yml).
+> **Snapshot date:** 2026-05-06 (stale — see warning above)
+> **Companions:** [TODOS.md](../TODOS.md), [docs/gaps/archive/](gaps/archive/) for closed parent backlogs.
+> **Source of truth at snapshot time:** 68 `*-api.spec.js` + 42 vitest files. **Current counts:** see [README.md](../README.md).
 
 ## Why this doc exists
 

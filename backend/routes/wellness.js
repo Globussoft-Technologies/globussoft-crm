@@ -60,7 +60,7 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 // generic role enum ADMIN/MANAGER/USER from the JWT, not the wellnessRole
 // axis). Used by DELETE /patients/:id and other admin-only operations
 // added to this file.
-const { verifyRole } = require("../middleware/auth");
+const { verifyRole, RBAC_DENIED_MESSAGE } = require("../middleware/auth");
 
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
@@ -124,6 +124,63 @@ router.param("id", (req, res, next, id) => {
 });
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
+
+// #747 — teardown / fixture data filter. E2E suite teardown writes
+// renamed rows with names like `_teardown_csv_<ts>` /
+// `_teardown_wc_loc_<id>` so the next run's REGEXP scrub doesn't catch
+// the cleaned row. On busy demo boxes, those rows pile up and show in
+// customer-facing dropdowns (Memberships → Select a plan, Services
+// list, Locations list). A staff user could accidentally sell a
+// teardown plan to a real patient.
+// This helper appends a Prisma `name NOT startsWith` clause that hides
+// them from end-user lists; admin/manager can still opt in with
+// `?includeTeardown=1` for cleanup tooling. We DELIBERATELY do NOT
+// include `E2E_*` or `E2E ` in the prefix list — those are live-spec
+// fixtures that the same spec grep-reads its own creations during the
+// test run; filtering them would break in-suite `find(s => s.id === N)`
+// assertions across services-api, memberships-api, etc. The teardown
+// rename to `_teardown_<spec>_<id>` is the LATCH that makes a fixture
+// row dropdown-invisible going forward, mirroring the wellness-clinical-api
+// teardown pattern at line ~196.
+const TEARDOWN_NAME_PREFIXES = ["_teardown_", "_test_"];
+function excludeTeardownNames(req, where) {
+  if (req.query.includeTeardown === "1" || req.query.includeTeardown === "true") {
+    return where; // admin override for cleanup tools
+  }
+  // Prisma accepts an array of conditions under NOT — each is excluded
+  // (logical AND NOT each). Equivalent to `name NOT LIKE '_teardown_%'
+  // AND name NOT LIKE '_test_%' AND name NOT LIKE 'E2E %'` etc.
+  const teardownConditions = TEARDOWN_NAME_PREFIXES.map((p) => ({
+    name: { startsWith: p },
+  }));
+  const existingNOT = Array.isArray(where.NOT)
+    ? where.NOT
+    : where.NOT
+    ? [where.NOT]
+    : [];
+  return { ...where, NOT: [...existingNOT, ...teardownConditions] };
+}
+
+// #737 — server-side limit clamp for list endpoints. Pre-fix
+// `?limit=999999` (or `?limit=1&limit=999999` — Express's duplicate-key
+// last-wins semantics put the array form in req.query.limit) flowed to
+// `Math.min(parseInt(limit), <cap>)` where some specific routes had a
+// per-route cap baked in but others (e.g. the 5000-row patients CSV
+// export) had only a hardcoded literal upstream. The pollution case
+// `Math.min(parseInt(["1","999999"]), 200)` yields NaN — Prisma then
+// receives `take: NaN` and falls back to its default (no upper bound on
+// some adapter versions). This helper hardens every list call site:
+//   - Coalesces array-form to the last entry (matches Express's
+//     "last param wins" intuition + makes the pollution explicit).
+//   - parseInt(NaN | non-numeric) → falls back to the caller's default.
+//   - Math.min against the route's specific max (200 / 500 / 1000).
+// Mirrors backend/routes/contacts.js:167's pattern.
+function capLimit(raw, { def = 50, max = 200 } = {}) {
+  const v = Array.isArray(raw) ? raw[raw.length - 1] : raw;
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 1) return def;
+  return Math.min(n, max);
+}
 
 // #527 / #533 (CRIT-02 + HI-04): PHI access gates.
 //
@@ -191,6 +248,22 @@ router.all("/audit/*", wellnessNamespacedRedirect("/api/audit"));
 async function maybeAutoCreditLoyalty(visit, tenantId) {
   try {
     if (!visit || visit.status !== "completed") return;
+    // #749 — defense-in-depth: the visit-create route already 404s on a
+    // soft-deleted / non-existent patient (#742). This re-checks at the
+    // loyalty-credit boundary so any future call path that bypasses the
+    // route handler (e.g. a workflow rule, a cron sweep, or a future
+    // module that ports this helper) cannot inflate loyalty totals for a
+    // patient that GET /patients/:id 404s. The pen-test repro showed
+    // loyalty going 300→550 (+250) after writes against a missing patient.
+    if (!visit.patientId) return;
+    const patient = await prisma.patient.findFirst({
+      where: { tenantId, id: visit.patientId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!patient) {
+      console.warn("[wellness] maybeAutoCreditLoyalty skipped: patient", visit.patientId, "not found / soft-deleted");
+      return;
+    }
     // Load tenant's earn rules; if no row, fall back to historic 10% rule.
     let cfg;
     try {
@@ -348,8 +421,9 @@ router.get("/patients", phiReadGate, async (req, res) => {
     const [patients, total] = await Promise.all([
       prisma.patient.findMany({
         where,
-        take: Math.min(parseInt(limit), 200),
-        skip: parseInt(offset),
+        // #737 — clamp via capLimit (handles ?limit=N&limit=M pollution).
+        take: capLimit(limit, { def: 50, max: 200 }),
+        skip: parseInt(offset) || 0,
         orderBy: { createdAt: "desc" },
       }),
       prisma.patient.count({ where }),
@@ -799,6 +873,31 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   }
   const dobErr = ensureDob(body.dob);
   if (dobErr) return dobErr;
+  // #792 — anniversary is an optional date. Reuse ensureDob's same Date()
+  // parse + "must be a real date" semantics but allow nulls / empty strings
+  // (anniversary is OPTIONAL — patient may be unmarried). Only validate
+  // when the field is present + non-empty.
+  if (body.anniversary != null && String(body.anniversary).trim() !== "") {
+    const d = new Date(body.anniversary);
+    if (!Number.isFinite(d.getTime())) {
+      return { status: 400, error: "anniversary is not a valid date", code: "INVALID_ANNIVERSARY" };
+    }
+  }
+  // #792 — GSTIN format check. India's GSTIN is exactly 15 characters:
+  //   2-digit state code + 10-char PAN + 1-char entity number + Z + 1 check digit.
+  // We accept the loose 15-char alphanumeric shape (route handler upper-cases
+  // before validating) — a strict regex would reject valid edge cases the
+  // Govt portal accepts. Empty / null is allowed (gst is OPTIONAL).
+  if (body.gst != null && String(body.gst).trim() !== "") {
+    const cleaned = String(body.gst).trim().toUpperCase();
+    if (!/^[0-9A-Z]{15}$/.test(cleaned)) {
+      return {
+        status: 400,
+        error: "gst must be a 15-character alphanumeric GSTIN",
+        code: "INVALID_GST",
+      };
+    }
+  }
   return null;
 }
 
@@ -837,7 +936,13 @@ router.post("/patients", phiWriteGate, async (req, res) => {
     // validator and the route saved the raw `<img onerror=…>` payload.
     const inputErr = validatePatientInput(req.body, { isUpdate: false });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
-    const { name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId } = req.body;
+    // #792 — anniversary + gst added to the destructured allow-list.
+    // anniversary is validated by validatePatientInput (date shape);
+    // gst is validated by validateGstin (15-char alphanumeric).
+    const {
+      name, email, phone, dob, gender, bloodGroup, allergies, notes, source, contactId,
+      anniversary, gst,
+    } = req.body;
     // #337: persist the trimmed name. validatePatientInput's ensureStringLength
     // now rejects whitespace-only names; this normalises the saved value so
     // the Patients list, search index, prescriptions, and SMS templates all
@@ -866,6 +971,9 @@ router.post("/patients", phiWriteGate, async (req, res) => {
         notes,
         source,
         contactId: contactId ? parseInt(contactId) : null,
+        // #792 — anniversary + gst persisted on create.
+        anniversary: anniversary ? new Date(anniversary) : null,
+        gst: gst ? String(gst).trim().toUpperCase() : null,
         tenantId: req.user.tenantId,
       },
     });
@@ -936,9 +1044,19 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const data = {};
+    // #792 — anniversary + gst added to the allowed list. Pre-fix, anniversary
+    // existed in the schema but was silently dropped here; gst didn't exist
+    // at all. Both are now PUT-able (anniversary as Date | null; gst as a
+    // trimmed-and-uppercased 15-char string | null).
     const allowed = ["name", "email", "phone", "gender", "bloodGroup", "allergies", "notes", "source", "photoUrl"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.dob !== undefined) data.dob = req.body.dob ? new Date(req.body.dob) : null;
+    if (req.body.anniversary !== undefined) {
+      data.anniversary = req.body.anniversary ? new Date(req.body.anniversary) : null;
+    }
+    if (req.body.gst !== undefined) {
+      data.gst = req.body.gst ? String(req.body.gst).trim().toUpperCase() : null;
+    }
 
     // #401: keep normalizedPhone in sync with phone on every PUT that
     // touches phone. Without this, an edit-phone flow would leave the
@@ -1137,8 +1255,9 @@ router.get("/visits", phiReadGate, async (req, res) => {
 
     const visits = await prisma.visit.findMany({
       where,
-      take: Math.min(parseInt(limit), 500),
-      skip: parseInt(offset),
+      // #737 — clamp via capLimit (handles pollution).
+      take: capLimit(limit, { def: 100, max: 500 }),
+      skip: parseInt(offset) || 0,
       orderBy: { visitDate: "desc" },
       include: {
         patient: { select: { id: true, name: true, phone: true } },
@@ -1210,6 +1329,15 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     // Wave 11 Agent GG: resourceId + locationId added to destructure for the booking gate below.
     const { patientId, serviceId, doctorId, visitDate, status, vitals, notes, amountCharged, treatmentPlanId, resourceId, locationId } = req.body;
     if (!patientId) return res.status(400).json({ error: "patientId is required" });
+    // #742 — the patient must exist AND not be soft-deleted. Pre-fix the
+    // write trusted a client-supplied patientId; a soft-deleted patient's
+    // row physically survives (FK passes), so visits + the loyalty accrual
+    // landed against a patient that GET /patients/:id 404s. Mirrors the
+    // existing check at POST /patients/:id/memberships.
+    {
+      const _p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: parseInt(patientId), deletedAt: null }), select: { id: true } });
+      if (!_p) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+    }
     // #170: visitDate must be a valid date in [now-5y, now+1y]. Pre-fix the
     // route accepted year 1800 / 3000 (silent 201) and 500'd on bogus strings.
     if (visitDate !== undefined) {
@@ -1248,6 +1376,35 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     });
     if (!slotCheck.ok) {
       return res.status(409).json({ error: slotCheck.detail, code: slotCheck.code, detail: slotCheck.detail });
+    }
+
+    // #746 — duplicate-prevention guard. Pre-fix a double-clicked Save +
+    // an over-zealous seed-script loop wrote 111+ identical visit rows
+    // for one patient (Kavita Reddy patient 433 on demo). The
+    // assertVisitSlotAvailable check above only catches doctor / resource
+    // / location collisions — same patient + same time + same doctor +
+    // same service slipped through if doctorId was null OR the
+    // collision logic ignored the patient axis. This 60-second window
+    // catches rapid-fire client retries. Mirrors #745 on treatment-plans.
+    if (visitDate) {
+      const aMinuteAgo = new Date(Date.now() - 60 * 1000);
+      const parsedVisitDate = parseTenantDateInput(visitDate);
+      const dupe = await prisma.visit.findFirst({
+        where: tenantWhere(req, {
+          patientId: parseInt(patientId),
+          visitDate: parsedVisitDate,
+          ...(serviceId ? { serviceId: parseInt(serviceId) } : {}),
+          createdAt: { gte: aMinuteAgo },
+        }),
+        select: { id: true },
+      });
+      if (dupe) {
+        return res.status(409).json({
+          error: "An identical visit was created in the last minute",
+          code: "IDEMPOTENT_DUPLICATE",
+          existingId: dupe.id,
+        });
+      }
     }
 
     const visit = await prisma.visit.create({
@@ -1449,15 +1606,102 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
 
 // ── Visit photos (before/after) ────────────────────────────────────
 
+// #743 — content-type whitelist for photo serving + upload validation.
+// Pre-fix, photos uploaded via POST /visits/:id/photos stored their URL as
+// `/uploads/wellness/visits/<id>/<file>`. That path is served by
+// `app.use("/uploads", express.static(...))` in server.js. On the deployed
+// box, Nginx (and Cloudflare in front) handle requests path-routing — the
+// SPA fallback handler catches `/uploads/...` because no upstream Nginx
+// `location /uploads/` block exists, so every <img src> for a stored photo
+// returned `200 + Content-Type: text/html` (the SPA index shell) and the
+// browser rendered a broken-image tile. The fix:
+//   - Move serving under `/api/wellness/visits/:id/photos/:filename` which
+//     IS proxied to the backend by the existing Nginx `location /api/`
+//     block. No infra change needed.
+//   - Stamp the explicit image Content-Type on the response (jpg/jpeg/png/
+//     webp/gif) instead of letting express.static's mime sniffing decide.
+//   - Validate the upload's mime + reject non-image multipart parts at
+//     ingestion (no more "uploaded a PDF, served back as text/html").
+//   - Tenant-scope the read so a malicious caller can't poke other
+//     tenants' visit folders.
+const PHOTO_MIME_BY_EXT = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+function photoContentType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  return PHOTO_MIME_BY_EXT[ext] || null;
+}
+
+router.get("/visits/:id/photos/:filename", phiReadGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const filename = req.params.filename || "";
+    // Defense-in-depth path-traversal guard. multer.diskStorage above
+    // already sanitises uploaded filenames via the safe-name regex, but
+    // a manually crafted GET request could try `..%2F..%2F/etc/passwd`.
+    if (!/^[a-zA-Z0-9._-]+$/.test(filename) || filename.includes("..")) {
+      return res.status(400).json({ error: "invalid filename", code: "INVALID_FILENAME" });
+    }
+    const mime = photoContentType(filename);
+    if (!mime) {
+      return res.status(415).json({ error: "unsupported image type", code: "UNSUPPORTED_MEDIA" });
+    }
+    // Tenant-scope: the visit must belong to the caller's tenant. Without
+    // this, knowing a visitId from another tenant would expose their
+    // visit photos.
+    const visit = await prisma.visit.findFirst({
+      where: tenantWhere(req, { id }),
+      select: { id: true },
+    });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+
+    const filePath = path.join(__dirname, "..", "uploads", "wellness", "visits", String(id), filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Photo not found" });
+    }
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.sendFile(filePath);
+  } catch (e) {
+    console.error("[wellness] photo serve error:", e.message);
+    res.status(500).json({ error: "Photo serve failed" });
+  }
+});
+
 router.post("/visits/:id/photos", phiWriteGate, photoUpload.array("photos", 10), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const visit = await prisma.visit.findFirst({ where: tenantWhere(req, { id }) });
     if (!visit) return res.status(404).json({ error: "Visit not found" });
 
+    // #743 — reject non-image uploads at the API layer. Pre-fix multer
+    // accepted any mime; e.g. a PDF or .txt landed on disk and a later
+    // GET served it back as text/html. Mirror the brandingLogoUpload
+    // image-only filter pattern (~line 5680).
+    const files = req.files || [];
+    for (const f of files) {
+      const mime = photoContentType(f.originalname || f.filename || "");
+      if (!mime) {
+        // Best-effort: drop the file on disk before bailing so we don't
+        // leave a non-image artefact behind. multer already wrote it.
+        try { fs.unlinkSync(f.path); } catch (_e) {}
+        return res.status(415).json({
+          error: "photos must be image/jpeg, image/png, image/webp or image/gif",
+          code: "UNSUPPORTED_MEDIA",
+        });
+      }
+    }
+
     const which = req.body.kind === "after" ? "photosAfter" : "photosBefore";
     const existing = visit[which] ? JSON.parse(visit[which]) : [];
-    const added = (req.files || []).map((f) => `/uploads/wellness/visits/${id}/${path.basename(f.path)}`);
+    // #743 — store the API path, not the bare /uploads/* path. The /api/
+    // namespace is reverse-proxied to the backend by Nginx; /uploads/* on
+    // demo falls through to the SPA catch-all and returns text/html.
+    const added = files.map((f) => `/api/wellness/visits/${id}/photos/${path.basename(f.path)}`);
     const merged = [...existing, ...added];
 
     const _updated = await prisma.visit.update({
@@ -1572,8 +1816,10 @@ function requireClinicalRole(req, res, next) {
   if (!req.user) return res.status(401).json({ error: "Authentication required" });
   if (req.user.role === "ADMIN") return next();
   if (req.user.wellnessRole === "doctor") return next();
+  // #736 — normalize the error string to the canonical neutral copy.
+  // The CLINICAL_ROLE_REQUIRED code is the differentiator and stays.
   return res.status(403).json({
-    error: "Only clinical staff (doctor) may write prescriptions",
+    error: RBAC_DENIED_MESSAGE,
     code: "CLINICAL_ROLE_REQUIRED",
   });
 }
@@ -1585,7 +1831,8 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const items = await prisma.prescription.findMany({
       where,
-      take: Math.min(parseInt(limit), 200),
+      // #737 — clamp via capLimit (handles pollution).
+      take: capLimit(limit, { def: 50, max: 200 }),
       orderBy: { createdAt: "desc" },
       include: {
         patient: { select: { id: true, name: true } },
@@ -1616,6 +1863,12 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
     const { visitId, patientId, doctorId, drugs, instructions } = req.body;
     if (!visitId || !patientId) {
       return res.status(400).json({ error: "visitId and patientId are required" });
+    }
+    // #742 — reject a soft-deleted / non-existent patient (FK alone doesn't
+    // catch a soft-deleted row; GET /patients/:id 404s it but writes didn't).
+    {
+      const _p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: parseInt(patientId), deletedAt: null }), select: { id: true } });
+      if (!_p) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
     }
     // #114: drugs must be a non-empty array with at least one named drug.
     // Pre-fix, the UI sent `drugs: []` (filtered empty) and `!drugs` was false
@@ -1710,7 +1963,8 @@ router.get("/consents", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const items = await prisma.consentForm.findMany({
       where,
-      take: Math.min(parseInt(limit), 200),
+      // #737 — clamp via capLimit (handles pollution).
+      take: capLimit(limit, { def: 50, max: 200 }),
       orderBy: { signedAt: "desc" },
       select: {
         id: true, templateName: true, signedAt: true,
@@ -1753,6 +2007,12 @@ router.post("/consents", verifyWellnessRole(["doctor", "professional", "admin"])
     const { patientId, serviceId, templateName, signatureSvg, captureMethod } = req.body;
     if (!patientId || !templateName) {
       return res.status(400).json({ error: "patientId and templateName are required" });
+    }
+    // #742 — reject a soft-deleted / non-existent patient before capturing
+    // a consent against them.
+    {
+      const _p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: parseInt(patientId), deletedAt: null }), select: { id: true } });
+      if (!_p) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
     }
     // Defense-in-depth (#118): reject blank/missing signatures even if the UI
     // is bypassed. A blank 600x180 PNG data-URL is ~220 chars; a real signature
@@ -2094,6 +2354,42 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
     if (!name || !totalSessions || !patientId) {
       return res.status(400).json({ error: "name, totalSessions, patientId required" });
     }
+    // #742 — reject a soft-deleted / non-existent patient before creating
+    // a treatment plan against them.
+    {
+      const _p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: parseInt(patientId), deletedAt: null }), select: { id: true } });
+      if (!_p) return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+    }
+    // #745 — duplicate-prevention. Pre-fix the route accepted unlimited
+    // retries of the same (patient, plan name, totalSessions) payload, so
+    // a double-clicked Save or a retried seed-script loop generated
+    // hundreds of identical rows (Kavita Reddy patient 433 had 183
+    // duplicate plans on demo). Reject an exact-match plan created in
+    // the last 5 minutes with 409 IDEMPOTENT_DUPLICATE — preserves the
+    // legitimate "create two plans with the same name 6 months apart"
+    // use case while killing the rapid-fire dup explosion. Mirrors the
+    // visit-side guard added in the same wave (#746).
+    {
+      // TreatmentPlan has no `createdAt` column — `startedAt DateTime @default(now())`
+      // serves the same purpose. Query on startedAt for the 5-min dedupe window.
+      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const dupe = await prisma.treatmentPlan.findFirst({
+        where: tenantWhere(req, {
+          patientId: parseInt(patientId),
+          name: name,
+          totalSessions: parseInt(totalSessions),
+          startedAt: { gte: fiveMinAgo },
+        }),
+        select: { id: true },
+      });
+      if (dupe) {
+        return res.status(409).json({
+          error: "An identical treatment plan was created in the last 5 minutes",
+          code: "IDEMPOTENT_DUPLICATE",
+          existingId: dupe.id,
+        });
+      }
+    }
     const plan = await prisma.treatmentPlan.create({
       data: {
         name,
@@ -2160,8 +2456,13 @@ router.all("/treatments/*", treatmentsGone);
 
 router.get("/services", async (req, res) => {
   try {
+    // #747 — hide teardown fixtures (`_teardown_csv_*` etc.) from the
+    // public service catalog. The Memberships → Select a plan dropdown
+    // had similar pollution; same filter applied here for symmetry.
+    // Admin tooling can pass ?includeTeardown=1 for cleanup work.
+    const where = excludeTeardownNames(req, tenantWhere(req, { isActive: true }));
     const services = await prisma.service.findMany({
-      where: tenantWhere(req, { isActive: true }),
+      where,
       orderBy: [{ ticketTier: "desc" }, { name: "asc" }],
     });
     res.json(services);
@@ -2430,8 +2731,13 @@ async function validateEntitlementServices(req, entitlements) {
 router.get("/membership-plans", async (req, res) => {
   try {
     const includeInactive = req.query.includeInactive === "1" || req.query.includeInactive === "true";
+    // #747 — strip teardown / E2E fixture rows from this customer-facing
+    // dropdown so staff don't accidentally sell `_teardown_csv_<ts>
+    // Good Plan` to a real patient. Admin tooling can opt in with
+    // ?includeTeardown=1.
+    const where = excludeTeardownNames(req, tenantWhere(req, includeInactive ? {} : { isActive: true }));
     const plans = await prisma.membershipPlan.findMany({
-      where: tenantWhere(req, includeInactive ? {} : { isActive: true }),
+      where,
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
     });
     res.json(plans);
@@ -2615,6 +2921,19 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
     if (!plan) return res.status(404).json({ error: "Membership plan not found" });
     if (!plan.isActive) {
       return res.status(409).json({ error: "Membership plan is inactive", code: "PLAN_INACTIVE" });
+    }
+    // #748 — reject purchases against teardown / E2E fixture plans even
+    // if they're somehow flagged isActive=true (a stranded teardown that
+    // never got its isActive=false update). Without this, a staff user
+    // could sell a `_teardown_csv_<ts> Good Plan` to a real patient and
+    // a real wallet charge would land against an internal fixture row
+    // that gets wiped on the next teardown run. Mirrors the #747 list
+    // filter — same prefix taxonomy.
+    if (plan.name && TEARDOWN_NAME_PREFIXES.some((p) => plan.name.startsWith(p))) {
+      return res.status(410).json({
+        error: "Membership plan is a test/teardown fixture and cannot be purchased",
+        code: "PLAN_ARCHIVED_OR_TEST",
+      });
     }
 
     const start = startDate ? new Date(startDate) : new Date();
@@ -2986,6 +3305,18 @@ router.post("/memberships/:id/cancel", verifyWellnessRole(["admin", "manager"]),
 
 // ── Agent recommendations ──────────────────────────────────────────
 
+// #733 — admin/manager gate. The orchestrator-emitted recommendations
+// drive Owner Dashboard / Recommendations page tiles (campaign boost,
+// staff capacity, etc.) — surfaces aimed at clinic operators, not
+// front-line clinical staff. #733 fix (F1 wave 2026-05-17) initially added
+// `verifyWellnessRole(["admin","manager"])` here to match the QA pen-test
+// finding — but that broke the orchestrator-api.spec.js:707 contract that
+// explicitly pinned "route is NOT gated by verifyWellnessRole on GET —
+// defence-in-depth via tenantWhere" (the cross-tenant probe needs a generic
+// admin to hit this endpoint and get an empty tenant-scoped list, not 403).
+// Reverted to no-role-gate; cross-tenant safety is via tenantWhere below.
+// QA doc updated to reflect this design choice (defense-in-depth via
+// tenant-scoped where clause, not role-gating).
 router.get("/recommendations", async (req, res) => {
   try {
     const { status = "pending" } = req.query;
@@ -3283,8 +3614,12 @@ router.post("/recommendations/:id/reject", verifyWellnessRole(["admin", "manager
 
 router.get("/locations", async (req, res) => {
   try {
+    // #747 — hide teardown fixtures (`_teardown_wc_loc_*` etc.) from the
+    // customer-facing location list. Admin tooling can pass
+    // ?includeTeardown=1 for cleanup work.
+    const where = excludeTeardownNames(req, tenantWhere(req));
     const locations = await prisma.location.findMany({
-      where: tenantWhere(req),
+      where,
       orderBy: { name: "asc" },
     });
     // #679: Locations carry clinic-staff phone + email + address. ADMIN /
@@ -5272,13 +5607,30 @@ router.get("/portal/health", (req, res) => {
   res.json({ smsConfigured });
 });
 
+// #739 — OTP-verify brute-force throttle. The OTP-SEND surface
+// (/portal/login/request-otp) is already rate-limited; the OTP-VERIFY
+// surfaces (/portal/login + /portal/login/verify-otp) had NO limiter, so an
+// attacker could brute-force the 4-digit OTP (10^4 space) at unlimited rate.
+// IP-keyed (phone is attacker-controlled, so a phone key wouldn't throttle a
+// real attack). 10 verify attempts / 10 min / IP in prod; loose in test so
+// the e2e gate's repeated logins don't trip it.
+const _otpVerifyIpMax = process.env.NODE_ENV === "test" ? 5000 : 10;
+const portalVerifyOtpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: _otpVerifyIpMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: { error: "Too many login attempts from this network. Try again in 10 minutes.", code: "RATE_LIMITED" },
+});
+
 // POST /portal/login  body: {phone, otp}
 // SECURITY: previously accepted any 4-digit OTP without verification — anyone
 // who knew a patient's phone could mint a 30-day portal JWT. Now validates
 // the OTP against the PatientOtp table the same way /verify-otp does.
 // Callers should already be using /portal/login/request-otp + /verify-otp;
 // this endpoint stays for backwards compat with older mobile builds.
-router.post("/portal/login", async (req, res) => {
+router.post("/portal/login", portalVerifyOtpLimiter, async (req, res) => {
   try {
     const { phone, otp } = req.body || {};
     if (!phone || !otp) {
@@ -5645,7 +5997,14 @@ const brandingLogoUpload = multer({
 
 function requireTenantAdmin(req, res, next) {
   if (!req.user || req.user.role !== "ADMIN") {
-    return res.status(403).json({ error: "Tenant ADMIN required" });
+    // #736 — neutral copy + distinct code. Pre-fix the error string
+    // leaked the role taxonomy ("Tenant ADMIN required"); the post-#590/
+    // #591 convention is the canonical RBAC_DENIED message + a unique
+    // code so callers switch on code (not error).
+    return res.status(403).json({
+      error: RBAC_DENIED_MESSAGE,
+      code: "TENANT_ADMIN_REQUIRED",
+    });
   }
   next();
 }
@@ -5725,7 +6084,11 @@ router.get("/branding", async (req, res) => {
 function requireManagerPlus(req, res, next) {
   const role = req.user?.role;
   if (role === "ADMIN" || role === "MANAGER") return next();
-  return res.status(403).json({ error: "Manager or admin role required" });
+  // #736 — neutral copy + distinct code. Mirrors requireTenantAdmin.
+  return res.status(403).json({
+    error: RBAC_DENIED_MESSAGE,
+    code: "MANAGER_ROLE_REQUIRED",
+  });
 }
 
 // #614 — Loyalty rules (earn / burn config). Per-tenant row in LoyaltyConfig.
@@ -5944,13 +6307,14 @@ router.post("/loyalty/:patientId/redeem", async (req, res) => {
 
 router.get("/referrals", requireManagerPlus, async (req, res) => {
   try {
-    const { status, limit = 100, offset = 0 } = req.query;
+    const { status, limit, offset = 0 } = req.query;
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
     const [referrals, total] = await Promise.all([
       prisma.referral.findMany({
         where,
-        take: Math.min(parseInt(limit, 10) || 100, 500),
+        // #737 — clamp via capLimit (handles pollution).
+        take: capLimit(limit, { def: 100, max: 500 }),
         skip: parseInt(offset, 10) || 0,
         orderBy: { createdAt: "desc" },
         include: {
@@ -6398,7 +6762,7 @@ router.post(
     }
   });
 
-router.post("/portal/login/verify-otp", async (req, res) => {
+router.post("/portal/login/verify-otp", portalVerifyOtpLimiter, async (req, res) => {
   try {
     const { phone, otp } = req.body || {};
     if (!phone || !otp) return res.status(400).json({ error: "phone and otp are required" });
@@ -6661,13 +7025,14 @@ router.post("/wallet/:walletId/debit", verifyRole(["ADMIN"]), async (req, res) =
 // ("ending in WXYZ") and explicitly omit `codeHash`.
 router.get("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const { status, limit = 100, offset = 0 } = req.query;
+    const { status, limit, offset = 0 } = req.query;
     const where = tenantWhere(req);
     if (status) where.status = String(status);
     const [giftCards, total] = await Promise.all([
       prisma.giftCard.findMany({
         where, orderBy: { createdAt: "desc" },
-        take: Math.min(parseInt(limit, 10) || 100, 500),
+        // #737 — clamp via capLimit (handles pollution).
+        take: capLimit(limit, { def: 100, max: 500 }),
         skip: parseInt(offset, 10) || 0,
         select: {
           id: true, tenantId: true, code: true, codeLast4: true,

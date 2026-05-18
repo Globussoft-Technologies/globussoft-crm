@@ -49,7 +49,12 @@ jobs:
   # release-validation latency stays around 15-20 min.
   e2e-full:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 min was the original ceiling but shard 1+2 wall-clock crept past
+    # 30:00 on v3.8.0 + v3.8.1 (audit-api serial-mode + heavy specs concentrate
+    # there) while shards 3+4 finish in 17-23 min. Bumping to 45 absorbs the
+    # imbalance. If a shard genuinely exceeds 45 min that's a real perf
+    # regression — the ceiling shouldn't silently grow further.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

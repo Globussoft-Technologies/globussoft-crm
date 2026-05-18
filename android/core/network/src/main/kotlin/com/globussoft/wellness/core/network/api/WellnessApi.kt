@@ -1495,4 +1495,55 @@ interface WellnessApi {
     suspend fun createAbTest(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
     ): Response<@JvmSuppressWildcards Any>
+
+    // ── Chatbots (Wave 15 gap) ────────────────────────────────────────────────
+
+    @GET("chatbots")
+    suspend fun getChatbots(): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Signatures (Wave 15 gap) ──────────────────────────────────────────────
+
+    @GET("signatures")
+    suspend fun getSignatures(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("signatures")
+    suspend fun createSignatureRequest(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── SLA Policies (Wave 15 gap) ────────────────────────────────────────────
+
+    @GET("sla")
+    suspend fun getSlaList(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("sla")
+    suspend fun createSlaPolicy(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Social Mentions (Wave 15 gap) ─────────────────────────────────────────
+
+    @GET("social")
+    suspend fun getSocialMentions(): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Global Search (Wave 20) ───────────────────────────────────────────────
+
+    @GET("search")
+    suspend fun globalSearch(
+        @Query("q") query: String,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Landing Pages — create (Wave 21) ─────────────────────────────────────
+
+    @POST("landing-pages")
+    suspend fun createLandingPage(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Marketplace Leads — flat list (Wave 21) ───────────────────────────────
+
+    @GET("marketplace-leads")
+    suspend fun getMarketplaceLeadsAll(
+        @Query("limit") limit: Int = 100,
+    ): Response<List<@JvmSuppressWildcards Any>>
 }

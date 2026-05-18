@@ -48,12 +48,14 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.MoveToInbox
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Polyline
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Settings
@@ -70,14 +72,25 @@ import androidx.compose.material.icons.filled.Web
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Android
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,6 +100,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.globussoft.wellness.core.data.datastore.UserSession
 import com.globussoft.wellness.core.designsystem.theme.GenericAccent
 import com.globussoft.wellness.core.designsystem.theme.GenericPrimary
@@ -164,6 +179,8 @@ private val crmAllSections = listOf(
             SidebarItem("crm-landing-pages",  "Landing Pages",  Icons.Filled.Web,                requiresRole = UserRole.MANAGER),
             SidebarItem("crm-marketplace",    "Marketplace",    Icons.Filled.Store,              requiresRole = UserRole.MANAGER),
             SidebarItem("crm-ab-tests",       "A/B Tests",      Icons.Filled.BarChart,           requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-chatbots",       "Chatbots",       Icons.Filled.Android,            requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-social",         "Social",         Icons.Filled.Share,              requiresRole = UserRole.MANAGER),
         ),
     ),
 
@@ -182,6 +199,8 @@ private val crmAllSections = listOf(
             SidebarItem("crm-doc-templates",  "Doc Templates",  Icons.Filled.Description,        requiresRole = UserRole.MANAGER),
             SidebarItem("crm-playbooks",      "Playbooks",      Icons.Filled.Lightbulb,          requiresRole = UserRole.MANAGER),
             SidebarItem("crm-lead-scoring",   "Lead Scoring",   Icons.Filled.Analytics,          requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-sla",            "SLA",            Icons.Filled.Schedule,           requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-signatures",     "E-Signatures",   Icons.Filled.Edit,               requiresRole = UserRole.MANAGER),
         ),
     ),
 
@@ -215,6 +234,7 @@ private fun crmFilteredSections(userSession: UserSession?): List<SidebarSection>
 
 // ─── Persistent Generic CRM Sidebar ──────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GenericCrmPersistentSidebar(
     currentRoute: String?,
@@ -230,6 +250,12 @@ fun GenericCrmPersistentSidebar(
         }
     }
 
+    // ── Notifications state ────────────────────────────────────────────────────
+    var showNotifications by remember { mutableStateOf(false) }
+    val notifViewModel: NotificationsViewModel = hiltViewModel()
+    val notifState by notifViewModel.state.collectAsStateWithLifecycle()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     Column(
         modifier = modifier
             .fillMaxHeight()
@@ -241,30 +267,89 @@ fun GenericCrmPersistentSidebar(
             ),
     ) {
         // ── Brand header ─────────────────────────────────────────────
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
                     start  = 20.dp,
-                    end    = 20.dp,
+                    end    = 8.dp,
                     top    = WindowInsets.safeDrawing.asPaddingValues().calculateTopPadding() + 12.dp,
-                    bottom = 20.dp,
+                    bottom = 12.dp,
                 ),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(
-                text          = "GLOBUSSOFT",
-                color         = GenericSidebarText.copy(alpha = 0.55f),
-                fontSize      = 10.sp,
-                fontWeight    = FontWeight.Bold,
-                letterSpacing = 2.5.sp,
-            )
-            Text(
-                text          = "Enterprise CRM",
-                color         = GenericAccent,
-                fontSize      = 17.sp,
-                fontWeight    = FontWeight.Bold,
-                letterSpacing = 0.3.sp,
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text          = "GLOBUSSOFT",
+                    color         = GenericSidebarText.copy(alpha = 0.55f),
+                    fontSize      = 10.sp,
+                    fontWeight    = FontWeight.Bold,
+                    letterSpacing = 2.5.sp,
+                )
+                Text(
+                    text          = "Enterprise CRM",
+                    color         = GenericAccent,
+                    fontSize      = 17.sp,
+                    fontWeight    = FontWeight.Bold,
+                    letterSpacing = 0.3.sp,
+                )
+            }
+
+            // ── Search icon ──────────────────────────────────────────
+            IconButton(
+                onClick  = { onNavigate(CrmRoutes.SEARCH) },
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    imageVector        = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint               = GenericSidebarText.copy(alpha = 0.75f),
+                    modifier           = Modifier.size(19.dp),
+                )
+            }
+
+            // ── Notifications bell with badge ────────────────────────
+            BadgedBox(
+                badge = {
+                    if (notifState.unreadCount > 0) {
+                        Badge(
+                            containerColor = GenericAccent,
+                        ) {
+                            Text(
+                                text      = notifState.unreadCount.coerceAtMost(99).toString(),
+                                fontSize  = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                },
+            ) {
+                IconButton(
+                    onClick  = { showNotifications = true },
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        imageVector        = Icons.Default.Notifications,
+                        contentDescription = "Notifications",
+                        tint               = GenericSidebarText.copy(alpha = 0.75f),
+                        modifier           = Modifier.size(19.dp),
+                    )
+                }
+            }
+        }
+
+        // ── Notifications bottom sheet ────────────────────────────────
+        if (showNotifications) {
+            ModalBottomSheet(
+                onDismissRequest = { showNotifications = false },
+                sheetState       = sheetState,
+            ) {
+                NotificationsDrawer(
+                    onDismiss = { showNotifications = false },
+                    viewModel = notifViewModel,
+                )
+            }
         }
 
         HorizontalDivider(

@@ -75,6 +75,13 @@ import com.globussoft.wellness.feature.crm.presentation.dashboards.DashboardsScr
 import com.globussoft.wellness.feature.crm.presentation.playbooks.PlaybooksScreen
 import com.globussoft.wellness.feature.crm.presentation.leadscoring.LeadScoringScreen
 import com.globussoft.wellness.feature.crm.presentation.abtests.AbTestsScreen
+import com.globussoft.wellness.feature.crm.presentation.search.SearchScreen
+import com.globussoft.wellness.feature.crm.presentation.sla.SlaScreen
+import com.globussoft.wellness.feature.crm.presentation.chatbots.ChatbotsScreen
+import com.globussoft.wellness.feature.crm.presentation.social.SocialScreen
+import com.globussoft.wellness.feature.crm.presentation.signatures.SignaturesScreen
+import com.globussoft.wellness.feature.crm.presentation.marketplaceleads.MarketplaceLeadsScreen
+import com.globussoft.wellness.feature.crm.presentation.landingpages.LandingPagesScreen
 
 // ─── CRM route constants ──────────────────────────────────────────────────────
 
@@ -148,6 +155,15 @@ object CrmRoutes {
     const val DEVELOPER      = "crm-developer"
     const val INTEGRATIONS   = "crm-integrations"
     const val PORTAL         = "crm-portal"
+
+    // Wave 20
+    const val SEARCH         = "crm-search"
+
+    // Wave 21
+    const val SLA            = "crm-sla"
+    const val CHATBOTS       = "crm-chatbots"
+    const val SOCIAL         = "crm-social"
+    const val SIGNATURES     = "crm-signatures"
 }
 
 // ─── Generic CRM main graph ───────────────────────────────────────────────────
@@ -386,10 +402,10 @@ private fun CrmInnerNavHost(
             SequencesScreen()
         }
         composable(CrmRoutes.LANDING_PAGES) {
-            CrmPlaceholder("Landing Pages")
+            LandingPagesScreen()
         }
         composable(CrmRoutes.MARKETPLACE) {
-            CrmPlaceholder("Marketplace Leads")
+            MarketplaceLeadsScreen()
         }
         composable(CrmRoutes.AB_TESTS) {
             AbTestsScreen()
@@ -451,6 +467,30 @@ private fun CrmInnerNavHost(
         }
         composable(CrmRoutes.PORTAL) {
             PortalScreen()
+        }
+
+        // ── Wave 21 ───────────────────────────────────────────────────────────
+        composable(CrmRoutes.SLA) {
+            SlaScreen()
+        }
+        composable(CrmRoutes.CHATBOTS) {
+            ChatbotsScreen()
+        }
+        composable(CrmRoutes.SOCIAL) {
+            SocialScreen()
+        }
+        composable(CrmRoutes.SIGNATURES) {
+            SignaturesScreen()
+        }
+
+        // ── Wave 20: Global Search ────────────────────────────────────────────
+        composable(CrmRoutes.SEARCH) {
+            SearchScreen(
+                onBack         = { navController.popBackStack() },
+                onContactClick = { id -> navController.navigate("crm-contacts/$id") },
+                onDealClick    = { id -> navController.navigate("crm-deals/$id") },
+                onTicketClick  = { id -> navController.navigate("crm-tickets/$id") },
+            )
         }
     }
 }

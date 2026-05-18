@@ -559,6 +559,7 @@ test.describe('Audit API — /verify hash-chain', () => {
   });
 
   test('a fresh seed extends the chain by ≥1', async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, 'demo-load-sensitive convergence test — runs in the per-push gate (local stack); skipped on e2e-full to stop the chronic hash-chain flake');
     // Timeout inherited from describe-level config (120_000ms) — see the
     // concurrency-mitigation block at the top of this describe.
     const { token } = await getGenericAdmin(request);

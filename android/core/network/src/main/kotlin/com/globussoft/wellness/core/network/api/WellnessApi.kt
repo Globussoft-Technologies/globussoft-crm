@@ -1276,10 +1276,20 @@ interface WellnessApi {
     @GET("territories")
     suspend fun getCrmTerritories(): Response<List<@JvmSuppressWildcards Any>>
 
+    @POST("territories")
+    suspend fun createCrmTerritory(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
     // ── Lead Routing ──────────────────────────────────────────────────────────
 
     @GET("lead-routing")
     suspend fun getCrmLeadRoutingRules(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("lead-routing")
+    suspend fun createCrmLeadRoutingRule(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
 
     // ── Staff (CRM admin) ─────────────────────────────────────────────────────
 
@@ -1337,6 +1347,30 @@ interface WellnessApi {
     @PUT("knowledge-base/articles/{id}")
     suspend fun updateCrmKbArticle(
         @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Contracts ─────────────────────────────────────────────────────────────
+
+    @GET("contracts")
+    suspend fun getCrmContracts(
+        @Query("status") status: String? = null,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("contracts")
+    suspend fun createCrmContract(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Projects ──────────────────────────────────────────────────────────────
+
+    @GET("projects")
+    suspend fun getCrmProjects(
+        @Query("status") status: String? = null,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("projects")
+    suspend fun createCrmProject(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
     ): Response<@JvmSuppressWildcards Any>
 

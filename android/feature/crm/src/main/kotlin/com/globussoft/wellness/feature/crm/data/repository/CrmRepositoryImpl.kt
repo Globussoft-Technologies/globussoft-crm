@@ -360,6 +360,10 @@ class CrmRepositoryImpl @Inject constructor(
     override suspend fun getQuotas(): WResult<List<Map<String, Any>>> =
         safeApiCall { api.getCrmQuotas() } as WResult<List<Map<String, Any>>>
 
+    override suspend fun createQuota(repName: String, target: Double): WResult<Map<String, Any>> =
+        safeApiCall { api.createCrmQuota(mapOf("repName" to repName, "target" to target)) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
     @Suppress("UNCHECKED_CAST")
     override suspend fun getWinLoss(from: String?, to: String?): WResult<Map<String, Any>> =
         safeApiCall { api.getCrmWinLoss(from = from, to = to) } as WResult<Map<String, Any>>
@@ -380,9 +384,17 @@ class CrmRepositoryImpl @Inject constructor(
     override suspend fun getTerritories(): WResult<List<Map<String, Any>>> =
         safeApiCall { api.getCrmTerritories() } as WResult<List<Map<String, Any>>>
 
+    override suspend fun createTerritory(name: String, region: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createCrmTerritory(mapOf("name" to name, "region" to region)) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
     @Suppress("UNCHECKED_CAST")
     override suspend fun getLeadRoutingRules(): WResult<List<Map<String, Any>>> =
         safeApiCall { api.getCrmLeadRoutingRules() } as WResult<List<Map<String, Any>>>
+
+    override suspend fun createLeadRoutingRule(name: String, assignTo: String, type: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createCrmLeadRoutingRule(mapOf("name" to name, "assignedTo" to assignTo, "type" to type)) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
 
     @Suppress("UNCHECKED_CAST")
     override suspend fun getStaff(): WResult<List<Map<String, Any>>> =
@@ -423,6 +435,26 @@ class CrmRepositoryImpl @Inject constructor(
     override suspend fun saveSettings(params: Map<String, Any>): WResult<Map<String, Any>> =
         safeApiCall { api.updateCrmSettings(params) }
             .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun getContracts(status: String?): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getCrmContracts(status = status) }
+            .mapSuccess { list -> list.map { @Suppress("UNCHECKED_CAST") (it as Map<String, Any>) } }
+
+    override suspend fun createContract(title: String, value: Double, startDate: String?, endDate: String?): WResult<Map<String, Any>> =
+        safeApiCall { api.createCrmContract(buildMap {
+            put("title", title); put("value", value)
+            startDate?.let { put("startDate", it) }; endDate?.let { put("endDate", it) }
+        }) }.mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun getProjects(status: String?): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getCrmProjects(status = status) }
+            .mapSuccess { list -> list.map { @Suppress("UNCHECKED_CAST") (it as Map<String, Any>) } }
+
+    override suspend fun createProject(name: String, description: String?, deadline: String?): WResult<Map<String, Any>> =
+        safeApiCall { api.createCrmProject(buildMap {
+            put("name", name)
+            description?.let { put("description", it) }; deadline?.let { put("deadline", it) }
+        }) }.mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 

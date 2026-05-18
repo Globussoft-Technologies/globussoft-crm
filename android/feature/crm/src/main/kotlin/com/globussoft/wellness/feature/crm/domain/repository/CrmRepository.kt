@@ -85,12 +85,15 @@ interface CrmRepository {
 
     // ── Misc ──────────────────────────────────────────────────────────────────
     suspend fun getQuotas(): WResult<List<Map<String, Any>>>
+    suspend fun createQuota(repName: String, target: Double): WResult<Map<String, Any>>
     suspend fun getWinLoss(from: String? = null, to: String? = null): WResult<Map<String, Any>>
     suspend fun getFunnel(): WResult<Map<String, Any>>
     suspend fun getSequences(): WResult<List<Map<String, Any>>>
     suspend fun toggleSequence(id: String, isActive: Boolean): WResult<Unit>
     suspend fun getTerritories(): WResult<List<Map<String, Any>>>
+    suspend fun createTerritory(name: String, region: String): WResult<Map<String, Any>>
     suspend fun getLeadRoutingRules(): WResult<List<Map<String, Any>>>
+    suspend fun createLeadRoutingRule(name: String, assignTo: String, type: String): WResult<Map<String, Any>>
     suspend fun getStaff(): WResult<List<Map<String, Any>>>
     suspend fun getSettings(): WResult<Map<String, Any>>
     suspend fun getChannels(): WResult<Map<String, Any>>
@@ -101,4 +104,8 @@ interface CrmRepository {
     suspend fun updateStaff(id: String, params: Map<String, Any>): WResult<Map<String, Any>>
     suspend fun createKbArticle(title: String, category: String, body: String): WResult<Map<String, Any>>
     suspend fun saveSettings(params: Map<String, Any>): WResult<Map<String, Any>>
+    suspend fun getContracts(status: String? = null): WResult<List<Map<String, Any>>>
+    suspend fun createContract(title: String, value: Double, startDate: String?, endDate: String?): WResult<Map<String, Any>>
+    suspend fun getProjects(status: String? = null): WResult<List<Map<String, Any>>>
+    suspend fun createProject(name: String, description: String?, deadline: String?): WResult<Map<String, Any>>
 }

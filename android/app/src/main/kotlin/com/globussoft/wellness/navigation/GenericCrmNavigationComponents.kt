@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.Polyline
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Store
@@ -68,6 +69,7 @@ import androidx.compose.material.icons.filled.ViewKanban
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -106,6 +108,7 @@ private val crmAllSections = listOf(
             SidebarItem("crm-pipeline",  "Pipeline",          Icons.Filled.ViewKanban),
             SidebarItem("crm-contacts",  "Contacts",          Icons.Filled.People),
             SidebarItem("crm-leads",     "Leads",             Icons.Filled.PersonAdd),
+            SidebarItem("crm-clients",   "Clients",           Icons.AutoMirrored.Filled.Assignment),
             SidebarItem("crm-tasks",     "Tasks",             Icons.Filled.TaskAlt),
             SidebarItem("crm-tickets",   "Tickets",           Icons.Filled.SupportAgent),
             SidebarItem("crm-inbox",     "Inbox",             Icons.Filled.Inbox),
@@ -116,10 +119,11 @@ private val crmAllSections = listOf(
     SidebarSection(
         title = "Financial",
         items = listOf(
-            SidebarItem("crm-invoices",  "Invoices",          Icons.Filled.Receipt),
-            SidebarItem("crm-estimates", "Estimates",         Icons.Filled.Description),
-            SidebarItem("crm-expenses",  "Expenses",          Icons.Filled.AttachMoney),
-            SidebarItem("crm-payments",  "Payments",          Icons.Filled.CreditCard,         requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-invoices",   "Invoices",          Icons.Filled.Receipt),
+            SidebarItem("crm-estimates",  "Estimates",         Icons.Filled.Description),
+            SidebarItem("crm-expenses",   "Expenses",          Icons.Filled.AttachMoney),
+            SidebarItem("crm-contracts",  "Contracts",         Icons.Filled.LocalOffer),
+            SidebarItem("crm-payments",   "Payments",          Icons.Filled.CreditCard,         requiresRole = UserRole.MANAGER),
         ),
     ),
 
@@ -162,6 +166,7 @@ private val crmAllSections = listOf(
     SidebarSection(
         title = "Operations",
         items = listOf(
+            SidebarItem("crm-projects",       "Projects",       Icons.Filled.Analytics,          requiresRole = UserRole.MANAGER),
             SidebarItem("crm-lead-routing",   "Lead Routing",   Icons.Filled.AccountTree,        requiresRole = UserRole.MANAGER),
             SidebarItem("crm-territories",    "Territories",    Icons.Filled.TravelExplore,      requiresRole = UserRole.MANAGER),
             SidebarItem("crm-knowledge-base", "Knowledge Base", Icons.Filled.MoveToInbox,        requiresRole = UserRole.MANAGER),
@@ -203,6 +208,7 @@ fun GenericCrmPersistentSidebar(
     currentRoute: String?,
     userSession: UserSession?,
     onNavigate: (String) -> Unit,
+    onLogout: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val sections = remember(userSession) { crmFilteredSections(userSession) }
@@ -320,6 +326,14 @@ fun GenericCrmPersistentSidebar(
                     text     = userSession?.role?.name?.lowercase()?.replaceFirstChar { it.uppercaseChar() } ?: "",
                     color    = GenericSidebarText.copy(alpha = 0.5f),
                     fontSize = 10.sp,
+                )
+            }
+            IconButton(onClick = onLogout) {
+                Icon(
+                    imageVector        = Icons.Default.Logout,
+                    contentDescription = "Logout",
+                    tint               = GenericSidebarText.copy(alpha = 0.6f),
+                    modifier           = Modifier.size(20.dp),
                 )
             }
         }

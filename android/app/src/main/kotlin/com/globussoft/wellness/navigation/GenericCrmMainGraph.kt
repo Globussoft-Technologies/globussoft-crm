@@ -13,6 +13,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -24,7 +27,40 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navDeepLink
+import com.globussoft.wellness.core.designsystem.components.AdaptiveTwoPaneLayout
 import com.globussoft.wellness.core.data.datastore.UserSession
+import com.globussoft.wellness.feature.crm.presentation.contacts.ContactDetailScreen
+import com.globussoft.wellness.feature.crm.presentation.contacts.ContactsScreen
+import com.globussoft.wellness.feature.crm.presentation.dashboard.CrmDashboardScreen
+import com.globussoft.wellness.feature.crm.presentation.deals.DealDetailScreen
+import com.globussoft.wellness.feature.crm.presentation.deals.DealsScreen
+import com.globussoft.wellness.feature.crm.presentation.approvals.ApprovalsScreen
+import com.globussoft.wellness.feature.crm.presentation.auditlog.AuditLogScreen
+import com.globussoft.wellness.feature.crm.presentation.channels.ChannelsScreen
+import com.globussoft.wellness.feature.crm.presentation.dealinsights.DealInsightsScreen
+import com.globussoft.wellness.feature.crm.presentation.estimates.EstimatesScreen
+import com.globussoft.wellness.feature.crm.presentation.expenses.ExpensesScreen
+import com.globussoft.wellness.feature.crm.presentation.forecasting.ForecastingScreen
+import com.globussoft.wellness.feature.crm.presentation.invoices.InvoicesScreen
+import com.globussoft.wellness.feature.crm.presentation.knowledgebase.KnowledgeBaseScreen
+import com.globussoft.wellness.feature.crm.presentation.leads.LeadsScreen
+import com.globussoft.wellness.feature.crm.presentation.marketing.MarketingScreen
+import com.globussoft.wellness.feature.crm.presentation.payments.PaymentsScreen
+import com.globussoft.wellness.feature.crm.presentation.pipeline.PipelineScreen
+import com.globussoft.wellness.feature.crm.presentation.reports.ReportsScreen
+import com.globussoft.wellness.feature.crm.presentation.sequences.SequencesScreen
+import com.globussoft.wellness.feature.crm.presentation.settings.CrmSettingsScreen
+import com.globussoft.wellness.feature.crm.presentation.staff.StaffScreen
+import com.globussoft.wellness.feature.crm.presentation.tasks.TasksScreen
+import com.globussoft.wellness.feature.crm.presentation.leadrouting.LeadRoutingScreen
+import com.globussoft.wellness.feature.crm.presentation.quotas.QuotasScreen
+import com.globussoft.wellness.feature.crm.presentation.territories.TerritoriesScreen
+import com.globussoft.wellness.feature.crm.presentation.clients.ClientsScreen
+import com.globussoft.wellness.feature.crm.presentation.contracts.ContractsScreen
+import com.globussoft.wellness.feature.crm.presentation.projects.ProjectsScreen
+import com.globussoft.wellness.feature.crm.presentation.tickets.TicketDetailScreen
+import com.globussoft.wellness.feature.crm.presentation.tickets.TicketsScreen
 
 // ─── CRM route constants ──────────────────────────────────────────────────────
 
@@ -43,6 +79,11 @@ object CrmRoutes {
     // Deals
     const val DEALS          = "crm-deals"
     const val DEAL_DETAIL    = "crm-deals/{dealId}"
+
+    // Clients / Contracts / Projects
+    const val CLIENTS        = "crm-clients"
+    const val CONTRACTS      = "crm-contracts"
+    const val PROJECTS       = "crm-projects"
 
     // Financial
     const val INVOICES       = "crm-invoices"
@@ -106,6 +147,7 @@ fun NavGraphBuilder.genericCrmMainGraph(
                 GenericCrmPersistentSidebar(
                     currentRoute = currentRoute,
                     userSession  = userSession,
+                    onLogout     = onLogout,
                     onNavigate   = { route ->
                         innerNavController.navigate(route) {
                             popUpTo(innerNavController.graph.startDestinationId) {
@@ -148,94 +190,174 @@ private fun CrmInnerNavHost(
         modifier         = modifier,
     ) {
         // ── Core ─────────────────────────────────────────────────────────────
-        composable(CrmRoutes.DASHBOARD) {
-            CrmPlaceholder("Dashboard")
+        composable(
+            route     = CrmRoutes.DASHBOARD,
+            deepLinks = listOf(navDeepLink { uriPattern = "globuscrm://crm/dashboard" }),
+        ) {
+            CrmDashboardScreen()
         }
-        composable(CrmRoutes.PIPELINE) {
-            CrmPlaceholder("Pipeline")
+        composable(
+            route     = CrmRoutes.PIPELINE,
+            deepLinks = listOf(navDeepLink { uriPattern = "globuscrm://crm/pipeline" }),
+        ) {
+            PipelineScreen(
+                onDealClick = { dealId ->
+                    navController.navigate("crm-deals/$dealId")
+                }
+            )
         }
-        composable(CrmRoutes.CONTACTS) {
-            CrmPlaceholder("Contacts")
+        composable(
+            route      = CrmRoutes.CONTACTS,
+            deepLinks  = listOf(navDeepLink { uriPattern = "globuscrm://crm/contacts" }),
+        ) {
+            var selectedContactId by rememberSaveable { mutableStateOf<String?>(null) }
+            AdaptiveTwoPaneLayout(
+                showDetailPane = selectedContactId != null,
+                listPane = {
+                    ContactsScreen(onContactClick = { selectedContactId = it })
+                },
+                detailPane = {
+                    ContactDetailScreen(
+                        contactId = selectedContactId ?: "",
+                        onBack    = { selectedContactId = null },
+                    )
+                },
+            )
         }
-        composable(CrmRoutes.CONTACT_DETAIL) {
-            CrmPlaceholder("Contact Detail")
+        composable(CrmRoutes.CONTACT_DETAIL) { backStackEntry ->
+            val contactId = backStackEntry.arguments?.getString("contactId") ?: ""
+            ContactDetailScreen(
+                contactId = contactId,
+                onBack    = { navController.popBackStack() },
+            )
         }
         composable(CrmRoutes.LEADS) {
-            CrmPlaceholder("Leads")
+            LeadsScreen(
+                onLeadClick = { contactId ->
+                    navController.navigate("crm-contacts/$contactId")
+                }
+            )
         }
         composable(CrmRoutes.TASKS) {
-            CrmPlaceholder("Tasks")
+            TasksScreen()
         }
-        composable(CrmRoutes.TICKETS) {
-            CrmPlaceholder("Tickets")
+        composable(
+            route     = CrmRoutes.TICKETS,
+            deepLinks = listOf(navDeepLink { uriPattern = "globuscrm://crm/tickets" }),
+        ) {
+            var selectedTicketId by rememberSaveable { mutableStateOf<String?>(null) }
+            AdaptiveTwoPaneLayout(
+                showDetailPane = selectedTicketId != null,
+                listPane = {
+                    TicketsScreen(onTicketClick = { selectedTicketId = it })
+                },
+                detailPane = {
+                    TicketDetailScreen(
+                        ticketId = selectedTicketId ?: "",
+                        onBack   = { selectedTicketId = null },
+                    )
+                },
+            )
         }
-        composable(CrmRoutes.TICKET_DETAIL) {
-            CrmPlaceholder("Ticket Detail")
+        composable(CrmRoutes.TICKET_DETAIL) { backStackEntry ->
+            val ticketId = backStackEntry.arguments?.getString("ticketId") ?: ""
+            TicketDetailScreen(
+                ticketId = ticketId,
+                onBack   = { navController.popBackStack() },
+            )
+        }
+        composable(CrmRoutes.CLIENTS) {
+            ClientsScreen()
+        }
+        composable(CrmRoutes.CONTRACTS) {
+            ContractsScreen()
+        }
+        composable(CrmRoutes.PROJECTS) {
+            ProjectsScreen()
         }
         composable(CrmRoutes.INBOX) {
             CrmPlaceholder("Inbox")
         }
-        composable(CrmRoutes.DEALS) {
-            CrmPlaceholder("Deals")
+        composable(
+            route     = CrmRoutes.DEALS,
+            deepLinks = listOf(navDeepLink { uriPattern = "globuscrm://crm/deals" }),
+        ) {
+            var selectedDealId by rememberSaveable { mutableStateOf<String?>(null) }
+            AdaptiveTwoPaneLayout(
+                showDetailPane = selectedDealId != null,
+                listPane = {
+                    DealsScreen(onDealClick = { selectedDealId = it })
+                },
+                detailPane = {
+                    DealDetailScreen(
+                        dealId = selectedDealId ?: "",
+                        onBack = { selectedDealId = null },
+                    )
+                },
+            )
         }
-        composable(CrmRoutes.DEAL_DETAIL) {
-            CrmPlaceholder("Deal Detail")
+        composable(CrmRoutes.DEAL_DETAIL) { backStackEntry ->
+            val dealId = backStackEntry.arguments?.getString("dealId") ?: ""
+            DealDetailScreen(
+                dealId = dealId,
+                onBack = { navController.popBackStack() },
+            )
         }
 
         // ── Financial ────────────────────────────────────────────────────────
         composable(CrmRoutes.INVOICES) {
-            CrmPlaceholder("Invoices")
+            InvoicesScreen()
         }
         composable(CrmRoutes.ESTIMATES) {
-            CrmPlaceholder("Estimates")
+            EstimatesScreen()
         }
         composable(CrmRoutes.EXPENSES) {
-            CrmPlaceholder("Expenses")
+            ExpensesScreen()
         }
         composable(CrmRoutes.PAYMENTS) {
-            CrmPlaceholder("Payments")
+            PaymentsScreen()
         }
 
         // ── Sales ────────────────────────────────────────────────────────────
         composable(CrmRoutes.PIPELINES) {
-            CrmPlaceholder("Pipelines")
+            PipelineScreen(onDealClick = { dealId -> navController.navigate("crm-deals/$dealId") })
         }
         composable(CrmRoutes.FORECASTING) {
-            CrmPlaceholder("Forecasting")
+            ForecastingScreen()
         }
         composable(CrmRoutes.QUOTAS) {
-            CrmPlaceholder("Quotas")
+            QuotasScreen()
         }
         composable(CrmRoutes.WIN_LOSS) {
-            CrmPlaceholder("Win / Loss")
+            ReportsScreen()
         }
         composable(CrmRoutes.FUNNEL) {
-            CrmPlaceholder("Funnel")
+            ReportsScreen()
         }
 
         // ── Analytics ────────────────────────────────────────────────────────
         composable(CrmRoutes.REPORTS) {
-            CrmPlaceholder("Reports")
+            ReportsScreen()
         }
         composable(CrmRoutes.AGENT_REPORTS) {
-            CrmPlaceholder("Agent Reports")
+            ReportsScreen()
         }
         composable(CrmRoutes.DASHBOARDS) {
             CrmPlaceholder("Dashboards")
         }
         composable(CrmRoutes.DEAL_INSIGHTS) {
-            CrmPlaceholder("Deal Insights")
+            DealInsightsScreen()
         }
         composable(CrmRoutes.APPROVALS) {
-            CrmPlaceholder("Approvals")
+            ApprovalsScreen()
         }
 
         // ── Marketing ────────────────────────────────────────────────────────
         composable(CrmRoutes.MARKETING) {
-            CrmPlaceholder("Marketing Campaigns")
+            MarketingScreen()
         }
         composable(CrmRoutes.SEQUENCES) {
-            CrmPlaceholder("Sequences")
+            SequencesScreen()
         }
         composable(CrmRoutes.LANDING_PAGES) {
             CrmPlaceholder("Landing Pages")
@@ -246,13 +368,13 @@ private fun CrmInnerNavHost(
 
         // ── Operations ───────────────────────────────────────────────────────
         composable(CrmRoutes.LEAD_ROUTING) {
-            CrmPlaceholder("Lead Routing")
+            LeadRoutingScreen()
         }
         composable(CrmRoutes.TERRITORIES) {
-            CrmPlaceholder("Territories")
+            TerritoriesScreen()
         }
         composable(CrmRoutes.KNOWLEDGE_BASE) {
-            CrmPlaceholder("Knowledge Base")
+            KnowledgeBaseScreen()
         }
         composable(CrmRoutes.SURVEYS) {
             CrmPlaceholder("Surveys")
@@ -263,16 +385,16 @@ private fun CrmInnerNavHost(
 
         // ── Admin ────────────────────────────────────────────────────────────
         composable(CrmRoutes.STAFF) {
-            CrmPlaceholder("Staff")
+            StaffScreen()
         }
         composable(CrmRoutes.SETTINGS) {
-            CrmPlaceholder("Settings")
+            CrmSettingsScreen()
         }
         composable(CrmRoutes.CHANNELS) {
-            CrmPlaceholder("Channels")
+            ChannelsScreen()
         }
         composable(CrmRoutes.AUDIT_LOG) {
-            CrmPlaceholder("Audit Log")
+            AuditLogScreen()
         }
         composable(CrmRoutes.PRIVACY) {
             CrmPlaceholder("Privacy")

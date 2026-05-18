@@ -70,6 +70,11 @@ import com.globussoft.wellness.feature.crm.presentation.integrations.Integration
 import com.globussoft.wellness.feature.crm.presentation.portal.PortalScreen
 import com.globussoft.wellness.feature.crm.presentation.developer.DeveloperScreen
 import com.globussoft.wellness.feature.crm.presentation.privacy.PrivacyScreen
+import com.globussoft.wellness.feature.crm.presentation.customreports.CustomReportsScreen
+import com.globussoft.wellness.feature.crm.presentation.dashboards.DashboardsScreen
+import com.globussoft.wellness.feature.crm.presentation.playbooks.PlaybooksScreen
+import com.globussoft.wellness.feature.crm.presentation.leadscoring.LeadScoringScreen
+import com.globussoft.wellness.feature.crm.presentation.abtests.AbTestsScreen
 
 // ─── CRM route constants ──────────────────────────────────────────────────────
 
@@ -113,16 +118,20 @@ object CrmRoutes {
     const val DASHBOARDS     = "crm-dashboards"
     const val DEAL_INSIGHTS  = "crm-deal-insights"
     const val APPROVALS      = "crm-approvals"
+    const val CUSTOM_REPORTS = "crm-custom-reports"
 
     // Marketing
     const val MARKETING      = "crm-marketing"
     const val SEQUENCES      = "crm-sequences"
     const val LANDING_PAGES  = "crm-landing-pages"
     const val MARKETPLACE    = "crm-marketplace"
+    const val AB_TESTS       = "crm-ab-tests"
 
     // Operations
     const val LEAD_ROUTING   = "crm-lead-routing"
     const val TERRITORIES    = "crm-territories"
+    const val PLAYBOOKS      = "crm-playbooks"
+    const val LEAD_SCORING   = "crm-lead-scoring"
     const val KNOWLEDGE_BASE = "crm-knowledge-base"
     const val SURVEYS        = "crm-surveys"
     const val SHARED_INBOX   = "crm-shared-inbox"
@@ -357,13 +366,16 @@ private fun CrmInnerNavHost(
             ReportsScreen()
         }
         composable(CrmRoutes.DASHBOARDS) {
-            CrmPlaceholder("Dashboards")
+            DashboardsScreen()
         }
         composable(CrmRoutes.DEAL_INSIGHTS) {
             DealInsightsScreen()
         }
         composable(CrmRoutes.APPROVALS) {
             ApprovalsScreen()
+        }
+        composable(CrmRoutes.CUSTOM_REPORTS) {
+            CustomReportsScreen()
         }
 
         // ── Marketing ────────────────────────────────────────────────────────
@@ -378,6 +390,9 @@ private fun CrmInnerNavHost(
         }
         composable(CrmRoutes.MARKETPLACE) {
             CrmPlaceholder("Marketplace Leads")
+        }
+        composable(CrmRoutes.AB_TESTS) {
+            AbTestsScreen()
         }
 
         // ── Operations ───────────────────────────────────────────────────────
@@ -404,6 +419,12 @@ private fun CrmInnerNavHost(
         }
         composable(CrmRoutes.DOC_TEMPLATES) {
             DocTemplatesScreen()
+        }
+        composable(CrmRoutes.PLAYBOOKS) {
+            PlaybooksScreen()
+        }
+        composable(CrmRoutes.LEAD_SCORING) {
+            LeadScoringScreen()
         }
 
         // ── Admin ────────────────────────────────────────────────────────────

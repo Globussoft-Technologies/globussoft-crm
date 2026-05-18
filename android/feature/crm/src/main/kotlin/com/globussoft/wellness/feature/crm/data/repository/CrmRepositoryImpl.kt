@@ -516,6 +516,44 @@ class CrmRepositoryImpl @Inject constructor(
         safeApiCall { api.createBookingPage(buildMap { put("name", name); put("description", description) }) }
             .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
 
+    // ── Wave 18 ───────────────────────────────────────────────────────────────
+
+    override suspend fun getCustomReports(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getCustomReports() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun createCustomReport(name: String, entityType: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createCustomReport(buildMap { put("name", name); put("entity", entityType) }) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun getDashboardsList(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getDashboards() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun createDashboardItem(name: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createDashboard(buildMap { put("name", name) }) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun getPlaybooks(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getPlaybooks() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun createPlaybook(name: String, description: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createPlaybook(buildMap { put("name", name); put("description", description) }) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun getLeadScores(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getLeadScores() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun getAbTests(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getAbTests() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun createAbTest(name: String, variantA: String, variantB: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createAbTest(buildMap { put("name", name); put("variantA", variantA); put("variantB", variantB) }) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private suspend fun tenantId(): String =

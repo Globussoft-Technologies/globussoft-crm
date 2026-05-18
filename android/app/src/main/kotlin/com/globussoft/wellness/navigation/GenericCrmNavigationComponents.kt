@@ -146,11 +146,12 @@ private val crmAllSections = listOf(
     SidebarSection(
         title = "Analytics",
         items = listOf(
-            SidebarItem("crm-reports",       "Reports",        Icons.Filled.BarChart,           requiresRole = UserRole.MANAGER),
-            SidebarItem("crm-agent-reports", "Agent Reports",  Icons.Filled.TableChart,         requiresRole = UserRole.MANAGER),
-            SidebarItem("crm-dashboards",    "Dashboards",     Icons.Filled.PieChart,           requiresRole = UserRole.MANAGER),
-            SidebarItem("crm-deal-insights", "Deal Insights",  Icons.Filled.Lightbulb,   requiresRole = UserRole.MANAGER),
-            SidebarItem("crm-approvals",     "Approvals",      Icons.Filled.Approval,           requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-reports",         "Reports",         Icons.Filled.BarChart,           requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-agent-reports",   "Agent Reports",   Icons.Filled.TableChart,         requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-dashboards",      "Dashboards",      Icons.Filled.PieChart,           requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-deal-insights",   "Deal Insights",   Icons.Filled.Lightbulb,          requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-approvals",       "Approvals",       Icons.Filled.Approval,           requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-custom-reports",  "Custom Reports",  Icons.Filled.TableChart,         requiresRole = UserRole.MANAGER),
         ),
     ),
 
@@ -162,6 +163,7 @@ private val crmAllSections = listOf(
             SidebarItem("crm-sequences",      "Sequences",      Icons.Filled.Timeline,           requiresRole = UserRole.MANAGER),
             SidebarItem("crm-landing-pages",  "Landing Pages",  Icons.Filled.Web,                requiresRole = UserRole.MANAGER),
             SidebarItem("crm-marketplace",    "Marketplace",    Icons.Filled.Store,              requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-ab-tests",       "A/B Tests",      Icons.Filled.BarChart,           requiresRole = UserRole.MANAGER),
         ),
     ),
 
@@ -178,6 +180,8 @@ private val crmAllSections = listOf(
             SidebarItem("crm-support",        "Support",        Icons.Filled.SupportAgent,       requiresRole = UserRole.MANAGER),
             SidebarItem("crm-doc-tracking",   "Doc Tracking",   Icons.Filled.Visibility,         requiresRole = UserRole.MANAGER),
             SidebarItem("crm-doc-templates",  "Doc Templates",  Icons.Filled.Description,        requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-playbooks",      "Playbooks",      Icons.Filled.Lightbulb,          requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-lead-scoring",   "Lead Scoring",   Icons.Filled.Analytics,          requiresRole = UserRole.MANAGER),
         ),
     ),
 

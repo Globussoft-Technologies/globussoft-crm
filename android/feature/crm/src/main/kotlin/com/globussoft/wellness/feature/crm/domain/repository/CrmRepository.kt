@@ -123,4 +123,15 @@ interface CrmRepository {
     suspend fun getIntegrations(): WResult<List<Map<String, Any>>>
     suspend fun getBookingPages(): WResult<List<Map<String, Any>>>
     suspend fun createBookingPage(name: String, description: String): WResult<Map<String, Any>>
+
+    // ── Wave 18 ───────────────────────────────────────────────────────────────
+    suspend fun getCustomReports(): WResult<List<Map<String, Any>>>
+    suspend fun createCustomReport(name: String, entityType: String): WResult<Map<String, Any>>
+    suspend fun getDashboardsList(): WResult<List<Map<String, Any>>>
+    suspend fun createDashboardItem(name: String): WResult<Map<String, Any>>
+    suspend fun getPlaybooks(): WResult<List<Map<String, Any>>>
+    suspend fun createPlaybook(name: String, description: String): WResult<Map<String, Any>>
+    suspend fun getLeadScores(): WResult<List<Map<String, Any>>>
+    suspend fun getAbTests(): WResult<List<Map<String, Any>>>
+    suspend fun createAbTest(name: String, variantA: String, variantB: String): WResult<Map<String, Any>>
 }

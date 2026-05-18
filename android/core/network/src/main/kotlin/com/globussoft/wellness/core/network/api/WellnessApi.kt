@@ -1450,4 +1450,49 @@ interface WellnessApi {
     suspend fun createBookingPage(
         @Body body: Map<String, @JvmSuppressWildcards Any>,
     ): Response<@JvmSuppressWildcards Any>
+
+    // ── Custom Reports (Wave 18) ──────────────────────────────────────────────
+
+    @GET("custom-reports")
+    suspend fun getCustomReports(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("custom-reports")
+    suspend fun createCustomReport(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Dashboards (Wave 18) ──────────────────────────────────────────────────
+
+    @GET("dashboards")
+    suspend fun getDashboards(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("dashboards")
+    suspend fun createDashboard(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Playbooks (Wave 18) ───────────────────────────────────────────────────
+
+    @GET("playbooks")
+    suspend fun getPlaybooks(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("playbooks")
+    suspend fun createPlaybook(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Lead Scoring / AI Scoring (Wave 18) ──────────────────────────────────
+
+    @GET("ai-scoring")
+    suspend fun getLeadScores(): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── A/B Tests (Wave 18) ───────────────────────────────────────────────────
+
+    @GET("ab-tests")
+    suspend fun getAbTests(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("ab-tests")
+    suspend fun createAbTest(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
 }

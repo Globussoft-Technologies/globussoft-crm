@@ -172,7 +172,14 @@ const loginIpLimiter = rateLimit({
 });
 const loginUsernameLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // 10 attempts per email per hour, regardless of IP
+  // 10/hr was too tight for the 8-shard e2e-full release-validation run —
+  // ~120+ spec files each do beforeAll login against admin@globussoft.com,
+  // and under contention some return 5xx (counted as failures since
+  // skipSuccessfulRequests only skips 2xx). The 10-budget got burned in
+  // a single run, locking subsequent runs out until the 1-hour window
+  // cleared. 200/hr still catches real credential-stuffing (an attacker
+  // tries thousands/hr) but accommodates the legitimate CI burst.
+  max: 200, // failed attempts per email per hour, regardless of IP
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true,

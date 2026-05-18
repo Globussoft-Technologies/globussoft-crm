@@ -11,20 +11,27 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -127,9 +134,9 @@ fun ApprovalsScreen(
                                 key   = { it.id },
                             ) { approval ->
                                 ApprovalCard(
-                                    approval = approval,
-                                    onApprove = { viewModel.approve(approval.id) },
-                                    onReject  = { viewModel.reject(approval.id) },
+                                    approval  = approval,
+                                    onApprove = { comment -> viewModel.approve(approval.id, comment) },
+                                    onReject  = { comment -> viewModel.reject(approval.id, comment) },
                                 )
                             }
                         }
@@ -143,10 +150,65 @@ fun ApprovalsScreen(
 @Composable
 private fun ApprovalCard(
     approval:  Approval,
-    onApprove: () -> Unit,
-    onReject:  () -> Unit,
+    onApprove: (String?) -> Unit,
+    onReject:  (String?) -> Unit,
     modifier:  Modifier = Modifier,
 ) {
+    var showApproveDialog by remember(approval.id) { mutableStateOf(false) }
+    var showRejectDialog  by remember(approval.id) { mutableStateOf(false) }
+    var commentText       by remember(approval.id) { mutableStateOf("") }
+
+    if (showApproveDialog) {
+        AlertDialog(
+            onDismissRequest = { showApproveDialog = false },
+            title   = { Text("Approve Request?") },
+            text    = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Optionally add a comment:")
+                    OutlinedTextField(
+                        value         = commentText,
+                        onValueChange = { commentText = it },
+                        placeholder   = { Text("Comment (optional)") },
+                        modifier      = Modifier.fillMaxWidth(),
+                        minLines      = 2,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showApproveDialog = false; onApprove(commentText.ifBlank { null }) },
+                    colors  = ButtonDefaults.buttonColors(containerColor = GenericAccent),
+                ) { Text("Approve") }
+            },
+            dismissButton = { TextButton(onClick = { showApproveDialog = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (showRejectDialog) {
+        AlertDialog(
+            onDismissRequest = { showRejectDialog = false },
+            title   = { Text("Reject Request?") },
+            text    = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Please provide a reason:")
+                    OutlinedTextField(
+                        value         = commentText,
+                        onValueChange = { commentText = it },
+                        placeholder   = { Text("Reason (optional)") },
+                        modifier      = Modifier.fillMaxWidth(),
+                        minLines      = 2,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showRejectDialog = false; onReject(commentText.ifBlank { null }) },
+                    colors  = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Reject") }
+            },
+            dismissButton = { TextButton(onClick = { showRejectDialog = false }) { Text("Cancel") } },
+        )
+    }
     WellnessCard(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -206,7 +268,7 @@ private fun ApprovalCard(
                 Spacer(Modifier.height(Dimens.SpacingMd))
                 Row(horizontalArrangement = Arrangement.spacedBy(Dimens.SpacingSm)) {
                     Button(
-                        onClick = onApprove,
+                        onClick = { commentText = ""; showApproveDialog = true },
                         colors  = ButtonDefaults.buttonColors(
                             containerColor = GenericAccent,
                             contentColor   = Color.White,
@@ -215,7 +277,7 @@ private fun ApprovalCard(
                         Text("Approve")
                     }
                     OutlinedButton(
-                        onClick = onReject,
+                        onClick = { commentText = ""; showRejectDialog = true },
                         colors  = ButtonDefaults.outlinedButtonColors(
                             contentColor = MaterialTheme.colorScheme.error,
                         ),

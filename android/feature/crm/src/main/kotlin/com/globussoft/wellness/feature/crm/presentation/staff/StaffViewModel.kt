@@ -36,6 +36,13 @@ class StaffViewModel @Inject constructor(
     }
     fun dismissForm() = _state.update { it.copy(showForm = false, editingId = null, formError = null) }
 
+    fun deactivateMember(id: String) {
+        viewModelScope.launch {
+            repo.updateStaff(id, mapOf("isActive" to false))
+            load()
+        }
+    }
+
     fun saveMember(name: String, email: String, role: String) {
         viewModelScope.launch {
             _state.update { it.copy(isSubmitting = true, formError = null) }

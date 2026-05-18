@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.PersonOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -21,6 +23,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -28,6 +32,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -39,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -121,9 +127,18 @@ fun StaffScreen(
                         ),
                     ) {
                         items(filteredStaff, key = { it["id"]?.toString() ?: it.hashCode().toString() }) { member ->
+                            val memberId = member["id"]?.toString() ?: ""
+                            val isActive = member["isActive"]?.let {
+                                when (it) {
+                                    is Boolean -> it
+                                    is String  -> it.equals("true", ignoreCase = true)
+                                    else       -> false
+                                }
+                            } ?: false
                             StaffCard(
-                                member = member,
-                                onEdit = { viewModel.showEdit(member) },
+                                member       = member,
+                                onEdit       = { viewModel.showEdit(member) },
+                                onDeactivate = if (isActive) ({ viewModel.deactivateMember(memberId) }) else null,
                             )
                         }
                     }
@@ -148,9 +163,10 @@ fun StaffScreen(
 
 @Composable
 private fun StaffCard(
-    member: Map<String, Any>,
-    onEdit: () -> Unit,
-    modifier: Modifier = Modifier,
+    member:       Map<String, Any>,
+    onEdit:       () -> Unit,
+    onDeactivate: (() -> Unit)?,
+    modifier:     Modifier = Modifier,
 ) {
     val name     = member["name"]?.toString() ?: "Unknown"
     val email    = member["email"]?.toString() ?: ""
@@ -162,6 +178,24 @@ private fun StaffCard(
             else       -> false
         }
     } ?: false
+    var showDeactivateDialog by remember { mutableStateOf(false) }
+
+    if (showDeactivateDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeactivateDialog = false },
+            title   = { Text("Deactivate $name?") },
+            text    = { Text("The user will lose access to the system.") },
+            confirmButton = {
+                Button(
+                    onClick = { showDeactivateDialog = false; onDeactivate?.invoke() },
+                    colors  = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Deactivate") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeactivateDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
 
     WellnessCard(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -171,7 +205,7 @@ private fun StaffCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = name, style = MaterialTheme.typography.titleSmall)
+                Text(text = name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 if (email.isNotBlank()) {
                     Text(
                         text  = email,
@@ -180,10 +214,18 @@ private fun StaffCard(
                     )
                 }
             }
-            Spacer(Modifier.width(Dimens.SpacingSm))
+            Spacer(Modifier.width(Dimens.SpacingXs))
             RoleChip(role = role)
             Spacer(Modifier.width(Dimens.SpacingXs))
             ActiveBadge(isActive = isActive)
+            if (onDeactivate != null) {
+                IconButton(
+                    onClick = { showDeactivateDialog = true },
+                    colors  = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Icon(Icons.Default.PersonOff, contentDescription = "Deactivate", Modifier.width(18.dp))
+                }
+            }
         }
     }
 }

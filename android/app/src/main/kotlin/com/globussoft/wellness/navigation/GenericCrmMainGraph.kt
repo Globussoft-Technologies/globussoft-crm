@@ -58,7 +58,10 @@ import com.globussoft.wellness.feature.crm.presentation.quotas.QuotasScreen
 import com.globussoft.wellness.feature.crm.presentation.territories.TerritoriesScreen
 import com.globussoft.wellness.feature.crm.presentation.clients.ClientsScreen
 import com.globussoft.wellness.feature.crm.presentation.contracts.ContractsScreen
+import com.globussoft.wellness.feature.crm.presentation.inbox.InboxScreen
 import com.globussoft.wellness.feature.crm.presentation.projects.ProjectsScreen
+import com.globussoft.wellness.feature.crm.presentation.sharedinbox.SharedInboxScreen
+import com.globussoft.wellness.feature.crm.presentation.surveys.SurveysScreen
 import com.globussoft.wellness.feature.crm.presentation.tickets.TicketDetailScreen
 import com.globussoft.wellness.feature.crm.presentation.tickets.TicketsScreen
 
@@ -116,6 +119,7 @@ object CrmRoutes {
     const val TERRITORIES    = "crm-territories"
     const val KNOWLEDGE_BASE = "crm-knowledge-base"
     const val SURVEYS        = "crm-surveys"
+    const val SHARED_INBOX   = "crm-shared-inbox"
     const val SUPPORT        = "crm-support"
 
     // Admin
@@ -276,7 +280,7 @@ private fun CrmInnerNavHost(
             ProjectsScreen()
         }
         composable(CrmRoutes.INBOX) {
-            CrmPlaceholder("Inbox")
+            InboxScreen()
         }
         composable(
             route     = CrmRoutes.DEALS,
@@ -377,7 +381,10 @@ private fun CrmInnerNavHost(
             KnowledgeBaseScreen()
         }
         composable(CrmRoutes.SURVEYS) {
-            CrmPlaceholder("Surveys")
+            SurveysScreen()
+        }
+        composable(CrmRoutes.SHARED_INBOX) {
+            SharedInboxScreen()
         }
         composable(CrmRoutes.SUPPORT) {
             CrmPlaceholder("Support")

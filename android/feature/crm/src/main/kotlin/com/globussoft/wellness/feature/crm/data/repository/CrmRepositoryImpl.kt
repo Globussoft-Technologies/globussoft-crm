@@ -456,6 +456,40 @@ class CrmRepositoryImpl @Inject constructor(
             description?.let { put("description", it) }; deadline?.let { put("deadline", it) }
         }) }.mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
 
+    override suspend fun createSurvey(title: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createCrmSurvey(mapOf("title" to title)) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun getEmailInbox(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getEmailInbox() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun getSmsMessages(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getSmsMessages() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun getWhatsAppInbox(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getWhatsAppMessages() }
+            .mapSuccess { raw ->
+                @Suppress("UNCHECKED_CAST")
+                (raw["messages"] as? List<*>)?.mapNotNull { it as? Map<String, Any> } ?: emptyList()
+            }
+
+    override suspend fun getNotificationsFeed(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getNotifications() }
+            .mapSuccess { raw ->
+                @Suppress("UNCHECKED_CAST")
+                (raw["notifications"] as? List<*>)?.mapNotNull { it as? Map<String, Any> } ?: emptyList()
+            }
+
+    override suspend fun getSharedInbox(status: String?): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getSharedInbox(status = status) }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun assignSharedInboxItem(id: String, assigneeId: String): WResult<Map<String, Any>> =
+        safeApiCall { api.assignSharedInboxItem(id, mapOf("assigneeId" to assigneeId)) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private suspend fun tenantId(): String =

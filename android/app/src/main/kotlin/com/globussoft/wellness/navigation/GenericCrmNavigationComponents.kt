@@ -171,6 +171,7 @@ private val crmAllSections = listOf(
             SidebarItem("crm-territories",    "Territories",    Icons.Filled.TravelExplore,      requiresRole = UserRole.MANAGER),
             SidebarItem("crm-knowledge-base", "Knowledge Base", Icons.Filled.MoveToInbox,        requiresRole = UserRole.MANAGER),
             SidebarItem("crm-surveys",        "Surveys",        Icons.Filled.Poll,               requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-shared-inbox",   "Shared Inbox",   Icons.Filled.Groups,             requiresRole = UserRole.MANAGER),
             SidebarItem("crm-support",        "Support",        Icons.Filled.SupportAgent,       requiresRole = UserRole.MANAGER),
         ),
     ),

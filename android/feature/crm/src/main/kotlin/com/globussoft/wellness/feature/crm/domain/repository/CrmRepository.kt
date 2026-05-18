@@ -108,4 +108,11 @@ interface CrmRepository {
     suspend fun createContract(title: String, value: Double, startDate: String?, endDate: String?): WResult<Map<String, Any>>
     suspend fun getProjects(status: String? = null): WResult<List<Map<String, Any>>>
     suspend fun createProject(name: String, description: String?, deadline: String?): WResult<Map<String, Any>>
+    suspend fun createSurvey(title: String): WResult<Map<String, Any>>
+    suspend fun getEmailInbox(): WResult<List<Map<String, Any>>>
+    suspend fun getSmsMessages(): WResult<List<Map<String, Any>>>
+    suspend fun getWhatsAppInbox(): WResult<List<Map<String, Any>>>
+    suspend fun getNotificationsFeed(): WResult<List<Map<String, Any>>>
+    suspend fun getSharedInbox(status: String? = null): WResult<List<Map<String, Any>>>
+    suspend fun assignSharedInboxItem(id: String, assigneeId: String): WResult<Map<String, Any>>
 }

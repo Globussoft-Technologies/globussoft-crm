@@ -1381,6 +1381,41 @@ interface WellnessApi {
         @Query("limit") limit: Int = 50,
     ): Response<List<@JvmSuppressWildcards Any>>
 
+    @POST("surveys")
+    suspend fun createCrmSurvey(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Email Inbox ───────────────────────────────────────────────────────────
+
+    @GET("email")
+    suspend fun getEmailInbox(
+        @Query("limit") limit: Int = 50,
+        @Query("page")  page:  Int = 1,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── SMS ───────────────────────────────────────────────────────────────────
+
+    @GET("sms")
+    suspend fun getSmsMessages(
+        @Query("limit") limit: Int = 50,
+        @Query("page")  page:  Int = 1,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Shared Inbox ──────────────────────────────────────────────────────────
+
+    @GET("shared-inbox")
+    suspend fun getSharedInbox(
+        @Query("status") status: String? = null,
+        @Query("limit")  limit:  Int = 50,
+    ): Response<List<@JvmSuppressWildcards Any>>
+
+    @PATCH("shared-inbox/{id}/assign")
+    suspend fun assignSharedInboxItem(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
     // ── Audit Log (CRM admin) ─────────────────────────────────────────────────
 
     @GET("audit-viewer")

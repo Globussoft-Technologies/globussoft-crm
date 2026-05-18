@@ -140,14 +140,33 @@ async function getWellness(request) {
 
 const headers = (token) => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' });
 
+// Cloudflare-fronted demo occasionally surfaces transient 5xx during origin
+// restarts / health-flap windows (Ray-ID 9fd52d673a868e10 on 2026-05-17 ran
+// 502 for a few seconds and red-balled the archive POST + threads list).
+// Retry transient 5xx with a short backoff; 4xx bails immediately so genuine
+// validator + auth regressions still surface fast.
+async function retryOn5xx(fn) {
+  let r;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    r = await fn();
+    if (r.status() < 500) return r;
+    await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+  }
+  return r;
+}
+
 async function get(request, token, path) {
-  return request.get(`${BASE_URL}${path}`, { headers: headers(token), timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(() => request.get(`${BASE_URL}${path}`, { headers: headers(token), timeout: REQUEST_TIMEOUT }));
 }
 async function post(request, token, path, body) {
-  return request.post(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(() =>
+    request.post(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT }),
+  );
 }
 async function del(request, token, path) {
-  return request.delete(`${BASE_URL}${path}`, { headers: headers(token), timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(() =>
+    request.delete(`${BASE_URL}${path}`, { headers: headers(token), timeout: REQUEST_TIMEOUT }),
+  );
 }
 
 // ── Cleanup tracking ──────────────────────────────────────────────────

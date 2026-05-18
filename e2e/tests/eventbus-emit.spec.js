@@ -56,9 +56,27 @@ const authB = () => ({ Authorization: `Bearer ${tokenB}` });
 test.describe.configure({ mode: 'serial' });
 
 test.describe('eventBus.emitEvent() — entry-point + orchestration', () => {
+  // Cloudflare-fronted demo occasionally surfaces transient 5xx during PM2
+  // restart windows / origin-side flap (Ray-ID 9fd52d673a868e10 on 2026-05-17
+  // run 26000933467 took down login for a few seconds, killing beforeAll for
+  // every test in the describe). Retry the login POST on 5xx with a short
+  // backoff before bailing — matches the loginAs() pattern used by
+  // notifications-api / email-threading-api.
+  async function loginWithRetry(request, creds, label) {
+    let last;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await request.post(`${API}/auth/login`, { data: creds });
+      if (r.ok()) return r;
+      last = r;
+      if (r.status() < 500) break; // 4xx is deterministic — don't waste retries
+      await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+    }
+    expect(last.ok(), `${label} login: ${last.status()} ${await last.text()}`).toBeTruthy();
+    return last;
+  }
+
   test.beforeAll(async ({ request }) => {
-    const a = await request.post(`${API}/auth/login`, { data: TENANT_A });
-    expect(a.ok(), `tenant A login: ${a.status()} ${await a.text()}`).toBeTruthy();
+    const a = await loginWithRetry(request, TENANT_A, 'tenant A');
     const aBody = await a.json();
     tokenA = aBody.token;
     userIdA = aBody.user?.id || aBody.userId || aBody.user?.userId || null;
@@ -71,8 +89,7 @@ test.describe('eventBus.emitEvent() — entry-point + orchestration', () => {
     }
     expect(userIdA).toBeTruthy();
 
-    const b = await request.post(`${API}/auth/login`, { data: TENANT_B });
-    expect(b.ok(), `tenant B login: ${b.status()} ${await b.text()}`).toBeTruthy();
+    const b = await loginWithRetry(request, TENANT_B, 'tenant B');
     const bBody = await b.json();
     tokenB = bBody.token;
     userIdB = bBody.user?.id || bBody.userId || bBody.user?.userId || null;

@@ -63,19 +63,44 @@ async function getAuthToken(request) {
 
 const auth = async (request) => ({ Authorization: `Bearer ${await getAuthToken(request)}` });
 
+// Cloudflare-fronted demo occasionally surfaces transient 5xx during origin
+// restarts / health-flap windows (Ray-ID 9fd52d673a868e10 on 2026-05-17 ran
+// 502 for a few seconds and red-balled estimates-api:406 expecting 400 but
+// receiving 502). Retry transient 5xx with a short backoff; 4xx bails
+// immediately so contract regressions still surface fast.
+async function retryOn5xx(fn) {
+  let r;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    r = await fn();
+    if (r.status() < 500) return r;
+    await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+  }
+  return r;
+}
+
 async function authGet(request, path) {
-  return request.get(`${BASE_URL}${path}`, { headers: await auth(request), timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(async () => {
+    const headers = await auth(request);
+    return request.get(`${BASE_URL}${path}`, { headers, timeout: REQUEST_TIMEOUT });
+  });
 }
 async function authPost(request, path, body) {
-  const headers = { ...(await auth(request)), 'Content-Type': 'application/json' };
-  return request.post(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(async () => {
+    const headers = { ...(await auth(request)), 'Content-Type': 'application/json' };
+    return request.post(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
+  });
 }
 async function authPut(request, path, body) {
-  const headers = { ...(await auth(request)), 'Content-Type': 'application/json' };
-  return request.put(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(async () => {
+    const headers = { ...(await auth(request)), 'Content-Type': 'application/json' };
+    return request.put(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
+  });
 }
 async function authDelete(request, path) {
-  return request.delete(`${BASE_URL}${path}`, { headers: await auth(request), timeout: REQUEST_TIMEOUT });
+  return retryOn5xx(async () => {
+    const headers = await auth(request);
+    return request.delete(`${BASE_URL}${path}`, { headers, timeout: REQUEST_TIMEOUT });
+  });
 }
 
 // ── cleanup tracking ────────────────────────────────────────────────

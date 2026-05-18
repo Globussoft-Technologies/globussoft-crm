@@ -16,7 +16,7 @@ data class PatientResponse(
     val bloodGroup: String?,
     val source: String?,
     val locationId: String?,
-    val createdAt: String,
+    val createdAt: String?,
     val _count: PatientCountResponse?,
 )
 

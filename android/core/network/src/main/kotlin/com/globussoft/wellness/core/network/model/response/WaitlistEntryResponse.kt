@@ -17,7 +17,7 @@ data class WaitlistEntryResponse(
     val preferredDateRange: String?,
     val estimatedWaitMin: Int?,
     val status: String,
-    val createdAt: String,
+    val createdAt: String?,
     val offeredAt: String?,
     val notes: String?,
 )

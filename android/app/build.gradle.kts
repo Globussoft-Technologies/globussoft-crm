@@ -57,6 +57,7 @@ dependencies {
     implementation(project(":feature:telecaller"))
     implementation(project(":feature:admin"))
     implementation(project(":feature:settings"))
+    implementation(project(":feature:crm"))
 
     // App-level deps
     implementation(libs.core.ktx)

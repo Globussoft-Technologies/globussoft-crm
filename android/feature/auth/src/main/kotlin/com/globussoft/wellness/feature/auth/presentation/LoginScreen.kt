@@ -359,6 +359,14 @@ private fun FormPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(4.dp))
+
+            // ── Wellness tenant ───────────────────────────────────────────────
+            Text(
+                text  = "Wellness",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(2.dp))
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(
                     Triple("Owner",   "rishu@enhancedwellness.in",   "password123"),
@@ -377,6 +385,38 @@ private fun FormPanel(
                             text  = label,
                             style = MaterialTheme.typography.labelSmall,
                             color = WellnessPrimary,
+                        )
+                    }
+                }
+            }
+
+            // ── Generic CRM tenant ────────────────────────────────────────────
+            Spacer(Modifier.height(Dimens.SpacingSm))
+            Text(
+                text  = "Generic CRM",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(2.dp))
+            val crmIndigo = Color(0xFF4F46E5)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    Triple("CRM Admin",   "admin@globussoft.com", "password123"),
+                    Triple("CRM Manager", "manager@crm.com",      "password123"),
+                    Triple("CRM User",    "user@crm.com",         "password123"),
+                ).forEach { (label, email, pass) ->
+                    OutlinedButton(
+                        onClick  = {
+                            onEvent(LoginEvent.EmailChanged(email))
+                            onEvent(LoginEvent.PasswordChanged(pass))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        border   = BorderStroke(1.dp, crmIndigo.copy(alpha = 0.4f)),
+                    ) {
+                        Text(
+                            text  = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = crmIndigo,
                         )
                     }
                 }

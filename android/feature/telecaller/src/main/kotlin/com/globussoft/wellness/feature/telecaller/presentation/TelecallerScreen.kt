@@ -290,7 +290,7 @@ private fun QueueLeadCard(
                 LeadScoreChip(score = lead.leadScore)
                 Spacer(modifier = Modifier.height(Dimens.SpacingXs))
                 Text(
-                    text  = formatRelativeTime(lead.createdAt),
+                    text  = formatRelativeTime(lead.createdAt ?: ""),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -367,13 +367,13 @@ private fun LeadCard(lead: Lead) {
                     StatusBadge(status = lead.source ?: "unknown")
                 }
                 Text(
-                    text  = "Added: ${formatRelativeTime(lead.createdAt)}",
+                    text  = "Added: ${formatRelativeTime(lead.createdAt ?: "")}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.weight(1f))
-                SlaStatusBadge(createdAt = lead.createdAt, firstResponseAt = lead.firstResponseAt)
-                SlaTimer(createdAtIso = lead.createdAt)
+                SlaStatusBadge(createdAt = lead.createdAt ?: "", firstResponseAt = lead.firstResponseAt)
+                SlaTimer(createdAtIso = lead.createdAt ?: "")
             }
         }
     }

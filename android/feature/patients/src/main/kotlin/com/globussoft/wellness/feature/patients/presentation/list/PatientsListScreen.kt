@@ -347,7 +347,7 @@ private fun PatientCard(
                         StatusBadge(status = patientSource)
                     }
                     Text(
-                        text  = formatDate(patient.createdAt),
+                        text  = formatDate(patient.createdAt ?: ""),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

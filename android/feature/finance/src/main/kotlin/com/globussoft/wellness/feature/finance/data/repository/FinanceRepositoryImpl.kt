@@ -205,23 +205,17 @@ class FinanceRepositoryImpl @Inject constructor(
 
     override suspend fun getPayments(): WResult<List<PaymentItem>> =
         safeApiCall { api.getPayments() }
-            .mapSuccess { envelope ->
-                @Suppress("UNCHECKED_CAST")
-                val rows = (envelope["payments"] ?: envelope["data"]) as? List<*>
-                    ?: envelope.values.filterIsInstance<List<*>>().firstOrNull()
-                    ?: emptyList<Any>()
-                rows.filterIsInstance<Map<*, *>>().map { it.toPaymentItem() }
-            }
+            .mapSuccess { list -> list.map { it.toPaymentItem() } }
 
-    private fun Map<*, *>.toPaymentItem(): PaymentItem = PaymentItem(
-        id        = anyId(this["id"]),
-        invoiceId = this["invoiceId"]?.toString(),
-        amount    = (this["amount"] as? Number)?.toDouble() ?: 0.0,
-        currency  = this["currency"] as? String ?: "INR",
-        gateway   = this["gateway"] as? String ?: "",
-        status    = this["status"] as? String ?: "PENDING",
-        paidAt    = this["paidAt"] as? String,
-        createdAt = this["createdAt"] as? String ?: "",
+    private fun com.globussoft.wellness.core.network.model.response.PaymentResponse.toPaymentItem(): PaymentItem = PaymentItem(
+        id        = id,
+        invoiceId = null,
+        amount    = amount ?: 0.0,
+        currency  = "INR",
+        gateway   = method ?: "",
+        status    = status ?: "PENDING",
+        paidAt    = createdAt,
+        createdAt = createdAt ?: "",
     )
 
     // ─── Invoices (Wave 4) ────────────────────────────────────────────────────

@@ -277,7 +277,7 @@ private fun WaitlistEntryCard(
             }
 
             // Added date
-            LabelValue("Added", formatRelativeTime(entry.createdAt))
+            LabelValue("Added", formatRelativeTime(entry.createdAt ?: ""))
 
             // Offered at
             entry.offeredAt?.let {

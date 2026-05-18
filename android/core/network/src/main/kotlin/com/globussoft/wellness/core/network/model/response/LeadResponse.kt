@@ -22,7 +22,7 @@ data class LeadResponse(
     val phone: String,
     val leadScore: Int,
     val source: String?,
-    val createdAt: String,
+    val createdAt: String?,
     val nextFollowUp: String?,
     val status: String?,
     val firstResponseAt: String? = null,

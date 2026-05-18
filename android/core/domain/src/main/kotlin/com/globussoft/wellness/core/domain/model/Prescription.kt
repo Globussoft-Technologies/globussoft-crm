@@ -13,7 +13,7 @@ data class Prescription(
     val doctorName: String?,
     val drugs: List<DrugItem>,
     val instructions: String?,
-    val createdAt: String,
+    val createdAt: String?,
 )
 
 /** A single medication line within a [Prescription]. */

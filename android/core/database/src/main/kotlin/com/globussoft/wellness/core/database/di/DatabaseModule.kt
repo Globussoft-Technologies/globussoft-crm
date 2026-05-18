@@ -3,6 +3,10 @@ package com.globussoft.wellness.core.database.di
 import android.content.Context
 import androidx.room.Room
 import com.globussoft.wellness.core.database.WellnessDatabase
+import com.globussoft.wellness.core.database.dao.CrmContactDao
+import com.globussoft.wellness.core.database.dao.CrmDealDao
+import com.globussoft.wellness.core.database.dao.CrmTaskDao
+import com.globussoft.wellness.core.database.dao.CrmTicketDao
 import com.globussoft.wellness.core.database.dao.PatientDao
 import com.globussoft.wellness.core.database.dao.VisitDao
 import dagger.Module
@@ -50,4 +54,24 @@ object DatabaseModule {
     @Singleton
     fun provideVisitDao(database: WellnessDatabase): VisitDao =
         database.visitDao()
+
+    @Provides
+    @Singleton
+    fun provideCrmContactDao(database: WellnessDatabase): CrmContactDao =
+        database.crmContactDao()
+
+    @Provides
+    @Singleton
+    fun provideCrmDealDao(database: WellnessDatabase): CrmDealDao =
+        database.crmDealDao()
+
+    @Provides
+    @Singleton
+    fun provideCrmTaskDao(database: WellnessDatabase): CrmTaskDao =
+        database.crmTaskDao()
+
+    @Provides
+    @Singleton
+    fun provideCrmTicketDao(database: WellnessDatabase): CrmTicketDao =
+        database.crmTicketDao()
 }

@@ -18,7 +18,7 @@ data class WaitlistEntry(
     val preferredDateRange: String?,
     val estimatedWaitMin: Int?,
     val status: WaitlistStatus,
-    val createdAt: String,
+    val createdAt: String?,
     val offeredAt: String?,
     val notes: String?,
 )

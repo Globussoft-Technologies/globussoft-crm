@@ -18,6 +18,6 @@ data class RecommendationResponse(
     val type: String,
     val status: String,
     val expectedImpact: String?,
-    val createdAt: String,
+    val createdAt: String?,
     val resolvedAt: String?,
 )

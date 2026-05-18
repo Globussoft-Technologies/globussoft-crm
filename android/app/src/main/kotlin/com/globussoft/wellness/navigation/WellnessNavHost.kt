@@ -19,6 +19,13 @@ fun WellnessNavHost(
     navController: NavHostController = rememberNavController(),
 ) {
     val startDestination = if (isLoggedIn) MAIN_GRAPH_ROUTE else AUTH_GRAPH_ROUTE
+    val vertical = userSession?.vertical ?: "wellness"
+
+    val onLogout: () -> Unit = {
+        navController.navigate(AUTH_GRAPH_ROUTE) {
+            popUpTo(MAIN_GRAPH_ROUTE) { inclusive = true }
+        }
+    }
 
     NavHost(
         navController    = navController,
@@ -32,14 +39,22 @@ fun WellnessNavHost(
                 }
             }
         )
-        mainGraph(
-            navController = navController,
-            userSession   = userSession,
-            onLogout      = {
-                navController.navigate(AUTH_GRAPH_ROUTE) {
-                    popUpTo(MAIN_GRAPH_ROUTE) { inclusive = true }
-                }
-            }
-        )
+
+        // Route to the correct main graph based on tenant vertical.
+        // "generic" → Generic CRM experience (indigo theme, CRM sidebar).
+        // "wellness" (default) → existing Wellness CRM experience.
+        if (vertical == "generic") {
+            genericCrmMainGraph(
+                navController = navController,
+                userSession   = userSession,
+                onLogout      = onLogout,
+            )
+        } else {
+            mainGraph(
+                navController = navController,
+                userSession   = userSession,
+                onLogout      = onLogout,
+            )
+        }
     }
 }

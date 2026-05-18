@@ -2,39 +2,48 @@ package com.globussoft.wellness.core.database
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import com.globussoft.wellness.core.database.dao.CrmContactDao
+import com.globussoft.wellness.core.database.dao.CrmDealDao
+import com.globussoft.wellness.core.database.dao.CrmTaskDao
+import com.globussoft.wellness.core.database.dao.CrmTicketDao
 import com.globussoft.wellness.core.database.dao.PatientDao
 import com.globussoft.wellness.core.database.dao.VisitDao
+import com.globussoft.wellness.core.database.entity.CrmContactEntity
+import com.globussoft.wellness.core.database.entity.CrmDealEntity
+import com.globussoft.wellness.core.database.entity.CrmTaskEntity
+import com.globussoft.wellness.core.database.entity.CrmTicketEntity
 import com.globussoft.wellness.core.database.entity.PatientEntity
 import com.globussoft.wellness.core.database.entity.VisitEntity
 
 /**
  * Room database for the Globussoft Wellness CRM Android app.
  *
- * Registered entities:
- * - [PatientEntity] — offline patient cache (table: "patients")
- * - [VisitEntity]   — today's calendar visit cache (table: "visits")
- *
- * [exportSchema] is false because this database is a disposable local cache;
- * schema migrations between versions use [fallbackToDestructiveMigration] in
- * the [DatabaseModule] builder so the cache is simply rebuilt from the server
- * rather than running complex migration SQL.
+ * [exportSchema] is false — this is a disposable server cache;
+ * [fallbackToDestructiveMigration] in [DatabaseModule] rebuilds it on upgrade.
  *
  * Version history:
- * - v1 (initial): patients + visits tables.
+ * - v1: patients + visits tables (Wellness vertical cache)
+ * - v2: crm_contacts, crm_deals, crm_tasks, crm_tickets (Generic CRM cache)
  */
 @Database(
     entities = [
         PatientEntity::class,
         VisitEntity::class,
+        CrmContactEntity::class,
+        CrmDealEntity::class,
+        CrmTaskEntity::class,
+        CrmTicketEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class WellnessDatabase : RoomDatabase() {
 
-    /** Returns the [PatientDao] for patient cache operations. */
     abstract fun patientDao(): PatientDao
-
-    /** Returns the [VisitDao] for visit / appointment cache operations. */
     abstract fun visitDao(): VisitDao
+
+    abstract fun crmContactDao(): CrmContactDao
+    abstract fun crmDealDao(): CrmDealDao
+    abstract fun crmTaskDao(): CrmTaskDao
+    abstract fun crmTicketDao(): CrmTicketDao
 }

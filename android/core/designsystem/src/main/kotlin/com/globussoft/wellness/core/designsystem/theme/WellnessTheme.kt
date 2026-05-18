@@ -114,24 +114,109 @@ private val WellnessDarkColorScheme = darkColorScheme(
     scrim = Color(0x80000000),
 )
 
+// ─── Generic CRM color schemes ───────────────────────────────────────────────
+
+private val GenericCrmLightColorScheme = lightColorScheme(
+    primary             = GenericPrimary,
+    onPrimary           = Color.White,
+    primaryContainer    = GenericSubtleBg3,
+    onPrimaryContainer  = GenericPrimary,
+
+    secondary             = GenericAccent,
+    onSecondary           = Color.White,
+    secondaryContainer    = Color(0xFFD1FAE5),
+    onSecondaryContainer  = GenericAccentDark,
+
+    tertiary             = GenericSuccess,
+    onTertiary           = Color.White,
+    tertiaryContainer    = Color(0xFFD1FAE5),
+    onTertiaryContainer  = Color(0xFF064E3B),
+
+    error             = GenericDanger,
+    onError           = Color.White,
+    errorContainer    = Color(0xFFFEE2E2),
+    onErrorContainer  = Color(0xFF7F1D1D),
+
+    background         = GenericBg,
+    onBackground       = GenericTextPrimary,
+    surface            = GenericSurface,
+    onSurface          = GenericTextPrimary,
+    surfaceVariant     = GenericBgGradientEnd,
+    onSurfaceVariant   = GenericTextSecondary,
+
+    outline        = GenericBorderColor,
+    outlineVariant = GenericBorderLight,
+
+    inverseSurface    = GenericTextPrimary,
+    inverseOnSurface  = GenericBg,
+    inversePrimary    = GenericPrimaryDark,
+
+    scrim = Color(0x80000000),
+)
+
+private val GenericCrmDarkColorScheme = darkColorScheme(
+    primary             = GenericPrimaryDarkMode,
+    onPrimary           = Color(0xFF1E1B4B),
+    primaryContainer    = Color(0xFF312E81),
+    onPrimaryContainer  = Color(0xFFC7D2FE),
+
+    secondary             = GenericAccentDarkMode,
+    onSecondary           = Color(0xFF064E3B),
+    secondaryContainer    = Color(0xFF065F46),
+    onSecondaryContainer  = Color(0xFFA7F3D0),
+
+    tertiary             = Color(0xFF6EE7B7),
+    onTertiary           = Color(0xFF064E3B),
+    tertiaryContainer    = Color(0xFF065F46),
+    onTertiaryContainer  = Color(0xFFA7F3D0),
+
+    error             = Color(0xFFFCA5A5),
+    onError           = Color(0xFF7F1D1D),
+    errorContainer    = Color(0xFF991B1B),
+    onErrorContainer  = Color(0xFFFEE2E2),
+
+    background         = GenericBgDark,
+    onBackground       = GenericTextPrimaryDark,
+    surface            = Color(0xFF1E293B),
+    onSurface          = GenericTextPrimaryDark,
+    surfaceVariant     = Color(0xFF1A2332),
+    onSurfaceVariant   = GenericTextSecondaryDark,
+
+    outline        = GenericBorderDark,
+    outlineVariant = Color(0x0FE0E7FF),
+
+    inverseSurface    = GenericTextPrimaryDark,
+    inverseOnSurface  = Color(0xFF0F172A),
+    inversePrimary    = GenericPrimary,
+
+    scrim = Color(0x80000000),
+)
+
 // ─── Root theme composable ────────────────────────────────────────────────────
 /**
- * The root Material 3 theme for the Globussoft Wellness CRM application.
+ * The root Material 3 theme for the Globussoft CRM application.
  *
- * Wraps [MaterialTheme] with wellness-specific color roles, typography, and
- * shapes. Also provides [LocalDarkTheme] so nested composables can read the
- * current dark-mode state without propagating it through parameters.
+ * Switches between the Wellness palette (teal/blush) and the Generic CRM
+ * palette (indigo/emerald) based on [vertical]. Both verticals share the same
+ * typography and shapes.
  *
+ * @param vertical   Tenant vertical — "wellness" or "generic". Defaults to "wellness".
  * @param darkTheme  Whether to use the dark color scheme. Defaults to the
  *                   system value via [isSystemInDarkTheme].
  * @param content    Composable content drawn within this theme.
  */
 @Composable
 fun WellnessTheme(
+    vertical: String = "wellness",
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (darkTheme) WellnessDarkColorScheme else WellnessLightColorScheme
+    val colorScheme = when {
+        vertical == "generic" && darkTheme  -> GenericCrmDarkColorScheme
+        vertical == "generic"               -> GenericCrmLightColorScheme
+        darkTheme                           -> WellnessDarkColorScheme
+        else                                -> WellnessLightColorScheme
+    }
 
     CompositionLocalProvider(LocalDarkTheme provides darkTheme) {
         MaterialTheme(

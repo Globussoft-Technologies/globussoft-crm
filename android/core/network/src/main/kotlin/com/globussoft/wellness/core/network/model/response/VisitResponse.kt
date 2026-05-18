@@ -23,7 +23,7 @@ data class VisitResponse(
     val notes: String?,
     val amount: Double?,
     val duration: Int?,
-    val createdAt: String,
+    val createdAt: String?,
 )
 
 /**

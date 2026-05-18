@@ -232,7 +232,7 @@ private fun PrescriptionCard(rx: Prescription) {
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text       = rx.createdAt.take(10),
+                    text       = rx.createdAt?.take(10) ?: "",
                     style      = MaterialTheme.typography.labelSmall,
                     color      = WellnessTextSecondary,
                 )

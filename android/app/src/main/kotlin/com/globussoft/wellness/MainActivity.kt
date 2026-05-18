@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val userSession by authDataStore.userFlow.collectAsState(initial = null)
-            WellnessTheme {
+            WellnessTheme(vertical = userSession?.vertical ?: "wellness") {
                 WellnessNavHost(
                     isLoggedIn  = userSession != null,
                     userSession = userSession,

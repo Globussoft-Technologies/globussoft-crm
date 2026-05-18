@@ -375,7 +375,7 @@ private fun RecommendationCard(
                 modifier              = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    text  = formatIsoDate(recommendation.createdAt),
+                    text  = formatIsoDate(recommendation.createdAt ?: ""),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -17,7 +17,7 @@ data class Patient(
     val bloodGroup: String?,
     val source: String?,
     val locationId: String?,
-    val createdAt: String,
+    val createdAt: String?,
     val visitsCount: Int = 0,
     val rxCount: Int = 0,
     val treatmentPlanCount: Int = 0,

@@ -47,6 +47,19 @@ beforeAll(() => {
   prisma.notification.createMany = vi.fn();
   prisma.user = prisma.user || {};
   prisma.user.findMany = vi.fn();
+  // v3.7.3 wired `membership.renewal_due` emit into the engine. The emit
+  // path calls `prisma.automationRule.findMany` inside eventBus.js:195
+  // — unmocked, that hangs the tests because the Prisma client tries to
+  // connect to a DATABASE_URL that isn't set in the vitest env. Same
+  // cron-learning as the J-wave 2026-05-18 hotfix in
+  // pos-cashLedger.test.js + wellness-patient-anniversary-gst.test.js.
+  prisma.automationRule = prisma.automationRule || {};
+  prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
+  // emitEvent's downstream also runs deliverWebhooks which queries
+  // prisma.webhook.findMany; unmocked Prisma init hangs the test fixture
+  // ~5s waiting for DATABASE_URL. Mock with [] (no webhooks → no delivery).
+  prisma.webhook = prisma.webhook || {};
+  prisma.webhook.findMany = vi.fn().mockResolvedValue([]);
 });
 
 beforeEach(() => {

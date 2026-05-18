@@ -6,4 +6,5 @@ data class CreateExpenseRequest(
     val category: String,
     val date: String,
     val notes: String? = null,
+    val status: String? = null,
 )

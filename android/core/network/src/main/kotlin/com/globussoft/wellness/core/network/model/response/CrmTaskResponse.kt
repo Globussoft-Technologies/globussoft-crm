@@ -5,6 +5,7 @@ data class CrmTaskResponse(
     val title: String?,
     val description: String?,
     val status: String?,
+    val priority: String?,
     val dueDate: String?,
     val contact: CrmTaskContactResponse?,
     val assignee: CrmTaskAssigneeResponse?,

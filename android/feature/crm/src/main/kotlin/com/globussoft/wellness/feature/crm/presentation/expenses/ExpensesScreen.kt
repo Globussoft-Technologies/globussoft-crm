@@ -57,6 +57,7 @@ private data class CategoryFilter(val label: String, val value: String?)
 
 private val CATEGORY_FILTERS = listOf(
     CategoryFilter("All",       null),
+    CategoryFilter("General",   "General"),
     CategoryFilter("Travel",    "Travel"),
     CategoryFilter("Software",  "Software"),
     CategoryFilter("Office",    "Office"),
@@ -175,8 +176,8 @@ fun ExpensesScreen(
                 isCreating = state.isCreating,
                 formError  = state.formError,
                 onDismiss  = { viewModel.dismissCreate() },
-                onSave     = { title, amount, category, date, notes ->
-                    viewModel.createExpense(title, amount, category, date, notes)
+                onSave     = { title, amount, category, date, notes, status ->
+                    viewModel.createExpense(title, amount, category, date, notes, status)
                 },
             )
         }
@@ -189,14 +190,14 @@ private fun ExpenseCreateSheet(
     isCreating: Boolean,
     formError: String?,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, String, String) -> Unit,
+    onSave: (String, String, String, String, String, String) -> Unit,
 ) {
     var title    by remember { mutableStateOf("") }
     var amount   by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("Other") }
+    var category by remember { mutableStateOf("General") }
     var date     by remember { mutableStateOf("") }
     var notes    by remember { mutableStateOf("") }
-    val categories = listOf("Travel", "Software", "Office", "Marketing", "Other")
+    val categories = listOf("General", "Travel", "Software", "Office", "Marketing", "Other")
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -247,13 +248,25 @@ private fun ExpenseCreateSheet(
             formError?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
-            Button(
-                onClick  = { onSave(title, amount, category, date, notes) },
-                enabled  = title.isNotBlank() && !isCreating,
-                modifier = Modifier.fillMaxWidth(),
-                colors   = ButtonDefaults.buttonColors(containerColor = GenericPrimary),
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(if (isCreating) "Creating…" else "Add Expense")
+                OutlinedButton(
+                    onClick  = { onSave(title, amount, category, date, notes, "DRAFT") },
+                    enabled  = title.isNotBlank() && !isCreating,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Save as Draft")
+                }
+                Button(
+                    onClick  = { onSave(title, amount, category, date, notes, "PENDING") },
+                    enabled  = title.isNotBlank() && !isCreating,
+                    modifier = Modifier.weight(1f),
+                    colors   = ButtonDefaults.buttonColors(containerColor = GenericPrimary),
+                ) {
+                    Text(if (isCreating) "Saving…" else "Submit")
+                }
             }
         }
     }

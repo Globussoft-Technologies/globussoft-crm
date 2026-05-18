@@ -58,16 +58,17 @@ class ExpensesViewModel @Inject constructor(
     fun showCreate() = _state.update { it.copy(showCreateForm = true, formError = null) }
     fun dismissCreate() = _state.update { it.copy(showCreateForm = false, formError = null) }
 
-    fun createExpense(title: String, amount: String, category: String, date: String, notes: String) {
+    fun createExpense(title: String, amount: String, category: String, date: String, notes: String, status: String = "PENDING") {
         viewModelScope.launch {
             _state.update { it.copy(isCreating = true, formError = null) }
             val amountDouble = amount.toDoubleOrNull() ?: 0.0
             val result = repo.createExpense(
                 title    = title,
                 amount   = amountDouble,
-                category = category.ifBlank { "Other" },
+                category = category.ifBlank { "General" },
                 date     = date.ifBlank { java.time.LocalDate.now().toString() },
                 notes    = notes.ifBlank { null },
+                status   = status,
             )
             _state.update { current ->
                 when (result) {

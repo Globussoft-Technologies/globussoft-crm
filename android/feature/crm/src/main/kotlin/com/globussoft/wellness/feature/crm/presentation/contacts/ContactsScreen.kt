@@ -76,10 +76,14 @@ import com.globussoft.wellness.core.domain.model.Contact
 // ─── Status filter options ────────────────────────────────────────────────────
 
 private val STATUS_FILTERS = listOf(
-    null       to "All",
-    "Lead"     to "Lead",
-    "Contact"  to "Contact",
-    "Client"   to "Client",
+    null         to "All",
+    "Lead"       to "Lead",
+    "Prospect"   to "Prospect",
+    "Contact"    to "Contact",
+    "Client"     to "Client",
+    "Customer"   to "Customer",
+    "Churned"    to "Churned",
+    "Junk"       to "Junk",
 )
 
 // ─── Public composable ────────────────────────────────────────────────────────
@@ -340,9 +344,10 @@ private fun ContactFormSheet(
                 modifier      = Modifier.fillMaxWidth(),
             )
 
-            // Status picker (only for new contacts)
-            if (state.editingContact == null) {
-                val statuses = listOf("Lead", "Contact", "Client")
+            // Status picker
+            run {
+                val statuses = listOf("Lead", "Prospect", "Contact", "Client", "Customer", "Churned", "Junk")
+                Text("Status", style = MaterialTheme.typography.labelLarge)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(statuses) { s ->
                         FilterChip(
@@ -513,10 +518,14 @@ private fun StatusChip(status: String) {
 }
 
 private fun statusColor(status: String): Color = when (status.lowercase()) {
-    "lead"    -> Color(0xFF8B5CF6)
-    "contact" -> Color(0xFF3B82F6)
-    "client"  -> GenericAccent
-    else      -> Color(0xFF6B7280)
+    "lead"     -> Color(0xFF8B5CF6)
+    "prospect" -> Color(0xFF6366F1)
+    "contact"  -> Color(0xFF3B82F6)
+    "client",
+    "customer" -> GenericAccent
+    "churned"  -> Color(0xFFF59E0B)
+    "junk"     -> Color(0xFF6B7280)
+    else       -> Color(0xFF6B7280)
 }
 
 // ─── AI Score Badge ───────────────────────────────────────────────────────────

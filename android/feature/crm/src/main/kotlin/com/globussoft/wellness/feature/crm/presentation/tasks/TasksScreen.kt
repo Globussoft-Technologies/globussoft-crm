@@ -14,9 +14,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +43,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -181,6 +186,16 @@ fun TasksScreen(
     }
 }
 
+private val PRIORITY_OPTIONS = listOf("Critical", "High", "Medium", "Low")
+
+private fun priorityColor(priority: String?): Color = when (priority?.lowercase()) {
+    "critical" -> Color(0xFFDC2626)
+    "high"     -> Color(0xFFF97316)
+    "medium"   -> Color(0xFF3B82F6)
+    "low"      -> Color(0xFF6B7280)
+    else       -> Color(0xFF6B7280)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TaskFormContent(
@@ -190,6 +205,14 @@ private fun TaskFormContent(
     var title       by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
     var dueDate     by rememberSaveable { mutableStateOf("") }
+    var priority    by rememberSaveable { mutableStateOf("Medium") }
+
+    val isPastDate = remember(dueDate) {
+        if (dueDate.length < 10) return@remember false
+        try {
+            java.time.LocalDate.parse(dueDate.take(10)).isBefore(java.time.LocalDate.now())
+        } catch (_: Exception) { false }
+    }
 
     Column(
         modifier            = Modifier
@@ -230,6 +253,28 @@ private fun TaskFormContent(
             modifier      = Modifier.fillMaxWidth(),
             singleLine    = true,
         )
+        if (isPastDate) {
+            Text(
+                text  = "⚠ Due date is in the past",
+                color = Color(0xFFF97316),
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+
+        Text("Priority", style = MaterialTheme.typography.labelLarge)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(Dimens.SpacingSm)) {
+            items(PRIORITY_OPTIONS) { p ->
+                FilterChip(
+                    selected = priority == p,
+                    onClick  = { priority = p },
+                    label    = { Text(p) },
+                    colors   = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = priorityColor(p),
+                        selectedLabelColor     = Color.White,
+                    ),
+                )
+            }
+        }
 
         if (state.formError != null) {
             Text(
@@ -242,7 +287,7 @@ private fun TaskFormContent(
         Button(
             onClick  = {
                 if (title.isNotBlank()) {
-                    viewModel.createTask(title.trim(), description, dueDate)
+                    viewModel.createTask(title.trim(), description, dueDate, priority)
                 }
             },
             enabled  = title.isNotBlank() && !state.isCreating,
@@ -301,14 +346,38 @@ private fun TaskCard(
                     horizontalArrangement = Arrangement.spacedBy(Dimens.SpacingMd),
                     verticalAlignment     = Alignment.CenterVertically,
                 ) {
+                    task.priority?.takeIf { it.isNotBlank() }?.let { p ->
+                        val pColor = priorityColor(p)
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(pColor.copy(alpha = 0.15f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                text  = p,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = pColor,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
                     task.dueDate?.takeIf { it.isNotBlank() }?.let { due ->
                         Text(
-                            text  = due,
+                            text  = due.take(10),
                             style = MaterialTheme.typography.labelSmall,
                             color = if (task.isOverdue)
                                 MaterialTheme.colorScheme.error
                             else
                                 MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (task.isOverdue) {
+                        Text(
+                            text  = "Overdue",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Bold,
                         )
                     }
                     task.assigneeName?.takeIf { it.isNotBlank() }?.let { assignee ->

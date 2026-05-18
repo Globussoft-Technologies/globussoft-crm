@@ -237,9 +237,9 @@ class CrmRepositoryImpl @Inject constructor(
         return if (cached.isNotEmpty()) WResult.Success(cached) else networkResult
     }
 
-    override suspend fun createTask(title: String, description: String?, dueDate: String?, assigneeId: String?): WResult<CrmTask> =
+    override suspend fun createTask(title: String, description: String?, dueDate: String?, assigneeId: String?, priority: String?): WResult<CrmTask> =
         safeApiCall {
-            api.createCrmTask(CreateCrmTaskRequest(title = title, description = description, dueDate = dueDate, assigneeId = assigneeId, contactId = null))
+            api.createCrmTask(CreateCrmTaskRequest(title = title, description = description, dueDate = dueDate, assigneeId = assigneeId, contactId = null, priority = priority))
         }.mapSuccess { it.toDomain() }
 
     override suspend fun completeTask(id: String): WResult<CrmTask> {
@@ -293,8 +293,8 @@ class CrmRepositoryImpl @Inject constructor(
     override suspend fun rejectExpense(id: String): WResult<Expense> =
         safeApiCall { api.rejectCrmExpense(id) }.mapSuccess { it.toDomain() }
 
-    override suspend fun createExpense(title: String, amount: Double, category: String, date: String, notes: String?): WResult<Expense> =
-        safeApiCall { api.createCrmExpense(CreateExpenseRequest(title, amount, category, date, notes)) }
+    override suspend fun createExpense(title: String, amount: Double, category: String, date: String, notes: String?, status: String?): WResult<Expense> =
+        safeApiCall { api.createCrmExpense(CreateExpenseRequest(title, amount, category, date, notes, status)) }
             .mapSuccess { it.toDomain() }
 
     // ── Forecasting ───────────────────────────────────────────────────────────
@@ -661,7 +661,7 @@ private fun CrmTask.toEntity(tenantId: String) = CrmTaskEntity(
     title        = title,
     description  = description,
     status       = status,
-    priority     = null,
+    priority     = priority,
     dueDate      = dueDate,
     assigneeName = assigneeName,
     contactId    = null,
@@ -719,6 +719,7 @@ private fun CrmTaskEntity.toDomain() = CrmTask(
     title        = title,
     description  = description,
     status       = status,
+    priority     = priority,
     dueDate      = dueDate,
     contactName  = null,
     assigneeName = assigneeName,

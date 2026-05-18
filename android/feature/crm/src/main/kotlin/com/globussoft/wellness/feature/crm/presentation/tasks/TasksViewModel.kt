@@ -39,7 +39,7 @@ class TasksViewModel @Inject constructor(
     fun showAdd() = _state.update { it.copy(showAddForm = true) }
     fun dismissForm() = _state.update { it.copy(showAddForm = false, formError = null) }
 
-    fun createTask(title: String, description: String, dueDate: String) {
+    fun createTask(title: String, description: String, dueDate: String, priority: String?) {
         viewModelScope.launch {
             _state.update { it.copy(isCreating = true, formError = null) }
             val result = repo.createTask(
@@ -47,6 +47,7 @@ class TasksViewModel @Inject constructor(
                 description = description.ifBlank { null },
                 dueDate     = dueDate.ifBlank { null },
                 assigneeId  = null,
+                priority    = priority.takeUnless { it.isNullOrBlank() },
             )
             _state.update { current ->
                 when (result) {

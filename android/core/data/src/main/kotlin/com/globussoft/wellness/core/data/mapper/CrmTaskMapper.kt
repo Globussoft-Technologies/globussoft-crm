@@ -8,6 +8,7 @@ fun CrmTaskResponse.toDomain(): CrmTask = CrmTask(
     title = title ?: "",
     description = description,
     status = status ?: "PENDING",
+    priority = priority,
     dueDate = dueDate,
     contactName = contact?.name,
     assigneeName = assignee?.name,

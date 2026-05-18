@@ -6,4 +6,5 @@ data class CreateCrmTaskRequest(
     val dueDate: String?,
     val contactId: String?,
     val assigneeId: String?,
+    val priority: String?,
 )

@@ -76,11 +76,14 @@ import com.globussoft.wellness.core.domain.model.Contact
 
 private val SOURCE_FILTERS = listOf(
     null          to "All",
+    "Organic"     to "Organic",
     "LinkedIn"    to "LinkedIn",
     "Cold Call"   to "Cold Call",
     "Referral"    to "Referral",
     "Website"     to "Website",
+    "Event"       to "Event",
     "Marketplace" to "Marketplace",
+    "Other"       to "Other",
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)

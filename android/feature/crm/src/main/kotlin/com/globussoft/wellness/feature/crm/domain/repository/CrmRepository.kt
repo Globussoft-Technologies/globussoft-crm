@@ -42,7 +42,7 @@ interface CrmRepository {
 
     // ── Tasks ─────────────────────────────────────────────────────────────────
     suspend fun getTasks(status: String? = null, skip: Int = 0): WResult<List<CrmTask>>
-    suspend fun createTask(title: String, description: String?, dueDate: String?, assigneeId: String?): WResult<CrmTask>
+    suspend fun createTask(title: String, description: String?, dueDate: String?, assigneeId: String?, priority: String? = null): WResult<CrmTask>
     suspend fun completeTask(id: String): WResult<CrmTask>
 
     // ── Invoices ──────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ interface CrmRepository {
     suspend fun getExpenses(category: String? = null, skip: Int = 0): WResult<List<Expense>>
     suspend fun approveExpense(id: String): WResult<Expense>
     suspend fun rejectExpense(id: String): WResult<Expense>
-    suspend fun createExpense(title: String, amount: Double, category: String, date: String, notes: String?): WResult<Expense>
+    suspend fun createExpense(title: String, amount: Double, category: String, date: String, notes: String?, status: String? = null): WResult<Expense>
 
     // ── Forecasting ───────────────────────────────────────────────────────────
     suspend fun getForecasting(): WResult<List<ForecastEntry>>

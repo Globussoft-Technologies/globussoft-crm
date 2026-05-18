@@ -301,6 +301,10 @@ class AdminRepositoryImpl @Inject constructor(
         safeApiCall { api.getMembershipPlans() }
             .mapSuccess { list -> list.filterIsInstance<Map<*, *>>().map { it.toMembershipPlan() } }
 
+    override suspend fun enrollMembership(patientId: String, planId: String): WResult<Unit> =
+        safeApiCall { api.enrollMembership(mapOf("patientId" to patientId, "planId" to planId)) }
+            .mapSuccess { }
+
     // ── All Leads ──────────────────────────────────────────────────────────────
 
     override suspend fun getLeads(search: String?, status: String?, page: Int): WResult<LeadsPage> =

@@ -797,6 +797,11 @@ interface WellnessApi {
         @Query("includeInactive") includeInactive: Int = 1,
     ): Response<List<@JvmSuppressWildcards Any>>
 
+    @POST("wellness/memberships/enroll")
+    suspend fun enrollMembership(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<Map<String, @JvmSuppressWildcards Any>>
+
     // -------------------------------------------------------------------------
     // All Leads / Contacts  (Wave 3)
     // GET contacts?search=&status=&limit=50&page=1

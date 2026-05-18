@@ -139,6 +139,7 @@ interface AdminRepository {
     // ── Membership Plans ───────────────────────────────────────────────────────
 
     suspend fun getMembershipPlans(): WResult<List<MembershipPlanItem>>
+    suspend fun enrollMembership(patientId: String, planId: String): WResult<Unit>
 
     // ── All Leads (Contacts) ───────────────────────────────────────────────────
 

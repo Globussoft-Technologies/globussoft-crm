@@ -14,20 +14,30 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CardMembership
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -85,16 +95,63 @@ fun MembershipsScreen(
                     modifier            = Modifier.fillMaxSize(),
                 ) {
                     items(state.plans, key = { it.id }) { item ->
-                        MembershipPlanCard(item)
+                        MembershipPlanCard(
+                            item     = item,
+                            onEnroll = { viewModel.showEnroll(item.id) },
+                        )
                     }
                 }
+            }
+        }
+    }
+
+    if (state.showEnrollSheet) {
+        EnrollMembershipSheet(
+            isEnrolling = state.isEnrolling,
+            onDismiss   = { viewModel.dismissEnroll() },
+            onEnroll    = { patientId -> viewModel.enrollPatient(patientId) },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EnrollMembershipSheet(
+    isEnrolling: Boolean,
+    onDismiss:   () -> Unit,
+    onEnroll:    (String) -> Unit,
+) {
+    var patientId by remember { mutableStateOf("") }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Enroll Patient", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            OutlinedTextField(
+                value         = patientId,
+                onValueChange = { patientId = it },
+                label         = { Text("Patient ID *") },
+                modifier      = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick  = { onEnroll(patientId) },
+                enabled  = patientId.isNotBlank() && !isEnrolling,
+                modifier = Modifier.fillMaxWidth(),
+                colors   = ButtonDefaults.buttonColors(containerColor = WellnessPrimary),
+            ) {
+                if (isEnrolling) CircularProgressIndicator(Modifier.padding(horizontal = 8.dp).height(18.dp), color = Color.White, strokeWidth = 2.dp)
+                else Text("Enroll")
             }
         }
     }
 }
 
 @Composable
-private fun MembershipPlanCard(item: MembershipPlanItem) {
+private fun MembershipPlanCard(
+    item:     MembershipPlanItem,
+    onEnroll: () -> Unit = {},
+) {
     WellnessCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.fillMaxWidth().padding(Dimens.SpacingMd)) {
             Row(
@@ -142,6 +199,15 @@ private fun MembershipPlanCard(item: MembershipPlanItem) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                 )
+            }
+            if (item.isActive) {
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick  = onEnroll,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("+ Enroll Patient", color = WellnessPrimary)
+                }
             }
         }
     }

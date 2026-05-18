@@ -17,6 +17,9 @@ data class MembershipsUiState(
     val isLoading: Boolean = false,
     val plans: List<MembershipPlanItem> = emptyList(),
     val error: String? = null,
+    val showEnrollSheet: Boolean = false,
+    val selectedPlanId: String? = null,
+    val isEnrolling: Boolean = false,
 )
 
 @HiltViewModel
@@ -30,6 +33,19 @@ class MembershipsViewModel @Inject constructor(
     init { load() }
 
     fun refresh() = load()
+
+    fun showEnroll(planId: String) = _state.update { it.copy(showEnrollSheet = true, selectedPlanId = planId) }
+    fun dismissEnroll()            = _state.update { it.copy(showEnrollSheet = false, selectedPlanId = null) }
+
+    fun enrollPatient(patientId: String) {
+        val planId = _state.value.selectedPlanId ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(isEnrolling = true) }
+            repository.enrollMembership(patientId, planId)
+            _state.update { it.copy(isEnrolling = false, showEnrollSheet = false, selectedPlanId = null) }
+            load()
+        }
+    }
 
     private fun load() {
         viewModelScope.launch {

@@ -80,6 +80,7 @@ import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -163,7 +164,8 @@ private val allSections = listOf(
             SidebarItem("visits",             "Visits",              Icons.AutoMirrored.Filled.Assignment, requiresRole = UserRole.MANAGER),
             SidebarItem("resources",          "Resources",           Icons.Filled.MeetingRoom,       requiresRole = UserRole.MANAGER),
             SidebarItem("holidays",           "Holidays",            Icons.Filled.EmojiEvents,       requiresRole = UserRole.MANAGER),
-            SidebarItem("working-hours",      "Working Hours",       Icons.Filled.AccessTime,        requiresRole = UserRole.MANAGER),
+            SidebarItem("working-hours",          "Working Hours",       Icons.Filled.AccessTime,        requiresRole = UserRole.MANAGER),
+            SidebarItem("wellness-public-booking", "Book Appointment",    Icons.Filled.EventAvailable,    requiresRole = UserRole.MANAGER),
         ),
     ),
 
@@ -483,7 +485,7 @@ private fun SidebarSectionGroup(
     }
 }
 
-private fun isRouteActive(itemRoute: String, currentRoute: String): Boolean =
+internal fun isRouteActive(itemRoute: String, currentRoute: String): Boolean =
     currentRoute == itemRoute || currentRoute.startsWith("$itemRoute/")
 
 // ─── Individual nav item ──────────────────────────────────────────────────────

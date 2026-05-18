@@ -38,6 +38,7 @@ import com.globussoft.wellness.feature.admin.presentation.sequences.SequencesScr
 import com.globussoft.wellness.feature.admin.presentation.staff.StaffScreen
 import com.globussoft.wellness.feature.admin.presentation.surveys.SurveysScreen
 import com.globussoft.wellness.feature.admin.presentation.perlocation.PerLocationScreen
+import com.globussoft.wellness.feature.admin.presentation.publicbooking.PublicBookingScreen
 import com.globussoft.wellness.feature.admin.presentation.whatsapp.WhatsAppScreen
 import com.globussoft.wellness.feature.admin.presentation.workinghours.WorkingHoursScreen
 
@@ -80,6 +81,7 @@ object AdminDestinations {
     const val KnowledgeBase        = "knowledge-base"
     const val Channels             = "channels"
     const val PerLocation          = "per-location"
+    const val PublicBooking        = "wellness-public-booking"
 }
 
 /**
@@ -302,5 +304,12 @@ fun NavGraphBuilder.adminGraph(
 
     composable(AdminDestinations.PerLocation) {
         PerLocationScreen(viewModel = hiltViewModel())
+    }
+
+    composable(AdminDestinations.PublicBooking) {
+        PublicBookingScreen(
+            tenantSlug = userSession?.tenantId ?: "demo",
+            onBack     = { navController.popBackStack() },
+        )
     }
 }

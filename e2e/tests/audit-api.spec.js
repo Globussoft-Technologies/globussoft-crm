@@ -670,6 +670,7 @@ test.describe('Audit API — /backfill hash-chain', () => {
   });
 
   test('post-backfill /verify returns chainLength === totalRows', async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, 'demo-load-sensitive convergence test — runs in the per-push gate (local stack); skipped on e2e-full to stop the chronic hash-chain flake');
     test.setTimeout(60_000);
     const { token } = await getGenericAdmin(request);
     await post(request, token, '/api/audit/backfill');
@@ -681,6 +682,7 @@ test.describe('Audit API — /backfill hash-chain', () => {
   });
 
   test('backfill is tenant-scoped — does not touch the other tenant\'s rows', async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, 'demo-load-sensitive convergence test — runs in the per-push gate (local stack); skipped on e2e-full to stop the chronic hash-chain flake');
     test.setTimeout(90_000);
     const { token: gToken } = await getGenericAdmin(request);
     const { token: wToken } = await getWellnessAdmin(request);

@@ -2,12 +2,15 @@ package com.globussoft.wellness.feature.crm.presentation.deals
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
@@ -93,7 +96,10 @@ fun DealDetailScreen(
                 ) { page ->
                     when (page) {
                         0 -> DealOverviewTab(state.deal)
-                        1 -> DealActivitiesTab()
+                        1 -> DealActivitiesTab(
+                            activities = state.activities,
+                            onLogNote  = { viewModel.showLogActivity() },
+                        )
                         2 -> DealFilesTab()
                         else -> Box(Modifier.fillMaxSize())
                     }
@@ -125,6 +131,15 @@ fun DealDetailScreen(
                 onSave = { title, amount, prob -> viewModel.saveDeal(title, amount, prob) },
             )
         }
+    }
+
+    // Log activity bottom sheet
+    if (state.showLogActivity) {
+        DealLogActivitySheet(
+            isLogging = state.isLoggingActivity,
+            onDismiss = { viewModel.dismissLogActivity() },
+            onLog     = { type, subject, body -> viewModel.logActivity(type, subject, body) },
+        )
     }
 }
 
@@ -241,9 +256,145 @@ private fun DealInfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun DealActivitiesTab() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("No activities recorded yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun DealActivitiesTab(
+    activities: List<Map<String, Any>>,
+    onLogNote:  () -> Unit,
+) {
+    LazyColumn(
+        contentPadding      = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier            = Modifier.fillMaxSize(),
+    ) {
+        item {
+            OutlinedButton(
+                onClick  = onLogNote,
+                modifier = Modifier.fillMaxWidth(),
+                border   = ButtonDefaults.outlinedButtonBorder,
+            ) {
+                Icon(Icons.Default.NoteAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Log Activity")
+            }
+        }
+        if (activities.isEmpty()) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                    Text("No activities recorded yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        } else {
+            items(activities) { act ->
+                DealActivityCard(act)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DealActivityCard(activity: Map<String, Any>) {
+    val type      = activity["type"]?.toString() ?: "NOTE"
+    val subject   = activity["subject"]?.toString() ?: ""
+    val body      = activity["body"]?.toString()
+    val createdAt = activity["createdAt"]?.toString()?.take(10) ?: ""
+
+    val typeColor = when (type) {
+        "CALL"    -> Color(0xFF10B981)
+        "EMAIL"   -> Color(0xFF3B82F6)
+        "MEETING" -> Color(0xFFF59E0B)
+        else      -> Color(0xFF8B5CF6)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Row(
+            Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = typeColor.copy(alpha = 0.12f),
+                modifier = Modifier.padding(top = 2.dp),
+            ) {
+                Text(
+                    type,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = typeColor,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(subject, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                if (!body.isNullOrBlank()) {
+                    Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                }
+                if (createdAt.isNotBlank()) {
+                    Text(createdAt, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DealLogActivitySheet(
+    isLogging: Boolean,
+    onDismiss: () -> Unit,
+    onLog:     (String, String, String?) -> Unit,
+) {
+    val types   = listOf("NOTE", "CALL", "EMAIL", "MEETING")
+    var selType by remember { mutableStateOf("NOTE") }
+    var subject by remember { mutableStateOf("") }
+    var body    by remember { mutableStateOf("") }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Log Activity", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                types.forEach { t ->
+                    FilterChip(
+                        selected = selType == t,
+                        onClick  = { selType = t },
+                        label    = { Text(t, style = MaterialTheme.typography.labelSmall) },
+                        colors   = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = GenericPrimary,
+                            selectedLabelColor     = Color.White,
+                        ),
+                    )
+                }
+            }
+            OutlinedTextField(
+                value         = subject,
+                onValueChange = { subject = it },
+                label         = { Text("Subject *") },
+                modifier      = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value         = body,
+                onValueChange = { body = it },
+                label         = { Text("Notes") },
+                modifier      = Modifier.fillMaxWidth(),
+                minLines      = 3,
+            )
+            Button(
+                onClick  = { onLog(selType, subject, body.ifBlank { null }) },
+                enabled  = subject.isNotBlank() && !isLogging,
+                modifier = Modifier.fillMaxWidth(),
+                colors   = ButtonDefaults.buttonColors(containerColor = GenericPrimary),
+            ) {
+                if (isLogging) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                else Text("Log")
+            }
+        }
     }
 }
 

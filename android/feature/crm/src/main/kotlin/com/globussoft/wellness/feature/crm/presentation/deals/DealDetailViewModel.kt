@@ -29,6 +29,27 @@ class DealDetailViewModel @Inject constructor(
     fun showEditForm() = _state.update { it.copy(showEditForm = true, formError = null) }
     fun dismissEditForm() = _state.update { it.copy(showEditForm = false, formError = null) }
 
+    fun showLogActivity() = _state.update { it.copy(showLogActivity = true) }
+    fun dismissLogActivity() = _state.update { it.copy(showLogActivity = false) }
+
+    fun logActivity(type: String, subject: String, body: String?) {
+        viewModelScope.launch {
+            _state.update { it.copy(isLoggingActivity = true) }
+            val result = repo.logActivity(type, subject, body, null, dealId)
+            _state.update { current ->
+                when (result) {
+                    is WResult.Success -> current.copy(
+                        isLoggingActivity = false,
+                        showLogActivity = false,
+                        activities = listOf(result.data) + current.activities,
+                    )
+                    is WResult.Error   -> current.copy(isLoggingActivity = false)
+                    WResult.Loading    -> current
+                }
+            }
+        }
+    }
+
     fun changeStage(newStage: String) {
         viewModelScope.launch {
             _state.update { it.copy(isUpdating = true) }
@@ -103,6 +124,12 @@ class DealDetailViewModel @Inject constructor(
             launch {
                 when (val r = repo.getPipelines()) {
                     is WResult.Success -> _state.update { it.copy(pipelines = r.data) }
+                    else -> Unit
+                }
+            }
+            launch {
+                when (val r = repo.getActivities(dealId = dealId)) {
+                    is WResult.Success -> _state.update { it.copy(activities = r.data) }
                     else -> Unit
                 }
             }

@@ -36,8 +36,19 @@ module.exports = defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'on-first-retry',
-    actionTimeout: 15000,
-    navigationTimeout: 30000,
+    // 15s actionTimeout was fine at 4 shards but cascade-failed at 8 — many
+    // specs call `request.post(...)` in beforeAll WITHOUT passing an explicit
+    // { timeout } option, so they fall back to actionTimeout. Under 8-shard
+    // contention on the shared demo backend, /api/auth/login + first-record
+    // seed POSTs (workflows, wellness/patients) routinely cross 15s. 60s
+    // matches REQUEST_TIMEOUT used by the rest of the suite and the per-test
+    // ceiling (`timeout: 60_000` above). A real hang still fails the test —
+    // just at 60s instead of 15s, which is consistent with the timeout: 60_000
+    // above.
+    actionTimeout: 60000,
+    // 30s navigation has the same shape (uncontentioned UI flows pass it in
+    // <5s, but shard-contention spikes push it past). Match actionTimeout.
+    navigationTimeout: 60000,
   },
 
   projects: [

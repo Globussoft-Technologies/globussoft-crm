@@ -53,6 +53,18 @@ class InvoicesViewModel @Inject constructor(
         }
     }
 
+    fun voidInvoice(id: String) {
+        viewModelScope.launch {
+            when (val result = repo.voidInvoice(id)) {
+                is WResult.Success -> load()
+                is WResult.Error   -> _state.update {
+                    it.copy(error = result.message ?: result.exception.message ?: "Failed to void invoice")
+                }
+                WResult.Loading    -> Unit
+            }
+        }
+    }
+
     fun refresh() = load()
 
     fun showCreate() = _state.update { it.copy(showCreateForm = true, formError = null) }

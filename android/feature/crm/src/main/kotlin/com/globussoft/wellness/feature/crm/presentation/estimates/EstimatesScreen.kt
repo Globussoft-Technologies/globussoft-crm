@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -26,9 +27,11 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -40,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -49,6 +53,7 @@ import com.globussoft.wellness.core.designsystem.components.ShimmerList
 import com.globussoft.wellness.core.designsystem.components.StatusBadge
 import com.globussoft.wellness.core.designsystem.components.WellnessCard
 import com.globussoft.wellness.core.designsystem.theme.Dimens
+import com.globussoft.wellness.core.designsystem.theme.GenericAccent
 import com.globussoft.wellness.core.designsystem.theme.GenericPrimary
 import com.globussoft.wellness.core.domain.model.Estimate
 import java.text.SimpleDateFormat
@@ -161,7 +166,10 @@ fun EstimatesScreen(
                                 items = state.estimates,
                                 key   = { it.id },
                             ) { estimate ->
-                                EstimateCard(estimate = estimate)
+                                EstimateCard(
+                                    estimate = estimate,
+                                    onSend   = { viewModel.sendEstimate(estimate.id) },
+                                )
                             }
                         }
                     }
@@ -231,6 +239,7 @@ private fun EstimateCreateSheet(
 @Composable
 private fun EstimateCard(
     estimate: Estimate,
+    onSend:   () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val today      = remember { Date() }
@@ -274,11 +283,26 @@ private fun EstimateCard(
             Spacer(Modifier.height(Dimens.SpacingMd))
 
             // Total amount
-            Text(
-                text  = "Total: ${"$%.2f".format(estimate.total)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = GenericPrimary,
-            )
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment     = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text       = "${"$%.2f".format(estimate.total)}",
+                    style      = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color      = GenericPrimary,
+                )
+                // Line items count
+                if (estimate.lineItems.isNotEmpty()) {
+                    Text(
+                        text  = "${estimate.lineItems.size} item${if (estimate.lineItems.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
 
             // Valid until / expired
             estimate.validUntil?.takeIf { it.isNotBlank() }?.let { validUntil ->
@@ -298,14 +322,17 @@ private fun EstimateCard(
                 }
             }
 
-            // Line items count
-            if (estimate.lineItems.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text  = "${estimate.lineItems.size} line item${if (estimate.lineItems.size == 1) "" else "s"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            // Action buttons
+            val showSend = estimate.status == "DRAFT"
+            if (showSend) {
+                Spacer(Modifier.height(Dimens.SpacingSm))
+                OutlinedButton(
+                    onClick  = onSend,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors   = ButtonDefaults.outlinedButtonColors(contentColor = GenericAccent),
+                ) {
+                    Text("Send to Client")
+                }
             }
         }
     }

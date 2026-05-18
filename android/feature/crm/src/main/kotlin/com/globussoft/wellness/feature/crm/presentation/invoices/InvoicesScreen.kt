@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -30,6 +31,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -178,6 +180,7 @@ fun InvoicesScreen(
                                     invoice    = invoice,
                                     onSend     = { viewModel.sendInvoice(invoice.id) },
                                     onMarkPaid = { viewModel.markPaid(invoice.id) },
+                                    onVoid     = { viewModel.voidInvoice(invoice.id) },
                                 )
                             }
                         }
@@ -285,8 +288,28 @@ private fun InvoiceCard(
     invoice:    Invoice,
     onSend:     () -> Unit,
     onMarkPaid: () -> Unit,
+    onVoid:     () -> Unit,
     modifier:   Modifier = Modifier,
 ) {
+    var showVoidDialog by remember { mutableStateOf(false) }
+
+    if (showVoidDialog) {
+        AlertDialog(
+            onDismissRequest = { showVoidDialog = false },
+            title = { Text("Void Invoice") },
+            text  = { Text("Are you sure you want to void ${invoice.invoiceNumber}? This action cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = { showVoidDialog = false; onVoid() },
+                    colors  = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Void") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showVoidDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
     WellnessCard(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -342,8 +365,9 @@ private fun InvoiceCard(
             // Action buttons
             val showSend     = invoice.status == "DRAFT" || invoice.status == "UNPAID"
             val showMarkPaid = !invoice.isPaid
+            val showVoid     = invoice.status != "VOID" && invoice.status != "PAID"
 
-            if (showSend || showMarkPaid) {
+            if (showSend || showMarkPaid || showVoid) {
                 Spacer(Modifier.height(Dimens.SpacingMd))
                 Row(horizontalArrangement = Arrangement.spacedBy(Dimens.SpacingSm)) {
                     if (showSend) {
@@ -360,6 +384,16 @@ private fun InvoiceCard(
                             colors  = ButtonDefaults.buttonColors(containerColor = GenericAccent),
                         ) {
                             Text("Mark Paid")
+                        }
+                    }
+                    if (showVoid) {
+                        OutlinedButton(
+                            onClick = { showVoidDialog = true },
+                            colors  = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error,
+                            ),
+                        ) {
+                            Text("Void")
                         }
                     }
                 }

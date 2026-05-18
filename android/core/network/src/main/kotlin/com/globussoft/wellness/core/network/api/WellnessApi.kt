@@ -1111,6 +1111,12 @@ interface WellnessApi {
         @Path("id") id: String,
     ): Response<InvoiceResponse>
 
+    @PUT("billing/{id}")
+    suspend fun updateCrmInvoice(
+        @Path("id") id: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<InvoiceResponse>
+
     @GET("billing/{id}/pdf")
     @Streaming
     suspend fun getCrmInvoicePdf(
@@ -1140,6 +1146,11 @@ interface WellnessApi {
     suspend fun updateCrmEstimate(
         @Path("id") id: String,
         @Body body: CreateEstimateRequest,
+    ): Response<EstimateResponse>
+
+    @PUT("estimates/{id}/send")
+    suspend fun sendCrmEstimate(
+        @Path("id") id: String,
     ): Response<EstimateResponse>
 
     // ── Expenses ──────────────────────────────────────────────────────────────

@@ -31,6 +31,18 @@ class EstimatesViewModel @Inject constructor(
 
     fun refresh() = load()
 
+    fun sendEstimate(id: String) {
+        viewModelScope.launch {
+            when (val result = repo.sendEstimate(id)) {
+                is WResult.Success -> load()
+                is WResult.Error   -> _state.update {
+                    it.copy(error = result.message ?: result.exception.message ?: "Failed to send estimate")
+                }
+                WResult.Loading    -> Unit
+            }
+        }
+    }
+
     fun showCreate() = _state.update { it.copy(showCreateForm = true, formError = null) }
     fun dismissCreate() = _state.update { it.copy(showCreateForm = false, formError = null) }
 

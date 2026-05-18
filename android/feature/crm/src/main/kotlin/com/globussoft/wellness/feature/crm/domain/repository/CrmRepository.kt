@@ -50,11 +50,13 @@ interface CrmRepository {
     suspend fun getInvoice(id: String): WResult<Invoice>
     suspend fun sendInvoice(id: String): WResult<Invoice>
     suspend fun markInvoicePaid(id: String): WResult<Invoice>
+    suspend fun voidInvoice(id: String): WResult<Invoice>
     suspend fun createInvoice(contactId: String?, dueDate: String?, notes: String?, lineItems: List<com.globussoft.wellness.core.network.model.request.InvoiceLineItemRequest>): WResult<Invoice>
 
     // ── Estimates ─────────────────────────────────────────────────────────────
     suspend fun getEstimates(status: String? = null, skip: Int = 0): WResult<List<Estimate>>
     suspend fun getEstimate(id: String): WResult<Estimate>
+    suspend fun sendEstimate(id: String): WResult<Estimate>
     suspend fun createEstimate(contactId: String?, validUntil: String?, notes: String?, lineItems: List<com.globussoft.wellness.core.network.model.request.EstimateLineItemRequest>): WResult<Estimate>
 
     // ── Expenses ──────────────────────────────────────────────────────────────

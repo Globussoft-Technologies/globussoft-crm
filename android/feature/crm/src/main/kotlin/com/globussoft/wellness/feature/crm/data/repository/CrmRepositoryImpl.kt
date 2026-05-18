@@ -264,6 +264,9 @@ class CrmRepositoryImpl @Inject constructor(
     override suspend fun markInvoicePaid(id: String): WResult<Invoice> =
         safeApiCall { api.markCrmInvoicePaid(id) }.mapSuccess { it.toDomain() }
 
+    override suspend fun voidInvoice(id: String): WResult<Invoice> =
+        safeApiCall { api.updateCrmInvoice(id, mapOf("status" to "VOID")) }.mapSuccess { it.toDomain() }
+
     override suspend fun createInvoice(contactId: String?, dueDate: String?, notes: String?, lineItems: List<InvoiceLineItemRequest>): WResult<Invoice> =
         safeApiCall { api.createCrmInvoice(CreateInvoiceRequest(contactId, dueDate, lineItems, notes)) }
             .mapSuccess { it.toDomain() }
@@ -276,6 +279,9 @@ class CrmRepositoryImpl @Inject constructor(
 
     override suspend fun getEstimate(id: String): WResult<Estimate> =
         safeApiCall { api.getCrmEstimate(id) }.mapSuccess { it.toDomain() }
+
+    override suspend fun sendEstimate(id: String): WResult<Estimate> =
+        safeApiCall { api.sendCrmEstimate(id) }.mapSuccess { it.toDomain() }
 
     override suspend fun createEstimate(contactId: String?, validUntil: String?, notes: String?, lineItems: List<EstimateLineItemRequest>): WResult<Estimate> =
         safeApiCall { api.createCrmEstimate(CreateEstimateRequest(contactId, validUntil, lineItems, notes)) }

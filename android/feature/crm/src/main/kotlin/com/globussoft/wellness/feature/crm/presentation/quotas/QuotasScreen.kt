@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -43,7 +45,15 @@ import com.globussoft.wellness.core.designsystem.components.ErrorState
 import com.globussoft.wellness.core.designsystem.components.ShimmerList
 import com.globussoft.wellness.core.designsystem.components.WellnessCard
 import com.globussoft.wellness.core.designsystem.theme.Dimens
+import com.globussoft.wellness.core.designsystem.theme.GenericAccent
 import com.globussoft.wellness.core.designsystem.theme.GenericPrimary
+
+private fun quotaProgressColor(pct: Int): Color = when {
+    pct >= 100 -> Color(0xFF2E7D32)  // green
+    pct >= 75  -> GenericPrimary     // blue/indigo
+    pct >= 50  -> Color(0xFFF59E0B)  // amber
+    else       -> Color(0xFFDC2626)  // red
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -86,16 +96,69 @@ fun QuotasScreen(
                     message  = "No quotas yet",
                     modifier = Modifier.fillMaxSize(),
                 )
-                else -> LazyColumn(
-                    modifier            = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(Dimens.SpacingSm),
-                    contentPadding      = PaddingValues(
-                        horizontal = Dimens.SpacingLg,
-                        vertical   = Dimens.SpacingSm,
-                    ),
-                ) {
-                    items(state.quotas, key = { it["id"]?.toString() ?: it.hashCode().toString() }) { quota ->
-                        QuotaCard(quota = quota)
+                else -> {
+                    // compute team totals
+                    val totalTarget   = state.quotas.sumOf { (it["target"] as? Number)?.toDouble() ?: 0.0 }
+                    val totalAttained = state.quotas.sumOf { (it["attained"] as? Number)?.toDouble() ?: 0.0 }
+                    val teamPct       = if (totalTarget > 0) ((totalAttained / totalTarget) * 100).toInt() else 0
+
+                    LazyColumn(
+                        modifier            = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(Dimens.SpacingSm),
+                        contentPadding      = PaddingValues(
+                            horizontal = Dimens.SpacingLg,
+                            vertical   = Dimens.SpacingSm,
+                        ),
+                    ) {
+                        item {
+                            // Team attainment KPI card
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Column(
+                                    modifier = Modifier.padding(Dimens.SpacingLg),
+                                    verticalArrangement = Arrangement.spacedBy(Dimens.SpacingSm),
+                                ) {
+                                    Text(
+                                        text  = "Team Attainment",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Row(
+                                        modifier              = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment     = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text       = "$teamPct%",
+                                            style      = MaterialTheme.typography.headlineSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color      = quotaProgressColor(teamPct),
+                                        )
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text(
+                                                text  = "${"$%.0f".format(totalAttained)} / ${"$%.0f".format(totalTarget)}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                            Text(
+                                                text  = "${state.quotas.size} rep${if (state.quotas.size == 1) "" else "s"}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                    LinearProgressIndicator(
+                                        progress   = { (totalAttained / totalTarget.coerceAtLeast(1.0)).toFloat().coerceIn(0f, 1f) },
+                                        modifier   = Modifier.fillMaxWidth(),
+                                        color      = quotaProgressColor(teamPct),
+                                        trackColor = quotaProgressColor(teamPct).copy(alpha = 0.15f),
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(Dimens.SpacingSm))
+                        }
+                        items(state.quotas, key = { it["id"]?.toString() ?: it.hashCode().toString() }) { quota ->
+                            QuotaCard(quota = quota)
+                        }
                     }
                 }
             }
@@ -150,14 +213,15 @@ private fun QuotaCard(
                 Text(
                     text  = "$pct%",
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (pct >= 100) GenericPrimary else MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold,
+                    color = quotaProgressColor(pct),
                 )
             }
             LinearProgressIndicator(
-                progress     = { progress },
-                modifier     = Modifier.fillMaxWidth(),
-                color        = GenericPrimary,
-                trackColor   = GenericPrimary.copy(alpha = 0.12f),
+                progress   = { progress },
+                modifier   = Modifier.fillMaxWidth(),
+                color      = quotaProgressColor(pct),
+                trackColor = quotaProgressColor(pct).copy(alpha = 0.15f),
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),

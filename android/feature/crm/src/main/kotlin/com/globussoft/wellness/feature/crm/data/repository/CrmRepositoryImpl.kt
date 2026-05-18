@@ -490,6 +490,32 @@ class CrmRepositoryImpl @Inject constructor(
         safeApiCall { api.assignSharedInboxItem(id, mapOf("assigneeId" to assigneeId)) }
             .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
 
+    // ── Wave 17 ───────────────────────────────────────────────────────────────
+
+    override suspend fun getDocumentViews(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getDocumentViews() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun getDocumentTemplates(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getDocumentTemplates() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun createDocumentTemplate(name: String, type: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createDocumentTemplate(buildMap { put("name", name); put("type", type) }) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
+    override suspend fun getIntegrations(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getIntegrations() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun getBookingPages(): WResult<List<Map<String, Any>>> =
+        safeApiCall { api.getBookingPages() }
+            .mapSuccess { list -> list.mapNotNull { @Suppress("UNCHECKED_CAST") it as? Map<String, Any> } }
+
+    override suspend fun createBookingPage(name: String, description: String): WResult<Map<String, Any>> =
+        safeApiCall { api.createBookingPage(buildMap { put("name", name); put("description", description) }) }
+            .mapSuccess { @Suppress("UNCHECKED_CAST") (it as? Map<String, Any>) ?: emptyMap() }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private suspend fun tenantId(): String =

@@ -64,6 +64,12 @@ import com.globussoft.wellness.feature.crm.presentation.sharedinbox.SharedInboxS
 import com.globussoft.wellness.feature.crm.presentation.surveys.SurveysScreen
 import com.globussoft.wellness.feature.crm.presentation.tickets.TicketDetailScreen
 import com.globussoft.wellness.feature.crm.presentation.tickets.TicketsScreen
+import com.globussoft.wellness.feature.crm.presentation.doctracking.DocTrackingScreen
+import com.globussoft.wellness.feature.crm.presentation.doctemplates.DocTemplatesScreen
+import com.globussoft.wellness.feature.crm.presentation.integrations.IntegrationsScreen
+import com.globussoft.wellness.feature.crm.presentation.portal.PortalScreen
+import com.globussoft.wellness.feature.crm.presentation.developer.DeveloperScreen
+import com.globussoft.wellness.feature.crm.presentation.privacy.PrivacyScreen
 
 // ─── CRM route constants ──────────────────────────────────────────────────────
 
@@ -121,6 +127,8 @@ object CrmRoutes {
     const val SURVEYS        = "crm-surveys"
     const val SHARED_INBOX   = "crm-shared-inbox"
     const val SUPPORT        = "crm-support"
+    const val DOC_TRACKING   = "crm-doc-tracking"
+    const val DOC_TEMPLATES  = "crm-doc-templates"
 
     // Admin
     const val STAFF          = "crm-staff"
@@ -129,6 +137,8 @@ object CrmRoutes {
     const val AUDIT_LOG      = "crm-audit-log"
     const val PRIVACY        = "crm-privacy"
     const val DEVELOPER      = "crm-developer"
+    const val INTEGRATIONS   = "crm-integrations"
+    const val PORTAL         = "crm-portal"
 }
 
 // ─── Generic CRM main graph ───────────────────────────────────────────────────
@@ -389,6 +399,12 @@ private fun CrmInnerNavHost(
         composable(CrmRoutes.SUPPORT) {
             CrmPlaceholder("Support")
         }
+        composable(CrmRoutes.DOC_TRACKING) {
+            DocTrackingScreen()
+        }
+        composable(CrmRoutes.DOC_TEMPLATES) {
+            DocTemplatesScreen()
+        }
 
         // ── Admin ────────────────────────────────────────────────────────────
         composable(CrmRoutes.STAFF) {
@@ -404,10 +420,16 @@ private fun CrmInnerNavHost(
             AuditLogScreen()
         }
         composable(CrmRoutes.PRIVACY) {
-            CrmPlaceholder("Privacy")
+            PrivacyScreen()
         }
         composable(CrmRoutes.DEVELOPER) {
-            CrmPlaceholder("Developer")
+            DeveloperScreen()
+        }
+        composable(CrmRoutes.INTEGRATIONS) {
+            IntegrationsScreen()
+        }
+        composable(CrmRoutes.PORTAL) {
+            PortalScreen()
         }
     }
 }

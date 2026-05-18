@@ -1425,4 +1425,29 @@ interface WellnessApi {
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 25,
     ): Response<Map<String, @JvmSuppressWildcards Any>>
+
+    // ── Document Views (Wave 17) ──────────────────────────────────────────────
+
+    @GET("document-views")
+    suspend fun getDocumentViews(): Response<List<@JvmSuppressWildcards Any>>
+
+    // ── Document Templates (Wave 17) ──────────────────────────────────────────
+
+    @GET("document-templates")
+    suspend fun getDocumentTemplates(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("document-templates")
+    suspend fun createDocumentTemplate(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
+
+    // ── Booking Pages (Wave 17) ───────────────────────────────────────────────
+
+    @GET("booking-pages")
+    suspend fun getBookingPages(): Response<List<@JvmSuppressWildcards Any>>
+
+    @POST("booking-pages")
+    suspend fun createBookingPage(
+        @Body body: Map<String, @JvmSuppressWildcards Any>,
+    ): Response<@JvmSuppressWildcards Any>
 }

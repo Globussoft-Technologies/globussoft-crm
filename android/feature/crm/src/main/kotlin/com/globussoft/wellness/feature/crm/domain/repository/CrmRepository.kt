@@ -115,4 +115,12 @@ interface CrmRepository {
     suspend fun getNotificationsFeed(): WResult<List<Map<String, Any>>>
     suspend fun getSharedInbox(status: String? = null): WResult<List<Map<String, Any>>>
     suspend fun assignSharedInboxItem(id: String, assigneeId: String): WResult<Map<String, Any>>
+
+    // ── Wave 17 ───────────────────────────────────────────────────────────────
+    suspend fun getDocumentViews(): WResult<List<Map<String, Any>>>
+    suspend fun getDocumentTemplates(): WResult<List<Map<String, Any>>>
+    suspend fun createDocumentTemplate(name: String, type: String): WResult<Map<String, Any>>
+    suspend fun getIntegrations(): WResult<List<Map<String, Any>>>
+    suspend fun getBookingPages(): WResult<List<Map<String, Any>>>
+    suspend fun createBookingPage(name: String, description: String): WResult<Map<String, Any>>
 }

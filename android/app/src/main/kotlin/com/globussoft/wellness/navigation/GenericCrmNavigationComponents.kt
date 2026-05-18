@@ -67,6 +67,9 @@ import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.ViewKanban
 import androidx.compose.material.icons.filled.Web
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -173,6 +176,8 @@ private val crmAllSections = listOf(
             SidebarItem("crm-surveys",        "Surveys",        Icons.Filled.Poll,               requiresRole = UserRole.MANAGER),
             SidebarItem("crm-shared-inbox",   "Shared Inbox",   Icons.Filled.Groups,             requiresRole = UserRole.MANAGER),
             SidebarItem("crm-support",        "Support",        Icons.Filled.SupportAgent,       requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-doc-tracking",   "Doc Tracking",   Icons.Filled.Visibility,         requiresRole = UserRole.MANAGER),
+            SidebarItem("crm-doc-templates",  "Doc Templates",  Icons.Filled.Description,        requiresRole = UserRole.MANAGER),
         ),
     ),
 
@@ -180,12 +185,14 @@ private val crmAllSections = listOf(
     SidebarSection(
         title = "Admin",
         items = listOf(
-            SidebarItem("crm-staff",      "Staff",         Icons.Filled.Groups,              requiresRole = UserRole.ADMIN),
-            SidebarItem("crm-settings",   "Settings",      Icons.Filled.Settings,            requiresRole = UserRole.ADMIN),
-            SidebarItem("crm-channels",   "Channels",      Icons.Filled.Hub,                 requiresRole = UserRole.ADMIN),
-            SidebarItem("crm-audit-log",  "Audit Log",     Icons.Filled.History,             requiresRole = UserRole.ADMIN),
-            SidebarItem("crm-privacy",    "Privacy",       Icons.Filled.Security,            requiresRole = UserRole.ADMIN),
-            SidebarItem("crm-developer",  "Developer",     Icons.Filled.AdminPanelSettings,  requiresRole = UserRole.ADMIN),
+            SidebarItem("crm-staff",         "Staff",         Icons.Filled.Groups,              requiresRole = UserRole.ADMIN),
+            SidebarItem("crm-settings",      "Settings",      Icons.Filled.Settings,            requiresRole = UserRole.ADMIN),
+            SidebarItem("crm-channels",      "Channels",      Icons.Filled.Hub,                 requiresRole = UserRole.ADMIN),
+            SidebarItem("crm-integrations",  "Integrations",  Icons.Filled.Extension,           requiresRole = UserRole.ADMIN),
+            SidebarItem("crm-portal",        "Portal",        Icons.Filled.Public,              requiresRole = UserRole.ADMIN),
+            SidebarItem("crm-audit-log",     "Audit Log",     Icons.Filled.History,             requiresRole = UserRole.ADMIN),
+            SidebarItem("crm-privacy",       "Privacy",       Icons.Filled.Security,            requiresRole = UserRole.ADMIN),
+            SidebarItem("crm-developer",     "Developer",     Icons.Filled.AdminPanelSettings,  requiresRole = UserRole.ADMIN),
         ),
     ),
 )

@@ -432,6 +432,7 @@ jobs:
             tests/travel-diagnostics-api.spec.js \
             tests/travel-itineraries-api.spec.js \
             tests/travel-trips-api.spec.js \
+            tests/travel-cost-master-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

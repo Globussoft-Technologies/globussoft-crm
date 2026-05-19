@@ -8,7 +8,14 @@ module.exports = defineConfig({
   testDir: '.',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 3 : 1,
+  // 3 retries piled up too much wall-clock under demo contention (run
+  // 26121861939: shards 3+4 had 16+18 flaky tests passing only on retry #2-3,
+  // consuming minutes per spec; shards 1+2 hit the 45min ceiling and got
+  // cancelled). Dropping to 2 retries keeps CF-blip resilience (most blips
+  // are <30s, single retry recovers) while shaving ~25% off per-shard
+  // wall-clock when flakes pile up. The 5xx-retry login + createContact
+  // helpers (96d7076) absorb the chronic CF-blip case independently.
+  retries: process.env.CI ? 2 : 1,
   workers: process.env.CI ? 2 : undefined,
   // Default per-test timeout. Playwright's 30s default is too tight against demo
   // under e2e-full's concurrent 4-shard load — `POST /send-email` (SendGrid) +

@@ -44,28 +44,30 @@ concurrency:
 jobs:
   # ── Sharded matrix: chromium project is ~2,578 tests, can't fit in a
   # single 30-min runner. Playwright's --shard flag splits the test list
-  # into N equal slices that run in parallel; each slice gets ~322 tests
-  # / ~7-10 min test wall-clock (plus ~4 min fixed setup floor for
-  # checkout + node + npm ci + playwright browsers + target health probe).
-  # 8 shards target ~15-20 min total release-validation latency (down
-  # from ~35 min at 4 shards). Tradeoff: 8 concurrent shards roughly
-  # double the cross-shard write pressure on the shared demo backend
-  # vs. 4 shards, so demo-load-sensitive convergence specs (audit-api
-  # hash-chain :520/:561/:633) must stay gated on IS_LOCAL_STACK.
+  # into N equal slices that run in parallel; each slice gets ~645 tests
+  # / ~15 min wall time. All 4 shards execute concurrently, so total
+  # release-validation latency stays around 15-20 min.
+  #
+  # 2026-05-19: an 8-shard experiment (runs 26053988488 → 26093112312) was
+  # tried to target ~15 min wall-clock. Result: wall-clock didn't improve
+  # (~30 min, dominated by longest shard), AND total-concurrent test
+  # workers doubled from 8 to 16, saturating the demo origin and causing
+  # chronic CF 502/520 blips. Cascade-fail rates 5–10× higher than 4-shard,
+  # multiple shards hitting the 45-min timeout. Reverted. Future ~15-min
+  # target needs a non-demo backing target (local docker stack per shard)
+  # — see TODOS.md / #457 / handoff.
   e2e-full:
     runs-on: ubuntu-latest
     # 30 min was the original ceiling but shard 1+2 wall-clock crept past
     # 30:00 on v3.8.0 + v3.8.1 (audit-api serial-mode + heavy specs concentrate
-    # there) while shards 3+4 finish in 17-23 min. Bumping to 45 absorbed the
-    # imbalance at 4 shards. With 8 shards the per-shard ceiling is well
-    # under 45 min in steady state, but we keep the ceiling at 45 so a
-    # genuinely slow shard still gets flagged as a perf regression rather
-    # than silently growing.
+    # there) while shards 3+4 finish in 17-23 min. Bumping to 45 absorbs the
+    # imbalance. If a shard genuinely exceeds 45 min that's a real perf
+    # regression — the ceiling shouldn't silently grow further.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
 
@@ -85,7 +87,7 @@ jobs:
             BASE_URL='https://crm.globusdemos.com'
           fi
           echo "BASE_URL=$BASE_URL" >> $GITHUB_OUTPUT
-          echo "::notice::Shard ${{ matrix.shard }}/8 running against $BASE_URL"
+          echo "::notice::Shard ${{ matrix.shard }}/4 running against $BASE_URL"
 
       - name: Wait for target health (up to 2 min)
         env:
@@ -110,14 +112,14 @@ jobs:
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
 
-      - name: Run shard ${{ matrix.shard }}/8
+      - name: Run shard ${{ matrix.shard }}/4
         working-directory: e2e
         env:
           BASE_URL: ${{ steps.target.outputs.BASE_URL }}
           # E2E_SKIP_SCRUB stays ON for the per-shard step. Each shard
           # would otherwise run its OWN globalTeardown at the end of its
           # slice and DELETE all rows matching `^E2E_FLOW_/Race_/...`,
-          # including fixtures the other 7 shards are still using mid-test
+          # including fixtures the other 3 shards are still using mid-test
           # (they all hit the same demo DB). The race is real — shard 2's
           # spec creates a fixture, shard 1 finishes + teardown wipes it,
           # shard 2's next assertion fails. The single post-matrix
@@ -136,7 +138,7 @@ jobs:
             --project=chromium \
             --project=auth-tests \
             --project=api-health \
-            --shard=${{ matrix.shard }}/8 \
+            --shard=${{ matrix.shard }}/4 \
             --reporter=list,blob
 
       - name: Upload blob report (will be merged across shards)
@@ -155,7 +157,7 @@ jobs:
           path: e2e/test-results/
           retention-days: 30
 
-  # ── Merge the 8 sharded blob reports into a single HTML report ──
+  # ── Merge the 4 sharded blob reports into a single HTML report ──
   merge-reports:
     if: always()
     needs: e2e-full
@@ -198,7 +200,7 @@ jobs:
           BASE_URL: ${{ inputs.base_url || 'https://crm.globusdemos.com' }}
         run: |
           {
-            echo "## Full e2e validation (8-shard parallel run)"
+            echo "## Full e2e validation (4-shard parallel run)"
             echo ""
             echo "- Target: \`$BASE_URL\`"
             echo "- Trigger: \`${{ github.event_name }}\`"
@@ -214,10 +216,10 @@ jobs:
           } >> $GITHUB_STEP_SUMMARY
 
   # ── Post-matrix demo scrub ─────────────────────────────────────────
-  # The 8-shard e2e-full matrix runs with E2E_SKIP_SCRUB=1 to avoid
+  # The 4-shard e2e-full matrix runs with E2E_SKIP_SCRUB=1 to avoid
   # an inter-shard race (each shard's globalTeardown would otherwise
   # delete all E2E_*/Race_*/PHI Audit/etc. rows, including fixtures
-  # the other 7 shards are still using mid-test). This job runs ONCE
+  # the other 3 shards are still using mid-test). This job runs ONCE
   # after all shards complete and runs the same scrub the demo
   # operator would have run by hand: regex-delete test residue +
   # merge real-name patient duplicates that the suite's seed-and-write

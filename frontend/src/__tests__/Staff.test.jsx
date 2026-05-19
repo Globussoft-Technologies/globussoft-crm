@@ -25,6 +25,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -59,12 +60,14 @@ function renderStaff(viewerRole = 'ADMIN') {
     return Promise.resolve({});
   });
   return render(
-    <AuthContext.Provider value={{
-      user: { userId: 1, name: 'Rishu Agarwal', email: 'rishu@enhancedwellness.in', role: viewerRole },
-      setUser: vi.fn(), token: 'tk', tenant: { id: 1 }, loading: false,
-    }}>
-      <Staff />
-    </AuthContext.Provider>
+    <MemoryRouter>
+      <AuthContext.Provider value={{
+        user: { userId: 1, name: 'Rishu Agarwal', email: 'rishu@enhancedwellness.in', role: viewerRole },
+        setUser: vi.fn(), token: 'tk', tenant: { id: 1 }, loading: false,
+      }}>
+        <Staff />
+      </AuthContext.Provider>
+    </MemoryRouter>
   );
 }
 

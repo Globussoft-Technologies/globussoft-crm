@@ -121,8 +121,215 @@ async function main() {
   }
   console.log(`[seed-travel] users upserted: ${users.length}`);
 
-  console.log("[seed-travel] done — Travel Stall demo tenant is reachable.");
+  // ── 3. Placeholder diagnostic Q-sets ─────────────────────────────────
+  //
+  // Stand-in content until Yasin's Q13 deliverables land. The TMC bank
+  // is a 3-question short-form; the RFU bank uses 4 questions to cover
+  // the readiness-tier classification.
+
+  await seedDiagnosticBank(tenant.id, "tmc", {
+    questions: [
+      {
+        id: "q1",
+        text: "How many trips do you organise per year?",
+        type: "single-choice",
+        options: [
+          { value: "first", label: "First-time", weight: 1 },
+          { value: "few", label: "2-4 trips", weight: 3 },
+          { value: "many", label: "5+ trips", weight: 5 },
+        ],
+      },
+      {
+        id: "q2",
+        text: "Average group size?",
+        type: "single-choice",
+        options: [
+          { value: "small", label: "< 20", weight: 1 },
+          { value: "medium", label: "20-50", weight: 3 },
+          { value: "large", label: "50+", weight: 5 },
+        ],
+      },
+      {
+        id: "q3",
+        text: "Trip duration?",
+        type: "single-choice",
+        options: [
+          { value: "weekend", label: "Weekend", weight: 1 },
+          { value: "week", label: "5-7 days", weight: 3 },
+          { value: "longer", label: "10+ days", weight: 5 },
+        ],
+      },
+    ],
+  }, {
+    method: "weighted-sum",
+    bands: [
+      { minScore: 0, maxScore: 5, classification: "level_1", label: "Starter", recommendedTier: "entry" },
+      { minScore: 6, maxScore: 10, classification: "level_2", label: "Established", recommendedTier: "primary" },
+      { minScore: 11, maxScore: 15, classification: "level_3", label: "Power User", recommendedTier: "premium" },
+    ],
+  });
+
+  await seedDiagnosticBank(tenant.id, "rfu", {
+    questions: [
+      {
+        id: "q1",
+        text: "Have you performed Umrah before?",
+        type: "single-choice",
+        options: [
+          { value: "first", label: "First-time pilgrim", weight: 1 },
+          { value: "second", label: "Second-time", weight: 3 },
+          { value: "repeat", label: "Repeat (3+)", weight: 5 },
+        ],
+      },
+      {
+        id: "q2",
+        text: "Preferred accommodation tier?",
+        type: "single-choice",
+        options: [
+          { value: "standard", label: "Standard hotel", weight: 1 },
+          { value: "deluxe", label: "Deluxe (closer to Haram)", weight: 3 },
+          { value: "premium", label: "Premium Haram-view", weight: 5 },
+        ],
+      },
+      {
+        id: "q3",
+        text: "Any special-assistance requirements?",
+        type: "multi-select",
+        options: [
+          { value: "wheelchair", label: "Wheelchair", weight: 2 },
+          { value: "halal-meal", label: "Halal meal", weight: 1 },
+          { value: "family-rooming", label: "Family rooming", weight: 1 },
+          { value: "translator", label: "Language translator", weight: 2 },
+        ],
+      },
+      {
+        id: "q4",
+        text: "Group size for this trip?",
+        type: "single-choice",
+        options: [
+          { value: "solo", label: "Solo or couple", weight: 1 },
+          { value: "family", label: "Family (3-6)", weight: 3 },
+          { value: "group", label: "Group (7+)", weight: 5 },
+        ],
+      },
+    ],
+  }, {
+    method: "weighted-sum",
+    bands: [
+      { minScore: 0, maxScore: 5, classification: "level_1", label: "Standard Pilgrim", recommendedTier: "entry" },
+      { minScore: 6, maxScore: 12, classification: "level_2", label: "Confident Pilgrim", recommendedTier: "primary" },
+      { minScore: 13, maxScore: 99, classification: "level_3", label: "Premium Pilgrim", recommendedTier: "premium" },
+    ],
+  });
+
+  // ── 4. Cost master rows ──────────────────────────────────────────────
+  //
+  // Placeholder rates so the /pricing/quote endpoint has something to
+  // compute against. Yasin's actual rate book lands as part of Section
+  // 13 (Q1 deliverable).
+  const costRows = [
+    { subBrand: "rfu", category: "hotel", routeOrSku: "Makkah:Hilton:Deluxe-HaramFacing", baseRate: 18500 },
+    { subBrand: "rfu", category: "hotel", routeOrSku: "Makkah:Hilton:Standard", baseRate: 9500 },
+    { subBrand: "rfu", category: "hotel", routeOrSku: "Madinah:Anwar Al Madinah:Deluxe", baseRate: 14000 },
+    { subBrand: "rfu", category: "flight", routeOrSku: "BLR-JED-Economy", baseRate: 35000 },
+    { subBrand: "rfu", category: "flight", routeOrSku: "BLR-JED-Business", baseRate: 95000 },
+    { subBrand: "rfu", category: "transport", routeOrSku: "JED-Makkah-AC-Coach", baseRate: 3500 },
+    { subBrand: "tmc", category: "hotel", routeOrSku: "Bali:Resort:Standard", baseRate: 7500 },
+    { subBrand: "tmc", category: "flight", routeOrSku: "BLR-DPS-Economy", baseRate: 22000 },
+    { subBrand: "tmc", category: "transport", routeOrSku: "DPS-Bali-AC-Coach", baseRate: 4500 },
+  ];
+  for (const r of costRows) {
+    await prisma.travelCostMaster.upsert({
+      where: { id: -1 }, // never matches; forces create
+      update: {},
+      create: {
+        tenantId: tenant.id,
+        subBrand: r.subBrand,
+        category: r.category,
+        routeOrSku: r.routeOrSku,
+        baseRate: r.baseRate,
+        currency: "INR",
+        isActive: true,
+      },
+    }).catch(() => null); // tolerate re-seed
+  }
+  console.log(`[seed-travel] cost-master rows: ${costRows.length}`);
+
+  // ── 5. Season calendar ──────────────────────────────────────────────
+  const seasons = [
+    { subBrand: "rfu", seasonName: "ramadan-peak", startDate: "2026-03-01", endDate: "2026-04-15", multiplier: 2.0 },
+    { subBrand: "rfu", seasonName: "school-holiday", startDate: "2026-06-01", endDate: "2026-07-15", multiplier: 1.3 },
+    { subBrand: "rfu", seasonName: "lean", startDate: "2026-08-01", endDate: "2026-09-30", multiplier: 0.85 },
+    { subBrand: "tmc", seasonName: "school-summer", startDate: "2026-05-15", endDate: "2026-07-15", multiplier: 1.4 },
+    { subBrand: "tmc", seasonName: "school-winter", startDate: "2026-12-15", endDate: "2027-01-15", multiplier: 1.2 },
+  ];
+  for (const s of seasons) {
+    await prisma.travelSeasonCalendar.create({
+      data: {
+        tenantId: tenant.id,
+        subBrand: s.subBrand,
+        seasonName: s.seasonName,
+        startDate: new Date(s.startDate),
+        endDate: new Date(s.endDate),
+        multiplier: s.multiplier,
+      },
+    }).catch(() => null);
+  }
+  console.log(`[seed-travel] season calendar rows: ${seasons.length}`);
+
+  // ── 6. Markup rules ─────────────────────────────────────────────────
+  const markupRules = [
+    { subBrand: "rfu", scope: "hotel", markupPct: 10, priority: 100 },
+    { subBrand: "rfu", scope: "flight", markupPct: 5, priority: 100 },
+    { subBrand: "rfu", scope: "transport", markupPct: 15, priority: 100 },
+    { subBrand: "tmc", scope: "hotel", markupPct: 12, priority: 100 },
+    { subBrand: "tmc", scope: "flight", markupPct: 7, priority: 100 },
+  ];
+  for (const m of markupRules) {
+    await prisma.travelMarkupRule.create({
+      data: {
+        tenantId: tenant.id,
+        subBrand: m.subBrand,
+        scope: m.scope,
+        matchKeyJson: "{}",
+        markupPct: m.markupPct,
+        priority: m.priority,
+        isActive: true,
+      },
+    }).catch(() => null);
+  }
+  console.log(`[seed-travel] markup rules: ${markupRules.length}`);
+
+  console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
+}
+
+/**
+ * Seed a diagnostic bank for the given sub-brand. Idempotent across re-
+ * runs: existing v1 banks are not duplicated; if a v1 bank already
+ * exists for (tenantId, subBrand), this no-ops. Used until Yasin's Q13
+ * content lands.
+ */
+async function seedDiagnosticBank(tenantId, subBrand, questions, scoringRules) {
+  const existing = await prisma.travelDiagnosticQuestionBank.findFirst({
+    where: { tenantId, subBrand, version: 1 },
+    select: { id: true },
+  });
+  if (existing) {
+    console.log(`[seed-travel] diagnostic bank v1 already exists for ${subBrand} (id=${existing.id})`);
+    return;
+  }
+  const bank = await prisma.travelDiagnosticQuestionBank.create({
+    data: {
+      tenantId,
+      subBrand,
+      version: 1,
+      questionsJson: JSON.stringify(questions),
+      scoringRulesJson: JSON.stringify(scoringRules),
+      isActive: true,
+    },
+  });
+  console.log(`[seed-travel] diagnostic bank v1 seeded for ${subBrand} (id=${bank.id}, ${questions.questions.length} Qs)`);
 }
 
 main()

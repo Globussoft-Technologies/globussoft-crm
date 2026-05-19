@@ -1,5 +1,90 @@
 # CHANGELOG
 
+## v3.9.0 — 2026-05-20 — Travel CRM vertical (Phase 1 backend + UI scaffolding)
+
+A new third `Tenant.vertical` value alongside `generic` + `wellness`. Hosts
+four sub-brands under one Travel Stall tenant per Q25: **TMC** (school
+educational trips), **RFU** (Umrah pilgrimage), **Travel Stall** (family
+holidays — Phase 2), and **Visa Sure** (visa assurance — Phase 3).
+
+Source-of-truth docs:
+- [docs/TRAVEL_CRM_PRD.md](docs/TRAVEL_CRM_PRD.md) — 12-section PRD with the
+  Phase 1 contract.
+- [docs/TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md) —
+  25 decisions captured in a single session with Yasin.
+- [docs/TRAVEL_CRM_RISKS.md](docs/TRAVEL_CRM_RISKS.md) — 11 risks with
+  status / mitigation / owner.
+
+### Shipped this arc
+
+**Schema (Day 2):** 21 new Prisma models — `TravelDiagnostic +
+TravelDiagnosticQuestionBank`, `Itinerary + ItineraryItem`, `TmcTrip +
+TripParticipant + RoomingAssignment + TripPaymentPlan +
+TripInstalmentPayment + TripDocumentRequirement`, `WebCheckin`,
+`SupplierCredential + SupplierCredentialAccessLog`, `VisaApplication +
+VisaDocumentChecklistItem`, `RfuLeadProfile`, `TripMicrosite +
+TripMicrositeOtp`, `TravelCostMaster + TravelSeasonCalendar +
+TravelMarkupRule`. Plus 8 additive nullable columns on existing models
+(`Tenant.subBrandConfigJson`, `Contact.subBrand`, `Deal.subBrand +
+diagnosticId`, `Booking.tripId + itineraryId`, `Invoice.legalEntityCode`,
+`User.subBrandAccess`).
+
+**Backend routes (Days 3, 6, 7, 7.5, 8, 9, 10, 11, 12, 13):**
+- `routes/travel.js` — `/health` + vertical guard
+- `routes/travel_diagnostics.js` — 6 endpoints (banks + diagnostics)
+- `routes/travel_itineraries.js` — 8 endpoints (itineraries + polymorphic items)
+- `routes/travel_trips.js` — 12 endpoints (trips + participants + documents)
+- `routes/travel_trip_billing.js` — 11 endpoints (rooming + payment plan + instalments)
+- `routes/travel_microsites.js` — 5 endpoints (admin CRUD + public info)
+- `routes/travel_cost_master.js` — 5 endpoints
+- `routes/travel_pricing.js` — 9 endpoints (seasons + markup rules + `/quote`)
+- `routes/travel_suppliers.js` — 7 endpoints (encrypted vault + access log)
+- `routes/travel_rfu_profiles.js` — 6 endpoints
+- `middleware/travelGuards.js` — shared `requireTravelTenant` +
+  sub-brand access helpers
+- `lib/travelDiagnosticScoring.js` — pure scoring helper (20 vitest cases)
+- `lib/travelPricing.js` — pure pricing math (21 vitest cases)
+
+**Frontend (Days 1, 4, 6, 14):**
+- `pages/travel/Dashboard.jsx` — placeholder
+- `pages/travel/Diagnostics.jsx` — list view with filter chips
+- `pages/travel/DiagnosticWizard.jsx` — multi-step taker + result card
+- `pages/travel/DiagnosticBuilder.jsx` — admin JSON-paste editor
+- `pages/travel/Itineraries.jsx` — list with item-icon strip
+- `pages/travel/Trips.jsx` — TMC trips list
+- `pages/travel/TripDetail.jsx` — 5-tab detail (overview, participants,
+  rooming, payment plan, microsite)
+- `theme/travel.css` — navy + gold placeholder palette (pending Yasin's
+  brand handover per Q22)
+
+**Gate specs (Days 5-13):** 10 spec files (`travel-diagnostics-api`,
+`travel-itineraries-api`, `travel-trips-api`, `travel-cost-master-api`,
+`travel-suppliers-api`, `travel-microsites-api`, `travel-rfu-profiles-api`,
+`travel-pricing-api`, `travel-trip-billing-api`), all wired into
+`deploy.yml` + `coverage.yml`. Plus 56 new vitest cases on the
+diagnostic-scoring + pricing helpers + travelGuards.
+
+**Seed (Day 15):** `prisma/seed-travel.js` enriched with placeholder TMC
++ RFU diagnostic Q-sets, 9 cost-master rows (RFU + TMC), 5 season-
+calendar entries, 5 markup rules. Re-runnable.
+
+**Out of scope (deferred to Phase 1.5 / Phase 3):**
+- Visa Sure routes (Q18 — Phase 3)
+- Web check-in (Chrome extension is a separate project; airline portal
+  creds pending in Q9)
+- TripMicrositeOtp request/verify flow (needs SMS provider creds, Q9
+  pending)
+- Reminder cron for trip instalments (same SMS dep)
+- Frontend admin pages for cost-master / seasons / markup / supplier
+  vault (Phase 1.5 visual builders)
+
+**Open risks (still red):**
+- R2 — 6-week timeline is aggressive (structural)
+- R3 — Chrome extension auto-update outside Web Store (medium impact)
+- R11 — On-prem hosting operational complexity (new from Q6 decision)
+
+---
+
 ## v3.8.3 — 2026-05-18 — Shard-2 e2e-full stabilization: GDPR bounded queries + 5xx retry on flake-prone specs
 
 Closes the 4-day release-validation gap. v3.8.2's e2e-full had shard 2 red with 4 hard failures + 5 flakies; this release fixes both.

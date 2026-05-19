@@ -150,6 +150,8 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 
 **Wellness vertical (v3.1):** wellness.js (patients, visits, prescriptions, consents, treatments, services, locations, recommendations, dashboard, reports/pnl-by-service, /per-professional, /per-location, /attribution, photos, inventory, telecaller/queue + /dispose, portal/login + /me + /visits + /prescriptions, orchestrator/run, public/tenant/:slug + public/book)
 
+**Travel vertical (Phase 1, in flight):** travel.js + travel_diagnostics.js + travel_itineraries.js + travel_trips.js + travel_trip_billing.js + travel_microsites.js + travel_cost_master.js + travel_pricing.js + travel_suppliers.js + travel_rfu_profiles.js. Hosts 4 sub-brands under one tenant (TMC school trips / RFU Umrah / Travel Stall family holidays / Visa Sure) per Q25. See [docs/TRAVEL_CRM_PRD.md](docs/TRAVEL_CRM_PRD.md), [docs/TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md), [docs/TRAVEL_CRM_RISKS.md](docs/TRAVEL_CRM_RISKS.md). Shared guards in [backend/middleware/travelGuards.js](backend/middleware/travelGuards.js); pure pricing math in [backend/lib/travelPricing.js](backend/lib/travelPricing.js); diagnostic scoring in [backend/lib/travelDiagnosticScoring.js](backend/lib/travelDiagnosticScoring.js). Schema: 21 new Prisma models (diagnostic banks + diagnostics, itineraries + items, TmcTrip + 5 children, supplier credentials vault + access log, microsite + OTP, VisaApplication + checklist, RfuLeadProfile, season calendar + markup rules).
+
 **External Partner API (v3.1):** external.js (/api/v1/external/* — health, me, leads, calls, messages, appointments, contacts/lookup, patients/lookup, services, staff, locations)
 
 ### Frontend (frontend/src/)

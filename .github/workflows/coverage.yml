@@ -269,6 +269,7 @@ jobs:
             tests/travel-cost-master-api.spec.js \
             tests/travel-suppliers-api.spec.js \
             tests/travel-microsites-api.spec.js \
+            tests/travel-rfu-profiles-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

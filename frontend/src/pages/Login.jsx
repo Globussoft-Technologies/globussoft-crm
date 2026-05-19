@@ -115,9 +115,14 @@ const Login = () => {
     setUser(data.user);
     setToken(data.token);
     if (data.tenant && setTenant) setTenant(data.tenant);
-    const landing = data.tenant?.vertical === 'wellness'
-      ? wellnessLandingFor(data.user)
-      : '/dashboard';
+    let landing;
+    if (data.tenant?.vertical === 'wellness') {
+      landing = wellnessLandingFor(data.user);
+    } else if (data.tenant?.vertical === 'travel') {
+      landing = '/travel';
+    } else {
+      landing = '/dashboard';
+    }
     navigate(landing);
   };
 
@@ -378,6 +383,13 @@ const Login = () => {
           { label: 'Owner (Rishu)',  email: 'rishu@enhancedwellness.in', color: '#a855f7' },
           { label: 'Demo Admin',     email: 'admin@wellness.demo',       color: '#a855f7' },
           { label: 'Demo User',      email: 'user@wellness.demo',        color: '#ec4899' },
+        ]} onLogin={quickLogin} />
+
+        <QuickLoginSection title="Travel Stall — Demo" accounts={[
+          { label: 'Owner (Yasin)',  email: 'yasin@travelstall.in',          color: '#122647' },
+          { label: 'Demo Admin',     email: 'admin@travelstall.demo',        color: '#122647' },
+          { label: 'TMC Operator',   email: 'tmc-ops@travelstall.demo',      color: '#C89A4E' },
+          { label: 'RFU Advisor',    email: 'rfu-advisor@travelstall.demo',  color: '#2F7A4D' },
         ]} onLogin={quickLogin} />
         <div style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.875rem' }}>
           <span style={{ color: 'var(--text-secondary)' }}>Don't have an account? </span>

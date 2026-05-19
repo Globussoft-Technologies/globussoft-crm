@@ -29,6 +29,7 @@ import {
   markAuthReady,
 } from "./utils/api";
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
+import "./theme/travel.css"; // travel vertical theme overrides (scoped, Day 1 placeholder palette)
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Contacts = lazy(() => import("./pages/Contacts"));
@@ -111,6 +112,8 @@ const Zapier = lazy(() => import("./pages/Zapier"));
 const SsoReturn = lazy(() => import("./pages/SsoReturn"));
 const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
+// Travel vertical (Day 1 scaffolding — Phase 1 pages land per docs/TRAVEL_CRM_PRD.md §7)
+const TravelDashboard = lazy(() => import("./pages/travel/Dashboard"));
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
   () => import("./pages/wellness/OwnerDashboard"),
@@ -240,6 +243,11 @@ function GenericOnly({ children }) {
   if (tenant?.vertical === 'wellness') {
     return <Navigate to={wellnessLandingFor(user)} replace />;
   }
+  if (tenant?.vertical === 'travel') {
+    // Travel vertical's landing route is /travel (no role-aware landing yet —
+    // Phase 1 will add per-sub-brand landings: TMC ops vs RFU advisor vs ...).
+    return <Navigate to="/travel" replace />;
+  }
   return children;
 }
 
@@ -267,6 +275,18 @@ function WellnessOwnerOnly({ children }) {
 function WellnessOnly({ children }) {
   const { tenant } = useContext(AuthContext);
   if (tenant && tenant.vertical !== "wellness") {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return children;
+}
+
+// Mirror of WellnessOnly for the travel vertical (Day 1 scaffolding). Non-
+// travel tenants get bounced to /dashboard rather than rendering empty
+// travel UI. API-level guard requireTravelTenant in backend/routes/travel.js
+// is the load-bearing check; this is just URL-bar hygiene.
+function TravelOnly({ children }) {
+  const { tenant } = useContext(AuthContext);
+  if (tenant && tenant.vertical !== "travel") {
     return <Navigate to="/dashboard" replace />;
   }
   return children;
@@ -823,6 +843,12 @@ export default function App() {
                   tenants get bounced to their themed calendar; everyone else sees
                   the calendar-sync page (which is the closest generic equivalent). */}
                     <Route path="calendar" element={<CalendarRedirect />} />
+                    {/* Travel vertical — Day 1 scaffolding. Gated by TravelOnly
+                  so generic + wellness tenants get bounced to /dashboard
+                  rather than rendering empty travel UI. Phase 1 sub-pages
+                  (diagnostics, itineraries, trips, visa, suppliers) mount
+                  under /travel/* per docs/TRAVEL_CRM_PRD.md §7. */}
+              <Route path="travel" element={<TravelOnly><TravelDashboard /></TravelOnly>} />
                     {/* Wellness vertical — gated by WellnessOnly so generic-CRM
                   tenants can't surface wellness pages by URL (#325). */}
               <Route path="wellness" element={<WellnessOnly><WellnessOwnerOnly><WellnessOwnerDashboard /></WellnessOwnerOnly></WellnessOnly>} />

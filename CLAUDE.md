@@ -21,14 +21,14 @@ Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM 
 
 ## Verticals
 
-Tenant.vertical ∈ `{generic, wellness}` drives:
+Tenant.vertical ∈ `{generic, wellness, travel}` drives:
 
-- **Sidebar layout** — wellness gets a slim clinic-focused nav (~25 items); generic gets the full 50+ item enterprise sidebar
-- **Theme** — wellness uses Dr. Haror's palette (teal `#265855`, blush `#CD9481`, cream bg) via scoped CSS under `[data-vertical="wellness"]`
-- **Landing route** — wellness users land on `/wellness`, generic on `/dashboard`
+- **Sidebar layout** — wellness gets a slim clinic-focused nav (~25 items); travel gets a slim travel-agency nav (~15 items, Day 1 scaffolding); generic gets the full 50+ item enterprise sidebar
+- **Theme** — wellness uses Dr. Haror's palette (teal `#265855`, blush `#CD9481`, cream bg) via scoped CSS under `[data-vertical="wellness"]`; travel uses placeholder navy `#122647` + warm gold `#C89A4E` on cream pending Yasin's brand handover (Q22)
+- **Landing route** — wellness users land on `/wellness`, travel users on `/travel`, generic on `/dashboard`
 - **Currency defaults** — tenant.defaultCurrency (INR/USD/EUR/etc.) + locale feed the `formatMoney()` helper everywhere
 
-Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `render<Vertical>Nav()` function in Sidebar, add a themed CSS file, seed + new pages as needed. No forks.
+Adding a new vertical (gym, spa, clinic chain) means: add enum value, add a `render<Vertical>Nav()` function in Sidebar, add a themed CSS file, seed + new pages as needed. No forks. **Travel** is the third vertical (Phase 1 in flight; see [docs/TRAVEL_CRM_PRD.md](docs/TRAVEL_CRM_PRD.md), [docs/TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md), [docs/TRAVEL_CRM_RISKS.md](docs/TRAVEL_CRM_RISKS.md)). It hosts 4 sub-brands (TMC school trips, RFU Umrah, Travel Stall family holidays, Visa Sure) under a single tenant with `subBrandAccess[]` per User (Q25 decision).
 
 ## Tech Stack
 

@@ -1,0 +1,74 @@
+/*
+ * Travel CRM vertical theme — placeholder palette pending brand asset
+ * handover (Q22, deferred to Day 1 deliverable). Activated by
+ * `<body data-vertical="travel">` set in App.jsx based on tenant.vertical.
+ *
+ * Current palette is a neutral travel-friendly default — deep navy primary
+ * (trustworthy / premium) + warm gold accent (Umrah / heritage / hospitality)
+ * + cream background (matches wellness's warm-not-cold aesthetic without
+ * fighting wellness's teal). Update the four `--primary-*` / `--accent-*`
+ * vars below when Yasin's brand pack lands; everything else inherits
+ * cleanly. Per-sub-brand overrides (TMC blue, RFU green-gold, Travel Stall
+ * orange, Visa Sure purple) ride on top with `[data-sub-brand="..."]`
+ * selectors once those brand books arrive.
+ *
+ * All overrides are scoped under [data-vertical="travel"] so generic +
+ * wellness tenants render unchanged.
+ */
+
+[data-vertical="travel"] {
+  --bg-color:        #FAF6EE;
+  --surface-color:   #FFFFFF;
+  --subtle-bg:       rgba(18, 38, 71, 0.04);
+  --subtle-bg-3:     rgba(18, 38, 71, 0.08);
+
+  --primary-color:   #122647;        /* deep navy — placeholder pending Q22 */
+  --primary-hover:   #0C1B33;
+  --accent-color:    #C89A4E;        /* warm gold — placeholder pending Q22 */
+  --accent-hover:    #A8823F;
+  --accent-glow:     rgba(200, 154, 78, 0.45);
+  --accent-bg:       var(--primary-color);   /* navy surface */
+  --accent-text:     #FFFFFF;                 /* cream/white foreground */
+
+  --success-color:   #2F7A4D;        /* travel-friendly forest green */
+  --warning-color:   #C58A2B;        /* burnt umber (visa-deadline amber) */
+  --danger-color:    #A8323F;        /* burgundy red (kept from wellness) */
+
+  --text-primary:    #1F1B14;        /* warm dark, ~13:1 on cream */
+  --text-secondary:  #5C5346;        /* warm taupe, ~7:1 on cream — clears AAA */
+  --text-tertiary:   #7E7264;        /* muted for de-emphasis */
+
+  --border-color:    rgba(18, 38, 71, 0.12);
+  --border-light:    rgba(18, 38, 71, 0.06);
+
+  --font-family:     "Roboto", "Inter", system-ui, -apple-system, sans-serif;
+  --font-heading:    "Playfair Display", "Georgia", serif;
+
+  --shadow-sm:       0 1px 2px rgba(18, 38, 71, 0.06);
+  --shadow-md:       0 4px 12px rgba(18, 38, 71, 0.08);
+  --shadow-lg:       0 12px 40px rgba(18, 38, 71, 0.12);
+}
+
+/* Dark mode override for travel vertical — preserves brand (navy + gold)
+ * but uses dark backgrounds + light text. */
+html[data-theme="dark"][data-vertical="travel"],
+[data-vertical="travel"][data-theme="dark"] {
+  --bg-color:        #0F1729;
+  --surface-color:   #19243A;
+  --subtle-bg:       rgba(200, 154, 78, 0.08);
+  --subtle-bg-3:     rgba(200, 154, 78, 0.14);
+
+  --primary-color:   #C89A4E;        /* gold pops on dark navy */
+  --primary-hover:   #DDB36A;
+  --accent-color:    #5D8FB8;        /* sky blue — secondary travel cue */
+  --accent-hover:    #7AA8CC;
+  --accent-bg:       var(--primary-color);
+  --accent-text:     #0F1729;        /* navy text on gold */
+
+  --text-primary:    #F4EFDF;        /* warm cream on dark navy */
+  --text-secondary:  #C9C0AC;        /* muted cream */
+  --text-tertiary:   #8C8676;
+
+  --border-color:    rgba(200, 154, 78, 0.18);
+  --border-light:    rgba(200, 154, 78, 0.08);
+}

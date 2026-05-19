@@ -75,6 +75,8 @@ import {
   Banknote,
   // Zylu-Gap #800 (WA-005) — Blocked WhatsApp numbers admin entry
   Ban,
+  // Travel CRM vertical (Day 1 scaffolding — Phase 1 per docs/TRAVEL_CRM_PRD.md §7)
+  Compass,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -101,6 +103,7 @@ const Sidebar = ({
   const isManager = role === "ADMIN" || role === "MANAGER";
   const wellnessRole = user?.wellnessRole || null;
   const isWellness = tenant?.vertical === "wellness";
+  const isTravel = tenant?.vertical === "travel";
   const location = useLocation();
 
   // T2.1: ref to the <aside> so the focus-trap effect below can locate
@@ -598,6 +601,14 @@ const Sidebar = ({
                 sectionLabelStyle,
                 counts,
               })
+            : isTravel
+            ? renderTravelNav({
+                Link,
+                isAdmin,
+                isManager,
+                sectionLabelStyle,
+                counts,
+              })
             : renderGenericNav({
                 Link,
                 ExtLink,
@@ -912,6 +923,72 @@ function renderWellnessNav({
       )}
 
       {/* User Notification Settings — only for regular users, not admin/manager */}
+      {!isAdmin && !isManager && (
+        <>
+          <div style={labelStyle}>User</div>
+          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+        </>
+      )}
+    </>
+  );
+}
+
+// ── Travel sidebar — Day 1 scaffolding ────────────────────────────
+//
+// Slim placeholder nav for the travel vertical. Phase 1 (docs/TRAVEL_CRM_PRD.md
+// §7) will fill out the full surface: Diagnostics, Itineraries, Trips (per
+// sub-brand: TMC trips / RFU pilgrims), Visa Applications, Suppliers,
+// Microsites. For Day 1, only Dashboard is wired — everything else is
+// "Coming in Phase 1" so the user can see the planned navigation map
+// without dead links.
+function renderTravelNav({
+  Link,
+  isAdmin,
+  isManager,
+  sectionLabelStyle,
+  counts = {},
+}) {
+  const labelStyle = sectionLabelStyle || sectionLabel;
+  return (
+    <>
+      <div style={labelStyle}>Travel</div>
+      <Link to="/travel" icon={Compass} label="Dashboard" />
+
+      <div style={labelStyle}>Sales pipeline</div>
+      <Link to="/leads" icon={UserPlus} label="Leads" />
+      <Link to="/contacts" icon={Users} label="Contacts" />
+      <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
+
+      <div style={labelStyle}>Customer comms</div>
+      <Link to="/inbox" icon={InboxIcon} label="Inbox" badge={counts.inbox} />
+      <Link to="/sequences" icon={Send} label="Sequences" />
+      <Link to="/tasks" icon={CheckSquare} label="Tasks" badge={counts.tasks} />
+
+      <div style={labelStyle}>Financial</div>
+      <Link to="/invoices" icon={Receipt} label="Invoices" />
+      <Link to="/payments" icon={DollarSign} label="Payments" />
+      <Link to="/quotes" icon={FileText} label="Quotes" />
+
+      <div style={labelStyle}>Reports</div>
+      <Link to="/reports" icon={BarChart3} label="Reports" />
+
+      {isManager && (
+        <>
+          <div style={labelStyle}>Admin</div>
+          <Link to="/staff" icon={UsersRound} label="Staff" />
+          <Link to="/settings" icon={Settings} label="Settings" />
+          <Link to="/audit-log" icon={ScrollText} label="Audit Log" />
+        </>
+      )}
+
+      {isAdmin && (
+        <>
+          <div style={labelStyle}>Platform</div>
+          <Link to="/developer" icon={Code} label="Developer" />
+          <Link to="/privacy" icon={Shield} label="Privacy" />
+        </>
+      )}
+
       {!isAdmin && !isManager && (
         <>
           <div style={labelStyle}>User</div>

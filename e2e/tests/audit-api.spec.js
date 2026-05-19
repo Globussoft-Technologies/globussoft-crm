@@ -722,6 +722,7 @@ test.describe('Audit API — /backfill hash-chain', () => {
   });
 
   test('/verify is tenant-scoped — wellness chainLength is independent of generic', async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, 'demo-load-sensitive convergence test — runs in the per-push gate (local stack); skipped on e2e-full to stop the chronic hash-chain flake');
     test.setTimeout(60_000);
     // Each tenant has its own chain. Seeding in one tenant must not move
     // the other tenant's chainLength.

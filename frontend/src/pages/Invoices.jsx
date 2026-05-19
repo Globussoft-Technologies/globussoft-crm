@@ -56,6 +56,50 @@ export default function Invoices() {
     loadPaymentConfig();
   }, []);
 
+  // Stripe Checkout return handler. Stripe redirects back to
+  // /invoices?stripe=success&session_id=… on payment success (or ?stripe=cancel
+  // if the user backed out). We finalize the Payment row server-side and
+  // refresh the invoice list, then strip the query string so a page refresh
+  // doesn't re-fire the confirmation.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const stripeOutcome = params.get('stripe');
+    const sessionId = params.get('session_id');
+    if (!stripeOutcome) return;
+
+    const cleanUrl = () => {
+      window.history.replaceState({}, '', window.location.pathname);
+    };
+
+    if (stripeOutcome === 'cancel') {
+      notify.info('Stripe payment was canceled.');
+      cleanUrl();
+      return;
+    }
+
+    if (stripeOutcome === 'success' && sessionId) {
+      (async () => {
+        try {
+          const result = await fetchApi('/api/payments/confirm-stripe-session', {
+            method: 'POST',
+            body: JSON.stringify({ sessionId }),
+          });
+          if (result?.paid) {
+            notify.success('Payment received via Stripe.');
+            loadData();
+          } else {
+            notify.info('Payment is processing. The invoice will update once Stripe confirms.');
+          }
+        } catch (err) {
+          console.error('[Payment] Stripe confirm error:', err);
+        } finally {
+          cleanUrl();
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadPaymentConfig = async () => {
     try {
       const config = await fetchApi('/api/payments/config');
@@ -332,18 +376,21 @@ export default function Invoices() {
           return;
         }
 
-        const response = await fetchApi('/api/payments/create-stripe-intent', {
+        const response = await fetchApi('/api/payments/create-stripe-checkout-session', {
           method: 'POST',
           body: JSON.stringify({
             invoiceId: paymentModal.id,
             amount: paymentModal.amount,
-            currency: 'USD',
           }),
         });
 
-        if (response?.clientSecret) {
-          // TODO: Implement Stripe Elements checkout in modal
-          notify.error('Stripe checkout coming soon');
+        if (response?.url) {
+          // Hosted-Checkout flow: redirect to Stripe. On success Stripe sends
+          // the user back to /invoices?stripe=success&session_id=… which the
+          // mount-effect below detects and finalizes via /confirm-stripe-session.
+          window.location.href = response.url;
+        } else {
+          notify.error('Failed to start Stripe checkout');
           setProcessingPayment(false);
         }
       }

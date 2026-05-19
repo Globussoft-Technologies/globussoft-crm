@@ -437,6 +437,9 @@ const adminRoutes = require("./routes/admin");
 const serviceCategoriesRoutes = require("./routes/service_categories");
 const drugsRoutes = require("./routes/drugs");
 const csvIoRoutes = require("./routes/csv_io");
+// Issue #816 — per-entity CSV import/export with template + async modes for
+// the wellness list pages (services, packages, products, customers, bookings).
+const wellnessCsvRoutes = require("./routes/wellnessCsv");
 
 // OpenAPI Swagger Bootloader
 //
@@ -464,7 +467,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/customer/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
@@ -606,6 +609,8 @@ app.use("/api/wellness", inventoryRoutes);
 app.use("/api/wellness/service-categories", serviceCategoriesRoutes);
 app.use("/api/wellness/drugs", drugsRoutes);
 app.use("/api/csv", csvIoRoutes);
+// Issue #816 — /api/wellness/csv/:entity/{template|export|import|import/async|jobs}.
+app.use("/api/wellness/csv", wellnessCsvRoutes);
 // Wave 2 Agent II — POS / cash register / shift / sale backbone. Mounted at
 // /api/pos. Wellness-vertical-gated; generic tenants get a clean 403.
 app.use("/api/pos", posRoutes);
@@ -782,6 +787,23 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`[Backend] Enterprise Express Server running securely on port ${PORT}`);
+
+  // Auto-heal RBAC state on boot so requiredPermission-gated UI (e.g. the
+  // "Roles" sidebar entry) appears consistently across local / dev / prod
+  // without manual seed-rbac-only.js runs. Fire-and-forget: a DB hiccup must
+  // never crash the server. Set DISABLE_RBAC_BOOT_SYNC=1 to opt out.
+  const { ensureRbacOnBoot } = require('./scripts/ensureRbacOnBoot');
+  ensureRbacOnBoot()
+    .then((stats) => {
+      if (!stats) return;
+      const wrote = stats.rolesCreated + stats.permsCreated + stats.assignmentsCreated;
+      if (wrote > 0) {
+        console.log(`[rbac-boot] backfilled — roles:${stats.rolesCreated} perms:${stats.permsCreated} assignments:${stats.assignmentsCreated} (skipped users:${stats.usersSkipped})`);
+      } else {
+        console.log('[rbac-boot] RBAC state already compatible — no changes.');
+      }
+    })
+    .catch((err) => console.error('[rbac-boot] non-fatal error:', err && err.message ? err.message : err));
 });
 
 // Graceful shutdown — required for c8 / V8 line coverage to flush its temp

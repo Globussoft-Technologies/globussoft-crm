@@ -293,10 +293,20 @@ router.get("/inventory/receipts", adminGate, async (req, res) => {
       take: Math.min(parseInt(req.query.limit) || 100, 500),
       include: {
         product: { select: { id: true, name: true, sku: true } },
-        vendor: { select: { id: true, name: true } },
+        vendor: { select: { id: true, name: true, phone: true, gstin: true } },
       },
     });
-    res.json(items);
+
+    const userIds = [...new Set(items.map((r) => r.receivedBy).filter(Boolean))];
+    const users = userIds.length
+      ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } })
+      : [];
+    const userById = new Map(users.map((u) => [u.id, u]));
+    const enriched = items.map((r) => ({
+      ...r,
+      receivedByUser: userById.get(r.receivedBy) || null,
+    }));
+    res.json(enriched);
   } catch (e) {
     console.error("[inventory] list receipts error:", e.message);
     res.status(500).json({ error: "Failed to list inventory receipts" });
@@ -305,7 +315,7 @@ router.get("/inventory/receipts", adminGate, async (req, res) => {
 
 router.post("/inventory/receipts", adminGate, async (req, res) => {
   try {
-    const { productId, vendorId, quantity, unitCost, batchNumber, expiryDate, notes } = req.body;
+    const { productId, vendorId, quantity, unitCost, batchNumber, expiryDate, notes, supplierInvoiceNumber } = req.body;
     if (!productId) return res.status(400).json({ error: "productId is required", code: "PRODUCT_REQUIRED" });
     if (quantity == null || Number(quantity) <= 0) {
       return res.status(400).json({ error: "quantity must be a positive number", code: "QUANTITY_INVALID" });
@@ -334,6 +344,7 @@ router.post("/inventory/receipts", adminGate, async (req, res) => {
       const r = await tx.inventoryReceipt.create({
         data: {
           receiptNumber,
+          supplierInvoiceNumber: supplierInvoiceNumber ? String(supplierInvoiceNumber).trim() || null : null,
           productId: parseInt(productId),
           vendorId: vendorId ? parseInt(vendorId) : null,
           quantity: qty,
@@ -374,6 +385,233 @@ router.post("/inventory/receipts", adminGate, async (req, res) => {
   }
 });
 
+// Edit a receipt with safety rails (Option B from product spec):
+//   - "Safe" fields (supplierInvoiceNumber, batchNumber, expiryDate, notes) are
+//     editable any time — they don't move stock.
+//   - "Unsafe" fields (productId, quantity, unitCost) are editable only within
+//     EDIT_WINDOW_MS of creation (the typo window). After that, callers must
+//     use Reverse + a new receipt, or an InventoryAdjustment.
+// Stock-impacting edits adjust Product.currentStock atomically with the row
+// update so the rolling stock count stays consistent.
+const EDIT_WINDOW_MS = 5 * 60 * 1000;
+const SAFE_FIELDS = ["supplierInvoiceNumber", "batchNumber", "expiryDate", "notes"];
+const UNSAFE_FIELDS = ["productId", "quantity", "unitCost"];
+
+router.put("/inventory/receipts/:id", adminGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.inventoryReceipt.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Receipt not found" });
+
+    const ageMs = Date.now() - new Date(existing.createdAt).getTime();
+    const withinWindow = ageMs <= EDIT_WINDOW_MS;
+
+    const safeChanges = {};
+    for (const k of SAFE_FIELDS) {
+      if (req.body[k] === undefined) continue;
+      if (k === "expiryDate") {
+        safeChanges[k] = req.body[k] ? new Date(req.body[k]) : null;
+      } else {
+        const v = req.body[k];
+        safeChanges[k] = v === "" || v == null ? null : (typeof v === "string" ? v.trim() || null : v);
+      }
+    }
+
+    const unsafeTouched = UNSAFE_FIELDS.some((k) => req.body[k] !== undefined);
+    if (unsafeTouched && !withinWindow) {
+      return res.status(409).json({
+        error: "Quantity, unit cost, and product can only be edited within 5 minutes of recording. Reverse this receipt and record a new one, or use an Adjustment.",
+        code: "EDIT_WINDOW_CLOSED",
+        editableFields: SAFE_FIELDS,
+      });
+    }
+
+    const unsafeChanges = {};
+    let newProductId = existing.productId;
+    let newQty = existing.quantity;
+    let newCost = existing.unitCost;
+
+    if (req.body.productId !== undefined) {
+      const pid = parseInt(req.body.productId);
+      const product = await prisma.product.findFirst({ where: tenantWhere(req, { id: pid }) });
+      if (!product) return res.status(400).json({ error: "product not found in this tenant", code: "PRODUCT_NOT_FOUND" });
+      newProductId = pid;
+      unsafeChanges.productId = pid;
+    }
+    if (req.body.quantity !== undefined) {
+      const q = Number(req.body.quantity);
+      if (!(q > 0)) return res.status(400).json({ error: "quantity must be a positive number", code: "QUANTITY_INVALID" });
+      newQty = q;
+      unsafeChanges.quantity = q;
+    }
+    if (req.body.unitCost !== undefined) {
+      const c = Number(req.body.unitCost);
+      if (!(c >= 0)) return res.status(400).json({ error: "unitCost must be 0 or greater", code: "UNIT_COST_INVALID" });
+      newCost = c;
+      unsafeChanges.unitCost = c;
+    }
+    if (req.body.quantity !== undefined || req.body.unitCost !== undefined) {
+      unsafeChanges.totalCost = newQty * newCost;
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (newProductId !== existing.productId) {
+        await tx.product.update({
+          where: { id: existing.productId },
+          data: { currentStock: { decrement: Math.ceil(existing.quantity) } },
+        });
+        await tx.product.update({
+          where: { id: newProductId },
+          data: { currentStock: { increment: Math.ceil(newQty) } },
+        });
+      } else if (newQty !== existing.quantity) {
+        const delta = Math.ceil(newQty) - Math.ceil(existing.quantity);
+        if (delta !== 0) {
+          await tx.product.update({
+            where: { id: existing.productId },
+            data: { currentStock: { increment: delta } },
+          });
+        }
+      }
+      return tx.inventoryReceipt.update({
+        where: { id },
+        data: { ...safeChanges, ...unsafeChanges },
+      });
+    });
+
+    const allChanged = { ...safeChanges, ...unsafeChanges };
+    if (Object.keys(allChanged).length > 0) {
+      await writeAudit("InventoryReceipt", "UPDATE", id, req.user.userId, req.user.tenantId, {
+        receiptNumber: existing.receiptNumber,
+        changedFields: diffFields(existing, updated, Object.keys(allChanged)),
+      });
+    }
+    res.json(updated);
+  } catch (e) {
+    console.error("[inventory] update receipt error:", e.message);
+    res.status(500).json({ error: "Failed to update inventory receipt" });
+  }
+});
+
+// Hard-delete a receipt with safety rails (Option B):
+//   - Refused (409) if any ServiceConsumption for the same product has been
+//     recorded since the receipt was created — we can't prove the consumed
+//     stock didn't come from this batch.
+//   - Refused (409) if the delete would push currentStock negative.
+// In both refusal cases the response carries `code` so the UI can prompt the
+// caller to use Reverse instead. Delete decrements stock by the receipt qty.
+router.delete("/inventory/receipts/:id", adminGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const receipt = await prisma.inventoryReceipt.findFirst({ where: tenantWhere(req, { id }) });
+    if (!receipt) return res.status(404).json({ error: "Receipt not found" });
+
+    const consumedSince = await prisma.serviceConsumption.count({
+      where: tenantWhere(req, {
+        productId: receipt.productId,
+        createdAt: { gte: receipt.createdAt },
+      }),
+    });
+    if (consumedSince > 0) {
+      return res.status(409).json({
+        error: "This receipt cannot be deleted because stock of this product has been consumed since it was recorded. Reverse it instead — that preserves the audit trail.",
+        code: "RECEIPT_CONSUMED",
+        consumptionCount: consumedSince,
+      });
+    }
+
+    const product = await prisma.product.findFirst({ where: tenantWhere(req, { id: receipt.productId }), select: { currentStock: true } });
+    if (product && product.currentStock < Math.ceil(receipt.quantity)) {
+      return res.status(409).json({
+        error: "Deleting this receipt would push stock below zero. Reverse it instead.",
+        code: "WOULD_OVERDRAW",
+        currentStock: product.currentStock,
+        receiptQuantity: receipt.quantity,
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.product.update({
+        where: { id: receipt.productId },
+        data: { currentStock: { decrement: Math.ceil(receipt.quantity) } },
+      });
+      await tx.inventoryReceipt.delete({ where: { id } });
+    });
+
+    await writeAudit("InventoryReceipt", "DELETE", id, req.user.userId, req.user.tenantId, {
+      receiptNumber: receipt.receiptNumber,
+      productId: receipt.productId,
+      quantity: receipt.quantity,
+    });
+    res.status(204).send();
+  } catch (e) {
+    console.error("[inventory] delete receipt error:", e.message);
+    res.status(500).json({ error: "Failed to delete inventory receipt" });
+  }
+});
+
+// Reverse a previously-recorded receipt by creating a compensating
+// InventoryAdjustment with a negative delta equal to the receipt's quantity.
+// The original receipt stays in place (immutability rule from server header).
+// Idempotent: re-reversing returns 409 with the existing adjustment id.
+router.post("/inventory/receipts/:id/reverse", adminGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const receipt = await prisma.inventoryReceipt.findFirst({ where: tenantWhere(req, { id }) });
+    if (!receipt) return res.status(404).json({ error: "Receipt not found" });
+
+    const existing = await prisma.inventoryAdjustment.findFirst({
+      where: tenantWhere(req, {
+        productId: receipt.productId,
+        reason: "RECEIPT_REVERSAL",
+        notes: { contains: receipt.receiptNumber },
+      }),
+    });
+    if (existing) {
+      return res.status(409).json({
+        error: "Receipt has already been reversed",
+        code: "ALREADY_REVERSED",
+        adjustmentId: existing.id,
+      });
+    }
+
+    const delta = -Math.abs(Number(receipt.quantity));
+    const reverseNote = `Reversal of receipt ${receipt.receiptNumber}${req.body?.notes ? ` — ${String(req.body.notes).slice(0, 200)}` : ""}`;
+
+    const adjustment = await prisma.$transaction(async (tx) => {
+      const a = await tx.inventoryAdjustment.create({
+        data: {
+          productId: receipt.productId,
+          quantityDelta: delta,
+          reason: "RECEIPT_REVERSAL",
+          notes: reverseNote,
+          performedBy: req.user.userId,
+          tenantId: req.user.tenantId,
+        },
+      });
+      const stockDelta = delta > 0 ? Math.ceil(delta) : Math.floor(delta);
+      await tx.product.update({
+        where: { id: receipt.productId },
+        data: { currentStock: { increment: stockDelta } },
+      });
+      return a;
+    });
+
+    await writeAudit("InventoryAdjustment", "INVENTORY_ADJUST", adjustment.id, req.user.userId, req.user.tenantId, {
+      productId: adjustment.productId,
+      quantityDelta: adjustment.quantityDelta,
+      reason: adjustment.reason,
+      reversedReceiptId: receipt.id,
+      reversedReceiptNumber: receipt.receiptNumber,
+    });
+
+    res.status(201).json(adjustment);
+  } catch (e) {
+    console.error("[inventory] reverse receipt error:", e.message);
+    res.status(500).json({ error: "Failed to reverse inventory receipt" });
+  }
+});
+
 // ── Inventory Adjustments (signed deltas) ─────────────────────────
 
 router.get("/inventory/adjustments", adminGate, async (req, res) => {
@@ -403,7 +641,7 @@ router.get("/inventory/adjustments", adminGate, async (req, res) => {
 });
 
 const VALID_ADJUSTMENT_REASONS = new Set([
-  "SHRINKAGE", "DAMAGE", "EXPIRY", "RECOUNT", "TRANSFER_OUT", "TRANSFER_IN", "MANUAL",
+  "SHRINKAGE", "DAMAGE", "EXPIRY", "RECOUNT", "TRANSFER_OUT", "TRANSFER_IN", "MANUAL", "RECEIPT_REVERSAL",
 ]);
 
 router.post("/inventory/adjustments", adminGate, async (req, res) => {

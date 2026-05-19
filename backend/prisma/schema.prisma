@@ -3213,6 +3213,11 @@ model InventoryReceipt {
   // Tenant-scoped human-readable id ("RCP-2026-0001"). Generated server-side
   // per tenant — do NOT use the autoincrement id in customer-facing artefacts.
   receiptNumber String
+  // Supplier's own invoice number (e.g. "LE0155", "BHNS/TI/26/01175") — distinct
+  // from our internal receiptNumber. Captured for vendor reconciliation and
+  // GST audit trails. Optional because samples / in-kind transfers have no
+  // paper invoice.
+  supplierInvoiceNumber String?
   vendorId      Int?
   vendor        Vendor?   @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   productId     Int

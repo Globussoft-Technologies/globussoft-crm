@@ -236,6 +236,23 @@ router.post(
             data: { status: "FAILED" },
           });
         }
+      } else if (event.type === "checkout.session.completed") {
+        // Hosted Checkout Session paid out. We store session.id as gatewayId
+        // when creating the session, so look up by that.
+        const session = event.data.object;
+        if (session.payment_status === "paid") {
+          const payment = await prisma.payment.findFirst({
+            where: { gateway: "stripe", gatewayId: session.id },
+          });
+          if (payment && payment.status !== "SUCCESS") {
+            const updated = await prisma.payment.update({
+              where: { id: payment.id },
+              data: { status: "SUCCESS", paidAt: new Date() },
+            });
+            await markInvoicePaid(payment.invoiceId, payment.tenantId);
+            emitPaymentCollected(updated);
+          }
+        }
       }
       return res.json({ received: true });
     } catch (err) {
@@ -488,6 +505,100 @@ router.post("/create-stripe-intent", async (req, res) => {
   }
 });
 
+// POST /create-stripe-checkout-session — hosted Stripe Checkout (redirect)
+// flow. Mirrors /create-stripe-intent's tenant/currency defaulting and
+// PENDING-row insertion, but instead of returning a clientSecret for
+// frontend Elements, returns a Stripe-hosted Checkout URL. The frontend
+// does `window.location.href = url`, Stripe handles the card form, then
+// redirects back to FRONTEND_URL/invoices with ?stripe=success&session_id=…
+// which the page detects on mount and POSTs to /confirm-stripe-session.
+router.post("/create-stripe-checkout-session", async (req, res) => {
+  try {
+    const stripe = getStripe();
+    if (!stripe)
+      return res.status(503).json({ error: "Stripe not configured" });
+
+    const tenantId = tenantOf(req);
+    const { invoiceId, amount } = req.body || {};
+    let { currency } = req.body || {};
+
+    if (!amount || isNaN(Number(amount))) {
+      return res.status(400).json({ error: "amount is required" });
+    }
+
+    if (!currency) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { defaultCurrency: true },
+      });
+      currency = tenant?.defaultCurrency || "USD";
+    }
+
+    const amountInt = Math.round(Number(amount) * 100);
+    const frontendBase = process.env.FRONTEND_URL || "http://localhost:5173";
+
+    let session;
+    try {
+      session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        line_items: [
+          {
+            price_data: {
+              currency: String(currency).toLowerCase(),
+              product_data: {
+                name: invoiceId ? `Invoice #${invoiceId}` : "Payment",
+              },
+              unit_amount: amountInt,
+            },
+            quantity: 1,
+          },
+        ],
+        success_url: `${frontendBase}/invoices?stripe=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${frontendBase}/invoices?stripe=cancel`,
+        metadata: {
+          tenantId: String(tenantId),
+          invoiceId: invoiceId ? String(invoiceId) : "",
+        },
+      });
+    } catch (gatewayErr) {
+      const parsed = parseGatewayError(gatewayErr, "Stripe");
+      console.error(
+        "[Payments] Stripe checkout session rejected:",
+        parsed.code,
+        parsed.message,
+      );
+      return res
+        .status(parsed.status)
+        .json({ error: parsed.message, code: parsed.code });
+    }
+
+    const payment = await prisma.payment.create({
+      data: {
+        invoiceId: invoiceId ? parseInt(invoiceId) : null,
+        amount: Number(amount),
+        currency: String(currency).toUpperCase(),
+        gateway: "stripe",
+        gatewayId: session.id,
+        status: "PENDING",
+        tenantId,
+        metadata: JSON.stringify({
+          mode: "checkout",
+          sessionUrl: session.url,
+        }),
+      },
+    });
+
+    res.json({
+      url: session.url,
+      sessionId: session.id,
+      paymentId: payment.id,
+    });
+  } catch (err) {
+    console.error("[Payments] create-stripe-checkout-session error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /create-razorpay-order
 router.post("/create-razorpay-order", async (req, res) => {
   try {
@@ -623,6 +734,72 @@ router.post("/confirm-razorpay", async (req, res) => {
     res.json({ success: true, payment: serialize(updated) });
   } catch (err) {
     console.error("[Payments] confirm-razorpay error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /confirm-stripe-session — finalize a Checkout Session after the user
+// redirects back from Stripe's hosted page. Idempotent: if the webhook has
+// already marked the Payment SUCCESS, returns the existing row. If it hasn't,
+// retrieves the session from Stripe and marks SUCCESS when payment_status=paid.
+// This means the flow works even when no webhook listener is running locally.
+router.post("/confirm-stripe-session", async (req, res) => {
+  try {
+    const stripe = getStripe();
+    if (!stripe)
+      return res.status(503).json({ error: "Stripe not configured" });
+
+    const tenantId = tenantOf(req);
+    const { sessionId } = req.body || {};
+    if (!sessionId)
+      return res.status(400).json({ error: "sessionId is required" });
+
+    const payment = await prisma.payment.findFirst({
+      where: { gateway: "stripe", gatewayId: String(sessionId), tenantId },
+    });
+    if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+    if (payment.status === "SUCCESS") {
+      return res.json({ success: true, paid: true, payment: serialize(payment) });
+    }
+
+    let session;
+    try {
+      session = await stripe.checkout.sessions.retrieve(String(sessionId));
+    } catch (gatewayErr) {
+      const parsed = parseGatewayError(gatewayErr, "Stripe");
+      return res
+        .status(parsed.status)
+        .json({ error: parsed.message, code: parsed.code });
+    }
+
+    if (session.payment_status !== "paid") {
+      return res.json({
+        success: false,
+        paid: false,
+        status: session.payment_status,
+      });
+    }
+
+    const updated = await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: "SUCCESS",
+        paidAt: new Date(),
+        metadata: JSON.stringify({
+          ...safeJsonParse(payment.metadata, {}),
+          paymentIntentId: session.payment_intent || null,
+          confirmedAt: new Date().toISOString(),
+        }),
+      },
+    });
+
+    await markInvoicePaid(payment.invoiceId, tenantId);
+    emitPaymentCollected(updated);
+
+    res.json({ success: true, paid: true, payment: serialize(updated) });
+  } catch (err) {
+    console.error("[Payments] confirm-stripe-session error:", err);
     res.status(500).json({ error: err.message });
   }
 });

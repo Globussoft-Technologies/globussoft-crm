@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../App';
 import { setAuthToken } from '../utils/api';
@@ -13,13 +13,14 @@ import { invalidatePermissionCache } from '../hooks/usePermissions';
 // a User row. The wellness patient portal (OTP, phone-only) is a separate auth
 // flow at /wellness/portal and unrelated to this page.
 //
-// Tenant list: the backend doesn't expose a public "list tenants" endpoint, so
-// we hardcode the two demo tenants today. Replace with a /api/public/tenants
-// call once one ships.
-const KNOWN_TENANTS = [
-  { id: 1, name: 'NovaCrest Technologies (Generic CRM)' },
-  { id: 2, name: 'Enhanced Wellness (Wellness Clinic)' },
-];
+// Tenant list is fetched from GET /api/auth/customer/tenants (public). New
+// orgs created via /api/auth/signup appear automatically once active.
+
+function tenantLabel(t) {
+  if (t.vertical === 'wellness') return `${t.name} (Wellness Clinic)`;
+  if (t.vertical === 'generic') return `${t.name} (Generic CRM)`;
+  return t.name;
+}
 
 function passwordStrength(p) {
   let s = 0;
@@ -45,6 +46,32 @@ export default function CustomerRegister() {
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [tenants, setTenants] = useState([]);
+  const [tenantsLoading, setTenantsLoading] = useState(true);
+  const [tenantsError, setTenantsError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/auth/customer/tenants')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data) => {
+        if (cancelled) return;
+        if (Array.isArray(data)) {
+          setTenants(data);
+        } else {
+          setTenantsError('Could not load organizations. Please try again.');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTenantsError('Could not load organizations. Please try again.');
+      })
+      .finally(() => {
+        if (!cancelled) setTenantsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const update = (field) => (e) => setForm({ ...form, [field]: e.target.value });
   const strength = passwordStrength(form.password);
@@ -183,19 +210,29 @@ export default function CustomerRegister() {
             />
           </Field>
 
-          <Field label="Organization" htmlFor="cr-tenant" error={errors.tenantId}>
+          <Field
+            label="Organization"
+            htmlFor="cr-tenant"
+            error={errors.tenantId || tenantsError}
+          >
             <select
               id="cr-tenant"
               className="input-field"
               value={form.tenantId}
               onChange={update('tenantId')}
-              disabled={isLoading}
+              disabled={isLoading || tenantsLoading || !!tenantsError}
               required
             >
-              <option value="">Select an organization…</option>
-              {KNOWN_TENANTS.map((t) => (
+              <option value="">
+                {tenantsLoading
+                  ? 'Loading organizations…'
+                  : tenantsError
+                    ? 'Unable to load organizations'
+                    : 'Select an organization…'}
+              </option>
+              {tenants.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.name}
+                  {tenantLabel(t)}
                 </option>
               ))}
             </select>

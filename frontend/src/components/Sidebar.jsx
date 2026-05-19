@@ -78,6 +78,7 @@ import {
   // Travel CRM vertical (Day 1 scaffolding — Phase 1 per docs/TRAVEL_CRM_PRD.md §7)
   Compass,
   ClipboardCheck,
+  Map as MapIcon,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -955,6 +956,7 @@ function renderTravelNav({
       <div style={labelStyle}>Travel</div>
       <Link to="/travel" icon={Compass} label="Dashboard" />
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" />
+      <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
 
       <div style={labelStyle}>Sales pipeline</div>
       <Link to="/leads" icon={UserPlus} label="Leads" />

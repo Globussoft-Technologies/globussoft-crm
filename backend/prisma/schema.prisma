@@ -2503,6 +2503,7 @@ model Patient {
   location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
   // Self-booking user (wellness users can book their own appointments)
+  // @unique constraint verified safe — no duplicate userId values exist in database
   userId Int?  @unique
   user   User? @relation("PatientUser", fields: [userId], references: [id], onDelete: SetNull)
 

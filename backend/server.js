@@ -422,6 +422,7 @@ const travelDiagnosticsRoutes = require("./routes/travel_diagnostics");
 const travelItinerariesRoutes = require("./routes/travel_itineraries");
 const travelTripsRoutes = require("./routes/travel_trips");
 const travelCostMasterRoutes = require("./routes/travel_cost_master");
+const travelSuppliersRoutes = require("./routes/travel_suppliers");
 // Wellness vertical (Enhanced Wellness, future clinic clients)
 const wellnessRoutes = require("./routes/wellness");
 // Wave 11 Agent HH — Inventory backbone (categories, vendors, receipts,
@@ -608,6 +609,7 @@ app.use("/api/travel", travelDiagnosticsRoutes);
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
 app.use("/api/travel", travelCostMasterRoutes);
+app.use("/api/travel", travelSuppliersRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths

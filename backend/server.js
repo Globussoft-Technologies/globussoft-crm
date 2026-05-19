@@ -418,6 +418,7 @@ const emailThreadingRoutes = require("./routes/email_threading");
 // Travel CRM vertical (Day 1 scaffolding — Phase 1 per docs/TRAVEL_CRM_PRD.md).
 // Hosts TMC (school trips), RFU (Umrah), Travel Stall, Visa Sure sub-brands.
 const travelRoutes = require("./routes/travel");
+const travelDiagnosticsRoutes = require("./routes/travel_diagnostics");
 // Wellness vertical (Enhanced Wellness, future clinic clients)
 const wellnessRoutes = require("./routes/wellness");
 // Wave 11 Agent HH — Inventory backbone (categories, vendors, receipts,
@@ -598,8 +599,9 @@ app.use("/api/funnel", funnelRoutes);
 app.use("/api/zapier", zapierRoutes);
 app.use("/api/voice-transcription", voiceTranscriptionRoutes);
 app.use("/api/email-threading", emailThreadingRoutes);
-// Travel vertical (Day 1 scaffolding — only /health for now)
+// Travel vertical (Day 1 + Day 3: /health, diagnostic banks, diagnostics)
 app.use("/api/travel", travelRoutes);
+app.use("/api/travel", travelDiagnosticsRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths

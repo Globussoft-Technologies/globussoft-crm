@@ -29,10 +29,11 @@
 // note in the CSV header line — backend gap is the same per-user
 // breakdown not yet returning lates/absences/leaves per row.
 import { useEffect, useState, useContext } from 'react';
-import { Clock, LogIn, LogOut, Calendar, Users, Download } from 'lucide-react';
+import { Clock, LogIn, LogOut, Calendar, Users, Download, List as ListIcon, CalendarDays } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
+import AttendanceCalendar from './AttendanceCalendar';
 
 function fmtDate(s) {
   if (!s) return '—';
@@ -66,6 +67,11 @@ export default function Attendance() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+
+  // #803 (Zylu-Gap ATT-002) — view toggle. Default 'list' keeps the existing
+  // punch + history surface as-is (no regression for daily use); 'calendar'
+  // exposes the month-grid of leaves + attendance status.
+  const [view, setView] = useState('list');
 
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -115,12 +121,71 @@ export default function Attendance() {
     }
   };
 
+  const tabStyle = (active) => ({
+    padding: '8px 16px', border: 'none', background: 'transparent',
+    fontWeight: 600, fontSize: 14, cursor: 'pointer',
+    borderBottom: active ? '2px solid var(--primary-color, var(--accent-color))' : '2px solid transparent',
+    color: active ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary, #888)',
+    display: 'inline-flex', alignItems: 'center', gap: 6,
+    marginBottom: -1,
+  });
+
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
-      <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+      <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
         <Clock size={28} aria-hidden /> Attendance
       </h1>
 
+      {/* #803 — View tabs. Default 'list' preserves the daily punch surface;
+          'calendar' is the new month grid. */}
+      <div role="tablist" aria-label="Attendance view" style={{
+        display: 'flex', gap: 4, borderBottom: '1px solid var(--border-color, #eee)',
+        marginBottom: 20,
+      }}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'list'}
+          onClick={() => setView('list')}
+          style={tabStyle(view === 'list')}
+        >
+          <ListIcon size={16} aria-hidden /> List
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'calendar'}
+          onClick={() => setView('calendar')}
+          style={tabStyle(view === 'calendar')}
+        >
+          <CalendarDays size={16} aria-hidden /> Calendar
+        </button>
+      </div>
+
+      {view === 'calendar' ? (
+        <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <AttendanceCalendar />
+        </section>
+      ) : (
+        <ListView
+          history={history}
+          loading={loading}
+          busy={busy}
+          todayRow={todayRow}
+          isClockedIn={isClockedIn}
+          isClockedOut={isClockedOut}
+          onClockIn={onClockIn}
+          onClockOut={onClockOut}
+          isManager={isManager}
+        />
+      )}
+    </div>
+  );
+}
+
+function ListView({ history, loading, busy, todayRow, isClockedIn, isClockedOut, onClockIn, onClockOut, isManager }) {
+  return (
+    <>
       {/* Today's punch card */}
       <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
         <h2 style={{ marginTop: 0 }}>Today, {new Date().toLocaleDateString()}</h2>
@@ -222,7 +287,7 @@ export default function Attendance() {
 
       {/* Manager-only: today's staff snapshot */}
       {isManager && <ManagerStaffSnapshot />}
-    </div>
+    </>
   );
 }
 

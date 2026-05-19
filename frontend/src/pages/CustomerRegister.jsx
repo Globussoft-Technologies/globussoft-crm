@@ -204,14 +204,14 @@ export default function CustomerRegister() {
           <Field
             label="Organization"
             htmlFor="cr-tenant"
-            error={errors.tenantId || tenantsError}
+            error={errors.tenantId}
           >
             <select
               id="cr-tenant"
               className="input-field"
               value={form.tenantId}
               onChange={update('tenantId')}
-              disabled={isLoading || tenantsLoading || !!tenantsError}
+              disabled={isLoading || tenantsLoading}
               required
             >
               <option value="">{tenantsLoading ? 'Loading organizations...' : 'Select an organization…'}</option>

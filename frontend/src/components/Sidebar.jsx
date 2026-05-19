@@ -79,6 +79,7 @@ import {
   Compass,
   ClipboardCheck,
   Map as MapIcon,
+  Luggage,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -957,6 +958,7 @@ function renderTravelNav({
       <Link to="/travel" icon={Compass} label="Dashboard" />
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
+      <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
 
       <div style={labelStyle}>Sales pipeline</div>
       <Link to="/leads" icon={UserPlus} label="Leads" />

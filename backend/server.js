@@ -420,6 +420,7 @@ const emailThreadingRoutes = require("./routes/email_threading");
 const travelRoutes = require("./routes/travel");
 const travelDiagnosticsRoutes = require("./routes/travel_diagnostics");
 const travelItinerariesRoutes = require("./routes/travel_itineraries");
+const travelTripsRoutes = require("./routes/travel_trips");
 // Wellness vertical (Enhanced Wellness, future clinic clients)
 const wellnessRoutes = require("./routes/wellness");
 // Wave 11 Agent HH — Inventory backbone (categories, vendors, receipts,
@@ -600,10 +601,11 @@ app.use("/api/funnel", funnelRoutes);
 app.use("/api/zapier", zapierRoutes);
 app.use("/api/voice-transcription", voiceTranscriptionRoutes);
 app.use("/api/email-threading", emailThreadingRoutes);
-// Travel vertical (Day 1 + Day 3 + Day 6: /health, diagnostic banks, diagnostics, itineraries)
+// Travel vertical (Day 1 + Day 3 + Day 6 + Day 7: /health, diagnostics, itineraries, trips)
 app.use("/api/travel", travelRoutes);
 app.use("/api/travel", travelDiagnosticsRoutes);
 app.use("/api/travel", travelItinerariesRoutes);
+app.use("/api/travel", travelTripsRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths

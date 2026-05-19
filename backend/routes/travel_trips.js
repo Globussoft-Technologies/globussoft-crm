@@ -36,50 +36,9 @@ const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
+const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 
-const VALID_SUB_BRANDS = ["tmc", "rfu", "travelstall", "visasure"];
 const VALID_TRIP_STATUSES = ["confirmed", "in-trip", "completed", "cancelled"];
-
-async function requireTravelTenant(req, res, next) {
-  try {
-    if (!req.user?.tenantId) {
-      return res.status(401).json({ error: "Unauthenticated", code: "NO_TENANT" });
-    }
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: req.user.tenantId },
-      select: { id: true, vertical: true, name: true, slug: true },
-    });
-    if (!tenant) return res.status(404).json({ error: "Tenant not found", code: "TENANT_NOT_FOUND" });
-    if (tenant.vertical !== "travel") {
-      return res.status(403).json({
-        error: "Travel CRM features require a travel-vertical tenant",
-        code: "WRONG_VERTICAL",
-      });
-    }
-    req.travelTenant = tenant;
-    next();
-  } catch (e) {
-    console.error("[travel-trips] requireTravelTenant error:", e.message);
-    res.status(500).json({ error: "Vertical guard failure", code: "VERTICAL_GUARD_ERROR" });
-  }
-}
-
-async function getSubBrandAccessSet(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { subBrandAccess: true, role: true },
-  });
-  if (!user) return new Set();
-  if (user.role === "ADMIN") return null;
-  if (!user.subBrandAccess) return null;
-  try {
-    const arr = JSON.parse(user.subBrandAccess);
-    if (!Array.isArray(arr) || arr.length === 0) return null;
-    return new Set(arr.filter((s) => VALID_SUB_BRANDS.includes(s)));
-  } catch (_e) {
-    return new Set();
-  }
-}
 
 // TMC-only access guard. Trips ARE tmc-only, so we just check that "tmc"
 // is in the allowed set (or that the user has full access).

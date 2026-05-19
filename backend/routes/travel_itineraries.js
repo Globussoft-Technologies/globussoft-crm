@@ -29,67 +29,15 @@ const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
+const {
+  requireTravelTenant,
+  getSubBrandAccessSet,
+  canAccessSubBrand,
+  assertValidSubBrand,
+} = require("../middleware/travelGuards");
 
-const VALID_SUB_BRANDS = ["tmc", "rfu", "travelstall", "visasure"];
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
 const VALID_STATUSES = ["draft", "sent", "revised", "accepted", "rejected"];
-
-// ─── Travel-vertical guard (shared shape with travel.js + travel_diagnostics.js) ──
-async function requireTravelTenant(req, res, next) {
-  try {
-    if (!req.user?.tenantId) {
-      return res.status(401).json({ error: "Unauthenticated", code: "NO_TENANT" });
-    }
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: req.user.tenantId },
-      select: { id: true, vertical: true, name: true, slug: true },
-    });
-    if (!tenant) return res.status(404).json({ error: "Tenant not found", code: "TENANT_NOT_FOUND" });
-    if (tenant.vertical !== "travel") {
-      return res.status(403).json({
-        error: "Travel CRM features require a travel-vertical tenant",
-        code: "WRONG_VERTICAL",
-      });
-    }
-    req.travelTenant = tenant;
-    next();
-  } catch (e) {
-    console.error("[travel-itin] requireTravelTenant error:", e.message);
-    res.status(500).json({ error: "Vertical guard failure", code: "VERTICAL_GUARD_ERROR" });
-  }
-}
-
-async function getSubBrandAccessSet(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { subBrandAccess: true, role: true },
-  });
-  if (!user) return new Set();
-  if (user.role === "ADMIN") return null;
-  if (!user.subBrandAccess) return null;
-  try {
-    const arr = JSON.parse(user.subBrandAccess);
-    if (!Array.isArray(arr) || arr.length === 0) return null;
-    return new Set(arr.filter((s) => VALID_SUB_BRANDS.includes(s)));
-  } catch (_e) {
-    return new Set();
-  }
-}
-
-function canAccessSubBrand(allowed, subBrand) {
-  if (allowed === null) return true;
-  if (!(allowed instanceof Set)) return false;
-  return allowed.has(subBrand);
-}
-
-function assertValidSubBrand(subBrand) {
-  if (!VALID_SUB_BRANDS.includes(subBrand)) {
-    const err = new Error(`subBrand must be one of: ${VALID_SUB_BRANDS.join(", ")}`);
-    err.status = 400;
-    err.code = "INVALID_SUB_BRAND";
-    throw err;
-  }
-}
 
 function assertValidItemType(itemType) {
   if (!VALID_ITEM_TYPES.includes(itemType)) {

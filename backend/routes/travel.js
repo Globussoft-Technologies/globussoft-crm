@@ -16,38 +16,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
-const prisma = require("../lib/prisma");
-
-// ─── Travel-vertical guard ─────────────────────────────────────────────
-//
-// Cheap per-request tenant check. Caches verticality on the Tenant row,
-// so it's one indexed read; future calls inside the same request reuse
-// req.travelTenant via the middleware.
-async function requireTravelTenant(req, res, next) {
-  try {
-    if (!req.user?.tenantId) {
-      return res.status(401).json({ error: "Unauthenticated", code: "NO_TENANT" });
-    }
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: req.user.tenantId },
-      select: { id: true, vertical: true, name: true, slug: true },
-    });
-    if (!tenant) {
-      return res.status(404).json({ error: "Tenant not found", code: "TENANT_NOT_FOUND" });
-    }
-    if (tenant.vertical !== "travel") {
-      return res.status(403).json({
-        error: "Travel CRM features require a travel-vertical tenant",
-        code: "WRONG_VERTICAL",
-      });
-    }
-    req.travelTenant = tenant;
-    next();
-  } catch (e) {
-    console.error("[travel] requireTravelTenant error:", e.message);
-    res.status(500).json({ error: "Vertical guard failure", code: "VERTICAL_GUARD_ERROR" });
-  }
-}
+const { requireTravelTenant } = require("../middleware/travelGuards");
 
 // ─── GET /api/travel/health ────────────────────────────────────────────
 //

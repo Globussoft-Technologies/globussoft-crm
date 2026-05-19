@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { DollarSign, Download, Filter, Search } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { formatMoney } from '../utils/formatMoney';
 
 export default function CommissionData() {
   const notify = useNotify();

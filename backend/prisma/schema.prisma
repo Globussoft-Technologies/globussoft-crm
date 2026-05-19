@@ -292,6 +292,9 @@ model Tenant {
 
   // RBAC — roles + permissions
   roles Role[]
+
+  // Wave 3 — Staff availability blocks (breaks, leave, etc.)
+  blockTimes BlockTime[] @relation("TenantBlockTimes")
 }
 
 model User {
@@ -394,6 +397,9 @@ model User {
 
   // Notification preferences
   notificationPreference NotificationPreference?
+
+  // Wave 3 — Staff availability blocks (breaks, leave, etc.)
+  blockTimes BlockTime[] @relation("UserBlockTimes")
 }
 
 model Contact {
@@ -4087,4 +4093,30 @@ model RolePermission {
 
   @@unique([roleId, module, action])
   @@index([roleId])
+}
+
+// Wave 3: Staff availability blocks (breaks, leave, personal time, etc.)
+// Prevents bookings during these periods. Used by wellness appointment booking
+// and calendar availability calculations.
+model BlockTime {
+  id        Int      @id @default(autoincrement())
+  userId    Int      // Staff member
+  user      User     @relation("UserBlockTimes", fields: [userId], references: [id], onDelete: Cascade)
+
+  startAt   DateTime
+  endAt     DateTime
+  reason    String   // "Lunch Break", "Leave", "Personal", "Maintenance", etc.
+
+  // Recurrence: null (one-time), "daily", "weekly", "monthly"
+  recurring String?
+
+  tenantId  Int
+  tenant    Tenant   @relation("TenantBlockTimes", fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, tenantId])
+  @@index([startAt, endAt])
+  @@index([tenantId])
 }

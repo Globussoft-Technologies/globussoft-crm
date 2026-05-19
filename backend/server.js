@@ -437,6 +437,8 @@ const adminRoutes = require("./routes/admin");
 const serviceCategoriesRoutes = require("./routes/service_categories");
 const drugsRoutes = require("./routes/drugs");
 const csvIoRoutes = require("./routes/csv_io");
+// Wave 3 — Staff availability blocks (breaks, leave, personal time)
+const blockTimesRoutes = require("./routes/block-times");
 // Issue #816 — per-entity CSV import/export with template + async modes for
 // the wellness list pages (services, packages, products, customers, bookings).
 const wellnessCsvRoutes = require("./routes/wellnessCsv");
@@ -605,6 +607,8 @@ app.use("/api/wellness", wellnessRoutes);
 // does NOT own (product-categories, vendors, inventory/receipts,
 // inventory/adjustments, inventory/movements, auto-consumption-rules).
 app.use("/api/wellness", inventoryRoutes);
+// Wave 3 — Staff availability blocks (breaks, leave, personal time). Wellness-gated.
+app.use("/api/wellness/block-times", blockTimesRoutes);
 // Wave 7 Agent A — Service catalogue depth + Drug catalogue + CSV io.
 app.use("/api/wellness/service-categories", serviceCategoriesRoutes);
 app.use("/api/wellness/drugs", drugsRoutes);

@@ -62,6 +62,7 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 // axis). Used by DELETE /patients/:id and other admin-only operations
 // added to this file.
 const { verifyRole } = require("../middleware/auth");
+const { uploadImage, deleteFile, extractKeyFromUrl } = require("../services/s3Service");
 
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
@@ -95,20 +96,9 @@ function verifyPatientToken(req, res, next) {
 
 const router = express.Router();
 
-// Multer storage for visit photos: uploads/wellness/visits/<visitId>/<filename>
+// Multer storage for visit photos: uses memory storage, uploads to S3
 const photoUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, _file, cb) => {
-      const visitId = req.params.id;
-      const dir = path.join(__dirname, "..", "uploads", "wellness", "visits", String(visitId));
-      fs.mkdirSync(dir, { recursive: true });
-      cb(null, dir);
-    },
-    filename: (_req, file, cb) => {
-      const safe = `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-      cb(null, safe);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per photo
 });
 
@@ -1458,14 +1448,18 @@ router.post("/visits/:id/photos", phiWriteGate, photoUpload.array("photos", 10),
 
     const which = req.body.kind === "after" ? "photosAfter" : "photosBefore";
     const existing = visit[which] ? JSON.parse(visit[which]) : [];
-    // Return URLs under `/api/uploads/...`, NOT bare `/uploads/...`. The
-    // bare path is not proxied by Nginx on the demo (or by Vite in dev),
-    // so `<img src="/uploads/...">` falls through the SPA catch-all and
-    // renders the React index.html as a broken image. server.js mounts
-    // the static directory at BOTH paths for legacy URLs already stored
-    // in the DB; the photo column on the frontend also normalises old
-    // values defensively.
-    const added = (req.files || []).map((f) => `/api/uploads/wellness/visits/${id}/${path.basename(f.path)}`);
+
+    // Upload files to S3 in parallel
+    const uploadPromises = (req.files || []).map((file) =>
+      uploadImage(
+        file.buffer,
+        file.originalname,
+        file.mimetype,
+        `visits/${id}`
+      )
+    );
+
+    const added = await Promise.all(uploadPromises);
     const merged = [...existing, ...added];
 
     const _updated = await prisma.visit.update({
@@ -1489,6 +1483,19 @@ router.delete("/visits/:id/photos", phiWriteGate, async (req, res) => {
     const field = kind === "after" ? "photosAfter" : "photosBefore";
     const existing = visit[field] ? JSON.parse(visit[field]) : [];
     const next = existing.filter((u) => u !== url);
+
+    // Delete from S3 if it's an S3 URL
+    if (url && url.includes(process.env.AWS_S3_URL || "s3")) {
+      try {
+        const fileKey = extractKeyFromUrl(url);
+        if (fileKey) {
+          await deleteFile(fileKey);
+        }
+      } catch (delErr) {
+        console.warn("[wellness] S3 delete warning:", delErr.message);
+      }
+    }
+
     await prisma.visit.update({ where: { id }, data: { [field]: JSON.stringify(next) } });
     res.json({ ok: true, urls: next });
   } catch (_e) {
@@ -7389,13 +7396,26 @@ router.get("/doctors/availability", verifyToken, async (req, res) => {
       }
     });
 
+    // Also check for block times (breaks, personal time, etc.) that span the entire day
+    const blockTimes = await prisma.blockTime.findMany({
+      where: {
+        tenantId,
+        startAt: { lte: endOfDay },
+        endAt: { gte: startOfDay }
+      },
+      select: {
+        userId: true
+      }
+    });
+
     const onLeaveIds = new Set(approvedLeaves.map(l => l.userId));
+    const hasBlockTimeIds = new Set(blockTimes.map(b => b.userId));
 
     // Return only necessary fields: id, name, availability status
     const doctorsList = doctors.map(doctor => ({
       id: doctor.id,
       name: doctor.name,
-      available: !onLeaveIds.has(doctor.id)
+      available: !onLeaveIds.has(doctor.id) && !hasBlockTimeIds.has(doctor.id)
     }));
 
     res.json(doctorsList);
@@ -7447,6 +7467,20 @@ router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
 
     if (leaveReq) {
       return res.json({ available: false, reason: 'Doctor is on leave', slots: [] });
+    }
+
+    // Check for block times (breaks, personal time, etc.)
+    const blockTime = await prisma.blockTime.findFirst({
+      where: {
+        tenantId,
+        userId: parseInt(doctorId),
+        startAt: { lte: endOfDay },
+        endAt: { gte: startOfDay }
+      }
+    });
+
+    if (blockTime) {
+      return res.json({ available: false, reason: `Doctor unavailable: ${blockTime.reason}`, slots: [] });
     }
 
     // Get all booked visits for this doctor on this date

@@ -58,12 +58,22 @@ jobs:
   # — see TODOS.md / #457 / handoff.
   e2e-full:
     runs-on: ubuntu-latest
-    # 30 min was the original ceiling but shard 1+2 wall-clock crept past
-    # 30:00 on v3.8.0 + v3.8.1 (audit-api serial-mode + heavy specs concentrate
-    # there) while shards 3+4 finish in 17-23 min. Bumping to 45 absorbs the
-    # imbalance. If a shard genuinely exceeds 45 min that's a real perf
-    # regression — the ceiling shouldn't silently grow further.
-    timeout-minutes: 45
+    # Per-shard wall-clock ceiling. History:
+    #   30 min — original, fine until shard 1+2 audit-api serial-mode +
+    #            heavy specs crossed 30 min.
+    #   45 min — absorbed the imbalance through v3.8.x.
+    #   60 min — current. Three consecutive runs (26095628417, 26121861939,
+    #            26125335052) hit the 45-min wall on shards 1+2 even after
+    #            7 bandaid commits (actionTimeout 60→30s, CI retries 3→2,
+    #            IS_LOCAL_STACK skips on 7 audit-api convergence specs).
+    #            Root cause is structural: at 4 shards × 2 workers, CF
+    #            blips + slow Prisma JOINs pile retry overhead until the
+    #            heavier shards exhaust 45 min. The real fix is per-shard
+    #            local docker stacks (eliminating demo contention) — see
+    #            R11 in docs/TRAVEL_CRM_RISKS.md if you want context.
+    #            60 unblocks release validation today; long-term local-
+    #            stack lift remains on the backlog.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

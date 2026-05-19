@@ -147,6 +147,26 @@ model Tenant {
   // #614: per-tenant earn/burn rule config (one-to-one)
   loyaltyConfig        LoyaltyConfig?
 
+  // Travel vertical — Day 2 schema migration. Back-relations only (FK
+  // cascade behavior lives on each child via @relation onDelete).
+  travelDiagnostics       TravelDiagnostic[]
+  travelDiagQuestionBanks TravelDiagnosticQuestionBank[]
+  itineraries             Itinerary[]
+  travelCostMasters       TravelCostMaster[]
+  travelSeasonCalendars   TravelSeasonCalendar[]
+  travelMarkupRules       TravelMarkupRule[]
+  tmcTrips                TmcTrip[]
+  webCheckins             WebCheckin[]
+  supplierCredentials     SupplierCredential[]
+  visaApplications        VisaApplication[]
+  rfuLeadProfiles         RfuLeadProfile[]
+  tripMicrosites          TripMicrosite[]
+  // Sub-brand config (Q9, Q14, Q21) — JSON keyed by sub-brand storing
+  // per-brand WhatsApp number / Wati WABA id / legal entity / GSTIN /
+  // Drive folder root / microsite domain. Nullable; sub-brands without
+  // an entry inherit tenant-level defaults.
+  subBrandConfigJson      String?                        @db.Text
+
   // Subscriptions
   subscriptions Subscription[]
 
@@ -317,6 +337,14 @@ model User {
   // Wellness sub-role (orthogonal to RBAC role)
   wellnessRole String? // doctor, professional, telecaller, helper
 
+  // Travel vertical sub-brand access (Q25 — single tenant + sub-brand
+  // tagging). JSON array of sub-brand codes the user can see/act on,
+  // e.g. ["tmc","rfu"] or ["travelstall","visasure"]. Empty/null = all
+  // sub-brands (admin-tier). Enforced at route level via a helper that
+  // reads this column + filters queries by Contact.subBrand /
+  // Deal.subBrand / etc.
+  subBrandAccess String? @db.Text
+
   // #618 — soft-deactivation. Set to now() when an admin clicks Deactivate
   // in the Staff Directory; cleared back to null on Reactivate. Reversible
   // alternative to DELETE so the row stays in the directory + audit trail.
@@ -393,6 +421,11 @@ model Contact {
   title                 String?
   status                String    @default("Lead") // Lead, Prospect, Customer, Churned
   source                String?   @default("Organic")
+  // Travel vertical sub-brand tag — nullable so generic + wellness Contacts
+  // ignore it. Set to "tmc" | "rfu" | "travelstall" | "visasure" when the
+  // Contact entered through a travel-vertical funnel. Drives analytics
+  // (per-sub-brand lead counts) + UI badge.
+  subBrand              String?
   aiScore               Int       @default(0) // 1-100 predictive close probability
   /// Last time leadScoringEngine wrote aiScore for this contact. Used as
   /// the recompute-window key so the cron only re-scores contacts whose
@@ -538,6 +571,12 @@ model Deal {
   expectedClose   DateTime?
   lostReason      String?
   winLossReasonId Int?
+  // Travel vertical — Day 2 schema migration. Nullable so non-travel deals
+  // (generic, wellness) ignore both columns. subBrand mirrors Contact.subBrand;
+  // diagnosticId links the deal to its originating TravelDiagnostic (one
+  // diagnostic per deal — soft FK, no @relation block to keep edits minimal).
+  subBrand        String?
+  diagnosticId    Int?
   createdAt       DateTime  @default(now())
   // #167: soft-delete column (see Contact).
   deletedAt       DateTime?
@@ -756,6 +795,12 @@ model Invoice {
   recurFrequency  String? // "monthly", "quarterly", "yearly"
   nextRecurDate   DateTime?
   parentInvoiceId Int? // original invoice this was generated from
+  // Travel vertical — Day 2 schema migration. A single tenant can issue
+  // invoices under different GST registrations (TMC vs Travel Stall vs
+  // RFU each operate under separate legal entities per Q-meta). Nullable;
+  // non-travel invoices ignore. e.g. "tmc_nexus", "labbaik_travels",
+  // "travel_stall_parent".
+  legalEntityCode String?
 
   // #413 — Restrict (not Cascade) on Tenant deletion. Invoices are financial
   // records of record; a misclick on tenant.delete() must NOT silently nuke
@@ -2106,6 +2151,14 @@ model Booking {
   notes         String?
   status        String   @default("CONFIRMED") // CONFIRMED, CANCELED, COMPLETED
   contactId     Int?
+  // Travel vertical — Day 2 schema migration. Optional links to the
+  // travel-side trip + itinerary so a Booking can be the operational
+  // anchor for a TMC school trip or a Travel Stall family holiday.
+  // Nullable: non-travel bookings (calendar bookings, wellness visits
+  // routed through BookingPage) ignore both. Soft FK — no @relation
+  // block to keep the additive migration purely additive.
+  tripId        Int?
+  itineraryId   Int?
   tenantId      Int      @default(1)
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt     DateTime @default(now())
@@ -3958,4 +4011,444 @@ model Subscription {
   @@index([tenantId, userId, status])
   @@index([tenantId, renewalDate])
   @@index([tenantId, startDate, endDate])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Travel CRM vertical — Day 2 schema migration (Phase 1 scaffolding)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Hosts four sub-brands under a single tenant (Q25 decision): TMC (school
+// trips), RFU (Umrah), Travel Stall (family holidays), Visa Sure (visa).
+// `subBrand` String column on every travel-side model isolates per-brand
+// data + drives sub-brand-scoped queries via `subBrandAccess[]` on User
+// (added below).
+//
+// Conventions match existing CRM (NOT the PRD draft):
+//   - Int @id @default(autoincrement()), not cuid()
+//   - tenantId Int @default(1) (Q25: single tenant, sub-brand tags inside)
+//   - Decimal(15,2) for INR money (Q24 decision)
+//   - Multi-tenant invariant: every model scopes to tenantId
+//   - JSON-as-String pattern (String? @db.Text) per CLAUDE.md standing rule
+//
+// See docs/TRAVEL_CRM_PRD.md §5 for the source spec.
+
+// ── Diagnostic engine (cross-sub-brand) ──────────────────────────────
+//
+// Weighted-scoring questionnaire that classifies leads into 3-4 tiers
+// BEFORE any quote is shown. The Q-set itself (questions + weights) lives
+// in TravelDiagnosticQuestionBank, versioned per sub-brand. Each
+// TravelDiagnostic captures an immutable snapshot of the Q-set used at
+// the time of submission (questionsJson) so changing the bank later
+// doesn't retroactively re-classify completed diagnostics.
+model TravelDiagnostic {
+  id                  Int       @id @default(autoincrement())
+  tenantId            Int       @default(1)
+  subBrand            String // tmc | rfu | travelstall | visasure
+  contactId           Int? // back-link if known at submission
+  leadId              Int? // links to Deal/Lead in pipeline
+  questionBankId      Int? // FK TravelDiagnosticQuestionBank
+  questionsJson       String    @db.Text // immutable Q-bank snapshot at submission
+  answersJson         String    @db.Text // {qid: answer}
+  score               Decimal?  @db.Decimal(10, 4)
+  classification      String? // level_1 .. level_4
+  classificationLabel String? // "Confident & Prepared" etc.
+  recommendedTier     String? // entry | primary | premium
+  reportPdfUrl        String?
+  talkingPointsJson   String?   @db.Text // LLM-generated advisor brief
+  consentCapturedAt   DateTime?
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([tenantId, subBrand, contactId])
+  @@index([tenantId, subBrand, classification])
+}
+
+model TravelDiagnosticQuestionBank {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @default(1)
+  subBrand         String
+  version          Int      @default(1)
+  questionsJson    String   @db.Text // ordered Qs + weights + branching rules
+  scoringRulesJson String   @db.Text // band thresholds + classification labels
+  isActive         Boolean  @default(true)
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([tenantId, subBrand, version])
+  @@index([tenantId, subBrand, isActive])
+}
+
+// ── Itinerary (multi-product trips: RFU + Travel Stall) ──────────────
+model Itinerary {
+  id                Int             @id @default(autoincrement())
+  tenantId          Int             @default(1)
+  subBrand          String
+  contactId         Int
+  leadId            Int?
+  status            String          @default("draft") // draft|sent|revised|accepted|rejected
+  version           Int             @default(1)
+  parentItineraryId Int? // version-history chain
+  destination       String
+  startDate         DateTime?
+  endDate           DateTime?
+  pricingJson       String?         @db.Text // breakdown
+  totalAmount       Decimal?        @db.Decimal(15, 2)
+  currency          String          @default("INR")
+  pdfUrl            String?
+  shareToken        String?         @unique // WhatsApp/email share link
+  items             ItineraryItem[]
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([tenantId, subBrand, contactId, status])
+  @@index([tenantId, status])
+}
+
+model ItineraryItem {
+  id          Int       @id @default(autoincrement())
+  itineraryId Int
+  itemType    String // flight | hotel | transfer | activity | visa | insurance
+  position    Int
+  description String
+  detailsJson String?   @db.Text // type-specific payload
+  supplierId  Int?
+  unitCost    Decimal?  @db.Decimal(15, 2)
+  markup      Decimal?  @db.Decimal(15, 2)
+  gstAmount   Decimal?  @db.Decimal(15, 2)
+  totalPrice  Decimal?  @db.Decimal(15, 2)
+  itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([itineraryId, position])
+}
+
+// ── Cost master + seasonal calendar + markup rules ───────────────────
+model TravelCostMaster {
+  id             Int       @id @default(autoincrement())
+  tenantId       Int       @default(1)
+  subBrand       String
+  category       String // hotel | flight | transport | visa | insurance
+  supplierId     Int?
+  routeOrSku     String // "MAA-JED" or "Makkah:Hilton:Deluxe-HaramFacing"
+  attributesJson String?   @db.Text // floor/view/room category for hotels
+  baseRate       Decimal   @db.Decimal(15, 2)
+  currency       String    @default("INR")
+  seasonId       Int?
+  validFrom      DateTime?
+  validTo        DateTime?
+  isActive       Boolean   @default(true)
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([tenantId, subBrand, category, isActive])
+  @@index([tenantId, supplierId])
+}
+
+model TravelSeasonCalendar {
+  id         Int      @id @default(autoincrement())
+  tenantId   Int      @default(1)
+  subBrand   String
+  seasonName String // peak | lean | ramadan-peak | school-holiday
+  startDate  DateTime
+  endDate    DateTime
+  multiplier Decimal? @db.Decimal(6, 4) // optional uniform multiplier
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([tenantId, subBrand, startDate, endDate])
+}
+
+model TravelMarkupRule {
+  id           Int      @id @default(autoincrement())
+  tenantId     Int      @default(1)
+  subBrand     String
+  scope        String // flight | hotel | transport | package
+  matchKeyJson String   @db.Text // airline+route+fareBucket / hotel+city / route
+  markupPct    Decimal? @db.Decimal(6, 4)
+  markupFlat   Decimal? @db.Decimal(15, 2)
+  ownerUserId  Int? // agent-level markup (flight plugin)
+  priority     Int      @default(100)
+  isActive     Boolean  @default(true)
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([tenantId, subBrand, scope, isActive])
+}
+
+// ── TMC trip + children ──────────────────────────────────────────────
+model TmcTrip {
+  id                   Int                       @id @default(autoincrement())
+  tenantId             Int                       @default(1)
+  tripCode             String                    @unique // "bali2026"
+  schoolContactId      Int // FK Contact (B2B school)
+  destination          String
+  departDate           DateTime
+  returnDate           DateTime
+  legalEntity          String                    @default("tmc_nexus")
+  micrositeUrl         String?
+  micrositeUuid        String?                   @unique
+  pricePerStudent      Decimal?                  @db.Decimal(15, 2)
+  status               String                    @default("confirmed") // confirmed | in-trip | completed | cancelled
+  driveFolderId        String?
+  participants         TripParticipant[]
+  rooming              RoomingAssignment[]
+  paymentPlan          TripPaymentPlan?
+  documentRequirements TripDocumentRequirement[]
+  microsite            TripMicrosite?
+  tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, departDate])
+}
+
+model TripParticipant {
+  id                Int       @id @default(autoincrement())
+  tripId            Int
+  fullName          String
+  passportNumber    String?
+  passportExpiry    DateTime?
+  passportDocId     Int? // ContactAttachment id
+  aadhaarLast4      String?
+  aadhaarTokenId    String? // DigiLocker token, encrypted
+  parentName        String?
+  parentPhone       String?
+  parentEmail       String?
+  medicalNotes      String?   @db.Text
+  consentCapturedAt DateTime?
+  trip              TmcTrip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([tripId])
+}
+
+model RoomingAssignment {
+  id             Int      @id @default(autoincrement())
+  tripId         Int
+  roomNumber     String
+  roomType       String // single | twin | triple | quad
+  participantIds String   @db.Text // JSON array of TripParticipant ids
+  trip           TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tripId])
+}
+
+model TripPaymentPlan {
+  id              Int      @id @default(autoincrement())
+  tripId          Int      @unique
+  instalmentsJson String   @db.Text // [{dueDate, amount, reminderDays}]
+  graceDays       Int      @default(0)
+  trip            TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model TripInstalmentPayment {
+  id              Int       @id @default(autoincrement())
+  tripId          Int
+  participantId   Int
+  instalmentIndex Int
+  dueDate         DateTime
+  amount          Decimal   @db.Decimal(15, 2)
+  paidAmount      Decimal   @default(0) @db.Decimal(15, 2)
+  paidAt          DateTime?
+  invoiceId       Int? // FK Invoice (existing model)
+  status          String    @default("pending") // pending | partial | paid | overdue
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([tripId, status])
+  @@index([dueDate])
+}
+
+model TripDocumentRequirement {
+  id        Int      @id @default(autoincrement())
+  tripId    Int
+  docType   String // passport | aadhaar | medical-form | consent-form | school-id
+  required  Boolean  @default(true)
+  trip      TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId])
+}
+
+// ── Web check-in (cross-cutting) ─────────────────────────────────────
+//
+// Records each pending web check-in window. Cron sweeps when departureAt
+// crosses T-48h / T-24h and the Chrome extension processes; if no
+// extension is available (or DOM-change broke the adapter) the row
+// transitions to "fallback-agent" with a Task for manual handling.
+model WebCheckin {
+  id              Int       @id @default(autoincrement())
+  tenantId        Int       @default(1)
+  contactId       Int
+  itineraryId     Int?
+  pnr             String
+  airlineCode     String
+  flightNumber    String
+  departureAt     DateTime
+  windowOpenAt    DateTime // T-48h or T-24h
+  passengerName   String
+  seatPref        String?
+  mealPref        String?
+  status          String    @default("pending") // pending | reminded | in-progress | done | fallback-agent | failed
+  attemptsJson    String?   @db.Text // [{at, result, errorReason}]
+  boardingPassUrl String?
+  deliveredAt     DateTime?
+  assignedAgentId Int?
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([tenantId, status, windowOpenAt])
+  @@index([tenantId, contactId])
+}
+
+// ── Supplier credentials vault ───────────────────────────────────────
+//
+// Login + 2FA seed material for airline / hotel / GDS / visa portals,
+// encrypted via backend/lib/fieldEncryption.js (AES-256-GCM). Access is
+// logged in SupplierCredentialAccessLog for audit. ADMIN-gated.
+model SupplierCredential {
+  id                Int                           @id @default(autoincrement())
+  tenantId          Int                           @default(1)
+  category          String // airline | hotel | gds | visa-portal | payment-gateway | insurance | government
+  supplierName      String
+  loginIdEncrypted  String                        @db.Text // AES-256-GCM ciphertext
+  passwordEncrypted String                        @db.Text
+  metadataJson      String?                       @db.Text // 2FA backup codes, MFA seed, notes
+  ownerUserId       Int?
+  lastUsedAt        DateTime?
+  tenant            Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accessLog         SupplierCredentialAccessLog[]
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+
+  @@index([tenantId, category])
+}
+
+model SupplierCredentialAccessLog {
+  id           Int                @id @default(autoincrement())
+  credentialId Int
+  userId       Int
+  action       String // viewed | used-in-checkin | rotated | deleted
+  ip           String?
+  credential   SupplierCredential @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  at           DateTime           @default(now())
+
+  @@index([credentialId, at])
+}
+
+// ── Visa Sure (Phase 3 model, schema-defined now for Phase 1 stability) ──
+model VisaApplication {
+  id                   Int                         @id @default(autoincrement())
+  tenantId             Int                         @default(1)
+  contactId            Int
+  applicationType      String // tourist | business | student | work | umrah | hajj
+  destinationCountry   String
+  status               String                      @default("intake") // intake | docs-pending | filed | approved | rejected | appeal
+  readinessLevel       Int? // 1-4 from diagnostic
+  complexCase          Boolean                     @default(false)
+  rejectionHistoryJson String?                     @db.Text // [{country, date, reason}]
+  advisorRiskFlag      String? // null | low | medium | high | priority
+  filedAt              DateTime?
+  decidedAt            DateTime?
+  outcome              String? // null | approved | rejected
+  outcomeReason        String?                     @db.Text
+  recoveryProgramId    Int? // FK to a future RejectionRecoveryProgram model
+  documentChecklist    VisaDocumentChecklistItem[]
+  tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  @@index([tenantId, status, advisorRiskFlag])
+  @@index([tenantId, contactId])
+}
+
+model VisaDocumentChecklistItem {
+  id            Int             @id @default(autoincrement())
+  applicationId Int
+  docType       String
+  required      Boolean         @default(true)
+  status        String          @default("pending") // pending | uploaded | verified | rejected
+  attachmentId  Int?
+  notes         String?         @db.Text
+  application   VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([applicationId, status])
+}
+
+// ── RFU customer profile extension ───────────────────────────────────
+model RfuLeadProfile {
+  id                    Int       @id @default(autoincrement())
+  tenantId              Int       @default(1)
+  contactId             Int       @unique // 1:1 with Contact
+  passportNumber        String?
+  passportExpiry        DateTime?
+  visaHistoryJson       String?   @db.Text
+  frequentFlyerJson     String?   @db.Text
+  seatPref              String?
+  mealPref              String?
+  travelStyle           String?
+  budgetMin             Decimal?  @db.Decimal(15, 2)
+  budgetMax             Decimal?  @db.Decimal(15, 2)
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  medicalNotes          String?   @db.Text
+  specialAssistance     String?   @db.Text
+  pastComplaintsJson    String?   @db.Text
+  productTier           String? // entry | primary | premium
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([tenantId, productTier])
+}
+
+// ── Trip microsite (TMC) — public, OTP-gated for sensitive views ─────
+model TripMicrosite {
+  id            Int                @id @default(autoincrement())
+  tenantId      Int                @default(1)
+  tripId        Int                @unique
+  publicUuid    String             @unique
+  subdomain     String // "trip-bali2026" (subdomain on tmc.travelstall.in per Q21)
+  itineraryHtml String             @db.Text
+  faqJson       String?            @db.Text
+  publishedAt   DateTime?
+  expiresAt     DateTime?
+  otps          TripMicrositeOtp[]
+  trip          TmcTrip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([tenantId, subdomain])
+}
+
+model TripMicrositeOtp {
+  id          Int           @id @default(autoincrement())
+  micrositeId Int
+  phone       String
+  purpose     String // registration | payment-plan | document-checklist | teacher-access
+  otpHash     String
+  expiresAt   DateTime
+  usedAt      DateTime?
+  microsite   TripMicrosite @relation(fields: [micrositeId], references: [id], onDelete: Cascade)
+  createdAt   DateTime      @default(now())
+
+  @@index([micrositeId, phone, purpose])
 }

@@ -201,11 +201,14 @@ jobs:
           # Apply schema to the empty CI database. Prisma `db push` is the
           # right call here (no migrations needed for a fresh CI DB).
           npx prisma db push --skip-generate --accept-data-loss
-          # Seed the generic + wellness tenants so the API specs have
-          # the demo creds + tenantId=2 they expect.
+          # Seed the generic + wellness + travel tenants so the API specs
+          # have the demo creds they expect.
           node prisma/seed.js
           if [ -f prisma/seed-wellness.js ]; then
             node prisma/seed-wellness.js
+          fi
+          if [ -f prisma/seed-travel.js ]; then
+            node prisma/seed-travel.js
           fi
           echo "::notice::Database seeded for CI"
 
@@ -426,6 +429,7 @@ jobs:
             tests/voice-transcription-api.spec.js \
             tests/channels-credentials-api.spec.js \
             tests/wellness-consent-archive-api.spec.js \
+            tests/travel-diagnostics-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

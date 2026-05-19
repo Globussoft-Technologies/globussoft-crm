@@ -263,6 +263,7 @@ jobs:
             tests/voice-transcription-api.spec.js \
             tests/channels-credentials-api.spec.js \
             tests/wellness-consent-archive-api.spec.js \
+            tests/travel-diagnostics-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

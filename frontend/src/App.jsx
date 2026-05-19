@@ -114,6 +114,9 @@ const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
 // Travel vertical (Day 1 scaffolding — Phase 1 pages land per docs/TRAVEL_CRM_PRD.md §7)
 const TravelDashboard = lazy(() => import("./pages/travel/Dashboard"));
+const TravelDiagnostics = lazy(() => import("./pages/travel/Diagnostics"));
+const TravelDiagnosticWizard = lazy(() => import("./pages/travel/DiagnosticWizard"));
+const TravelDiagnosticBuilder = lazy(() => import("./pages/travel/DiagnosticBuilder"));
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
   () => import("./pages/wellness/OwnerDashboard"),
@@ -849,6 +852,9 @@ export default function App() {
                   (diagnostics, itineraries, trips, visa, suppliers) mount
                   under /travel/* per docs/TRAVEL_CRM_PRD.md §7. */}
               <Route path="travel" element={<TravelOnly><TravelDashboard /></TravelOnly>} />
+              <Route path="travel/diagnostics" element={<TravelOnly><TravelDiagnostics /></TravelOnly>} />
+              <Route path="travel/diagnostics/new" element={<TravelOnly><TravelDiagnosticWizard /></TravelOnly>} />
+              <Route path="travel/diagnostics/banks/new" element={<TravelOnly><TravelDiagnosticBuilder /></TravelOnly>} />
                     {/* Wellness vertical — gated by WellnessOnly so generic-CRM
                   tenants can't surface wellness pages by URL (#325). */}
               <Route path="wellness" element={<WellnessOnly><WellnessOwnerOnly><WellnessOwnerDashboard /></WellnessOwnerOnly></WellnessOnly>} />

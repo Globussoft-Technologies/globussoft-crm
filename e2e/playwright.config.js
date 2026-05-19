@@ -36,19 +36,20 @@ module.exports = defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'on-first-retry',
-    // 15s actionTimeout was fine at 4 shards but cascade-failed at 8 — many
-    // specs call `request.post(...)` in beforeAll WITHOUT passing an explicit
-    // { timeout } option, so they fall back to actionTimeout. Under 8-shard
-    // contention on the shared demo backend, /api/auth/login + first-record
-    // seed POSTs (workflows, wellness/patients) routinely cross 15s. 60s
-    // matches REQUEST_TIMEOUT used by the rest of the suite and the per-test
-    // ceiling (`timeout: 60_000` above). A real hang still fails the test —
-    // just at 60s instead of 15s, which is consistent with the timeout: 60_000
-    // above.
-    actionTimeout: 60000,
-    // 30s navigation has the same shape (uncontentioned UI flows pass it in
-    // <5s, but shard-contention spikes push it past). Match actionTimeout.
-    navigationTimeout: 60000,
+    // 15s was too tight under 8-shard contention (run 26057150278 cascade-
+    // failed 545 tests when beforeAll login POSTs fell back to 15s). Bumped
+    // to 60s for the 8-shard experiment; reverted to 4 shards after that
+    // experiment failed (cancelled mid-flight, see e2e-full.yml header).
+    // 30s is the new baseline: still 2× the original 15s headroom (absorbs
+    // CF blips + warm-cache contention), but doesn't waste 60s per slow call
+    // when the demo is in steady state. At 4 shards × 2 workers = 8 concurrent
+    // test workers, the demo origin handles requests in <5s steady state, so
+    // 30s catches real hangs while letting legitimate slowness pass. The
+    // retry-on-5xx login/createContact helpers (commit 96d7076) cover the
+    // residual CF-blip case independently of this timeout.
+    actionTimeout: 30000,
+    // Navigation pairs with actionTimeout — same rationale.
+    navigationTimeout: 30000,
   },
 
   projects: [

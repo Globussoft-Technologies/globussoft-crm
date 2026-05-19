@@ -436,6 +436,7 @@ jobs:
             tests/travel-suppliers-api.spec.js \
             tests/travel-microsites-api.spec.js \
             tests/travel-rfu-profiles-api.spec.js \
+            tests/travel-pricing-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

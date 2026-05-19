@@ -36,8 +36,24 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const { generateReceiptNumber } = require("../lib/inventoryReceiptNumber");
 // #665: shared inverted-date-range guard — see lib/validateDateRange.js.
 const { validateDateRange } = require("../lib/validateDateRange");
+const multer = require("multer");
+const { uploadImage, deleteFile, extractKeyFromUrl } = require("../services/s3Service");
 
 const router = express.Router();
+
+// Memory storage for multer (files uploaded to S3, not kept locally)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed"));
+    }
+  },
+});
 
 // Standard tenant-where helper used everywhere in wellness.js.
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
@@ -65,7 +81,7 @@ router.get("/product-categories", adminGate, async (req, res) => {
 
 router.post("/product-categories", adminGate, async (req, res) => {
   try {
-    const { name, parentId, isActive } = req.body;
+    const { name, parentId, isActive, imageUrl, color } = req.body;
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
     }
@@ -78,19 +94,26 @@ router.post("/product-categories", adminGate, async (req, res) => {
     const cat = await prisma.productCategory.create({
       data: {
         name: name.trim(),
-        parentId: parentId ? parseInt(parentId) : null,
         isActive: isActive !== false,
+        imageUrl: imageUrl || null,
+        color: color || null,
         tenantId: req.user.tenantId,
+        ...(parentId ? { parent: { connect: { id: parseInt(parentId) } } } : {}),
       },
     });
     await writeAudit("ProductCategory", "CREATE", cat.id, req.user.userId, req.user.tenantId, {
       name: cat.name,
       parentId: cat.parentId,
+      imageUrl: cat.imageUrl,
     });
     res.status(201).json(cat);
   } catch (e) {
     console.error("[inventory] create category error:", e.message);
-    res.status(500).json({ error: "Failed to create product category" });
+    let errorMsg = "Failed to create product category";
+    if (e.code === "P2002") errorMsg = "A category with this name already exists";
+    else if (e.message.includes("Unique constraint")) errorMsg = "A category with this name already exists";
+    else if (e.message.includes("Foreign key")) errorMsg = "Invalid parent category selected";
+    res.status(500).json({ error: errorMsg, code: e.code || "CREATION_FAILED" });
   }
 });
 
@@ -101,18 +124,30 @@ router.put("/product-categories/:id", adminGate, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Product category not found" });
 
     const data = {};
-    const allowed = ["name", "parentId", "isActive"];
-    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    const allowed = ["name", "parentId", "isActive", "imageUrl", "color"];
+    let parentId = undefined;
 
-    if (data.parentId === id) {
+    for (const k of allowed) {
+      if (req.body[k] !== undefined) {
+        if (k === "parentId") {
+          parentId = req.body[k];
+        } else {
+          data[k] = req.body[k];
+        }
+      }
+    }
+
+    if (parentId === id) {
       return res.status(400).json({ error: "category cannot be its own parent", code: "PARENT_SELF_REFERENCE" });
     }
-    if (data.parentId !== undefined && data.parentId !== null) {
+    if (parentId !== undefined && parentId !== null) {
       const parent = await prisma.productCategory.findFirst({
-        where: tenantWhere(req, { id: parseInt(data.parentId) }),
+        where: tenantWhere(req, { id: parseInt(parentId) }),
       });
       if (!parent) return res.status(400).json({ error: "parentId does not exist in this tenant", code: "PARENT_NOT_FOUND" });
-      data.parentId = parseInt(data.parentId);
+      data.parent = { connect: { id: parseInt(parentId) } };
+    } else if (parentId === null) {
+      data.parent = { disconnect: true };
     }
 
     const updated = await prisma.productCategory.update({ where: { id }, data });
@@ -123,7 +158,11 @@ router.put("/product-categories/:id", adminGate, async (req, res) => {
     res.json(updated);
   } catch (e) {
     console.error("[inventory] update category error:", e.message);
-    res.status(500).json({ error: "Failed to update product category" });
+    let errorMsg = "Failed to update product category";
+    if (e.code === "P2002") errorMsg = "A category with this name already exists";
+    else if (e.message.includes("Unique constraint")) errorMsg = "A category with this name already exists";
+    else if (e.message.includes("Foreign key")) errorMsg = "Invalid parent category selected";
+    res.status(500).json({ error: errorMsg, code: e.code || "UPDATE_FAILED" });
   }
 });
 
@@ -132,6 +171,16 @@ router.delete("/product-categories/:id", adminGate, async (req, res) => {
     const id = parseInt(req.params.id);
     const existing = await prisma.productCategory.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Product category not found" });
+
+    // Delete associated S3 image if exists
+    if (existing.imageUrl) {
+      const fileKey = extractKeyFromUrl(existing.imageUrl);
+      if (fileKey) {
+        await deleteFile(fileKey).catch(err =>
+          console.warn(`Failed to delete S3 image: ${err.message}`)
+        );
+      }
+    }
 
     await prisma.productCategory.delete({ where: { id } });
     await writeAudit("ProductCategory", "DELETE", id, req.user.userId, req.user.tenantId, { name: existing.name });
@@ -142,6 +191,50 @@ router.delete("/product-categories/:id", adminGate, async (req, res) => {
   }
 });
 
+// ── Image upload for categories and products ───────────────────────
+
+router.post("/upload/category-image", adminGate, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "file is required (multipart field 'file')" });
+    }
+    const url = await uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      'product-categories'
+    );
+    res.status(201).json({ success: true, url, filename: req.file.originalname });
+  } catch (err) {
+    console.error("[inventory] category image upload error:", err.message);
+    if (/file too large|allowed/i.test(err.message)) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to upload image" });
+  }
+});
+
+router.post("/upload/product-image", adminGate, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "file is required (multipart field 'file')" });
+    }
+    const url = await uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      'products'
+    );
+    res.status(201).json({ success: true, url, filename: req.file.originalname });
+  } catch (err) {
+    console.error("[inventory] product image upload error:", err.message);
+    if (/file too large|allowed/i.test(err.message)) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to upload image" });
+  }
+});
+
 // ── Product read (list for forms) ───────────────────────────────────
 
 router.get("/products", adminGate, async (req, res) => {
@@ -149,12 +242,193 @@ router.get("/products", adminGate, async (req, res) => {
     const items = await prisma.product.findMany({
       where: tenantWhere(req),
       orderBy: { name: "asc" },
-      select: { id: true, name: true, sku: true, categoryId: true, currentStock: true, threshold: true, price: true },
+      include: { category: { select: { id: true, name: true } } },
     });
     res.json(items);
   } catch (e) {
     console.error("[inventory] list products error:", e.message);
     res.status(500).json({ error: "Failed to list products" });
+  }
+});
+
+router.post("/products", adminGate, async (req, res) => {
+  try {
+    const {
+      name, sku, description, price, categoryId, brandName, productType,
+      productCode, hsnCode, volume, unit, discountedPrice, dealerPrice,
+      purchasePrice, manufacturer, tax, isTaxIncluded, barcode, imageUrl,
+      threshold, currentStock, isActive
+    } = req.body;
+
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
+    }
+
+    // Check for duplicate SKU if provided
+    if (sku) {
+      const existing = await prisma.product.findFirst({
+        where: tenantWhere(req, { sku }),
+      });
+      if (existing) {
+        return res.status(400).json({ error: "SKU already exists", code: "SKU_DUPLICATE" });
+      }
+    }
+
+    // Verify category exists if provided
+    if (categoryId) {
+      const category = await prisma.productCategory.findFirst({
+        where: tenantWhere(req, { id: parseInt(categoryId) }),
+      });
+      if (!category) {
+        return res.status(400).json({ error: "Category not found", code: "CATEGORY_NOT_FOUND" });
+      }
+    }
+
+    const product = await prisma.product.create({
+      data: {
+        name: name.trim(),
+        sku: sku ? sku.trim() : null,
+        description: description || null,
+        price: parseFloat(price) || 0,
+        categoryId: categoryId ? parseInt(categoryId) : null,
+        brandName: brandName || null,
+        productType: productType || null,
+        productCode: productCode || null,
+        hsnCode: hsnCode || null,
+        volume: volume ? parseFloat(volume) : null,
+        unit: unit || null,
+        discountedPrice: discountedPrice ? parseFloat(discountedPrice) : null,
+        dealerPrice: dealerPrice ? parseFloat(dealerPrice) : null,
+        purchasePrice: purchasePrice ? parseFloat(purchasePrice) : null,
+        manufacturer: manufacturer || null,
+        tax: tax ? parseFloat(tax) : null,
+        isTaxIncluded: isTaxIncluded === true,
+        barcode: barcode || null,
+        imageUrl: imageUrl || null,
+        threshold: threshold ? parseInt(threshold) : 0,
+        currentStock: currentStock ? parseInt(currentStock) : 0,
+        isActive: isActive !== false,
+        tenantId: req.user.tenantId,
+      },
+      include: { category: { select: { id: true, name: true } } },
+    });
+
+    await writeAudit("Product", "CREATE", product.id, req.user.userId, req.user.tenantId, {
+      name: product.name,
+      sku: product.sku,
+      price: product.price,
+    });
+
+    res.status(201).json(product);
+  } catch (e) {
+    console.error("[inventory] create product error:", e.message);
+    let errorMsg = "Failed to create product";
+    if (e.code === "P2002") errorMsg = "A product with this SKU already exists";
+    else if (e.message.includes("Unique constraint")) errorMsg = "A product with this SKU already exists";
+    else if (e.message.includes("Foreign key")) errorMsg = "Invalid category selected";
+    res.status(500).json({ error: errorMsg, code: e.code || "CREATION_FAILED" });
+  }
+});
+
+router.put("/products/:id", adminGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.product.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Product not found" });
+
+    const allowed = [
+      "name", "sku", "description", "price", "categoryId", "brandName",
+      "productType", "productCode", "hsnCode", "volume", "unit",
+      "discountedPrice", "dealerPrice", "purchasePrice", "manufacturer",
+      "tax", "isTaxIncluded", "barcode", "imageUrl", "threshold",
+      "currentStock", "isActive"
+    ];
+
+    const data = {};
+    for (const k of allowed) {
+      if (req.body[k] !== undefined) {
+        if (k.includes("Price") || k === "price" || k === "volume" || k === "tax") {
+          data[k] = req.body[k] ? parseFloat(req.body[k]) : null;
+        } else if (k.includes("Stock") || k === "threshold") {
+          data[k] = req.body[k] ? parseInt(req.body[k]) : 0;
+        } else if (k === "isTaxIncluded" || k === "isActive") {
+          data[k] = req.body[k] === true;
+        } else if (k === "categoryId") {
+          data[k] = req.body[k] ? parseInt(req.body[k]) : null;
+        } else {
+          data[k] = req.body[k];
+        }
+      }
+    }
+
+    // Check SKU uniqueness if changing
+    if (data.sku && data.sku !== existing.sku) {
+      const duplicate = await prisma.product.findFirst({
+        where: tenantWhere(req, { sku: data.sku }),
+      });
+      if (duplicate) {
+        return res.status(400).json({ error: "SKU already exists", code: "SKU_DUPLICATE" });
+      }
+    }
+
+    // Verify new category exists if provided
+    if (data.categoryId && data.categoryId !== existing.categoryId) {
+      const category = await prisma.productCategory.findFirst({
+        where: tenantWhere(req, { id: data.categoryId }),
+      });
+      if (!category) {
+        return res.status(400).json({ error: "Category not found", code: "CATEGORY_NOT_FOUND" });
+      }
+    }
+
+    const updated = await prisma.product.update({
+      where: { id },
+      data,
+      include: { category: { select: { id: true, name: true } } },
+    });
+
+    const changes = diffFields(existing, updated, Object.keys(data));
+    if (Object.keys(changes).length > 0) {
+      await writeAudit("Product", "UPDATE", id, req.user.userId, req.user.tenantId, { changedFields: changes });
+    }
+
+    res.json(updated);
+  } catch (e) {
+    console.error("[inventory] update product error:", e.message);
+    let errorMsg = "Failed to update product";
+    if (e.code === "P2002") errorMsg = "A product with this SKU already exists";
+    else if (e.message.includes("Unique constraint")) errorMsg = "A product with this SKU already exists";
+    else if (e.message.includes("Foreign key")) errorMsg = "Invalid category selected";
+    res.status(500).json({ error: errorMsg, code: e.code || "UPDATE_FAILED" });
+  }
+});
+
+router.delete("/products/:id", adminGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.product.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Product not found" });
+
+    // Delete associated S3 image if exists
+    if (existing.imageUrl) {
+      const fileKey = extractKeyFromUrl(existing.imageUrl);
+      if (fileKey) {
+        await deleteFile(fileKey).catch(err =>
+          console.warn(`Failed to delete S3 image: ${err.message}`)
+        );
+      }
+    }
+
+    await prisma.product.delete({ where: { id } });
+    await writeAudit("Product", "DELETE", id, req.user.userId, req.user.tenantId, {
+      name: existing.name,
+      sku: existing.sku,
+    });
+
+    res.status(204).send();
+  } catch (e) {
+    console.error("[inventory] delete product error:", e.message);
+    res.status(500).json({ error: "Failed to delete product" });
   }
 });
 

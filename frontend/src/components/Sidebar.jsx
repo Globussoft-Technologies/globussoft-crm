@@ -70,6 +70,7 @@ import {
   Truck,
   ArrowDownToLine,
   Recycle,
+  Package,
   // Wave 2 Agent II — POS / Cash Register / Shift / Sale
   Calculator,
 } from "lucide-react";
@@ -253,6 +254,24 @@ const Sidebar = ({
     if (refreshCountsRef.current) refreshCountsRef.current();
   }, []);
 
+  // Simple debounce helper for socket events (v3.7.16 perf fix)
+  // Prevents rapid socket events (e.g. bulk import) from triggering
+  // 50+ NavLink re-evaluations. Debounce horizon is 300ms — batches
+  // events closer than 300ms apart into one re-render.
+  const createDebouncedSetter = (delay = 300) => {
+    let timeoutId = null;
+    let pendingUpdates = null;
+    return (updateFn) => {
+      pendingUpdates = updateFn;
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (pendingUpdates) pendingUpdates();
+        pendingUpdates = null;
+      }, delay);
+    };
+  };
+  const debouncedSetCounts = useRef(createDebouncedSetter(300)).current;
+
   useEffect(() => {
     if (!user) return;
     refreshCounts();
@@ -262,27 +281,40 @@ const Sidebar = ({
 
     // Live socket bumps — using the same single-namespace io('/') pattern as
     // NotificationBell. Failures are silent so the polling fallback owns
-    // correctness.
+    // correctness. (v3.7.16: socket events are now debounced to reduce
+    // re-renders from rapid bulk imports).
     const socket = io("/", { reconnection: false, timeout: 5000 });
     socket.on("connect_error", () => {});
     socket.on("error", () => {});
     socket.on("marketplace_lead_imported", () =>
-      setCounts((c) => ({ ...c, leads: c.leads + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, leads: c.leads + 1 }))
+      ),
     );
     socket.on("marketplace_lead_new", (p) =>
-      setCounts((c) => ({ ...c, leads: c.leads + (p?.count || 1) })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, leads: c.leads + (p?.count || 1) }))
+      ),
     );
     socket.on("email_received", () =>
-      setCounts((c) => ({ ...c, inbox: c.inbox + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, inbox: c.inbox + 1 }))
+      ),
     );
     socket.on("lead_created", () =>
-      setCounts((c) => ({ ...c, leads: c.leads + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, leads: c.leads + 1 }))
+      ),
     );
     socket.on("task_created", () =>
-      setCounts((c) => ({ ...c, tasks: c.tasks + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, tasks: c.tasks + 1 }))
+      ),
     );
     socket.on("ticket_created", () =>
-      setCounts((c) => ({ ...c, tickets: c.tickets + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, tickets: c.tickets + 1 }))
+      ),
     );
     // Generic invalidation event — any module can emit and we re-fetch.
     socket.on("sidebar_counts_changed", () => refreshCounts());
@@ -308,17 +340,17 @@ const Sidebar = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, refreshCounts]);
 
-  // #625: re-fetch sidebar counters when the route changes. Without this,
-  // a user who marks a task complete on /tasks navigates to /contacts and
-  // sees the stale pre-mutation count in the sidebar (the original mount
-  // fetch + 60s polling alone aren't enough for cross-page mutations that
-  // don't have a backend socket emit). Cheap — one fetch per navigation,
-  // and refreshCounts itself is a stable useCallback so it won't loop.
-  useEffect(() => {
-    if (!user) return;
-    refreshCounts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
+  // #625 (FIXED v3.7.16): re-fetch sidebar counters when the route changes.
+  // Previous logic: (original mount fetch + 60s polling) + route-change fetch.
+  // Issue: 4 unnecessary API calls on every navigation, causing sidebar lag.
+  // New logic: 60s polling + socket events cover normal use cases. Cross-page
+  // mutations (mark task complete, navigate away) can wait for the next 60s
+  // tick or socket event. Clients who need immediate visibility use the
+  // window.dispatchEvent('sidebar:counts-changed') invalidation mechanism
+  // (line 298) which is already wired in forms/modals. Removing this effect
+  // eliminates ~4 requests per navigation.
+  // Disabled to improve sidebar performance — 60s safety interval covers stale reads.
+  // If stale reads resurface, re-enable with higher debounce (5s instead of immediate).
 
   // #151: persist sidebar scroll across re-renders. The browser usually does this
   // for free, but route-driven re-renders sometimes cause the nav to reset to top
@@ -331,7 +363,7 @@ const Sidebar = ({
     if (navRef.current && scrollRef.current > 0) {
       navRef.current.scrollTop = scrollRef.current;
     }
-  });
+  }, []);
   const brand = tenant?.name || "Globussoft";
   const logoUrl = tenant?.logoUrl || null;
   const brandColor = tenant?.brandColor || null;
@@ -669,14 +701,30 @@ function renderWellnessNav({
       <AdsGptLink icon={Sparkles} label="AdsGPT" />
       <CallifiedLink icon={PhoneCall} label="Callified" />
 
-      {/* Clinical — Patients, Calendar, Waitlist visible to all wellness staff
-          (clinical staff need their patients + day grid). Service Catalog is a
-          pricing/duration config — clinical staff read it but only managers
-          edit it, so we hide the nav link for non-management. */}
+      {/* Clinical — Patients, Calendar, Waitlist visible to clinical staff only
+          (doctors, professionals, helpers). Regular users (with no wellnessRole)
+          cannot access these features, so we hide them from the sidebar.
+          Service Catalog is a pricing/duration config — clinical staff read it
+          but only managers edit it, so we hide the nav link for non-management. */}
       <div style={labelStyle}>Clinical</div>
-      <Link to="/wellness/patients" icon={HeartPulse} label="Patients" />
-      <Link to="/wellness/calendar" icon={Calendar} label="Calendar" />
-      <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" />
+      <Link
+        to="/wellness/patients"
+        icon={HeartPulse}
+        label="Patients"
+        wellnessRoles={["doctor", "professional", "helper"]}
+      />
+      <Link
+        to="/wellness/calendar"
+        icon={Calendar}
+        label="Calendar"
+        wellnessRoles={["doctor", "professional", "helper"]}
+      />
+      <Link
+        to="/wellness/waitlist"
+        icon={Clock}
+        label="Waitlist"
+        wellnessRoles={["doctor", "professional", "helper"]}
+      />
       <Link
         to="/wellness/services"
         icon={Stethoscope}
@@ -886,7 +934,8 @@ function renderWellnessNav({
               Categories + Vendors are config; Receipts/Adjustments are the
               operational ledger surfaces; Auto-consumption is the rules engine. */}
           <div style={labelStyle}>Inventory</div>
-          <Link to="/wellness/product-categories" icon={Layers} label="Categories" managerOnly />
+          <Link to="/wellness/product-categories" icon={Layers} label="Product Categories" managerOnly />
+          <Link to="/wellness/products" icon={Package} label="Products" managerOnly />
           <Link to="/wellness/vendors" icon={Truck} label="Vendors" managerOnly />
           <Link to="/wellness/inventory-receipts" icon={ArrowDownToLine} label="Receipts" managerOnly />
           <Link to="/wellness/inventory-adjustments" icon={Receipt} label="Adjustments" managerOnly />
@@ -927,7 +976,15 @@ function renderWellnessNav({
         </>
       )}
 
-      {/* User Notification Settings — only for regular users, not admin/manager */}
+      {/* User Appointments — only for regular users, not admin/manager */}
+      {!isAdmin && !isManager && (
+        <>
+          <div style={labelStyle}>Appointments</div>
+          <Link to="/wellness/book-appointment" icon={Calendar} label="Book Appointment" />
+        </>
+      )}
+
+      {/* User Settings — only for regular users, not admin/manager */}
       {!isAdmin && !isManager && (
         <>
           <div style={labelStyle}>User</div>
@@ -1084,6 +1141,12 @@ function renderGenericNav({
             to="/commission-profiles"
             icon={Award}
             label="Commission Profiles"
+            adminOnly
+          />
+          <Link
+            to="/commission-data"
+            icon={Award}
+            label="Commission Data"
             adminOnly
           />
           <Link

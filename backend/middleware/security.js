@@ -168,16 +168,35 @@ function sanitizeObject(obj) {
 // cross-tenant writes with 400 IMMUTABLE_FIELD instead of silently 200'ing
 // a no-op) can introspect what came in. Routes that don't care continue to
 // work unchanged.
+//
+// Exception: Public endpoints like /customer/register need tenantId from the body
+// since users aren't authenticated yet.
 function stripTenantOverride(req, res, next) {
   req.strippedFields = req.strippedFields || {};
+
+  // Skip stripping for public endpoints that need tenantId
+  const shouldSkip = req.path.includes('/customer/register');
+
+  // Debug logging
+  if (req.path.includes('/customer/register')) {
+    console.log('[stripTenantOverride] Path:', req.path, 'shouldSkip:', shouldSkip, 'tenantId in body:', 'tenantId' in (req.body || {}), 'tenantId value:', req.body?.tenantId);
+  }
+
   if (req.body && typeof req.body === 'object') {
-    if ('tenantId' in req.body) {
-      req.strippedFields.tenantId = req.body.tenantId;
-      delete req.body.tenantId; // routes add tenantId from req.user.tenantId, never from input
-    }
-    if ('userId' in req.body) {
-      req.strippedFields.userId = req.body.userId;
-      delete req.body.userId; // same protection
+    if (!shouldSkip) {
+      if ('tenantId' in req.body) {
+        req.strippedFields.tenantId = req.body.tenantId;
+        delete req.body.tenantId; // routes add tenantId from req.user.tenantId, never from input
+      }
+      if ('userId' in req.body) {
+        req.strippedFields.userId = req.body.userId;
+        delete req.body.userId; // same protection
+      }
+    } else {
+      // Debug: show we're skipping
+      if (req.path.includes('/customer/register')) {
+        console.log('[stripTenantOverride] SKIPPING deletion for customer/register - tenantId should remain');
+      }
     }
   }
   next();

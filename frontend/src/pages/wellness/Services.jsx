@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
@@ -14,6 +14,7 @@ import {
   X,
   Save,
   Activity,
+  ChevronDown,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -34,18 +35,28 @@ export default function Services() {
   const initialTab = searchParams.get('tab') || 'catalog';
   const [tab, setTab] = useState(initialTab); // catalog | packages | activetreatments
   const [services, setServices] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [treatments, setTreatments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [treatmentsLoading, setTreatmentsLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTreatment, setSelectedTreatment] = useState(null);
   // #115: basePrice starts blank (not 0) so the placeholder shows and the
   // validity gate rejects submit until the user enters ≥ ₹1.
-  const [form, setForm] = useState({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
+  const [form, setForm] = useState({ name: '', categoryIds: [], ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
 
   const load = () => {
     setLoading(true);
     fetchApi('/api/wellness/services').then(setServices).catch(() => setServices([])).finally(() => setLoading(false));
+  };
+
+  const loadCategories = () => {
+    setCategoriesLoading(true);
+    fetchApi('/api/wellness/service-categories?limit=1000')
+      .then(res => setCategories(res.sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => setCategories([]))
+      .finally(() => setCategoriesLoading(false));
   };
 
   const loadTreatments = () => {
@@ -53,7 +64,10 @@ export default function Services() {
     fetchApi('/api/wellness/activetreatment').then(res => setTreatments(res.data || [])).catch(() => setTreatments([])).finally(() => setTreatmentsLoading(false));
   };
 
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    loadCategories();
+  }, []);
   useEffect(() => {
     if (tab === 'activetreatments') {
       loadTreatments();
@@ -63,10 +77,15 @@ export default function Services() {
   const submit = async (e) => {
     e.preventDefault();
     try {
-      await fetchApi('/api/wellness/services', { method: 'POST', body: JSON.stringify(form) });
+      // Use first category as primary categoryId for backend compatibility
+      const submitData = {
+        ...form,
+        categoryId: form.categoryIds?.[0] || null,
+      };
+      await fetchApi('/api/wellness/services', { method: 'POST', body: JSON.stringify(submitData) });
       notify.success(`Service "${form.name}" created`);
       setShowAdd(false);
-      setForm({ name: '', category: 'aesthetics', ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
+      setForm({ name: '', categoryIds: [], ticketTier: 'medium', basePrice: '', durationMin: 60, targetRadiusKm: 30, description: '' });
       load();
     } catch (_err) { /* fetchApi already toasted */ }
   };
@@ -129,6 +148,8 @@ export default function Services() {
         <CatalogTab
           services={services}
           loading={loading}
+          categories={categories}
+          categoriesLoading={categoriesLoading}
           showAdd={showAdd}
           form={form}
           setForm={setForm}
@@ -182,7 +203,7 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
   );
 }
 
-function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChanged }) {
+function CatalogTab({ services, loading, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged }) {
   const notify = useNotify();
   return (
     <>
@@ -214,9 +235,12 @@ function CatalogTab({ services, loading, showAdd, form, setForm, submit, onChang
             </div>
             <div>
               <label style={fieldLabel}>Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={inputStyle}>
-                {['hair', 'skin', 'aesthetics', 'slimming', 'ayurveda', 'salon'].map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <MultiSelectDropdown
+                categories={categories}
+                categoriesLoading={categoriesLoading}
+                selectedIds={form.categoryIds}
+                onChange={(ids) => setForm({ ...form, categoryIds: ids })}
+              />
             </div>
             <div>
               <label style={fieldLabel}>Ticket tier</label>
@@ -804,6 +828,181 @@ const labelStyle = {
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
 };
+
+function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onChange }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  const selectedNames = categories
+    .filter(cat => selectedIds.includes(cat.id))
+    .map(cat => cat.name)
+    .join(', ');
+
+  const handleToggle = (catId) => {
+    if (selectedIds.includes(catId)) {
+      onChange(selectedIds.filter(id => id !== catId));
+    } else {
+      onChange([...selectedIds, catId]);
+    }
+  };
+
+  const handleOpen = () => {
+    setIsOpen(true);
+  };
+
+  // Close on escape key
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && isOpen) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [isOpen]);
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
+      <button
+        type="button"
+        onClick={handleOpen}
+        style={{
+          width: '100%',
+          padding: '0.6rem 0.75rem',
+          background: isOpen ? 'rgba(0, 0, 0, 0.3)' : 'rgba(0, 0, 0, 0.2)',
+          border: isOpen ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid rgba(255, 255, 255, 0.1)',
+          borderRadius: '6px',
+          color: 'var(--text-primary)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          cursor: 'pointer',
+          fontSize: '0.9rem',
+          transition: 'border-color 0.2s, background 0.2s',
+          position: 'relative',
+          zIndex: 1,
+        }}
+      >
+        <span style={{ textAlign: 'left', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {categoriesLoading ? 'Loading...' : selectedNames || 'Select categories...'}
+        </span>
+        <ChevronDown size={16} style={{ marginLeft: '0.5rem', flexShrink: 0, transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+      </button>
+
+      {isOpen && (
+        <>
+          {/* Backdrop overlay - closes dropdown on click */}
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 9998,
+            }}
+            onClick={() => setIsOpen(false)}
+          />
+
+          {/* Dropdown menu - white background, positioned directly below button */}
+          <div
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              right: 0,
+              marginTop: '8px',
+              height: '340px',
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.08)',
+              zIndex: 10000,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            {/* Scrollable content area */}
+            <div
+              style={{
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                flex: 1,
+              }}
+            >
+              {categoriesLoading ? (
+                <div style={{ padding: '1rem', color: '#6b7280', textAlign: 'center', fontSize: '0.9rem' }}>
+                  Loading categories...
+                </div>
+              ) : categories.length === 0 ? (
+                <div style={{ padding: '1rem', color: '#6b7280', textAlign: 'center', fontSize: '0.9rem' }}>
+                  No categories available
+                </div>
+              ) : (
+                categories.map((cat, idx) => (
+                  <label
+                    key={cat.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      padding: '0.65rem 1rem',
+                      cursor: 'pointer',
+                      borderBottom: idx < categories.length - 1 ? '1px solid #f3f4f6' : 'none',
+                      transition: 'background 0.15s ease',
+                      backgroundColor: selectedIds.includes(cat.id) ? '#eff6ff' : 'transparent',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!selectedIds.includes(cat.id)) {
+                        e.currentTarget.style.backgroundColor = '#f9fafb';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = selectedIds.includes(cat.id) ? '#eff6ff' : 'transparent';
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(cat.id)}
+                      onChange={() => handleToggle(cat.id)}
+                      style={{
+                        cursor: 'pointer',
+                        accentColor: '#3b82f6',
+                        width: '16px',
+                        height: '16px',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span style={{ fontSize: '0.9rem', color: '#1f2937', fontWeight: selectedIds.includes(cat.id) ? 500 : 400 }}>{cat.name}</span>
+                  </label>
+                ))
+              )}
+            </div>
+
+            {/* Footer with count */}
+            {selectedIds.length > 0 && (
+              <div
+                style={{
+                  padding: '0.65rem 1rem',
+                  borderTop: '1px solid #f3f4f6',
+                  fontSize: '0.8rem',
+                  color: '#6b7280',
+                  backgroundColor: '#f9fafb',
+                  textAlign: 'center',
+                }}
+              >
+                {selectedIds.length} selected
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 // Visually-hidden style for screen-reader-only headings (a11y heading hierarchy).
 const srOnly = {

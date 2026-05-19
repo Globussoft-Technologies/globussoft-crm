@@ -96,8 +96,20 @@ export default function Staff() {
   // PRD Gap §1.5 — commission profiles are listed in the edit modal as a
   // dropdown so admins can assign payroll rules per staff member.
   const [commissionProfiles, setCommissionProfiles] = useState([]);
+  // Staff availability tracking
+  const [availDate, setAvailDate] = useState(new Date());
+  const [availability, setAvailability] = useState([]);
+  const [availLoading, setAvailLoading] = useState(false);
+  const [showAvailability, setShowAvailability] = useState(false);
 
   useEffect(() => { loadStaff(); loadCommissionProfiles(); }, []);
+
+  // Load availability when date changes or showAvailability is toggled
+  useEffect(() => {
+    if (showAvailability) {
+      loadAvailability();
+    }
+  }, [availDate, showAvailability]);
 
   const loadCommissionProfiles = async () => {
     if (!canManageStaff) return;
@@ -121,6 +133,19 @@ export default function Staff() {
       console.error('Failed to load staff:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAvailability = async () => {
+    try {
+      setAvailLoading(true);
+      const dateStr = availDate.toISOString().split('T')[0];
+      const data = await fetchApi(`/api/leave/availability?date=${dateStr}`);
+      setAvailability(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load availability:', err);
+    } finally {
+      setAvailLoading(false);
     }
   };
 
@@ -274,7 +299,7 @@ export default function Staff() {
 
       {/* Stats bar */}
       {staff.length > 0 && (
-        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <button
             onClick={() => setFilter(filter === 'ADMIN' ? null : 'ADMIN')}
             style={{
@@ -315,6 +340,123 @@ export default function Staff() {
           >
             {staff.length} total
           </button>
+          {/* Availability toggle - only for ADMIN/MANAGER */}
+          {canManageStaff && (
+            <div style={{ marginLeft: 'auto' }}>
+              <button
+                onClick={() => setShowAvailability(!showAvailability)}
+                style={{
+                  padding: '0.4rem 1rem', borderRadius: '999px', background: showAvailability ? 'rgba(34,197,94,0.2)' : 'rgba(34,197,94,0.1)',
+                  color: '#22c55e', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(34,197,94,0.3)',
+                  cursor: 'pointer', transition: 'all 0.2s',
+                }}
+              >
+                {showAvailability ? '✓ Availability' : 'Availability'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Availability Panel - Only for ADMIN users */}
+      {showAvailability && canManageStaff && (
+        <div className="card" style={{ padding: '1.5rem', marginBottom: '2rem', background: 'var(--subtle-bg-1)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: '600' }}>Staff Availability</h3>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button
+                onClick={() => setAvailDate(new Date(availDate.getTime() - 86400000))}
+                style={{ padding: '0.3rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--subtle-bg-2)', cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                ← Prev
+              </button>
+              <span style={{ fontSize: '0.85rem', fontWeight: '500', minWidth: '120px', textAlign: 'center' }}>
+                {availDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+              </span>
+              <button
+                onClick={() => setAvailDate(new Date(availDate.getTime() + 86400000))}
+                style={{ padding: '0.3rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--subtle-bg-2)', cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                Next →
+              </button>
+              <button
+                onClick={() => setAvailDate(new Date())}
+                style={{ padding: '0.3rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--subtle-bg-2)', cursor: 'pointer', fontSize: '0.75rem' }}
+              >
+                Today
+              </button>
+            </div>
+          </div>
+
+          {/* Summary bar */}
+          {!availLoading && availability.length > 0 && (
+            <div style={{ display: 'flex', gap: '2rem', marginBottom: '1.25rem', padding: '0.75rem 0', borderBottom: '1px solid var(--border-color)' }}>
+              <div style={{ fontSize: '0.85rem' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Available: </span>
+                <span style={{ fontWeight: '600', color: '#22c55e' }}>{availability.filter(a => a.available).length}</span>
+              </div>
+              <div style={{ fontSize: '0.85rem' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>On Leave: </span>
+                <span style={{ fontWeight: '600', color: '#ef4444' }}>{availability.filter(a => !a.available).length}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Staff availability list */}
+          {availLoading ? (
+            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>Loading availability...</p>
+          ) : availability.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>No staff data available.</p>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1rem' }}>
+              {availability.map(member => (
+                <div
+                  key={member.id}
+                  style={{
+                    padding: '0.75rem',
+                    borderRadius: '6px',
+                    background: member.available ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+                    border: `1px solid ${member.available ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}`,
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                    <div>
+                      <div style={{ fontWeight: '500', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
+                        {member.name || '—'}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        {displayRole(member)}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: '4px',
+                        fontSize: '0.7rem',
+                        fontWeight: '600',
+                        background: member.available ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)',
+                        color: member.available ? '#22c55e' : '#ef4444',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {member.available ? '● Available' : '✕ On Leave'}
+                    </div>
+                  </div>
+                  {!member.available && member.leave && (
+                    <div style={{ marginTop: '0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                      <div>{member.leave.leaveType}</div>
+                      <div>
+                        {new Date(member.leave.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        {' – '}
+                        {new Date(member.leave.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

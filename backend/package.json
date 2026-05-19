@@ -22,10 +22,10 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "@prisma/client": "^6.4.1",
     "@sentry/node": "^10.48.0",
     "@twilio/voice-sdk": "^2.18.1",
-    "axios": "^1.16.0",
+    "aws-sdk": "^2.1693.0",
+    "axios": "^1.16.1",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
@@ -43,6 +43,7 @@
     "jsonwebtoken": "^9.0.3",
     "mailgun.js": "^13.0.0",
     "multer": "^2.1.1",
+    "mysql2": "^3.22.3",
     "node-cron": "^4.2.1",
     "nodemailer": "^8.0.4",
     "pdf-lib": "^1.17.1",
@@ -61,13 +62,14 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@prisma/client": "^6.19.3",
     "@vitest/coverage-v8": "^4.1.5",
     "c8": "^11.0.0",
     "eslint": "^9.39.4",
     "globals": "^17.5.0",
     "msw": "^2.14.2",
     "nodemon": "^3.0.1",
-    "prisma": "^6.4.1",
+    "prisma": "^6.19.3",
     "supertest": "^7.2.2",
     "vitest": "^4.1.5"
   }

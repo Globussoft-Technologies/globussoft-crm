@@ -933,6 +933,13 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initTripPaymentRemindersCron } = require('./cron/tripPaymentReminders');
   initTripPaymentRemindersCron();
 
+  // Initialize Travel CRM diagnostic-to-advisor escalation (every 5 min).
+  // PRD §6.3 row 6 — diagnostics stalled >30 min without advisor outreach
+  // surface as high-priority Notification rows on the advisor dashboard.
+  // Outreach detected via Activity / Task created after the diagnostic.
+  const { initTravelDiagnosticAlertsCron } = require('./cron/travelDiagnosticAdvisorAlerts');
+  initTravelDiagnosticAlertsCron();
+
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require('./cron/lowStockEngine');
   initLowStockCron();

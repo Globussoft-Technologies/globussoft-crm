@@ -114,6 +114,12 @@ const NON_TENANT_MODELS = new Set([
   'SequenceStep',
   'QuoteLineItem',
   'EstimateLineItem',
+  // Patient↔Tag junction. Both parents (Patient + Tag) carry tenantId and
+  // cascade on tenant delete; PatientTag rows are scoped through the
+  // patient join (routes/wellness.js bulk-tag handlers filter via
+  // `patient: { tenantId }` + `tag: { tenantId }`). A redundant
+  // PatientTag.tenantId would risk drift from the parents.
+  'PatientTag',
   // PR #754 RBAC junction tables. UserRole bridges User↔Role and
   // RolePermission bridges Role↔(module,action). Tenant isolation flows
   // through the parents (User.tenantId and Role.tenantId). A redundant

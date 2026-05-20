@@ -6,9 +6,9 @@
 // schema-edit-discipline); add new rows + flip isActive on outdated
 // ones.
 
-import { useEffect, useState } from "react";
-import { DollarSign, Filter, Plus, ToggleLeft, ToggleRight } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { useEffect, useRef, useState } from "react";
+import { DollarSign, Download, Filter, Plus, ToggleLeft, ToggleRight, Upload } from "lucide-react";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
 const SUB_BRANDS = [
@@ -78,6 +78,62 @@ export default function CostMaster() {
     }
   };
 
+  const fileRef = useRef(null);
+
+  const exportCsv = async () => {
+    try {
+      const qs = new URLSearchParams();
+      if (subBrand) qs.set("subBrand", subBrand);
+      if (category) qs.set("category", category);
+      const res = await fetch(`/api/travel/cost-master/export.csv?${qs.toString()}`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "travel-cost-master.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.error(e.message || "Failed to export");
+    }
+  };
+
+  const importCsv = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const res = await fetch("/api/travel/cost-master/import.csv", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${getAuthToken()}`,
+          "Content-Type": "text/csv",
+        },
+        body: text,
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || `Import failed (${res.status})`);
+      const summary = `Imported ${body.imported}, updated ${body.updated}, skipped ${body.skipped}`;
+      if (body.errors?.length) {
+        notify.error(`${summary}. First error row ${body.errors[0].rowNumber}: ${body.errors[0].reason}`);
+      } else {
+        notify.success(summary);
+      }
+      load();
+    } catch (e) {
+      notify.error(e.message || "Failed to import");
+    } finally {
+      // Reset so the same file can be re-selected (browsers skip change events
+      // when the value matches the prior one).
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
   const toggleActive = async (rate) => {
     try {
       await fetchApi(`/api/travel/cost-master/${rate.id}`, {
@@ -101,11 +157,32 @@ export default function CostMaster() {
             Supplier rate book. /pricing/quote applies seasons + markup rules over these base rates.
           </p>
         </div>
-        {!adding && (
-          <button type="button" onClick={() => setAdding(true)} style={primaryBtn}>
-            <Plus size={14} /> Add rate
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={exportCsv} style={secondaryBtn}>
+            <Download size={14} /> Export CSV
           </button>
-        )}
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            style={secondaryBtn}
+            title="Bulk-upload supplier rates. Columns: subBrand, category, routeOrSku, baseRate, currency, supplierId, seasonId, attributesJson, validFrom, validTo, isActive."
+          >
+            <Upload size={14} /> Import CSV
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={importCsv}
+            style={{ display: "none" }}
+            aria-label="Upload cost-master CSV"
+          />
+          {!adding && (
+            <button type="button" onClick={() => setAdding(true)} style={primaryBtn}>
+              <Plus size={14} /> Add rate
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}

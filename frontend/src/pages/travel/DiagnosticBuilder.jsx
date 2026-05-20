@@ -15,10 +15,10 @@
 // risks structural drift. Paste-and-validate keeps the source of truth
 // in the document the brand team controls.
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ChevronLeft, Save, FileJson, CheckCircle, AlertTriangle } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
+import { AlertTriangle, CheckCircle, ChevronLeft, Download, FileJson, Save, Upload } from 'lucide-react';
+import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 
 const SUB_BRANDS = [
@@ -79,6 +79,55 @@ export default function DiagnosticBuilder() {
   const [rJson, setRJson] = useState(SCORING_EXAMPLE);
   const [validation, setValidation] = useState(null);
   const [saving, setSaving] = useState(false);
+  const fileRef = useRef(null);
+
+  const exportCsv = async () => {
+    try {
+      const res = await fetch('/api/travel/diagnostic-banks/export.csv', {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'travel-diagnostic-banks.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.error(e.message || 'Failed to export');
+    }
+  };
+
+  const importCsv = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const res = await fetch('/api/travel/diagnostic-banks/import.csv', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${getAuthToken()}`,
+          'Content-Type': 'text/csv',
+        },
+        body: text,
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || `Import failed (${res.status})`);
+      const summary = `Imported ${body.imported}, updated ${body.updated}, skipped ${body.skipped}`;
+      if (body.errors?.length) {
+        notify.error(`${summary}. Row ${body.errors[0].rowNumber}: ${body.errors[0].reason}`);
+      } else {
+        notify.success(summary);
+      }
+    } catch (e) {
+      notify.error(e.message || 'Failed to import');
+    } finally {
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
 
   const validate = () => {
     const errors = [];
@@ -137,9 +186,30 @@ export default function DiagnosticBuilder() {
         <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
           <FileJson size={28} aria-hidden /> New Diagnostic Bank
         </h1>
-        <Link to="/travel/diagnostics" style={backLink}>
-          <ChevronLeft size={16} aria-hidden /> Back to list
-        </Link>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button type="button" onClick={exportCsv} style={secondaryBtn}>
+            <Download size={14} aria-hidden /> Export CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            style={secondaryBtn}
+            title="Bulk-upload diagnostic banks. Columns: subBrand, version, questionsJson, scoringRulesJson, isActive."
+          >
+            <Upload size={14} aria-hidden /> Import CSV
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={importCsv}
+            style={{ display: 'none' }}
+            aria-label="Upload diagnostic-banks CSV"
+          />
+          <Link to="/travel/diagnostics" style={backLink}>
+            <ChevronLeft size={16} aria-hidden /> Back to list
+          </Link>
+        </div>
       </header>
       <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
         Admin-only. Paste pre-prepared JSON for questions + scoring. The textareas

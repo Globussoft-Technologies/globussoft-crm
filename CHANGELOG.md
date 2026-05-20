@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## v3.9.1 — 2026-05-20 — Travel CRM CSV import/export
+
+Closes the Phase 1.5 polish-list item "CSV import for cost-master +
+diagnostic banks" from [docs/TRAVEL_CRM_SESSION_HANDOFF_2026-05-20.md](docs/TRAVEL_CRM_SESSION_HANDOFF_2026-05-20.md).
+Clinic admins can now bulk-onboard a supplier rate card or a batch of
+diagnostic Q-set versions without the API-only / paste-JSON detour.
+
+**New endpoints** (`backend/routes/travel_csv_io.js`, mounted at /api/travel):
+- `GET  /cost-master/export.csv`        — verifyToken + requireTravelTenant; filterable by ?subBrand, ?category
+- `POST /cost-master/import.csv`        — ADMIN | MANAGER; upserts by `(tenantId, subBrand, category, routeOrSku)`
+- `GET  /diagnostic-banks/export.csv`   — verifyToken + requireTravelTenant
+- `POST /diagnostic-banks/import.csv`   — ADMIN only; upserts by `(tenantId, subBrand, version)`
+
+Per-row error reports follow the existing `routes/csv_io.js` contract:
+`{ imported, updated, skipped, errors: [{ rowNumber, reason }] }` JSON, or
+re-downloadable as a CSV with `?errorReport=csv`. Diagnostic-bank rows
+reuse the `parseBank()` validator from `lib/travelDiagnosticScoring.js`
+so a bad JSON cell can't slip past write time and crash a downstream
+scoring call.
+
+**Frontend buttons:**
+- `frontend/src/pages/travel/CostMaster.jsx` — Export CSV / Import CSV
+  buttons next to Add rate. Export honours the active sub-brand + category
+  filters so a TMC ops user can dump just their rates.
+- `frontend/src/pages/travel/DiagnosticBuilder.jsx` — Export CSV / Import
+  CSV buttons in the header alongside the existing paste-JSON-and-create
+  flow. The paste path stays for one-off bank authoring; CSV is the bulk
+  path.
+
+**Gate spec:** `e2e/tests/travel-csv-io-api.spec.js` — 12 cases covering
+the auth + vertical gate, the role gate (MANAGER allowed on cost-master,
+denied on diagnostic-banks per the existing POST /diagnostic-banks
+contract), export shape (BOM + content-type + header line), happy-path
+import + per-row validation, ?errorReport=csv CSV re-download, and
+idempotent re-runs. Wired into both `deploy.yml` api_tests + `coverage.yml`.
+
 ## v3.9.0 — 2026-05-20 — Travel CRM vertical (Phase 1 backend + UI scaffolding)
 
 A new third `Tenant.vertical` value alongside `generic` + `wellness`. Hosts

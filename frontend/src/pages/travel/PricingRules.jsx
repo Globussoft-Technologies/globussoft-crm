@@ -26,14 +26,56 @@
 // Closes Phase 1.5 / 8e from the 2026-05-20 PM handoff. Backend routes were
 // already shipped; this is the missing admin UI on top.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  CalendarRange, ChevronLeft, Edit2, Filter,
-  Percent, Plus, Save, ToggleLeft, ToggleRight, Trash2, X,
+  CalendarRange, ChevronLeft, Download, Edit2, Filter,
+  Percent, Plus, Save, ToggleLeft, ToggleRight, Trash2, Upload, X,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+
+// Shared helpers for the CSV Export / Import buttons on both sections.
+// Same pattern as CostMaster.jsx + DiagnosticBuilder.jsx in v3.9.1.
+async function downloadCsv(notify, url, filename) {
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${getAuthToken()}` },
+    });
+    if (!res.ok) throw new Error(`Export failed (${res.status})`);
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objUrl);
+  } catch (e) {
+    notify.error(e.message || "Failed to export");
+  }
+}
+async function uploadCsv(notify, url, file, onDone) {
+  const text = await file.text();
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${getAuthToken()}`,
+      "Content-Type": "text/csv",
+    },
+    body: text,
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body?.error || `Import failed (${res.status})`);
+  const summary = `Imported ${body.imported}, updated ${body.updated}, skipped ${body.skipped}`;
+  if (body.errors?.length) {
+    notify.error(`${summary}. Row ${body.errors[0].rowNumber}: ${body.errors[0].reason}`);
+  } else {
+    notify.success(summary);
+  }
+  onDone?.();
+}
 
 const SUB_BRANDS = [
   { value: "tmc", label: "TMC" },
@@ -92,6 +134,7 @@ function SeasonsSection() {
   const [editingId, setEditingId] = useState(null);
   const blankForm = { subBrand: "rfu", seasonName: "", startDate: "", endDate: "", multiplier: "" };
   const [form, setForm] = useState(blankForm);
+  const fileRef = useRef(null);
 
   const load = () => {
     setLoading(true);
@@ -162,6 +205,23 @@ function SeasonsSection() {
 
   const showForm = adding || editingId != null;
 
+  const exportCsv = () => {
+    const qs = new URLSearchParams();
+    if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    return downloadCsv(notify, `/api/travel/seasons/export.csv?${qs.toString()}`, "travel-seasons.csv");
+  };
+  const importCsv = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await uploadCsv(notify, "/api/travel/seasons/import.csv", file, load);
+    } catch (err) {
+      notify.error(err.message || "Failed to import");
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
   return (
     <section style={card}>
       <div style={sectionHeader}>
@@ -170,11 +230,32 @@ function SeasonsSection() {
           Seasons
           <span style={countBadge}>{seasons.length}</span>
         </h2>
-        {!showForm && (
-          <button type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>
-            <Plus size={14} /> Add season
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={exportCsv} style={secondaryBtn}>
+            <Download size={14} /> Export CSV
           </button>
-        )}
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            style={secondaryBtn}
+            title="Bulk-upload seasons. Columns: subBrand, seasonName, startDate, endDate, multiplier."
+          >
+            <Upload size={14} /> Import CSV
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={importCsv}
+            style={{ display: "none" }}
+            aria-label="Upload seasons CSV"
+          />
+          {!showForm && (
+            <button type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>
+              <Plus size={14} /> Add season
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={filterRow}>
@@ -299,6 +380,7 @@ function MarkupRulesSection() {
     markupType: "pct", markupValue: "", priority: "100",
   };
   const [form, setForm] = useState(blankForm);
+  const fileRef = useRef(null);
 
   const load = () => {
     setLoading(true);
@@ -403,6 +485,24 @@ function MarkupRulesSection() {
 
   const showForm = adding || editingId != null;
 
+  const exportCsv = () => {
+    const qs = new URLSearchParams();
+    if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    if (filterScope) qs.set("scope", filterScope);
+    return downloadCsv(notify, `/api/travel/markup-rules/export.csv?${qs.toString()}`, "travel-markup-rules.csv");
+  };
+  const importCsv = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await uploadCsv(notify, "/api/travel/markup-rules/import.csv", file, load);
+    } catch (err) {
+      notify.error(err.message || "Failed to import");
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
   return (
     <section style={card}>
       <div style={sectionHeader}>
@@ -411,11 +511,32 @@ function MarkupRulesSection() {
           Markup Rules
           <span style={countBadge}>{rules.length}</span>
         </h2>
-        {!showForm && (
-          <button type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>
-            <Plus size={14} /> Add rule
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={exportCsv} style={secondaryBtn}>
+            <Download size={14} /> Export CSV
           </button>
-        )}
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            style={secondaryBtn}
+            title="Bulk-upload markup rules. Columns: subBrand, scope, matchKeyJson, markupPct OR markupFlat, priority, isActive."
+          >
+            <Upload size={14} /> Import CSV
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={importCsv}
+            style={{ display: "none" }}
+            aria-label="Upload markup rules CSV"
+          />
+          {!showForm && (
+            <button type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>
+              <Plus size={14} /> Add rule
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={filterRow}>

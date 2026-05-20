@@ -431,4 +431,340 @@ router.post(
   },
 );
 
+// ── Seasons (TravelSeasonCalendar) ─────────────────────────────────
+
+const SEASON_COLS = [
+  { key: "id", header: "id" },
+  { key: "subBrand", header: "subBrand" },
+  { key: "seasonName", header: "seasonName" },
+  {
+    key: "startDate",
+    header: "startDate",
+    render: (r) => (r.startDate ? new Date(r.startDate).toISOString().slice(0, 10) : ""),
+  },
+  {
+    key: "endDate",
+    header: "endDate",
+    render: (r) => (r.endDate ? new Date(r.endDate).toISOString().slice(0, 10) : ""),
+  },
+  { key: "multiplier", header: "multiplier" },
+];
+
+router.get("/seasons/export.csv", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+    if (req.query.subBrand) {
+      assertValidSubBrand(String(req.query.subBrand));
+      where.subBrand = String(req.query.subBrand);
+    }
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    narrowWhereBySubBrand(where, allowed);
+
+    const rows = await prisma.travelSeasonCalendar.findMany({
+      where,
+      orderBy: [{ subBrand: "asc" }, { startDate: "asc" }],
+      take: 5000,
+    });
+    const csv = serializeRows(SEASON_COLS, rows);
+    setCsvDownloadHeaders(res, "travel-seasons-export.csv");
+    res.send(csv);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-csv] seasons export error:", e.message);
+    res.status(500).json({ error: "Failed to export seasons" });
+  }
+});
+
+router.post(
+  "/seasons/import.csv",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const csvText = readUploadedCsv(req);
+      if (!csvText) {
+        return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
+      }
+      const { rows } = parseCsv(csvText);
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
+      }
+      if (rows.length > MAX_IMPORT_ROWS) {
+        return res.status(413).json({
+          error: `Too many rows. Max ${MAX_IMPORT_ROWS}`,
+          code: "TOO_MANY_ROWS",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      let imported = 0;
+      let updated = 0;
+      const errors = [];
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNumber = i + 2;
+        try {
+          const subBrand = String(row.subBrand || "").trim();
+          const seasonName = String(row.seasonName || "").trim();
+          const startDateStr = String(row.startDate || "").trim();
+          const endDateStr = String(row.endDate || "").trim();
+
+          if (!subBrand || !seasonName || !startDateStr || !endDateStr) {
+            errors.push({
+              rowNumber,
+              reason: "missing subBrand, seasonName, startDate, or endDate",
+            });
+            continue;
+          }
+          try { assertValidSubBrand(subBrand); }
+          catch (subBrandErr) { errors.push({ rowNumber, reason: subBrandErr.message }); continue; }
+          if (!canAccessSubBrand(allowed, subBrand)) {
+            errors.push({ rowNumber, reason: `sub-brand access denied: ${subBrand}` });
+            continue;
+          }
+          const startDate = new Date(startDateStr);
+          const endDate = new Date(endDateStr);
+          if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime())) {
+            errors.push({ rowNumber, reason: `invalid date(s): ${startDateStr} / ${endDateStr}` });
+            continue;
+          }
+          if (endDate < startDate) {
+            errors.push({ rowNumber, reason: "endDate must be on or after startDate" });
+            continue;
+          }
+          let multiplier = null;
+          if (row.multiplier !== "" && row.multiplier != null) {
+            const m = Number(row.multiplier);
+            if (!Number.isFinite(m) || m < 0) {
+              errors.push({ rowNumber, reason: `invalid multiplier: ${row.multiplier}` });
+              continue;
+            }
+            multiplier = m;
+          }
+
+          const data = { subBrand, seasonName, startDate, endDate, multiplier };
+          // Natural key: (tenantId, subBrand, seasonName) — the same season for
+          // the same sub-brand should overwrite, not duplicate.
+          const existing = await prisma.travelSeasonCalendar.findFirst({
+            where: { tenantId: req.travelTenant.id, subBrand, seasonName },
+          });
+          if (existing) {
+            await prisma.travelSeasonCalendar.update({ where: { id: existing.id }, data });
+            updated++;
+          } else {
+            await prisma.travelSeasonCalendar.create({
+              data: { ...data, tenantId: req.travelTenant.id },
+            });
+            imported++;
+          }
+        } catch (rowErr) {
+          errors.push({ rowNumber, reason: rowErr.message });
+        }
+      }
+
+      await writeImportAudit(req, "TravelSeasonCalendar", {
+        rowCount: rows.length,
+        imported,
+        updated,
+        errorCount: errors.length,
+      });
+
+      if (req.query.errorReport === "csv" && errors.length > 0) {
+        setCsvDownloadHeaders(res, "travel-seasons-errors.csv");
+        return res.send(buildErrorReport(errors));
+      }
+      res.json({ imported, updated, skipped: errors.length, errors });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-csv] seasons import error:", e.message);
+      res.status(500).json({ error: "Failed to import seasons" });
+    }
+  },
+);
+
+// ── Markup rules (TravelMarkupRule) ────────────────────────────────
+
+const VALID_SCOPES = ["flight", "hotel", "transport", "package"];
+
+const MARKUP_RULE_COLS = [
+  { key: "id", header: "id" },
+  { key: "subBrand", header: "subBrand" },
+  { key: "scope", header: "scope" },
+  { key: "matchKeyJson", header: "matchKeyJson" },
+  { key: "markupPct", header: "markupPct" },
+  { key: "markupFlat", header: "markupFlat" },
+  { key: "priority", header: "priority" },
+  { key: "isActive", header: "isActive" },
+];
+
+router.get("/markup-rules/export.csv", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const where = { tenantId: req.travelTenant.id };
+    if (req.query.subBrand) {
+      assertValidSubBrand(String(req.query.subBrand));
+      where.subBrand = String(req.query.subBrand);
+    }
+    if (req.query.scope) {
+      if (!VALID_SCOPES.includes(String(req.query.scope))) {
+        return res.status(400).json({
+          error: `scope must be one of: ${VALID_SCOPES.join(", ")}`,
+          code: "INVALID_SCOPE",
+        });
+      }
+      where.scope = String(req.query.scope);
+    }
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    narrowWhereBySubBrand(where, allowed);
+
+    const rows = await prisma.travelMarkupRule.findMany({
+      where,
+      orderBy: [{ subBrand: "asc" }, { priority: "asc" }],
+      take: 5000,
+    });
+    const csv = serializeRows(MARKUP_RULE_COLS, rows);
+    setCsvDownloadHeaders(res, "travel-markup-rules-export.csv");
+    res.send(csv);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-csv] markup-rules export error:", e.message);
+    res.status(500).json({ error: "Failed to export markup rules" });
+  }
+});
+
+router.post(
+  "/markup-rules/import.csv",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const csvText = readUploadedCsv(req);
+      if (!csvText) {
+        return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
+      }
+      const { rows } = parseCsv(csvText);
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
+      }
+      if (rows.length > MAX_IMPORT_ROWS) {
+        return res.status(413).json({
+          error: `Too many rows. Max ${MAX_IMPORT_ROWS}`,
+          code: "TOO_MANY_ROWS",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      let imported = 0;
+      let updated = 0;
+      const errors = [];
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNumber = i + 2;
+        try {
+          const subBrand = String(row.subBrand || "").trim();
+          const scope = String(row.scope || "").trim();
+          const matchKeyJson = String(row.matchKeyJson || "").trim();
+          if (!subBrand || !scope || !matchKeyJson) {
+            errors.push({
+              rowNumber,
+              reason: "missing subBrand, scope, or matchKeyJson",
+            });
+            continue;
+          }
+          try { assertValidSubBrand(subBrand); }
+          catch (subBrandErr) { errors.push({ rowNumber, reason: subBrandErr.message }); continue; }
+          if (!canAccessSubBrand(allowed, subBrand)) {
+            errors.push({ rowNumber, reason: `sub-brand access denied: ${subBrand}` });
+            continue;
+          }
+          if (!VALID_SCOPES.includes(scope)) {
+            errors.push({ rowNumber, reason: `invalid scope: ${scope}` });
+            continue;
+          }
+          try { JSON.parse(matchKeyJson); }
+          catch { errors.push({ rowNumber, reason: "matchKeyJson is not valid JSON" }); continue; }
+
+          // Exactly one of markupPct / markupFlat must be set — mirrors the
+          // EXACTLY_ONE_MARKUP_TYPE invariant from routes/travel_pricing.js.
+          const hasPct = row.markupPct !== "" && row.markupPct != null;
+          const hasFlat = row.markupFlat !== "" && row.markupFlat != null;
+          if (hasPct === hasFlat) {
+            errors.push({ rowNumber, reason: "exactly one of markupPct / markupFlat must be set" });
+            continue;
+          }
+          let markupPct = null;
+          let markupFlat = null;
+          if (hasPct) {
+            const p = Number(row.markupPct);
+            if (!Number.isFinite(p) || p < 0) {
+              errors.push({ rowNumber, reason: `invalid markupPct: ${row.markupPct}` });
+              continue;
+            }
+            markupPct = p;
+          } else {
+            const f = Number(row.markupFlat);
+            if (!Number.isFinite(f) || f < 0) {
+              errors.push({ rowNumber, reason: `invalid markupFlat: ${row.markupFlat}` });
+              continue;
+            }
+            markupFlat = f;
+          }
+          const priority = row.priority !== "" && row.priority != null
+            ? parseInt(row.priority, 10)
+            : 100;
+          if (!Number.isFinite(priority)) {
+            errors.push({ rowNumber, reason: `invalid priority: ${row.priority}` });
+            continue;
+          }
+          const isActive = row.isActive ? row.isActive !== "false" : true;
+
+          const data = { subBrand, scope, matchKeyJson, markupPct, markupFlat, priority, isActive };
+          // Natural key: (tenantId, subBrand, scope, matchKeyJson). Same rule
+          // expressed twice in a CSV (e.g. re-imports) updates instead of
+          // creating a second row. matchKeyJson is normalised via JSON.parse
+          // round-trip so whitespace / key-order differences don't fork rows.
+          const normalisedMatchKey = JSON.stringify(JSON.parse(matchKeyJson));
+          const existing = await prisma.travelMarkupRule.findFirst({
+            where: { tenantId: req.travelTenant.id, subBrand, scope, matchKeyJson: normalisedMatchKey },
+          });
+          data.matchKeyJson = normalisedMatchKey;
+          if (existing) {
+            await prisma.travelMarkupRule.update({ where: { id: existing.id }, data });
+            updated++;
+          } else {
+            await prisma.travelMarkupRule.create({
+              data: { ...data, tenantId: req.travelTenant.id },
+            });
+            imported++;
+          }
+        } catch (rowErr) {
+          errors.push({ rowNumber, reason: rowErr.message });
+        }
+      }
+
+      await writeImportAudit(req, "TravelMarkupRule", {
+        rowCount: rows.length,
+        imported,
+        updated,
+        errorCount: errors.length,
+      });
+
+      if (req.query.errorReport === "csv" && errors.length > 0) {
+        setCsvDownloadHeaders(res, "travel-markup-rules-errors.csv");
+        return res.send(buildErrorReport(errors));
+      }
+      res.json({ imported, updated, skipped: errors.length, errors });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-csv] markup-rules import error:", e.message);
+      res.status(500).json({ error: "Failed to import markup rules" });
+    }
+  },
+);
+
 module.exports = router;

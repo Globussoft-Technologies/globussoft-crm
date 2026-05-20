@@ -378,3 +378,163 @@ test.describe("Travel CSV — diagnostic-banks import", () => {
     expect(secondBody.imported).toBe(0);
   });
 });
+
+// ── Seasons CSV (extends v3.9.1 pattern to TravelSeasonCalendar) ──
+
+test.describe("Travel CSV — seasons", () => {
+  test("export returns BOM + column header", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/seasons/export.csv`, {
+        headers: jsonHeaders(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(200);
+    expect(r.headers()["content-type"]).toMatch(/text\/csv/);
+    const text = await r.text();
+    expect(text.startsWith(UTF8_BOM)).toBe(true);
+    expect(text).toContain("subBrand,seasonName");
+  });
+
+  test("generic admin → 403 WRONG_VERTICAL on seasons export", async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/seasons/export.csv`, {
+        headers: jsonHeaders(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(403);
+  });
+
+  test("import 400 NO_CSV without body", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/seasons/import.csv`, {
+        headers: csvHeaders(token),
+        data: "",
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(400);
+    expect((await r.json()).code).toBe("NO_CSV");
+  });
+
+  test("import upserts by (subBrand, seasonName) + reports per-row validation errors", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const seasonName = `${RUN_TAG}-spring`;
+    const csvBody = [
+      "subBrand,seasonName,startDate,endDate,multiplier",
+      `tmc,${seasonName},2026-03-01,2026-04-30,1.25`,
+      // inverted dates
+      `tmc,${RUN_TAG}-inverted,2026-06-01,2026-05-01,1.1`,
+      // invalid multiplier
+      `tmc,${RUN_TAG}-badmult,2026-08-01,2026-08-31,-1`,
+    ].join("\r\n");
+    const r = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/seasons/import.csv`, {
+        headers: csvHeaders(token),
+        data: csvBody,
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.imported + body.updated).toBeGreaterThanOrEqual(1);
+    expect(body.errors.length).toBeGreaterThanOrEqual(2);
+    expect(body.errors.some((e) => /endDate.*startDate/i.test(e.reason))).toBe(true);
+    expect(body.errors.some((e) => /multiplier/i.test(e.reason))).toBe(true);
+
+    // Re-running the same CSV updates instead of duplicating.
+    const second = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/seasons/import.csv`, {
+        headers: csvHeaders(token),
+        data: csvBody,
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    const secondBody = await second.json();
+    expect(secondBody.updated).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ── Markup-rules CSV ──────────────────────────────────────────────
+
+test.describe("Travel CSV — markup-rules", () => {
+  test("export returns BOM + column header", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/markup-rules/export.csv`, {
+        headers: jsonHeaders(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(200);
+    const text = await r.text();
+    expect(text.startsWith(UTF8_BOM)).toBe(true);
+    expect(text).toContain("subBrand,scope,matchKeyJson");
+  });
+
+  test("export rejects invalid ?scope with 400 INVALID_SCOPE", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/markup-rules/export.csv?scope=wormhole`, {
+        headers: jsonHeaders(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(400);
+    expect((await r.json()).code).toBe("INVALID_SCOPE");
+  });
+
+  test("import enforces EXACTLY_ONE markupPct / markupFlat invariant + upserts by (subBrand, scope, matchKeyJson)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const matchKey = JSON.stringify({ marker: `${RUN_TAG}-hotel-A` });
+    const csvBody = [
+      "subBrand,scope,matchKeyJson,markupPct,markupFlat,priority",
+      // good — pct only
+      `tmc,hotel,"${matchKey.replace(/"/g, '""')}",0.15,,100`,
+      // BAD — both pct + flat set
+      `tmc,hotel,"{""marker"":""${RUN_TAG}-both""}",0.1,500,100`,
+      // BAD — neither set
+      `tmc,hotel,"{""marker"":""${RUN_TAG}-none""}",,,100`,
+      // BAD — invalid scope
+      `tmc,wormhole,"{""marker"":""${RUN_TAG}-bad""}",0.05,,100`,
+      // BAD — non-parseable matchKeyJson
+      `tmc,hotel,{not-json,0.05,,100`,
+    ].join("\r\n");
+    const r = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/markup-rules/import.csv`, {
+        headers: csvHeaders(token),
+        data: csvBody,
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.imported + body.updated).toBeGreaterThanOrEqual(1);
+    expect(body.errors.length).toBeGreaterThanOrEqual(4);
+    expect(body.errors.some((e) => /exactly one/i.test(e.reason))).toBe(true);
+    expect(body.errors.some((e) => /invalid scope/i.test(e.reason))).toBe(true);
+    expect(body.errors.some((e) => /matchKeyJson|json/i.test(e.reason))).toBe(true);
+
+    // Re-running same body upserts the one good row.
+    const second = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/markup-rules/import.csv`, {
+        headers: csvHeaders(token),
+        data: csvBody,
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    const secondBody = await second.json();
+    expect(secondBody.updated).toBeGreaterThanOrEqual(1);
+  });
+});

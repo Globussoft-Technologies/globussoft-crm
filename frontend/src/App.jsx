@@ -85,6 +85,7 @@ const FieldPermissions = lazy(() => import("./pages/FieldPermissions"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
+const CommissionData = lazy(() => import("./pages/CommissionData"));
 const RevenueGoals = lazy(() => import("./pages/RevenueGoals"));
 const LeadRouting = lazy(() => import("./pages/LeadRouting"));
 const Territories = lazy(() => import("./pages/Territories"));
@@ -149,6 +150,7 @@ const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
+const WellnessBookAppointment = lazy(() => import("./pages/wellness/BookAppointment"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
 const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
 const WellnessPublicBooking = lazy(
@@ -169,9 +171,10 @@ const WellnessWaitlist = lazy(() => import("./pages/wellness/Waitlist"));
 // Inventory is implemented as a tab inside PatientDetail; this stub explains
 // that and links to the patient list.
 const WellnessInventory = lazy(() => import("./pages/wellness/Inventory"));
-// Wave 11 Agent HH — Inventory backbone admin pages (categories, vendors,
+// Wave 11 Agent HH — Inventory backbone admin pages (categories, products, vendors,
 // receipts, adjustments, auto-consumption rules). All ADMIN/MANAGER-only.
 const WellnessProductCategories = lazy(() => import("./pages/wellness/ProductCategories"));
+const WellnessProducts = lazy(() => import("./pages/wellness/Products"));
 const WellnessVendors = lazy(() => import("./pages/wellness/Vendors"));
 const WellnessInventoryReceipts = lazy(() => import("./pages/wellness/InventoryReceipts"));
 const WellnessInventoryAdjustments = lazy(() => import("./pages/wellness/InventoryAdjustments"));
@@ -227,9 +230,9 @@ function wellnessLandingFor(user) {
     case 'stylist':
       return '/wellness/calendar';
     default:
-      // No wellnessRole + not ADMIN/MANAGER — read-only fallback to calendar
-      // so we never silently drop them on the org-wide dashboard.
-      return '/wellness/calendar';
+      // No wellnessRole + not ADMIN/MANAGER — regular user (patient).
+      // Send to appointment booking page where they can book with doctors.
+      return '/wellness/book-appointment';
   }
 }
 
@@ -781,6 +784,14 @@ export default function App() {
                       }
                     />
                     <Route
+                      path="commission-data"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Commission Data requires admin access.">
+                          <CommissionData />
+                        </RoleGuard>
+                      }
+                    />
+                    <Route
                       path="revenue-goals"
                       element={
                         <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="Revenue Goals requires staff access.">
@@ -936,6 +947,7 @@ export default function App() {
                 </WellnessOnly>
               } />
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
+              <Route path="wellness/book-appointment" element={<WellnessOnly><WellnessBookAppointment /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
               <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
@@ -959,6 +971,13 @@ export default function App() {
                 <WellnessOnly>
                   <RoleGuard allow={["ADMIN", "MANAGER"]} message="Product categories require manager access.">
                     <WellnessProductCategories />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              <Route path="wellness/products" element={
+                <WellnessOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Products require manager access.">
+                    <WellnessProducts />
                   </RoleGuard>
                 </WellnessOnly>
               } />

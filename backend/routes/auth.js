@@ -13,6 +13,21 @@ const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 // In-memory store for password reset tokens (token -> { userId, expiresAt })
 const resetTokens = new Map();
 
+// Public endpoint: Get list of tenants for customer registration
+router.get("/public/tenants", async (req, res) => {
+  try {
+    const tenants = await prisma.tenant.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json(tenants);
+  } catch (err) {
+    console.error("[auth/public/tenants] error:", err.message);
+    res.status(500).json({ error: "Failed to load tenants" });
+  }
+});
+
 // #526 (CRIT-01): Send password-reset link via SendGrid. Local helper
 // because the same `sendSendGrid` function is duplicated in
 // `lib/notificationService.js` and `routes/email_scheduling.js`; promoting
@@ -236,13 +251,25 @@ router.get("/customer/tenants", async (req, res) => {
 // Creates a new User with userType: 'CUSTOMER' and assigns the tenant's CUSTOMER role
 router.post("/customer/register", async (req, res) => {
   try {
-    const { email, password, name, tenantId } = req.body || {};
+    console.log('[customer/register] Full req.body:', JSON.stringify(req.body));
+    console.log('[customer/register] Stripped fields:', req.strippedFields);
+
+    // Restore tenantId from strippedFields if it was stripped
+    let { email, password, name, tenantId } = req.body || {};
+    if (!tenantId && req.strippedFields?.tenantId) {
+      tenantId = req.strippedFields.tenantId;
+      console.log('[customer/register] Restored tenantId from strippedFields:', tenantId);
+    }
 
     // Input validation
     if (!email || typeof email !== "string" || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email, password, and tenantId are required" });
     }
+
+    console.log('[customer/register] Received tenantId:', tenantId, 'type:', typeof tenantId);
+
     if (!tenantId || typeof tenantId !== "number") {
+      console.log('[customer/register] Validation FAILED - tenantId:', tenantId, 'type:', typeof tenantId);
       return res.status(400).json({ error: "tenantId must be a valid number" });
     }
 

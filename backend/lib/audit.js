@@ -194,12 +194,23 @@ async function writeAudit(entity, action, entityId, userId, tenantId, details, o
       createdAt: createdAt.toISOString(),
     });
 
+    // #616: if userId doesn't exist (e.g. system event, or deleted user),
+    // validate it exists before inserting. If not, set to null.
+    let validatedUserId = userIdNum;
+    if (userIdNum && userIdNum > 0) {
+      const userExists = await prisma.user.findUnique({ where: { id: userIdNum } }).catch(() => null);
+      if (!userExists) {
+        console.warn(`[audit] userId ${userIdNum} not found, setting to null`);
+        validatedUserId = null;
+      }
+    }
+
     await prisma.auditLog.create({
       data: {
         action,
         entity,
         entityId: entityIdNum,
-        userId: userIdNum,
+        userId: validatedUserId,
         tenantId: tenantIdNum,
         details: detailsStr,
         createdAt,

@@ -58,6 +58,7 @@ export default function WorkingHoursEditor() {
     });
   }, [doctorId]);
 
+
   const updateDay = (idx, patch) => {
     setSchedule((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
   };
@@ -84,6 +85,7 @@ export default function WorkingHoursEditor() {
     } catch (_err) { /* fetchApi already toasted */ }
     setSaving(false);
   };
+
 
   const doctors = staff.filter((u) => u.wellnessRole === 'doctor' || u.wellnessRole === 'professional');
 
@@ -145,6 +147,7 @@ function Row({ s, idx, updateDay }) {
     </>
   );
 }
+
 
 const inputStyle = { padding: '0.4rem 0.6rem', borderRadius: 8, border: '1px solid var(--border-color, rgba(255,255,255,0.1))', background: 'transparent', color: 'var(--text-primary)', fontSize: '0.85rem' };
 const btnPrimary = { padding: '0.55rem 1.25rem', background: 'var(--primary-color, var(--accent-color))', border: 'none', color: '#fff', borderRadius: 8, cursor: 'pointer', fontWeight: 600 };

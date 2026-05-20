@@ -76,7 +76,7 @@ model Tenant {
   emailRetention  Boolean  @default(true)
   isActive        Boolean  @default(true)
   ownerEmail      String?
-  adsgptLogin     String?  // AdsGPT aMember username or email for SSO
+  adsgptLogin     String? // AdsGPT aMember username or email for SSO
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -285,12 +285,16 @@ model Tenant {
   // goals. Both per-tenant scoped, cascade-delete with the tenant.
   commissionProfiles CommissionProfile[]
   staffRevenueGoals  StaffRevenueGoal[]
+  commissionData     CommissionData[]
 
   // Notification preferences (per-user opt-in/out)
   notificationPreferences NotificationPreference[]
 
   // RBAC — roles + permissions
   roles Role[]
+
+  // Wave 3 — Staff availability blocks (breaks, leave, etc.)
+  blockTimes BlockTime[] @relation("TenantBlockTimes")
 }
 
 model User {
@@ -298,7 +302,7 @@ model User {
   email     String   @unique
   password  String
   role      String   @default("USER") // ADMIN, USER, MANAGER
-  userType  String   @default("STAFF")   // STAFF | OWNER | CUSTOMER
+  userType  String   @default("STAFF") // STAFF | OWNER | CUSTOMER
   name      String?
   createdAt DateTime @default(now())
 
@@ -319,6 +323,7 @@ model User {
 
   // Wellness sub-role (orthogonal to RBAC role)
   wellnessRole String? // doctor, professional, telecaller, helper
+  specialty    String? // e.g., Dermatology, Cardiology, General Practice (for doctors)
 
   // #618 — soft-deactivation. Set to now() when an admin clicks Deactivate
   // in the Staff Directory; cleared back to null on Reactivate. Reversible
@@ -360,6 +365,12 @@ model User {
   // Wellness vertical
   doctorVisits        Visit[]        @relation("DoctorVisits")
   doctorPrescriptions Prescription[] @relation("DoctorPrescriptions")
+  // One self-booking User → many Patient rows (one per tenant the user
+  // is registered at). Enforcement that there's at most ONE Patient per
+  // (tenantId, userId) lives in the @@unique constraint on the Patient
+  // model. Singular `Patient?` here would force a 1-to-1 globally and
+  // contradict the multi-tenant intent.
+  patientProfiles     Patient[]      @relation("PatientUser")
 
   // Wave 11 Agent GG — per-practitioner availability.
   doctorHolidays     Holiday[]      @relation("DoctorHolidays")
@@ -383,11 +394,17 @@ model User {
   // PRD Gap §1.6 — Per-staff revenue goals (distinct from generic Quota).
   staffRevenueGoals StaffRevenueGoal[]
 
+  // Commission data — historical payroll/commission records.
+  commissionData CommissionData[] @relation("commissionData")
+
   // Subscriptions
   subscriptions Subscription[]
 
   // Notification preferences
   notificationPreference NotificationPreference?
+
+  // Wave 3 — Staff availability blocks (breaks, leave, etc.)
+  blockTimes BlockTime[] @relation("UserBlockTimes")
 }
 
 model Contact {
@@ -923,17 +940,37 @@ model SequenceStep {
 }
 
 model Product {
-  id           Int             @id @default(autoincrement())
+  id           Int      @id @default(autoincrement())
   name         String
-  sku          String?         @unique
-  description  String?
-  price        Float
-  isRecurring  Boolean         @default(true) // true = MRR, false = One-Time
+  sku          String?  @unique
+  description  String?  @db.Text
+  price        Float // sale_price / MRP
+  isRecurring  Boolean  @default(true) // true = MRR, false = One-Time
   // Agent A: low stock support — threshold=0 disables alerting per product
-  threshold    Int             @default(0)
-  currentStock Int             @default(0)
-  createdAt    DateTime        @default(now())
-  lineItems    QuoteLineItem[]
+  threshold    Int      @default(0) // threshold in complete units
+  currentStock Int      @default(0) // number of complete units in stock
+  partialMlUsed Float   @default(0) // ml consumed from the current open unit (0 to volume-1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+
+  // Product catalog fields
+  brandName       String? // Brand/Manufacturer
+  productType     String? // Sale | Consumption
+  productCode     String? // Internal product code
+  hsnCode         String? // HSN code for taxes
+  volume          Float? // Product volume/quantity
+  unit            String? // ml, gm, piece, kg, ltr, etc.
+  discountedPrice Float? // Discounted price
+  dealerPrice     Float? // Dealer price
+  purchasePrice   Float? // Cost price
+  manufacturer    String? // Manufacturer name
+  tax             Float? // Tax percentage
+  isTaxIncluded   Boolean @default(false) // Is tax included in price?
+  barcode         String? // Product barcode
+  imageUrl        String? // Product image URL
+  isActive        Boolean @default(true)
+
+  lineItems QuoteLineItem[]
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -946,6 +983,9 @@ model Product {
   receipts             InventoryReceipt[]
   adjustments          InventoryAdjustment[]
   autoConsumptionRules AutoConsumptionRule[]
+
+  @@index([tenantId, categoryId])
+  @@index([tenantId, isActive])
 }
 
 model Quote {
@@ -1535,25 +1575,25 @@ model PushTemplate {
 }
 
 model NotificationPreference {
-  id                Int      @id @default(autoincrement())
-  userId            Int      @unique
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenantId          Int
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       Int    @id @default(autoincrement())
+  userId   Int    @unique
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Per-category toggles: { deal: true, task: false, ticket: true, lead: true, approval: true, leave: true, expense: true, ticket: true }
-  categoryToggles   Json     @default("{\"deal\": true, \"task\": true, \"ticket\": true, \"lead\": true, \"approval\": true, \"leave\": true, \"expense\": true}")
+  categoryToggles Json @default("{\"deal\": true, \"task\": true, \"ticket\": true, \"lead\": true, \"approval\": true, \"leave\": true, \"expense\": true}")
 
   // Per-channel toggles: { db: true, socket: true, push: true, email: true }
-  channels          Json     @default("{\"db\": true, \"socket\": true, \"push\": false, \"email\": false}")
+  channels Json @default("{\"db\": true, \"socket\": true, \"push\": false, \"email\": false}")
 
   // Quiet hours (24h format, e.g. "22:00" to "07:00")
-  quietHoursStart   String?  // "HH:MM"
-  quietHoursEnd     String?  // "HH:MM"
-  timezone          String?  // "Asia/Kolkata"
+  quietHoursStart String? // "HH:MM"
+  quietHoursEnd   String? // "HH:MM"
+  timezone        String? // "Asia/Kolkata"
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId])
 }
@@ -2473,6 +2513,12 @@ model Patient {
   locationId Int?
   location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
+  // Self-booking user (wellness users can book their own appointments)
+  // Composite unique constraint: prevents duplicate userId within a tenant,
+  // but allows different tenants to each link a patient to the same user.
+  userId Int?
+  user   User? @relation("PatientUser", fields: [userId], references: [id], onDelete: SetNull)
+
   visits              Visit[]
   prescriptions       Prescription[]
   consents            ConsentForm[]
@@ -2512,9 +2558,14 @@ model Patient {
   // DUPLICATE_PHONE. Backfill + merge MUST run before this can apply
   // — see backend/scripts/backfill-patient-normalized-phone.js.
   @@unique([tenantId, normalizedPhone], name: "patient_tenant_normalized_phone_unique")
+  // safe-unique: replaces the single-column `userId @unique` removed in
+  // d8aab25; 0c9b59a already verified zero duplicate userId in the live
+  // Patient table, and (tenantId, userId) is strictly ≤ as strict.
+  @@unique([tenantId, userId], name: "patient_tenant_user_unique")
   @@index([tenantId, name])
   @@index([tenantId, phone])
   @@index([tenantId, locationId])
+  @@index([tenantId, userId])
   @@index([contactId])
   // #534 (PERF-1): Patient list query is `where: { tenantId } orderBy: { createdAt: desc }`.
   // The composite (tenantId, createdAt) index lets MySQL satisfy both the
@@ -2539,12 +2590,24 @@ model Service {
   categoryId      Int?
   serviceCategory ServiceCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
-  ticketTier     String  @default("medium") // low, medium, high
-  basePrice      Float   @default(0)
-  durationMin    Int     @default(30)
-  targetRadiusKm Int? // null = unlimited
-  description    String? @db.Text
-  isActive       Boolean @default(true)
+  ticketTier      String  @default("medium") // low, medium, high
+  basePrice       Float   @default(0)
+  discountedPrice Float? // discounted / promotional price (Zylu import)
+  durationMin     Int     @default(30)
+  targetRadiusKm  Int? // null = unlimited
+  description     String? @db.Text
+  isActive        Boolean @default(true)
+
+  // Zylu POS import fields (v3.7.16 Wave 1)
+  gender                String? // Unisex, Male, Female (for salon/beauty services)
+  code                  String? // service code from POS system (e.g. SKU)
+  isStartingPrice       Boolean @default(false)
+  isHomeService         Boolean @default(false)
+  hidePriceFromCustomer Boolean @default(false)
+  tax                   Float? // tax percentage or amount
+  isTaxIncluded         Boolean @default(false) // is basePrice inclusive of tax
+  displayOrder          Int     @default(0) // sort order in picker/list (lower = earlier)
+  imageUrls             String? @db.Text // JSON array of image URLs
 
   // Wave 2 Agent LL — booking-widget completion (2026-05-08 Google Doc audit).
   // JSON-string column listing the BookingType variants this service supports
@@ -2806,7 +2869,7 @@ model TreatmentPlan {
 model ServiceConsumption {
   id          Int    @id @default(autoincrement())
   productName String
-  qty         Int    @default(1)
+  qty         Float  @default(1) // quantity in ml (or product's unit)
   unitCost    Float  @default(0)
 
   visitId Int
@@ -3172,6 +3235,8 @@ model ProductCategory {
   tenantId  Int               @default(1)
   tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name      String
+  color     String? // Category color for UI (hex code)
+  imageUrl  String? // Category image URL
   // Self-referential hierarchy for sub-categories ("Consumables > Sterile >
   // Needles"). SetNull so deleting a parent doesn't cascade-delete children;
   // they bubble up to the root and the admin can re-nest manually.
@@ -3185,6 +3250,7 @@ model ProductCategory {
   products Product[]
 
   @@index([tenantId, parentId])
+  @@index([tenantId, isActive])
 }
 
 model Vendor {
@@ -3761,6 +3827,11 @@ model ServiceCategory {
   parent   ServiceCategory?  @relation("ServiceCategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children ServiceCategory[] @relation("ServiceCategoryHierarchy")
 
+  // Brand color for UI (hex code)
+  color       String?
+  description String? @db.Text
+  imageUrl    String?
+
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3841,6 +3912,8 @@ model CommissionProfile {
   basis             String   @default("REVENUE_PERCENT")
   // Optional Service category filter (e.g. "Aesthetics"). Null = applies to all.
   appliesToCategory String?
+  // Optional Product filter (e.g. "Hair Dye"). Null = applies to all.
+  appliesToProduct  String?
   isActive          Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -3850,6 +3923,57 @@ model CommissionProfile {
 
   @@unique([tenantId, name])
   @@index([tenantId, isActive])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Commission Data — payroll/commission records per employee per period
+// Stores historical commission data with detailed revenue breakdowns.
+// ─────────────────────────────────────────────────────────────────────
+model CommissionData {
+  id                               Int      @id @default(autoincrement())
+  tenantId                         Int      @default(1)
+  tenant                           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId                           Int?
+  user                             User?    @relation("commissionData", fields: [userId], references: [id], onDelete: SetNull)
+  employeeName                     String
+  periodStart                      DateTime
+  periodEnd                        DateTime
+  serviceRevenue                   Decimal  @default(0) @db.Decimal(14, 2)
+  packageRedemptionCommissionBase  Decimal  @default(0) @db.Decimal(14, 2)
+  packageRedemptionCommissionBasePrice Decimal @default(0) @db.Decimal(14, 2)
+  serviceCount                     Int      @default(0)
+  serviceCommissionableAmount      Decimal  @default(0) @db.Decimal(14, 2)
+  serviceCommission                Decimal  @default(0) @db.Decimal(14, 2)
+  productRevenue                   Decimal  @default(0) @db.Decimal(14, 2)
+  productCount                     Int      @default(0)
+  productCommissionableAmount      Decimal  @default(0) @db.Decimal(14, 2)
+  productCommission                Decimal  @default(0) @db.Decimal(14, 2)
+  packageRevenue                   Decimal  @default(0) @db.Decimal(14, 2)
+  packageCount                     Int      @default(0)
+  packageCommissionableAmount      Decimal  @default(0) @db.Decimal(14, 2)
+  packageCommission                Decimal  @default(0) @db.Decimal(14, 2)
+  membershipRevenue                Decimal  @default(0) @db.Decimal(14, 2)
+  membershipCount                  Int      @default(0)
+  membershipCommissionableAmount   Decimal  @default(0) @db.Decimal(14, 2)
+  membershipCommission             Decimal  @default(0) @db.Decimal(14, 2)
+  prepaidCardRevenue               Decimal  @default(0) @db.Decimal(14, 2)
+  prepaidCardCount                 Int      @default(0)
+  prepaidCardCommissionableAmount  Decimal  @default(0) @db.Decimal(14, 2)
+  prepaidCardCommission            Decimal  @default(0) @db.Decimal(14, 2)
+  totalCommissionableAmount        Decimal  @default(0) @db.Decimal(14, 2)
+  commission                       Decimal  @default(0) @db.Decimal(14, 2)
+  walletRedemption                 Decimal  @default(0) @db.Decimal(14, 2)
+  grossSales                       Decimal  @default(0) @db.Decimal(14, 2)
+  discount                         Decimal  @default(0) @db.Decimal(14, 2)
+  netSales                         Decimal  @default(0) @db.Decimal(14, 2)
+  tax                              Decimal  @default(0) @db.Decimal(14, 2)
+  totalSales                       Decimal  @default(0) @db.Decimal(14, 2)
+  createdAt                        DateTime @default(now())
+  updatedAt                        DateTime @updatedAt
+
+  @@index([tenantId, userId])
+  @@index([tenantId, periodStart, periodEnd])
+  @@index([employeeName])
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -3938,14 +4062,14 @@ model Subscription {
 
 model Role {
   id          Int      @id @default(autoincrement())
-  tenantId    Int?     // null = platform-level (OWNER role only)
+  tenantId    Int? // null = platform-level (OWNER role only)
   tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  key         String   // "ADMIN", "CUSTOMER", "doctor", "sales_rep", etc.
-  name        String   // display name
+  key         String // "ADMIN", "CUSTOMER", "doctor", "sales_rep", etc.
+  name        String // display name
   description String?
-  isSystem    Boolean  @default(false)  // ADMIN, CUSTOMER, OWNER — immutable key
+  isSystem    Boolean  @default(false) // ADMIN, CUSTOMER, OWNER — immutable key
   isActive    Boolean  @default(true)
-  userType    String   @default("STAFF")  // which user type this role applies to
+  userType    String   @default("STAFF") // which user type this role applies to
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -3971,12 +4095,38 @@ model UserRole {
 }
 
 model RolePermission {
-  id      Int     @id @default(autoincrement())
-  roleId  Int
-  role    Role    @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  module  String  // "contacts", "patients", "billing", etc.
-  action  String  // "read", "write", "update", "delete", "export", "manage"
+  id     Int    @id @default(autoincrement())
+  roleId Int
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  module String // "contacts", "patients", "billing", etc.
+  action String // "read", "write", "update", "delete", "export", "manage"
 
   @@unique([roleId, module, action])
   @@index([roleId])
+}
+
+// Wave 3: Staff availability blocks (breaks, leave, personal time, etc.)
+// Prevents bookings during these periods. Used by wellness appointment booking
+// and calendar availability calculations.
+model BlockTime {
+  id        Int      @id @default(autoincrement())
+  userId    Int      // Staff member
+  user      User     @relation("UserBlockTimes", fields: [userId], references: [id], onDelete: Cascade)
+
+  startAt   DateTime
+  endAt     DateTime
+  reason    String   // "Lunch Break", "Leave", "Personal", "Maintenance", etc.
+
+  // Recurrence: null (one-time), "daily", "weekly", "monthly"
+  recurring String?
+
+  tenantId  Int
+  tenant    Tenant   @relation("TenantBlockTimes", fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, tenantId])
+  @@index([startAt, endAt])
+  @@index([tenantId])
 }

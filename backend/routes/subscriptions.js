@@ -1,18 +1,13 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyRole } = require('../middleware/auth');
 const razorpayService = require('../services/razorpayService');
 
 const router = express.Router();
 
 // Get current user's subscription status
-router.get('/status', verifyToken, async (req, res) => {
+router.get('/status', verifyToken, verifyRole(['ADMIN', 'OWNER']), async (req, res) => {
   try {
-    if (!req.user) {
-      console.error('[subscriptions.get/status] req.user is undefined');
-      return res.status(401).json({ error: 'User context missing' });
-    }
-
     const { userId, tenantId } = req.user;
 
     if (!userId || !tenantId) {
@@ -71,7 +66,7 @@ router.get('/status', verifyToken, async (req, res) => {
 });
 
 // Get available subscription plans
-router.get('/plans', verifyToken, async (req, res) => {
+router.get('/plans', verifyToken, verifyRole(['ADMIN', 'OWNER']), async (req, res) => {
   try {
     const plans = await prisma.subscriptionPlan.findMany({
       where: { isActive: true },
@@ -96,7 +91,7 @@ router.get('/plans', verifyToken, async (req, res) => {
 });
 
 // Create a Razorpay order
-router.post('/create-order', verifyToken, async (req, res) => {
+router.post('/create-order', verifyToken, verifyRole(['ADMIN', 'OWNER']), async (req, res) => {
   try {
     const { planId } = req.body;
 
@@ -131,7 +126,7 @@ router.post('/create-order', verifyToken, async (req, res) => {
 });
 
 // Verify payment and create subscription
-router.post('/verify-payment', verifyToken, async (req, res) => {
+router.post('/verify-payment', verifyToken, verifyRole(['ADMIN', 'OWNER']), async (req, res) => {
   try {
     const { userId, tenantId } = req.user;
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature, planId } = req.body;
@@ -220,7 +215,7 @@ router.post('/verify-payment', verifyToken, async (req, res) => {
 });
 
 // Cancel subscription
-router.patch('/:id/cancel', verifyToken, async (req, res) => {
+router.patch('/:id/cancel', verifyToken, verifyRole(['ADMIN', 'OWNER']), async (req, res) => {
   try {
     const { userId, tenantId } = req.user;
     const { id } = req.params;

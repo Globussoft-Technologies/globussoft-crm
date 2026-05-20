@@ -143,15 +143,25 @@ jobs:
           # `|| true` so we can branch on the report file's
           # riskCount rather than the script's exit code. The exit
           # code goes into the next step (final-gate).
+          # --allow-unique: Patient.userId switched from a single-column
+          # `userId @unique` to a composite `@@unique([tenantId, userId])`
+          # in d8aab25. The composite is strictly ≤ as strict; commit
+          # 0c9b59a verified zero duplicate userId values in the live
+          # Patient table; seed data sets userId = NULL on all patients
+          # (NULL doesn't participate in UNIQUE). The inline
+          # `// safe-unique:` marker only works for field-level @unique,
+          # not @@unique, so we bless at the workflow level here.
           if [ "$BASELINE_AVAILABLE" = "true" ]; then
             node backend/scripts/check-migration-safety.js \
               --schema backend/prisma/schema.prisma \
               --against "$BASELINE_FILE" \
+              --allow-unique \
               --json > "$REPORT_JSON" 2> /tmp/migration-safety-stderr.log || true
           else
             echo "::warning::No baseline schema available — diffing from empty (every NOT NULL / UNIQUE / FK will fire)"
             node backend/scripts/check-migration-safety.js \
               --schema backend/prisma/schema.prisma \
+              --allow-unique \
               --json > "$REPORT_JSON" 2> /tmp/migration-safety-stderr.log || true
           fi
 

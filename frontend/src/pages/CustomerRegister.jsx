@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../App';
 import { setAuthToken } from '../utils/api';
@@ -36,6 +36,8 @@ export default function CustomerRegister() {
   const navigate = useNavigate();
   const { setUser, setToken, setTenant } = useContext(AuthContext);
 
+  const [tenants, setTenants] = useState([]);
+  const [tenantsLoading, setTenantsLoading] = useState(true);
   const [form, setForm] = useState({
     email: '',
     name: '',
@@ -46,31 +48,22 @@ export default function CustomerRegister() {
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [tenants, setTenants] = useState([]);
-  const [tenantsLoading, setTenantsLoading] = useState(true);
-  const [tenantsError, setTenantsError] = useState('');
 
+  // Fetch tenants from backend
   useEffect(() => {
-    let cancelled = false;
-    fetch('/api/auth/customer/tenants')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data) => {
-        if (cancelled) return;
-        if (Array.isArray(data)) {
-          setTenants(data);
-        } else {
-          setTenantsError('Could not load organizations. Please try again.');
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setTenantsError('Could not load organizations. Please try again.');
-      })
-      .finally(() => {
-        if (!cancelled) setTenantsLoading(false);
-      });
-    return () => {
-      cancelled = true;
+    const loadTenants = async () => {
+      try {
+        const res = await fetch('/api/auth/public/tenants');
+        const data = await res.json();
+        setTenants(data || []);
+      } catch (err) {
+        console.error('Failed to load tenants:', err);
+        setTenants([]);
+      } finally {
+        setTenantsLoading(false);
+      }
     };
+    loadTenants();
   }, []);
 
   const update = (field) => (e) => setForm({ ...form, [field]: e.target.value });
@@ -139,11 +132,9 @@ export default function CustomerRegister() {
       if (data?.user) setUser(data.user);
       if (data?.tenant) setTenant(data.tenant);
       invalidatePermissionCache();
-      // /portal is the closest read-only landing for a customer — it's the
-      // public Knowledge Base + support ticket page. The dashboard isn't a
-      // good landing because CUSTOMER userType is blocked from most staff
-      // endpoints; landing on /dashboard would render an empty shell.
-      navigate('/portal');
+      // Route based on tenant vertical: wellness tenants → /wellness, others → /dashboard
+      const vertical = data?.tenant?.vertical || 'generic';
+      navigate(vertical === 'wellness' ? '/wellness' : '/dashboard');
     } catch {
       setSubmitError('Server error. Please try again.');
     } finally {
@@ -213,26 +204,20 @@ export default function CustomerRegister() {
           <Field
             label="Organization"
             htmlFor="cr-tenant"
-            error={errors.tenantId || tenantsError}
+            error={errors.tenantId}
           >
             <select
               id="cr-tenant"
               className="input-field"
               value={form.tenantId}
               onChange={update('tenantId')}
-              disabled={isLoading || tenantsLoading || !!tenantsError}
+              disabled={isLoading || tenantsLoading}
               required
             >
-              <option value="">
-                {tenantsLoading
-                  ? 'Loading organizations…'
-                  : tenantsError
-                    ? 'Unable to load organizations'
-                    : 'Select an organization…'}
-              </option>
+              <option value="">{tenantsLoading ? 'Loading organizations...' : 'Select an organization…'}</option>
               {tenants.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {tenantLabel(t)}
+                <option key={t.id} value={String(t.id)}>
+                  {t.name}
                 </option>
               ))}
             </select>

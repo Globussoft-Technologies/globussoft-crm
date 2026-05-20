@@ -811,6 +811,100 @@ router.delete("/revenue-goals/:id", verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// Commission Data — Historical payroll/commission records
+// ─────────────────────────────────────────────────────────────────────
+
+// GET /commission-data — list all commission records (admin only)
+router.get("/commission-data", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { startDate, endDate, employeeName } = req.query;
+    const where = { tenantId: req.user.tenantId };
+
+    if (startDate || endDate) {
+      where.periodStart = {};
+      if (startDate) where.periodStart.gte = new Date(startDate);
+      if (endDate) where.periodStart.lte = new Date(endDate);
+    }
+
+    if (employeeName) where.employeeName = { contains: employeeName };
+
+    const records = await prisma.commissionData.findMany({
+      where,
+      include: { user: { select: { id: true, email: true, name: true } } },
+      orderBy: [{ periodStart: "desc" }, { employeeName: "asc" }],
+    });
+
+    res.json(records);
+  } catch (err) {
+    console.error("[staff][commission-data][list]", err);
+    res.status(500).json({ error: "Failed to fetch commission data." });
+  }
+});
+
+// GET /commission-data/:id — get single commission record
+router.get("/commission-data/:id", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id." });
+
+    const record = await prisma.commissionData.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      include: { user: { select: { id: true, email: true, name: true } } },
+    });
+
+    if (!record) return res.status(404).json({ error: "Commission record not found." });
+    res.json(record);
+  } catch (err) {
+    console.error("[staff][commission-data][detail]", err);
+    res.status(500).json({ error: "Failed to fetch commission record." });
+  }
+});
+
+// GET /commission-data/summary/by-employee — aggregate by employee
+router.get("/commission-data/summary/by-employee", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const records = await prisma.commissionData.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: {
+        employeeName: true,
+        serviceRevenue: true,
+        productRevenue: true,
+        packageRevenue: true,
+        membershipRevenue: true,
+        totalSales: true,
+      },
+    });
+
+    const summary = {};
+    records.forEach((r) => {
+      if (!summary[r.employeeName]) {
+        summary[r.employeeName] = {
+          employeeName: r.employeeName,
+          serviceRevenue: 0,
+          productRevenue: 0,
+          packageRevenue: 0,
+          membershipRevenue: 0,
+          totalSales: 0,
+          recordCount: 0,
+        };
+      }
+      summary[r.employeeName].serviceRevenue += parseFloat(r.serviceRevenue) || 0;
+      summary[r.employeeName].productRevenue += parseFloat(r.productRevenue) || 0;
+      summary[r.employeeName].packageRevenue += parseFloat(r.packageRevenue) || 0;
+      summary[r.employeeName].membershipRevenue += parseFloat(r.membershipRevenue) || 0;
+      summary[r.employeeName].totalSales += parseFloat(r.totalSales) || 0;
+      summary[r.employeeName].recordCount += 1;
+    });
+
+    const rows = Object.values(summary).sort((a, b) => b.totalSales - a.totalSales);
+    res.json(rows);
+  } catch (err) {
+    console.error("[staff][commission-data][summary]", err);
+    res.status(500).json({ error: "Failed to compute commission summary." });
+  }
+});
+
 module.exports = router;
 // Test hooks — exported only for backend/test/routes/staff.test.js.
 module.exports.__testHooks = { adminResetTokens, inviteTokens };

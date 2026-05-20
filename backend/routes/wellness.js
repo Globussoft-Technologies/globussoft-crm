@@ -26,6 +26,7 @@ const {
   renderBrandedInvoicePdf,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { verifyToken } = require("../middleware/auth")
 // #679/#680/#681/#682 PII masking helpers + viewer policy. Used on list views
 // (Locations, Patients list, Telecaller Queue) so low-trust viewers
 // (telecaller / helper / generic USER on wellness tenant) see masked
@@ -61,6 +62,7 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 // axis). Used by DELETE /patients/:id and other admin-only operations
 // added to this file.
 const { verifyRole } = require("../middleware/auth");
+const { uploadImage, deleteFile, extractKeyFromUrl } = require("../services/s3Service");
 
 // Portal tokens carry { patientId } and are issued/verified separately from staff
 // tokens. Prefer a dedicated PORTAL_JWT_SECRET so a leaked patient-portal key
@@ -94,20 +96,9 @@ function verifyPatientToken(req, res, next) {
 
 const router = express.Router();
 
-// Multer storage for visit photos: uploads/wellness/visits/<visitId>/<filename>
+// Multer storage for visit photos: uses memory storage, uploads to S3
 const photoUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, _file, cb) => {
-      const visitId = req.params.id;
-      const dir = path.join(__dirname, "..", "uploads", "wellness", "visits", String(visitId));
-      fs.mkdirSync(dir, { recursive: true });
-      cb(null, dir);
-    },
-    filename: (_req, file, cb) => {
-      const safe = `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-      cb(null, safe);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per photo
 });
 
@@ -1457,14 +1448,18 @@ router.post("/visits/:id/photos", phiWriteGate, photoUpload.array("photos", 10),
 
     const which = req.body.kind === "after" ? "photosAfter" : "photosBefore";
     const existing = visit[which] ? JSON.parse(visit[which]) : [];
-    // Return URLs under `/api/uploads/...`, NOT bare `/uploads/...`. The
-    // bare path is not proxied by Nginx on the demo (or by Vite in dev),
-    // so `<img src="/uploads/...">` falls through the SPA catch-all and
-    // renders the React index.html as a broken image. server.js mounts
-    // the static directory at BOTH paths for legacy URLs already stored
-    // in the DB; the photo column on the frontend also normalises old
-    // values defensively.
-    const added = (req.files || []).map((f) => `/api/uploads/wellness/visits/${id}/${path.basename(f.path)}`);
+
+    // Upload files to S3 in parallel
+    const uploadPromises = (req.files || []).map((file) =>
+      uploadImage(
+        file.buffer,
+        file.originalname,
+        file.mimetype,
+        `visits/${id}`
+      )
+    );
+
+    const added = await Promise.all(uploadPromises);
     const merged = [...existing, ...added];
 
     const _updated = await prisma.visit.update({
@@ -1488,6 +1483,19 @@ router.delete("/visits/:id/photos", phiWriteGate, async (req, res) => {
     const field = kind === "after" ? "photosAfter" : "photosBefore";
     const existing = visit[field] ? JSON.parse(visit[field]) : [];
     const next = existing.filter((u) => u !== url);
+
+    // Delete from S3 if it's an S3 URL
+    if (url && url.includes(process.env.AWS_S3_URL || "s3")) {
+      try {
+        const fileKey = extractKeyFromUrl(url);
+        if (fileKey) {
+          await deleteFile(fileKey);
+        }
+      } catch (delErr) {
+        console.warn("[wellness] S3 delete warning:", delErr.message);
+      }
+    }
+
     await prisma.visit.update({ where: { id }, data: { [field]: JSON.stringify(next) } });
     res.json({ ok: true, urls: next });
   } catch (_e) {
@@ -7339,6 +7347,395 @@ router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
   } catch (e) {
     console.error("[wellness] cashback apply error:", e.message);
     res.status(500).json({ error: "Failed to apply cashback" });
+  }
+});
+
+// Get doctors availability for patient appointment booking
+// Returns minimal doctor info (only id, name, availability status)
+// No email or sensitive fields exposed to prevent data leakage to patients
+router.get("/doctors/availability", verifyToken, async (req, res) => {
+  try {
+    const { tenantId } = req.user;
+    const dateParam = req.query.date || new Date().toISOString().split('T')[0];
+
+    // Fetch all active doctors (staff with wellnessRole='doctor')
+    // Only select id and name — no email or other sensitive fields
+    const doctors = await prisma.user.findMany({
+      where: {
+        tenantId,
+        wellnessRole: 'doctor',
+        deactivatedAt: null
+      },
+      select: {
+        id: true,
+        name: true
+      },
+      orderBy: { name: 'asc' }
+    });
+
+    // Fetch approved leave requests for all doctors on the specified date
+    const targetDate = new Date(dateParam + 'T00:00:00Z');
+    if (isNaN(targetDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' });
+    }
+
+    const startOfDay = new Date(targetDate);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setUTCHours(23, 59, 59, 999);
+
+    const approvedLeaves = await prisma.leaveRequest.findMany({
+      where: {
+        tenantId,
+        status: 'APPROVED',
+        startDate: { lte: endOfDay },
+        endDate: { gte: startOfDay }
+      },
+      select: {
+        userId: true
+      }
+    });
+
+    // Also check for block times (breaks, personal time, etc.) that span the entire day
+    const blockTimes = await prisma.blockTime.findMany({
+      where: {
+        tenantId,
+        startAt: { lte: endOfDay },
+        endAt: { gte: startOfDay }
+      },
+      select: {
+        userId: true
+      }
+    });
+
+    const onLeaveIds = new Set(approvedLeaves.map(l => l.userId));
+    const hasBlockTimeIds = new Set(blockTimes.map(b => b.userId));
+
+    // Return only necessary fields: id, name, availability status
+    const doctorsList = doctors.map(doctor => ({
+      id: doctor.id,
+      name: doctor.name,
+      available: !onLeaveIds.has(doctor.id) && !hasBlockTimeIds.has(doctor.id)
+    }));
+
+    res.json(doctorsList);
+  } catch (err) {
+    console.error('[wellness] get doctors availability error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch doctors availability' });
+  }
+});
+
+// Get available time slots for a doctor on a specific date
+// Returns array of 30-min slots between 9 AM - 6 PM that are not already booked
+router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
+  try {
+    const { doctorId } = req.params;
+    const { tenantId } = req.user;
+    const dateParam = req.query.date || new Date().toISOString().split('T')[0];
+
+    // Validate doctor exists and belongs to tenant
+    const doctor = await prisma.user.findFirst({
+      where: {
+        id: parseInt(doctorId),
+        tenantId,
+        wellnessRole: 'doctor',
+        deactivatedAt: null
+      },
+      select: { id: true }
+    });
+
+    if (!doctor) {
+      return res.status(404).json({ error: 'Doctor not found' });
+    }
+
+    // Check if doctor is on leave
+    const targetDate = new Date(dateParam + 'T00:00:00Z');
+    const startOfDay = new Date(targetDate);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setUTCHours(23, 59, 59, 999);
+
+    const leaveReq = await prisma.leaveRequest.findFirst({
+      where: {
+        tenantId,
+        userId: parseInt(doctorId),
+        status: 'APPROVED',
+        startDate: { lte: endOfDay },
+        endDate: { gte: startOfDay }
+      }
+    });
+
+    if (leaveReq) {
+      return res.json({ available: false, reason: 'Doctor is on leave', slots: [] });
+    }
+
+    // Check for block times (breaks, personal time, etc.)
+    const blockTime = await prisma.blockTime.findFirst({
+      where: {
+        tenantId,
+        userId: parseInt(doctorId),
+        startAt: { lte: endOfDay },
+        endAt: { gte: startOfDay }
+      }
+    });
+
+    if (blockTime) {
+      return res.json({ available: false, reason: `Doctor unavailable: ${blockTime.reason}`, slots: [] });
+    }
+
+    // Get all booked visits for this doctor on this date
+    const bookedVisits = await prisma.visit.findMany({
+      where: {
+        tenantId,
+        doctorId: parseInt(doctorId),
+        visitDate: {
+          gte: new Date(dateParam + 'T00:00:00+05:30'),
+          lte: new Date(dateParam + 'T23:59:59+05:30')
+        },
+        status: { not: 'cancelled' }
+      },
+      select: { visitDate: true }
+    });
+
+    // Generate 30-min slots from 9 AM to 6 PM
+    const slots = [];
+    for (let hour = 9; hour < 18; hour++) {
+      for (let min = 0; min < 60; min += 30) {
+        const timeStr = `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+
+        // Check if this slot is booked
+        const isBooked = bookedVisits.some(visit => {
+          const visitHour = visit.visitDate.getHours();
+          const visitMin = visit.visitDate.getMinutes();
+          return visitHour === hour && visitMin === min;
+        });
+
+        slots.push({
+          time: timeStr,
+          available: !isBooked
+        });
+      }
+    }
+
+    res.json({
+      available: true,
+      date: dateParam,
+      doctorId: parseInt(doctorId),
+      slots: slots.filter(s => s.available).map(s => s.time)
+    });
+  } catch (err) {
+    console.error('[wellness] get time slots error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch available time slots' });
+  }
+});
+
+// User appointment booking endpoint
+// Allows any authenticated user to book an appointment
+router.post("/appointments/book", verifyToken, async (req, res) => {
+  try {
+    const { doctorId, serviceId, appointmentDate, appointmentTime, duration } = req.body;
+    const { userId, tenantId } = req.user;
+
+    // Validate required fields
+    if (!doctorId || !appointmentDate || !appointmentTime) {
+      return res.status(400).json({
+        error: "Missing required fields: doctorId, appointmentDate, appointmentTime"
+      });
+    }
+
+    // Parse date and time
+    const apptDate = new Date(appointmentDate);
+    if (isNaN(apptDate.getTime())) {
+      return res.status(400).json({ error: "Invalid appointment date" });
+    }
+
+    // Check if doctor is available (approved leave check)
+    const leaveReq = await prisma.leaveRequest.findFirst({
+      where: {
+        tenantId,
+        userId: parseInt(doctorId),
+        status: 'APPROVED',
+        startDate: { lte: apptDate },
+        endDate: { gte: apptDate }
+      }
+    });
+
+    if (leaveReq) {
+      return res.status(409).json({
+        error: "Doctor is not available on this date",
+        code: "DOCTOR_UNAVAILABLE"
+      });
+    }
+
+    // Get or create patient for current user
+    let patient = await prisma.patient.findFirst({
+      where: {
+        tenant: { id: tenantId },
+        user: { id: userId }
+      }
+    });
+
+    if (!patient) {
+      // Create patient record for user
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { name: true, email: true }
+      });
+
+      patient = await prisma.patient.create({
+        data: {
+          name: user.name || user.email || 'Patient',
+          email: user.email,
+          source: 'self-booking',
+          tenant: {
+            connect: { id: tenantId }
+          },
+          user: {
+            connect: { id: userId }
+          }
+        }
+      });
+    }
+
+    // Create visit/appointment with IST timezone
+    const [hours, mins] = appointmentTime.split(':').map(x => parseInt(x));
+    const visitDate = new Date(appointmentDate + `T${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:00+05:30`);
+
+    const visit = await prisma.visit.create({
+      data: {
+        tenantId,
+        patientId: patient.id,
+        doctorId: parseInt(doctorId),
+        serviceId: serviceId ? parseInt(serviceId) : null,
+        visitDate,
+        status: 'booked',
+        bookingType: 'CLINIC_VISIT',
+        createdAt: new Date()
+      },
+      include: {
+        patient: { select: { id: true, name: true, email: true } },
+        doctor: { select: { id: true, name: true } },
+        service: { select: { id: true, name: true } }
+      }
+    });
+
+    // Write audit log
+    await writeAudit('Visit', 'CREATE', userId, visit.id, tenantId, {
+      patientId: patient.id,
+      doctorId,
+      visitDate: visitDate.toISOString(),
+      action: 'User self-booked appointment'
+    });
+
+    res.status(201).json({
+      success: true,
+      appointment: {
+        id: visit.id,
+        patientName: visit.patient.name,
+        doctorName: visit.doctor?.name || 'N/A',
+        serviceName: visit.service?.name || 'General',
+        appointmentDate: visit.visitDate,
+        status: visit.status
+      }
+    });
+  } catch (err) {
+    console.error('[wellness] appointment booking failed:', err.message);
+    res.status(500).json({
+      error: 'Failed to book appointment',
+      code: 'APPOINTMENT_BOOKING_FAILED'
+    });
+  }
+});
+
+// Get user's appointments
+router.get("/appointments/my", verifyToken, async (req, res) => {
+  try {
+    const { userId, tenantId } = req.user;
+
+    // Find patient record for current user
+    const patient = await prisma.patient.findFirst({
+      where: {
+        tenant: { id: tenantId },
+        user: { id: userId }
+      }
+    });
+
+    if (!patient) {
+      return res.json([]);
+    }
+
+    // Get all visits for this patient (booked, arrived, in-treatment; exclude cancelled/completed/no-show)
+    const visits = await prisma.visit.findMany({
+      where: {
+        tenantId,
+        patientId: patient.id,
+        status: { in: ['booked', 'arrived', 'in-treatment', 'checked-in'] }
+      },
+      include: {
+        doctor: { select: { id: true, name: true } },
+        service: { select: { id: true, name: true } }
+      },
+      orderBy: { visitDate: 'asc' }
+    });
+
+    const appointments = visits.map(v => ({
+      id: v.id,
+      doctorName: v.doctor?.name || 'N/A',
+      serviceName: v.service?.name || 'General',
+      appointmentDate: v.visitDate,
+      status: v.status
+    }));
+
+    res.json(appointments);
+  } catch (err) {
+    console.error('[wellness] get appointments failed:', err.message);
+    res.status(500).json({ error: 'Failed to fetch appointments' });
+  }
+});
+
+// Cancel appointment
+router.post("/appointments/:id/cancel", verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId, tenantId } = req.user;
+
+    // Find visit
+    const visit = await prisma.visit.findUnique({
+      where: { id: parseInt(id) }
+    });
+
+    if (!visit) {
+      return res.status(404).json({ error: 'Appointment not found' });
+    }
+
+    if (visit.tenantId !== tenantId) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    // Check if user is the patient
+    const patient = await prisma.patient.findUnique({
+      where: { id: visit.patientId }
+    });
+
+    if (patient.userId !== userId) {
+      return res.status(403).json({ error: 'Can only cancel your own appointments' });
+    }
+
+    // Update visit status to cancelled
+    const updated = await prisma.visit.update({
+      where: { id: parseInt(id) },
+      data: { status: 'cancelled' }
+    });
+
+    await writeAudit('Visit', 'UPDATE', userId, visit.id, tenantId, {
+      action: 'User cancelled appointment',
+      status: 'cancelled'
+    });
+
+    res.json({ success: true, appointment: { id: updated.id, status: 'cancelled' } });
+  } catch (err) {
+    console.error('[wellness] cancel appointment failed:', err.message);
+    res.status(500).json({ error: 'Failed to cancel appointment' });
   }
 });
 

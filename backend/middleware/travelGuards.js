@@ -135,6 +135,43 @@ function narrowWhereBySubBrand(where, allowed) {
   return where;
 }
 
+/**
+ * PRD §4.1 diagnostic-first guard.
+ *
+ * Throws a 403 DIAGNOSTIC_REQUIRED error if no TravelDiagnostic exists
+ * for the given (tenantId, contactId, subBrand). The PRD requires that
+ * "across all four brands, customers MUST take the diagnostic before
+ * any package/price is shown" — concretely, the customer-facing
+ * Itinerary creation rejects when the prerequisite isn't met.
+ *
+ * Intentionally permissive on `classification`: any TravelDiagnostic
+ * row (even one with score=null because the bank scoring failed)
+ * counts as "diagnostic taken." The hard requirement per the PRD is
+ * "completed diagnostic," and we use row existence as the contract.
+ * If a stricter completeness rule lands later (e.g. classification
+ * must be set), tighten the where clause here.
+ *
+ * Throws a tagged error the route's catch block converts to:
+ *   { status: 403, code: "DIAGNOSTIC_REQUIRED",
+ *     error: "Contact has no completed diagnostic for this sub-brand" }
+ *
+ * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {number} tenantId
+ * @param {number} contactId
+ * @param {string} subBrand
+ */
+async function assertCompletedDiagnostic(prisma, tenantId, contactId, subBrand) {
+  const count = await prisma.travelDiagnostic.count({
+    where: { tenantId, contactId, subBrand },
+  });
+  if (count === 0) {
+    const err = new Error("Contact has no completed diagnostic for this sub-brand");
+    err.status = 403;
+    err.code = "DIAGNOSTIC_REQUIRED";
+    throw err;
+  }
+}
+
 module.exports = {
   VALID_SUB_BRANDS,
   requireTravelTenant,
@@ -142,4 +179,5 @@ module.exports = {
   canAccessSubBrand,
   assertValidSubBrand,
   narrowWhereBySubBrand,
+  assertCompletedDiagnostic,
 };

@@ -34,6 +34,7 @@ const {
   getSubBrandAccessSet,
   canAccessSubBrand,
   assertValidSubBrand,
+  assertCompletedDiagnostic,
 } = require("../middleware/travelGuards");
 
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
@@ -119,6 +120,12 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
     if (!canAccessSubBrand(allowed, subBrand)) {
       return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
     }
+
+    // PRD §4.1 diagnostic-first guard. The Itinerary is the customer-facing
+    // quote artifact (PDF + share link); the PRD forbids creating one
+    // before the contact has completed a diagnostic for this sub-brand.
+    // /pricing/quote stays unguarded — it's pure internal pricing math.
+    await assertCompletedDiagnostic(prisma, req.travelTenant.id, cid, subBrand);
 
     const {
       leadId, status, startDate, endDate,

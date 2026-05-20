@@ -113,6 +113,25 @@ test.beforeAll(async ({ request }) => {
     const body = await r.json();
     testContactId = body.id || body.contact?.id;
   }
+  if (!testContactId) return;
+
+  // PRD §4.1 diagnostic-first guard: POST /itineraries now refuses to
+  // create a quote for a contact without a prior diagnostic for the
+  // subBrand. Submit one against the seeded RFU bank v1 so the
+  // happy-path tests can create itineraries. The bank lookup tolerates
+  // any active v1 RFU bank (seed-travel.js seeds one).
+  const banksRes = await get(request, token, "/api/travel/diagnostic-banks?subBrand=rfu&active=true");
+  if (banksRes.ok()) {
+    const banks = (await banksRes.json()).banks || [];
+    const rfuBank = banks.find((b) => b.subBrand === "rfu");
+    if (rfuBank) {
+      await post(request, token, "/api/travel/diagnostics", {
+        bankId: rfuBank.id,
+        answers: { q1: "few", q2: "medium" },
+        contactId: testContactId,
+      }).catch(() => null);
+    }
+  }
 });
 
 test.afterAll(async ({ request }) => {
@@ -259,6 +278,63 @@ test.describe("Travel itineraries API — create + list", () => {
     const res = await get(request, token, "/api/travel/itineraries?status=foobar");
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe("INVALID_STATUS");
+  });
+});
+
+// ─── PRD §4.1 diagnostic-first guard ────────────────────────────────
+
+test.describe("Travel itineraries API — diagnostic-first guard (PRD §4.1)", () => {
+  let noDiagnosticContactId = null;
+
+  test.beforeAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) return;
+    // Contact created here intentionally does NOT submit a diagnostic.
+    // The guard test below asserts the itinerary endpoint refuses on its
+    // behalf. Same RUN_TAG so demo-scrub cleans it.
+    const r = await post(request, token, "/api/contacts", {
+      name: `${RUN_TAG} No-Diagnostic Contact`,
+      email: `${RUN_TAG.toLowerCase()}-nodiag@e2e.test`,
+      phone: `+91${String(Date.now() + 1).slice(-10)}`,
+      subBrand: "rfu",
+    });
+    if (r.ok()) {
+      const body = await r.json();
+      noDiagnosticContactId = body.id || body.contact?.id;
+    }
+  });
+
+  test.afterAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !noDiagnosticContactId) return;
+    await del(request, token, `/api/contacts/${noDiagnosticContactId}`).catch(() => {});
+  });
+
+  test("POST /itineraries for a contact without a diagnostic → 403 DIAGNOSTIC_REQUIRED", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !noDiagnosticContactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: noDiagnosticContactId,
+      destination: `${RUN_TAG} should-be-rejected`,
+    });
+    expect(res.status(), `body: ${await res.text()}`).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe("DIAGNOSTIC_REQUIRED");
+  });
+
+  test("POST /itineraries for a contact WITH a diagnostic → 201 (guard passes)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "testContactId missing — beforeAll diagnostic submission likely failed");
+    // testContactId already had a diagnostic submitted in the outer beforeAll.
+    const res = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: testContactId,
+      destination: `${RUN_TAG} guard-passes`,
+    });
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    created.itineraryIds.push(body.id);
   });
 });
 

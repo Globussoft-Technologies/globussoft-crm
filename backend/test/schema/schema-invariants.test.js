@@ -124,6 +124,28 @@ const NON_TENANT_MODELS = new Set([
   // (Subscription model has tenantId Int @default(1)). The PLAN catalog
   // intentionally is not.
   'SubscriptionPlan',
+  // Travel vertical (v3.9.0) — child rows that derive tenant scope from
+  // their parent. The parent's tenantId is the multi-tenant boundary;
+  // these tables are joined via FK to the parent and filtered through
+  // it in every route handler.
+  //   - ItineraryItem            → Itinerary.tenantId  (FK itineraryId)
+  //   - TripParticipant          → TmcTrip.tenantId    (FK tripId)
+  //   - RoomingAssignment        → TmcTrip.tenantId    (FK tripId)
+  //   - TripPaymentPlan          → TmcTrip.tenantId    (FK tripId)
+  //   - TripInstalmentPayment    → TmcTrip.tenantId    (FK tripId)
+  //   - TripDocumentRequirement  → TmcTrip.tenantId    (FK tripId)
+  //   - SupplierCredentialAccessLog → SupplierCredential.tenantId (FK credentialId)
+  //   - VisaDocumentChecklistItem → VisaApplication.tenantId (FK applicationId)
+  //   - TripMicrositeOtp         → TripMicrosite.tenantId (FK micrositeId)
+  'ItineraryItem',
+  'TripParticipant',
+  'RoomingAssignment',
+  'TripPaymentPlan',
+  'TripInstalmentPayment',
+  'TripDocumentRequirement',
+  'SupplierCredentialAccessLog',
+  'VisaDocumentChecklistItem',
+  'TripMicrositeOtp',
 ]);
 
 // ── Expected AuditLog shape ──────────────────────────────────────────

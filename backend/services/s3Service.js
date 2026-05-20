@@ -16,12 +16,22 @@
  *   const url = await uploadImage(buffer, 'user-avatar.jpg', 'image/jpeg', 'avatars');
  */
 
-const AWS = require("aws-sdk");
+const {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+} = require("@aws-sdk/client-s3");
+const {
+  getSignedUrl: presignerGetSignedUrl,
+} = require("@aws-sdk/s3-request-presigner");
 
-const s3Client = new AWS.S3({
+const s3Client = new S3Client({
   region: process.env.AWS_REGION || "us-east-1",
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
 });
 
 const BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME;
@@ -44,7 +54,6 @@ async function uploadFile(fileBuffer, fileName, mimeType, subfolder = "uploads")
     throw new Error("S3 bucket not configured. Set AWS_S3_BUCKET_NAME env var.");
   }
 
-  // Generate unique key with subfolder
   const timestamp = Date.now();
   const sanitizedName = fileName
     .toLowerCase()
@@ -52,16 +61,16 @@ async function uploadFile(fileBuffer, fileName, mimeType, subfolder = "uploads")
     .substring(0, 50);
   const fileKey = `${subfolder}/${timestamp}-${sanitizedName}`;
 
-  const params = {
+  const command = new PutObjectCommand({
     Bucket: BUCKET_NAME,
     Key: fileKey,
     Body: fileBuffer,
     ContentType: mimeType,
-    ACL: "public-read", // Makes file publicly readable
-  };
+    ACL: "public-read",
+  });
 
   try {
-    await s3Client.upload(params).promise();
+    await s3Client.send(command);
     const fileUrl = `${S3_BASE_URL}/${fileKey}`;
     return fileUrl;
   } catch (error) {
@@ -85,7 +94,6 @@ async function uploadImage(
   mimeType,
   subfolder = "images"
 ) {
-  // Validate MIME type
   const validImageMimes = [
     "image/jpeg",
     "image/png",
@@ -110,13 +118,13 @@ async function deleteFile(fileKey) {
     throw new Error("S3 bucket not configured.");
   }
 
-  const params = {
+  const command = new DeleteObjectCommand({
     Bucket: BUCKET_NAME,
     Key: fileKey,
-  };
+  });
 
   try {
-    await s3Client.deleteObject(params).promise();
+    await s3Client.send(command);
   } catch (error) {
     console.error("❌ S3 delete error:", error.message);
     throw new Error(`Failed to delete file from S3: ${error.message}`);
@@ -134,14 +142,13 @@ async function getSignedUrl(fileKey, expiresIn = 3600) {
     throw new Error("S3 bucket not configured.");
   }
 
-  const params = {
+  const command = new GetObjectCommand({
     Bucket: BUCKET_NAME,
     Key: fileKey,
-    Expires: expiresIn,
-  };
+  });
 
   try {
-    const url = await s3Client.getSignedUrlPromise("getObject", params);
+    const url = await presignerGetSignedUrl(s3Client, command, { expiresIn });
     return url;
   } catch (error) {
     console.error("❌ S3 signed URL error:", error.message);

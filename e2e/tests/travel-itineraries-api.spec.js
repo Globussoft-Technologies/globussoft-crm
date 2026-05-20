@@ -468,3 +468,144 @@ test.describe("Travel itineraries API — items", () => {
     expect((await res.json()).code).toBe("ITEM_NOT_FOUND");
   });
 });
+
+// ─── Version chain + accept/reject + share (PRD §4.3 / §6.1) ────────
+
+async function putReq(request, token, path, body) {
+  return retryOn5xx(() =>
+    request.put(`${BASE_URL}${path}`, {
+      headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT,
+    }),
+  );
+}
+
+test.describe("Travel itineraries API — version chain + status transitions", () => {
+  let baseItineraryId = null;
+
+  test.beforeAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) return;
+    const res = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: testContactId,
+      destination: `${RUN_TAG} version-chain root`,
+      totalAmount: 50000,
+      currency: "INR",
+    });
+    if (res.ok()) {
+      baseItineraryId = (await res.json()).id;
+      created.itineraryIds.push(baseItineraryId);
+    }
+  });
+
+  test("PUT /itineraries/:id creates a new revised version linked via parentItineraryId", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !baseItineraryId) test.skip(true, "base itinerary missing");
+    const res = await putReq(request, token, `/api/travel/itineraries/${baseItineraryId}`, {
+      destination: `${RUN_TAG} v2 destination`,
+      totalAmount: 60000,
+    });
+    expect(res.status(), `put: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.id).not.toBe(baseItineraryId);
+    expect(body.version).toBeGreaterThanOrEqual(2);
+    expect(body.parentItineraryId).toBe(baseItineraryId);
+    expect(body.status).toBe("revised");
+    expect(Number(body.totalAmount)).toBe(60000);
+    created.itineraryIds.push(body.id);
+  });
+
+  test("PUT /itineraries/:id second revision: version increments to 3", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !baseItineraryId) test.skip(true, "base itinerary missing");
+    const res = await putReq(request, token, `/api/travel/itineraries/${baseItineraryId}`, {
+      destination: `${RUN_TAG} v3 destination`,
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(body.version).toBeGreaterThanOrEqual(3);
+    expect(body.parentItineraryId).toBe(baseItineraryId);
+    created.itineraryIds.push(body.id);
+  });
+
+  test("POST /itineraries/:id/accept flips status to 'accepted'", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    // Create a fresh itinerary so we don't disturb the version-chain head.
+    const created1 = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu", contactId: testContactId, destination: `${RUN_TAG} accept-target`,
+    });
+    expect(created1.status()).toBe(201);
+    const id = (await created1.json()).id;
+    created.itineraryIds.push(id);
+
+    const res = await post(request, token, `/api/travel/itineraries/${id}/accept`);
+    expect(res.status()).toBe(200);
+    expect((await res.json()).status).toBe("accepted");
+  });
+
+  test("POST /itineraries/:id/accept twice → 409 ALREADY_ACCEPTED", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const created1 = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu", contactId: testContactId, destination: `${RUN_TAG} accept-dup`,
+    });
+    const id = (await created1.json()).id;
+    created.itineraryIds.push(id);
+    await post(request, token, `/api/travel/itineraries/${id}/accept`);
+    const res = await post(request, token, `/api/travel/itineraries/${id}/accept`);
+    expect(res.status()).toBe(409);
+    expect((await res.json()).code).toBe("ALREADY_ACCEPTED");
+  });
+
+  test("POST /itineraries/:id/reject flips status to 'rejected'; reason logged", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const created1 = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu", contactId: testContactId, destination: `${RUN_TAG} reject-target`,
+    });
+    const id = (await created1.json()).id;
+    created.itineraryIds.push(id);
+
+    const res = await post(request, token, `/api/travel/itineraries/${id}/reject`, {
+      reason: "Customer found a cheaper option",
+    });
+    expect(res.status()).toBe(200);
+    expect((await res.json()).status).toBe("rejected");
+  });
+
+  test("POST /itineraries/:id/accept on rejected → 409 ALREADY_REJECTED", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const created1 = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu", contactId: testContactId, destination: `${RUN_TAG} reject-then-accept`,
+    });
+    const id = (await created1.json()).id;
+    created.itineraryIds.push(id);
+    await post(request, token, `/api/travel/itineraries/${id}/reject`);
+    const res = await post(request, token, `/api/travel/itineraries/${id}/accept`);
+    expect(res.status()).toBe(409);
+    expect((await res.json()).code).toBe("ALREADY_REJECTED");
+  });
+
+  test("POST /itineraries/:id/share mints a shareToken + URL, idempotent on re-call", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const created1 = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu", contactId: testContactId, destination: `${RUN_TAG} share-target`,
+    });
+    const id = (await created1.json()).id;
+    created.itineraryIds.push(id);
+
+    const first = await post(request, token, `/api/travel/itineraries/${id}/share`);
+    expect(first.status()).toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody.shareToken).toBeTruthy();
+    expect(firstBody.shareUrl).toContain(firstBody.shareToken);
+
+    // Re-calling returns the SAME token (so existing WhatsApp links don't break).
+    const second = await post(request, token, `/api/travel/itineraries/${id}/share`);
+    expect(second.status()).toBe(200);
+    expect((await second.json()).shareToken).toBe(firstBody.shareToken);
+  });
+});

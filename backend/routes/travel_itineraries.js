@@ -440,4 +440,223 @@ router.delete("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant
   }
 });
 
+// ─── Status transitions + version chain (PRD §4.3 / §6.1) ───────────
+//
+// `status` flows: draft → sent → revised → accepted | rejected. The
+// accept/reject endpoints are explicit terminal transitions; PUT (full
+// replacement with version bump) is the canonical "revised" path —
+// creates a NEW Itinerary row chained to the original via
+// parentItineraryId so the full revision history is queryable.
+//
+// Customer-facing share creates a shareToken (random URL slug) the
+// itinerary's PDF link uses. The actual PDF rendering hooks into the
+// existing pdfRenderer pattern in a follow-up — for now the endpoint
+// returns the share URL + token (back-compat with frontend's existing
+// /api/travel/itineraries/:id/share contract from PRD §6.1).
+
+// POST /api/travel/itineraries/:id/accept
+//
+// Marks the itinerary as customer-accepted (terminal status). Refuses
+// if already accepted or rejected — explicit re-statuses require a new
+// version via PUT.
+router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+    const full = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      select: { id: true, status: true },
+    });
+    if (full.status === "accepted") {
+      return res.status(409).json({ error: "Itinerary already accepted", code: "ALREADY_ACCEPTED" });
+    }
+    if (full.status === "rejected") {
+      return res.status(409).json({
+        error: "Itinerary was rejected — create a new version via PUT to accept",
+        code: "ALREADY_REJECTED",
+      });
+    }
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: { status: "accepted" },
+    });
+    res.json(updated);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] accept error:", e.message);
+    res.status(500).json({ error: "Failed to accept itinerary" });
+  }
+});
+
+// POST /api/travel/itineraries/:id/reject
+//
+// Body: { reason?: string } — optional rejection reason stored on the
+// row (reuses pricingJson? no, that's pricing). We add the reason to a
+// new column? No — keep it simple, store under `pricingJson` would be
+// wrong. The schema doesn't have a rejectionReason field; the reason
+// goes into an audit log entry if needed. For now the endpoint just
+// flips status — reason is logged but not persisted on the row.
+router.post("/itineraries/:id/reject", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+    const full = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      select: { id: true, status: true },
+    });
+    if (full.status === "accepted") {
+      return res.status(409).json({
+        error: "Itinerary was accepted — create a new version via PUT to reject",
+        code: "ALREADY_ACCEPTED",
+      });
+    }
+    if (full.status === "rejected") {
+      return res.status(409).json({ error: "Itinerary already rejected", code: "ALREADY_REJECTED" });
+    }
+    const { reason } = req.body || {};
+    if (reason) {
+      console.log(`[travel-itin] itinerary ${itin.id} rejected — reason: ${String(reason).slice(0, 200)}`);
+    }
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: { status: "rejected" },
+    });
+    res.json(updated);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] reject error:", e.message);
+    res.status(500).json({ error: "Failed to reject itinerary" });
+  }
+});
+
+// PUT /api/travel/itineraries/:id
+//
+// Per PRD §6.1: "PUT creates new version, links via parentItineraryId."
+// This is the "revised" path — the customer pushed back, we recompute
+// with a new structure, and ship a new row in the chain. The original
+// row is preserved verbatim (history); the new row carries
+// parentItineraryId=<originalId>, version=N+1.
+router.put("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+    const original = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+    });
+    if (!original) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, original.subBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+
+    const {
+      destination, startDate, endDate,
+      pricingJson, totalAmount, currency, items,
+    } = req.body || {};
+
+    // Find the highest version in the chain so we can increment.
+    const chainRoot = original.parentItineraryId || original.id;
+    const latest = await prisma.itinerary.findFirst({
+      where: {
+        tenantId: req.travelTenant.id,
+        OR: [{ id: chainRoot }, { parentItineraryId: chainRoot }],
+      },
+      orderBy: { version: "desc" },
+      select: { version: true },
+    });
+    const nextVersion = (latest?.version || 1) + 1;
+
+    // Validate item shapes the same way POST does. Inline here to keep
+    // imports contained — the assertValidItemType helper is already in
+    // scope at the top of the file.
+    const itemRows = [];
+    if (Array.isArray(items)) {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (!it || typeof it !== "object") continue;
+        if (!it.itemType || !it.description) {
+          return res.status(400).json({
+            error: `items[${i}]: itemType + description required`,
+            code: "ITEM_MISSING_FIELDS",
+          });
+        }
+        assertValidItemType(it.itemType);
+        itemRows.push({
+          itemType: it.itemType,
+          position: typeof it.position === "number" ? it.position : i,
+          description: String(it.description),
+          detailsJson: it.detailsJson ? String(it.detailsJson) : null,
+          supplierId: it.supplierId ? parseInt(it.supplierId, 10) : null,
+          unitCost: it.unitCost != null ? Number(it.unitCost) : null,
+          markup: it.markup != null ? Number(it.markup) : null,
+          gstAmount: it.gstAmount != null ? Number(it.gstAmount) : null,
+          totalPrice: it.totalPrice != null ? Number(it.totalPrice) : null,
+        });
+      }
+    }
+
+    const newItin = await prisma.itinerary.create({
+      data: {
+        tenantId: req.travelTenant.id,
+        subBrand: original.subBrand,
+        contactId: original.contactId,
+        leadId: original.leadId,
+        status: "revised",
+        version: nextVersion,
+        parentItineraryId: chainRoot,
+        destination: destination != null ? String(destination) : original.destination,
+        startDate: startDate ? new Date(startDate) : original.startDate,
+        endDate: endDate ? new Date(endDate) : original.endDate,
+        pricingJson: pricingJson != null ? String(pricingJson) : original.pricingJson,
+        totalAmount: totalAmount != null ? Number(totalAmount) : original.totalAmount,
+        currency: currency || original.currency,
+        items: itemRows.length > 0 ? { create: itemRows } : undefined,
+      },
+      include: { items: { orderBy: { position: "asc" } } },
+    });
+    res.status(201).json(newItin);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] put error:", e.message);
+    res.status(500).json({ error: "Failed to revise itinerary" });
+  }
+});
+
+// POST /api/travel/itineraries/:id/share
+//
+// Mints a shareToken (random URL-safe slug) and returns the share URL
+// the advisor pastes into WhatsApp/email. Idempotent: re-calling on an
+// itinerary that already has a shareToken returns the existing one
+// rather than minting a new one (so old WhatsApp links keep working).
+router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+    const full = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      select: { id: true, shareToken: true, status: true },
+    });
+
+    let token = full.shareToken;
+    if (!token) {
+      // 32-byte random → base64url-safe 43-char string. crypto.randomBytes
+      // is already in scope from the multer block.
+      token = crypto.randomBytes(24).toString("base64url");
+      await prisma.itinerary.update({
+        where: { id: full.id },
+        data: { shareToken: token, status: full.status === "draft" ? "sent" : full.status },
+      });
+    }
+
+    const portalBase = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+    const shareUrl = `${portalBase}/p/itinerary/${token}`;
+    res.json({ shareToken: token, shareUrl });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    if (e.code === "P2002") {
+      // Extremely unlikely (24 random bytes), but bcrypt-grade caution.
+      return res.status(409).json({ error: "shareToken collision — retry", code: "DUPLICATE_SHARE_TOKEN" });
+    }
+    console.error("[travel-itin] share error:", e.message);
+    res.status(500).json({ error: "Failed to mint share token" });
+  }
+});
+
 module.exports = router;

@@ -7,13 +7,14 @@
 //   Payment plan — upsert plan + materialised per-participant instalments
 //   Microsite — preview + admin link + publicUuid copy
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
+  Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
 const TABS = [
@@ -114,7 +115,7 @@ export default function TripDetail() {
       {tab === "participants" && <ParticipantsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "rooming" && <RoomingTab trip={trip} notify={notify} />}
       {tab === "payment" && <PaymentTab trip={trip} notify={notify} />}
-      {tab === "microsite" && <MicrositeTab trip={trip} notify={notify} />}
+      {tab === "microsite" && <MicrositeTab trip={trip} onChange={load} notify={notify} />}
     </div>
   );
 }
@@ -835,17 +836,102 @@ function PaymentTab({ trip, notify }) {
 }
 
 // ─── Microsite tab ───────────────────────────────────────────────────
+//
+// Inline editor (Phase 1.5 / 8d). Two states:
+//   - no microsite yet → Create form (subdomain default + initial itineraryHtml).
+//   - already published → Edit form for subdomain + itineraryHtml + faqJson + expiresAt,
+//     plus Copy/Open/Preview buttons and Unpublish (ADMIN-only).
+//
+// Rich-text uses native `contenteditable` + document.execCommand (B / I / H2 /
+// list / link / image) rather than TipTap/Lexical/Slate. Trade-off: less
+// flexibility but zero new npm deps — avoids the Windows-npm-lockfile gotcha
+// (see project_frontend_npm_windows memory + the v3.9 handoff). The output
+// is plain HTML which is what the backend's itineraryHtml column already stores
+// and sanitizes via the global sanitizeBody middleware.
 
-function MicrositeTab({ trip, notify }) {
+const ITINERARY_PLACEHOLDER = `<h2>Day 1 — Arrival</h2>
+<p>Welcome and orientation. Hotel check-in.</p>
+<h2>Day 2 — Excursion</h2>
+<p>Full-day guided tour.</p>`;
+
+function MicrositeTab({ trip, onChange, notify }) {
   const ms = trip.microsite;
-  if (!ms) {
-    return (
-      <div style={empty}>
-        No microsite published yet. Create via{" "}
-        <code>POST /api/travel/trips/{trip.id}/microsite</code> (admin builder UI lands in Phase 1.5).
+  if (ms) return <MicrositeEditor trip={trip} ms={ms} onChange={onChange} notify={notify} />;
+  return <MicrositeCreate trip={trip} onChange={onChange} notify={notify} />;
+}
+
+// ─── Create form (no microsite yet) ──────────────────────────────────
+
+function MicrositeCreate({ trip, onChange, notify }) {
+  const [subdomain, setSubdomain] = useState(`trip-${trip.tripCode}`);
+  const [itineraryHtml, setItineraryHtml] = useState(ITINERARY_PLACEHOLDER);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!itineraryHtml.trim()) {
+      notify.error("Itinerary content required");
+      return;
+    }
+    setSaving(true);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/microsite`, {
+        method: "POST",
+        body: JSON.stringify({ subdomain: subdomain.trim() || undefined, itineraryHtml }),
+      });
+      notify.success("Microsite published");
+      onChange?.();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to publish microsite");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ background: "var(--subtle-bg)", border: "1px solid var(--border-color)", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, color: "var(--text-secondary)" }}>
+        No microsite published yet. Fill the editor and click <strong>Publish</strong> to create one.
       </div>
-    );
-  }
+      <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+        Subdomain
+      </label>
+      <input
+        type="text"
+        value={subdomain}
+        onChange={(e) => setSubdomain(e.target.value)}
+        placeholder={`trip-${trip.tripCode}`}
+        style={{ ...input, width: "100%", boxSizing: "border-box", marginBottom: 12 }}
+        aria-label="Microsite subdomain"
+      />
+      <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+        Itinerary content
+      </label>
+      <RichTextEditor
+        value={itineraryHtml}
+        onChange={setItineraryHtml}
+        tripId={trip.id}
+        notify={notify}
+      />
+      <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+        <button type="button" onClick={submit} disabled={saving} style={saving ? primaryBtnDisabled : primaryBtn}>
+          <Save size={14} /> {saving ? "Publishing…" : "Publish microsite"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Edit form (microsite exists) ────────────────────────────────────
+
+function MicrositeEditor({ trip, ms, onChange, notify }) {
+  const [subdomain, setSubdomain] = useState(ms.subdomain || "");
+  const [itineraryHtml, setItineraryHtml] = useState(ms.itineraryHtml || "");
+  const [faqJson, setFaqJson] = useState(ms.faqJson || "");
+  const [expiresAt, setExpiresAt] = useState(toDateInput(ms.expiresAt));
+  const [saving, setSaving] = useState(false);
+  const [unpublishing, setUnpublishing] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+
   const publicUrl = `${window.location.origin}/api/travel/microsites/public/${ms.publicUuid}`;
   const copy = async () => {
     try {
@@ -855,41 +941,303 @@ function MicrositeTab({ trip, notify }) {
       /* clipboard not available */
     }
   };
+
+  const save = async () => {
+    if (!itineraryHtml.trim()) {
+      notify.error("Itinerary content required");
+      return;
+    }
+    if (faqJson.trim()) {
+      try { JSON.parse(faqJson); }
+      catch { notify.error("faqJson is not valid JSON"); return; }
+    }
+    setSaving(true);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/microsite`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          subdomain: subdomain.trim(),
+          itineraryHtml,
+          faqJson: faqJson.trim() ? faqJson : null,
+          expiresAt: expiresAt || null,
+        }),
+      });
+      notify.success("Microsite updated");
+      onChange?.();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to update");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const unpublish = async () => {
+    if (!window.confirm("Unpublish this microsite? The public URL will stop responding.")) return;
+    setUnpublishing(true);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/microsite`, { method: "DELETE" });
+      notify.success("Microsite unpublished");
+      onChange?.();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to unpublish");
+    } finally {
+      setUnpublishing(false);
+    }
+  };
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <div>
-          <strong>Subdomain:</strong> <code>{ms.subdomain}</code>
+        <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+          <code style={{ fontSize: 11 }}>{ms.publicUuid}</code>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" onClick={copy} style={secondaryBtn}>
-            <Copy size={14} /> Copy public URL
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={() => setPreviewing((p) => !p)} style={secondaryBtn}>
+            {previewing ? <><Edit3 size={14} /> Edit</> : <><Eye size={14} /> Preview</>}
           </button>
-          <a href={publicUrl} target="_blank" rel="noopener noreferrer" style={primaryBtn}>
+          <button type="button" onClick={copy} style={secondaryBtn}>
+            <Copy size={14} /> Copy URL
+          </button>
+          <a href={publicUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryBtn, textDecoration: "none" }}>
             <ExternalLink size={14} /> Open
           </a>
         </div>
       </div>
-      <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 8, padding: 16 }}>
-        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>publicUuid (treat as semi-public per Q21)</div>
-        <code style={{ fontSize: 13 }}>{ms.publicUuid}</code>
-      </div>
-      <div style={{ marginTop: 16 }}>
-        <h3 style={{ fontSize: 14, marginBottom: 8 }}>Itinerary HTML</h3>
+
+      {previewing ? (
         <div
           style={{
             background: "var(--surface-color)", border: "1px solid var(--border-color)",
-            borderRadius: 8, padding: 16, maxHeight: 400, overflow: "auto", fontSize: 13,
+            borderRadius: 8, padding: 16, maxHeight: 500, overflow: "auto", fontSize: 14,
           }}
-          // Note: itineraryHtml is admin-authored content; sanitization happens
-          // at the route layer's sanitizeBody middleware on write. Rendering as
-          // HTML here matches the public microsite's intended UX.
-          dangerouslySetInnerHTML={{ __html: ms.itineraryHtml }}
+          // itineraryHtml is admin-authored; sanitization happens at the route's
+          // sanitizeBody middleware on write. Preview renders the in-edit state.
+          dangerouslySetInnerHTML={{ __html: itineraryHtml }}
         />
+      ) : (
+        <>
+          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", marginBottom: 12 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                Subdomain
+              </label>
+              <input
+                type="text"
+                value={subdomain}
+                onChange={(e) => setSubdomain(e.target.value)}
+                style={{ ...input, width: "100%", boxSizing: "border-box" }}
+                aria-label="Microsite subdomain"
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                Expires (optional)
+              </label>
+              <input
+                type="date"
+                value={expiresAt}
+                onChange={(e) => setExpiresAt(e.target.value)}
+                style={{ ...input, width: "100%", boxSizing: "border-box" }}
+                aria-label="Microsite expiry date"
+              />
+            </div>
+          </div>
+
+          <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+            Itinerary content
+          </label>
+          <RichTextEditor
+            value={itineraryHtml}
+            onChange={setItineraryHtml}
+            tripId={trip.id}
+            notify={notify}
+          />
+
+          <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4, marginTop: 12 }}>
+            FAQ (optional, JSON array of {`{ q, a }`})
+          </label>
+          <textarea
+            value={faqJson}
+            onChange={(e) => setFaqJson(e.target.value)}
+            placeholder='[{"q":"What to pack?","a":"Sunscreen + ID."}]'
+            spellCheck={false}
+            style={{ ...input, width: "100%", boxSizing: "border-box", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, minHeight: 80, resize: "vertical" }}
+            aria-label="Microsite FAQ JSON"
+          />
+        </>
+      )}
+
+      <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "space-between", flexWrap: "wrap" }}>
+        <button type="button" onClick={save} disabled={saving || previewing} style={(saving || previewing) ? primaryBtnDisabled : primaryBtn}>
+          <Save size={14} /> {saving ? "Saving…" : "Save changes"}
+        </button>
+        <button type="button" onClick={unpublish} disabled={unpublishing} style={dangerBtn}>
+          <Trash2 size={14} /> {unpublishing ? "Unpublishing…" : "Unpublish"}
+        </button>
       </div>
     </div>
   );
 }
+
+// ─── Rich-text editor (contenteditable + execCommand) ────────────────
+//
+// document.execCommand is technically deprecated but is the only thing
+// every modern browser supports for contenteditable formatting without
+// a 100KB library. We use a narrow command set (bold, italic, H2, lists,
+// link, image) — the parts that work uniformly across Chrome / Edge /
+// Firefox / Safari. If we eventually adopt TipTap/Lexical (when the
+// Windows-lockfile gotcha is solved) this component is the sole replace-
+// site; the parent components pass HTML strings through opaquely.
+
+function RichTextEditor({ value, onChange, tripId, notify }) {
+  const editorRef = useRef(null);
+  const fileRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+
+  // Inject value into the contenteditable div once on mount. After that,
+  // the DOM is the source of truth; controlled-input style would fight
+  // the browser's caret state and lose selection on every keystroke.
+  useEffect(() => {
+    if (editorRef.current && editorRef.current.innerHTML !== value) {
+      editorRef.current.innerHTML = value || "";
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleInput = () => {
+    if (editorRef.current) onChange(editorRef.current.innerHTML);
+  };
+
+  const exec = (cmd, arg) => {
+    editorRef.current?.focus();
+    document.execCommand(cmd, false, arg);
+    handleInput();
+  };
+
+  const insertLink = () => {
+    const url = window.prompt("Link URL", "https://");
+    if (!url) return;
+    exec("createLink", url);
+  };
+
+  const insertHeading = () => {
+    // execCommand "formatBlock" with H2 — wraps the current block in <h2>.
+    exec("formatBlock", "H2");
+  };
+
+  const insertImage = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/travel/trips/${tripId}/microsite/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+        body: form,
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || `Upload failed (${res.status})`);
+      exec("insertImage", body.url);
+      notify.success("Image inserted");
+    } catch (e) {
+      notify.error(e.message || "Failed to upload image");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  return (
+    <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 8, overflow: "hidden" }}>
+      <div style={toolbar} role="toolbar" aria-label="Formatting toolbar">
+        <ToolButton onClick={() => exec("bold")} label="Bold (Ctrl+B)"><Bold size={14} /></ToolButton>
+        <ToolButton onClick={() => exec("italic")} label="Italic (Ctrl+I)"><Italic size={14} /></ToolButton>
+        <ToolButton onClick={insertHeading} label="Heading"><Heading size={14} /></ToolButton>
+        <ToolButton onClick={() => exec("insertUnorderedList")} label="Bulleted list"><List size={14} /></ToolButton>
+        <ToolButton onClick={insertLink} label="Insert link"><Link2 size={14} /></ToolButton>
+        <ToolButton onClick={() => fileRef.current?.click()} label="Insert image" disabled={uploading}>
+          <ImageIcon size={14} /> {uploading && <span style={{ marginLeft: 4, fontSize: 11 }}>…</span>}
+        </ToolButton>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          onChange={insertImage}
+          style={{ display: "none" }}
+          aria-label="Upload image"
+        />
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: "var(--text-secondary)", padding: "0 6px" }}>
+          B / I / H2 / list / link / image · output is HTML
+        </span>
+      </div>
+      <div
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        onInput={handleInput}
+        onBlur={handleInput}
+        style={{
+          padding: 16,
+          minHeight: 240,
+          maxHeight: 500,
+          overflow: "auto",
+          background: "var(--bg-color)",
+          color: "var(--text-primary)",
+          fontSize: 14,
+          lineHeight: 1.5,
+          outline: "none",
+        }}
+        aria-label="Itinerary content editor"
+      />
+    </div>
+  );
+}
+
+function ToolButton({ children, onClick, label, disabled }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      style={{
+        ...toolBtn,
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+const toolbar = {
+  display: "flex", alignItems: "center", gap: 4, padding: 6,
+  background: "var(--subtle-bg)", borderBottom: "1px solid var(--border-color)",
+  flexWrap: "wrap",
+};
+const toolBtn = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  padding: "6px 8px", borderRadius: 4, border: "1px solid transparent",
+  background: "transparent", color: "var(--text-primary)",
+  cursor: "pointer",
+};
+const primaryBtnDisabled = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
+  background: "var(--primary-color)", color: "#fff",
+  border: "none", opacity: 0.5, cursor: "not-allowed",
+};
+const dangerBtn = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
+  background: "var(--surface-color)", color: "var(--danger-color)",
+  border: "1px solid var(--danger-color)", cursor: "pointer",
+};
 
 // ─── Shared styles ───────────────────────────────────────────────────
 

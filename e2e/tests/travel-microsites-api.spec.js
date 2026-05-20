@@ -278,3 +278,115 @@ test.describe("Travel microsites API — public info endpoint", () => {
     });
   });
 });
+
+// ─── Image upload (Phase 1.5 / 8d — inline microsite editor) ─────────
+//
+// The editor's "Insert image" toolbar button POSTs a multipart file to
+// /trips/:tripId/microsite/upload and embeds the returned URL into the
+// itineraryHtml via <img src="…">. Mirrors the booking_pages upload
+// pattern (PNG/JPEG/WebP, 4MB cap, multer disk storage under
+// /uploads/microsites/).
+//
+// Tiny 1×1 PNG payload — enough for the route to write a file, return
+// the URL, and let us assert the contract. We don't fetch the asset back
+// because the static /uploads mount is served by Nginx on demo and the
+// Express static mount in CI; either way the route contract is what we
+// pin here.
+const ONE_PX_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=",
+  "base64",
+);
+const TINY_TXT = Buffer.from("not an image", "utf8");
+
+test.describe("Travel microsites API — image upload", () => {
+  test("POST /microsite/upload without auth → 401/403", async ({ request }) => {
+    if (!tripId) test.skip(true, "no trip");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/trips/${tripId}/microsite/upload`,
+      {
+        multipart: { file: { name: "x.png", mimeType: "image/png", buffer: ONE_PX_PNG } },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test("POST /microsite/upload rejects generic admin with 403 WRONG_VERTICAL", async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    if (!token || !tripId) test.skip(true, "deps missing");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/trips/${tripId}/microsite/upload`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        multipart: { file: { name: "x.png", mimeType: "image/png", buffer: ONE_PX_PNG } },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe("WRONG_VERTICAL");
+  });
+
+  test("POST /microsite/upload happy path returns { success, url } under /uploads/microsites/", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId) test.skip(true, "deps missing");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/trips/${tripId}/microsite/upload`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        multipart: { file: { name: "x.png", mimeType: "image/png", buffer: ONE_PX_PNG } },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status(), `upload: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.url).toMatch(/^\/uploads\/microsites\/ms-[a-z0-9-]+\.(png|jpg|jpeg|webp)$/i);
+    expect(body.tripId).toBe(tripId);
+  });
+
+  test("POST /microsite/upload rejects non-image mimetype with 400 INVALID_FILE", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId) test.skip(true, "deps missing");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/trips/${tripId}/microsite/upload`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        multipart: { file: { name: "x.txt", mimeType: "text/plain", buffer: TINY_TXT } },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_FILE");
+  });
+
+  test("POST /microsite/upload with no file field → 400 MISSING_FILE", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId) test.skip(true, "deps missing");
+    // Empty multipart — multer.single("file") leaves req.file undefined.
+    const res = await request.post(
+      `${BASE_URL}/api/travel/trips/${tripId}/microsite/upload`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        multipart: { unused: "x" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_FILE");
+  });
+
+  test("POST /microsite/upload for unknown tripId → 404 TRIP_NOT_FOUND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/trips/99999999/microsite/upload`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        multipart: { file: { name: "x.png", mimeType: "image/png", buffer: ONE_PX_PNG } },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("TRIP_NOT_FOUND");
+  });
+});

@@ -22,11 +22,37 @@
 // @@unique([publicUuid]) so duplicate-uuid creates are impossible.
 
 const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const router = express.Router();
 const crypto = require("crypto");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
+
+// Image upload for the microsite editor. Mirrors routes/booking_pages.js's
+// multer pattern (disk storage under backend/uploads/, PNG/JPEG/WebP only,
+// 4MB cap). Files land under uploads/microsites/ and are served from the
+// existing /uploads static mount in server.js.
+const UPLOAD_DIR = path.join(__dirname, "..", "uploads", "microsites");
+try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch { /* best-effort */ }
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase();
+      const safeExt = /^\.(png|jpe?g|webp)$/i.test(ext) ? ext.toLowerCase() : ".png";
+      const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+      cb(null, `ms-${stamp}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(png|jpe?g|webp)$/i.test(file.mimetype || "")) return cb(null, true);
+    return cb(new Error("Only PNG / JPEG / WebP images are allowed"));
+  },
+});
 
 async function requireTmcAccess(req, res, next) {
   try {
@@ -190,6 +216,44 @@ router.patch(
       }
       console.error("[travel-microsite] patch error:", e.message);
       res.status(500).json({ error: "Failed to update microsite" });
+    }
+  },
+);
+
+// POST /api/travel/trips/:tripId/microsite/upload
+//
+// Image upload for the rich-text editor (Phase 1.5 / 8d). Returns
+// `{ url: "/uploads/microsites/ms-xxx.png" }`; the editor stashes the URL
+// into the inline <img src> as the user inserts the image. No DB write —
+// the image is referenced indirectly via the editor's HTML output, which
+// the PATCH endpoint stores into itineraryHtml. Orphan files (uploaded
+// but never embedded) are tolerated; a separate sweep can prune them by
+// scanning itineraryHtml across all microsites if it becomes a concern.
+router.post(
+  "/trips/:tripId/microsite/upload",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  requireTmcAccess,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      // Trip-exists check protects against random uploads to non-existent
+      // trip ids — also gives us a chance to clean up the orphan upload.
+      const trip = await loadTrip(req);
+      if (!req.file) {
+        return res.status(400).json({ error: "file is required (multipart field 'file')", code: "MISSING_FILE" });
+      }
+      const url = `/uploads/microsites/${req.file.filename}`;
+      res.status(201).json({ success: true, url, tripId: trip.id });
+    } catch (e) {
+      if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch { /* swallow */ } }
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e && /file too large|allowed/i.test(e.message || "")) {
+        return res.status(400).json({ error: e.message, code: "INVALID_FILE" });
+      }
+      console.error("[travel-microsite] upload error:", e.message);
+      res.status(500).json({ error: "Failed to upload image" });
     }
   },
 );

@@ -20,16 +20,57 @@
 // See docs/TRAVEL_CRM_PRD.md §4.2 + §5.1 for the contract.
 
 const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
+const { renderTravelDiagnosticPdf } = require("../services/pdfRenderer");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
   canAccessSubBrand,
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
+
+// PRD §4.2 branded PDF — saved under backend/uploads/diagnostics/ and
+// served via the existing /uploads static mount (server.js:710). Filename
+// includes a 16-byte random suffix so the URL is unguessable for casual
+// access; auth'd surfaces (WhatsApp / email delivery, advisor download)
+// resolve via the stored TravelDiagnostic.reportPdfUrl column.
+const DIAG_PDF_DIR = path.join(__dirname, "..", "uploads", "diagnostics");
+try { fs.mkdirSync(DIAG_PDF_DIR, { recursive: true }); } catch { /* best-effort */ }
+
+async function generateDiagnosticPdfBestEffort(diag, bank) {
+  // Best-effort: if PDF generation fails, we don't break the diagnostic
+  // submission — the row is already saved, the advisor still sees it on
+  // the dashboard, and a future endpoint can re-generate. Logs the error
+  // for observability but swallows.
+  try {
+    const contact = diag.contactId
+      ? await prisma.contact.findUnique({
+          where: { id: diag.contactId },
+          select: { name: true, email: true, phone: true },
+        })
+      : { name: "Anonymous customer", email: null, phone: null };
+    const pdfBuf = await renderTravelDiagnosticPdf(diag, contact, bank);
+    const rand = crypto.randomBytes(16).toString("hex");
+    const filename = `diag-${diag.id}-${rand}.pdf`;
+    const filepath = path.join(DIAG_PDF_DIR, filename);
+    await fs.promises.writeFile(filepath, pdfBuf);
+    const url = `/uploads/diagnostics/${filename}`;
+    await prisma.travelDiagnostic.update({
+      where: { id: diag.id },
+      data: { reportPdfUrl: url },
+    });
+    return url;
+  } catch (e) {
+    console.error("[travel-diag] PDF generation failed:", e.message);
+    return null;
+  }
+}
 
 // ─── Question banks ───────────────────────────────────────────────────
 
@@ -240,13 +281,19 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
       },
     });
 
+    // PRD §4.2: branded PDF generated on submission. Awaited so the
+    // response includes reportPdfUrl; if generation fails, the diagnostic
+    // row is still returned (PDF can be regenerated later).
+    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank);
+
     res.status(201).json({
-      diagnostic: diag,
+      diagnostic: { ...diag, reportPdfUrl: reportPdfUrl || diag.reportPdfUrl },
       score: result.score,
       classification: result.classification,
       classificationLabel: result.classificationLabel,
       recommendedTier: result.recommendedTier,
       warnings: result.warnings,
+      reportPdfUrl,
     });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

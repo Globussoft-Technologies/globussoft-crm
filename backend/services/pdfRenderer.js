@@ -360,8 +360,142 @@ async function renderBrandedInvoicePdf(invoice, contact, clinic) {
   return bufPromise;
 }
 
+// ── Travel CRM — diagnostic report ──────────────────────────────────
+//
+// PRD §4.2: "Auto-generated branded PDF report — sub-brand logo/colors/
+// fonts; sent by WhatsApp + email immediately on completion."
+//
+// Phase 1: text-only branded layout per sub-brand (logos/full asset pack
+// lands once Yasin delivers Q22). The sub-brand drives the accent color
+// + label string at the top of the document.
+//
+// Q&A rendering: walks bank.questions (parsed) and answers in parallel,
+// printing each question text and the corresponding answer label (resolving
+// option.value → option.label when the bank defines options).
+
+const SUB_BRAND_LABEL = {
+  tmc: "TMC — School Trips",
+  rfu: "RFU — Umrah Readiness",
+  travelstall: "Travel Stall — Family Travel",
+  visasure: "Visa Sure — Visa Readiness",
+};
+const SUB_BRAND_ACCENT = {
+  // Hex strings used directly by PDFKit fillColor / strokeColor.
+  tmc: "#0B4F6C",
+  rfu: "#2F7A4D",
+  travelstall: "#122647",
+  visasure: "#7A2F5C",
+};
+
+function resolveAnswerLabel(question, rawAnswer) {
+  if (rawAnswer == null) return "—";
+  // Option lists support both string + array answers (multi-select).
+  if (Array.isArray(question?.options) && question.options.length > 0) {
+    const lookup = (val) => {
+      const opt = question.options.find((o) => o && o.value === val);
+      return opt ? (opt.label || opt.value) : String(val);
+    };
+    if (Array.isArray(rawAnswer)) return rawAnswer.map(lookup).join(", ");
+    return lookup(rawAnswer);
+  }
+  if (Array.isArray(rawAnswer)) return rawAnswer.join(", ");
+  return String(rawAnswer);
+}
+
+/**
+ * Render the diagnostic report.
+ * @param {object} diagnostic — TravelDiagnostic row (with subBrand, score,
+ *   classification, classificationLabel, recommendedTier, answersJson)
+ * @param {object} contact — { name, email, phone }
+ * @param {object} bank — { version, questionsJson } (questionsJson parsed lazily here)
+ * @returns {Promise<Buffer>}
+ */
+function renderTravelDiagnosticPdf(diagnostic, contact, bank) {
+  const sub = diagnostic.subBrand;
+  const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
+  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+
+  let questions = [];
+  try {
+    const parsed = JSON.parse(bank?.questionsJson || "{}");
+    questions = Array.isArray(parsed.questions) ? parsed.questions : [];
+  } catch { /* fall through with empty questions */ }
+  let answers = {};
+  try {
+    answers = JSON.parse(diagnostic.answersJson || "{}");
+  } catch { /* leave empty */ }
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+
+  // Brand header band
+  doc.rect(0, 0, doc.page.width, 60).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
+    .text(brandLabel, 50, 22, { align: "left" });
+  doc.fillColor("#fff").fontSize(10).text("Diagnostic Report", 50, 42, { align: "left" });
+  doc.fillColor("#111").moveDown(2);
+
+  // Body — contact + meta
+  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text(contact?.name || "Customer", 50, 90);
+  const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  •  ");
+  if (metaLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(metaLine);
+  doc.moveDown(0.5);
+
+  doc.font("Helvetica").fontSize(10).fillColor("#555");
+  doc.text(`Bank version: v${bank?.version ?? "?"}`);
+  doc.text(`Submitted: ${formatDate(diagnostic.createdAt || new Date())}`);
+  doc.moveDown();
+
+  // Result band
+  doc.rect(50, doc.y, doc.page.width - 100, 70).fillAndStroke("#f4f6f8", accent);
+  const resultY = doc.y - 65;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#555")
+    .text("Classification", 60, resultY + 8);
+  doc.font("Helvetica-Bold").fontSize(16).fillColor(accent)
+    .text(diagnostic.classificationLabel || diagnostic.classification || "—", 60, resultY + 24);
+  doc.font("Helvetica").fontSize(10).fillColor("#333")
+    .text(`Score: ${diagnostic.score != null ? Number(diagnostic.score).toFixed(2) : "—"}`, 60, resultY + 50);
+  if (diagnostic.recommendedTier) {
+    doc.text(`Recommended tier: ${diagnostic.recommendedTier}`, 280, resultY + 50);
+  }
+  doc.fillColor("#111").moveDown(2);
+
+  // Q&A section
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111").text("Your answers", { underline: false });
+  doc.moveDown(0.3);
+  doc.font("Helvetica").fontSize(10).fillColor("#111");
+
+  if (questions.length === 0) {
+    doc.fillColor("#777").text("(No question bank snapshot available.)");
+  } else {
+    questions.forEach((q, idx) => {
+      const num = idx + 1;
+      const qText = q?.text || `Question ${num}`;
+      const ans = resolveAnswerLabel(q, answers[q?.id]);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#333")
+        .text(`${num}. ${qText}`);
+      doc.font("Helvetica").fontSize(10).fillColor("#111")
+        .text(`   ${ans}`);
+      doc.moveDown(0.4);
+    });
+  }
+
+  // Footer divider + disclaimer
+  const footerY = doc.page.height - doc.page.margins.bottom - 32;
+  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
+  doc.font("Helvetica").fontSize(8).fillColor("#777")
+    .text(
+      `Generated by ${brandLabel}. This report is informational; pricing and tier recommendations follow on consultation.`,
+      50, footerY + 8, { width: doc.page.width - 100, align: "center" },
+    );
+
+  doc.end();
+  return bufPromise;
+}
+
 module.exports = {
   renderPrescriptionPdf,
   renderConsentPdf,
   renderBrandedInvoicePdf,
+  renderTravelDiagnosticPdf,
 };

@@ -948,6 +948,14 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initTravelJourneyRemindersCron } = require('./cron/travelJourneyReminders');
   initTravelJourneyRemindersCron();
 
+  // Initialize Travel CRM web check-in scheduler (every 15 min).
+  // PRD §4.6 + §6.3 row 1 — flips WebCheckin status pending → reminded
+  // when windowOpenAt arrives, then reminded → fallback-agent if stalled
+  // 30m+. Browser-automation half (P1B) deferred — this scheduler only
+  // handles the tracking + reminder side.
+  const { initWebCheckinSchedulerCron } = require('./cron/webCheckinScheduler');
+  initWebCheckinSchedulerCron();
+
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require('./cron/lowStockEngine');
   initLowStockCron();

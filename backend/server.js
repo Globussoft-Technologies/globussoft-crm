@@ -619,6 +619,14 @@ app.use("/api/voice-transcription", voiceTranscriptionRoutes);
 app.use("/api/email-threading", emailThreadingRoutes);
 // Travel vertical (Day 1-8: /health, diagnostics, itineraries, trips, cost-master)
 app.use("/api/travel", travelRoutes);
+// v3.9.1 — CSV I/O routes MUST mount BEFORE the CRUD routes below.
+// `/cost-master/export.csv` would otherwise be caught by `/cost-master/:id`
+// in travelCostMasterRoutes (with id="export.csv" → parseInt → NaN → 400
+// INVALID_ID); same for `/diagnostic-banks/export.csv` vs
+// `/diagnostic-banks/:id` in travelDiagnosticsRoutes. The CRUD routes
+// use `:id` as a numeric route param so the more-specific export/import
+// paths in travelCsvIoRoutes need precedence.
+app.use("/api/travel", travelCsvIoRoutes);
 app.use("/api/travel", travelDiagnosticsRoutes);
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
@@ -628,7 +636,6 @@ app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
 app.use("/api/travel", travelPricingRoutes);
 app.use("/api/travel", travelTripBillingRoutes);
-app.use("/api/travel", travelCsvIoRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths

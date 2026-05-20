@@ -917,6 +917,13 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initWellnessOpsCron } = require('./cron/wellnessOpsEngine');
   initWellnessOpsCron();
 
+  // Initialize Travel CRM post-trip feedback cron (daily 06:13 IST).
+  // PRD §4.8 + §6.3 — creates a Survey row for TmcTrips whose returnDate
+  // is 1-7 days ago. WhatsApp/email dispatch slots in once Wati BSP creds
+  // (Q9) land; for now the survey link is just logged.
+  const { initTripPostTripFeedbackCron } = require('./cron/tripPostTripFeedback');
+  initTripPostTripFeedbackCron();
+
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require('./cron/lowStockEngine');
   initLowStockCron();

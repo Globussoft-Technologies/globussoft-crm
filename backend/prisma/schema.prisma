@@ -2558,6 +2558,9 @@ model Patient {
   // DUPLICATE_PHONE. Backfill + merge MUST run before this can apply
   // — see backend/scripts/backfill-patient-normalized-phone.js.
   @@unique([tenantId, normalizedPhone], name: "patient_tenant_normalized_phone_unique")
+  // safe-unique: replaces the single-column `userId @unique` removed in
+  // d8aab25; 0c9b59a already verified zero duplicate userId in the live
+  // Patient table, and (tenantId, userId) is strictly ≤ as strict.
   @@unique([tenantId, userId], name: "patient_tenant_user_unique")
   @@index([tenantId, name])
   @@index([tenantId, phone])

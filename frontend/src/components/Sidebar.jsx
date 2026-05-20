@@ -962,6 +962,7 @@ function renderTravelNav({
       <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
       <Link to="/travel/cost-master" icon={DollarSign} label="Cost Master" />
       {isAdmin && <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" />}
+      <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Suppliers" />}
 
       <div style={labelStyle}>Sales pipeline</div>

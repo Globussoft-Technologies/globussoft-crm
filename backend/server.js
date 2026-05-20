@@ -924,6 +924,15 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initTripPostTripFeedbackCron } = require('./cron/tripPostTripFeedback');
   initTripPostTripFeedbackCron();
 
+  // Initialize Travel CRM payment reminders cron (daily 07:13 IST).
+  // PRD §4.4 + §6.3 — creates a Notification row for each
+  // TripInstalmentPayment in pre-due or overdue windows (per
+  // TripPaymentPlan.instalmentsJson reminderDays per entry). Dedupes
+  // via (entityType, entityId, type). WhatsApp/email dispatch lands
+  // once Wati BSP creds (Q9) arrive.
+  const { initTripPaymentRemindersCron } = require('./cron/tripPaymentReminders');
+  initTripPaymentRemindersCron();
+
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require('./cron/lowStockEngine');
   initLowStockCron();

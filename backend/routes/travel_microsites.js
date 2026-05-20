@@ -54,6 +54,27 @@ const upload = multer({
   },
 });
 
+// Wrap multer so its rejection paths (LIMIT_FILE_SIZE, fileFilter Error)
+// land as 400 INVALID_FILE instead of bubbling to Express's default
+// 500 handler. The route's own try/catch can only see errors thrown
+// INSIDE the handler — by the time the request reaches the handler,
+// multer has already either populated req.file or short-circuited via
+// next(err). This wrapper sits between multer and the handler and
+// converts the err arg into a structured 400 response.
+function uploadImageOrReject(req, res, next) {
+  upload.single("file")(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "File too large (max 4MB)", code: "INVALID_FILE" });
+    }
+    if (/allowed|invalid|not an image/i.test(err.message || "")) {
+      return res.status(400).json({ error: err.message, code: "INVALID_FILE" });
+    }
+    console.error("[travel-microsite] upload middleware error:", err.message);
+    return res.status(500).json({ error: "Upload error", code: "UPLOAD_FAILED" });
+  });
+}
+
 async function requireTmcAccess(req, res, next) {
   try {
     const allowed = await getSubBrandAccessSet(req.user.userId);
@@ -235,7 +256,7 @@ router.post(
   verifyRole(["ADMIN", "MANAGER"]),
   requireTravelTenant,
   requireTmcAccess,
-  upload.single("file"),
+  uploadImageOrReject,
   async (req, res) => {
     try {
       // Trip-exists check protects against random uploads to non-existent

@@ -60,10 +60,9 @@ async function getTravelAdmin(request) {
 }
 async function getTravelManager(request) {
   if (!travelManagerToken) {
-    // Demo Admin (admin@travelstall.demo) is seeded as a MANAGER on the
-    // travel tenant per seed-travel.js. If unavailable in this env we
-    // skip the manager-only tests rather than fail.
-    travelManagerToken = await loginAs(request, "admin@travelstall.demo", "password123");
+    // tmc-ops@travelstall.demo is the seeded MANAGER (seed-travel.js:86-87).
+    // admin@travelstall.demo is ADMIN (despite the "Demo Admin" label).
+    travelManagerToken = await loginAs(request, "tmc-ops@travelstall.demo", "password123");
   }
   return travelManagerToken;
 }

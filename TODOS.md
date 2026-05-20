@@ -4,41 +4,43 @@
 
 ---
 
-## 🏁 SESSION HANDOFF (2026-05-20 PM evening — Phase 1.5 polish: 3 visual builders shipped)
+## 🏁 SESSION HANDOFF (2026-05-21 office — Travel CRM Phase 1 closeout + Phase 1.5 polish closed)
 
-**HEAD on origin/main:** `8c3ae7d`. **3 commits this session, all Phase 1.5 polish on the Travel CRM frontend** (no schema / backend / dependency changes). Picks up from the morning's [docs/SESSION_HANDOFF_2026-05-20_PM.md](docs/SESSION_HANDOFF_2026-05-20_PM.md). Latest release tag still **v3.9.1**.
+**HEAD on origin/main:** `b40ef4a` (Owner Dashboard ship). Release **v3.9.2**. Working tree clean.
 
-### What shipped this session
+This session closed the **last Phase 1 deliverable** (real Owner Dashboard, replacing the Day-1 placeholder) plus the **entire Phase 1.5 polish list** that the prior session-handoff opened. Six commits stacked on v3.9.1:
 
-| Commit | Phase 1.5 item | What it does | Gate |
-|---|---|---|---|
-| `266f004` | **8a** — Diagnostic Q-set visual builder | Replaced the JSON-paste textareas in `DiagnosticBuilder.jsx` with a two-tab UI (Visual / JSON). Visual tab = form-based questions + scoring-bands editor with add / remove / reorder. JSON tab keeps Yasin's Q13 paste-from-document workflow verbatim. Single source of truth: the JSON string state. | ✅ verified |
-| `c8dded5` | **8b** — Payment-plan timeline editor | Inline editor on the Trip detail Payment tab — `graceDays` + per-instalment `dueDate` / `amount` / `reminderDays`, with add / remove / reorder + running total. Save (PUT) + Delete buttons; per-participant materialised list preserved read-only. | ✅ verified |
-| `8c3ae7d` | **8c** — Rooming visual editor | Inline editor on the Trip detail Rooming tab — each room is an editable card (roomNumber, roomType, participant chips). Capacity enforced client-side (unchecked chips disable when full); backend revalidates via `ROOM_CAPACITY_EXCEEDED`. Live "X/Y unassigned" header. Add/Edit/Delete via existing GET/POST/PATCH/DELETE `/api/travel/trips/:tripId/rooming`. | ✅ verified ([run 26172184032](https://github.com/Globussoft-Technologies/globussoft-crm/actions/runs/26172184032)) |
+| Commit | Item | What |
+|---|---|---|
+| `1acd073` | Phase 1.5 / 8e | Seasons + Markup Rules admin UI (`PricingRules.jsx`, mounted at `/travel/pricing-rules`) on top of the already-shipped `routes/travel_pricing.js` endpoints. Linked from sidebar (admin-only) + Cost Master header. |
+| `02c304e` | Phase 1.5 / 8d | Inline microsite editor (`MicrositeTab` rewrite) + new `POST /api/travel/trips/:tripId/microsite/upload` endpoint (multer, 4MB, PNG/JPEG/WebP). Rich-text via native `contenteditable` + `execCommand` to sidestep the Windows-npm-lockfile gotcha — deliberate trade-off documented in code. |
+| `4e69e47` | 8d follow-up | Multer rejection wrapper — `fileFilter` Error now lands as `400 INVALID_FILE` instead of bubbling to Express's default 500 handler. |
+| `769c484` | CSV extension | `travel_csv_io.js` grows `/seasons/{export,import}.csv` + `/markup-rules/{export,import}.csv`. Completes the bulk-admin CSV pattern across all 4 pricing/rate tables. PricingRules.jsx gets Export/Import buttons on both sections. |
+| `39ba54a` | CSV follow-up | Added the two new `/import.csv` paths to `CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES` in `server.js` (second time the same miss bit a CSV ship in 24 hours; comment now explicit about the standing rule). |
+| `b40ef4a` | **Phase 1 Dashboard** | `GET /api/travel/dashboard` (14 parallel aggregates, sub-brand-scoped) + 6-tile KPI grid on `Dashboard.jsx` + 5-case gate spec. No PII in `recentTrips` slice. |
 
-Local pre-flight on each commit before push: `eslint` 0 errors on new code, `vite build` ✓. All three deploy gates green; demo is live on `8c3ae7d` at https://crm.globusdemos.com.
+Local pre-flight on each: `node --check` ✓, `eslint` 0 errors, `vite build` ✓. All deploy gates green; demo live on `b40ef4a`.
 
-### Two things to do first (home session)
+### What's actually left on the Travel CRM queue
 
-1. **Phase 1.5 / 8e — Seasons + markup rules admin UI.** Data models confirmed in [backend/prisma/schema.prisma:4152-4183](backend/prisma/schema.prisma):
-   - `TravelSeasonCalendar` — subBrand + seasonName + startDate/endDate + optional `multiplier`
-   - `TravelMarkupRule` — subBrand + scope (`flight | hotel | transport | package`) + `matchKeyJson` + `markupPct` OR `markupFlat` + priority + isActive
+**Truly nothing autonomous left from Phase 1 / 1.5.** Remaining items split into three buckets, none of which are pickup-able without user action:
 
-   Backend routes were **not located** before handoff — start by grepping `backend/routes/travel_cost_master.js` and adjacent travel route files for season + markup handlers. Likely fits as a new tab or section on the existing `CostMaster.jsx` page (which already has CSV import per v3.9.1).
+- **Process / external / legal** — R11 infra-handover call (Travel Stall ops), Yasin's Section 13 deliverables (9 items, biggest unlock is real diagnostic Q-sets for Q13 — now uploadable via CSV per v3.9.1), Aadhaar consent legal copy.
+- **Cred-blocked** — DigiLocker wiring (needs Q3 partner creds), Wati BSP for 3 WABAs (needs Meta BM access), Microsite OTP flow (needs SMS provider creds), Reminder cron for `TripInstalmentPayment` instalments (same SMS dep).
+- **Phase 3, explicitly out of Phase 1 scope** — Visa Sure routes/UI, Web check-in Chrome extension (`flight-plugin/`).
 
-2. **Phase 1.5 / 8d — inline microsite editor — DEFERRED.** Rich-text needs a library (TipTap / Lexical / Slate). Adding it via `npm install` on the Windows dev box would strip the cross-platform `@esbuild/*` optional packages from `frontend/package-lock.json` — see `project_frontend_npm_windows.md` memory + the 2026-05-18 handoff below for the full story. Pick up either on Linux / macOS, or run the dep-add in CI and commit the lockfile from there. Until then this stays on the queue.
-
-### What was NOT touched this session (still open from the 2026-05-20 PM handoff)
-
-- **Top of pile** items 1–3 (R11 infra-handover call, Yasin's Section 13 deliverables, Aadhaar consent legal copy) — process / external / legal, not autonomous code.
-- **Medium-leverage** items 4–7 (DigiLocker, Wati BSP, microsite OTP, reminder cron) — blocked on external creds.
-- **Phase 3** items (Visa Sure, web-checkin extension) — out of Phase 1 scope.
+**Off-list but valuable next-ups** (when you want more autonomous code work):
+1. **Travel Reports** (P&L / per-sub-brand / per-supplier — mirrors the wellness Reports surface). ~4-5 hrs.
+2. **Microsite OTP scaffold** with `sendSMS` stubbed — surface ready for 1-line wire-up when Wati creds arrive. ~3 hrs.
+3. **Realistic demo seed extension** — `seed-travel.js` currently seeds catalogues but not trips/itineraries/microsites; the new dashboard tiles render zero on a fresh tenant. ~1-2 hrs.
+4. **415-guard refactor** — promote `CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES` from per-path allowlist to a suffix-based rule (`/import.csv` always bypasses). Bug-class elimination. ~30 min.
 
 ### Gotchas / context still in force
 
-- **Windows-npm-lockfile** corruption is real — see memory + 2026-05-18 handoff. Don't `npm install` frontend deps on the Windows box.
-- **Travel route precedence** (from the 2026-05-20 PM handoff): `travelCsvIoRoutes` mounts BEFORE the `/:id` CRUD routes — any new travel route with `:id` params has to land after `travelCsvIoRoutes` in [server.js:621-632](backend/server.js#L621).
-- **Demo accounts have misleading labels** — `admin@travelstall.demo` is ADMIN despite the "Demo Admin" label; the real MANAGER on the travel tenant is `tmc-ops@travelstall.demo`. Don't infer role from the label.
+- **Windows-npm-lockfile** corruption is real — don't `npm install` frontend deps on the Windows box. The microsite rich-text editor ships `contenteditable` for exactly this reason; if/when the lockfile constraint eases, `RichTextEditor` in `TripDetail.jsx` is the swap-site.
+- **Travel route precedence** — `travelCsvIoRoutes` + `travelDashboardRoutes` mount BEFORE the `/:id`-using CRUD route files in [server.js](backend/server.js). Any new travel route with `:id` at the first path segment must land after them.
+- **`CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES` is a footgun** — every new endpoint accepting `text/csv` (or any non-JSON content type) must be explicitly added or the global 415 guard fires before `verifyToken` runs. Bit two CSV ships in 24 hours; refactor it (item 4 above) before adding a fifth bulk-admin CSV table.
+- **Demo accounts have misleading labels** — `admin@travelstall.demo` is ADMIN; real MANAGER on the travel tenant is `tmc-ops@travelstall.demo`. Don't infer role from the label.
 
 ---
 

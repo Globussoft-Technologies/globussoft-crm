@@ -1,5 +1,83 @@
 # CHANGELOG
 
+## v3.9.2 — 2026-05-20 — Travel CRM Phase 1 closeout
+
+Closes the last Phase 1 deliverable + the entire Phase 1.5 polish list
+(items 8a–8e from [docs/SESSION_HANDOFF_2026-05-20_PM.md](docs/SESSION_HANDOFF_2026-05-20_PM.md)).
+Six commits stacked on top of v3.9.1.
+
+### Phase 1 — Owner Dashboard (b40ef4a)
+
+Replaces the Day-1 placeholder at `/travel` with a real KPI surface.
+New endpoint `GET /api/travel/dashboard` ([backend/routes/travel_dashboard.js](backend/routes/travel_dashboard.js))
+fires 14 aggregate queries in parallel, returns counts for trips,
+diagnostics (last 30 days), itineraries, microsites, cost-master rates,
+and pricing rules — all sub-brand-scoped server-side via the caller's
+`subBrandAccess`. Frontend [Dashboard.jsx](frontend/src/pages/travel/Dashboard.jsx)
+rendered as a 6-tile responsive grid + Recent Trips panel. recentTrips
+deliberately omits PII (no participants / payment plans / schoolContactId).
+
+Gate spec [travel-dashboard-api.spec.js](e2e/tests/travel-dashboard-api.spec.js)
+(5 cases) pins auth gate, vertical gate, response shape, no-PII guarantee
+on recentTrips, and groupBy-key enum stability. Wired into both
+`deploy.yml` + `coverage.yml`.
+
+### Phase 1.5 — completes the polish list
+
+**8e — Seasons + Markup Rules admin UI (1acd073)**
+New page [PricingRules.jsx](frontend/src/pages/travel/PricingRules.jsx)
+at `/travel/pricing-rules` with two stacked CRUD sections backed by the
+existing `routes/travel_pricing.js` endpoints. Linked from sidebar
+(admin-only) + a "Pricing rules" button on the Cost Master page header.
+Frontend mirrors the backend invariants: exactly-one of `markupPct` /
+`markupFlat`, scope ∈ {flight,hotel,transport,package}, parseable
+`matchKeyJson`, `endDate >= startDate` on seasons.
+
+**8d — Inline microsite editor with rich-text + image upload (02c304e + 4e69e47)**
+Replaces the read-only `MicrositeTab` in [TripDetail.jsx](frontend/src/pages/travel/TripDetail.jsx)
+with a Create / Edit / Preview / Unpublish editor backed by a new
+`POST /api/travel/trips/:tripId/microsite/upload` endpoint (multer disk
+storage, PNG/JPEG/WebP, 4MB cap, mirrors `routes/booking_pages.js`).
+Rich-text editor uses native `contenteditable` + `document.execCommand`
+instead of TipTap/Lexical/Slate — deliberate trade-off to sidestep the
+Windows-npm-lockfile gotcha (adding the dep would have stripped
+`@esbuild/*` optional packages from `package-lock.json`). 6-button
+toolbar: Bold / Italic / H2 / list / link / image. If the lockfile
+constraint eases later, the `RichTextEditor` component is the sole
+swap-site.
+
+Follow-up `4e69e47` wraps multer in `uploadImageOrReject` so its
+`fileFilter` Error rejections land as `400 INVALID_FILE` instead of
+bubbling to Express's default 500 handler. Gate spec extended with
+6 image-upload cases.
+
+### CSV pattern extended to pricing tables (769c484 + 39ba54a)
+
+`backend/routes/travel_csv_io.js` gains `GET/POST` for `/seasons/{export,import}.csv`
+and `/markup-rules/{export,import}.csv` — completes the bulk-admin
+pattern across all four travel rate/rule tables (was cost-master +
+diagnostic-banks in v3.9.1; now also seasons + markup-rules).
+Idempotency keys: `(tenantId, subBrand, seasonName)` for seasons,
+`(tenantId, subBrand, scope, matchKeyJson)` for markup rules with
+JSON.parse round-trip normalisation so whitespace differences don't
+fork rows. PricingRules UI grows Export CSV / Import CSV buttons on
+both sections.
+
+Follow-up `39ba54a` adds the two new endpoints to
+`CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES` in `server.js` — second time
+this miss bit a CSV ship in 24 hours; the comment is now explicit that
+every new `/<resource>/import.csv` endpoint must be added here.
+
+### Known follow-ups (open for future work)
+
+- 415-guard refactor — promote `CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES`
+  from per-path allowlist to a suffix-based rule ("paths ending in
+  `/import.csv` bypass the guard") so this class of miss can't happen
+  again. Deferred per don't-bundle discipline.
+- `routes/booking_pages.js` `POST /:id/upload` shares the multer
+  rejection bug `4e69e47` fixed; its gate spec doesn't exercise the
+  non-image path so it stays latent.
+
 ## v3.9.1 — 2026-05-20 — Travel CRM CSV import/export
 
 Closes the Phase 1.5 polish-list item "CSV import for cost-master +

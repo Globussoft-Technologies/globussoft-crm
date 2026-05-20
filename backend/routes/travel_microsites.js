@@ -27,9 +27,32 @@ const fs = require("fs");
 const multer = require("multer");
 const router = express.Router();
 const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { JWT_SECRET } = require("../config/secrets");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
+
+// OTP constants for the public microsite PII reveal flow (PRD §4.5).
+// 4-digit code per the PRD spec, 10-minute validity, 30-minute access
+// token after verification, 60-second cool-down between OTP requests
+// for the same (micrositeId, phone, purpose) tuple.
+const OTP_LENGTH = 4;
+const OTP_TTL_MS = 10 * 60 * 1000;
+const OTP_COOLDOWN_MS = 60 * 1000;
+const OTP_ACCESS_TTL = "30m";
+const VALID_OTP_PURPOSES = ["registration", "payment-plan", "document-checklist", "teacher-access"];
+
+// SMS dispatch stub — when Wati BSP creds (Q9) land, replace the
+// console.log with a prisma.whatsAppMessage.create call. The function
+// signature is intentionally minimal so the cutover is a one-line
+// substitution.
+async function sendOtpStub(phone, code, purpose) {
+  console.log(
+    `[travel-microsite] OTP dispatch stub — phone=${phone} purpose=${purpose} code=${code} (will route through Wati once creds land)`,
+  );
+}
 
 // Image upload for the microsite editor. Mirrors routes/booking_pages.js's
 // multer pattern (disk storage under backend/uploads/, PNG/JPEG/WebP only,
@@ -333,6 +356,268 @@ router.get("/microsites/public/:publicUuid", async (req, res) => {
   } catch (e) {
     console.error("[travel-microsite] public-get error:", e.message);
     res.status(500).json({ error: "Failed to load microsite" });
+  }
+});
+
+// ─── PUBLIC OTP flow (PRD §4.5) ──────────────────────────────────────
+//
+// Three endpoints fronting the PII reveal:
+//   POST /microsites/public/:publicUuid/request-otp
+//   POST /microsites/public/:publicUuid/verify-otp
+//   GET  /microsites/public/:publicUuid/full?token=...
+//
+// All three are unauthenticated and CORS-public (parents/teachers visit
+// the microsite from email/WhatsApp links). The /full endpoint is the
+// only one returning participant / rooming / payment-plan PII, and only
+// against a valid access-token JWT minted by verify-otp.
+//
+// Auth allowlist is already covered by server.js's openPaths entry for
+// "/travel/microsites/public" (prefix match catches the sub-paths).
+//
+// Cred dep: sendOtpStub() will swap to a real Wati WhatsApp dispatch
+// once Q9 / Meta Business Manager creds arrive — single-line cutover.
+
+function validOtpPurpose(p) {
+  return VALID_OTP_PURPOSES.includes(p);
+}
+
+function generateOtpCode() {
+  // crypto.randomInt range is [min, max) — generate 0000..9999 then
+  // pad-left to OTP_LENGTH so codes always have 4 digits.
+  const n = crypto.randomInt(0, 10 ** OTP_LENGTH);
+  return String(n).padStart(OTP_LENGTH, "0");
+}
+
+// POST /api/travel/microsites/public/:publicUuid/request-otp
+//
+// Body: { phone, purpose }. Generates a 4-digit OTP, stores bcrypt hash,
+// dispatches via stub. Idempotent within the cool-down: a second request
+// within 60s for the same (micrositeId, phone, purpose) returns 429.
+router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
+  try {
+    const uuid = String(req.params.publicUuid);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+      return res.status(400).json({ error: "publicUuid must be a UUID", code: "INVALID_UUID" });
+    }
+    const { phone, purpose } = req.body || {};
+    if (!phone || !purpose) {
+      return res.status(400).json({ error: "phone + purpose required", code: "MISSING_FIELDS" });
+    }
+    if (!validOtpPurpose(purpose)) {
+      return res.status(400).json({
+        error: `purpose must be one of: ${VALID_OTP_PURPOSES.join(", ")}`,
+        code: "INVALID_PURPOSE",
+      });
+    }
+    // Look up the microsite (+ expiry check) before generating an OTP —
+    // no point hashing a code for an expired/missing microsite.
+    const ms = await prisma.tripMicrosite.findUnique({
+      where: { publicUuid: uuid },
+      select: { id: true, expiresAt: true },
+    });
+    if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
+    if (ms.expiresAt && new Date(ms.expiresAt) < new Date()) {
+      return res.status(410).json({ error: "This microsite has expired", code: "GONE" });
+    }
+
+    // Cool-down: reject if we issued an OTP for the same tuple inside
+    // the OTP_COOLDOWN_MS window. Prevents trivial spam.
+    const cooldownFloor = new Date(Date.now() - OTP_COOLDOWN_MS);
+    const recent = await prisma.tripMicrositeOtp.findFirst({
+      where: { micrositeId: ms.id, phone: String(phone), purpose, createdAt: { gte: cooldownFloor } },
+      select: { id: true },
+    });
+    if (recent) {
+      return res.status(429).json({
+        error: `OTP recently sent — wait ${Math.ceil(OTP_COOLDOWN_MS / 1000)}s before requesting again`,
+        code: "OTP_COOLDOWN",
+      });
+    }
+
+    const code = generateOtpCode();
+    const otpHash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+    await prisma.tripMicrositeOtp.create({
+      data: {
+        micrositeId: ms.id,
+        phone: String(phone),
+        purpose,
+        otpHash,
+        expiresAt,
+      },
+    });
+    await sendOtpStub(phone, code, purpose);
+    res.status(201).json({
+      sent: true,
+      expiresAt: expiresAt.toISOString(),
+      // Code intentionally NOT returned in the response — the stub logs
+      // it server-side. When Wati replaces the stub, this endpoint stays
+      // identical from the caller's perspective.
+    });
+  } catch (e) {
+    console.error("[travel-microsite] request-otp error:", e.message);
+    res.status(500).json({ error: "Failed to request OTP" });
+  }
+});
+
+// POST /api/travel/microsites/public/:publicUuid/verify-otp
+//
+// Body: { phone, purpose, code }. Looks up the most-recent unused-and-
+// unexpired OTP for the tuple, bcrypt-compares the provided code,
+// marks usedAt, and returns a 30-min JWT access token bound to the
+// (micrositeId, phone, purpose) that the /full endpoint accepts.
+router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
+  try {
+    const uuid = String(req.params.publicUuid);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+      return res.status(400).json({ error: "publicUuid must be a UUID", code: "INVALID_UUID" });
+    }
+    const { phone, purpose, code } = req.body || {};
+    if (!phone || !purpose || !code) {
+      return res.status(400).json({ error: "phone + purpose + code required", code: "MISSING_FIELDS" });
+    }
+    if (!validOtpPurpose(purpose)) {
+      return res.status(400).json({
+        error: `purpose must be one of: ${VALID_OTP_PURPOSES.join(", ")}`,
+        code: "INVALID_PURPOSE",
+      });
+    }
+    const ms = await prisma.tripMicrosite.findUnique({
+      where: { publicUuid: uuid },
+      select: { id: true, expiresAt: true },
+    });
+    if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
+
+    // Find the latest unused, unexpired OTP for the tuple.
+    const otp = await prisma.tripMicrositeOtp.findFirst({
+      where: {
+        micrositeId: ms.id,
+        phone: String(phone),
+        purpose,
+        usedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!otp) {
+      return res.status(400).json({ error: "OTP expired or not found", code: "OTP_INVALID" });
+    }
+    const match = await bcrypt.compare(String(code), otp.otpHash);
+    if (!match) {
+      return res.status(400).json({ error: "OTP code does not match", code: "OTP_INVALID" });
+    }
+    await prisma.tripMicrositeOtp.update({
+      where: { id: otp.id },
+      data: { usedAt: new Date() },
+    });
+
+    // Mint a short-lived access JWT scoped to the (micrositeId, phone,
+    // purpose). The /full endpoint verifies this token and refuses to
+    // serve PII without it.
+    const accessToken = jwt.sign(
+      { kind: "microsite-otp", micrositeId: ms.id, phone: String(phone), purpose },
+      JWT_SECRET,
+      { expiresIn: OTP_ACCESS_TTL },
+    );
+    res.json({ verified: true, accessToken, expiresIn: OTP_ACCESS_TTL });
+  } catch (e) {
+    console.error("[travel-microsite] verify-otp error:", e.message);
+    res.status(500).json({ error: "Failed to verify OTP" });
+  }
+});
+
+// GET /api/travel/microsites/public/:publicUuid/full?token=<jwt>
+//
+// PII-reveal endpoint. Requires the access token from /verify-otp. Returns
+// the full microsite payload INCLUDING participants, rooming, payment plan,
+// and document requirements. Token's `purpose` claim narrows the response
+// (e.g. teacher-access doesn't get payment plan PII; payment-plan purpose
+// gets the instalments but not other participants' rooming).
+router.get("/microsites/public/:publicUuid/full", async (req, res) => {
+  try {
+    const uuid = String(req.params.publicUuid);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+      return res.status(400).json({ error: "publicUuid must be a UUID", code: "INVALID_UUID" });
+    }
+    const token = req.query.token || req.headers["x-microsite-token"];
+    if (!token) {
+      return res.status(401).json({ error: "Access token required (?token=<jwt>)", code: "TOKEN_REQUIRED" });
+    }
+    let claims;
+    try {
+      claims = jwt.verify(String(token), JWT_SECRET);
+    } catch (jwtErr) {
+      return res.status(401).json({ error: "Access token invalid or expired", code: "TOKEN_INVALID" });
+    }
+    if (!claims || claims.kind !== "microsite-otp") {
+      return res.status(401).json({ error: "Token is not a microsite access token", code: "TOKEN_INVALID" });
+    }
+
+    const ms = await prisma.tripMicrosite.findUnique({
+      where: { publicUuid: uuid },
+      select: {
+        id: true,
+        subdomain: true,
+        itineraryHtml: true,
+        faqJson: true,
+        publishedAt: true,
+        expiresAt: true,
+        publicUuid: true,
+        tripId: true,
+      },
+    });
+    if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
+    if (ms.expiresAt && new Date(ms.expiresAt) < new Date()) {
+      return res.status(410).json({ error: "This microsite has expired", code: "GONE" });
+    }
+    if (claims.micrositeId !== ms.id) {
+      return res.status(403).json({ error: "Token scoped to a different microsite", code: "TOKEN_SCOPE" });
+    }
+
+    const trip = await prisma.tmcTrip.findUnique({
+      where: { id: ms.tripId },
+      select: {
+        id: true, tripCode: true, destination: true,
+        departDate: true, returnDate: true, status: true,
+      },
+    });
+
+    // Purpose-narrowed reveal — only the data the OTP was issued for.
+    const reveal = { microsite: ms, trip };
+    if (claims.purpose === "registration" || claims.purpose === "teacher-access") {
+      reveal.participants = await prisma.tripParticipant.findMany({
+        where: { tripId: ms.tripId },
+        select: {
+          id: true, fullName: true, passportNumber: true,
+          passportExpiry: true, dob: true,
+        },
+      });
+    }
+    if (claims.purpose === "teacher-access") {
+      reveal.rooming = await prisma.roomingAssignment.findMany({
+        where: { tripId: ms.tripId },
+        orderBy: { roomNumber: "asc" },
+      });
+    }
+    if (claims.purpose === "payment-plan") {
+      reveal.paymentPlan = await prisma.tripPaymentPlan.findUnique({
+        where: { tripId: ms.tripId },
+      });
+      reveal.instalments = await prisma.tripInstalmentPayment.findMany({
+        where: { tripId: ms.tripId },
+        orderBy: [{ participantId: "asc" }, { instalmentIndex: "asc" }],
+      });
+    }
+    if (claims.purpose === "document-checklist") {
+      reveal.documentRequirements = await prisma.tripDocumentRequirement.findMany({
+        where: { tripId: ms.tripId },
+      });
+    }
+
+    res.json(reveal);
+  } catch (e) {
+    console.error("[travel-microsite] /full error:", e.message);
+    res.status(500).json({ error: "Failed to load full microsite payload" });
   }
 });
 

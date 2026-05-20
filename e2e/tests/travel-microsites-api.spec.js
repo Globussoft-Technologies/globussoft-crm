@@ -390,3 +390,179 @@ test.describe("Travel microsites API — image upload", () => {
     expect((await res.json()).code).toBe("TRIP_NOT_FOUND");
   });
 });
+
+// ─── PRD §4.5 — public OTP flow + gated /full reveal ─────────────────
+//
+// The verify-otp happy path can't be exercised end-to-end without
+// reading the server-logged stub code; we cover the request-otp +
+// /full contract here and leave the actual code-match path to a
+// unit-level test. When Wati creds land per Q9, a sandbox phone
+// number can be added that returns the OTP in the response for
+// integration testing.
+
+test.describe("Travel microsites API — OTP flow (PRD §4.5)", () => {
+  test("request-otp without phone → 400 MISSING_FIELDS", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { purpose: "registration" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_FIELDS");
+  });
+
+  test("request-otp with bad purpose → 400 INVALID_PURPOSE", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { phone: "+919999999999", purpose: "wormhole" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_PURPOSE");
+  });
+
+  test("request-otp with garbage UUID → 400 INVALID_UUID", async ({ request }) => {
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/not-a-uuid/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { phone: "+919999999999", purpose: "registration" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_UUID");
+  });
+
+  test("request-otp for unknown microsite → 404 NOT_FOUND", async ({ request }) => {
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/00000000-0000-0000-0000-000000000000/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { phone: "+919999999999", purpose: "registration" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("NOT_FOUND");
+  });
+
+  test("request-otp happy path → 201 with expiresAt + no code in response", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        // Unique phone per RUN to avoid the 60s cooldown stomping the test.
+        data: { phone: `+91${String(Date.now()).slice(-10)}`, purpose: "registration" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.sent).toBe(true);
+    expect(body.expiresAt).toBeTruthy();
+    // OTP code MUST NOT be in the response — it's stub-logged server-side.
+    expect(body).not.toHaveProperty("code");
+    expect(body).not.toHaveProperty("otp");
+  });
+
+  test("request-otp cooldown: second request for same tuple within 60s → 429 OTP_COOLDOWN", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const phone = `+91${String(Date.now() + 1).slice(-10)}`;
+    const first = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { phone, purpose: "payment-plan" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(first.status()).toBe(201);
+    const second = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { phone, purpose: "payment-plan" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(second.status()).toBe(429);
+    expect((await second.json()).code).toBe("OTP_COOLDOWN");
+  });
+
+  test("verify-otp with bogus code → 400 OTP_INVALID", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const phone = `+91${String(Date.now() + 2).slice(-10)}`;
+    // Request first so a real OTP row exists for this phone.
+    await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { phone, purpose: "document-checklist" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/verify-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { phone, purpose: "document-checklist", code: "9999" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("OTP_INVALID");
+  });
+
+  test("verify-otp without phone → 400 MISSING_FIELDS", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/verify-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { purpose: "registration", code: "1234" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_FIELDS");
+  });
+
+  test("/full without token → 401 TOKEN_REQUIRED", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite");
+    const res = await request.get(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/full`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status()).toBe(401);
+    expect((await res.json()).code).toBe("TOKEN_REQUIRED");
+  });
+
+  test("/full with garbage token → 401 TOKEN_INVALID", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite");
+    const res = await request.get(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/full?token=not-a-jwt`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status()).toBe(401);
+    expect((await res.json()).code).toBe("TOKEN_INVALID");
+  });
+
+  test("/full with invalid UUID → 400 INVALID_UUID", async ({ request }) => {
+    const res = await request.get(
+      `${BASE_URL}/api/travel/microsites/public/garbage/full?token=anything`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_UUID");
+  });
+});

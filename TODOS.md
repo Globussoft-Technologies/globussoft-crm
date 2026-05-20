@@ -4,6 +4,44 @@
 
 ---
 
+## 🏁 SESSION HANDOFF (2026-05-20 PM evening — Phase 1.5 polish: 3 visual builders shipped)
+
+**HEAD on origin/main:** `8c3ae7d`. **3 commits this session, all Phase 1.5 polish on the Travel CRM frontend** (no schema / backend / dependency changes). Picks up from the morning's [docs/SESSION_HANDOFF_2026-05-20_PM.md](docs/SESSION_HANDOFF_2026-05-20_PM.md). Latest release tag still **v3.9.1**.
+
+### What shipped this session
+
+| Commit | Phase 1.5 item | What it does | Gate |
+|---|---|---|---|
+| `266f004` | **8a** — Diagnostic Q-set visual builder | Replaced the JSON-paste textareas in `DiagnosticBuilder.jsx` with a two-tab UI (Visual / JSON). Visual tab = form-based questions + scoring-bands editor with add / remove / reorder. JSON tab keeps Yasin's Q13 paste-from-document workflow verbatim. Single source of truth: the JSON string state. | ✅ verified |
+| `c8dded5` | **8b** — Payment-plan timeline editor | Inline editor on the Trip detail Payment tab — `graceDays` + per-instalment `dueDate` / `amount` / `reminderDays`, with add / remove / reorder + running total. Save (PUT) + Delete buttons; per-participant materialised list preserved read-only. | ✅ verified |
+| `8c3ae7d` | **8c** — Rooming visual editor | Inline editor on the Trip detail Rooming tab — each room is an editable card (roomNumber, roomType, participant chips). Capacity enforced client-side (unchecked chips disable when full); backend revalidates via `ROOM_CAPACITY_EXCEEDED`. Live "X/Y unassigned" header. Add/Edit/Delete via existing GET/POST/PATCH/DELETE `/api/travel/trips/:tripId/rooming`. | ✅ verified ([run 26172184032](https://github.com/Globussoft-Technologies/globussoft-crm/actions/runs/26172184032)) |
+
+Local pre-flight on each commit before push: `eslint` 0 errors on new code, `vite build` ✓. All three deploy gates green; demo is live on `8c3ae7d` at https://crm.globusdemos.com.
+
+### Two things to do first (home session)
+
+1. **Phase 1.5 / 8e — Seasons + markup rules admin UI.** Data models confirmed in [backend/prisma/schema.prisma:4152-4183](backend/prisma/schema.prisma):
+   - `TravelSeasonCalendar` — subBrand + seasonName + startDate/endDate + optional `multiplier`
+   - `TravelMarkupRule` — subBrand + scope (`flight | hotel | transport | package`) + `matchKeyJson` + `markupPct` OR `markupFlat` + priority + isActive
+
+   Backend routes were **not located** before handoff — start by grepping `backend/routes/travel_cost_master.js` and adjacent travel route files for season + markup handlers. Likely fits as a new tab or section on the existing `CostMaster.jsx` page (which already has CSV import per v3.9.1).
+
+2. **Phase 1.5 / 8d — inline microsite editor — DEFERRED.** Rich-text needs a library (TipTap / Lexical / Slate). Adding it via `npm install` on the Windows dev box would strip the cross-platform `@esbuild/*` optional packages from `frontend/package-lock.json` — see `project_frontend_npm_windows.md` memory + the 2026-05-18 handoff below for the full story. Pick up either on Linux / macOS, or run the dep-add in CI and commit the lockfile from there. Until then this stays on the queue.
+
+### What was NOT touched this session (still open from the 2026-05-20 PM handoff)
+
+- **Top of pile** items 1–3 (R11 infra-handover call, Yasin's Section 13 deliverables, Aadhaar consent legal copy) — process / external / legal, not autonomous code.
+- **Medium-leverage** items 4–7 (DigiLocker, Wati BSP, microsite OTP, reminder cron) — blocked on external creds.
+- **Phase 3** items (Visa Sure, web-checkin extension) — out of Phase 1 scope.
+
+### Gotchas / context still in force
+
+- **Windows-npm-lockfile** corruption is real — see memory + 2026-05-18 handoff. Don't `npm install` frontend deps on the Windows box.
+- **Travel route precedence** (from the 2026-05-20 PM handoff): `travelCsvIoRoutes` mounts BEFORE the `/:id` CRUD routes — any new travel route with `:id` params has to land after `travelCsvIoRoutes` in [server.js:621-632](backend/server.js#L621).
+- **Demo accounts have misleading labels** — `admin@travelstall.demo` is ADMIN despite the "Demo Admin" label; the real MANAGER on the travel tenant is `tmc-ops@travelstall.demo`. Don't infer role from the label.
+
+---
+
 ## 🏁 SESSION HANDOFF (2026-05-18 office session — post-v3.8.3 hygiene: doc drift + CI + audit P1s)
 
 **HEAD on origin/main:** `5ef564a`. **No new release tag** — all 7 commits are docs / CI-config / code-hygiene; each push went 6/6 gates green + deployed. Latest release tag still **v3.8.3**. Working tree clean.

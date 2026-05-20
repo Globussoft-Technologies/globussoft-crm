@@ -262,12 +262,16 @@ const SUPPORTED_CONTENT_TYPES = [
 const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = [
   "/api/marketing/submit",
   "/api/csv/",
-  // v3.9.1 — travel CSV import endpoints accept text/csv same as /api/csv/.
+  // v3.9.1+ — travel CSV import endpoints accept text/csv same as /api/csv/.
   // Without these the global 415 guard fires BEFORE verifyToken, so the
   // gate spec's "401 without token" case sees 415 and fails — see commit
-  // 2840d46 → first push of travel_csv_io.js.
+  // 2840d46 (first push of travel_csv_io.js) and 769c484 (extending to
+  // seasons + markup-rules). Every new travel /<resource>/import.csv
+  // endpoint must be added here.
   "/api/travel/cost-master/import.csv",
   "/api/travel/diagnostic-banks/import.csv",
+  "/api/travel/seasons/import.csv",
+  "/api/travel/markup-rules/import.csv",
 ];
 app.use("/api", (req, res, next) => {
   if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();

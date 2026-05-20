@@ -255,41 +255,310 @@ function ParticipantsTab({ trip, onChange, notify }) {
 
 // ─── Rooming tab ─────────────────────────────────────────────────────
 
-function RoomingTab({ trip, notify: _notify }) {
+const ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
+const ROOM_TYPES = ["single", "twin", "triple", "quad"];
+
+function RoomingTab({ trip, notify }) {
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Edit buffer per existing room (keyed by room.id). Local edits live
+  // here until Save → PATCH; the server response then re-hydrates on load.
+  const [buffers, setBuffers] = useState({});
+  // In-progress new-room form, or null when the form is closed.
+  const [newRoom, setNewRoom] = useState(null);
+  // 'new' or a room.id while an API call is in flight; used to disable
+  // its row's Save/Delete buttons.
+  const [busyId, setBusyId] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
     fetchApi(`/api/travel/trips/${trip.id}/rooming`)
-      .then((r) => setRooms(r?.rooming || []))
-      .catch(() => setRooms([]))
+      .then((r) => {
+        const rs = r?.rooming || [];
+        setRooms(rs);
+        const buf = {};
+        for (const room of rs) {
+          let pids = [];
+          try { pids = JSON.parse(room.participantIds || "[]"); } catch (_e) { /* ignore */ }
+          buf[room.id] = {
+            roomNumber: room.roomNumber || "",
+            roomType: room.roomType || "twin",
+            participantIds: Array.isArray(pids) ? pids.map(Number).filter(Number.isFinite) : [],
+          };
+        }
+        setBuffers(buf);
+      })
+      .catch(() => {
+        setRooms([]);
+        setBuffers({});
+      })
       .finally(() => setLoading(false));
   }, [trip.id]);
 
   useEffect(load, [load]);
 
+  const participants = Array.isArray(trip.participants) ? trip.participants : [];
+
+  // Live unassigned count — derived from current edit buffers + the
+  // in-flight new-room form. Helps the operator see at a glance which
+  // participants still need a bed.
+  const assigned = new Set();
+  for (const b of Object.values(buffers)) {
+    for (const pid of (b.participantIds || [])) assigned.add(Number(pid));
+  }
+  if (newRoom) {
+    for (const pid of newRoom.participantIds) assigned.add(Number(pid));
+  }
+  const unassignedCount = participants.filter((p) => !assigned.has(p.id)).length;
+
+  const updateBuf = (id, patch) =>
+    setBuffers((b) => ({ ...b, [id]: { ...b[id], ...patch } }));
+
+  const toggleParticipant = (id, pid) => {
+    const buf = buffers[id];
+    if (!buf) return;
+    const next = buf.participantIds.includes(pid)
+      ? buf.participantIds.filter((x) => x !== pid)
+      : [...buf.participantIds, pid];
+    updateBuf(id, { participantIds: next });
+  };
+
+  const saveRoom = async (id) => {
+    const buf = buffers[id];
+    if (!buf || !buf.roomNumber.trim()) {
+      notify.error("roomNumber is required");
+      return;
+    }
+    setBusyId(id);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/rooming/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          roomNumber: buf.roomNumber.trim(),
+          roomType: buf.roomType,
+          participantIds: buf.participantIds.map(Number),
+        }),
+      });
+      notify.success("Room saved");
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to save room");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const deleteRoom = async (id) => {
+    if (!window.confirm("Delete this room?")) return;
+    setBusyId(id);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/rooming/${id}`, { method: "DELETE" });
+      notify.success("Room deleted");
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to delete room");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const startNew = () =>
+    setNewRoom({ roomNumber: "", roomType: "twin", participantIds: [] });
+
+  const cancelNew = () => setNewRoom(null);
+
+  const toggleNewParticipant = (pid) => {
+    if (!newRoom) return;
+    const next = newRoom.participantIds.includes(pid)
+      ? newRoom.participantIds.filter((x) => x !== pid)
+      : [...newRoom.participantIds, pid];
+    setNewRoom({ ...newRoom, participantIds: next });
+  };
+
+  const createRoom = async () => {
+    if (!newRoom) return;
+    if (!newRoom.roomNumber.trim()) {
+      notify.error("roomNumber is required");
+      return;
+    }
+    setBusyId("new");
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/rooming`, {
+        method: "POST",
+        body: JSON.stringify({
+          roomNumber: newRoom.roomNumber.trim(),
+          roomType: newRoom.roomType,
+          participantIds: newRoom.participantIds.map(Number),
+        }),
+      });
+      notify.success("Room added");
+      setNewRoom(null);
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to add room");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (loading) return <div style={empty}>Loading&hellip;</div>;
+
   return (
     <div>
-      {loading ? <div style={empty}>Loading&hellip;</div> : null}
-      <div style={listShell}>
-        {!loading && rooms.length === 0 ? (
-          <div style={empty}>
-            No rooming assignments yet. Add via the API; visual builder lands in Phase 1.5.
-          </div>
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        marginBottom: 12, flexWrap: "wrap", gap: 8,
+      }}>
+        <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+          {rooms.length} room{rooms.length === 1 ? "" : "s"} ·{" "}
+          {unassignedCount} of {participants.length} participant{participants.length === 1 ? "" : "s"} unassigned
+        </span>
+        {!newRoom && (
+          <button type="button" onClick={startNew} style={addBtn}>
+            <Plus size={14} aria-hidden /> Add room
+          </button>
+        )}
+      </div>
+
+      {newRoom && (
+        <RoomCard
+          buf={newRoom}
+          isNew
+          busy={busyId === "new"}
+          participants={participants}
+          onChangeRoomNumber={(v) => setNewRoom({ ...newRoom, roomNumber: v })}
+          onChangeRoomType={(v) => setNewRoom({ ...newRoom, roomType: v })}
+          onToggleParticipant={toggleNewParticipant}
+          onSave={createRoom}
+          onCancel={cancelNew}
+        />
+      )}
+
+      {rooms.length === 0 && !newRoom ? (
+        <div style={listShell}>
+          <div style={empty}>No rooming assignments yet — click <em>Add room</em> to start.</div>
+        </div>
+      ) : (
+        rooms.map((room) => {
+          const buf = buffers[room.id] || {
+            roomNumber: room.roomNumber,
+            roomType: room.roomType,
+            participantIds: [],
+          };
+          return (
+            <RoomCard
+              key={room.id}
+              buf={buf}
+              busy={busyId === room.id}
+              participants={participants}
+              onChangeRoomNumber={(v) => updateBuf(room.id, { roomNumber: v })}
+              onChangeRoomType={(v) => updateBuf(room.id, { roomType: v })}
+              onToggleParticipant={(pid) => toggleParticipant(room.id, pid)}
+              onSave={() => saveRoom(room.id)}
+              onDelete={() => deleteRoom(room.id)}
+            />
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function RoomCard({
+  buf, isNew, busy, participants,
+  onChangeRoomNumber, onChangeRoomType, onToggleParticipant,
+  onSave, onDelete, onCancel,
+}) {
+  const capacity = ROOM_CAPACITY[buf.roomType] || 0;
+  const count = buf.participantIds.length;
+  const overCapacity = count > capacity;
+  const atCapacity = count >= capacity;
+  return (
+    <div style={{ ...listShell, marginBottom: 12, padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <input
+          type="text"
+          value={buf.roomNumber}
+          onChange={(e) => onChangeRoomNumber(e.target.value)}
+          placeholder="Room # (e.g. 101)"
+          style={{ ...input, flex: "1 1 140px" }}
+          aria-label="Room number"
+        />
+        <select
+          value={buf.roomType}
+          onChange={(e) => onChangeRoomType(e.target.value)}
+          style={{ ...input, flex: "0 0 140px" }}
+          aria-label="Room type"
+        >
+          {ROOM_TYPES.map((t) => (
+            <option key={t} value={t}>{t} ({ROOM_CAPACITY[t]})</option>
+          ))}
+        </select>
+        <span style={{
+          fontSize: 12, fontWeight: 600,
+          color: overCapacity ? "var(--danger-color)" : "var(--text-secondary)",
+        }}>
+          {count} / {capacity} assigned
+        </span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={busy}
+            style={{ ...primaryBtn, opacity: busy ? 0.5 : 1, cursor: busy ? "not-allowed" : "pointer" }}
+            aria-label={isNew ? "Add room" : "Save room"}
+          >
+            <Save size={14} aria-hidden /> {busy ? (isNew ? "Adding…" : "Saving…") : (isNew ? "Add room" : "Save")}
+          </button>
+          {isNew ? (
+            <button type="button" onClick={onCancel} style={secondaryBtn} aria-label="Cancel new room">
+              Cancel
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={busy}
+              style={{ ...iconBtn, opacity: busy ? 0.5 : 1 }}
+              title="Delete room"
+              aria-label="Delete room"
+            >
+              <Trash2 size={14} aria-hidden />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {participants.length === 0 ? (
+          <span style={{ ...empty, padding: 0 }}>No participants on this trip yet.</span>
         ) : (
-          rooms.map((r) => {
-            let pids = [];
-            try { pids = JSON.parse(r.participantIds || "[]"); } catch (_e) { /* ignore */ }
+          participants.map((p) => {
+            const checked = buf.participantIds.includes(p.id);
+            const disabled = !checked && atCapacity;
             return (
-              <div key={r.id} style={row}>
-                <div>
-                  <strong>Room {r.roomNumber}</strong>
-                  <span style={{ color: "var(--text-secondary)", marginLeft: 8, fontSize: 13 }}>
-                    · {r.roomType} · {pids.length} occupant{pids.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-              </div>
+              <label
+                key={p.id}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "4px 10px", borderRadius: 6,
+                  border: "1px solid var(--border-color)",
+                  background: checked ? "var(--primary-color)" : "var(--surface-color)",
+                  color: checked ? "#fff" : "var(--text-primary)",
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  opacity: disabled ? 0.45 : 1,
+                  fontSize: 13,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => onToggleParticipant(p.id)}
+                  disabled={disabled}
+                  style={{ margin: 0 }}
+                />
+                {p.fullName || `Participant #${p.id}`}
+              </label>
             );
           })
         )}

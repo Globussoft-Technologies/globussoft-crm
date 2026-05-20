@@ -365,7 +365,12 @@ model User {
   // Wellness vertical
   doctorVisits        Visit[]        @relation("DoctorVisits")
   doctorPrescriptions Prescription[] @relation("DoctorPrescriptions")
-  patientProfile      Patient?       @relation("PatientUser")
+  // One self-booking User → many Patient rows (one per tenant the user
+  // is registered at). Enforcement that there's at most ONE Patient per
+  // (tenantId, userId) lives in the @@unique constraint on the Patient
+  // model. Singular `Patient?` here would force a 1-to-1 globally and
+  // contradict the multi-tenant intent.
+  patientProfiles     Patient[]      @relation("PatientUser")
 
   // Wave 11 Agent GG — per-practitioner availability.
   doctorHolidays     Holiday[]      @relation("DoctorHolidays")

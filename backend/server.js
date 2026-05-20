@@ -441,6 +441,7 @@ const travelRfuProfilesRoutes = require("./routes/travel_rfu_profiles");
 const travelPricingRoutes = require("./routes/travel_pricing");
 const travelTripBillingRoutes = require("./routes/travel_trip_billing");
 const travelCsvIoRoutes = require("./routes/travel_csv_io");
+const travelDashboardRoutes = require("./routes/travel_dashboard");
 // Wellness vertical (Enhanced Wellness, future clinic clients)
 const wellnessRoutes = require("./routes/wellness");
 // Wave 11 Agent HH — Inventory backbone (categories, vendors, receipts,
@@ -631,6 +632,11 @@ app.use("/api/travel", travelRoutes);
 // use `:id` as a numeric route param so the more-specific export/import
 // paths in travelCsvIoRoutes need precedence.
 app.use("/api/travel", travelCsvIoRoutes);
+// Dashboard mounts BEFORE the CRUD route files for the same reason as
+// travelCsvIoRoutes — /dashboard would otherwise look like a `:id` capture
+// in any travel route that uses `:id` at the path's first segment. (No
+// current collision, but defensive ordering keeps it that way.)
+app.use("/api/travel", travelDashboardRoutes);
 app.use("/api/travel", travelDiagnosticsRoutes);
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);

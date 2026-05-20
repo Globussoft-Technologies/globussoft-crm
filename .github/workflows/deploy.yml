@@ -716,6 +716,20 @@ jobs:
               node prisma/seed-wellness.js 2>&1 | tail -20
             fi
 
+            # Travel vertical seed — runs UNCONDITIONALLY on every push to
+            # main because seed-travel.js is fully idempotent (upserts for
+            # Tenant + Users; .catch(() => null) on the other ~22
+            # cost-master / season / markup rows for safe re-runs). Unlike
+            # seed-wellness which generates ~50 patients + ~200 visits and
+            # is heavy, this seed is ~50 lightweight rows total. Without it
+            # the Travel Stall tenant + yasin@travelstall.in never get
+            # created on demo, so every travel-vertical gate spec fails
+            # `expect(token).toBeTruthy()` on `getTravelAdmin`.
+            if [ -f prisma/seed-travel.js ]; then
+              echo "=== seed-travel (always) ==="
+              node prisma/seed-travel.js 2>&1 | tail -20
+            fi
+
             echo "=== pm2 restart ==="
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
 

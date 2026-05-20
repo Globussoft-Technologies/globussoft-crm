@@ -629,19 +629,26 @@ router.put("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
 router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const itin = await loadItineraryWithGuard(req);
+
+    // Re-fetch with the columns we need. loadItineraryWithGuard's select is
+    // narrow (id + subBrand); we want shareToken here too.
     const full = await prisma.itinerary.findFirst({
       where: { id: itin.id, tenantId: req.travelTenant.id },
-      select: { id: true, shareToken: true, status: true },
+      select: { id: true, shareToken: true },
     });
+    if (!full) {
+      // Belt-and-braces — loadItineraryWithGuard just succeeded, so this
+      // would only fire under a concurrent delete. Surface clearly.
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
 
     let token = full.shareToken;
     if (!token) {
-      // 32-byte random → base64url-safe 43-char string. crypto.randomBytes
-      // is already in scope from the multer block.
+      // 32-char random → base64url. crypto already required at the top.
       token = crypto.randomBytes(24).toString("base64url");
       await prisma.itinerary.update({
         where: { id: full.id },
-        data: { shareToken: token, status: full.status === "draft" ? "sent" : full.status },
+        data: { shareToken: token },
       });
     }
 
@@ -651,11 +658,14 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     if (e.code === "P2002") {
-      // Extremely unlikely (24 random bytes), but bcrypt-grade caution.
+      // Extremely unlikely with 24 random bytes — surface as 409.
       return res.status(409).json({ error: "shareToken collision — retry", code: "DUPLICATE_SHARE_TOKEN" });
     }
-    console.error("[travel-itin] share error:", e.message);
-    res.status(500).json({ error: "Failed to mint share token" });
+    // Log the full stack so a future gate failure has more than e.message
+    // to work with — the prior commit's catch only logged the message and
+    // we couldn't see what threw.
+    console.error("[travel-itin] share error:", e.message, "\nstack:", e.stack);
+    res.status(500).json({ error: "Failed to mint share token", code: "SHARE_FAILED" });
   }
 });
 

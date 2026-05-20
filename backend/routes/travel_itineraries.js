@@ -30,6 +30,7 @@ const crypto = require("crypto");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
+const { renderTravelItineraryPdf } = require("../services/pdfRenderer");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -667,6 +668,46 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
     // we couldn't see what threw.
     console.error("[travel-itin] share error:", e.message, "\nstack:", e.stack);
     res.status(500).json({ error: "Failed to mint share token", code: "SHARE_FAILED" });
+  }
+});
+
+// GET /api/travel/itineraries/:id/pdf
+//
+// Streams a branded itinerary PDF (PRD §6.1). Sub-brand header band,
+// trip summary, items table with unit-cost / markup / total, grand
+// total band. Uses the existing renderTravelItineraryPdf in
+// services/pdfRenderer.js (mirrors the v3.9.2 diagnostic PDF pattern).
+//
+// Tenant + sub-brand access enforced via loadItineraryWithGuard — same
+// access discipline as every other /itineraries/:id endpoint.
+router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+    const full = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      include: { items: { orderBy: { position: "asc" } } },
+    });
+    if (!full) {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    const contact = full.contactId
+      ? await prisma.contact.findUnique({
+          where: { id: full.contactId },
+          select: { name: true, email: true, phone: true },
+        })
+      : { name: "Customer", email: null, phone: null };
+    const pdfBuf = await renderTravelItineraryPdf(full, contact);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="itinerary-${full.id}-v${full.version || 1}.pdf"`,
+    );
+    res.setHeader("Content-Length", pdfBuf.length);
+    res.send(pdfBuf);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] pdf error:", e.message, "\nstack:", e.stack);
+    res.status(500).json({ error: "Failed to render itinerary PDF", code: "PDF_FAILED" });
   }
 });
 

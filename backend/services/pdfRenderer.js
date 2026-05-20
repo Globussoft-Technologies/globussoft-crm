@@ -493,9 +493,133 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank) {
   return bufPromise;
 }
 
+// ── Travel CRM — itinerary PDF ──────────────────────────────────────
+//
+// PRD §6.1 — GET /api/travel/itineraries/:id/pdf returns the customer-
+// facing branded itinerary PDF (the RFU "quotation" doc). Reuses the
+// sub-brand header band from renderTravelDiagnosticPdf, then renders
+// the trip-summary block + the items table (flight | hotel | transfer
+// | activity | visa | insurance) with per-item unitCost + markup +
+// gstAmount + totalPrice, capped by the itinerary's totalAmount.
+//
+// Items are sorted by `position` (caller is responsible for passing
+// the rows in display order). The PDF gracefully degrades when fields
+// are missing — Phase 1 itineraries often have description-only items
+// before pricing is finalised, and we render those as-is rather than
+// blocking the PDF on incomplete data.
+
+/**
+ * @param {object} itinerary — Itinerary row with subBrand, destination,
+ *   startDate, endDate, totalAmount, currency, version, items
+ * @param {object} contact — { name, email, phone }
+ * @returns {Promise<Buffer>}
+ */
+function renderTravelItineraryPdf(itinerary, contact) {
+  const sub = itinerary.subBrand;
+  const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
+  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+  const currency = itinerary.currency || "INR";
+  const items = Array.isArray(itinerary.items) ? itinerary.items : [];
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+
+  // Brand header band
+  doc.rect(0, 0, doc.page.width, 60).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
+    .text(brandLabel, 50, 22, { align: "left" });
+  doc.fillColor("#fff").fontSize(10).text(
+    `Itinerary v${itinerary.version || 1}`,
+    50, 42, { align: "left" },
+  );
+  doc.fillColor("#111").moveDown(2);
+
+  // Customer block
+  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text(contact?.name || "Customer", 50, 90);
+  const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  •  ");
+  if (metaLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(metaLine);
+  doc.moveDown(0.5);
+
+  // Trip-summary block
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111").text(itinerary.destination || "Destination TBD");
+  const dateLine = [
+    itinerary.startDate && `From ${formatDate(itinerary.startDate)}`,
+    itinerary.endDate && `to ${formatDate(itinerary.endDate)}`,
+  ].filter(Boolean).join(" ");
+  if (dateLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(dateLine);
+  doc.fillColor("#111").moveDown(0.8);
+
+  // Items table
+  if (items.length === 0) {
+    doc.font("Helvetica").fontSize(10).fillColor("#777").text("(No items on this itinerary yet — quote pending.)");
+  } else {
+    // Table header
+    const colX = { type: 50, desc: 115, qty: 360, unit: 410, total: 480 };
+    const tableTop = doc.y;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
+    doc.text("Type", colX.type, tableTop);
+    doc.text("Description", colX.desc, tableTop);
+    doc.text("Markup", colX.qty, tableTop);
+    doc.text("Unit cost", colX.unit, tableTop);
+    doc.text("Total", colX.total, tableTop);
+    doc.moveTo(50, tableTop + 14)
+      .lineTo(doc.page.width - 50, tableTop + 14)
+      .lineWidth(0.5).strokeColor(accent).stroke();
+    doc.font("Helvetica").fontSize(10).fillColor("#111");
+
+    let y = tableTop + 22;
+    const sorted = [...items].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    for (const it of sorted) {
+      // Page-break headroom
+      if (y > doc.page.height - 120) {
+        doc.addPage();
+        y = 50;
+      }
+      doc.text(String(it.itemType || "—"), colX.type, y, { width: 60 });
+      doc.text(String(it.description || ""), colX.desc, y, { width: 240 });
+      const markupStr = it.markup != null ? formatMoney(Number(it.markup), currency) : "—";
+      const unitStr = it.unitCost != null ? formatMoney(Number(it.unitCost), currency) : "—";
+      const totalStr = it.totalPrice != null ? formatMoney(Number(it.totalPrice), currency) : "—";
+      doc.text(markupStr, colX.qty, y, { width: 50, align: "right" });
+      doc.text(unitStr, colX.unit, y, { width: 65, align: "right" });
+      doc.text(totalStr, colX.total, y, { width: 60, align: "right" });
+      y += 24;
+    }
+    doc.y = y + 6;
+  }
+
+  // Grand total band
+  if (itinerary.totalAmount != null) {
+    doc.moveDown(0.8);
+    const totalY = doc.y;
+    doc.rect(50, totalY, doc.page.width - 100, 40).fillAndStroke("#f4f6f8", accent);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#555")
+      .text("Grand total", 60, totalY + 10);
+    doc.font("Helvetica-Bold").fontSize(16).fillColor(accent)
+      .text(formatMoney(Number(itinerary.totalAmount), currency), 60, totalY + 8, {
+        width: doc.page.width - 120, align: "right",
+      });
+    doc.fillColor("#111").y = totalY + 50;
+  }
+
+  // Footer
+  const footerY = doc.page.height - doc.page.margins.bottom - 32;
+  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
+  doc.font("Helvetica").fontSize(8).fillColor("#777")
+    .text(
+      `${brandLabel} — Itinerary #${itinerary.id || "?"} v${itinerary.version || 1}. ` +
+        `Pricing subject to availability at the time of booking.`,
+      50, footerY + 8, { width: doc.page.width - 100, align: "center" },
+    );
+
+  doc.end();
+  return bufPromise;
+}
+
 module.exports = {
   renderPrescriptionPdf,
   renderConsentPdf,
   renderBrandedInvoicePdf,
   renderTravelDiagnosticPdf,
+  renderTravelItineraryPdf,
 };

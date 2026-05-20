@@ -608,4 +608,41 @@ test.describe("Travel itineraries API — version chain + status transitions", (
     expect(second.status()).toBe(200);
     expect((await second.json()).shareToken).toBe(firstBody.shareToken);
   });
+
+  test("GET /itineraries/:id/pdf returns application/pdf with magic bytes", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const created1 = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: testContactId,
+      destination: `${RUN_TAG} pdf-target`,
+      startDate: "2026-09-01",
+      endDate: "2026-09-10",
+      totalAmount: 125000,
+      currency: "INR",
+      items: [
+        { itemType: "flight", description: "BLR-JED economy", unitCost: 35000, markup: 5000, totalPrice: 40000 },
+        { itemType: "hotel", description: "Makkah Hilton — 7n", unitCost: 70000, markup: 8000, totalPrice: 78000 },
+      ],
+    });
+    expect(created1.status()).toBe(201);
+    const id = (await created1.json()).id;
+    created.itineraryIds.push(id);
+
+    const res = await get(request, token, `/api/travel/itineraries/${id}/pdf`);
+    expect(res.status(), `pdf: ${await res.text().catch(() => "(non-text)")}`).toBe(200);
+    expect(res.headers()["content-type"]).toMatch(/application\/pdf/);
+    // First 4 bytes of any PDF file are the magic %PDF marker.
+    const body = await res.body();
+    expect(body.length).toBeGreaterThan(200);
+    expect(body.slice(0, 4).toString("ascii")).toBe("%PDF");
+  });
+
+  test("GET /itineraries/:id/pdf for unknown id → 404 NOT_FOUND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/itineraries/99999999/pdf");
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("NOT_FOUND");
+  });
 });

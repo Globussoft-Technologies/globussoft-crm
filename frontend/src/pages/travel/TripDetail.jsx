@@ -10,8 +10,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
-  Luggage, ChevronLeft, Users, BedDouble, Wallet, Globe,
-  ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy,
+  Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
+  ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -27,6 +27,18 @@ const TABS = [
 function fmt(d) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString();
+}
+
+// Convert an ISO date string / Date / YYYY-MM-DD into the YYYY-MM-DD shape
+// that <input type="date"> binds to. Returns '' for missing / unparseable.
+function toDateInput(d) {
+  if (!d) return "";
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "";
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 export default function TripDetail() {
@@ -288,10 +300,17 @@ function RoomingTab({ trip, notify: _notify }) {
 
 // ─── Payment plan tab ────────────────────────────────────────────────
 
-function PaymentTab({ trip, notify: _notify }) {
+function PaymentTab({ trip, notify }) {
   const [plan, setPlan] = useState(null);
   const [instalments, setInstalments] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Editor state — always editable. Hydrated from the loaded plan; an
+  // empty plan starts blank.
+  const [graceDays, setGraceDays] = useState(0);
+  const [editInstalments, setEditInstalments] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -302,43 +321,222 @@ function PaymentTab({ trip, notify: _notify }) {
       .then(([p, ins]) => {
         setPlan(p);
         setInstalments(ins);
+        if (p) {
+          setGraceDays(p.graceDays ?? 0);
+          let parsed = [];
+          try { parsed = JSON.parse(p.instalmentsJson || "[]"); } catch (_e) { /* ignore */ }
+          setEditInstalments(Array.isArray(parsed) ? parsed : []);
+        } else {
+          setGraceDays(0);
+          setEditInstalments([]);
+        }
       })
       .finally(() => setLoading(false));
   }, [trip.id]);
 
   useEffect(load, [load]);
 
-  let planInstalments = [];
-  if (plan && plan.instalmentsJson) {
-    try { planInstalments = JSON.parse(plan.instalmentsJson); } catch (_e) { /* ignore */ }
-  }
+  const addInstalment = () => {
+    setEditInstalments([
+      ...editInstalments,
+      { dueDate: "", amount: 0, reminderDays: 7 },
+    ]);
+  };
+
+  const updateInstalment = (idx, patch) => {
+    setEditInstalments(editInstalments.map((it, j) => (j === idx ? { ...it, ...patch } : it)));
+  };
+
+  const removeInstalment = (idx) => {
+    setEditInstalments(editInstalments.filter((_it, j) => j !== idx));
+  };
+
+  const moveInstalment = (idx, dir) => {
+    const target = idx + dir;
+    if (target < 0 || target >= editInstalments.length) return;
+    const next = editInstalments.slice();
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setEditInstalments(next);
+  };
+
+  const onSave = async () => {
+    if (editInstalments.length === 0) {
+      notify.error("Add at least one instalment");
+      return;
+    }
+    for (let i = 0; i < editInstalments.length; i++) {
+      const ins = editInstalments[i];
+      if (!ins.dueDate) {
+        notify.error(`Instalment ${i + 1}: due date is required`);
+        return;
+      }
+      if (!ins.amount || Number(ins.amount) <= 0) {
+        notify.error(`Instalment ${i + 1}: amount must be > 0`);
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/payment-plan`, {
+        method: "PUT",
+        body: JSON.stringify({
+          instalmentsJson: JSON.stringify(editInstalments),
+          graceDays: Number(graceDays) || 0,
+        }),
+      });
+      notify.success(`Payment plan saved (${editInstalments.length} instalments).`);
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to save payment plan");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onDelete = async () => {
+    if (!window.confirm("Delete payment plan? Per-participant instalments are NOT deleted.")) return;
+    setDeleting(true);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/payment-plan`, { method: "DELETE" });
+      notify.success("Payment plan deleted.");
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to delete payment plan");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const total = editInstalments.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
 
   if (loading) return <div style={empty}>Loading&hellip;</div>;
   return (
     <div>
-      <div style={{ marginBottom: 12, color: "var(--text-secondary)", fontSize: 13 }}>
-        {plan ? `Plan with ${planInstalments.length} instalments, ${plan.graceDays}-day grace period` : "No plan configured yet."}
-      </div>
+      <section style={{ marginBottom: 20 }}>
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          marginBottom: 10, flexWrap: "wrap", gap: 8,
+        }}>
+          <h3 style={{ margin: 0, fontSize: 14 }}>
+            {plan ? "Edit payment plan" : "Create payment plan"}
+          </h3>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+            <span style={{ color: "var(--text-secondary)" }}>Grace days</span>
+            <input
+              type="number"
+              min="0"
+              value={graceDays}
+              onChange={(e) => setGraceDays(e.target.value === "" ? 0 : Number(e.target.value))}
+              style={{ ...input, width: 70 }}
+              aria-label="Grace days"
+            />
+          </label>
+        </div>
 
-      {planInstalments.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <h3 style={{ fontSize: 14, marginBottom: 8 }}>Plan instalments</h3>
-          <div style={listShell}>
-            {planInstalments.map((ins, idx) => (
-              <div key={idx} style={row}>
-                <div>
-                  <strong>#{idx + 1}</strong>
-                  <span style={{ marginLeft: 8 }}>Due {fmt(ins.dueDate)}</span>
-                  <span style={{ marginLeft: 8, color: "var(--text-secondary)" }}>
-                    {ins.reminderDays != null ? `· reminder T-${ins.reminderDays}d` : ""}
-                  </span>
-                </div>
-                <strong>₹{Number(ins.amount).toLocaleString()}</strong>
+        <div style={listShell}>
+          {editInstalments.length === 0 ? (
+            <div style={empty}>No instalments — click <em>Add instalment</em> to start.</div>
+          ) : (
+            editInstalments.map((ins, idx) => (
+              <div key={idx} style={{ ...row, flexWrap: "wrap", gap: 8 }}>
+                <strong style={{ minWidth: 28 }}>#{idx + 1}</strong>
+                <input
+                  type="date"
+                  value={toDateInput(ins.dueDate)}
+                  onChange={(e) => updateInstalment(idx, { dueDate: e.target.value })}
+                  style={{ ...input, flex: "1 1 140px" }}
+                  aria-label={`Instalment ${idx + 1} due date`}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="amount"
+                  value={ins.amount ?? ""}
+                  onChange={(e) => updateInstalment(idx, { amount: e.target.value === "" ? "" : Number(e.target.value) })}
+                  style={{ ...input, flex: "1 1 110px" }}
+                  aria-label={`Instalment ${idx + 1} amount`}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="reminder days"
+                  value={ins.reminderDays ?? ""}
+                  onChange={(e) => updateInstalment(idx, { reminderDays: e.target.value === "" ? null : Number(e.target.value) })}
+                  style={{ ...input, flex: "0 0 130px" }}
+                  aria-label={`Instalment ${idx + 1} reminder days before due`}
+                  title="Days before dueDate to fire reminder (blank = no reminder)"
+                />
+                <button
+                  type="button"
+                  onClick={() => moveInstalment(idx, -1)}
+                  disabled={idx === 0}
+                  style={{ ...iconBtn, opacity: idx === 0 ? 0.4 : 1 }}
+                  title="Move up"
+                  aria-label={`Move instalment ${idx + 1} up`}
+                >
+                  <ChevronUp size={14} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveInstalment(idx, 1)}
+                  disabled={idx === editInstalments.length - 1}
+                  style={{ ...iconBtn, opacity: idx === editInstalments.length - 1 ? 0.4 : 1 }}
+                  title="Move down"
+                  aria-label={`Move instalment ${idx + 1} down`}
+                >
+                  <ChevronDown size={14} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeInstalment(idx)}
+                  style={iconBtn}
+                  title="Remove instalment"
+                  aria-label={`Remove instalment ${idx + 1}`}
+                >
+                  <Trash2 size={14} aria-hidden />
+                </button>
               </div>
-            ))}
+            ))
+          )}
+        </div>
+
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          marginTop: 10, flexWrap: "wrap", gap: 8,
+        }}>
+          <button type="button" onClick={addInstalment} style={addBtn}>
+            <Plus size={14} aria-hidden /> Add instalment
+          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+              Total: <strong style={{ color: "var(--text-primary)" }}>
+                ₹{total.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </strong>
+            </span>
+            {plan && (
+              <button
+                type="button"
+                onClick={onDelete}
+                disabled={deleting}
+                style={{ ...secondaryBtn, opacity: deleting ? 0.5 : 1 }}
+                aria-label="Delete payment plan"
+              >
+                <Trash2 size={14} aria-hidden /> {deleting ? "Deleting…" : "Delete plan"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={saving}
+              style={{ ...primaryBtn, opacity: saving ? 0.5 : 1, cursor: saving ? "not-allowed" : "pointer" }}
+              aria-label="Save payment plan"
+            >
+              <Save size={14} aria-hidden /> {saving ? "Saving…" : "Save plan"}
+            </button>
           </div>
         </div>
-      )}
+      </section>
 
       <h3 style={{ fontSize: 14, marginBottom: 8 }}>Per-participant instalments</h3>
       <div style={listShell}>

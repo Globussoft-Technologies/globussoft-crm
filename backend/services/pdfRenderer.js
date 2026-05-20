@@ -109,6 +109,40 @@ function parseDrugs(drugs) {
   return [];
 }
 
+// Parse Zylu-style structured `instructions` into clinical sections. Mirrors
+// frontend/src/pages/wellness/PatientDetail.jsx's parseRxInstructions so the
+// PDF and the on-screen modal render the same sections.
+function parseRxInstructions(raw) {
+  const out = { zyluId: "", chiefComplaint: "", diagnosis: "", investigations: "", advice: "", status: "", notes: "" };
+  if (!raw || typeof raw !== "string") return out;
+  const lines = raw.split(/\r?\n/);
+  const leftover = [];
+  let bucket = null;
+  for (const line of lines) {
+    const z = line.match(/^\s*\[ZYLU-#?(\d+)\]\s*$/i);
+    if (z) { out.zyluId = z[1]; bucket = null; continue; }
+    const m = line.match(/^\s*(chief complaint|diagnosis|investigations?|advice|advice\/referrals?|status|notes?)\s*:\s*(.*)$/i);
+    if (m) {
+      const key = m[1].toLowerCase();
+      const val = m[2].trim();
+      if (key.startsWith("chief")) { out.chiefComplaint = val; bucket = "chiefComplaint"; }
+      else if (key.startsWith("diagnosis")) { out.diagnosis = val; bucket = "diagnosis"; }
+      else if (key.startsWith("invest")) { out.investigations = val; bucket = "investigations"; }
+      else if (key.startsWith("advice")) { out.advice = val; bucket = "advice"; }
+      else if (key.startsWith("status")) { out.status = val; bucket = null; }
+      else if (key.startsWith("note")) { out.notes = val; bucket = "notes"; }
+      continue;
+    }
+    if (bucket && line.trim()) {
+      out[bucket] = (out[bucket] ? out[bucket] + "\n" : "") + line.trim();
+    } else if (line.trim()) {
+      leftover.push(line.trim());
+    }
+  }
+  if (!out.notes && leftover.length) out.notes = leftover.join("\n");
+  return out;
+}
+
 // ── Consent templates ──────────────────────────────────────────────
 
 const CONSENT_TEMPLATES = {
@@ -130,87 +164,177 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor) {
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
+  const parsed = parseRxInstructions(prescription?.instructions);
+  const status = parsed.status || "Issued";
+  const drugs = parseDrugs(prescription?.drugs);
+  const pageRight = doc.page.width - doc.page.margins.right; // 545 with margin 50
+
+  // ── Header: clinic on the left, prescription metadata on the right.
   drawClinicHeader(doc, clinic);
+  const headerY = doc.y;
+  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111")
+    .text(`Prescription - ${prescription?.id ?? ""}`, 50, headerY, { continued: false });
 
-  // Title
-  doc.font("Helvetica-Bold").fontSize(14).text("Prescription", { align: "center" });
-  doc.moveDown(0.8);
+  // Rx badge (boxed) centered between the title and the right block.
+  doc.lineWidth(0.6).strokeColor("#444").rect(280, headerY - 2, 28, 16).stroke();
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("#222").text("Rx", 280, headerY + 1, { width: 28, align: "center" });
 
-  // Patient block
-  const age = computeAge(patient?.dob);
-  doc.font("Helvetica-Bold").fontSize(11).text("Patient", { continued: false });
+  // Right-aligned metadata column. pdfkit's `continued: true` with
+  // `align: "right"` aligns each segment independently and overlaps them,
+  // so render each line as one pre-composed string instead.
+  const rightX = 360, rightW = pageRight - rightX;
   doc.font("Helvetica").fontSize(10).fillColor("#222");
-  doc.text(`Name: ${patient?.name || "—"}`);
-  doc.text(`Phone: ${patient?.phone || "—"}`);
-  doc.text(`Age: ${age}    Gender: ${patient?.gender || "—"}`);
-  doc.text(`Date: ${formatDate(prescription?.createdAt || new Date())}`);
-  doc.moveDown(0.8);
+  doc.text(`Date: ${formatDate(prescription?.createdAt)}`, rightX, headerY, { width: rightW, align: "right" });
+  doc.text(`Prescription #: ${prescription?.id ?? "—"}`, rightX, doc.y, { width: rightW, align: "right" });
+  doc.text(`Appointment #: ${prescription?.visitId ?? "—"}`, rightX, doc.y, { width: rightW, align: "right" });
 
-  // Drug table — #278: Rx label uses the unicode ℞ glyph (U+211E). pdfkit's
-  // built-in Helvetica covers the BMP enough for this symbol on every
-  // platform we target; if a future custom font drops it, fall back to "Rx".
-  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text("℞");
+  doc.moveDown(1);
+  doc.y = Math.max(doc.y, headerY + 48);
+
+  // ── Patient + Doctor side-by-side blocks.
+  const blockTop = doc.y;
+  const leftCol = 50, rightCol = 300, colWidth = 240;
+
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Patient Information", leftCol, blockTop);
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  const patientLines = [
+    ["Name", patient?.name],
+    ["ID", patient?.id != null ? String(patient.id) : ""],
+    ["Gender", patient?.gender],
+    ["Phone", patient?.phone],
+  ];
+  let py = doc.y;
+  for (const [k, v] of patientLines) {
+    doc.font("Helvetica-Bold").text(`${k}: `, leftCol, py, { continued: true })
+      .font("Helvetica").text(String(v || "—"));
+    py = doc.y;
+  }
+  const patientEndY = doc.y;
+
+  // Reset to top of the right column.
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Doctor Information", rightCol, blockTop);
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  // Registration Number is only included when present — the User model
+  // doesn't carry one today, so for most rows we just drop the line.
+  const doctorLines = [
+    ["Name", doctor?.name],
+    ["Phone", doctor?.phone],
+    ["Email", doctor?.email],
+  ];
+  if (doctor?.registrationNumber) {
+    doctorLines.push(["Registration Number", doctor.registrationNumber]);
+  }
+  let dy = doc.y;
+  for (const [k, v] of doctorLines) {
+    doc.font("Helvetica-Bold").text(`${k}: `, rightCol, dy, { continued: true, width: colWidth })
+      .font("Helvetica").text(String(v || "—"));
+    dy = doc.y;
+  }
+  const doctorEndY = doc.y;
+
+  // Realign cursor to the lower of the two columns + a divider.
+  const sectionEndY = Math.max(patientEndY, doctorEndY) + 8;
+  doc.moveTo(leftCol, sectionEndY).lineTo(pageRight, sectionEndY).lineWidth(0.5).strokeColor("#bbb").stroke();
+  doc.y = sectionEndY + 10;
+
+  // ── Medical Information.
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Medical Information", leftCol);
+  doc.moveDown(0.3);
+  const medRows = [
+    ["Chief Complaint", parsed.chiefComplaint || "Not Specified"],
+    ["Diagnosis", parsed.diagnosis || "Not Specified"],
+    ["Investigations", parsed.investigations || "Not Specified"],
+  ];
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  for (const [k, v] of medRows) {
+    const y = doc.y;
+    doc.font("Helvetica-Bold").text(`${k}: `, leftCol, y, { continued: true, width: pageRight - leftCol })
+      .font("Helvetica").text(String(v));
+  }
+  doc.moveDown(0.5);
+
+  // ── Prescription Medications table.
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Prescription Medications");
   doc.moveDown(0.3);
 
-  const drugs = parseDrugs(prescription?.drugs);
   const tableTop = doc.y;
-  const colX = [50, 200, 310, 400]; // name, dosage, frequency, duration
-  const headers = ["Medication", "Dosage", "Frequency", "Duration"];
+  // Column layout sized to A4 with 50pt margins (usable width = 495).
+  const cols = [
+    { label: "Medication", x: 50, w: 95 },
+    { label: "Dosage", x: 145, w: 55 },
+    { label: "Form", x: 200, w: 50 },
+    { label: "Route", x: 250, w: 50 },
+    { label: "Frequency", x: 300, w: 60 },
+    { label: "Duration", x: 360, w: 75 },
+    { label: "Instructions", x: 435, w: 110 },
+  ];
 
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
-  headers.forEach((h, i) => doc.text(h, colX[i], tableTop));
-  doc.moveTo(50, tableTop + 14)
-    .lineTo(545, tableTop + 14)
-    .lineWidth(0.5)
-    .strokeColor("#bbb")
-    .stroke();
+  // Header band.
+  doc.rect(50, tableTop, 495, 18).fillColor("#f3f4f6").fill();
+  doc.fillColor("#333").font("Helvetica-Bold").fontSize(9);
+  for (const c of cols) doc.text(c.label, c.x + 3, tableTop + 5, { width: c.w - 6 });
 
-  let rowY = tableTop + 20;
-  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  let rowY = tableTop + 18;
+  doc.font("Helvetica").fontSize(9).fillColor("#222");
   if (drugs.length === 0) {
-    doc.text("(no medications listed)", 50, rowY);
-    rowY += 16;
+    doc.text("(no medications listed)", 53, rowY + 4);
+    rowY += 22;
   } else {
     for (const d of drugs) {
+      const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join("") || d.strength || "";
+      const dosageCell = [d.dosage || "—", strength || "—"].join(" ");
       const cells = [
         d.name || d.drug || "—",
-        d.dosage || "—",
+        dosageCell,
+        d.preparation || d.dosageForm || "—",
+        d.route || "—",
         d.frequency || "—",
         d.duration || "—",
+        d.instructions || "—",
       ];
-      cells.forEach((val, i) => {
-        doc.text(String(val), colX[i], rowY, {
-          width: (colX[i + 1] || 545) - colX[i] - 6,
-        });
-      });
-      rowY += 20;
-      if (rowY > 720) {
+      // Estimate row height from the tallest cell.
+      const heights = cells.map((val, i) => doc.heightOfString(String(val), { width: cols[i].w - 6 }));
+      const rowH = Math.max(18, ...heights) + 6;
+      // Page-break guard.
+      if (rowY + rowH > 740) {
         doc.addPage();
         rowY = 60;
       }
+      cells.forEach((val, i) => {
+        doc.text(String(val), cols[i].x + 3, rowY + 3, { width: cols[i].w - 6 });
+      });
+      // Row border line.
+      doc.moveTo(50, rowY + rowH).lineTo(545, rowY + rowH).lineWidth(0.3).strokeColor("#e5e7eb").stroke();
+      rowY += rowH;
     }
   }
+  doc.y = rowY + 8;
 
-  doc.moveDown(1);
-  doc.y = Math.max(doc.y, rowY + 10);
+  // ── Additional Advice.
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Additional Advice");
+  doc.font("Helvetica").fontSize(10).fillColor("#222")
+    .text(parsed.advice || "—", { width: 495 });
+  doc.moveDown(0.5);
 
-  // Instructions
-  if (prescription?.instructions) {
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Instructions");
-    doc.font("Helvetica").fontSize(10).fillColor("#222").text(prescription.instructions, {
-      width: 495,
-    });
-    doc.moveDown(0.8);
-  }
+  // ── Notes.
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Notes");
+  doc.font("Helvetica").fontSize(10).fillColor("#222")
+    .text(parsed.notes || "No clinical notes recorded.", { width: 495 });
+  doc.moveDown(1.5);
 
-  // Signature line — #278: when the Rx has a tracked prescriber, name them
-  // under the line so the document reads as a proper doctor-attributed Rx.
-  const sigY = Math.max(doc.y + 40, 700);
-  doc.moveTo(360, sigY).lineTo(545, sigY).lineWidth(0.5).strokeColor("#444").stroke();
-  doc.font("Helvetica").fontSize(10).fillColor("#333").text("Doctor's signature", 360, sigY + 4);
-  if (doctor?.name) {
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#222").text(doctor.name, 360, sigY + 18);
-  }
+  // ── Doctor's signature.
+  const sigY = Math.max(doc.y + 30, 680);
+  doc.moveTo(340, sigY).lineTo(545, sigY).lineWidth(0.5).strokeColor("#444").stroke();
+  doc.font("Helvetica").fontSize(10).fillColor("#444").text("Doctor's Signature", 340, sigY + 4, { width: 205, align: "center" });
+
+  // ── Footer: status (left) + printed-on (right).
+  const footerY = 760;
+  doc.font("Helvetica-Bold").fontSize(9).fillColor("#222")
+    .text("Status: ", 50, footerY, { continued: true })
+    .font("Helvetica").text(status);
+  doc.font("Helvetica").fontSize(9).fillColor("#666")
+    .text(`Printed on: ${new Date().toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}`,
+      50, footerY, { width: 495, align: "right" });
 
   doc.end();
   return bufPromise;

@@ -94,6 +94,53 @@ describe('#604 DocumentTemplates — empty state CTA', () => {
       expect(screen.getByRole('heading', { name: /New Template/i })).toBeInTheDocument();
     });
   });
+
+  it('does NOT show empty state when templates exist', async () => {
+    const DocumentTemplates = (await import('../pages/DocumentTemplates')).default;
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/document-templates')) {
+        return Promise.resolve([
+          { id: 1, name: 'Invoice Template', description: 'For invoices' },
+        ]);
+      }
+      if (url === '/api/contacts') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(
+      <MemoryRouter>
+        <DocumentTemplates />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    expect(screen.queryByTestId('document-templates-empty-state')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('empty-state-create-cta')).not.toBeInTheDocument();
+    expect(screen.getByText(/Invoice Template/i)).toBeInTheDocument();
+  });
+
+  it('displays explainer text describing what document templates are for', async () => {
+    const DocumentTemplates = (await import('../pages/DocumentTemplates')).default;
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/document-templates')) return Promise.resolve([]);
+      if (url === '/api/contacts') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(
+      <MemoryRouter>
+        <DocumentTemplates />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-templates-empty-state')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('empty-state-explainer')).toBeInTheDocument();
+    expect(screen.getByTestId('empty-state-explainer')).toHaveTextContent(
+      /template|document/i,
+    );
+  });
 });
 
 // ───────────────────────────────────────────────────────────────
@@ -165,6 +212,84 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
     fireEvent.change(dateInput, { target: { value: localStr } });
 
     expect(screen.queryByTestId('task-past-date-warning')).not.toBeInTheDocument();
+  });
+
+  it('displays warning with icon and border styling for past date', async () => {
+    const Tasks = (await import('../pages/Tasks')).default;
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/tasks') return Promise.resolve([]);
+      if (url === '/api/contacts') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    const past = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
+    const localStr =
+      `${past.getFullYear()}-${pad(past.getMonth() + 1)}-${pad(past.getDate())}` +
+      `T${pad(past.getHours())}:${pad(past.getMinutes())}`;
+
+    const dateInput = document.querySelector('input[type="datetime-local"]');
+    fireEvent.change(dateInput, { target: { value: localStr } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-past-date-warning')).toBeInTheDocument();
+    });
+
+    const warning = screen.getByTestId('task-past-date-warning');
+    // Warning should have yellow border styling.
+    expect(warning).toHaveClass('border-yellow');
+    // AlertTriangle icon should be visible within the warning.
+    expect(screen.getByTestId('alert-triangle-icon')).toBeInTheDocument();
+  });
+
+  it('clears the warning when past date is changed to future date', async () => {
+    const Tasks = (await import('../pages/Tasks')).default;
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/tasks') return Promise.resolve([]);
+      if (url === '/api/contacts') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    render(
+      <MemoryRouter>
+        <Tasks />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const dateInput = document.querySelector('input[type="datetime-local"]');
+
+    // Set a past date.
+    const past = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const pastStr =
+      `${past.getFullYear()}-${pad(past.getMonth() + 1)}-${pad(past.getDate())}` +
+      `T${pad(past.getHours())}:${pad(past.getMinutes())}`;
+    fireEvent.change(dateInput, { target: { value: pastStr } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-past-date-warning')).toBeInTheDocument();
+    });
+
+    // Change to a future date.
+    const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const futureStr =
+      `${future.getFullYear()}-${pad(future.getMonth() + 1)}-${pad(future.getDate())}` +
+      `T${pad(future.getHours())}:${pad(future.getMinutes())}`;
+    fireEvent.change(dateInput, { target: { value: futureStr } });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('task-past-date-warning')).not.toBeInTheDocument();
+    });
   });
 });
 
@@ -316,5 +441,81 @@ describe('#610 Marketing — edit campaign preserves saved scheduledAt', () => {
     );
     const body = JSON.parse(scheduleCall[1].body);
     expect(new Date(body.scheduledAt).getUTCFullYear()).toBe(2026);
+  });
+
+  it('changing the schedule value and saving preserves the NEW value, not the original', async () => {
+    const Marketing = (await import('../pages/Marketing')).default;
+
+    const savedScheduledAt = '2026-09-15T10:00:00.000Z';
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url.startsWith('/api/marketing/campaigns?channel=EMAIL') && (!opts || !opts.method)) {
+        return Promise.resolve([
+          {
+            id: 42,
+            name: 'Q3 Saved Campaign',
+            status: 'Draft',
+            channel: 'EMAIL',
+            budget: 0,
+            sent: 0,
+            opened: 0,
+            clicked: 0,
+            scheduledAt: savedScheduledAt,
+            scheduleFilters: JSON.stringify({
+              subject: 'Hello',
+              preheader: 'Preview',
+              body: '<p>Body</p>',
+              audienceFilter: { status: '' },
+            }),
+          },
+        ]);
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    render(
+      <MemoryRouter>
+        <Marketing />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Q3 Saved Campaign/)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(/Edit campaign Q3 Saved Campaign/i));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Edit campaign/i })).toBeInTheDocument();
+    });
+
+    const scheduleInput = document.querySelector(
+      '[role="dialog"] input[type="datetime-local"]',
+    );
+    expect(scheduleInput.value).toMatch(/^2026-09-15T/);
+
+    // Change to a different date (Dec 2026 instead of Sept 2026).
+    const newDate = new Date('2026-12-20T14:30:00.000Z');
+    const pad = (n) => String(n).padStart(2, '0');
+    const newLocalStr =
+      `${newDate.getFullYear()}-${pad(newDate.getMonth() + 1)}-${pad(newDate.getDate())}` +
+      `T${pad(newDate.getHours())}:${pad(newDate.getMinutes())}`;
+
+    fireEvent.change(scheduleInput, { target: { value: newLocalStr } });
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    // Verify the schedule POST was called with the NEW date, not the original Sept value.
+    await waitFor(() => {
+      const scheduleCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          /\/api\/marketing\/campaigns\/42\/schedule/.test(url) &&
+          opts?.method === 'POST',
+      );
+      expect(scheduleCall).toBeDefined();
+      const body = JSON.parse(scheduleCall[1].body);
+      // New date should be in December 2026, not September.
+      expect(new Date(body.scheduledAt).getUTCMonth()).toBe(11); // December = month 11 (0-indexed)
+      expect(new Date(body.scheduledAt).getUTCFullYear()).toBe(2026);
+    });
   });
 });

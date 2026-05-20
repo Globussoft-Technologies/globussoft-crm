@@ -64,7 +64,8 @@ export default function Memberships() {
   const startEdit = (plan) => {
     let entitlements = [];
     try {
-      entitlements = JSON.parse(plan.entitlements || '[]');
+      const parsed = JSON.parse(plan.entitlements || '[]');
+      entitlements = Array.isArray(parsed) ? parsed : [];
     } catch { entitlements = []; }
     setEditingId(plan.id);
     setForm({
@@ -358,7 +359,10 @@ export default function Memberships() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1rem' }}>
           {plans.map((p) => {
             let entitlements = [];
-            try { entitlements = JSON.parse(p.entitlements || '[]'); } catch { entitlements = []; }
+            try {
+              const parsed = JSON.parse(p.entitlements || '[]');
+              entitlements = Array.isArray(parsed) ? parsed : [];
+            } catch { entitlements = []; }
             return (
               <div key={p.id} className="glass" style={{ padding: '1.25rem', opacity: p.isActive ? 1 : 0.55 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.5rem' }}>

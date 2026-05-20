@@ -387,11 +387,70 @@ function RxSummary({ drugs, instructions }) {
   );
 }
 
-// #278 sub-issue 2 + 3: full Rx detail modal. Lists every field (drug, dosage,
-// frequency, duration, instructions, prescribed-by, date, patient) and offers
-// a "Download PDF" button wired to the existing /api/wellness/prescriptions/:id/pdf
-// endpoint (route already exists in backend/routes/wellness.js, which calls
-// renderPrescriptionPdf in services/pdfRenderer.js).
+// Parse the prescription's free-text `instructions` field into the structured
+// clinical sections shown in the detail modal (and the PDF). Zylu-imported
+// prescriptions store the text as labeled lines:
+//   [ZYLU-#260]
+//   Chief complaint: Dark circle
+//   Advice: Under eye peel
+//   Under eye Filler
+//   Status: Issued
+// Anything not matched by a known label falls through as `notes` so legacy
+// free-text Rx still displays everything.
+function parseRxInstructions(raw) {
+  const out = { zyluId: '', chiefComplaint: '', diagnosis: '', investigations: '', advice: '', status: '', notes: '' };
+  if (!raw || typeof raw !== 'string') return out;
+  const lines = raw.split(/\r?\n/);
+  const leftover = [];
+  let bucket = null; // currently-collecting multi-line section
+  for (const line of lines) {
+    const z = line.match(/^\s*\[ZYLU-#?(\d+)\]\s*$/i);
+    if (z) { out.zyluId = z[1]; bucket = null; continue; }
+    const m = line.match(/^\s*(chief complaint|diagnosis|investigations?|advice|advice\/referrals?|status|notes?)\s*:\s*(.*)$/i);
+    if (m) {
+      const key = m[1].toLowerCase();
+      const val = m[2].trim();
+      if (key.startsWith('chief')) { out.chiefComplaint = val; bucket = 'chiefComplaint'; }
+      else if (key.startsWith('diagnosis')) { out.diagnosis = val; bucket = 'diagnosis'; }
+      else if (key.startsWith('invest')) { out.investigations = val; bucket = 'investigations'; }
+      else if (key.startsWith('advice')) { out.advice = val; bucket = 'advice'; }
+      else if (key.startsWith('status')) { out.status = val; bucket = null; }
+      else if (key.startsWith('note')) { out.notes = val; bucket = 'notes'; }
+      continue;
+    }
+    // Continuation line for the currently-collecting section.
+    if (bucket && line.trim()) {
+      out[bucket] = (out[bucket] ? out[bucket] + '\n' : '') + line.trim();
+    } else if (line.trim()) {
+      leftover.push(line.trim());
+    }
+  }
+  if (!out.notes && leftover.length) out.notes = leftover.join('\n');
+  return out;
+}
+
+function computeAgeFromDob(dob) {
+  if (!dob) return '';
+  const d = new Date(dob);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+  return age >= 0 ? String(age) : '';
+}
+
+function sexLabel(g) {
+  if (!g) return '';
+  if (g === 'M') return 'Male';
+  if (g === 'F') return 'Female';
+  return g;
+}
+
+// Clinical-format Rx detail modal. Matches the Zylu-style prescription layout
+// (Patient demographics → Chief complaint / Diagnosis / Investigations / Advice
+// → Prescriptions table → Notes). Free-text Rx without zylu-style labels still
+// display fine — every unmatched section just shows "—".
 function RxDetailModal({ rx, patient, onClose }) {
   const notify = useNotify();
   const [downloading, setDownloading] = useState(false);
@@ -399,11 +458,13 @@ function RxDetailModal({ rx, patient, onClose }) {
   try { drugs = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs; } catch { drugs = []; }
   if (!Array.isArray(drugs)) drugs = [];
 
+  const parsed = parseRxInstructions(rx.instructions);
+  const status = parsed.status || 'Issued';
+  const age = computeAgeFromDob(patient?.dob);
+
   const downloadPdf = async () => {
     setDownloading(true);
     try {
-      // Use fetch directly so we can stream the binary into a blob URL.
-      // fetchApi assumes JSON responses; PDFs are binary.
       const token = getAuthToken();
       const res = await fetch(`/api/wellness/prescriptions/${rx.id}/pdf`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -414,8 +475,6 @@ function RxDetailModal({ rx, patient, onClose }) {
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      // Open in a new tab; user can save from there. We also revoke the URL
-      // shortly after so we don't leak the blob in memory forever.
       window.open(url, '_blank', 'noopener');
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
@@ -425,11 +484,19 @@ function RxDetailModal({ rx, patient, onClose }) {
     }
   };
 
+  const headerRowStyle = {
+    background: 'rgba(255,255,255,0.03)',
+    padding: '0.6rem 0.85rem',
+    borderRadius: 6,
+    marginBottom: '0.5rem',
+    fontSize: '0.85rem',
+  };
+
   return (
     <div
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
       }}
     >
@@ -437,74 +504,91 @@ function RxDetailModal({ rx, patient, onClose }) {
         onClick={(e) => e.stopPropagation()}
         className="glass"
         style={{
-          width: '90%', maxWidth: 640, maxHeight: '85vh', overflow: 'auto',
-          padding: '1.5rem', background: 'var(--surface-color, #fff)',
+          width: '95%', maxWidth: 1080, maxHeight: '90vh', overflow: 'auto',
+          padding: '1.5rem',
         }}
       >
+        {/* Title strip with close button */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <FileText size={18} /> Prescription details
+          <h2 style={{ fontSize: '1.05rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <FileText size={18} /> Prescription #{rx.id}
+            {parsed.zyluId && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 400 }}>(ZYLU-#{parsed.zyluId})</span>}
           </h2>
           <button onClick={onClose} aria-label="Close" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
             <X size={18} />
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem', fontSize: '0.85rem' }}>
-          <div>
-            <div style={{ color: 'var(--text-secondary)' }}>Patient</div>
-            <div style={{ fontWeight: 600 }}>{patient?.name || '—'}</div>
+        {/* Patient + prescriber two-column header */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: '0.4rem', marginBottom: '1rem', padding: '0.85rem', background: 'rgba(255,255,255,0.03)', borderRadius: 8 }}>
+          <div style={{ fontSize: '0.85rem', lineHeight: 1.6 }}>
+            <div><strong>Patient Name:</strong> {patient?.name || '—'}</div>
+            <div><strong>Age:</strong> {age || '—'}</div>
+            <div><strong>Sex:</strong> {sexLabel(patient?.gender) || '—'}</div>
+            <div><strong>Status:</strong> <span style={{ color: 'var(--success-color, #10b981)' }}>{status}</span></div>
           </div>
-          <div>
-            <div style={{ color: 'var(--text-secondary)' }}>Date</div>
-            <div style={{ fontWeight: 600 }}>{new Date(rx.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
-          </div>
-          <div>
-            <div style={{ color: 'var(--text-secondary)' }}>Prescribed by</div>
-            <div style={{ fontWeight: 600 }}>{rx.doctor?.name || '—'}</div>
-          </div>
-          <div>
-            <div style={{ color: 'var(--text-secondary)' }}>Visit ID</div>
-            <div style={{ fontWeight: 600 }}>#{rx.visitId}</div>
+          <div style={{ fontSize: '0.85rem', lineHeight: 1.6 }}>
+            <div><strong>Patient ID:</strong> {patient?.id || '—'}</div>
+            <div><strong>Prescriber:</strong> {rx.doctor?.name || '—'}</div>
+            {rx.doctor?.registrationNumber && (
+              <div><strong>Registration Number:</strong> {rx.doctor.registrationNumber}</div>
+            )}
+            <div><strong>Date:</strong> {new Date(rx.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
           </div>
         </div>
 
-        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Medications</h3>
-        {drugs.length === 0 ? (
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '0.5rem 0' }}>(no medications listed)</div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', marginBottom: '1rem' }}>
+        {/* Clinical sections */}
+        <div style={headerRowStyle}><strong>Chief Complaint:</strong> {parsed.chiefComplaint || '—'}</div>
+        <div style={headerRowStyle}><strong>Diagnosis:</strong> {parsed.diagnosis || '—'}</div>
+        <div style={headerRowStyle}><strong>Investigations:</strong> {parsed.investigations || '—'}</div>
+        <div style={{ ...headerRowStyle, whiteSpace: 'pre-wrap' }}><strong>Advice/Referrals:</strong> {parsed.advice || '—'}</div>
+
+        {/* Medications table */}
+        <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '1rem 0 0.4rem' }}>Prescriptions</h3>
+        <div style={{ overflowX: 'auto', marginBottom: '1rem' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 720 }}>
             <thead>
-              <tr>
-                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Drug</th>
-                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Dosage</th>
-                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Frequency</th>
-                <th style={{ textAlign: 'left', padding: '0.4rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Duration</th>
+              <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <th style={th}>No.</th>
+                <th style={th}>Drug Name</th>
+                <th style={th}>Strength</th>
+                <th style={th}>Preparation</th>
+                <th style={th}>Route</th>
+                <th style={th}>Dosage</th>
+                <th style={th}>Direction</th>
+                <th style={th}>Frequency</th>
+                <th style={th}>Instructions</th>
+                <th style={th}>Start Date</th>
               </tr>
             </thead>
             <tbody>
-              {drugs.map((d, i) => (
-                <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '0.4rem', fontWeight: 600 }}>{d.name || d.drug || '—'}</td>
-                  <td style={{ padding: '0.4rem' }}>{d.dosage || '—'}</td>
-                  <td style={{ padding: '0.4rem' }}>{d.frequency || '—'}</td>
-                  <td style={{ padding: '0.4rem' }}>{d.duration || '—'}</td>
-                </tr>
-              ))}
+              {drugs.length === 0 ? (
+                <tr><td colSpan={10} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>(no medications listed)</td></tr>
+              ) : drugs.map((d, i) => {
+                const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join('') || d.strength || '—';
+                const startDate = d.startDate ? new Date(d.startDate).toLocaleDateString('en-IN') : '—';
+                return (
+                  <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
+                    <td style={td}>{i + 1}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{d.name || d.drug || '—'}</td>
+                    <td style={td}>{strength}</td>
+                    <td style={td}>{d.preparation || d.dosageForm || '—'}</td>
+                    <td style={td}>{d.route || '—'}</td>
+                    <td style={td}>{d.dosage || '—'}</td>
+                    <td style={td}>{d.direction || '—'}</td>
+                    <td style={td}>{d.frequency || '—'}</td>
+                    <td style={td}>{d.instructions || '—'}</td>
+                    <td style={td}>{startDate}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        )}
-
-        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Instructions</h3>
-        <div style={{
-          fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5,
-          whiteSpace: 'pre-wrap', padding: '0.6rem', borderRadius: 8,
-          border: '1px solid var(--border-color)', marginBottom: '1rem',
-        }}>
-          {rx.instructions || '—'}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+        <div style={headerRowStyle}><strong>Notes:</strong> {parsed.notes || '—'}</div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
           <button
             type="button"
             onClick={onClose}
@@ -531,6 +615,9 @@ function RxDetailModal({ rx, patient, onClose }) {
   );
 }
 
+const th = { textAlign: 'left', padding: '0.5rem 0.6rem', color: 'var(--text-secondary)', fontWeight: 500, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.03em' };
+const td = { padding: '0.5rem 0.6rem', verticalAlign: 'top' };
+
 // ── Prescribe tab ─────────────────────────────────────────────────
 
 const INITIAL_RX = {
@@ -538,6 +625,128 @@ const INITIAL_RX = {
   drugs: [{ name: '', dosage: '', frequency: '', duration: '' }],
   instructions: '',
 };
+
+// Typeahead over the tenant's Drug catalogue (GET /api/wellness/drugs?q=…).
+// Free-text entry still works — selecting a row just auto-fills the sibling
+// dosage/frequency/duration inputs from the drug's stored defaults.
+function DrugAutocomplete({ value, onChange, onPick }) {
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+  const debounceRef = useRef(null);
+  const abortRef = useRef(null);
+  const blurTimerRef = useRef(null);
+
+  const search = (q) => {
+    if (abortRef.current) abortRef.current.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    // Empty q → backend returns first 20 drugs alphabetically (no filter applied).
+    const trimmed = (q || '').trim();
+    const url = trimmed
+      ? `/api/wellness/drugs?q=${encodeURIComponent(trimmed)}&isActive=true&limit=20`
+      : `/api/wellness/drugs?isActive=true&limit=20`;
+    fetchApi(url, { signal: ac.signal, silent: true })
+      .then((data) => {
+        if (ac.signal.aborted) return;
+        setResults(Array.isArray(data) ? data : []);
+      })
+      .catch(() => { /* typeahead is best-effort; ignore failures */ });
+  };
+
+  const handleChange = (e) => {
+    const next = e.target.value;
+    onChange(next);
+    setOpen(true);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => search(next), 200);
+  };
+
+  const handleFocus = () => {
+    if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null; }
+    setOpen(true);
+    // Show the top of the catalogue on focus even before the user types,
+    // so they see "this is a dropdown, not just a text box."
+    search(value || '');
+  };
+
+  // Delay close so an onMouseDown on a suggestion still fires.
+  const handleBlur = () => {
+    blurTimerRef.current = setTimeout(() => setOpen(false), 150);
+  };
+
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (abortRef.current) abortRef.current.abort();
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+  }, []);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        placeholder="Drug name — start typing to search the catalogue"
+        value={value}
+        onChange={handleChange}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        autoComplete="off"
+        style={inputStyle}
+      />
+      {open && results.length > 0 && (
+        <ul
+          role="listbox"
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            marginTop: 4,
+            maxHeight: 240,
+            overflowY: 'auto',
+            background: 'var(--surface-color, #1f2937)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 8,
+            listStyle: 'none',
+            padding: 4,
+            margin: 0,
+            zIndex: 20,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+          }}
+        >
+          {results.map((d) => (
+            <li
+              key={d.id}
+              role="option"
+              onMouseDown={(e) => { e.preventDefault(); onPick(d); setOpen(false); }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              style={{
+                padding: '0.45rem 0.6rem',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+                color: 'var(--text-primary)',
+              }}
+            >
+              <div style={{ fontWeight: 500 }}>
+                {d.name}
+                {d.strengthValue && d.strengthUnit && (
+                  <span style={{ color: 'var(--text-secondary)', fontWeight: 400, marginLeft: 6 }}>
+                    {d.strengthValue}{d.strengthUnit}
+                  </span>
+                )}
+              </div>
+              {(d.genericName || d.dosageForm) && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                  {[d.genericName, d.dosageForm].filter(Boolean).join(' • ')}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function PrescribeTab({ patient, onSaved }) {
   const notify = useNotify();
@@ -547,6 +756,18 @@ function PrescribeTab({ patient, onSaved }) {
   const [draft, setDraft, isDirty, clearDraft] = useFormAutosave(`rx-${patient.id}`, initial);
   const { visitId, drugs, instructions } = draft;
   const [saving, setSaving] = useState(false);
+  const [openRx, setOpenRx] = useState(null);
+  const [showAllPastRx, setShowAllPastRx] = useState(false);
+
+  // Past prescriptions for this patient — already loaded with the patient
+  // payload (GET /api/wellness/patients/:id includes `prescriptions`). Newest
+  // first. The dedicated GET /api/wellness/patients/:id/prescriptions endpoint
+  // returns the same data; we use the pre-loaded copy to avoid an extra round
+  // trip.
+  const pastRx = [...(patient.prescriptions || [])].sort(
+    (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+  );
+  const visiblePastRx = showAllPastRx ? pastRx : pastRx.slice(0, 5);
 
   const setVisitId = (v) => setDraft((s) => ({ ...s, visitId: v }));
   const setInstructions = (v) => setDraft((s) => ({ ...s, instructions: v }));
@@ -591,6 +812,78 @@ function PrescribeTab({ patient, onSaved }) {
   };
 
   return (
+    <>
+      {pastRx.length > 0 && (
+        <div className="glass" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <FileText size={16} /> Past prescriptions ({pastRx.length})
+            </h3>
+            {pastRx.length > 5 && (
+              <button
+                type="button"
+                onClick={() => setShowAllPastRx((v) => !v)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                {showAllPastRx ? 'Show recent only' : `Show all ${pastRx.length}`}
+              </button>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {visiblePastRx.map((rx) => {
+              let drugList = [];
+              try {
+                const parsed = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs;
+                if (Array.isArray(parsed)) drugList = parsed;
+              } catch { /* fall through to empty */ }
+              const summary = drugList.length === 0
+                ? '(no medications)'
+                : drugList.slice(0, 3).map((d) => d.name).filter(Boolean).join(', ')
+                  + (drugList.length > 3 ? ` + ${drugList.length - 3} more` : '');
+              return (
+                <button
+                  key={rx.id}
+                  type="button"
+                  onClick={() => setOpenRx(rx)}
+                  style={{
+                    textAlign: 'left',
+                    padding: '0.6rem 0.75rem',
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    color: 'var(--text-primary)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {summary}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                      {new Date(rx.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                      {rx.doctor?.name && <> • {rx.doctor.name}</>}
+                    </div>
+                  </div>
+                  <FileText size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {openRx && (
+        <RxDetailModal
+          rx={openRx}
+          patient={patient}
+          onClose={() => setOpenRx(null)}
+        />
+      )}
+
     <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
       <h3 style={{ marginBottom: '1rem' }}>New prescription</h3>
 
@@ -611,7 +904,22 @@ function PrescribeTab({ patient, onSaved }) {
       <div style={{ marginBottom: '0.5rem' }}><label style={labelStyle}>Drugs</label></div>
       {drugs.map((d, i) => (
         <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
-          <input placeholder="Drug name" value={d.name} onChange={(e) => setDrug(i, 'name', e.target.value)} style={inputStyle} />
+          <DrugAutocomplete
+            value={d.name}
+            onChange={(v) => setDrug(i, 'name', v)}
+            onPick={(drug) => setDraft((s) => {
+              const next = [...s.drugs];
+              // Don't clobber dosage/frequency/duration the clinician already typed.
+              next[i] = {
+                ...next[i],
+                name: drug.name,
+                dosage: next[i].dosage || drug.defaultDosage || '',
+                frequency: next[i].frequency || drug.defaultFrequency || '',
+                duration: next[i].duration || drug.defaultDuration || '',
+              };
+              return { ...s, drugs: next };
+            })}
+          />
           <input placeholder="Dosage" value={d.dosage} onChange={(e) => setDrug(i, 'dosage', e.target.value)} style={inputStyle} />
           <input placeholder="Frequency" value={d.frequency} onChange={(e) => setDrug(i, 'frequency', e.target.value)} style={inputStyle} />
           <input placeholder="Duration" value={d.duration} onChange={(e) => setDrug(i, 'duration', e.target.value)} style={inputStyle} />
@@ -641,6 +949,7 @@ function PrescribeTab({ patient, onSaved }) {
         {saving ? 'Saving…' : 'Save prescription'}
       </button>
     </form>
+    </>
   );
 }
 

@@ -2509,8 +2509,9 @@ model Patient {
   location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
   // Self-booking user (wellness users can book their own appointments)
-  // @unique constraint verified safe — no duplicate userId values exist in database
-  userId Int?  @unique
+  // Composite unique constraint: prevents duplicate userId within a tenant,
+  // but allows different tenants to each link a patient to the same user.
+  userId Int?
   user   User? @relation("PatientUser", fields: [userId], references: [id], onDelete: SetNull)
 
   visits              Visit[]
@@ -2552,6 +2553,7 @@ model Patient {
   // DUPLICATE_PHONE. Backfill + merge MUST run before this can apply
   // — see backend/scripts/backfill-patient-normalized-phone.js.
   @@unique([tenantId, normalizedPhone], name: "patient_tenant_normalized_phone_unique")
+  @@unique([tenantId, userId], name: "patient_tenant_user_unique")
   @@index([tenantId, name])
   @@index([tenantId, phone])
   @@index([tenantId, locationId])

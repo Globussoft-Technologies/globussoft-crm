@@ -43,9 +43,12 @@ describe('<Services /> — Catalog tab', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    const editBtns = screen.getAllByTitle(/^Edit$/i);
+    // The catalog's card order is not pinned (sort criterion may change), so
+    // target the specific service via its per-card aria-label rather than
+    // a positional selector.
+    const editBtns = screen.getAllByLabelText(/^Edit service /i);
     expect(editBtns.length).toBe(2);
-    await user.click(editBtns[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
 
     // Edit mode shows a Save button + the name as an input value
     expect(screen.getByRole('button', { name: /^Save$/i })).toBeInTheDocument();
@@ -57,7 +60,7 @@ describe('<Services /> — Catalog tab', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
     await user.click(screen.getByRole('button', { name: /^Save$/i }));
 
     await waitFor(() => {
@@ -74,8 +77,7 @@ describe('<Services /> — Catalog tab', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    const deactivateBtns = screen.getAllByTitle(/Deactivate/i);
-    await user.click(deactivateBtns[0]);
+    await user.click(screen.getByLabelText('Deactivate service GFC Hair'));
 
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(confirmSpy.mock.calls[0][0]).toMatch(/GFC Hair/);

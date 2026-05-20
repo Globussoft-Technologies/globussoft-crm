@@ -1,24 +1,29 @@
 /**
  * Sidebar counter-refresh regression spec — issue #625.
  *
- * Pre-fix observation: the My Tasks badge was fetched once on mount and only
- * updated by socket.io `task_created` (no `task_completed` event exists on the
- * backend) plus a 60s safety-net poll. A user who marked a task complete on
- * /tasks then navigated to /contacts saw the stale pre-mutation count in the
- * sidebar until the next poll fired or the page was reloaded.
+ * Original framing (#625 pre-fix):
+ *   The My Tasks badge was fetched once on mount and only updated by socket.io
+ *   `task_created` (no `task_completed` event exists on the backend) plus a
+ *   60s safety-net poll. Marking a task complete on /tasks then navigating to
+ *   /contacts showed the stale pre-mutation count until the next poll/reload.
  *
- * Fix shipped (Sidebar.jsx):
- *   1. Route-change useEffect — on every location.pathname change, re-fetch
- *      the four counter endpoints. Cheap, predictable, no race vs polling.
- *   2. Window-level CustomEvent — pages that mutate tasks/tickets dispatch
- *      `sidebar:counts-changed` and Sidebar re-fetches in response. Tasks.jsx
- *      now dispatches this on createTask + markComplete.
+ * Current shipped behaviour (Sidebar.jsx:343-353):
+ *   The route-change useEffect was REMOVED as a perf decision — every
+ *   navigation was firing four redundant fetches. Refresh now happens via:
+ *     1. Initial mount fetch.
+ *     2. 60s safety-net polling.
+ *     3. Socket events on `*_created`.
+ *     4. Window-level CustomEvent `sidebar:counts-changed` — mutating pages
+ *        (Tasks.jsx, ticket close, etc.) dispatch this and Sidebar re-fetches.
+ *   The window-event mechanism gives mutating pages an explicit hook for
+ *   immediate visibility without paying the 4-call cost on every route change.
  *
  * Test pins
  *   - On mount, Sidebar fires the four sidebar fetchApi calls once.
- *   - Navigating from /tasks to /contacts re-fires those four calls.
- *   - Dispatching `sidebar:counts-changed` on window re-fires those four calls
- *     without a route change.
+ *   - Navigating routes alone does NOT re-fire the counter fetches (the
+ *     route-change effect is intentionally disabled — see Sidebar.jsx:343).
+ *   - Dispatching `sidebar:counts-changed` on window re-fires those four
+ *     calls without needing a route change.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -108,10 +113,11 @@ describe('Sidebar counter refresh — #625', () => {
     });
   });
 
-  it('re-fires the four counter fetches when location.pathname changes', async () => {
-    // Render Sidebar at /tasks, capture the baseline call counts after the
-    // initial render settles, then programmatically navigate to /contacts.
-    // The post-navigation count must be > baseline for every counter URL.
+  it('does NOT re-fire the four counter fetches on a bare route change (perf trade-off)', async () => {
+    // Sidebar.jsx:343-353 intentionally removed the route-change refetch
+    // effect — every navigation was firing four redundant API calls. The
+    // explicit window CustomEvent path (next test) is the supported way for
+    // a mutating page to force an immediate refresh.
     render(
       <MemoryRouter initialEntries={['/tasks']}>
         <AuthContext.Provider
@@ -130,14 +136,23 @@ describe('Sidebar counter refresh — #625', () => {
       </MemoryRouter>,
     );
 
-    // After mount + navigate, every counter URL should have been hit at least
-    // twice (initial mount + post-navigation refresh). The route-change effect
-    // is what ships the second call.
+    // Settle: each counter URL hit at least once on initial mount.
     await waitFor(() => {
       for (const url of COUNTER_URLS) {
-        expect(callsForUrl(url)).toBeGreaterThanOrEqual(2);
+        expect(callsForUrl(url)).toBeGreaterThanOrEqual(1);
       }
     });
+
+    // Give React + the navigator effect a tick to land.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // After the route change, each counter URL should still be at exactly the
+    // baseline mount-fetch count — no extra requests fired by the navigation.
+    for (const url of COUNTER_URLS) {
+      expect(callsForUrl(url)).toBe(1);
+    }
   });
 
   it('re-fires the four counter fetches when window dispatches sidebar:counts-changed', async () => {

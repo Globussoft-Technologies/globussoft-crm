@@ -91,6 +91,11 @@ router.post("/product-categories", adminGate, async (req, res) => {
       });
       if (!parent) return res.status(400).json({ error: "parentId does not exist in this tenant", code: "PARENT_NOT_FOUND" });
     }
+    // Set parentId as a scalar (matches how tenantId is set on this same
+    // create). The previous shape — tenantId scalar + `parent: { connect }`
+    // relation — caused Prisma to throw because the create mixed two
+    // foreign-key idioms on the same row; the scalar form is the canonical
+    // one used everywhere else in this module.
     const cat = await prisma.productCategory.create({
       data: {
         name: name.trim(),
@@ -98,7 +103,7 @@ router.post("/product-categories", adminGate, async (req, res) => {
         imageUrl: imageUrl || null,
         color: color || null,
         tenantId: req.user.tenantId,
-        ...(parentId ? { parent: { connect: { id: parseInt(parentId) } } } : {}),
+        ...(parentId ? { parentId: parseInt(parentId) } : {}),
       },
     });
     await writeAudit("ProductCategory", "CREATE", cat.id, req.user.userId, req.user.tenantId, {

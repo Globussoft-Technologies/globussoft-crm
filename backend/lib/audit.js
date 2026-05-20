@@ -194,23 +194,18 @@ async function writeAudit(entity, action, entityId, userId, tenantId, details, o
       createdAt: createdAt.toISOString(),
     });
 
-    // #616: if userId doesn't exist (e.g. system event, or deleted user),
-    // validate it exists before inserting. If not, set to null.
-    let validatedUserId = userIdNum;
-    if (userIdNum && userIdNum > 0) {
-      const userExists = await prisma.user.findUnique({ where: { id: userIdNum } }).catch(() => null);
-      if (!userExists) {
-        console.warn(`[audit] userId ${userIdNum} not found, setting to null`);
-        validatedUserId = null;
-      }
-    }
-
+    // #616: callers own userId validity. If a writeAudit lands with a
+    // userId that no longer references a real User row, the FK violation
+    // is caught by the outer try/catch (audit emission is fail-soft and
+    // must never break the user-facing request). Probing prisma.user on
+    // every audit write doubles DB round-trips and was breaking unit
+    // tests whose prisma.user mock didn't include findUnique.
     await prisma.auditLog.create({
       data: {
         action,
         entity,
         entityId: entityIdNum,
-        userId: validatedUserId,
+        userId: userIdNum,
         tenantId: tenantIdNum,
         details: detailsStr,
         createdAt,

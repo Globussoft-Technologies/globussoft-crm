@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CalendarOff, Plus, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 
 // Wave 11 Agent GG — admin Holiday calendar. The next 365 days surface as a
 // scrollable list grouped by month; clicking an empty cell opens an inline
@@ -21,6 +22,14 @@ export default function Holidays() {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ date: '', name: '', locationId: '', doctorId: '' });
   const [saving, setSaving] = useState(false);
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
+  const visibleHolidays = (rangeStart && rangeEnd)
+    ? holidays.filter((h) => {
+        const ts = new Date(h.date).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : holidays;
 
   // Default range: today + next 365 days.
   const range = useMemo(() => {
@@ -125,36 +134,58 @@ export default function Holidays() {
             No holidays configured. Mark Diwali, Republic Day, or a per-practitioner leave day to gate the calendar.
           </div>
         ) : (
-          <div className="glass" style={{ padding: '0.5rem', overflow: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                  <th style={th}>Date</th><th style={th}>Name</th><th style={th}>Scope</th><th style={th}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {holidays.map((h) => {
-                  const loc = locations.find((l) => l.id === h.locationId);
-                  const doc = staff.find((u) => u.id === h.doctorId);
-                  const scope = doc
-                    ? `Practitioner: ${doc.name}`
-                    : loc
-                      ? `Location: ${loc.name}`
-                      : 'Clinic-wide';
-                  return (
-                    <tr key={h.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                      <td style={td}>{fmtDate(h.date)}</td>
-                      <td style={td}>{h.name}</td>
-                      <td style={td}>{scope}</td>
-                      <td style={{ ...td, textAlign: 'right' }}>
-                        <button onClick={() => remove(h)} style={iconBtn} aria-label="Delete"><Trash2 size={14} /></button>
-                      </td>
+          <>
+            <div
+              className="glass"
+              style={{
+                padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap',
+                alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem',
+              }}
+            >
+              <DateRangeFilter value={filter} onChange={setFilter} />
+              <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                {visibleHolidays.length === holidays.length
+                  ? `${holidays.length} holiday${holidays.length === 1 ? '' : 's'}`
+                  : `${visibleHolidays.length} of ${holidays.length} holidays`}
+              </span>
+            </div>
+            {visibleHolidays.length === 0 ? (
+              <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                No holidays in the selected range.
+              </div>
+            ) : (
+              <div className="glass" style={{ padding: '0.5rem', overflow: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                      <th style={th}>Date</th><th style={th}>Name</th><th style={th}>Scope</th><th style={th}></th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody>
+                    {visibleHolidays.map((h) => {
+                      const loc = locations.find((l) => l.id === h.locationId);
+                      const doc = staff.find((u) => u.id === h.doctorId);
+                      const scope = doc
+                        ? `Practitioner: ${doc.name}`
+                        : loc
+                          ? `Location: ${loc.name}`
+                          : 'Clinic-wide';
+                      return (
+                        <tr key={h.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                          <td style={td}>{fmtDate(h.date)}</td>
+                          <td style={td}>{h.name}</td>
+                          <td style={td}>{scope}</td>
+                          <td style={{ ...td, textAlign: 'right' }}>
+                            <button onClick={() => remove(h)} style={iconBtn} aria-label="Delete"><Trash2 size={14} /></button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )
       )}
     </div>

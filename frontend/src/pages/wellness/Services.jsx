@@ -104,7 +104,7 @@ export default function Services() {
             {/* Issue #816: services CSV. No active filter, so we pass an empty
                 filters object — the export reflects the same all-active view
                 as the catalog tab. */}
-            <CsvImportExportToolbar entity="services" label="Services" onImported={load} />
+            <CsvImportExportToolbar entity="services" label="Services" formats={['csv', 'xlsx']} onImported={load} />
             <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
               <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
             </button>
@@ -116,7 +116,7 @@ export default function Services() {
         {tab === 'packages' && (
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             {/* Issue #816: packages CSV. */}
-            <CsvImportExportToolbar entity="packages" label="Packages" />
+            <CsvImportExportToolbar entity="packages" label="Packages" formats={['csv', 'xlsx']} />
             <button
               onClick={() => {
                 const el = document.getElementById('package-builder-anchor');

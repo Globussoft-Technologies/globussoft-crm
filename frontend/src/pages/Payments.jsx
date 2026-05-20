@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   CreditCard,
   DollarSign,
@@ -15,6 +15,7 @@ import { Link } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
 import { formatMoney } from '../utils/money';
+import { DateRangeFilter, resolveDateRange, DATE_FILTER_OPTIONS } from '../components/wellness/DateRangeFilter';
 
 // ── Style constants ───────────────────────────────────────────────
 const GLASS = {
@@ -103,6 +104,15 @@ export default function Payments() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
+  // Default to last30 to preserve the prior "Total Collected (30D)" semantics —
+  // user can now switch to today / this week / this month / this year / custom
+  // and the KPI label and table follow.
+  const [dateFilter, setDateFilter] = useState({ preset: 'last30', start: '', end: '' });
+  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+  const filterLabel = useMemo(() => {
+    const o = DATE_FILTER_OPTIONS.find((x) => x.value === dateFilter.preset);
+    return o ? o.label : 'All time';
+  }, [dateFilter.preset]);
 
   useEffect(() => {
     loadAll();
@@ -125,27 +135,31 @@ export default function Payments() {
     }
   }
 
+  // Row date: paidAt when set (SUCCESS / REFUNDED), createdAt otherwise.
+  // useCallback so it's stable across renders for the useMemo dep arrays below.
+  const inDateRange = useCallback((p) => {
+    if (!rangeStart || !rangeEnd) return true;
+    const ts = new Date(p.paidAt || p.createdAt).getTime();
+    return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+  }, [rangeStart, rangeEnd]);
+
   const filtered = useMemo(() => {
-    if (tab === 'all') return payments;
-    return payments.filter(p => String(p.gateway || '').toLowerCase() === tab);
-  }, [payments, tab]);
+    return payments.filter((p) => {
+      if (tab !== 'all' && String(p.gateway || '').toLowerCase() !== tab) return false;
+      return inDateRange(p);
+    });
+  }, [payments, tab, inDateRange]);
 
   const stats = useMemo(() => {
-    const now = Date.now();
-    const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
     let collected = 0, pending = 0, failed = 0;
     for (const p of payments) {
-      if (p.status === 'SUCCESS') {
-        const ts = p.paidAt ? new Date(p.paidAt).getTime() : new Date(p.createdAt).getTime();
-        if (ts >= thirtyDaysAgo) collected += Number(p.amount || 0);
-      } else if (p.status === 'PENDING') {
-        pending += 1;
-      } else if (p.status === 'FAILED') {
-        failed += 1;
-      }
+      if (!inDateRange(p)) continue;
+      if (p.status === 'SUCCESS') collected += Number(p.amount || 0);
+      else if (p.status === 'PENDING') pending += 1;
+      else if (p.status === 'FAILED') failed += 1;
     }
     return { collected, pending, failed };
-  }, [payments]);
+  }, [payments, inDateRange]);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
@@ -240,30 +254,38 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
         </div>
       )}
 
-      {/* Stats row */}
+      {/* Stats row — labels are window-aware so the KPI value the user sees
+          always matches what the date filter is showing. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard
           icon={<DollarSign size={20} />}
-          label="Total Collected (30d)"
+          label={`Total Collected (${filterLabel})`}
           value={formatMoney(stats.collected)}
           color="#10b981"
         />
         <StatCard
           icon={<Clock size={20} />}
-          label="Pending"
+          label={`Pending (${filterLabel})`}
           value={stats.pending}
           color="#f59e0b"
         />
         <StatCard
           icon={<XCircle size={20} />}
-          label="Failed"
+          label={`Failed (${filterLabel})`}
           value={stats.failed}
           color="#ef4444"
         />
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+      {/* Gateway chips + date filter — share a row, gateway chips on the left,
+          date picker right-pinned via marginLeft: auto so they wrap together
+          when the viewport narrows. */}
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: '0.5rem',
+          marginBottom: '1rem', flexWrap: 'wrap',
+        }}
+      >
         {['all', 'stripe', 'razorpay'].map(t => (
           <button
             key={t}
@@ -283,6 +305,9 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
             {t === 'all' ? 'All' : t}
           </button>
         ))}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <DateRangeFilter value={dateFilter} onChange={setDateFilter} />
+        </div>
       </div>
 
       {/* Payments table */}
@@ -592,8 +617,10 @@ function DetailModal({ payment, onClose }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          ...GLASS,
-          background: 'rgba(20,20,30,0.95)',
+          background: 'var(--bg-color)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '12px',
+          boxShadow: 'var(--glass-shadow, 0 8px 32px rgba(0,0,0,0.25))',
           padding: '1.5rem',
           maxWidth: '560px',
           width: '100%',
@@ -623,13 +650,14 @@ function DetailModal({ payment, onClose }) {
             Metadata
           </div>
           <pre style={{
-            background: 'rgba(0,0,0,0.4)',
+            background: 'var(--subtle-bg)',
+            border: '1px solid var(--border-color)',
             padding: '0.75rem',
             borderRadius: '8px',
             fontSize: '0.75rem',
             overflowX: 'auto',
             margin: 0,
-            color: '#9ca3af',
+            color: 'var(--text-secondary)',
           }}>
 {JSON.stringify(meta, null, 2)}
           </pre>
@@ -641,7 +669,7 @@ function DetailModal({ payment, onClose }) {
 
 function DetailRow({ label, children }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.45rem 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.45rem 0', borderBottom: '1px solid var(--border-color)' }}>
       <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>{label}</span>
       <span style={{ fontSize: '0.85rem' }}>{children}</span>
     </div>

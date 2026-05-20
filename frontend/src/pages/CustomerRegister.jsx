@@ -107,7 +107,10 @@ export default function CustomerRegister() {
           email: form.email.trim().toLowerCase(),
           password: form.password,
           name: form.name.trim(),
-          tenantId: parseInt(form.tenantId, 10),
+          // #646: the global stripDangerous middleware on the backend deletes
+          // `tenantId` from every request body. The route accepts the chosen
+          // org under `registrationTenantId`, a non-stripped name.
+          registrationTenantId: parseInt(form.tenantId, 10),
         }),
       });
       const data = await res.json().catch(() => ({}));

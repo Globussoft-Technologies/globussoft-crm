@@ -48,7 +48,7 @@ const PERMISSION_CATALOG = {
 
   tickets: ['read', 'write', 'update', 'delete', 'export'],
   knowledge_base: ['read', 'write', 'update', 'delete'],
-  surveys: ['read', 'write', 'delete', 'export'],
+  surveys: ['read', 'write', 'update', 'delete', 'export'],
   chatbots: ['read', 'write', 'delete', 'manage'],
 
   // ─────────────────────────────────────────────────────────────────────
@@ -93,6 +93,9 @@ const PERMISSION_CATALOG = {
   services: ['read', 'write', 'update', 'delete'],
   prescriptions: ['read', 'write', 'update', 'delete', 'export'],
   consents: ['read', 'write', 'update', 'delete'],
+  visits: ['read', 'write', 'update', 'delete'],
+  inventory: ['read', 'write', 'update', 'delete', 'manage'],
+  pos: ['read', 'write', 'manage'],
 
   // ─────────────────────────────────────────────────────────────────────
   // Admin & Platform (6 modules)
@@ -102,7 +105,7 @@ const PERMISSION_CATALOG = {
   roles: ['read', 'manage'],
   settings: ['read', 'manage'],
   audit: ['read', 'export'],
-  integrations: ['read', 'write', 'manage'],
+  integrations: ['read', 'write', 'update', 'delete', 'manage'],
   developer: ['read', 'manage'],
 };
 

@@ -3,6 +3,7 @@ import { Plus, Trash2, CheckCircle2, Clock, XCircle, UserPlus } from 'lucide-rea
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatDate } from '../../utils/date';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All', icon: null },
@@ -21,6 +22,14 @@ export default function Waitlist() {
   const [filter, setFilter] = useState('waiting');
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+  const visibleItems = (rangeStart && rangeEnd)
+    ? items.filter((it) => {
+        const ts = new Date(it.createdAt).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : items;
   // #363: estimatedWaitMin is a strict numeric (minutes). Pre-fix the rough
   // "preferredDateRange" textbox doubled as a wait-time field and accepted
   // free text like "soon" / "tomorrow", which the cron couldn't bucket.
@@ -207,6 +216,18 @@ export default function Waitlist() {
           <div>No waitlist entries{filter !== 'all' ? ` with status "${filter}"` : ''}.</div>
         </div>
       ) : (
+        <>
+          <div className="glass" style={{ padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.6rem', marginBottom: '0.5rem' }}>
+            <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by added date" />
+            <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              {visibleItems.length === items.length
+                ? `${items.length} entr${items.length === 1 ? 'y' : 'ies'}`
+                : `${visibleItems.length} of ${items.length} entries`}
+            </span>
+          </div>
+          {visibleItems.length === 0 ? (
+            <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No entries in the selected range.</div>
+          ) : (
         <div className="glass" style={{ padding: '0.5rem', overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <thead>
@@ -221,7 +242,7 @@ export default function Waitlist() {
               </tr>
             </thead>
             <tbody>
-              {items.map((w) => {
+              {visibleItems.map((w) => {
                 const opt = STATUS_OPTIONS.find((o) => o.value === w.status);
                 return (
                   <tr key={w.id} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
@@ -258,6 +279,8 @@ export default function Waitlist() {
             </tbody>
           </table>
         </div>
+          )}
+        </>
       )}
     </div>
   );

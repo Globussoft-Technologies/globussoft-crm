@@ -40,6 +40,8 @@ const {
   parseCsv,
   toCsv,
   withBom,
+  toXlsxBuffer,
+  parseXlsxBuffer,
 } = require("../lib/csvIO");
 const {
   getEntity,
@@ -99,6 +101,36 @@ function sendCsv(res, filename, body) {
   res.send(withBom(body));
 }
 
+function sendXlsx(res, filename, buffer) {
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(buffer);
+}
+
+// Normalize a `?format=` query param. Anything other than "xlsx" falls back
+// to "csv" so existing callers without the param keep working unchanged.
+function resolveFormat(req) {
+  const raw = String(req.query.format || "csv").toLowerCase();
+  return raw === "xlsx" ? "xlsx" : "csv";
+}
+
+// True when the uploaded file looks like an XLSX (extension OR mimetype).
+// Multer sets req.file.mimetype from the browser; both Chrome/Firefox emit
+// the canonical "application/vnd.openxmlformats-officedocument..." form.
+function isXlsxUpload(file) {
+  if (!file) return false;
+  const name = String(file.originalname || "").toLowerCase();
+  if (name.endsWith(".xlsx")) return true;
+  const mt = String(file.mimetype || "").toLowerCase();
+  return (
+    mt === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mt === "application/vnd.ms-excel"
+  );
+}
+
 function rowKey(def, data) {
   try {
     const k = def.naturalKey(data);
@@ -107,9 +139,12 @@ function rowKey(def, data) {
 }
 
 // Core import loop — exported so the async runner can reuse it.
-async function runImport(def, fileBuffer, tenantId, ctx) {
-  const text = fileBuffer.toString("utf8");
-  const { headers, rows } = parseCsv(text);
+// `format` ∈ {"csv","xlsx"} picks the parser; defaults to csv for back-compat
+// with existing callers (vitest suite, internal one-off jobs) that don't
+// pass it.
+async function runImport(def, fileBuffer, tenantId, ctx, format = "csv") {
+  const { headers, rows } =
+    format === "xlsx" ? parseXlsxBuffer(fileBuffer) : parseCsv(fileBuffer.toString("utf8"));
 
   // Header check.
   const missing = def.headers.filter((h) => !headers.includes(h));
@@ -188,13 +223,18 @@ async function runImport(def, fileBuffer, tenantId, ctx) {
 // resolution rather than a single global middleware so each method picks
 // the right gate.
 
-// GET /:entity/template — download CSV template
+// GET /:entity/template?format=csv|xlsx — download template
 router.get("/:entity/template", (req, res) => {
   const def = resolveEntity(req, res);
   if (!def) return;
   return gateFor(def, "read")(req, res, () => {
+    const format = resolveFormat(req);
+    if (format === "xlsx") {
+      const buf = toXlsxBuffer(def.headers, [def.sample], "Template");
+      return sendXlsx(res, `${req.params.entity}-template.xlsx`, buf);
+    }
     const body = toCsv(def.headers, [def.sample]);
-    sendCsv(res, `${req.params.entity}-template.csv`, body);
+    return sendCsv(res, `${req.params.entity}-template.csv`, body);
   });
 });
 
@@ -225,12 +265,11 @@ router.get("/:entity/export", async (req, res) => {
         ctx = { serviceIdToName };
       }
 
-      const csvRows = [];
+      const outRows = [];
       for (const row of rows) {
         const cells = await def.serialize(row, ctx);
-        csvRows.push(cells);
+        outRows.push(cells);
       }
-      const body = toCsv(def.headers, csvRows);
 
       // Audit: capture row count + filter params (NOT row contents).
       writeAudit(
@@ -239,13 +278,19 @@ router.get("/:entity/export", async (req, res) => {
         null,
         req.user.userId,
         req.user.tenantId,
-        { entity: req.params.entity, count: rows.length, filters: req.query },
+        { entity: req.params.entity, count: rows.length, filters: req.query, format: resolveFormat(req) },
       ).catch((auditErr) => {
         console.warn("[wellness-csv] audit EXPORT failed:", auditErr.message);
       });
 
       const stamp = new Date().toISOString().slice(0, 10);
-      sendCsv(res, `${req.params.entity}-${stamp}.csv`, body);
+      const format = resolveFormat(req);
+      if (format === "xlsx") {
+        const buf = toXlsxBuffer(def.headers, outRows, "Export");
+        return sendXlsx(res, `${req.params.entity}-${stamp}.xlsx`, buf);
+      }
+      const body = toCsv(def.headers, outRows);
+      return sendCsv(res, `${req.params.entity}-${stamp}.csv`, body);
     } catch (e) {
       console.error(`[wellness-csv] export ${req.params.entity} error:`, e.message);
       res.status(500).json({ error: "Failed to export", code: "EXPORT_FAILED" });
@@ -276,18 +321,33 @@ router.post("/:entity/import", (req, res) => {
       }
 
       try {
-        const text = req.file.buffer.toString("utf8");
-        // Cheap row-count probe before doing the heavy work.
-        const newlines = (text.match(/\n/g) || []).length;
-        if (newlines > ASYNC_THRESHOLD_ROWS + 1) {
+        const isXlsx = isXlsxUpload(req.file);
+        if (!isXlsx) {
+          const text = req.file.buffer.toString("utf8");
+          // Cheap row-count probe before doing the heavy work (CSV only —
+          // XLSX is binary so newline count is meaningless; the run-time
+          // row cap below catches oversized sheets).
+          const newlines = (text.match(/\n/g) || []).length;
+          if (newlines > ASYNC_THRESHOLD_ROWS + 1) {
+            return res.status(413).json({
+              error: `File has > ${ASYNC_THRESHOLD_ROWS} rows; use /import/async`,
+              code: "TOO_MANY_ROWS_SYNC",
+            });
+          }
+        }
+
+        const lookups = await buildLookupContext(prisma, req.user.tenantId);
+        const format = isXlsx ? "xlsx" : "csv";
+        const result = await runImport(def, req.file.buffer, req.user.tenantId, { lookups, req }, format);
+
+        // Belt-and-braces row cap after parsing — protects the xlsx path
+        // (which skips the newline pre-probe) without blowing memory.
+        if (result.total > ASYNC_THRESHOLD_ROWS) {
           return res.status(413).json({
             error: `File has > ${ASYNC_THRESHOLD_ROWS} rows; use /import/async`,
             code: "TOO_MANY_ROWS_SYNC",
           });
         }
-
-        const lookups = await buildLookupContext(prisma, req.user.tenantId);
-        const result = await runImport(def, req.file.buffer, req.user.tenantId, { lookups, req });
 
         writeAudit(
           "CsvImport",
@@ -333,6 +393,7 @@ router.post("/:entity/import/async", (req, res) => {
       }
 
       const jobId = newJobId();
+      const format = isXlsxUpload(req.file) ? "xlsx" : "csv";
       const job = {
         id: jobId,
         entity: req.params.entity,
@@ -344,6 +405,7 @@ router.post("/:entity/import/async", (req, res) => {
         finishedAt: null,
         result: null,
         error: null,
+        format,
       };
       _jobs.set(jobId, job);
 
@@ -354,7 +416,7 @@ router.post("/:entity/import/async", (req, res) => {
         job.startedAt = Date.now();
         try {
           const lookups = await buildLookupContext(prisma, job.tenantId);
-          const result = await runImport(def, req.file.buffer, job.tenantId, { lookups });
+          const result = await runImport(def, req.file.buffer, job.tenantId, { lookups }, job.format);
           job.result = result;
           job.status = "done";
           job.finishedAt = Date.now();

@@ -3,12 +3,13 @@ import { ChevronLeft, Phone, Calendar, ChevronRight } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 import { formatDate } from '../../utils/date';
-
-const isoDay = (d) => d.toISOString().slice(0, 10);
+import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
 
 export default function Visits() {
-  const [from, setFrom] = useState(isoDay(new Date(Date.now() - 30 * 86400000)));
-  const [to, setTo] = useState(isoDay(new Date()));
+  // Visit reports require a window — opt out of the "All time" option in the
+  // dropdown and default to last30 (matches the prior 30-day default).
+  const [filter, setFilter] = useState({ preset: 'last30', start: '', end: '' });
+  const [from, to] = resolveDateRangeYmd(filter);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [skip, setSkip] = useState(0);
@@ -24,6 +25,7 @@ export default function Visits() {
   const [isCustomDetailsLimit, setIsCustomDetailsLimit] = useState(false);
 
   const loadVisits = () => {
+    if (!from || !to) return; // 'custom' preset with no dates yet — skip fetch
     setLoading(true);
     const url = `/api/wellness/reports/visit?startDate=${from}&endDate=${to}&skip=${skip}&limit=${limit}`;
     fetchApi(url)
@@ -33,6 +35,7 @@ export default function Visits() {
   };
 
   const loadPatientDetails = (patientId) => {
+    if (!from || !to) return;
     setDetailsLoading(true);
     const url = `/api/wellness/reports/visit/${patientId}?startDate=${from}&endDate=${to}&skip=${detailsSkip}&limit=${detailsLimit}`;
     fetchApi(url)
@@ -48,6 +51,10 @@ export default function Visits() {
       loadPatientDetails(selectedPatient.id);
     }
   }, [selectedPatient, from, to, detailsSkip, detailsLimit]);
+
+  // Reset pagination whenever the date range changes so we don't show "page 4"
+  // of a window that may have far fewer pages now.
+  useEffect(() => { setSkip(0); }, [from, to]);
 
   const handlePatientClick = (patient) => {
     setSelectedPatient(patient);
@@ -213,9 +220,7 @@ export default function Visits() {
       </header>
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <input type="date" value={from} onChange={(e) => { setFrom(e.target.value); setSkip(0); }} style={dateInput} />
-        <span style={{ color: 'var(--text-secondary)' }}>→</span>
-        <input type="date" value={to} onChange={(e) => { setTo(e.target.value); setSkip(0); }} style={dateInput} />
+        <DateRangeFilter value={filter} onChange={setFilter} label={null} includeAllOption={false} />
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Per page:</label>
@@ -363,7 +368,6 @@ export default function Visits() {
 
 const thStyle = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', overflow: 'hidden', textOverflow: 'ellipsis' };
 const tdStyle = { padding: '0.65rem 1rem', fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis' };
-const dateInput = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem' };
 const paginationSelect = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem', cursor: 'pointer' };
 const paginationInput = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem', width: '80px' };
 const statusBg = (status) => {

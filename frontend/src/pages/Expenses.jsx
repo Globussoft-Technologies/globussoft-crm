@@ -4,6 +4,7 @@ import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
 import { Receipt, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucide-react';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
 
 const CATEGORY_OPTIONS = ['General', 'Travel', 'Software', 'Office', 'Marketing', 'Other'];
 
@@ -57,6 +58,18 @@ export default function Expenses() {
   const [form, setForm] = useState({
     title: '', amount: '', category: 'General', expenseDate: '', notes: '', contactId: '',
   });
+  const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+  // Filter by expenseDate when set, fall back to createdAt for legacy rows
+  // that haven't backfilled expenseDate.
+  const visibleExpenses = (rangeStart && rangeEnd)
+    ? expenses.filter((exp) => {
+        const d = exp.expenseDate || exp.createdAt;
+        if (!d) return false;
+        const ts = new Date(d).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : expenses;
 
   useEffect(() => { loadData(); }, []);
 
@@ -283,13 +296,29 @@ export default function Expenses() {
 
         {/* Expenses Table */}
         <div className="card" style={{ padding: '2rem' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Receipt size={20} color="var(--accent-color)" /> All Expenses
-          </h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.5rem' }}>
+            <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Receipt size={20} color="var(--accent-color)" /> All Expenses
+            </h3>
+            {expenses.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <DateRangeFilter value={dateFilter} onChange={setDateFilter} label={null} />
+                {visibleExpenses.length !== expenses.length && (
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    {visibleExpenses.length} of {expenses.length}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
 
           {expenses.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
               No expenses recorded yet.
+            </p>
+          ) : visibleExpenses.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
+              No expenses in the selected range.
             </p>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -306,7 +335,7 @@ export default function Expenses() {
                   </tr>
                 </thead>
                 <tbody>
-                  {expenses.map(exp => (
+                  {visibleExpenses.map(exp => (
                     <tr key={exp.id} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s' }}
                       onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>

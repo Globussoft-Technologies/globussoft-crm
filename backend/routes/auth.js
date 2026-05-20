@@ -263,7 +263,7 @@ router.post("/customer/register", async (req, res) => {
 
     // Input validation
     if (!email || typeof email !== "string" || !password || typeof password !== "string") {
-      return res.status(400).json({ error: "email, password, and tenantId are required" });
+      return res.status(400).json({ error: "email, password, and registrationTenantId are required" });
     }
 
     console.log('[customer/register] Received tenantId:', tenantId, 'type:', typeof tenantId);

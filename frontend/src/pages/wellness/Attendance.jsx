@@ -14,6 +14,7 @@ import { Clock, LogIn, LogOut, Calendar, Users } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
+import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
 
 function fmtDate(s) {
   if (!s) return '—';
@@ -51,6 +52,10 @@ export default function Attendance() {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Attendance requires a window — opt out of "All time" and default to last30
+  // (matches the prior 30-day default).
+  const [dateFilter, setDateFilter] = useState({ preset: 'last30', start: '', end: '' });
+  const [from, to] = resolveDateRangeYmd(dateFilter);
 
   // Today's row (clockInAt/clockOutAt) — derived from history's first row.
   const todayKey = new Date().toISOString().slice(0, 10);
@@ -59,14 +64,14 @@ export default function Attendance() {
   const isClockedOut = todayRow && todayRow.clockOutAt;
 
   const load = () => {
+    if (!from || !to) return;
     setLoading(true);
-    const from = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    fetchApi(`/api/attendance/me?from=${from}`)
+    fetchApi(`/api/attendance/me?from=${from}&to=${to}`)
       .then((rows) => setHistory(Array.isArray(rows) ? rows : []))
       .catch(() => setHistory([]))
       .finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [from, to]);
 
   const onClockIn = async () => {
     setBusy(true);
@@ -157,11 +162,16 @@ export default function Attendance() {
         </div>
       </section>
 
-      {/* Last-30-days history */}
+      {/* My attendance history */}
       <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
-        <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Calendar size={20} aria-hidden /> My Last 30 Days
-        </h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: 12 }}>
+          <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Calendar size={20} aria-hidden /> My attendance
+          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <DateRangeFilter value={dateFilter} onChange={setDateFilter} label={null} includeAllOption={false} />
+          </div>
+        </div>
         {loading ? (
           <div>Loading&hellip;</div>
         ) : history.length === 0 ? (

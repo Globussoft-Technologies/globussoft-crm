@@ -1,5 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
 const { verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
 // #714 (HIGH): server-side validation for Staff edit. Pre-fix PUT /:id
@@ -131,6 +132,84 @@ router.get("/", async (req, res) => {
     res.json(out);
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch staff." });
+  }
+});
+
+// POST / — admin-driven staff creation. The "Add Staff" button in the Staff
+// Directory opens a modal that POSTs here. Unlike /auth/signup (which creates
+// a NEW tenant), this endpoint creates a user inside the requesting admin's
+// existing tenant — the canonical way for a clinic / org admin to onboard a
+// colleague. The new user's role is whatever the admin selected, so the
+// role-aware Dashboard (frontend/src/pages/Dashboard.jsx) automatically
+// renders the correct landing view on their first login.
+router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { name, email, password, role, wellnessRole } = req.body || {};
+
+    // Basic field presence + shape checks. Mirror auth.js/signup so the
+    // error envelope is uniform across signup and admin-create paths.
+    if (!name || typeof name !== "string" || name.trim().length === 0) {
+      return res.status(400).json({ error: "Name is required." });
+    }
+    if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "A valid work email is required." });
+    }
+    if (!password || typeof password !== "string" || password.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters." });
+    }
+    if (!role || !VALID_ROLES.includes(role)) {
+      return res.status(400).json({ error: `Invalid role. Must be one of: ${VALID_ROLES.join(", ")}` });
+    }
+    if (wellnessRole && !VALID_WELLNESS_ROLES.includes(wellnessRole)) {
+      return res.status(400).json({ error: `Invalid wellness role. Must be one of: ${VALID_WELLNESS_ROLES.join(", ")}` });
+    }
+
+    // Email is globally unique (Prisma @unique). Pre-check inside the
+    // tenant so the admin gets a meaningful 409 instead of Prisma's raw
+    // P2002 unique-constraint error.
+    const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    if (existing) {
+      return res.status(409).json({ error: "A user with that email already exists." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const created = await prisma.user.create({
+      data: {
+        name: name.trim(),
+        email: email.toLowerCase(),
+        password: passwordHash,
+        role,
+        wellnessRole: wellnessRole || null,
+        tenantId: req.user.tenantId,
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        wellnessRole: true,
+        commissionProfileId: true,
+        createdAt: true,
+        deactivatedAt: true,
+      },
+    });
+
+    await writeAudit(
+      "User",
+      "CREATE",
+      created.id,
+      req.user.userId,
+      req.user.tenantId,
+      { targetEmail: created.email, role: created.role, wellnessRole: created.wellnessRole || null },
+    ).catch((e) => console.warn("[staff] audit User CREATE failed:", e.message));
+
+    res.status(201).json(created);
+  } catch (err) {
+    if (err && err.code === "P2002") {
+      return res.status(409).json({ error: "A user with that email already exists." });
+    }
+    console.error("[staff] POST / failed:", err);
+    res.status(500).json({ error: "Failed to create staff member." });
   }
 });
 

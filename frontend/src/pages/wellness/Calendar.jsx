@@ -362,6 +362,7 @@ export default function CalendarGrid() {
               from: `${isoDay(date)}T00:00:00+05:30`,
               to: `${isoDay(date)}T23:59:59+05:30`,
             }}
+            formats={['csv', 'xlsx']}
             onImported={load}
           />
         </div>

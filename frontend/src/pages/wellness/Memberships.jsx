@@ -357,7 +357,7 @@ export default function Memberships() {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1rem' }}>
-          {plans.map((p) => {
+          {plans.filter((p) => p.id !== editingId).map((p) => {
             let entitlements = [];
             try {
               const parsed = JSON.parse(p.entitlements || '[]');
@@ -365,13 +365,35 @@ export default function Memberships() {
             } catch { entitlements = []; }
             return (
               <div key={p.id} className="glass" style={{ padding: '1.25rem', opacity: p.isActive ? 1 : 0.55 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem', marginBottom: '0.5rem' }}>
                   <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{p.name}</h3>
-                  {!p.isActive && (
-                    <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', borderRadius: 4, background: '#fee2e2', color: '#991b1b' }}>
-                      Inactive
-                    </span>
-                  )}
+                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexShrink: 0 }}>
+                    {!p.isActive && (
+                      <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', borderRadius: 4, background: '#fee2e2', color: '#991b1b' }}>
+                        Inactive
+                      </span>
+                    )}
+                    {isAdmin && (
+                      <>
+                        <button
+                          onClick={() => startEdit(p)}
+                          title="Edit plan"
+                          style={{ padding: '0.3rem 0.6rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem' }}
+                        >
+                          <Pencil size={14} /> Edit
+                        </button>
+                        {p.isActive && (
+                          <button
+                            onClick={() => softDelete(p)}
+                            title="Deactivate plan"
+                            style={{ padding: '0.3rem 0.6rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--danger-color, #ef4444)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem' }}
+                          >
+                            <Trash2 size={14} /> Deactivate
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
                 {p.description && <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>{p.description}</p>}
                 <div style={{ display: 'flex', gap: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
@@ -394,18 +416,6 @@ export default function Memberships() {
                     </ul>
                   )}
                 </div>
-                {isAdmin && (
-                  <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
-                    <button onClick={() => startEdit(p)} style={{ flex: 1, padding: '0.4rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', fontSize: '0.85rem' }}>
-                      <Pencil size={14} /> Edit
-                    </button>
-                    {p.isActive && (
-                      <button onClick={() => softDelete(p)} style={{ padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--danger-color, #ef4444)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.85rem' }}>
-                        <Trash2 size={14} /> Deactivate
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
             );
           })}

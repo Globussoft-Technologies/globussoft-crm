@@ -10,7 +10,7 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const { requirePermission, clearUserCache, clearTenantCache } = require("../middleware/requirePermission");
-const { isValidPermission } = require("../lib/permissionCatalog");
+const { isValidPermission, getCatalog } = require("../lib/permissionCatalog");
 const { writeAudit } = require("../lib/audit");
 
 // GET /api/roles — list all roles (tenant-scoped; OWNER sees all)
@@ -44,6 +44,22 @@ router.get(
       console.error("[roles] list error:", err);
       res.status(500).json({ error: "Failed to list roles" });
     }
+  }
+);
+
+// GET /api/roles/catalog — the permission catalog (module → [actions]).
+// Source of truth for the role-editor matrix; prevents UI/server drift.
+router.get(
+  "/catalog",
+  verifyToken,
+  requirePermission("roles", "read"),
+  (req, res) => {
+    const catalog = getCatalog();
+    const modules = Object.entries(catalog).map(([module, actions]) => ({
+      module,
+      actions,
+    }));
+    res.json({ catalog, modules });
   }
 );
 
@@ -165,11 +181,6 @@ router.put(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      // Cannot modify system roles
-      if (role.isSystem) {
-        return res.status(409).json({ error: "Cannot modify system roles" });
-      }
-
       const updated = await prisma.role.update({
         where: { id: roleId },
         data: {
@@ -214,11 +225,6 @@ router.delete(
       // Tenant-scoping check
       if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
         return res.status(403).json({ error: "Access denied" });
-      }
-
-      // Cannot delete system roles
-      if (role.isSystem) {
-        return res.status(409).json({ error: "Cannot delete system roles" });
       }
 
       // Cannot delete role with assigned users
@@ -404,13 +410,34 @@ router.put(
         return res.status(400).json({ error: "permissions must be an array" });
       }
 
-      // Validate all permissions
+      // Validate + dedupe in one pass. Server-side dedup is defensive —
+      // the matrix UI uses a Set so it shouldn't send duplicates, but if
+      // any do leak through, the composite (roleId, module, action)
+      // unique constraint would race the parallel inserts and leave the
+      // role half-applied.
+      const normalized = [];
+      const seen = new Set();
       for (const perm of permissions) {
-        if (!isValidPermission(perm.module, perm.action)) {
+        if (!perm || typeof perm !== "object") {
           return res.status(400).json({
-            error: `Invalid permission: ${perm.module}.${perm.action}`
+            error: "Each permission must be an object {module, action}"
           });
         }
+        const { module, action } = perm;
+        if (!module || !action) {
+          return res.status(400).json({
+            error: "Each permission requires both module and action"
+          });
+        }
+        if (!isValidPermission(module, action)) {
+          return res.status(400).json({
+            error: `Invalid permission: ${module}.${action}`
+          });
+        }
+        const key = `${module}.${action}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        normalized.push({ roleId, module, action });
       }
 
       const role = await prisma.role.findUnique({ where: { id: roleId } });
@@ -423,17 +450,20 @@ router.put(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      // Delete all existing permissions
-      await prisma.rolePermission.deleteMany({ where: { roleId } });
-
-      // Create new permissions
-      const newPermissions = await Promise.all(
-        permissions.map(perm =>
-          prisma.rolePermission.create({
-            data: { roleId, module: perm.module, action: perm.action }
-          })
-        )
-      );
+      // Atomic replace. If the bulk insert fails for any reason
+      // (connection pool, unique-constraint race, transient lock),
+      // the deleteMany rolls back and the role keeps its prior
+      // permissions — no more "half-applied + 500" state.
+      const newPermissions = await prisma.$transaction(async (tx) => {
+        await tx.rolePermission.deleteMany({ where: { roleId } });
+        if (normalized.length > 0) {
+          await tx.rolePermission.createMany({
+            data: normalized,
+            skipDuplicates: true,
+          });
+        }
+        return tx.rolePermission.findMany({ where: { roleId } });
+      });
 
       // Clear permission cache for all users with this role
       clearTenantCache(role.tenantId);

@@ -940,6 +940,14 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initTravelDiagnosticAlertsCron } = require('./cron/travelDiagnosticAdvisorAlerts');
   initTravelDiagnosticAlertsCron();
 
+  // Initialize Travel CRM RFU journey reminders (every 30 min).
+  // PRD §4.8 + §6.3 — fires fixed-point milestones (T-7d / T-3d / T-1d /
+  // T-0 / T+2d / T+7d) for RFU accepted itineraries. WhatsApp/email
+  // dispatch deferred to Wati BSP creds; Notification row is the
+  // visible Phase 1 output.
+  const { initTravelJourneyRemindersCron } = require('./cron/travelJourneyReminders');
+  initTravelJourneyRemindersCron();
+
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require('./cron/lowStockEngine');
   initLowStockCron();

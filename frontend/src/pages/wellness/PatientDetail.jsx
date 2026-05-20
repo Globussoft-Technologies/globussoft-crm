@@ -21,6 +21,57 @@ function genderLabel(g) {
   return g;
 }
 
+function PatientSummaryDownloadButton({ patientId, patientName }) {
+  const [downloading, setDownloading] = useState(false);
+  const notify = useNotify();
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/wellness/patients/${patientId}/summary.pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Download failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safe = String(patientName || `patient-${patientId}`).replace(/[^a-z0-9_-]+/gi, '_');
+      a.download = `${safe}-summary.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      notify.error(e.message || 'Failed to download patient summary.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleDownload}
+      disabled={downloading}
+      title="Download full patient record (case history, visits, prescriptions, wallet, memberships) as PDF"
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+        padding: '0.5rem 0.9rem', borderRadius: 6, border: '1px solid var(--border-color)',
+        background: 'var(--primary-color, var(--accent-color))', color: '#fff',
+        cursor: downloading ? 'wait' : 'pointer', fontSize: '0.85rem', fontWeight: 500,
+      }}
+    >
+      <Download size={14} />
+      {downloading ? 'Preparing PDF…' : 'Download PDF'}
+    </button>
+  );
+}
+
 export default function PatientDetail() {
   const { id } = useParams();
   const [patient, setPatient] = useState(null);
@@ -81,9 +132,12 @@ export default function PatientDetail() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <Link to="/wellness/patients" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', textDecoration: 'none', marginBottom: '1rem', fontSize: '0.85rem' }}>
-        <ArrowLeft size={14} /> Back to patients
-      </Link>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '1rem' }}>
+        <Link to="/wellness/patients" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '0.85rem' }}>
+          <ArrowLeft size={14} /> Back to patients
+        </Link>
+        <PatientSummaryDownloadButton patientId={patient.id} patientName={patient.name} />
+      </div>
 
       {/* Patient header — #638: surface DOB + computed age + gender + phone
           inline so clinically-relevant identifiers are visible without

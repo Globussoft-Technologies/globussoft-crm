@@ -484,8 +484,453 @@ async function renderBrandedInvoicePdf(invoice, contact, clinic) {
   return bufPromise;
 }
 
+// ── 4. Patient Summary PDF ─────────────────────────────────────────
+// Full multi-page dossier: profile, case history (visits + Rx + consents
+// chronologically), detailed prescriptions, treatment plans, wallet ledger,
+// and memberships. One file per patient, downloadable from PatientDetail.
+
+async function renderPatientSummaryPdf({
+  patient,
+  tenant,
+  clinic,
+  wallet,
+  walletTransactions,
+  memberships,
+  logoBuffer,
+}) {
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+  const pageRight = doc.page.width - doc.page.margins.right;
+  const leftX = 50;
+  const usableW = pageRight - leftX;
+
+  const ensureSpace = (needed) => {
+    if (doc.y + needed > 770) {
+      doc.addPage();
+      doc.y = 60;
+    }
+  };
+
+  const sectionTitle = (text) => {
+    ensureSpace(40);
+    doc.moveDown(0.4);
+    doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text(text, leftX);
+    doc.moveTo(leftX, doc.y + 2).lineTo(pageRight, doc.y + 2)
+      .lineWidth(0.6).strokeColor("#999").stroke();
+    doc.moveDown(0.5);
+  };
+
+  const kv = (label, value, opts = {}) => {
+    const v = value == null || value === "" ? "—" : String(value);
+    ensureSpace(16);
+    const y = doc.y;
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#333")
+      .text(`${label}: `, leftX, y, { continued: true, width: opts.width || usableW });
+    doc.font("Helvetica").fillColor("#222").text(v);
+  };
+
+  const currency = wallet?.currency || patient?.currency || "INR";
+
+  const visits = patient?.visits || [];
+  const prescriptions = patient?.prescriptions || [];
+  const consents = patient?.consents || [];
+  const treatmentPlans = patient?.treatmentPlans || [];
+  const membershipList = memberships || [];
+  const transactions = walletTransactions || [];
+  const hasWalletActivity = wallet && (Number(wallet.balance) !== 0 || transactions.length > 0);
+
+  // ── Cover / header: logo banner on top, company-name box below ────
+  // Tenant.name is the company brand (e.g. "Enhanced Wellness Clinic").
+  // Clinic (Location) gives the branch address / phone / email beneath.
+  const companyName = tenant?.name || clinic?.name || "Clinic";
+  const c = safeClinic(clinic);
+
+  // Logo banner: spans the full usable page width so it actually fills
+  // the header area (the bundled globussoft-logo.png is a ~3.3:1 banner,
+  // so width-only sizing preserves the aspect ratio and renders at
+  // roughly the page-width × 150pt tall). `width` (not `fit`) lets
+  // PDFKit scale by aspect — `fit: [W, W]` would have letterboxed the
+  // banner inside a square box and left huge whitespace.
+  let logoHeight = 0;
+  if (logoBuffer) {
+    try {
+      const logoTop = 50;
+      doc.image(logoBuffer, leftX, logoTop, { width: usableW });
+      // Approximate rendered height — pdfkit doesn't expose the post-
+      // image cursor reliably, so we compute from the cached source
+      // dimensions (assumed banner aspect ~3.3:1). Caps at 160pt so a
+      // square logo upload doesn't push the rest of the header off
+      // the page.
+      logoHeight = Math.min(160, Math.round(usableW / 3.3));
+    } catch (_e) {
+      logoHeight = 0;
+    }
+  }
+  const afterLogoY = logoBuffer ? 50 + logoHeight + 12 : 50;
+
+  // Company-name box: light fill + thin border, holds tenant name (bold,
+  // centered) and the address / contact subline beneath it.
+  const addrJoined = [c.addressLine, [c.city, c.state, c.pincode].filter(Boolean).join(", ")]
+    .filter(Boolean).join(" • ");
+  const contactJoined = [c.phone, c.email].filter(Boolean).join(" • ");
+  const subline = [addrJoined, contactJoined].filter(Boolean).join("   ·   ");
+  const boxY = afterLogoY;
+  const boxH = subline ? 56 : 38;
+  doc.save();
+  doc.rect(leftX, boxY, usableW, boxH).fillColor("#f8f9fa").fill();
+  doc.rect(leftX, boxY, usableW, boxH).lineWidth(0.7).strokeColor("#d1d5db").stroke();
+  doc.restore();
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111")
+    .text(companyName, leftX, boxY + 8, { width: usableW, align: "center" });
+  if (subline) {
+    doc.font("Helvetica").fontSize(9).fillColor("#555")
+      .text(subline, leftX, boxY + 34, { width: usableW, align: "center" });
+  }
+
+  doc.y = boxY + boxH + 16;
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111").text("Patient Summary", leftX, doc.y);
+  doc.font("Helvetica").fontSize(10).fillColor("#666")
+    .text(`Generated: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`, leftX, doc.y);
+  doc.moveDown(0.8);
+
+  // ── Profile (always rendered) ─────────────────────────────────────
+  sectionTitle("Profile");
+  kv("Name", patient?.name);
+  kv("Patient ID", patient?.id);
+  kv("Date of Birth", patient?.dob ? `${formatDate(patient.dob)} (age ${computeAge(patient.dob)})` : "—");
+  kv("Gender", patient?.gender);
+  kv("Phone", patient?.phone);
+  kv("Email", patient?.email);
+  if (patient?.bloodGroup) kv("Blood Group", patient.bloodGroup);
+  if (patient?.address) kv("Address", patient.address);
+  if (patient?.source) kv("Source", patient.source);
+  if (patient?.allergies) kv("Allergies", patient.allergies);
+  if (patient?.medicalHistory) kv("Medical History", patient.medicalHistory);
+  if (patient?.notes) kv("Notes", patient.notes);
+
+  // Breathing room between Profile and the next section.
+  doc.moveDown(1.5);
+
+  // ── Case history (chronological) ──────────────────────────────────
+  const events = [
+    ...visits.map((v) => ({ kind: "Visit", date: v.visitDate, data: v })),
+    ...prescriptions.map((p) => ({ kind: "Prescription", date: p.createdAt, data: p })),
+    ...consents.map((c) => ({ kind: "Consent", date: c.signedAt, data: c })),
+  ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  if (events.length > 0) {
+    sectionTitle(`Case History (${events.length})`);
+    doc.font("Helvetica").fontSize(10).fillColor("#222");
+    for (const e of events) {
+      ensureSpace(36);
+      const y = doc.y;
+      doc.font("Helvetica-Bold").fillColor("#111")
+        .text(`${formatDate(e.date)} — ${e.kind}`, leftX, y);
+      doc.font("Helvetica").fillColor("#333");
+      if (e.kind === "Visit") {
+        const v = e.data;
+        const line = [
+          v.service?.name && `Service: ${v.service.name}`,
+          v.doctor?.name && `Doctor: ${v.doctor.name}`,
+          v.amount != null && `Amount: ${formatMoney(v.amount, currency)}`,
+          v.status && `Status: ${v.status}`,
+        ].filter(Boolean).join("  •  ");
+        if (line) doc.text(line, leftX + 10, doc.y, { width: usableW - 10 });
+        if (v.notes) doc.text(`Notes: ${v.notes}`, leftX + 10, doc.y, { width: usableW - 10 });
+      } else if (e.kind === "Prescription") {
+        const p = e.data;
+        const drugs = parseDrugs(p.drugs);
+        const summary = drugs.length
+          ? drugs.map((d) => d.name || d.drug || "").filter(Boolean).join(", ")
+          : "(no medications listed)";
+        doc.text(`Rx #${p.id} — ${summary}`, leftX + 10, doc.y, { width: usableW - 10 });
+        if (p.doctor?.name) doc.text(`Prescribed by: ${p.doctor.name}`, leftX + 10, doc.y, { width: usableW - 10 });
+      } else if (e.kind === "Consent") {
+        const c = e.data;
+        doc.text(`${c.templateName || "general"}${c.service?.name ? ` — ${c.service.name}` : ""}`, leftX + 10, doc.y, { width: usableW - 10 });
+      }
+      doc.moveDown(0.3);
+    }
+  }
+
+  // ── Visits (detailed) — start on a fresh page ─────────────────────
+  if (visits.length > 0) {
+    doc.addPage();
+    doc.y = 60;
+    sectionTitle(`Visits (${visits.length})`);
+    doc.font("Helvetica").fontSize(10).fillColor("#222");
+    for (const v of visits) {
+      ensureSpace(60);
+      const y = doc.y;
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111")
+        .text(`Visit #${v.id} — ${formatDate(v.visitDate)}`, leftX, y);
+      doc.font("Helvetica").fillColor("#333");
+      const rows = [
+        ["Service", v.service?.name],
+        ["Doctor", v.doctor?.name],
+        ["Status", v.status],
+        ["Amount", v.amount != null ? formatMoney(v.amount, currency) : null],
+        ["Payment", v.paymentMode],
+        ["Notes", v.notes],
+      ];
+      for (const [k, val] of rows) {
+        if (val == null || val === "") continue;
+        ensureSpace(14);
+        doc.font("Helvetica-Bold").text(`  ${k}: `, leftX, doc.y, { continued: true });
+        doc.font("Helvetica").text(String(val));
+      }
+      doc.moveDown(0.4);
+    }
+  }
+
+  // ── Prescriptions (full Rx layout — mirrors renderPrescriptionPdf) ──
+  // Each Rx renders as its own block: title row with Rx badge + right-
+  // aligned metadata, doctor info, Medical Information rows, Prescription
+  // Medications table (same column layout as the single-Rx PDF), Advice,
+  // Notes. Page-break per Rx so each one is self-contained.
+  if (prescriptions.length > 0) {
+    for (let i = 0; i < prescriptions.length; i++) {
+      const p = prescriptions[i];
+      const parsed = parseRxInstructions(p.instructions);
+      const status = parsed.status || "Issued";
+      const drugs = parseDrugs(p.drugs);
+      const doctor = p.doctor || null;
+
+      // Start each Rx on its own page (matches single-Rx PDF layout).
+      doc.addPage();
+      doc.y = 60;
+      sectionTitle(i === 0 ? `Prescriptions (${prescriptions.length})` : `Prescription ${i + 1} of ${prescriptions.length}`);
+
+      // Title + Rx badge + right-aligned metadata.
+      const headerY = doc.y;
+      doc.font("Helvetica-Bold").fontSize(13).fillColor("#111")
+        .text(`Prescription - ${p.id ?? ""}`, leftX, headerY, { continued: false });
+      doc.lineWidth(0.6).strokeColor("#444").rect(230, headerY - 2, 28, 16).stroke();
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#222").text("Rx", 230, headerY + 1, { width: 28, align: "center" });
+      const rightX = 360, rightW = pageRight - rightX;
+      doc.font("Helvetica").fontSize(10).fillColor("#222");
+      doc.text(`Date: ${formatDate(p.createdAt)}`, rightX, headerY, { width: rightW, align: "right" });
+      doc.text(`Prescription #: ${p.id ?? "—"}`, rightX, doc.y, { width: rightW, align: "right" });
+      doc.text(`Appointment #: ${p.visitId ?? "—"}`, rightX, doc.y, { width: rightW, align: "right" });
+      doc.moveDown(0.6);
+      doc.y = Math.max(doc.y, headerY + 48);
+
+      // Patient + Doctor side-by-side blocks.
+      const blockTop = doc.y;
+      const rightCol = 300, colWidth = 240;
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Patient Information", leftX, blockTop);
+      doc.font("Helvetica").fontSize(10).fillColor("#222");
+      const patientLines = [
+        ["Name", patient?.name],
+        ["ID", patient?.id != null ? String(patient.id) : ""],
+        ["Gender", patient?.gender],
+        ["Phone", patient?.phone],
+      ];
+      let py = doc.y;
+      for (const [k, v] of patientLines) {
+        doc.font("Helvetica-Bold").text(`${k}: `, leftX, py, { continued: true })
+          .font("Helvetica").text(String(v || "—"));
+        py = doc.y;
+      }
+      const patientEndY = doc.y;
+
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Doctor Information", rightCol, blockTop);
+      doc.font("Helvetica").fontSize(10).fillColor("#222");
+      const doctorLines = [
+        ["Name", doctor?.name],
+        ["Phone", doctor?.phone],
+        ["Email", doctor?.email],
+      ];
+      if (doctor?.registrationNumber) doctorLines.push(["Registration Number", doctor.registrationNumber]);
+      let dy = doc.y;
+      for (const [k, v] of doctorLines) {
+        doc.font("Helvetica-Bold").text(`${k}: `, rightCol, dy, { continued: true, width: colWidth })
+          .font("Helvetica").text(String(v || "—"));
+        dy = doc.y;
+      }
+      const doctorEndY = doc.y;
+
+      const sectionEndY = Math.max(patientEndY, doctorEndY) + 8;
+      doc.moveTo(leftX, sectionEndY).lineTo(pageRight, sectionEndY).lineWidth(0.5).strokeColor("#bbb").stroke();
+      doc.y = sectionEndY + 10;
+
+      // Medical Information.
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Medical Information", leftX);
+      doc.moveDown(0.3);
+      const medRows = [
+        ["Chief Complaint", parsed.chiefComplaint || "Not Specified"],
+        ["Diagnosis", parsed.diagnosis || "Not Specified"],
+        ["Investigations", parsed.investigations || "Not Specified"],
+      ];
+      doc.font("Helvetica").fontSize(10).fillColor("#222");
+      for (const [k, v] of medRows) {
+        const y = doc.y;
+        doc.font("Helvetica-Bold").text(`${k}: `, leftX, y, { continued: true, width: pageRight - leftX })
+          .font("Helvetica").text(String(v));
+      }
+      doc.moveDown(0.5);
+
+      // Prescription Medications table — same column layout as single-Rx PDF.
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Prescription Medications");
+      doc.moveDown(0.3);
+      const tableTop = doc.y;
+      const cols = [
+        { label: "Medication", x: 50, w: 95 },
+        { label: "Dosage", x: 145, w: 55 },
+        { label: "Form", x: 200, w: 50 },
+        { label: "Route", x: 250, w: 50 },
+        { label: "Frequency", x: 300, w: 60 },
+        { label: "Duration", x: 360, w: 75 },
+        { label: "Instructions", x: 435, w: 110 },
+      ];
+      doc.rect(50, tableTop, 495, 18).fillColor("#f3f4f6").fill();
+      doc.fillColor("#333").font("Helvetica-Bold").fontSize(9);
+      for (const c of cols) doc.text(c.label, c.x + 3, tableTop + 5, { width: c.w - 6 });
+
+      let rowY = tableTop + 18;
+      doc.font("Helvetica").fontSize(9).fillColor("#222");
+      if (drugs.length === 0) {
+        doc.text("(no medications listed)", 53, rowY + 4);
+        rowY += 22;
+      } else {
+        for (const d of drugs) {
+          const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join("") || d.strength || "";
+          const dosageCell = [d.dosage || "—", strength || "—"].join(" ");
+          const cells = [
+            d.name || d.drug || "—",
+            dosageCell,
+            d.preparation || d.dosageForm || "—",
+            d.route || "—",
+            d.frequency || "—",
+            d.duration || "—",
+            d.instructions || "—",
+          ];
+          const heights = cells.map((val, i) => doc.heightOfString(String(val), { width: cols[i].w - 6 }));
+          const rowH = Math.max(18, ...heights) + 6;
+          if (rowY + rowH > 740) {
+            doc.addPage();
+            rowY = 60;
+          }
+          cells.forEach((val, i) => {
+            doc.text(String(val), cols[i].x + 3, rowY + 3, { width: cols[i].w - 6 });
+          });
+          doc.moveTo(50, rowY + rowH).lineTo(545, rowY + rowH).lineWidth(0.3).strokeColor("#e5e7eb").stroke();
+          rowY += rowH;
+        }
+      }
+      doc.y = rowY + 8;
+
+      // Additional Advice + Notes.
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Additional Advice");
+      doc.font("Helvetica").fontSize(10).fillColor("#222").text(parsed.advice || "—", { width: 495 });
+      doc.moveDown(0.5);
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Notes");
+      doc.font("Helvetica").fontSize(10).fillColor("#222").text(parsed.notes || "No clinical notes recorded.", { width: 495 });
+      doc.moveDown(0.4);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#222")
+        .text("Status: ", leftX, doc.y, { continued: true })
+        .font("Helvetica").text(status);
+    }
+  }
+
+  // ── Treatment plans ───────────────────────────────────────────────
+  if (treatmentPlans.length > 0) {
+    sectionTitle(`Treatment Plans (${treatmentPlans.length})`);
+    for (const t of treatmentPlans) {
+      ensureSpace(40);
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+        .text(`Plan #${t.id} — ${t.service?.name || "—"}`, leftX);
+      doc.font("Helvetica").fontSize(10).fillColor("#333");
+      if (t.sessionsTotal != null || t.sessionsCompleted != null) {
+        kv("Sessions", `${t.sessionsCompleted ?? 0} / ${t.sessionsTotal ?? "—"}`);
+      }
+      if (t.totalPrice != null) kv("Total Price", formatMoney(t.totalPrice, currency));
+      if (t.status) kv("Status", t.status);
+      if (t.notes) kv("Notes", t.notes);
+      doc.moveDown(0.5);
+    }
+  }
+
+  // ── Wallet ────────────────────────────────────────────────────────
+  if (hasWalletActivity) {
+    sectionTitle("Wallet");
+    kv("Balance", formatMoney(wallet.balance, currency));
+    kv("Currency", currency);
+    if (transactions.length > 0) {
+      doc.moveDown(0.4);
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text(`Recent transactions (${transactions.length})`, leftX);
+      doc.moveDown(0.2);
+      const tableTop = doc.y;
+      const cols = [
+        { label: "Date", x: leftX, w: 90 },
+        { label: "Type", x: leftX + 90, w: 110 },
+        { label: "Amount", x: leftX + 200, w: 90 },
+        { label: "Reason", x: leftX + 290, w: usableW - 290 },
+      ];
+      doc.rect(leftX, tableTop, usableW, 18).fillColor("#f3f4f6").fill();
+      doc.fillColor("#333").font("Helvetica-Bold").fontSize(9);
+      for (const c of cols) doc.text(c.label, c.x + 3, tableTop + 5, { width: c.w - 6 });
+      let rowY = tableTop + 18;
+      doc.font("Helvetica").fontSize(9).fillColor("#222");
+      for (const tx of transactions) {
+        const cells = [
+          formatDate(tx.createdAt),
+          String(tx.type || "").replace(/_/g, " "),
+          `${tx.amount >= 0 ? "+" : ""}${formatMoney(tx.amount, currency)}`,
+          tx.reason || "—",
+        ];
+        const heights = cells.map((val, i) => doc.heightOfString(String(val), { width: cols[i].w - 6 }));
+        const rowH = Math.max(16, ...heights) + 6;
+        if (rowY + rowH > 770) {
+          doc.addPage();
+          rowY = 60;
+        }
+        cells.forEach((val, i) => {
+          doc.text(String(val), cols[i].x + 3, rowY + 3, { width: cols[i].w - 6 });
+        });
+        doc.moveTo(leftX, rowY + rowH).lineTo(pageRight, rowY + rowH)
+          .lineWidth(0.3).strokeColor("#e5e7eb").stroke();
+        rowY += rowH;
+      }
+      doc.y = rowY + 8;
+    }
+  }
+
+  // ── Memberships ───────────────────────────────────────────────────
+  if (membershipList.length > 0) {
+    sectionTitle(`Memberships (${membershipList.length})`);
+    for (const m of membershipList) {
+      ensureSpace(50);
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+        .text(`${m.plan?.name || "Plan"} — Membership #${m.id}`, leftX);
+      doc.font("Helvetica").fontSize(10).fillColor("#333");
+      if (m.status) kv("Status", m.status);
+      if (m.startDate) kv("Start", formatDate(m.startDate));
+      if (m.endDate) kv("End", formatDate(m.endDate));
+      if (m.plan?.price != null) kv("Price Paid", formatMoney(m.plan.price, m.plan.currency || currency));
+      if (m.balanceJson || m.balance) {
+        let balText = "";
+        try {
+          const bal = typeof m.balanceJson === "string" ? JSON.parse(m.balanceJson) : (m.balanceJson || m.balance);
+          if (bal && typeof bal === "object") {
+            balText = Object.entries(bal).map(([k, v]) => `${k}: ${v}`).join("  •  ");
+          }
+        } catch {
+          /* ignore */
+        }
+        if (balText) kv("Balance", balText);
+      }
+      doc.moveDown(0.5);
+    }
+  }
+
+  doc.end();
+  return bufPromise;
+}
+
 module.exports = {
   renderPrescriptionPdf,
   renderConsentPdf,
   renderBrandedInvoicePdf,
+  renderPatientSummaryPdf,
 };

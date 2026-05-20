@@ -249,7 +249,10 @@ describe('renderPrescriptionPdf', () => {
     );
     const txt = extractPdfText(buf);
     expect(txt).toContain('Dr. Harsh Mehta');
-    expect(txt).toContain("Doctor's signature");
+    // The signature label is rendered Title-Case in the new comprehensive
+    // Rx layout ("Doctor's Signature") — matches the rest of the section
+    // labels (Patient Information, Doctor Information, etc.).
+    expect(txt).toContain("Doctor's Signature");
   });
 
   test('omits prescriber name when no doctor object passed', async () => {
@@ -260,7 +263,7 @@ describe('renderPrescriptionPdf', () => {
       undefined,
     );
     const txt = extractPdfText(buf);
-    expect(txt).toContain("Doctor's signature");
+    expect(txt).toContain("Doctor's Signature");
     expect(txt).not.toContain('Dr. Harsh Mehta');
   });
 
@@ -319,14 +322,21 @@ describe('renderPrescriptionPdf', () => {
     expect(txt).toContain('Avoid sun exposure');
   });
 
-  test('omits instructions block when none supplied', async () => {
+  test('renders the no-clinical-notes placeholder when no instructions supplied', async () => {
+    // The new comprehensive Rx layout always renders a Medications table
+    // (with an "Instructions" column header) and a Notes section, so the
+    // previous absence-check on the literal word "Instructions" no longer
+    // matches a meaningful contract. The semantic equivalent is: when the
+    // caller supplies no instructions, the Notes section surfaces the
+    // canonical "No clinical notes recorded." placeholder rather than any
+    // user-supplied free-form text.
     const buf = await renderPrescriptionPdf(
       { drugs: [] },
       patientFixture(),
       clinicFixture(),
     );
     const txt = extractPdfText(buf);
-    expect(txt).not.toContain('Instructions');
+    expect(txt).toContain('No clinical notes recorded.');
   });
 
   test('formats createdAt as en-IN long-form date in header', async () => {

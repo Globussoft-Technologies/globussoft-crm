@@ -24,6 +24,7 @@ const {
   renderPrescriptionPdf,
   renderConsentPdf,
   renderBrandedInvoicePdf,
+  renderPatientSummaryPdf,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { verifyToken } = require("../middleware/auth")
@@ -5026,6 +5027,139 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
   } catch (e) {
     console.error("[wellness] prescription pdf error:", e.message);
     res.status(500).json({ error: "Failed to render prescription PDF" });
+  }
+});
+
+// Module-level cache for logo bytes — keyed by absolute file path. The
+// bundled globussoft-logo.png is 2.4 MB; without the cache, every PDF
+// download did a fresh fs.readFileSync, which dominated /summary.pdf
+// latency. The cache lives for the process lifetime; PM2 restart picks
+// up any new logo file. A sentinel of `null` records "we already
+// checked this path and it doesn't exist" so we don't re-stat per call.
+const __logoCache = new Map();
+function loadCachedLogo(candidatePaths) {
+  for (const p of candidatePaths) {
+    if (__logoCache.has(p)) {
+      const cached = __logoCache.get(p);
+      if (cached) return cached;
+      continue;
+    }
+    try {
+      if (fs.existsSync(p)) {
+        const buf = fs.readFileSync(p);
+        __logoCache.set(p, buf);
+        return buf;
+      }
+    } catch (_e) {
+      /* swallow — fall through to next candidate */
+    }
+    __logoCache.set(p, null);
+  }
+  return null;
+}
+
+// GET /patients/:id/summary.pdf — full multi-page dossier for one patient.
+// Bundles profile + case history + visits + Rx + treatment plans + wallet
+// + memberships into a single PDF so staff can hand off / archive / share
+// a complete patient record in one click. PHI-heavy — audited on every read.
+router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "Invalid patient id" });
+    }
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id, deletedAt: null }),
+      include: {
+        visits: {
+          orderBy: { visitDate: "desc" },
+          include: { service: true, doctor: { select: { id: true, name: true } } },
+        },
+        prescriptions: {
+          orderBy: { createdAt: "desc" },
+          include: { doctor: { select: { id: true, name: true } } },
+        },
+        consents: {
+          orderBy: { signedAt: "desc" },
+          select: {
+            id: true, templateName: true, signedAt: true,
+            patientId: true, serviceId: true,
+            service: { select: { id: true, name: true } },
+          },
+        },
+        treatmentPlans: { include: { service: true } },
+      },
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    const [tenant, clinic, wallet, memberships] = await Promise.all([
+      prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { id: true, name: true, logoUrl: true, brandColor: true },
+      }),
+      primaryClinic(req.user.tenantId),
+      prisma.wallet.findFirst({ where: { tenantId: req.user.tenantId, patientId: id } }),
+      prisma.membership.findMany({
+        where: tenantWhere(req, { patientId: id }),
+        include: { plan: { select: { id: true, name: true, durationDays: true, price: true, currency: true } } },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+
+    const walletTransactions = wallet
+      ? await prisma.walletTransaction.findMany({
+          where: { tenantId: req.user.tenantId, walletId: wallet.id },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+        })
+      : [];
+
+    // Resolve a logo image to embed: prefer tenant's uploaded logoUrl
+    // (mapped onto disk under backend/uploads), else fall back to the
+    // bundled globussoft-logo.png. Uses an in-memory cache so the same
+    // file isn't re-read off disk on every download — the bundled logo
+    // is 2.4 MB and a per-request fs.readFileSync was the dominant slow
+    // path for /summary.pdf.
+    const candidates = [];
+    if (tenant?.logoUrl && tenant.logoUrl.startsWith("/uploads/")) {
+      candidates.push(path.join(__dirname, "..", tenant.logoUrl));
+    }
+    candidates.push(path.join(__dirname, "..", "..", "frontend", "public", "globussoft-logo.png"));
+    const logoBuffer = loadCachedLogo(candidates);
+
+    const buf = await renderPatientSummaryPdf({
+      patient,
+      tenant,
+      clinic,
+      wallet,
+      walletTransactions,
+      memberships,
+      logoBuffer,
+    });
+
+    try {
+      await writeAudit("Patient", "PATIENT_SUMMARY_PDF_DOWNLOAD", patient.id, req.user.userId, req.user.tenantId, {
+        patientId: patient.id,
+        visitCount: patient.visits.length,
+        rxCount: patient.prescriptions.length,
+        consentCount: patient.consents.length,
+        membershipCount: memberships.length,
+      });
+    } catch (auditErr) {
+      console.warn("[wellness] audit PATIENT_SUMMARY_PDF_DOWNLOAD failed:", auditErr.message);
+    }
+
+    const safeName = String(patient.name || `patient-${id}`).replace(/[^a-z0-9_-]+/gi, "_");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}-summary.pdf"`);
+    res.setHeader("Content-Length", buf.length);
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.send(buf);
+  } catch (e) {
+    console.error("[wellness] patient summary pdf error:", e.message);
+    res.status(500).json({ error: "Failed to render patient summary PDF" });
   }
 });
 

@@ -26,6 +26,7 @@
 // See docs/TRAVEL_CRM_PRD.md §4.3 + §5.1 for the spec.
 
 const express = require("express");
+const crypto = require("crypto");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");

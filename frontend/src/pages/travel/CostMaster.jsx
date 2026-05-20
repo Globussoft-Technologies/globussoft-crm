@@ -7,7 +7,8 @@
 // ones.
 
 import { useEffect, useRef, useState } from "react";
-import { DollarSign, Download, Filter, Plus, ToggleLeft, ToggleRight, Upload } from "lucide-react";
+import { Link } from "react-router-dom";
+import { BadgePercent, DollarSign, Download, Filter, Plus, ToggleLeft, ToggleRight, Upload } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -158,6 +159,9 @@ export default function CostMaster() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Link to="/travel/pricing-rules" style={{ ...secondaryBtn, textDecoration: "none" }}>
+            <BadgePercent size={14} /> Pricing rules
+          </Link>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Download size={14} /> Export CSV
           </button>

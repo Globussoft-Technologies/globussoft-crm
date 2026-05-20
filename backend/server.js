@@ -259,7 +259,16 @@ const SUPPORTED_CONTENT_TYPES = [
 // Wave 7A CSV import endpoints accept text/csv content type; let them
 // bypass the JSON-only guard. The route's own readUploadedCsv() helper
 // handles multipart-vs-raw-text intake.
-const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = ["/api/marketing/submit", "/api/csv/"];
+const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = [
+  "/api/marketing/submit",
+  "/api/csv/",
+  // v3.9.1 — travel CSV import endpoints accept text/csv same as /api/csv/.
+  // Without these the global 415 guard fires BEFORE verifyToken, so the
+  // gate spec's "401 without token" case sees 415 and fails — see commit
+  // 2840d46 → first push of travel_csv_io.js.
+  "/api/travel/cost-master/import.csv",
+  "/api/travel/diagnostic-banks/import.csv",
+];
 app.use("/api", (req, res, next) => {
   if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
   const lenHeader = req.headers["content-length"];

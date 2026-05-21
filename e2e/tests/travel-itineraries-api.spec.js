@@ -338,6 +338,54 @@ test.describe("Travel itineraries API — diagnostic-first guard (PRD §4.1)", (
   });
 });
 
+// ─── PRD §6.4 productTier capture-from-latest-diagnostic ─────────────
+
+test.describe("Travel itineraries API — productTier defaulting (PRD §6.4)", () => {
+  test("POST /itineraries with no productTier defaults from the latest diagnostic", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: testContactId,
+      destination: `${RUN_TAG} tier-defaulted`,
+    });
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    // The diagnostic submitted in the outer beforeAll (answers q1=few +
+    // q2=medium) classifies into one of these three tiers under the
+    // seeded RFU bank's scoring rules.
+    expect(["entry", "primary", "premium"]).toContain(body.productTier);
+    created.itineraryIds.push(body.id);
+  });
+
+  test("POST /itineraries with explicit productTier honours the override", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: testContactId,
+      destination: `${RUN_TAG} tier-overridden`,
+      productTier: "premium",
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(body.productTier).toBe("premium");
+    created.itineraryIds.push(body.id);
+  });
+
+  test("GET /itineraries/:id round-trips productTier", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.itineraryIds.length === 0) test.skip(true, "need a created itinerary");
+    // The most-recently-pushed id is the explicit-override case above, so
+    // we know exactly what to expect on the read.
+    const id = created.itineraryIds[created.itineraryIds.length - 1];
+    const res = await get(request, token, `/api/travel/itineraries/${id}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.productTier).toBe("premium");
+  });
+});
+
 // ─── Get + amend ─────────────────────────────────────────────────────
 
 test.describe("Travel itineraries API — get + amend", () => {

@@ -4094,6 +4094,12 @@ model Itinerary {
   status            String          @default("draft")
   version           Int             @default(1)
   parentItineraryId Int? // version-history chain
+  // Phase 2 PRD §6.4 — recommended product tier captured at itinerary
+  // creation, defaulted from the contact's latest diagnostic
+  // (entry | primary | premium). Nullable — TMC + Visa Sure don't carry a
+  // tier today. Captured-at-creation so tier-vs-actual analytics stay
+  // stable if the diagnostic is re-taken later.
+  productTier       String?
   destination       String
   startDate         DateTime?
   endDate           DateTime?

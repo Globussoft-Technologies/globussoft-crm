@@ -38,6 +38,7 @@ const {
   assertValidSubBrand,
   assertCompletedDiagnostic,
 } = require("../middleware/travelGuards");
+const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
 // Phase 2 (PRD §4.7) extends the enum with advance_paid / fully_paid for
@@ -139,8 +140,18 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
     const {
       leadId, status, startDate, endDate,
       pricingJson, totalAmount, currency, shareToken,
-      items,
+      items, productTier: bodyProductTier,
     } = req.body;
+
+    // PRD §6.4 — capture the recommended tier from the contact's latest
+    // diagnostic so tier-vs-actual analytics stay stable. Body can override;
+    // otherwise default from the diagnostic's recommendedTier (may itself
+    // be null if the diagnostic didn't classify, e.g. unanswered Qs).
+    let productTier = bodyProductTier || null;
+    if (!productTier) {
+      const latest = await findLatestDiagnostic(prisma, req.travelTenant.id, cid, subBrand);
+      productTier = (latest && latest.recommendedTier) || null;
+    }
 
     if (status && !VALID_STATUSES.includes(status)) {
       return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
@@ -181,6 +192,7 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
         contactId: cid,
         leadId: leadId ? parseInt(leadId, 10) : null,
         status: status || "draft",
+        productTier,
         destination: String(destination),
         startDate: startDate ? new Date(startDate) : null,
         endDate: endDate ? new Date(endDate) : null,

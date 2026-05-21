@@ -39,6 +39,15 @@ const STATUS_COLORS = {
   rejected: { bg: "rgba(168,50,63,0.14)", color: "#A8323F" },
 };
 
+// PRD §6.4 — tier badge palette. productTier on each Itinerary is captured
+// at creation from the contact's latest diagnostic (recommendedTier).
+// Neutral / travel-navy / warm-gold for entry / primary / premium.
+const TIER_COLORS = {
+  entry: { bg: "rgba(120,120,120,0.12)", color: "#5C6E82" },
+  primary: { bg: "rgba(18,38,71,0.14)", color: "#122647" },
+  premium: { bg: "rgba(200,154,78,0.22)", color: "#7A5419" },
+};
+
 const ITEM_ICONS = {
   flight: Plane,
   hotel: Hotel,
@@ -62,6 +71,20 @@ function fmtMoney(amt, currency = "INR") {
     return `₹${(n / 100000).toFixed(2)}L`;
   }
   return `${currency === "INR" ? "₹" : currency + " "}${n.toLocaleString()}`;
+}
+
+function TierBadge({ tier }) {
+  if (!tier) return <span style={{ color: "var(--text-secondary)" }}>—</span>;
+  const tc = TIER_COLORS[tier] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
+  return (
+    <span style={{
+      background: tc.bg, color: tc.color,
+      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+      textTransform: "uppercase", letterSpacing: 0.5,
+    }}>
+      {tier}
+    </span>
+  );
 }
 
 export default function Itineraries() {
@@ -134,6 +157,7 @@ export default function Itineraries() {
                 <th style={th}>Items</th>
                 <th style={th}>Total</th>
                 <th style={th}>Status</th>
+                <th style={th}>Tier</th>
                 <th style={th}>Updated</th>
               </tr>
             </thead>
@@ -181,6 +205,7 @@ export default function Itineraries() {
                         {it.status}
                       </span>
                     </td>
+                    <td style={td}><TierBadge tier={it.productTier} /></td>
                     <td style={td}>{new Date(it.updatedAt).toLocaleDateString()}</td>
                   </tr>
                 );

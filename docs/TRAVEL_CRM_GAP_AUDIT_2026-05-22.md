@@ -8,11 +8,11 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (44 in §4, 23 models in §5, 11 route bundles in §6.1, 22 frontend pages in §7, 5 vertical-config items in §8, 14 integrations in §9; some collapse — see per-section tables for the precise denominator)
-- **SHIPPED:** **48** (~62%) — up from 44 baseline; +4 since: pipeline + lost-reason (`ab2f15f`), travel_webcheckin.js route (`9898e87`), LLM router scaffold (`583c06b`)
+- **SHIPPED:** **50** (~64%) — up from 44 baseline; +6 since: pipeline + lost-reason (`ab2f15f`), travel_webcheckin.js route (`9898e87`), LLM router scaffold (`583c06b`), talking-points endpoint + Diagnostic-interpretation cell (`cf876af`)
 - **PARTIAL:** **9** (~12%) — P1A web check-in row flipped most-of-way; still partial pending WebCheckinQueue.jsx UI
-- **GAP-AUTONOMOUS:** **2** (~3%) — down from 8; -6 since (pipeline + lost-reason + webcheckin route + LLM router + 2 downstream rows that flipped STUB-ABLE once router landed)
-- **GAP-STUB-ABLE:** **9** (~12%) — up from 6; +3 since (boarding-pass auto-delivery, LLM-switchable quotation, diagnostic interpretation)
-- **GAP-CRED-BLOCKED:** **8** (~10%) — down from 9 (boarding-pass moved up the ladder)
+- **GAP-AUTONOMOUS:** **1** (~1%) — down from 8; -7 since (last remaining autonomous in §4.10 TMC sample data seed extension)
+- **GAP-STUB-ABLE:** **8** (~10%) — down 1 from 9 (diagnostic interpretation flipped to SHIPPED via the talking-points endpoint wire-in)
+- **GAP-CRED-BLOCKED:** **8** (~10%)
 - **GAP-PRODUCT-CALL:** **2** (~3%)
 
 The Phase 1 contractual surface (TMC + RFU diagnostic + itinerary + microsite + supplier vault + cost master + rooming + payment plans + reports + DigiLocker scaffold) is **almost entirely shipped**. The remaining gaps cluster into three buckets: (a) the Chrome flight-quote plugin + airline web-check-in automation (Phase 1 W3-W4 scope, NOT yet started), (b) the LLM router + talking-points + form-vs-call (Phase 1 W2-W3 scope, NOT yet started), (c) the per-cron WhatsApp dispatch + microsite OTP SMS cutover (one-line edits, Q9 cred-blocked).
@@ -59,7 +59,7 @@ The Phase 1 contractual surface (TMC + RFU diagnostic + itinerary + microsite + 
 | Auto CRM record creation (Contact + Diagnostic + Lead) | SHIPPED | `routes/travel_diagnostics.js:493-557` public submit creates Contact + Diagnostic + dedup via `findDuplicateContactFull` | No `Diagnostic pending` → `Qualified` Deal-stage transition yet (deals not auto-created today) |
 | Curriculum mapping logic (TMC-only) | GAP-PRODUCT-CALL | No code surface; PRD scope-ambiguous | Q13 says "scoring weights written + ready to share" but curriculum→tier mapping isn't spelled out in the PRD — likely Q-bank tagging covers it but needs confirmation |
 | Risk flagging (Visa Sure) | SHIPPED (schema) | `VisaApplication.advisorRiskFlag` (`schema.prisma:4459`) | Phase 3 model; no route handlers yet — `routes/travel_visa.js` does not exist |
-| LLM-generated talking points per advisor | GAP-AUTONOMOUS | `TravelDiagnostic.talkingPointsJson` column exists (`schema.prisma:4094`) but ZERO writes/reads grep-confirmed; no `talking-points` endpoint | Mid-size single-commit autonomous: per Q11, route through Gemini/Perplexity with the locked task→model routing |
+| LLM-generated talking points per advisor | SHIPPED | `POST /api/travel/diagnostics/:id/talking-points/regen` (commit `cf876af`) — first LLM router consumer; writes `{ text, model, generatedAt, stub }` envelope to `talkingPointsJson` | Stub-mode-ready; real Claude output lands when Q11 keys arrive |
 | AI summary notes (Visa Sure) | GAP-AUTONOMOUS | Phase 3 scope — out of Phase 1 | Defer; same shape as talking-points once that lands |
 
 ### §4.3 Itinerary / package builder
@@ -220,7 +220,7 @@ Most rolled up into the above tables. Net:
 | Expected file | State | Notes |
 |---|---|---|
 | `travel.js` | SHIPPED | `routes/travel.js` (`/health` only — minimal); cross-sub-brand dashboard lives in `travel_dashboard.js`; sub-brand switcher inferred client-side from `User.subBrandAccess` (no `/sub-brands/:code/switch` endpoint) |
-| `travel_diagnostics.js` | SHIPPED | 9 endpoints incl. public submit + report PDF; `/talking-points/regen` NOT shipped |
+| `travel_diagnostics.js` | SHIPPED | 10 endpoints incl. public submit + report PDF + `/talking-points/regen` (commit `cf876af`) |
 | `travel_itineraries.js` | SHIPPED | 14 endpoints; `/share` shipped (commits `45bef33`, `22bb641`, `fef099b`) |
 | `travel_quotation_flight.js` | GAP-AUTONOMOUS (Chrome plugin) | Does not exist; Phase 1 W3 scope |
 | `travel_cost_master.js` | SHIPPED | 5 endpoints |
@@ -330,7 +330,7 @@ Most rolled up into the above tables. Net:
 
 | Task | Locked model | Implementation state |
 |---|---|---|
-| Diagnostic interpretation | Perplexity | GAP-STUB-ABLE — router scaffold landed `583c06b`; interpretation consumer call site (e.g. talking-points endpoint) is the next dependency |
+| Diagnostic interpretation | Perplexity | SHIPPED via talking-points endpoint (commit `cf876af`) routing through Claude; stub-mode-ready until Q11 keys land |
 | Itinerary draft | Gemini 2.5 | GAP-AUTONOMOUS |
 | AI qualification call | Gemini Live | GAP-CRED-BLOCKED (Callified front-end) |
 | Document OCR fallback | Gemini Vision | GAP-CRED-BLOCKED (passport OCR needs provider creds first) |
@@ -451,7 +451,7 @@ For each shipped stub, the file + line where the `// STUB:` marker lives, the Q-
 
 3. ~~**LLM router scaffold (`lib/llmRouter.js`)** with Q11 task→model routing + cost dashboard tile (PRD §9.1, R7). Scope: `lib/llmRouter.js` with `routeRequest({task, payload})` returning a normalized response; per-task provider selection (Perplexity for diagnostic interpretation, Gemini 2.5 for itinerary draft + sentiment, Gemini Vision for OCR fallback); cost-attribution log row per call; admin daily summary endpoint. Effort: medium (~1 day). Why next: prerequisite for talking-points + personalised recommendations + form-vs-call comparison; pure-code; locked routing means zero ambiguity.~~ — ✅ **commit `583c06b`** (stub-mode scaffold, 20 vitest cases; `LlmCallLog` model + admin daily-summary endpoint deferred to first real-mode consumer)
 
-4. **Diagnostic talking-points endpoint** (PRD §4.2; §6.1 row `/api/travel/diagnostics/:id/talking-points/regen`). Scope: new route + `lib/llmRouter` call + write to existing `TravelDiagnostic.talkingPointsJson` column. Effort: small (~3 hrs). Why next: column is shipped + unused; advisor needs context for the first call; depends on item 3 (LLM router) being green.
+4. ~~**Diagnostic talking-points endpoint** (PRD §4.2; §6.1 row `/api/travel/diagnostics/:id/talking-points/regen`). Scope: new route + `lib/llmRouter` call + write to existing `TravelDiagnostic.talkingPointsJson` column. Effort: small (~3 hrs). Why next: column is shipped + unused; advisor needs context for the first call; depends on item 3 (LLM router) being green.~~ — ✅ **commit `cf876af`** (first LLM router consumer; ADMIN/MANAGER-only; PII-safe; stub-mode-ready)
 
 5. **TMC sub-brand seed sample data** (PRD §8.5). Scope: extend `seed-travel.js` with 1 sample `TmcTrip` + 2 `TripParticipant` + 1 `RoomingAssignment` + 1 `TripPaymentPlan` + 4 `TripInstalmentPayment` + 1 `Itinerary` + 1 `SupplierCredential` (encrypted) + 1 `VisaApplication`. Effort: small (~3 hrs). Why next: every existing travel page renders empty against the demo seed because the demo data stops at diagnostic banks + cost master. UAT can't validate end-to-end flows until this lands. Idempotent upserts so demo re-seeds don't double-up.
 

@@ -38,13 +38,16 @@ async function audit(action, entityId, userId, tenantId, details) {
 // filtered (see follow-up note at end of file).
 router.get("/", async (req, res) => {
   try {
-    const { stage, ownerId, pipelineId, contactId, from, to } = req.query;
+    const { stage, ownerId, pipelineId, contactId, subBrand, from, to } = req.query;
     const where = { tenantId: req.user.tenantId };
 
     if (stage) where.stage = stage;
     if (ownerId) where.ownerId = parseInt(ownerId);
     if (pipelineId) where.pipelineId = parseInt(pipelineId);
     if (contactId) where.contactId = parseInt(contactId);
+    // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
+    // missing column on legacy tenants — Prisma matches by exact value.
+    if (subBrand) where.subBrand = String(subBrand);
     if (from || to) {
       where.createdAt = {};
       if (from) where.createdAt.gte = new Date(from);

@@ -957,6 +957,7 @@ function renderTravelNav({
     <>
       <div style={labelStyle}>Travel</div>
       <Link to="/travel" icon={Compass} label="Dashboard" />
+      <Link to="/travel/leads" icon={UserPlus} label="Leads" />
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
       <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />

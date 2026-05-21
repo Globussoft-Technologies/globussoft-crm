@@ -297,6 +297,213 @@ async function main() {
     ],
   });
 
+  // ── Visa Sure (visa applications) — 15Q Readiness Assessment ─────────
+  //
+  // Phase 3 (PRD §4.7 "Visa Sure — visa applications sub-brand" + §4.10
+  // "Rejection Recovery program"). 15-question intake the advisor (or
+  // the public landing-page wizard) walks the lead through to classify
+  // visa applicants by complexity tier — feeding downstream advisor
+  // priority alerts + Rejection Recovery program enrolment.
+  //
+  // Stand-in content until Yasin's Q13 brand-shaped Visa Sure question
+  // set arrives; same trajectory as the TMC / RFU / Travel Stall placeholder
+  // banks above. Bank version 1; admin can publish v2 via POST
+  // /api/travel/diagnostic-banks once final copy lands (auto-bumps version,
+  // does NOT touch this seed).
+  //
+  // 4 classification bands (PRD §4.2):
+  //   level_1 "Visa Ready"           (0-15)   → entry tier   — clean cases
+  //   level_2 "Standard Support"     (16-30)  → primary tier — most applicants
+  //   level_3 "High Touch"           (31-45)  → premium tier — complex profiles
+  //   level_4 "Premium / Rejection Recovery" (46+) → premium — high-risk
+  //
+  // level_3 + level_4 share recommendedTier="premium" but differ on the
+  // risk-flag axis a separate later commit wires into advisor priority
+  // alerts + rejection-recovery enrolment.
+  //
+  // Weights calibrated so the worst-case answer set (US visa, first-time
+  // applicant, 2+ rejections, no travel history, family-sponsored, no
+  // income proof, unemployed, few documents, no insurance, no
+  // accommodation, no return intent, rush timeline, medical+senior
+  // circumstances, no English, white-glove tier) totals 71 → level_4;
+  // a clean-case answer set (Schengen, prior visa-holder, no rejections,
+  // 3+ intl trips, employer-sponsored, full ITR+bank, >2y employment,
+  // all docs ready, insurance arranged, hotel booking, strong ties,
+  // >60d timeline, no special circumstances, English, entry tier) totals
+  // 5 → level_1.
+  await seedDiagnosticBank(tenant.id, "visasure", {
+    questions: [
+      {
+        id: "q1",
+        text: "Which visa are you applying for?",
+        type: "single-choice",
+        options: [
+          { value: "schengen", label: "Schengen", weight: 3 },
+          { value: "us", label: "United States", weight: 5 },
+          { value: "uk", label: "United Kingdom", weight: 4 },
+          { value: "gulf", label: "Gulf (UAE / KSA / Qatar / Oman)", weight: 2 },
+          { value: "sea", label: "South-East Asia", weight: 2 },
+          { value: "other", label: "Other", weight: 2 },
+        ],
+      },
+      {
+        id: "q2",
+        text: "First-time applicant or prior visa-holder?",
+        type: "single-choice",
+        options: [
+          { value: "first", label: "First-time applicant", weight: 3 },
+          { value: "prior", label: "Held a visa before (for this or another country)", weight: 1 },
+        ],
+      },
+      {
+        id: "q3",
+        text: "Any prior visa rejections?",
+        type: "single-choice",
+        options: [
+          { value: "none", label: "Never rejected", weight: 0 },
+          { value: "one", label: "Rejected once", weight: 4 },
+          { value: "two-plus", label: "Rejected 2+ times", weight: 7 },
+        ],
+      },
+      {
+        id: "q4",
+        text: "International travel history?",
+        type: "single-choice",
+        options: [
+          { value: "none", label: "No international travel", weight: 5 },
+          { value: "domestic", label: "Domestic only", weight: 4 },
+          { value: "intl-few", label: "1-2 international trips", weight: 2 },
+          { value: "intl-many", label: "3+ international trips", weight: 0 },
+        ],
+      },
+      {
+        id: "q5",
+        text: "Who is sponsoring this trip?",
+        type: "single-choice",
+        options: [
+          { value: "self", label: "Self-sponsored", weight: 2 },
+          { value: "employer", label: "Employer", weight: 1 },
+          { value: "family", label: "Family member abroad", weight: 3 },
+          { value: "institution", label: "Educational / institutional", weight: 1 },
+        ],
+      },
+      {
+        id: "q6",
+        text: "Income proof readiness?",
+        type: "single-choice",
+        options: [
+          { value: "ready", label: "3 years ITR + 6 months bank statements ready", weight: 0 },
+          { value: "partial", label: "Some documents ready, others pending", weight: 3 },
+          { value: "none", label: "No income proof available", weight: 6 },
+        ],
+      },
+      {
+        id: "q7",
+        text: "Employment stability?",
+        type: "single-choice",
+        options: [
+          { value: "stable", label: "Same employer 2+ years", weight: 0 },
+          { value: "mid", label: "Current role 6 months to 2 years", weight: 2 },
+          { value: "new", label: "Current role under 6 months", weight: 4 },
+          { value: "unemployed", label: "Currently unemployed / self-employed without books", weight: 6 },
+        ],
+      },
+      {
+        id: "q8",
+        text: "How many supporting documents are ready?",
+        type: "single-choice",
+        options: [
+          { value: "all", label: "All documents in hand", weight: 0 },
+          { value: "most", label: "Most ready, a few pending", weight: 2 },
+          { value: "half", label: "About half ready", weight: 4 },
+          { value: "few", label: "Few documents ready", weight: 6 },
+        ],
+      },
+      {
+        id: "q9",
+        text: "Travel insurance arranged?",
+        type: "single-choice",
+        options: [
+          { value: "yes", label: "Yes — policy in hand", weight: 0 },
+          { value: "no", label: "Not yet", weight: 2 },
+        ],
+      },
+      {
+        id: "q10",
+        text: "Accommodation proof for the stay?",
+        type: "single-choice",
+        options: [
+          { value: "hotel", label: "Hotel booking confirmed", weight: 1 },
+          { value: "invitation", label: "Invitation letter from host", weight: 1 },
+          { value: "property", label: "Own property at destination", weight: 0 },
+          { value: "none", label: "No accommodation proof yet", weight: 4 },
+        ],
+      },
+      {
+        id: "q11",
+        text: "Return-intent strength (ties to home country)?",
+        type: "single-choice",
+        options: [
+          { value: "strong", label: "Strong — stable job + family + property", weight: 0 },
+          { value: "weak", label: "Weak — job-only or family-only", weight: 3 },
+          { value: "none", label: "No significant ties", weight: 6 },
+        ],
+      },
+      {
+        id: "q12",
+        text: "How soon is the application needed?",
+        type: "single-choice",
+        options: [
+          { value: "far", label: "More than 60 days out", weight: 0 },
+          { value: "mid", label: "30-60 days", weight: 1 },
+          { value: "soon", label: "Under 30 days", weight: 3 },
+          { value: "rush", label: "Rush / urgent", weight: 5 },
+        ],
+      },
+      {
+        id: "q13",
+        text: "Any special circumstances? (select all that apply)",
+        type: "multi-select",
+        options: [
+          { value: "medical", label: "Medical treatment / chronic condition", weight: 2 },
+          { value: "minor", label: "Travelling with minor children", weight: 1 },
+          { value: "student", label: "Student applicant", weight: 1 },
+          { value: "senior", label: "Senior citizen applicant", weight: 2 },
+        ],
+      },
+      {
+        id: "q14",
+        text: "Language comfort for visa interview?",
+        type: "single-choice",
+        options: [
+          { value: "english", label: "Comfortable in English", weight: 0 },
+          { value: "native", label: "Native language only", weight: 1 },
+          { value: "both", label: "Comfortable in both", weight: 0 },
+          { value: "neither", label: "Limited comfort in either", weight: 4 },
+        ],
+      },
+      {
+        id: "q15",
+        text: "Service tier you're considering?",
+        type: "single-choice",
+        options: [
+          { value: "entry", label: "Entry — DIY assistance only", weight: 0 },
+          { value: "standard", label: "Standard support", weight: 1 },
+          { value: "premium", label: "Premium handholding", weight: 2 },
+          { value: "white-glove", label: "White-glove / end-to-end", weight: 3 },
+        ],
+      },
+    ],
+  }, {
+    method: "weighted-sum",
+    bands: [
+      { minScore: 0, maxScore: 15, classification: "level_1", label: "Visa Ready", recommendedTier: "entry" },
+      { minScore: 16, maxScore: 30, classification: "level_2", label: "Standard Support", recommendedTier: "primary" },
+      { minScore: 31, maxScore: 45, classification: "level_3", label: "High Touch", recommendedTier: "premium" },
+      { minScore: 46, maxScore: 99, classification: "level_4", label: "Premium / Rejection Recovery", recommendedTier: "premium" },
+    ],
+  });
+
   // ── 4. Cost master rows ──────────────────────────────────────────────
   //
   // Placeholder rates so the /pricing/quote endpoint has something to

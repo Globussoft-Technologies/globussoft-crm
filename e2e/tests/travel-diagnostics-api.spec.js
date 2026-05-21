@@ -735,3 +735,113 @@ test.describe('Travel diagnostics — Travel Stall Family Travel Quiz seed (PRD 
     if (body.diagnostic?.id) created.diagnosticIds.push(body.diagnostic.id);
   });
 });
+
+// Phase 3 (PRD §4.7 + §4.10) — Visa Sure 15Q Readiness Assessment seed
+// lands a `visasure` v1 bank with 15 Qs + 4 scoring bands. These tests
+// pin the seed contract so the admin's sub-brand picker has something to
+// list and the public landing-page wizard can render the readiness quiz.
+// The 4-band classification feeds downstream advisor priority alerts +
+// Rejection Recovery enrolment (later commit, NOT this one).
+test.describe('Travel diagnostics — Visa Sure 15Q Readiness seed (PRD §4.7 + §4.10)', () => {
+  test('GET /diagnostic-banks?subBrand=visasure&active=true returns the seeded bank', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const res = await get(request, token, '/api/travel/diagnostic-banks?subBrand=visasure&active=true');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.banks)).toBe(true);
+    expect(body.banks.length).toBeGreaterThanOrEqual(1);
+    // v1 lives here; v2+ would land via admin POST after Yasin's final copy.
+    const v1 = body.banks.find((b) => b.version === 1);
+    expect(v1, 'visasure v1 bank must be seeded').toBeTruthy();
+    expect(v1.subBrand).toBe('visasure');
+    expect(v1.isActive).toBe(true);
+  });
+
+  test('GET /diagnostic-banks/:id renders the 15 Visa Sure readiness questions', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    // Resolve the seeded id via list, then fetch by id.
+    const listRes = await get(request, token, '/api/travel/diagnostic-banks?subBrand=visasure&active=true');
+    if (!listRes.ok()) test.skip(true, 'visasure bank not seeded on this stack');
+    const v1 = (await listRes.json()).banks.find((b) => b.version === 1);
+    if (!v1) test.skip(true, 'visasure v1 not seeded');
+    const res = await get(request, token, `/api/travel/diagnostic-banks/${v1.id}`);
+    expect(res.status()).toBe(200);
+    const bank = await res.json();
+    const questions = JSON.parse(bank.questionsJson);
+    expect(Array.isArray(questions.questions)).toBe(true);
+    expect(questions.questions.length).toBe(15);
+    // Pin the question IDs so future copy changes don't silently break
+    // the scorer (answers map by id). Q1..Q15 covers the readiness factors.
+    expect(questions.questions.map((q) => q.id)).toEqual([
+      'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7', 'q8',
+      'q9', 'q10', 'q11', 'q12', 'q13', 'q14', 'q15',
+    ]);
+  });
+
+  test('Visa Sure bank scoring rules classify into 4 readiness-level bands', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const listRes = await get(request, token, '/api/travel/diagnostic-banks?subBrand=visasure&active=true');
+    if (!listRes.ok()) test.skip(true, 'visasure bank not seeded on this stack');
+    const v1 = (await listRes.json()).banks.find((b) => b.version === 1);
+    if (!v1) test.skip(true, 'visasure v1 not seeded');
+    const res = await get(request, token, `/api/travel/diagnostic-banks/${v1.id}`);
+    const bank = await res.json();
+    const rules = JSON.parse(bank.scoringRulesJson);
+    expect(rules.method).toBe('weighted-sum');
+    expect(Array.isArray(rules.bands)).toBe(true);
+    expect(rules.bands.length).toBe(4);
+    const labels = rules.bands.map((b) => b.label);
+    expect(labels).toContain('Visa Ready');
+    expect(labels).toContain('Standard Support');
+    expect(labels).toContain('High Touch');
+    expect(labels).toContain('Premium / Rejection Recovery');
+  });
+
+  test('POST /diagnostics against the Visa Sure bank with worst-case answers computes level_4', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const listRes = await get(request, token, '/api/travel/diagnostic-banks?subBrand=visasure&active=true');
+    if (!listRes.ok()) test.skip(true, 'visasure bank not seeded on this stack');
+    const v1 = (await listRes.json()).banks.find((b) => b.version === 1);
+    if (!v1) test.skip(true, 'visasure v1 not seeded');
+    // Worst-case answer set picks the highest-weight option for each Q:
+    // q1=us(5) + q2=first(3) + q3=two-plus(7) + q4=none(5) + q5=family(3)
+    // + q6=none(6) + q7=unemployed(6) + q8=few(6) + q9=no(2) + q10=none(4)
+    // + q11=none(6) + q12=rush(5) + q13=[medical,minor,student,senior](6)
+    // + q14=neither(4) + q15=white-glove(3) = 71 → level_4 band (46-99).
+    const res = await post(request, token, '/api/travel/diagnostics', {
+      bankId: v1.id,
+      answers: {
+        q1: 'us',
+        q2: 'first',
+        q3: 'two-plus',
+        q4: 'none',
+        q5: 'family',
+        q6: 'none',
+        q7: 'unemployed',
+        q8: 'few',
+        q9: 'no',
+        q10: 'none',
+        q11: 'none',
+        q12: 'rush',
+        q13: ['medical', 'minor', 'student', 'senior'],
+        q14: 'neither',
+        q15: 'white-glove',
+      },
+    });
+    expect(res.status(), `submit: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    // Authed /diagnostics response shape: { diagnostic, score, classification,
+    // classificationLabel, recommendedTier, warnings, reportPdfUrl }. subBrand
+    // lives on the embedded diagnostic.
+    expect(body.diagnostic?.subBrand).toBe('visasure');
+    expect(body.classification).toBe('level_4');
+    expect(body.classificationLabel).toBe('Premium / Rejection Recovery');
+    expect(body.recommendedTier).toBe('premium');
+    expect(Number(body.score)).toBeGreaterThanOrEqual(46);
+    if (body.diagnostic?.id) created.diagnosticIds.push(body.diagnostic.id);
+  });
+});

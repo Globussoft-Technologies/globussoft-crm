@@ -588,14 +588,27 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
       where: { id: itin.id },
       data: { status: "accepted" },
     });
-    res.json(updated);
 
-    // Fire-and-forget WebCheckin fan-out. Awaited inside this micro-task
-    // so unhandled-rejection / log surface still works; the response is
-    // already on the wire before this kicks off.
-    autoCreateWebCheckinsForItinerary(itin.id, req.travelTenant.id).catch((e) => {
+    // PRD §4.6 WebCheckin fan-out. Originally fire-and-forget (commit
+    // 9898e87) — switched to AWAIT after the deploy gate caught a CI race:
+    // shared-infra latency stretched the post-response create past the
+    // spec's 5s polling window, making the contract impossible to pin.
+    // Awaiting adds ~50-100ms to the operator's /accept turnaround (one
+    // findMany + 1-N create calls scoped to flight items only) — a
+    // worthwhile trade for the deterministic post-accept invariant
+    // "all flight items have a corresponding WebCheckin row".
+    //
+    // Wrapping in a separate try/catch so a fan-out failure DOES NOT
+    // roll back the accept itself (operator's primary action wins).
+    // We log the failure + return the accepted itinerary; the cron can
+    // sweep + the operator can manually create the missing row later.
+    try {
+      await autoCreateWebCheckinsForItinerary(itin.id, req.travelTenant.id);
+    } catch (e) {
       console.error("[travel-itin] webcheckin auto-create error (non-fatal):", e.message);
-    });
+    }
+
+    res.json(updated);
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-itin] accept error:", e.message);

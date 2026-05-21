@@ -264,6 +264,7 @@ jobs:
             tests/channels-credentials-api.spec.js \
             tests/wellness-consent-archive-api.spec.js \
             tests/travel-diagnostics-api.spec.js \
+            tests/travel-digilocker-stub-api.spec.js \
             tests/travel-itineraries-api.spec.js \
             tests/travel-trips-api.spec.js \
             tests/travel-cost-master-api.spec.js \

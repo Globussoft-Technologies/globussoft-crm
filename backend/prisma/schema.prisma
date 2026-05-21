@@ -315,6 +315,11 @@ model Tenant {
   // override + `travel.advanceRatio.default`); future per-tenant tunables
   // can land here without adding a column to Tenant for each one.
   settings TenantSetting[]
+
+  // PRD §4.5 + §4.7 — DigiLocker OAuth sessions for Aadhaar verification
+  // (currently stub-mode pending Q3 cred drop from Travel Stall). Per-
+  // tenant scoped + cascade-deletes with the tenant.
+  digilockerSessions DigilockerSession[]
 }
 
 model User {
@@ -4265,24 +4270,59 @@ model TmcTrip {
 }
 
 model TripParticipant {
-  id                Int       @id @default(autoincrement())
-  tripId            Int
-  fullName          String
-  passportNumber    String?
-  passportExpiry    DateTime?
-  passportDocId     Int? // ContactAttachment id
-  aadhaarLast4      String?
-  aadhaarTokenId    String? // DigiLocker token, encrypted
-  parentName        String?
-  parentPhone       String?
-  parentEmail       String?
-  medicalNotes      String?   @db.Text
-  consentCapturedAt DateTime?
-  trip              TmcTrip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                 Int                 @id @default(autoincrement())
+  tripId             Int
+  fullName           String
+  passportNumber     String?
+  passportExpiry     DateTime?
+  passportDocId      Int? // ContactAttachment id
+  aadhaarLast4       String?
+  aadhaarTokenId     String? // DigiLocker token, encrypted
+  parentName         String?
+  parentPhone        String?
+  parentEmail        String?
+  medicalNotes       String?             @db.Text
+  consentCapturedAt  DateTime?
+  trip               TmcTrip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  digilockerSessions DigilockerSession[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   @@index([tripId])
+}
+
+// PRD §4.5 + §4.7 — DigiLocker OAuth flow state. Created on /initiate
+// (status="initiated"), updated to "verified" on /callback after the
+// stub (or real, once Q3 creds land) DigiLocker token exchange. The
+// `state` column doubles as the OAuth CSRF token AND the dedup key
+// (replay protection — a session that's already "verified" can't be
+// re-callbacked).
+//
+// resultLast4 / resultTokenId mirror what gets written to
+// TripParticipant on a successful callback — the row is kept as an
+// audit trail of the verification event.
+model DigilockerSession {
+  id            Int             @id @default(autoincrement())
+  tenantId      Int             @default(1)
+  participantId Int
+  state         String          @unique // OAuth state (CSRF token); dedup/replay-protection key
+  status        String          @default("initiated") // initiated | verified | failed | expired
+  redirectUri   String          @db.Text
+  initiatedAt   DateTime        @default(now())
+  verifiedAt    DateTime?
+  failedReason  String?
+  // Stub-mode: holds the synthetic last-4 + token written by the stub
+  // client. Real-mode: holds the values returned from DigiLocker's
+  // signed Aadhaar XML after callback exchange.
+  resultLast4   String?
+  resultTokenId String?
+  participant   TripParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([tenantId, status])
+  @@index([participantId])
 }
 
 model RoomingAssignment {

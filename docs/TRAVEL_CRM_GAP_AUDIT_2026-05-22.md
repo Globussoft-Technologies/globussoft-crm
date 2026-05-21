@@ -9,9 +9,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **57** (~73%) — up from 52 (+5: Pipeline/lost-reason seed, WebCheckin route, LLM router, talking-points endpoint, seed-travel TMC fixtures)
-- **PARTIAL:** **6** (~8%) — webcheckin row promoted PARTIAL → SHIPPED-(backend); seed-travel row promoted PARTIAL → SHIPPED
-- **GAP-AUTONOMOUS:** **7** (~9%) — refreshed from the audit's prior "0"; surfaced from PARTIAL and SHIPPED-(backend-only) rows whose frontend / consumer side is still autonomous-doable
+- **SHIPPED:** **58** (~74%) — up from 57 (+1: WebCheckinQueue.jsx operator UI `bfe956c`)
+- **PARTIAL:** **6** (~8%)
+- **GAP-AUTONOMOUS:** **6** (~8%) — down from 7 since WebCheckinQueue.jsx shipped
 - **GAP-STUB-ABLE:** **6** (~8%) — was 8; talking-points + LLM router consumed two slots
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
@@ -28,7 +28,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 
 ### Top 3 next-best cron picks (priority order)
 
-1. **`WebCheckinQueue.jsx` operator UI** — backend ships (commit `9898e87`); cron scans empty table. Build the list / filter / "upload boarding pass" / "deliver" UI on top of the 7-endpoint API. PRD §4.6 + §7 row 20. Pure-frontend single-commit. ~½ day.
+1. ~~**`WebCheckinQueue.jsx` operator UI** — backend ships (commit `9898e87`); cron scans empty table. Build the list / filter / "upload boarding pass" / "deliver" UI on top of the 7-endpoint API. PRD §4.6 + §7 row 20. Pure-frontend single-commit. ~½ day.~~ — ✅ **commit `bfe956c`** (filter + upcoming toggle + multipart upload + deliver + reassign + status-color badges + 10 vitest cases; route mounted; sidebar link added)
 
 2. **`LlmCallLog` model + admin daily-summary endpoint** — PRD §9.1 explicitly calls for cost-attribution + per-task spend breakdown (R7 observability). Router scaffold (`583c06b`) wrote a structured log line as the swap-point contract; replacing `console.log` with `prisma.llmCallLog.create` + the GET endpoint closes that loop. Single migration + one route file. ~3 hrs.
 
@@ -116,7 +116,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| P1A tracking + delivery (auto-schedule T-48h/T-24h, WA reminder, agent task, manual upload, dashboard) | PARTIAL (backend ships) | `WebCheckin` model (`schema.prisma:4387`) + `cron/webCheckinScheduler.js` + `routes/travel_webcheckin.js` 7 endpoints (commit `9898e87`) + `lib/webCheckinWindow.js` + auto-create on `POST /itineraries/:id/accept` | Backend complete; **`WebCheckinQueue.jsx` operator UI MISSING** — GAP-AUTONOMOUS. WA dispatch on `/deliver` is Q9-stub |
+| P1A tracking + delivery (auto-schedule T-48h/T-24h, WA reminder, agent task, manual upload, dashboard) | PARTIAL | `WebCheckin` model (`schema.prisma:4387`) + `cron/webCheckinScheduler.js` + `routes/travel_webcheckin.js` 7 endpoints (commit `9898e87`) + `lib/webCheckinWindow.js` + auto-create on `POST /itineraries/:id/accept` + `WebCheckinQueue.jsx` operator UI (commit `bfe956c`) + sidebar link | Backend + operator UI both ship. **Still partial:** WA dispatch on `/deliver` is Q9-stub; WA reminder fan-out at T-window in the cron is also Q9-stub. Both swap when Q9 creds land |
 | P1B top-4 airline automation (IndiGo, AI/Express, Vistara, Emirates per Q20) | GAP-AUTONOMOUS | No `webCheckinAutomation.js` engine | Phase 1 W4 — paired with Chrome plugin work |
 | Fallback (2 failed retries → agent task; portal-down >2h → all-passengers-to-agents) | PARTIAL | `WebCheckin.status` enum includes `fallback-agent` + `failed` (`schema.prisma:4400`) | Schema-only; no code emits transitions yet — GAP-AUTONOMOUS |
 | Boarding-pass auto-delivery (WA + email) | GAP-STUB-ABLE | `POST /webcheckins/:id/deliver` (`routes/travel_webcheckin.js:372`) emits Wati-stub log line; `boardingPassUrl` + `deliveredAt` columns ready | One-line swap on Q9 cred drop |
@@ -281,7 +281,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | `TmcPaymentPlan.jsx` | NOT SHIPPED — folded into TripDetail | Same |
 | `TmcDocumentChecklist.jsx` | NOT SHIPPED — folded into TripDetail | Same |
 | `TmcMicrositePreview.jsx` | NOT SHIPPED | Admin preview not wired |
-| `WebCheckinQueue.jsx` | **NOT SHIPPED — GAP-AUTONOMOUS top pick** | Backend ships in `9898e87`; UI is the next bundle |
+| `WebCheckinQueue.jsx` | SHIPPED | `frontend/src/pages/travel/WebCheckinQueue.jsx` (commit `bfe956c`); route `/travel/webcheckins` + sidebar link between "TMC Trips" and "Cost Master" |
 | `RfuCustomerProfile.jsx` | SHIPPED | |
 | `RfuJourneyReminders.jsx` | NOT SHIPPED | |
 | `VisaApplications.jsx` + Detail + AdvisorDashboard | NOT SHIPPED (Phase 3) | |

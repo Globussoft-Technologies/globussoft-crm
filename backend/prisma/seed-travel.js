@@ -323,13 +323,15 @@ async function main() {
  * Re-running seed-travel.js does NOT create duplicates.
  */
 async function seedSampleTrips(tenantId) {
-  // School contact (used as schoolContactId for TMC trips).
+  // School contact (used as schoolContactId for TMC trips). Contact's
+  // unique constraint is @@unique([email, tenantId]) — compound key.
+  const schoolEmail = "principal@bharatpublic.demo";
   const school = await prisma.contact.upsert({
-    where: { email: "principal@bharatpublic.demo" },
+    where: { email_tenantId: { email: schoolEmail, tenantId } },
     update: {},
     create: {
       name: "Bharat Public School",
-      email: "principal@bharatpublic.demo",
+      email: schoolEmail,
       phone: "+919811111101",
       subBrand: "tmc",
       status: "Prospect",
@@ -337,12 +339,13 @@ async function seedSampleTrips(tenantId) {
     },
   });
   // RFU pilgrim contact for the Umrah itinerary.
+  const pilgrimEmail = "ahmed.pilgrim@demo.test";
   const pilgrim = await prisma.contact.upsert({
-    where: { email: "ahmed.pilgrim@demo.test" },
+    where: { email_tenantId: { email: pilgrimEmail, tenantId } },
     update: {},
     create: {
       name: "Ahmed Khan",
-      email: "ahmed.pilgrim@demo.test",
+      email: pilgrimEmail,
       phone: "+919811111102",
       subBrand: "rfu",
       status: "Lead",

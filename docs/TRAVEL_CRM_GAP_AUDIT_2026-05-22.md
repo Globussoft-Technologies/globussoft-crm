@@ -8,18 +8,18 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (44 in §4, 23 models in §5, 11 route bundles in §6.1, 22 frontend pages in §7, 5 vertical-config items in §8, 14 integrations in §9; some collapse — see per-section tables for the precise denominator)
-- **SHIPPED:** **46** (~59%) — up from 44 baseline; +2 since: pipeline (`ab2f15f`) + lost-reason (`ab2f15f`)
-- **PARTIAL:** **9** (~12%)
-- **GAP-AUTONOMOUS:** **6** (~8%) — down from 8; -2 since (both shipped above)
-- **GAP-STUB-ABLE:** **6** (~8%)
-- **GAP-CRED-BLOCKED:** **9** (~12%)
+- **SHIPPED:** **47** (~60%) — up from 44 baseline; +3 since: pipeline + lost-reason (`ab2f15f`), travel_webcheckin.js route (`9898e87`)
+- **PARTIAL:** **9** (~12%) — P1A web check-in row flipped most-of-way; still partial pending WebCheckinQueue.jsx UI
+- **GAP-AUTONOMOUS:** **5** (~6%) — down from 8; -3 since (pipeline + lost-reason + webcheckin route)
+- **GAP-STUB-ABLE:** **7** (~9%) — up from 6; boarding-pass auto-delivery flipped from CRED-BLOCKED → STUB-ABLE after `9898e87` shipped the `/deliver` Wati stub
+- **GAP-CRED-BLOCKED:** **8** (~10%) — down from 9 (boarding-pass moved up the ladder)
 - **GAP-PRODUCT-CALL:** **2** (~3%)
 
 The Phase 1 contractual surface (TMC + RFU diagnostic + itinerary + microsite + supplier vault + cost master + rooming + payment plans + reports + DigiLocker scaffold) is **almost entirely shipped**. The remaining gaps cluster into three buckets: (a) the Chrome flight-quote plugin + airline web-check-in automation (Phase 1 W3-W4 scope, NOT yet started), (b) the LLM router + talking-points + form-vs-call (Phase 1 W2-W3 scope, NOT yet started), (c) the per-cron WhatsApp dispatch + microsite OTP SMS cutover (one-line edits, Q9 cred-blocked).
 
 ### Top three "biggest remaining single-commit wins" the cron should pick next
 
-1. **WebCheckin CRUD route + auto-create on Itinerary.accept** — `WebCheckin` model is shipped (`schema.prisma:4387`) and the cron `webCheckinScheduler.js` already runs; what's missing is the route that creates rows + the auto-create trigger on itinerary acceptance. The cron sweeps an empty table today. Single commit; small-to-medium. (PRD §4.6, §6.1 `travel_webcheckin.js`)
+1. ~~**WebCheckin CRUD route + auto-create on Itinerary.accept** — `WebCheckin` model is shipped (`schema.prisma:4387`) and the cron `webCheckinScheduler.js` already runs; what's missing is the route that creates rows + the auto-create trigger on itinerary acceptance. The cron sweeps an empty table today. Single commit; small-to-medium. (PRD §4.6, §6.1 `travel_webcheckin.js`)~~ — ✅ **commit `9898e87`** (2026-05-22; 18 vitest + 17 gate-spec cases, 2641/2641 backend pass)
 2. ~~**Seed 8-status travel pipeline + 8 lost reasons** (Q10 decision is final). `seed-travel.js` does not create a Pipeline + 8 PipelineStage rows for the travel tenant; deals can't move through the contractual funnel until they're there. Single commit; small. (PRD §4.1)~~ — ✅ **commit `ab2f15f`**
 3. **Per-tenant subBrandConfigJson reader + usage in route layer** — schema column shipped (`schema.prisma:168`) but ZERO consumers grep-confirmed. Cron WhatsApp dispatch + microsite OTP can't pick the right WABA number without it. ~½ day; medium. (PRD §5.2 + §6 + §8.5 Q9)
 
@@ -105,10 +105,10 @@ The Phase 1 contractual surface (TMC + RFU diagnostic + itinerary + microsite + 
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| P1A tracking + delivery (auto-schedule T-48h/T-24h, WA reminder, agent task, manual upload, dashboard) | PARTIAL | `WebCheckin` model (`schema.prisma:4387`) + `cron/webCheckinScheduler.js` (commit `a6e80eb`) | Cron + model shipped; **NO route to create WebCheckin rows + NO `WebCheckinQueue.jsx` page**. The cron loops over an empty table today |
+| P1A tracking + delivery (auto-schedule T-48h/T-24h, WA reminder, agent task, manual upload, dashboard) | PARTIAL | `WebCheckin` model (`schema.prisma:4387`) + `cron/webCheckinScheduler.js` (commit `a6e80eb`) + `routes/travel_webcheckin.js` (commit `9898e87`) + `lib/webCheckinWindow.js` per-airline T-window helper + auto-create on `POST /itineraries/:id/accept` | Backend complete: cron + model + 7-endpoint CRUD + multer boarding-pass upload + auto-create on itinerary accept. **Still missing:** `WebCheckinQueue.jsx` operator UI; WhatsApp dispatch on `/deliver` is Q9-stub |
 | P1B top-4 airline automation (IndiGo, AI/Express, Vistara, Emirates per Q20) | GAP-AUTONOMOUS | No browser-automation engine | Phase 1 W4 scope; large single-commit (per-airline adapter pattern + retry + fallback). Pairs with Chrome plugin work |
 | Fallback (2 failed retries → agent task; portal-down >2h → all-passengers-to-agents) | PARTIAL | `WebCheckin.status` enum includes `fallback-agent` + `failed` (`schema.prisma:4400`) | Schema-level only; no code emits these transitions today |
-| Boarding-pass auto-delivery (WA + email) | GAP-CRED-BLOCKED | `WebCheckin.boardingPassUrl` + `deliveredAt` columns exist | Awaits Q9 WhatsApp creds + the WebCheckin upload endpoint |
+| Boarding-pass auto-delivery (WA + email) | GAP-STUB-ABLE | `WebCheckin.boardingPassUrl` + `deliveredAt` columns + `POST /webcheckins/:id/deliver` endpoint (commit `9898e87`) emits Wati-stub log line | Real WA send is one-line swap in `/deliver` handler when Q9 creds land. Email path still untouched; mirror the stub pattern |
 
 ### §4.7 Visa documents + compliance
 
@@ -189,7 +189,7 @@ Most rolled up into the above tables. Net:
 | `TripPaymentPlan` | SHIPPED | `schema.prisma:4341` | 1:1 with trip |
 | `TripInstalmentPayment` | SHIPPED | `schema.prisma:4351` | |
 | `TripDocumentRequirement` | SHIPPED | `schema.prisma:4369` | Trip-scoped (not per-participant) |
-| `WebCheckin` | SHIPPED | `schema.prisma:4387` | No route to create rows yet |
+| `WebCheckin` | SHIPPED | `schema.prisma:4387` + `routes/travel_webcheckin.js` (commit `9898e87`) | Full CRUD + auto-create on Itinerary.accept |
 | `SupplierCredential` | SHIPPED | `schema.prisma:4418` | AES-256 fields |
 | `SupplierCredentialAccessLog` | SHIPPED | `schema.prisma:4436` | |
 | `VisaApplication` | SHIPPED (Phase 3) | `schema.prisma:4449` | Schema-defined; no routes |
@@ -228,7 +228,7 @@ Most rolled up into the above tables. Net:
 | `travel_trips.js` (TMC) | SHIPPED | 17 endpoints incl. participants + documents + DigiLocker |
 | `travel_trip_microsite_public.js` | SHIPPED (folded into `travel_microsites.js`) | Public endpoints under `/microsites/public/:publicUuid` |
 | `travel_payment_plans.js` | SHIPPED (as `travel_trip_billing.js`) | 11 endpoints incl. rooming + plan + instalments |
-| `travel_webcheckin.js` | GAP-AUTONOMOUS | Cron runs but no route to create/manage WebCheckin rows |
+| `travel_webcheckin.js` | SHIPPED | commit `9898e87`; 7 endpoints (list/upcoming/get/post/patch/upload-pass/deliver) + ADMIN-only DELETE |
 | `travel_visa.js` (Visa Sure) | GAP (Phase 3) | Schema-ready, no routes |
 | `travel_callified.js` | GAP-CRED-BLOCKED | Q11 routing locked; needs Callified.ai handover per Q1 |
 
@@ -240,7 +240,7 @@ Most rolled up into the above tables. Net:
 
 | Engine | State | Evidence |
 |---|---|---|
-| `webCheckinScheduler.js` | SHIPPED | `cron/webCheckinScheduler.js` (commit `a6e80eb`) — but ingests an empty table |
+| `webCheckinScheduler.js` | SHIPPED | `cron/webCheckinScheduler.js` (commit `a6e80eb`) — now fed by `9898e87`'s auto-create on Itinerary.accept |
 | `webCheckinAutomation.js` (event-driven, browser-automation per airline) | GAP-AUTONOMOUS | NOT shipped; Phase 1 W4 scope |
 | `tripPaymentReminders.js` | SHIPPED | `cron/tripPaymentReminders.js` (commit `e3e2cd9`) |
 | `travelJourneyReminders.js` | SHIPPED | `cron/travelJourneyReminders.js` (commit `1e3c123`) |

@@ -8,10 +8,10 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (44 in §4, 23 models in §5, 11 route bundles in §6.1, 22 frontend pages in §7, 5 vertical-config items in §8, 14 integrations in §9; some collapse — see per-section tables for the precise denominator)
-- **SHIPPED:** **47** (~60%) — up from 44 baseline; +3 since: pipeline + lost-reason (`ab2f15f`), travel_webcheckin.js route (`9898e87`)
+- **SHIPPED:** **48** (~62%) — up from 44 baseline; +4 since: pipeline + lost-reason (`ab2f15f`), travel_webcheckin.js route (`9898e87`), LLM router scaffold (`583c06b`)
 - **PARTIAL:** **9** (~12%) — P1A web check-in row flipped most-of-way; still partial pending WebCheckinQueue.jsx UI
-- **GAP-AUTONOMOUS:** **5** (~6%) — down from 8; -3 since (pipeline + lost-reason + webcheckin route)
-- **GAP-STUB-ABLE:** **7** (~9%) — up from 6; boarding-pass auto-delivery flipped from CRED-BLOCKED → STUB-ABLE after `9898e87` shipped the `/deliver` Wati stub
+- **GAP-AUTONOMOUS:** **2** (~3%) — down from 8; -6 since (pipeline + lost-reason + webcheckin route + LLM router + 2 downstream rows that flipped STUB-ABLE once router landed)
+- **GAP-STUB-ABLE:** **9** (~12%) — up from 6; +3 since (boarding-pass auto-delivery, LLM-switchable quotation, diagnostic interpretation)
 - **GAP-CRED-BLOCKED:** **8** (~10%) — down from 9 (boarding-pass moved up the ladder)
 - **GAP-PRODUCT-CALL:** **2** (~3%)
 
@@ -156,7 +156,7 @@ Most rolled up into the above tables. Net:
 | TMC diagnostic-first + curriculum mapping + teacher OTP access | SHIPPED (partial — teacher OTP) | OTP flow supports `purpose=teacher-access` (`schema.prisma:4540`) but no dedicated teacher access UI |
 | RFU 4-tier tagging drives quotation tier | SHIPPED | `Itinerary.productTier` (commit `2612a7e`) defaults from latest diagnostic via `lib/travelLatestDiagnostic.js` |
 | RFU Haram-facing hotel filters | PARTIAL | Schema-supported; no filter UI |
-| LLM-switchable layer for quotation engine | GAP-AUTONOMOUS | No `lib/llmRouter.js` grep-hit | Q11 routing locked; ~½ day single commit |
+| LLM-switchable layer for quotation engine | GAP-STUB-ABLE | `lib/llmRouter.js` scaffold shipped (commit `583c06b`); quotation-engine consumer call site still missing | Router exposes `routeRequest({task: "bulk-text", payload, tenantId})` for itinerary draft; quotation routes need to wire it in |
 | Aadhaar OCR via DigiLocker | PARTIAL (stub) | See §4.7 |
 | Passport OCR | GAP-CRED-BLOCKED | See §4.7 |
 | Religious-guidance content library | GAP-AUTONOMOUS | See §4.8 |
@@ -319,7 +319,7 @@ Most rolled up into the above tables. Net:
 | **DigiLocker** (Aadhaar XML) | PARTIAL (stub-mode) | `services/digilockerClient.js` shipped; Q3 cred drop unlocks real |
 | **Passport OCR** (Google Document AI or MS Form Recognizer) | GAP-CRED-BLOCKED | No service stub |
 | **AdsGPT** | GAP-CRED-BLOCKED | Q1 — no travel-specific integration |
-| **LLM router** (Perplexity/Gemini/Claude/GPT, Q11 routing) | GAP-AUTONOMOUS | No `lib/llmRouter.js`; routing decision is final, build is pure dev |
+| **LLM router** (Perplexity/Gemini/Claude/GPT, Q11 routing) | SHIPPED | `lib/llmRouter.js` scaffold (commit `583c06b`); stub-mode returns deterministic synthetic responses matching real-mode shape. Real provider call wires in when Q11 API keys land. `LlmCallLog` model + admin daily-summary endpoint deferred to first consumer |
 | **Meta/Google/LinkedIn/YouTube Ads APIs** | GAP-CRED-BLOCKED | Q1 |
 | **Excel Software for Travel** | GAP-CRED-BLOCKED | Q8 API docs pending |
 | **Airline portals** (IndiGo/AI/AI Express/Vistara/Emirates) | GAP-AUTONOMOUS | Browser-automation; Phase 1 W4 — paired with Chrome plugin |
@@ -330,7 +330,7 @@ Most rolled up into the above tables. Net:
 
 | Task | Locked model | Implementation state |
 |---|---|---|
-| Diagnostic interpretation | Perplexity | GAP-AUTONOMOUS — `lib/llmRouter.js` not built |
+| Diagnostic interpretation | Perplexity | GAP-STUB-ABLE — router scaffold landed `583c06b`; interpretation consumer call site (e.g. talking-points endpoint) is the next dependency |
 | Itinerary draft | Gemini 2.5 | GAP-AUTONOMOUS |
 | AI qualification call | Gemini Live | GAP-CRED-BLOCKED (Callified front-end) |
 | Document OCR fallback | Gemini Vision | GAP-CRED-BLOCKED (passport OCR needs provider creds first) |
@@ -388,7 +388,7 @@ All 25 questions decided 2026-05-20. Per-question implementation status:
 | Q8 | MEDIUM | Excel SW integration | 🟢 REST API | RESOLVED-pending-docs |
 | Q9 | CRITICAL | WhatsApp numbers | 🟢 3 procured | RESOLVED-pending-handover; stubs in place. 8-feature unblock |
 | Q10 | CRITICAL | Pipeline labels | 🟢 GS defaults | DECIDED + SEEDED (commit `ab2f15f`) — both 8-stage Pipeline + 8 lost-reason rows live |
-| Q11 | HIGH | LLM defaults | 🟢 Routing locked | DECIDED but `lib/llmRouter.js` not built — GAP-AUTONOMOUS |
+| Q11 | HIGH | LLM defaults | 🟢 Routing locked | DECIDED + router scaffold shipped (commit `583c06b`); real API-key wire-in pending Q11 cred drop into `SupplierCredential` category `"llm-key"` |
 | Q12 | HIGH | KPI periods | 🟢 D/W/M | RESOLVED (reports support all 3) |
 | Q13 | CRITICAL | Diagnostic length | 🟢 Both ready | RESOLVED-pending-content (CSV import ready) |
 | Q14 | CRITICAL | Retention durations | 🟢 GS defaults | RESOLVED (retention engine ✅) |
@@ -449,7 +449,7 @@ For each shipped stub, the file + line where the `// STUB:` marker lives, the Q-
 
 2. **Build WebCheckin CRUD route + auto-create on Itinerary.accept** (PRD §4.6, §6.1 row `travel_webcheckin.js`). Scope: new `routes/travel_webcheckin.js` with `GET /upcoming`, `POST /` (admin), `POST /:id/upload-boarding-pass`, `POST /:id/deliver`; auto-create row on `POST /itineraries/:id/accept` for each flight `ItineraryItem`. Effort: medium (~½ day). Why next: cron is already running over an empty table; this gives it something to scan AND unblocks W4 exit gate without needing browser automation.
 
-3. **LLM router scaffold (`lib/llmRouter.js`)** with Q11 task→model routing + cost dashboard tile (PRD §9.1, R7). Scope: `lib/llmRouter.js` with `routeRequest({task, payload})` returning a normalized response; per-task provider selection (Perplexity for diagnostic interpretation, Gemini 2.5 for itinerary draft + sentiment, Gemini Vision for OCR fallback); cost-attribution log row per call; admin daily summary endpoint. Effort: medium (~1 day). Why next: prerequisite for talking-points + personalised recommendations + form-vs-call comparison; pure-code; locked routing means zero ambiguity.
+3. ~~**LLM router scaffold (`lib/llmRouter.js`)** with Q11 task→model routing + cost dashboard tile (PRD §9.1, R7). Scope: `lib/llmRouter.js` with `routeRequest({task, payload})` returning a normalized response; per-task provider selection (Perplexity for diagnostic interpretation, Gemini 2.5 for itinerary draft + sentiment, Gemini Vision for OCR fallback); cost-attribution log row per call; admin daily summary endpoint. Effort: medium (~1 day). Why next: prerequisite for talking-points + personalised recommendations + form-vs-call comparison; pure-code; locked routing means zero ambiguity.~~ — ✅ **commit `583c06b`** (stub-mode scaffold, 20 vitest cases; `LlmCallLog` model + admin daily-summary endpoint deferred to first real-mode consumer)
 
 4. **Diagnostic talking-points endpoint** (PRD §4.2; §6.1 row `/api/travel/diagnostics/:id/talking-points/regen`). Scope: new route + `lib/llmRouter` call + write to existing `TravelDiagnostic.talkingPointsJson` column. Effort: small (~3 hrs). Why next: column is shipped + unused; advisor needs context for the first call; depends on item 3 (LLM router) being green.
 

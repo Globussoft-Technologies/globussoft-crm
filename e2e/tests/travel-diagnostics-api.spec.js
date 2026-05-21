@@ -495,6 +495,121 @@ test.describe('Travel diagnostics API — list + fetch submissions', () => {
   });
 });
 
+// PRD §4.2 + §6.1 — advisor talking-points endpoint.
+//
+// First consumer of the lib/llmRouter.js scaffold (commit 583c06b). In CI
+// no LLM API keys are set in the env, so the router returns the
+// deterministic [STUB-TALKING-POINTS] envelope. These tests pin:
+//   - auth gate (401/403 without token)
+//   - RBAC gate (USER role denied — ADMIN/MANAGER only)
+//   - happy-path 201 with stub envelope shape (text + model + generatedAt + stub=true)
+//   - subsequent GET returns the persisted talkingPointsJson
+//   - 404 for unknown / 400 for non-numeric id
+//
+// USER login uses telecaller@travelstall.demo (seeded by seed-travel.js
+// with role=USER). When the seed file is absent the cross-role test
+// skips (matches the existing pattern in the WRONG_VERTICAL block).
+test.describe('Travel diagnostics API — talking-points regen (PRD §4.2)', () => {
+  let userToken = null;
+  async function getTravelUser(request) {
+    if (!userToken) {
+      userToken = await loginAs(request, 'telecaller@travelstall.demo', 'password123');
+    }
+    return userToken;
+  }
+
+  test('POST /diagnostics/:id/talking-points/regen without auth → 401/403', async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/travel/diagnostics/1/talking-points/regen`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: {},
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test('POST /diagnostics/:id/talking-points/regen as USER role → 403 RBAC_DENIED', async ({ request }) => {
+    const token = await getTravelUser(request);
+    if (!token) test.skip(true, 'telecaller@travelstall.demo not seeded — skipping RBAC test');
+    if (created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    const id = created.diagnosticIds[0];
+    const res = await post(request, token, `/api/travel/diagnostics/${id}/talking-points/regen`, {});
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('RBAC_DENIED');
+  });
+
+  test('POST /diagnostics/:id/talking-points/regen happy path → 201 with stub envelope', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    const id = created.diagnosticIds[0];
+    const res = await post(request, token, `/api/travel/diagnostics/${id}/talking-points/regen`, {});
+    expect(res.status(), `regen: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.diagnostic?.id).toBe(id);
+    expect(body.talkingPoints).toBeTruthy();
+    // PRD §9.1 — talking-points task routes to Claude Opus primary.
+    expect(body.talkingPoints.model).toBe('claude-opus-4-7');
+    // CI runs without LLM API keys → stub mode.
+    expect(body.talkingPoints.stub).toBe(true);
+    expect(body.talkingPoints.text).toMatch(/STUB-TALKING-POINTS/);
+    // generatedAt must parse back to a valid Date.
+    expect(Number.isFinite(Date.parse(body.talkingPoints.generatedAt))).toBe(true);
+    // talkingPointsJson must be the JSON-stringified envelope on the row.
+    expect(typeof body.diagnostic.talkingPointsJson).toBe('string');
+    const persisted = JSON.parse(body.diagnostic.talkingPointsJson);
+    expect(persisted.text).toBe(body.talkingPoints.text);
+    expect(persisted.model).toBe(body.talkingPoints.model);
+    expect(persisted.stub).toBe(true);
+  });
+
+  test('GET /diagnostics/:id after regen returns persisted talkingPointsJson', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    const id = created.diagnosticIds[0];
+    const res = await get(request, token, `/api/travel/diagnostics/${id}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(typeof body.talkingPointsJson).toBe('string');
+    const envelope = JSON.parse(body.talkingPointsJson);
+    expect(envelope.text).toMatch(/STUB-TALKING-POINTS/);
+    expect(envelope.model).toBe('claude-opus-4-7');
+    expect(envelope.stub).toBe(true);
+    expect(Number.isFinite(Date.parse(envelope.generatedAt))).toBe(true);
+  });
+
+  test('POST /diagnostics/:id/talking-points/regen with unknown id → 404 NOT_FOUND', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const res = await post(request, token, '/api/travel/diagnostics/9999999/talking-points/regen', {});
+    expect(res.status()).toBe(404);
+    const body = await res.json();
+    expect(body.code).toBe('NOT_FOUND');
+  });
+
+  test('POST /diagnostics/:id/talking-points/regen with non-numeric id → 400 INVALID_ID', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const res = await post(request, token, '/api/travel/diagnostics/abc/talking-points/regen', {});
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_ID');
+  });
+
+  test('POST /diagnostics/:id/talking-points/regen against a generic-tenant id → 404 (tenant scope)', async ({ request }) => {
+    // The generic-tenant ADMIN can't load a travel diagnostic — the
+    // requireTravelTenant guard rejects with WRONG_VERTICAL FIRST,
+    // before tenant-scope is checked. This pins that contract: a
+    // non-travel ADMIN can NEVER reach this endpoint with any id.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, 'admin@globussoft.com not seeded — skipping cross-tenant guard');
+    const id = created.diagnosticIds[0] || 1;
+    const res = await post(request, token, `/api/travel/diagnostics/${id}/talking-points/regen`, {});
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('WRONG_VERTICAL');
+  });
+});
+
 // Phase 2 — public landing-page wizard endpoints (PRD §4.7). These run
 // WITHOUT auth (allowlisted in server.js openPaths under
 // /travel/diagnostics/public). Tenant is resolved via tenantSlug.

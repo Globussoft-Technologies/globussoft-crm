@@ -7,6 +7,7 @@
 //   POST   /api/travel/diagnostics                          — submit a diagnostic (authed)
 //   GET    /api/travel/diagnostics                          — list diagnostics (paginated, filterable)
 //   GET    /api/travel/diagnostics/:id                      — fetch one diagnostic
+//   POST   /api/travel/diagnostics/:id/talking-points/regen — ADMIN/MANAGER: regen LLM brief (PRD §4.2)
 //
 // Mounted at /api/travel by server.js. All endpoints scope to
 // req.user.tenantId + vertical=travel (via requireTravelTenant guard,
@@ -29,6 +30,7 @@ const prisma = require("../lib/prisma");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
 const { renderTravelDiagnosticPdf } = require("../services/pdfRenderer");
 const { findDuplicateContactFull } = require("../utils/deduplication");
+const llmRouter = require("../lib/llmRouter");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -366,6 +368,116 @@ router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res
     res.status(500).json({ error: "Failed to get diagnostic" });
   }
 });
+
+// POST /api/travel/diagnostics/:id/talking-points/regen
+//
+// PRD §4.2 + §6.1: generate an advisor talking-points brief for a
+// completed diagnostic via the LLM router (per PRD §9.1 this is a
+// reasoning task → Claude Opus primary, GPT-4 fallback). First consumer
+// of the lib/llmRouter.js scaffold (commit 583c06b) — until Q11 API
+// keys land the router returns deterministic [STUB-TALKING-POINTS]
+// synthetic text so the advisor UI can render SOMETHING and tests can
+// pin the contract.
+//
+// ADMIN/MANAGER-gated: regenerating costs LLM tokens (in real mode) +
+// surfaces a fresh brief that downstream advisors will act on; we
+// don't want every USER firing it on every page load. USERs read the
+// already-persisted brief via GET /diagnostics/:id (talkingPointsJson).
+//
+// Persists the result envelope to TravelDiagnostic.talkingPointsJson
+// as JSON-stringified { text, model, generatedAt, stub } so the next
+// GET serves the cached brief without re-billing the LLM.
+//
+// PII discipline: payload contents (customer answers + contact info)
+// are forwarded to the router but NEVER logged from the route — the
+// router's own log line only emits token counts. Don't add a
+// console.log of `payload` here.
+router.post(
+  "/diagnostics/:id/talking-points/regen",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const diag = await prisma.travelDiagnostic.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!diag) {
+        return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, diag.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Load the contact for prompt context (name + company). Tolerant
+      // of contact-not-found — talking-points still rendered against
+      // the diagnostic answers alone, just without contact framing.
+      const contact = diag.contactId
+        ? await prisma.contact.findFirst({
+            where: { id: diag.contactId, tenantId: req.travelTenant.id },
+            select: { name: true, company: true },
+          })
+        : null;
+
+      // Build a clean payload — answers parsed back from the stored
+      // JSON string so the LLM sees the structured object, not the
+      // raw escaped text. Tolerate parse failure (bank corruption) by
+      // forwarding an empty object; the LLM still has classification
+      // + tier to work with.
+      let answers = {};
+      try {
+        answers = JSON.parse(diag.answersJson || "{}");
+      } catch (_e) {
+        answers = {};
+      }
+      const payload = {
+        classification: diag.classification,
+        classificationLabel: diag.classificationLabel,
+        recommendedTier: diag.recommendedTier,
+        subBrand: diag.subBrand,
+        answers,
+        contact: {
+          name: contact?.name || null,
+          company: contact?.company || null,
+        },
+      };
+
+      const result = await llmRouter.routeRequest({
+        task: "talking-points",
+        payload,
+        tenantId: req.travelTenant.id,
+      });
+
+      const generatedAt = new Date().toISOString();
+      const envelope = {
+        text: result.text,
+        model: result.model,
+        generatedAt,
+        stub: Boolean(result.stub),
+      };
+
+      const updated = await prisma.travelDiagnostic.update({
+        where: { id: diag.id },
+        data: { talkingPointsJson: JSON.stringify(envelope) },
+      });
+
+      res.status(201).json({
+        diagnostic: updated,
+        talkingPoints: envelope,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] talking-points regen error:", e.message);
+      res.status(500).json({ error: "Failed to regenerate talking points" });
+    }
+  },
+);
 
 // ─── PUBLIC ENDPOINTS (no auth) — PRD §4.7 Travel Stall landing-page wizard ──
 //

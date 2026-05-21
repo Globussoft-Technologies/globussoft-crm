@@ -11,6 +11,212 @@ const { formatMoney } = require("../utils/formatMoney");
 // rules are actually enforced (not just stored). Mirrors the deals.js +
 // contacts.js adoption pattern from #464.
 const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
+// PRD §4.4 — CA / Tally file-download exporters. Pure helpers; the
+// route handler does the Prisma fetch + shape mapping then delegates.
+const { buildTallyXml } = require("../lib/tallyXmlExport");
+const { buildCaCsv } = require("../lib/caCsvExport");
+
+// ────────────────────────────────────────────────────────────────
+// Shared helpers for the two CA / Tally export endpoints below.
+// ────────────────────────────────────────────────────────────────
+
+// Default to the current Indian financial year (Apr 1 → Mar 31). Used
+// when the caller doesn't pass ?from / ?to. CA exports are FY-shaped by
+// convention; this default matches what an accountant would intuitively
+// request mid-year.
+function currentFinancialYearRange() {
+  const now = new Date();
+  const y = now.getFullYear();
+  // FY starts in April. Before April → previous calendar year.
+  const startYear = now.getMonth() < 3 ? y - 1 : y;
+  const from = new Date(startYear, 3, 1, 0, 0, 0, 0);
+  const to = new Date(startYear + 1, 2, 31, 23, 59, 59, 999);
+  return { from, to };
+}
+
+function parseDateRange(query) {
+  const { from: defFrom, to: defTo } = currentFinancialYearRange();
+  const from = query && query.from ? new Date(query.from) : defFrom;
+  const to = query && query.to ? new Date(query.to) : defTo;
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime())) {
+    return null;
+  }
+  // If caller passed a date-only "YYYY-MM-DD" for `to`, push to end-of-day
+  // so the inclusive range matches user expectation.
+  if (query && query.to && /^\d{4}-\d{2}-\d{2}$/.test(String(query.to))) {
+    to.setHours(23, 59, 59, 999);
+  }
+  return { from, to };
+}
+
+// Quick ASCII slug for filename use. Avoids smuggling unicode / spaces /
+// path separators into the Content-Disposition value where a browser may
+// refuse to save the file.
+function fileSlug(s) {
+  return String(s || "tenant")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "tenant";
+}
+
+// Derive seller-state from tenant.country + locale. The schema doesn't
+// store a per-tenant state explicitly today (Tenant.country is the only
+// geo column), so for non-IN tenants we leave it empty (CA / Tally
+// export is India-shaped; non-IN tenants will see all sales fall to
+// the default-intrastate branch which is fine — they don't use GST).
+function sellerStateFromTenant(tenant) {
+  if (!tenant) return "";
+  // If a future migration adds tenant.state, prefer that. For now use
+  // locale as a soft hint (en-IN-* → "IN") but leave the actual state
+  // empty — accountants typically import per-state separately anyway.
+  return "";
+}
+
+// Map a Prisma Invoice row (with `contact` included) into the shape both
+// helpers consume. GST is NOT stored on the Invoice today — `amount` is
+// the gross figure. The exporter treats the full amount as subtotal +
+// zero GST so the helper still emits a valid voucher; an accountant can
+// post-process in Tally / Excel to break out GST manually until per-line
+// GST columns ship. This keeps the export honest (no fabricated tax
+// figures) while still unlocking the W5 exit gate today.
+function mapInvoiceToExportShape(inv) {
+  const total = Number(inv.amount) || 0;
+  return {
+    id: inv.id,
+    invoiceNumber: inv.invoiceNum || `INV-${inv.id}`,
+    issueDate: inv.issuedDate || inv.createdAt,
+    contactName: inv.contact ? inv.contact.name || "Unknown" : "Unknown",
+    billingAddress: "", // schema has no billing-address column today
+    billingState: "",   // ditto for state
+    buyerState: "",     // helper defaults to sellerState (intrastate)
+    subtotal: total,
+    cgstAmount: 0,
+    sgstAmount: 0,
+    igstAmount: 0,
+    totalAmount: total,
+    status: inv.status || "UNPAID",
+    subBrand: inv.contact ? inv.contact.subBrand || "" : "",
+    notes: inv.legalEntityCode || "",
+  };
+}
+
+// Build the Prisma where clause shared by both export endpoints.
+async function buildInvoiceWhere(req, range) {
+  const where = {
+    tenantId: req.user.tenantId,
+    issuedDate: { gte: range.from, lte: range.to },
+  };
+  if (req.query.legalEntity) {
+    where.legalEntityCode = String(req.query.legalEntity).slice(0, 64);
+  }
+  // subBrand lives on Contact, not Invoice. Use a relational filter so the
+  // exporter scopes correctly when a travel tenant wants per-sub-brand
+  // exports (e.g. ?subBrand=travelstall).
+  if (req.query.subBrand) {
+    where.contact = { subBrand: String(req.query.subBrand).slice(0, 32) };
+  }
+  return where;
+}
+
+// ────────────────────────────────────────────────────────────────
+// GET /api/billing/export/tally.xml
+//
+// PRD §4.4 — TallyPrime / Tally.ERP 9 importable envelope. ADMIN or
+// MANAGER only (financial data — USER role excluded). Placed BEFORE the
+// `/:id` route below so the static path doesn't get parseInt'd.
+// ────────────────────────────────────────────────────────────────
+router.get(
+  "/export/tally.xml",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const range = parseDateRange(req.query);
+      if (!range) {
+        return res.status(400).json({ error: "invalid from/to date", code: "INVALID_DATE_RANGE" });
+      }
+
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { name: true, slug: true, country: true, locale: true },
+      });
+      if (!tenant) {
+        return res.status(404).json({ error: "Tenant not found" });
+      }
+
+      const where = await buildInvoiceWhere(req, range);
+      const invoices = await prisma.invoice.findMany({
+        where,
+        include: { contact: { select: { name: true, email: true, subBrand: true } } },
+        orderBy: { issuedDate: "asc" },
+      });
+
+      const xml = buildTallyXml({
+        companyName: tenant.name,
+        sellerState: sellerStateFromTenant(tenant),
+        invoices: invoices.map(mapInvoiceToExportShape),
+      });
+
+      const fromIso = range.from.toISOString().slice(0, 10);
+      const toIso = range.to.toISOString().slice(0, 10);
+      const filename = `tally-export-${fileSlug(tenant.slug)}-${fromIso}-${toIso}.xml`;
+      res.setHeader("Content-Type", "application/xml; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.status(200).send(xml);
+    } catch (err) {
+      console.error("[billing/export/tally.xml]", err);
+      res.status(500).json({ error: "Failed to generate Tally XML export" });
+    }
+  }
+);
+
+// ────────────────────────────────────────────────────────────────
+// GET /api/billing/export/ca-summary.csv
+//
+// PRD §4.4 — accountant-friendly tabular summary (one row per invoice,
+// GST broken out). ADMIN or MANAGER only.
+// ────────────────────────────────────────────────────────────────
+router.get(
+  "/export/ca-summary.csv",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const range = parseDateRange(req.query);
+      if (!range) {
+        return res.status(400).json({ error: "invalid from/to date", code: "INVALID_DATE_RANGE" });
+      }
+
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { name: true, slug: true },
+      });
+      if (!tenant) {
+        return res.status(404).json({ error: "Tenant not found" });
+      }
+
+      const where = await buildInvoiceWhere(req, range);
+      const invoices = await prisma.invoice.findMany({
+        where,
+        include: { contact: { select: { name: true, subBrand: true } } },
+        orderBy: { issuedDate: "asc" },
+      });
+
+      const csv = buildCaCsv(invoices.map(mapInvoiceToExportShape));
+
+      const fromIso = range.from.toISOString().slice(0, 10);
+      const toIso = range.to.toISOString().slice(0, 10);
+      const filename = `ca-summary-${fileSlug(tenant.slug)}-${fromIso}-${toIso}.csv`;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.status(200).send(csv);
+    } catch (err) {
+      console.error("[billing/export/ca-summary.csv]", err);
+      res.status(500).json({ error: "Failed to generate CA summary CSV" });
+    }
+  }
+);
 
 // Fetch all ledgers for current tenant
 router.get("/", verifyToken, async (req, res) => {

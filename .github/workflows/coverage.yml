@@ -181,6 +181,7 @@ jobs:
             tests/auth-security-api.spec.js \
             tests/route-contracts-api.spec.js \
             tests/billing-api.spec.js \
+            tests/billing-export-api.spec.js \
             tests/lead-routing-api.spec.js \
             tests/search-api.spec.js \
             tests/workflows-api.spec.js \

@@ -40,6 +40,7 @@ const {
 } = require("../middleware/travelGuards");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
+const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
 // Phase 2 (PRD §4.7) extends the enum with advance_paid / fully_paid for
@@ -479,11 +480,94 @@ router.delete("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant
 // returns the share URL + token (back-compat with frontend's existing
 // /api/travel/itineraries/:id/share contract from PRD §6.1).
 
+// PRD §4.6 — auto-create WebCheckin rows for every flight item on an
+// accepted itinerary. Best-effort: failures log + don't block the
+// accept (the operator's primary action — confirming the booking —
+// must always succeed). Cron sweeps the created rows at T-window
+// per airline.
+//
+// detailsJson on a flight item needs { pnr, flightNumber, departureAt };
+// items missing those fields skip silently. The operator can still
+// manually POST /api/travel/webcheckins to fill the gap.
+//
+// Exported for unit-test reach; not used by anything outside this file
+// in production.
+async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
+  const flightItems = await prisma.itineraryItem.findMany({
+    where: { itineraryId, itemType: "flight" },
+  });
+  if (flightItems.length === 0) return { created: 0, skipped: 0 };
+
+  const itinFull = await prisma.itinerary.findUnique({
+    where: { id: itineraryId },
+    select: { contactId: true, tenantId: true, contact: { select: { name: true } } },
+  });
+  if (!itinFull || itinFull.tenantId !== tenantId) {
+    // Defensive — should never trip since the caller already guarded.
+    return { created: 0, skipped: flightItems.length };
+  }
+
+  let created = 0;
+  let skipped = 0;
+  for (const item of flightItems) {
+    let details = {};
+    try { details = JSON.parse(item.detailsJson || "{}"); } catch { /* malformed → skip */ }
+    if (!details.pnr || !details.flightNumber || !details.departureAt) {
+      skipped++;
+      continue;
+    }
+    const airlineCode = String(
+      details.airlineCode
+        || (typeof details.flightNumber === "string"
+          && details.flightNumber.match(/^[A-Z0-9]{2}/)?.[0])
+        || "",
+    ).toUpperCase();
+    const dep = new Date(details.departureAt);
+    if (!Number.isFinite(dep.getTime())) {
+      skipped++;
+      continue;
+    }
+    const windowOpenAt = computeWindowOpenAt(dep, airlineCode);
+    try {
+      await prisma.webCheckin.create({
+        data: {
+          tenantId: itinFull.tenantId,
+          contactId: itinFull.contactId,
+          itineraryId,
+          pnr: String(details.pnr),
+          airlineCode,
+          flightNumber: String(details.flightNumber),
+          departureAt: dep,
+          windowOpenAt: windowOpenAt || dep,
+          passengerName: details.passengerName || itinFull.contact?.name || "Passenger",
+          seatPref: details.seatPref || null,
+          mealPref: details.mealPref || null,
+          status: "pending",
+        },
+      });
+      created++;
+    } catch (e) {
+      console.error(
+        `[travel-itin] webcheckin auto-create for itinerary ${itineraryId} ` +
+          `(PNR ${details.pnr}) failed (non-fatal):`,
+        e.message,
+      );
+      skipped++;
+    }
+  }
+  return { created, skipped };
+}
+
 // POST /api/travel/itineraries/:id/accept
 //
 // Marks the itinerary as customer-accepted (terminal status). Refuses
 // if already accepted or rejected — explicit re-statuses require a new
 // version via PUT.
+//
+// Side-effect: fans out one WebCheckin row per flight ItineraryItem
+// (PRD §4.6). Fan-out runs AFTER the response is sent so the
+// operator's HTTP turnaround stays fast and any auto-create failure
+// can't block the primary accept action. Errors log only.
 router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const itin = await loadItineraryWithGuard(req);
@@ -505,6 +589,13 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
       data: { status: "accepted" },
     });
     res.json(updated);
+
+    // Fire-and-forget WebCheckin fan-out. Awaited inside this micro-task
+    // so unhandled-rejection / log surface still works; the response is
+    // already on the wire before this kicks off.
+    autoCreateWebCheckinsForItinerary(itin.id, req.travelTenant.id).catch((e) => {
+      console.error("[travel-itin] webcheckin auto-create error (non-fatal):", e.message);
+    });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-itin] accept error:", e.message);

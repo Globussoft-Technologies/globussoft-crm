@@ -440,6 +440,7 @@ const travelMicrositesRoutes = require("./routes/travel_microsites");
 const travelRfuProfilesRoutes = require("./routes/travel_rfu_profiles");
 const travelPricingRoutes = require("./routes/travel_pricing");
 const travelTripBillingRoutes = require("./routes/travel_trip_billing");
+const travelWebcheckinRoutes = require("./routes/travel_webcheckin");
 const travelCsvIoRoutes = require("./routes/travel_csv_io");
 const travelDashboardRoutes = require("./routes/travel_dashboard");
 const travelReportsRoutes = require("./routes/travel_reports");
@@ -648,6 +649,7 @@ app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
 app.use("/api/travel", travelPricingRoutes);
 app.use("/api/travel", travelTripBillingRoutes);
+app.use("/api/travel", travelWebcheckinRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths

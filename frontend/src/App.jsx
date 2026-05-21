@@ -159,6 +159,9 @@ const WellnessPublicBooking = lazy(
 const TravelStallQuiz = lazy(
   () => import("./pages/public/TravelStallQuiz"),
 );
+const TripBooking = lazy(
+  () => import("./pages/public/TripBooking"),
+);
 const WellnessTelecallerQueue = lazy(
   () => import("./pages/wellness/TelecallerQueue"),
 );
@@ -591,6 +594,15 @@ export default function App() {
                   <Route
                     path="/travel-stall/quiz"
                     element={<TravelStallQuiz />}
+                  />
+                  {/* PRD §4.7 — Travel Stall trip booking page. Customer
+                      receives the shareToken URL from advisor (WhatsApp /
+                      email), reviews the itinerary, pays the 50% advance.
+                      Backed by /api/travel/itineraries/public/* (commit
+                      8abf6f3). */}
+                  <Route
+                    path="/trip/:shareToken"
+                    element={<TripBooking />}
                   />
                   {/* #208: wellness patient portal lives under /wellness/portal so it
                 inherits the wellness theme + namespace. The generic /portal route

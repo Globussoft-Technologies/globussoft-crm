@@ -1,0 +1,397 @@
+// Public Travel Stall trip booking page (PRD §4.7 — 50%-advance flow).
+//
+// Lives at /trip/:shareToken (no auth). The advisor sends the lead a
+// shareToken URL via WhatsApp/email; the lead lands here, reviews the
+// itinerary, and pays the 50% deposit to lock the trip.
+//
+// Consumes the public endpoints from commit 8abf6f3:
+//   GET  /api/travel/itineraries/public/:shareToken
+//   POST /api/travel/itineraries/public/:shareToken/record-advance-payment
+//
+// Payment flow is currently demo-mode (no Razorpay/Stripe wiring until
+// Q9 / payment-provider creds land). The "Pay" button POSTs to the
+// record-advance endpoint with a generated reference; the page then
+// re-fetches and shows the advance-paid state. The button label says
+// "Pay" so the demo reflects the production UX — when the gateway
+// wires in, this page only needs the button onClick swapped for the
+// gateway's payment-intent helper.
+//
+// Uses raw fetch() (renders outside AuthContext shell), matching the
+// pattern in TravelStallQuiz.jsx + wellness PublicBooking.jsx.
+
+import { useCallback, useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+import {
+  AlertTriangle, Calendar, CheckCircle2, CreditCard, Globe, Hotel,
+  MapPin, Plane, RefreshCw, ShieldCheck, Ticket,
+} from "lucide-react";
+
+const ITEM_ICON = {
+  flight: Plane,
+  hotel: Hotel,
+  transfer: Ticket,
+  activity: Ticket,
+  visa: ShieldCheck,
+  insurance: ShieldCheck,
+};
+
+export default function TripBooking() {
+  const { shareToken } = useParams();
+  const [itin, setItin] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState("");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError("");
+    fetch(`/api/travel/itineraries/public/${encodeURIComponent(shareToken || "")}`)
+      .then(async (r) => {
+        if (r.ok) return r.json();
+        const body = await r.json().catch(() => ({}));
+        if (body?.code === "NOT_SHARED") throw new Error("This trip is not yet ready to share. Please check back shortly.");
+        if (r.status === 404) throw new Error("We couldn't find a trip with this link.");
+        throw new Error(body.error || "Could not load the trip.");
+      })
+      .then(setItin)
+      .catch((e) => setLoadError(e.message))
+      .finally(() => setLoading(false));
+  }, [shareToken]);
+
+  useEffect(load, [load]);
+
+  // PRD §4.7 — demo-mode advance payment. In production this button
+  // opens the gateway (Razorpay SDK / Stripe Elements) and the gateway
+  // webhook hits the record-advance endpoint with the real charge id.
+  // For demo, the page generates a sandbox reference and POSTs directly.
+  const payAdvance = async () => {
+    if (!itin || itin.advanceDue <= 0) return;
+    setPaying(true);
+    setPayError("");
+    try {
+      const ref = `demo_pay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const r = await fetch(
+        `/api/travel/itineraries/public/${encodeURIComponent(shareToken)}/record-advance-payment`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount: itin.advanceDue, paymentReference: ref }),
+        },
+      );
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error || "Payment failed. Please try again.");
+      }
+      load(); // re-fetch to show new advance-paid state
+    } catch (e) {
+      setPayError(e.message);
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  const payBalance = async () => {
+    if (!itin || itin.balanceDue <= 0) return;
+    setPaying(true);
+    setPayError("");
+    try {
+      const ref = `demo_bal_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const r = await fetch(
+        `/api/travel/itineraries/public/${encodeURIComponent(shareToken)}/record-advance-payment`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount: itin.balanceDue, paymentReference: ref }),
+        },
+      );
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error || "Payment failed. Please try again.");
+      }
+      load();
+    } catch (e) {
+      setPayError(e.message);
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  if (loading) return <Shell><p style={{ color: "#5a6275" }}>Loading your trip…</p></Shell>;
+  if (loadError) {
+    return (
+      <Shell>
+        <div style={errorBox} role="alert">
+          <AlertTriangle size={18} aria-hidden style={{ marginRight: 8, verticalAlign: -3 }} />
+          {loadError}
+        </div>
+        <button type="button" onClick={load} style={secondaryBtn}>
+          <RefreshCw size={14} aria-hidden /> Try again
+        </button>
+      </Shell>
+    );
+  }
+  if (!itin) return null;
+
+  return (
+    <Shell tenantName={itin.tenantName}>
+      <header style={{ marginBottom: 20 }}>
+        <h1 style={{ margin: 0, display: "flex", alignItems: "center", gap: 10, fontSize: 26 }}>
+          <MapPin size={26} aria-hidden style={{ color: "#C89A4E" }} />
+          {itin.destination}
+        </h1>
+        <p style={{ color: "#5a6275", marginTop: 6, fontSize: 14 }}>
+          <Calendar size={14} aria-hidden style={{ verticalAlign: -2, marginRight: 4 }} />
+          {fmtDate(itin.startDate)} &mdash; {fmtDate(itin.endDate)}
+          {" · "}
+          <StatusBadge status={itin.status} />
+        </p>
+      </header>
+
+      <section aria-labelledby="items-heading">
+        <h2 id="items-heading" style={sectionHeading}>Your trip includes</h2>
+        <ul style={{ listStyle: "none", padding: 0, margin: "0 0 24px", display: "grid", gap: 10 }}>
+          {itin.items.map((item) => {
+            const Icon = ITEM_ICON[item.itemType] || Ticket;
+            return (
+              <li key={item.id} style={itemRow}>
+                <Icon size={18} aria-hidden style={{ color: "#122647", flexShrink: 0 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600 }}>{item.description}</div>
+                  <div style={{ fontSize: 12, color: "#7a8294", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    {item.itemType}
+                  </div>
+                </div>
+                {item.totalPrice != null && (
+                  <div style={{ fontWeight: 600, color: "#122647" }}>
+                    {fmtMoney(item.totalPrice, itin.currency)}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section style={costBox} aria-labelledby="cost-heading">
+        <h2 id="cost-heading" style={{ ...sectionHeading, marginTop: 0 }}>Trip cost</h2>
+        <Line label="Total" value={fmtMoney(itin.totalAmount, itin.currency)} bold />
+        <Line label={`Advance (${Math.round(itin.advanceRatio * 100)}%)`} value={fmtMoney(itin.advanceDue, itin.currency)} />
+        {itin.advancePaid > 0 && (
+          <Line label="Paid so far" value={fmtMoney(itin.advancePaid, itin.currency)} positive />
+        )}
+        {itin.balanceDue > 0 && itin.advancePaid > 0 && (
+          <Line label="Balance due" value={fmtMoney(itin.balanceDue, itin.currency)} bold />
+        )}
+      </section>
+
+      {payError && <div role="alert" style={errorBox}>{payError}</div>}
+
+      <PaymentCTA
+        itin={itin}
+        paying={paying}
+        onPayAdvance={payAdvance}
+        onPayBalance={payBalance}
+      />
+
+      {itin.pdfUrl && (
+        <p style={{ marginTop: 18, textAlign: "center" }}>
+          <a href={itin.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#122647", fontWeight: 600 }}>
+            Download itinerary PDF
+          </a>
+        </p>
+      )}
+
+      <p style={fineprint}>
+        Secure payment. We&rsquo;ll email a receipt to the address on file.
+      </p>
+    </Shell>
+  );
+}
+
+// ─── Payment CTA (state-machine) ─────────────────────────────────────
+
+function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance }) {
+  if (itin.status === "fully_paid") {
+    return (
+      <div style={successBox} role="status">
+        <CheckCircle2 size={20} aria-hidden style={{ color: "#2ecc71" }} />
+        <span><strong>Fully paid.</strong> Your trip is locked in. We&rsquo;ll send pre-trip details closer to departure.</span>
+      </div>
+    );
+  }
+  if (itin.status === "advance_paid") {
+    return (
+      <>
+        <div style={successBox} role="status">
+          <CheckCircle2 size={20} aria-hidden style={{ color: "#2ecc71" }} />
+          <span><strong>Advance received.</strong> Your trip is confirmed. Settle the balance any time before departure.</span>
+        </div>
+        {itin.balanceDue > 0 && (
+          <button
+            type="button"
+            onClick={onPayBalance}
+            disabled={paying}
+            style={{ ...primaryBtn, opacity: paying ? 0.6 : 1, cursor: paying ? "wait" : "pointer" }}
+          >
+            <CreditCard size={16} aria-hidden />
+            {paying ? "Processing…" : `Pay balance · ${fmtMoneyCompact(itin.balanceDue, itin.currency)}`}
+          </button>
+        )}
+      </>
+    );
+  }
+  if (itin.status === "rejected") {
+    return (
+      <div style={errorBox} role="alert">
+        This trip was cancelled. Please contact your advisor for next steps.
+      </div>
+    );
+  }
+  // sent / accepted / revised / draft (draft is filtered server-side
+  // already, but the branch is harmless).
+  return (
+    <button
+      type="button"
+      onClick={onPayAdvance}
+      disabled={paying || itin.advanceDue <= 0}
+      style={{ ...primaryBtn, opacity: paying ? 0.6 : 1, cursor: paying ? "wait" : "pointer" }}
+    >
+      <CreditCard size={16} aria-hidden />
+      {paying ? "Processing…" : `Pay ${Math.round(itin.advanceRatio * 100)}% to confirm · ${fmtMoneyCompact(itin.advanceDue, itin.currency)}`}
+    </button>
+  );
+}
+
+// ─── Shell + helpers ─────────────────────────────────────────────────
+
+function Shell({ children, tenantName }) {
+  return (
+    <div style={page}>
+      <div style={card}>
+        <div style={brand}>
+          <Globe size={18} aria-hidden style={{ color: "#122647" }} />
+          <strong>{tenantName || "Travel Stall"}</strong>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StatusBadge({ status }) {
+  const map = {
+    sent: { label: "Quote sent", bg: "#eaf2fb", fg: "#1e4d8c" },
+    accepted: { label: "Accepted", bg: "#e8f6ee", fg: "#1e8449" },
+    revised: { label: "Revised", bg: "#fff3e0", fg: "#b76b00" },
+    advance_paid: { label: "Advance paid", bg: "#e8f6ee", fg: "#1e8449" },
+    fully_paid: { label: "Fully paid", bg: "#e8f6ee", fg: "#1e8449" },
+    rejected: { label: "Cancelled", bg: "#fdecea", fg: "#922b21" },
+  };
+  const meta = map[status] || { label: status, bg: "#eee", fg: "#444" };
+  return (
+    <span style={{
+      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+      background: meta.bg, color: meta.fg, textTransform: "uppercase", letterSpacing: 0.5,
+    }}>{meta.label}</span>
+  );
+}
+
+function Line({ label, value, bold, positive }) {
+  return (
+    <div style={{
+      display: "flex", justifyContent: "space-between",
+      padding: "8px 0", borderTop: "1px solid #ece6da", fontSize: 14,
+    }}>
+      <span style={{ color: "#5a6275" }}>{label}</span>
+      <span style={{
+        fontWeight: bold ? 700 : 500,
+        color: positive ? "#1e8449" : "#1c2233",
+      }}>{value}</span>
+    </div>
+  );
+}
+
+function fmtDate(d) {
+  if (!d) return "—";
+  const dt = new Date(d);
+  if (!Number.isFinite(dt.getTime())) return "—";
+  return dt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function fmtMoney(n, currency = "INR") {
+  if (n == null) return "—";
+  try {
+    return new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
+  } catch {
+    return `${currency} ${Number(n).toLocaleString("en-IN")}`;
+  }
+}
+
+// Compact form for buttons: "₹50,000" not "₹50,000.00".
+function fmtMoneyCompact(n, currency = "INR") {
+  if (n == null) return "—";
+  if (currency === "INR") return `₹${Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+  return fmtMoney(n, currency);
+}
+
+// ─── Styles ──────────────────────────────────────────────────────────
+// Travel Stall theme (PRD Q22 placeholder): navy #122647 + warm gold
+// #C89A4E on cream #fbf7f0. Matches TravelStallQuiz.jsx.
+
+const page = {
+  minHeight: "100vh",
+  background: "#fbf7f0",
+  padding: "32px 16px",
+  fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+  color: "#1c2233",
+};
+const card = {
+  maxWidth: 680, margin: "0 auto",
+  background: "#fff", borderRadius: 16, padding: "28px 28px 32px",
+  boxShadow: "0 8px 32px rgba(18, 38, 71, 0.08)",
+  border: "1px solid #ece6da",
+};
+const brand = {
+  display: "flex", alignItems: "center", gap: 8, fontSize: 14,
+  color: "#122647", marginBottom: 20,
+  borderBottom: "1px solid #ece6da", paddingBottom: 14,
+};
+const sectionHeading = { fontSize: 17, margin: "18px 0 12px" };
+const itemRow = {
+  display: "flex", alignItems: "center", gap: 12,
+  padding: "12px 14px", border: "1px solid #e5e7ee",
+  borderRadius: 10, background: "#fff",
+};
+const costBox = {
+  marginTop: 4, padding: "16px 18px",
+  background: "#f7f3eb", borderRadius: 12, border: "1px solid #ece6da",
+};
+const primaryBtn = {
+  marginTop: 20, width: "100%", padding: "14px 18px",
+  background: "#122647", color: "#fff", border: "none", borderRadius: 8,
+  fontSize: 15, fontWeight: 600,
+  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8,
+};
+const secondaryBtn = {
+  marginTop: 12, padding: "10px 16px",
+  background: "transparent", color: "#122647",
+  border: "1px solid #122647", borderRadius: 8,
+  fontSize: 14, fontWeight: 600,
+  display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer",
+};
+const errorBox = {
+  marginTop: 16, padding: "10px 14px",
+  background: "#fdecea", border: "1px solid #f5b7b1",
+  color: "#922b21", borderRadius: 8, fontSize: 14,
+};
+const successBox = {
+  marginTop: 16, padding: "14px 16px",
+  background: "#e8f6ee", border: "1px solid #b7e4c7",
+  color: "#1e6e3a", borderRadius: 10, fontSize: 14,
+  display: "flex", alignItems: "center", gap: 10,
+};
+const fineprint = {
+  textAlign: "center", color: "#7a8294",
+  fontSize: 12, marginTop: 14,
+};

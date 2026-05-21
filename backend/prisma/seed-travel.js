@@ -300,8 +300,210 @@ async function main() {
   }
   console.log(`[seed-travel] markup rules: ${markupRules.length}`);
 
+  // ── 7. Sample TMC trips + RFU itinerary + microsite ─────────────────
+  // Without entity data the Dashboard tiles all read 0 — fine for a unit
+  // test, hostile for a demo. Add a small but realistic set so the
+  // /travel landing surface is non-empty out of the box. Idempotency
+  // keyed on tripCode (TmcTrip.tripCode is @unique).
+  await seedSampleTrips(tenant.id);
+
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
+}
+
+/**
+ * Seed 3 sample TmcTrips + 1 RFU Itinerary + 1 published microsite.
+ * Idempotent — each row keys on a stable natural identifier:
+ *   - TmcTrip → tripCode (@unique)
+ *   - Itinerary → (tenantId, contactId, destination) check
+ *   - TripMicrosite → tripId (@unique)
+ *   - Contacts → email
+ *   - Participants → (tripId, fullName) check
+ *
+ * Re-running seed-travel.js does NOT create duplicates.
+ */
+async function seedSampleTrips(tenantId) {
+  // School contact (used as schoolContactId for TMC trips).
+  const school = await prisma.contact.upsert({
+    where: { email: "principal@bharatpublic.demo" },
+    update: {},
+    create: {
+      name: "Bharat Public School",
+      email: "principal@bharatpublic.demo",
+      phone: "+919811111101",
+      subBrand: "tmc",
+      status: "Prospect",
+      tenantId,
+    },
+  });
+  // RFU pilgrim contact for the Umrah itinerary.
+  const pilgrim = await prisma.contact.upsert({
+    where: { email: "ahmed.pilgrim@demo.test" },
+    update: {},
+    create: {
+      name: "Ahmed Khan",
+      email: "ahmed.pilgrim@demo.test",
+      phone: "+919811111102",
+      subBrand: "rfu",
+      status: "Lead",
+      tenantId,
+    },
+  });
+
+  // Three TMC trips — confirmed (upcoming), in-trip (mid-flight), completed (past).
+  const now = new Date();
+  const tripPlans = [
+    {
+      tripCode: "tmc-bali-2026",
+      destination: "Bali — Class 10 educational tour",
+      departDate: new Date(now.getTime() + 21 * 86400_000),
+      returnDate: new Date(now.getTime() + 30 * 86400_000),
+      pricePerStudent: 75000,
+      status: "confirmed",
+      participants: ["Aarav Sharma", "Diya Patel", "Vihaan Iyer", "Saanvi Reddy"],
+      withMicrosite: true,
+    },
+    {
+      tripCode: "tmc-andaman-2026",
+      destination: "Andaman — Class 8 marine biology trip",
+      departDate: new Date(now.getTime() - 3 * 86400_000),
+      returnDate: new Date(now.getTime() + 4 * 86400_000),
+      pricePerStudent: 55000,
+      status: "in-trip",
+      participants: ["Kabir Singh", "Ishaan Verma", "Ananya Gupta"],
+      withMicrosite: false,
+    },
+    {
+      tripCode: "tmc-jaipur-2025",
+      destination: "Jaipur — Class 9 heritage tour (completed)",
+      departDate: new Date(now.getTime() - 60 * 86400_000),
+      returnDate: new Date(now.getTime() - 53 * 86400_000),
+      pricePerStudent: 22000,
+      status: "completed",
+      participants: ["Arjun Mehta", "Riya Kapoor"],
+      withMicrosite: false,
+    },
+  ];
+
+  for (const plan of tripPlans) {
+    const trip = await prisma.tmcTrip.upsert({
+      where: { tripCode: plan.tripCode },
+      update: {},
+      create: {
+        tenantId,
+        tripCode: plan.tripCode,
+        schoolContactId: school.id,
+        destination: plan.destination,
+        departDate: plan.departDate,
+        returnDate: plan.returnDate,
+        pricePerStudent: plan.pricePerStudent,
+        legalEntity: "tmc_nexus",
+        status: plan.status,
+      },
+    });
+
+    // Idempotent participant seeding — only insert names not already
+    // present on this trip.
+    const existingNames = new Set(
+      (await prisma.tripParticipant.findMany({
+        where: { tripId: trip.id },
+        select: { fullName: true },
+      })).map((p) => p.fullName),
+    );
+    for (const fullName of plan.participants) {
+      if (existingNames.has(fullName)) continue;
+      await prisma.tripParticipant.create({
+        data: { tripId: trip.id, fullName },
+      }).catch(() => null);
+    }
+
+    // Microsite for the Bali trip only — represents the "published &
+    // sent to parents" state the dashboard's microsite tile counts.
+    if (plan.withMicrosite) {
+      const existing = await prisma.tripMicrosite.findUnique({ where: { tripId: trip.id } });
+      if (!existing) {
+        const crypto = require("crypto");
+        await prisma.tripMicrosite.create({
+          data: {
+            tenantId,
+            tripId: trip.id,
+            publicUuid: crypto.randomUUID(),
+            subdomain: `trip-${plan.tripCode}`,
+            itineraryHtml:
+              `<h2>Day 1 — Arrival in Denpasar</h2>` +
+              `<p>Welcome briefing at the hotel; group orientation.</p>` +
+              `<h2>Day 2 — Ubud cultural day</h2>` +
+              `<p>Monkey forest, rice terraces, traditional dance performance.</p>` +
+              `<h2>Day 3 — Beach + marine biology workshop</h2>` +
+              `<p>Hands-on tide-pool study at Sanur. Departure brief.</p>`,
+            faqJson: JSON.stringify([
+              { q: "What to pack?", a: "Sunscreen, light cotton, ID, sturdy walking shoes." },
+              { q: "Pocket money?", a: "USD 30 per student is sufficient." },
+            ]),
+            publishedAt: new Date(),
+          },
+        });
+      }
+    }
+  }
+  console.log(`[seed-travel] sample trips: ${tripPlans.length} (+ 1 microsite)`);
+
+  // One accepted RFU itinerary for the pilgrim contact. Diagnostic-first
+  // guard requires a TravelDiagnostic for (pilgrim, rfu) before an
+  // Itinerary can be created — seed a row with raw prisma.create that
+  // bypasses the route guard (seed runs server-side, not via API).
+  const existingItin = await prisma.itinerary.findFirst({
+    where: { tenantId, contactId: pilgrim.id, subBrand: "rfu" },
+    select: { id: true },
+  });
+  if (!existingItin) {
+    // Need a stub diagnostic so the future API-driven flow's guard
+    // would also pass — for completeness of the demo data shape.
+    const stubBankId = (await prisma.travelDiagnosticQuestionBank.findFirst({
+      where: { tenantId, subBrand: "rfu" },
+      select: { id: true },
+    }))?.id;
+    if (stubBankId) {
+      await prisma.travelDiagnostic.create({
+        data: {
+          tenantId,
+          subBrand: "rfu",
+          contactId: pilgrim.id,
+          questionBankId: stubBankId,
+          questionsJson: JSON.stringify({ note: "demo seed snapshot" }),
+          answersJson: JSON.stringify({ q1: "few", q2: "medium" }),
+          score: 6,
+          classification: "level_2",
+          classificationLabel: "Established",
+          recommendedTier: "primary",
+        },
+      }).catch(() => null);
+    }
+    const itin = await prisma.itinerary.create({
+      data: {
+        tenantId,
+        subBrand: "rfu",
+        contactId: pilgrim.id,
+        status: "accepted",
+        version: 1,
+        destination: "Makkah + Madinah — 10-day Umrah",
+        startDate: new Date(now.getTime() + 45 * 86400_000),
+        endDate: new Date(now.getTime() + 55 * 86400_000),
+        totalAmount: 185000,
+        currency: "INR",
+        items: {
+          create: [
+            { itemType: "flight", position: 0, description: "DEL-JED Saudia economy", unitCost: 38000, markup: 4000, totalPrice: 42000 },
+            { itemType: "hotel", position: 1, description: "Makkah Hilton — 6 nights Haram-facing", unitCost: 72000, markup: 6000, totalPrice: 78000 },
+            { itemType: "transport", position: 2, description: "Airport + intercity transfers", unitCost: 9000, markup: 1500, totalPrice: 10500 },
+          ],
+        },
+      },
+    });
+    console.log(`[seed-travel] RFU itinerary id=${itin.id} (accepted, totalAmount ₹185,000)`);
+  } else {
+    console.log(`[seed-travel] RFU itinerary already exists (id=${existingItin.id}) — skipping`);
+  }
 }
 
 /**

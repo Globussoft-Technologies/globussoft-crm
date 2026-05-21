@@ -277,6 +277,7 @@ jobs:
             tests/travel-csv-io-api.spec.js \
             tests/travel-dashboard-api.spec.js \
             tests/travel-reports-api.spec.js \
+            tests/travel-seed-taxonomy-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

@@ -504,7 +504,20 @@ async function main() {
     ],
   });
 
-  // ── 4. Cost master rows ──────────────────────────────────────────────
+  // ── 4. Pipeline + lost-reason taxonomies — PRD §4.1 + Q10 locked ────
+  //
+  // Without these, every travel-vertical user opening the Deals
+  // pipeline view sees an empty kanban + no way to record a lost-deal
+  // reason. PRD §4.1 and the Q10 open-question resolution lock the
+  // taxonomy: 8 ordered stages + 8 LOST reasons (no WON reasons).
+  //
+  // Idempotency: single-shot `findFirst` guards on each of the three
+  // tables — if the tenant already has any rows for a table, we no-op
+  // the section. Re-running this seed is safe and does NOT duplicate.
+  // Same trajectory as the diagnostic-bank seeds above.
+  await seedPipelineTaxonomies(tenant.id);
+
+  // ── 5. Cost master rows ──────────────────────────────────────────────
   //
   // Placeholder rates so the /pricing/quote endpoint has something to
   // compute against. Yasin's actual rate book lands as part of Section
@@ -537,7 +550,7 @@ async function main() {
   }
   console.log(`[seed-travel] cost-master rows: ${costRows.length}`);
 
-  // ── 5. Season calendar ──────────────────────────────────────────────
+  // ── 6. Season calendar ──────────────────────────────────────────────
   const seasons = [
     { subBrand: "rfu", seasonName: "ramadan-peak", startDate: "2026-03-01", endDate: "2026-04-15", multiplier: 2.0 },
     { subBrand: "rfu", seasonName: "school-holiday", startDate: "2026-06-01", endDate: "2026-07-15", multiplier: 1.3 },
@@ -559,7 +572,7 @@ async function main() {
   }
   console.log(`[seed-travel] season calendar rows: ${seasons.length}`);
 
-  // ── 6. Markup rules ─────────────────────────────────────────────────
+  // ── 7. Markup rules ─────────────────────────────────────────────────
   const markupRules = [
     { subBrand: "rfu", scope: "hotel", markupPct: 10, priority: 100 },
     { subBrand: "rfu", scope: "flight", markupPct: 5, priority: 100 },
@@ -582,7 +595,7 @@ async function main() {
   }
   console.log(`[seed-travel] markup rules: ${markupRules.length}`);
 
-  // ── 7. Sample TMC trips + RFU itinerary + microsite ─────────────────
+  // ── 8. Sample TMC trips + RFU itinerary + microsite ─────────────────
   // Without entity data the Dashboard tiles all read 0 — fine for a unit
   // test, hostile for a demo. Add a small but realistic set so the
   // /travel landing surface is non-empty out of the box. Idempotency
@@ -788,6 +801,101 @@ async function seedSampleTrips(tenantId) {
     console.log(`[seed-travel] RFU itinerary id=${itin.id} (accepted, totalAmount ₹185,000)`);
   } else {
     console.log(`[seed-travel] RFU itinerary already exists (id=${existingItin.id}) — skipping`);
+  }
+}
+
+/**
+ * Seed the default Pipeline + 8 PipelineStage rows + 8 LOST WinLossReason
+ * rows for the travel tenant. Taxonomy locked per PRD §4.1 + Q10.
+ *
+ * Idempotency: single-shot `findFirst` guards per table — if the tenant
+ * already has any rows for a table, that table's section no-ops. Each
+ * table is guarded independently so a partial prior seed (e.g. Pipeline
+ * created but stages crashed half-way) can be completed on re-run rather
+ * than skipped entirely.
+ *
+ * Schema notes:
+ *   - Pipeline.tenantId + isDefault; no FK back from PipelineStage.
+ *   - PipelineStage is tenant-scoped + position-ordered (mirror of the
+ *     generic seed.js:178-189 pattern). Stages are bound to the tenant's
+ *     `isDefault: true` Pipeline by app convention, not by FK.
+ *   - WinLossReason: only LOST reasons per PRD §4.1 (WON deals don't get
+ *     a reason taxonomy — outcome is binary).
+ */
+async function seedPipelineTaxonomies(tenantId) {
+  // -- Pipeline (single default) -------------------------------------------
+  const existingPipeline = await prisma.pipeline.findFirst({
+    where: { tenantId, isDefault: true },
+    select: { id: true },
+  });
+  if (existingPipeline) {
+    console.log(`[seed-travel] default pipeline already exists (id=${existingPipeline.id})`);
+  } else {
+    const pipeline = await prisma.pipeline.create({
+      data: {
+        name: "Travel Default Pipeline",
+        description: "8-status enterprise pipeline per PRD §4.1 + Q10 locked taxonomy.",
+        isDefault: true,
+        tenantId,
+      },
+    });
+    console.log(`[seed-travel] default pipeline seeded (id=${pipeline.id})`);
+  }
+
+  // -- PipelineStage (8 stages — Q10 locked order) -------------------------
+  // Q10 locked names + order:
+  //   0 New · 1 Diagnostic Complete · 2 Qualifying · 3 Quoted ·
+  //   4 Negotiating · 5 Won · 6 Lost · 7 Dormant
+  // Note: PRD §4.1 prose said "Diagnostic pending"; Q10 finalised on
+  // "Diagnostic Complete" as the post-diagnostic stage. Q10 wins.
+  const existingStage = await prisma.pipelineStage.findFirst({
+    where: { tenantId, position: 0 },
+    select: { id: true },
+  });
+  if (existingStage) {
+    console.log(`[seed-travel] pipeline stages already exist (position-0 id=${existingStage.id}) — skipping`);
+  } else {
+    const stages = [
+      { name: "New",                 color: "#3b82f6", position: 0 }, // blue   — fresh
+      { name: "Diagnostic Complete", color: "#06b6d4", position: 1 }, // cyan   — diag done
+      { name: "Qualifying",          color: "#8b5cf6", position: 2 }, // violet — advisor working
+      { name: "Quoted",              color: "#f59e0b", position: 3 }, // amber  — itinerary sent
+      { name: "Negotiating",         color: "#ec4899", position: 4 }, // pink   — back-and-forth
+      { name: "Won",                 color: "#10b981", position: 5 }, // green
+      { name: "Lost",                color: "#6b7280", position: 6 }, // grey
+      { name: "Dormant",             color: "#9ca3af", position: 7 }, // light grey — went cold
+    ];
+    for (const s of stages) {
+      await prisma.pipelineStage.create({ data: { ...s, tenantId } });
+    }
+    console.log(`[seed-travel] pipeline stages seeded: ${stages.length}`);
+  }
+
+  // -- WinLossReason (8 LOST reasons — Q10 locked) -------------------------
+  // PRD §4.1: only LOST reasons taxonomised. Do NOT seed `type: "won"`.
+  const existingReason = await prisma.winLossReason.findFirst({
+    where: { tenantId, type: "lost" },
+    select: { id: true },
+  });
+  if (existingReason) {
+    console.log(`[seed-travel] win/loss reasons already exist (id=${existingReason.id}) — skipping`);
+  } else {
+    const reasons = [
+      { reason: "Price" },
+      { reason: "No response" },
+      { reason: "Chose competitor" },
+      { reason: "Wrong requirement" },
+      { reason: "Timing issue" },
+      { reason: "Budget issue" },
+      { reason: "Trust issue" },
+      { reason: "Duplicate enquiry" },
+    ];
+    for (const r of reasons) {
+      await prisma.winLossReason.create({
+        data: { type: "lost", reason: r.reason, count: 0, tenantId },
+      });
+    }
+    console.log(`[seed-travel] win/loss reasons seeded: ${reasons.length} (all type=lost)`);
   }
 }
 

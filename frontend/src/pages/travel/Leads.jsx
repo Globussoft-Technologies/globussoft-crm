@@ -133,6 +133,15 @@ export default function TravelLeads() {
                     ) : (
                       <span style={{ color: "var(--text-secondary)" }}>—</span>
                     )}
+                    {d.subBrand === "rfu" && d.contactId && (
+                      <Link
+                        to={`/travel/rfu/customers/${d.contactId}`}
+                        style={{ ...dealLink, fontSize: 11, marginLeft: 8 }}
+                        title="Open RFU customer profile"
+                      >
+                        RFU profile →
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))}

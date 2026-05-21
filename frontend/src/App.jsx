@@ -124,6 +124,7 @@ const TravelCostMaster = lazy(() => import("./pages/travel/CostMaster"));
 const TravelLeads = lazy(() => import("./pages/travel/Leads"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
+const TravelRfuCustomerProfile = lazy(() => import("./pages/travel/RfuCustomerProfile"));
 const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
@@ -868,6 +869,7 @@ export default function App() {
               <Route path="travel/trips/:id" element={<TravelOnly><TravelTripDetail /></TravelOnly>} />
               <Route path="travel/cost-master" element={<TravelOnly><TravelCostMaster /></TravelOnly>} />
               <Route path="travel/leads" element={<TravelOnly><TravelLeads /></TravelOnly>} />
+              <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
               <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />
               <Route path="travel/reports" element={<TravelOnly><TravelReports /></TravelOnly>} />
               <Route path="travel/suppliers" element={<TravelOnly><TravelSuppliers /></TravelOnly>} />

@@ -724,10 +724,14 @@ test.describe('Travel diagnostics — Travel Stall Family Travel Quiz seed (PRD 
     });
     expect(res.status(), `submit: ${await res.text()}`).toBe(201);
     const body = await res.json();
-    expect(body.subBrand).toBe('travelstall');
+    // Authed /diagnostics response shape: { diagnostic, score, classification,
+    // classificationLabel, recommendedTier, warnings, reportPdfUrl }. subBrand
+    // lives on the embedded diagnostic, NOT at the top level (top-level
+    // subBrand is only on the public /submit endpoint).
+    expect(body.diagnostic?.subBrand).toBe('travelstall');
     expect(body.classification).toBe('level_3');
     expect(body.recommendedTier).toBe('premium');
     expect(Number(body.score)).toBeGreaterThanOrEqual(16);
-    if (body.id) created.diagnosticIds.push(body.id);
+    if (body.diagnostic?.id) created.diagnosticIds.push(body.diagnostic.id);
   });
 });

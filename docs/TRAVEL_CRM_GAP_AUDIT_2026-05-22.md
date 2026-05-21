@@ -8,12 +8,14 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (44 in §4, 23 models in §5, 11 route bundles in §6.1, 22 frontend pages in §7, 5 vertical-config items in §8, 14 integrations in §9; some collapse — see per-section tables for the precise denominator)
-- **SHIPPED:** **50** (~64%) — up from 44 baseline; +6 since: pipeline + lost-reason (`ab2f15f`), travel_webcheckin.js route (`9898e87`), LLM router scaffold (`583c06b`), talking-points endpoint + Diagnostic-interpretation cell (`cf876af`)
-- **PARTIAL:** **9** (~12%) — P1A web check-in row flipped most-of-way; still partial pending WebCheckinQueue.jsx UI
-- **GAP-AUTONOMOUS:** **1** (~1%) — down from 8; -7 since (last remaining autonomous in §4.10 TMC sample data seed extension)
-- **GAP-STUB-ABLE:** **8** (~10%) — down 1 from 9 (diagnostic interpretation flipped to SHIPPED via the talking-points endpoint wire-in)
+- **SHIPPED:** **52** (~67%) — up from 44 baseline; +8 since (pipeline + lost-reason, webcheckin route, LLM router, talking-points + diag-interpretation, seed-travel.js full fixture set)
+- **PARTIAL:** **8** (~10%) — seed-travel.js row flipped PARTIAL → SHIPPED with `78884e3`
+- **GAP-AUTONOMOUS:** **0** (~0%) — all original 8 closed
+- **GAP-STUB-ABLE:** **8** (~10%)
 - **GAP-CRED-BLOCKED:** **8** (~10%)
 - **GAP-PRODUCT-CALL:** **2** (~3%)
+
+**Queue-refill threshold tripped** — Recommended next 5 has 0 unstruck items; §4 tables have 0 GAP-AUTONOMOUS. Per cron Step 4, next tick dispatches a re-audit refill to refresh the menu (the remaining 8 GAP-STUB-ABLE rows are pickable but the audit's curated priority ordering needs a refresh to surface them).
 
 The Phase 1 contractual surface (TMC + RFU diagnostic + itinerary + microsite + supplier vault + cost master + rooming + payment plans + reports + DigiLocker scaffold) is **almost entirely shipped**. The remaining gaps cluster into three buckets: (a) the Chrome flight-quote plugin + airline web-check-in automation (Phase 1 W3-W4 scope, NOT yet started), (b) the LLM router + talking-points + form-vs-call (Phase 1 W2-W3 scope, NOT yet started), (c) the per-cron WhatsApp dispatch + microsite OTP SMS cutover (one-line edits, Q9 cred-blocked).
 
@@ -302,7 +304,7 @@ Most rolled up into the above tables. Net:
 | Sub-brand switcher in sidebar | SHIPPED | `Sidebar.jsx:986-1019` |
 | Theme `frontend/src/theme/travel.css` | SHIPPED (placeholder palette) | 74 lines; per Q22 brand assets "all ready" but not yet applied to theme |
 | Landing route `/travel` | SHIPPED | `App.jsx:266-268` |
-| Seed `seed-travel.js` | PARTIAL | tenant + users + diagnostic banks for tmc/rfu/travelstall/visasure + cost master + seasons + **8-status Pipeline + 8 PipelineStage rows + 8 WinLossReason rows** (commit `ab2f15f`). **Still missing:** sample TmcTrip, sample Itinerary, sample VisaApplication, sample SupplierCredential |
+| Seed `seed-travel.js` | SHIPPED | tenant + users + 4 diagnostic banks + cost master + seasons + 8-status Pipeline + 8 lost reasons (`ab2f15f`) + 3 TmcTrips + participants + Itinerary + microsite + RoomingAssignment + TripPaymentPlan + 4 TripInstalmentPayment + SupplierCredential (env-gated) + VisaApplication + checklist (`78884e3`). End-to-end demo fixtures complete |
 
 ---
 
@@ -453,7 +455,7 @@ For each shipped stub, the file + line where the `// STUB:` marker lives, the Q-
 
 4. ~~**Diagnostic talking-points endpoint** (PRD §4.2; §6.1 row `/api/travel/diagnostics/:id/talking-points/regen`). Scope: new route + `lib/llmRouter` call + write to existing `TravelDiagnostic.talkingPointsJson` column. Effort: small (~3 hrs). Why next: column is shipped + unused; advisor needs context for the first call; depends on item 3 (LLM router) being green.~~ — ✅ **commit `cf876af`** (first LLM router consumer; ADMIN/MANAGER-only; PII-safe; stub-mode-ready)
 
-5. **TMC sub-brand seed sample data** (PRD §8.5). Scope: extend `seed-travel.js` with 1 sample `TmcTrip` + 2 `TripParticipant` + 1 `RoomingAssignment` + 1 `TripPaymentPlan` + 4 `TripInstalmentPayment` + 1 `Itinerary` + 1 `SupplierCredential` (encrypted) + 1 `VisaApplication`. Effort: small (~3 hrs). Why next: every existing travel page renders empty against the demo seed because the demo data stops at diagnostic banks + cost master. UAT can't validate end-to-end flows until this lands. Idempotent upserts so demo re-seeds don't double-up.
+5. ~~**TMC sub-brand seed sample data** (PRD §8.5). Scope: extend `seed-travel.js` with 1 sample `TmcTrip` + 2 `TripParticipant` + 1 `RoomingAssignment` + 1 `TripPaymentPlan` + 4 `TripInstalmentPayment` + 1 `Itinerary` + 1 `SupplierCredential` (encrypted) + 1 `VisaApplication`. Effort: small (~3 hrs). Why next: every existing travel page renders empty against the demo seed because the demo data stops at diagnostic banks + cost master. UAT can't validate end-to-end flows until this lands. Idempotent upserts so demo re-seeds don't double-up.~~ — ✅ **commit `78884e3`** (audit was point-in-time stale: TmcTrip × 3 + participants + Itinerary + microsite already shipped earlier; `78884e3` added the remaining 5 fixture types — RoomingAssignment, TripPaymentPlan, TripInstalmentPayment × 4, SupplierCredential AES-256-GCM-encrypted with env-gate, VisaApplication + 4 nested checklist items)
 
 ---
 

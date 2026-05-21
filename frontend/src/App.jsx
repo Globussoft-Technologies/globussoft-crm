@@ -121,6 +121,7 @@ const TravelDiagnosticBuilder = lazy(() => import("./pages/travel/DiagnosticBuil
 const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
 const TravelTrips = lazy(() => import("./pages/travel/Trips"));
 const TravelTripDetail = lazy(() => import("./pages/travel/TripDetail"));
+const TravelWebCheckinQueue = lazy(() => import("./pages/travel/WebCheckinQueue"));
 const TravelCostMaster = lazy(() => import("./pages/travel/CostMaster"));
 const TravelLeads = lazy(() => import("./pages/travel/Leads"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
@@ -892,6 +893,7 @@ export default function App() {
               <Route path="travel/itineraries" element={<TravelOnly><TravelItineraries /></TravelOnly>} />
               <Route path="travel/trips" element={<TravelOnly><TravelTrips /></TravelOnly>} />
               <Route path="travel/trips/:id" element={<TravelOnly><TravelTripDetail /></TravelOnly>} />
+              <Route path="travel/webcheckins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
               <Route path="travel/cost-master" element={<TravelOnly><TravelCostMaster /></TravelOnly>} />
               <Route path="travel/leads" element={<TravelOnly><TravelLeads /></TravelOnly>} />
               <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />

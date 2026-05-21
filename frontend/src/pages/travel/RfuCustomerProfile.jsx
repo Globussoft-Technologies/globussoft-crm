@@ -15,9 +15,9 @@
 // diagnostic Q-set + microsite editor flows.
 
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  AlertCircle, ChevronLeft, Edit2, Globe, Save, User, X,
+  AlertCircle, AlertTriangle, ChevronLeft, Edit2, Globe, Save, User, X,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -57,6 +57,7 @@ function toDateInput(d) {
 export default function RfuCustomerProfile() {
   const { contactId } = useParams();
   const notify = useNotify();
+  const navigate = useNavigate();
   const cid = parseInt(contactId, 10);
 
   const [contact, setContact] = useState(null);
@@ -65,6 +66,11 @@ export default function RfuCustomerProfile() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(blankProfile);
+  // PRD §4.5 — when the backend rejects with 409 DUPLICATE_PASSPORT,
+  // surface the merge-or-edit choice in a modal instead of a toast.
+  // `null` = closed; otherwise `{ existingContactId, existingProfileId,
+  // attemptedPassport }`.
+  const [dupModal, setDupModal] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -147,7 +153,19 @@ export default function RfuCustomerProfile() {
       setEditing(false);
       load();
     } catch (e) {
-      notify.error(e?.body?.error || "Failed to save profile");
+      // PRD §4.5 — passport-key collision: a different contact in this
+      // tenant already owns the passport the operator typed. Show the
+      // merge-or-edit modal rather than a toast so the operator can
+      // navigate to the other contact's profile (one-click).
+      if (e?.status === 409 && e?.body?.code === "DUPLICATE_PASSPORT") {
+        setDupModal({
+          existingContactId: e.body.existingContactId,
+          existingProfileId: e.body.existingProfileId,
+          attemptedPassport: form.passportNumber,
+        });
+      } else {
+        notify.error(e?.body?.error || "Failed to save profile");
+      }
     } finally {
       setSaving(false);
     }
@@ -200,6 +218,115 @@ export default function RfuCustomerProfile() {
       ) : profile ? (
         <ReadView profile={profile} />
       ) : null}
+
+      {dupModal && (
+        <DuplicatePassportModal
+          existingContactId={dupModal.existingContactId}
+          existingProfileId={dupModal.existingProfileId}
+          attemptedPassport={dupModal.attemptedPassport}
+          onGoToContact={() => {
+            setDupModal(null);
+            navigate(`/travel/rfu/customers/${dupModal.existingContactId}`);
+          }}
+          onClose={() => setDupModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Duplicate-passport modal (PRD §4.5 Phase 2 dedup) ───────────────
+//
+// Surfaced when POST /rfu-profiles or PATCH /rfu-profiles/:id returns
+// 409 DUPLICATE_PASSPORT. Lets the operator either jump to the other
+// contact (preferred — preserves the pilgrim's single history line)
+// or dismiss and edit the passport to the correct value.
+
+function DuplicatePassportModal({
+  existingContactId,
+  attemptedPassport,
+  onGoToContact,
+  onClose,
+}) {
+  const [otherContact, setOtherContact] = useState(null);
+  useEffect(() => {
+    if (!existingContactId) return;
+    fetchApi(`/api/contacts/${existingContactId}`)
+      .then(setOtherContact)
+      .catch(() => { /* fall back to id-only display */ });
+  }, [existingContactId]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="dup-passport-modal-title"
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 1000, padding: 16,
+      }}
+    >
+      <div style={{
+        background: "var(--surface-color)", color: "var(--text-primary)",
+        borderRadius: 12, padding: 24, maxWidth: 480, width: "100%",
+        border: "1px solid var(--border-color)",
+        boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
+      }}>
+        <header style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          <AlertTriangle size={22} aria-hidden style={{ color: "var(--warning-color)" }} />
+          <h2 id="dup-passport-modal-title" style={{ margin: 0, fontSize: 18 }}>
+            Passport already on file
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              marginLeft: "auto", background: "transparent", border: "none",
+              cursor: "pointer", color: "var(--text-secondary)",
+            }}
+          >
+            <X size={18} />
+          </button>
+        </header>
+        <p style={{ margin: "0 0 12px", fontSize: 14, lineHeight: 1.5 }}>
+          Passport <strong>{attemptedPassport}</strong> is already linked to{" "}
+          {otherContact ? (
+            <>
+              <strong>{otherContact.name}</strong>
+              {otherContact.email && <> ({otherContact.email})</>}
+            </>
+          ) : (
+            <strong>contact #{existingContactId}</strong>
+          )}
+          . A passport must belong to one pilgrim — please open that contact and update their record, or correct the passport number here.
+        </p>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
+              background: "var(--surface-color)", color: "var(--text-primary)",
+              border: "1px solid var(--border-color)", cursor: "pointer",
+            }}
+          >
+            Edit passport
+          </button>
+          <button
+            type="button"
+            onClick={onGoToContact}
+            style={{
+              padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
+              background: "var(--primary-color, var(--accent-color))", color: "#fff",
+              border: "none", cursor: "pointer",
+            }}
+          >
+            Open that contact
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

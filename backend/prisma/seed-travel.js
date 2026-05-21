@@ -222,6 +222,81 @@ async function main() {
     ],
   });
 
+  // ── Travel Stall (family holidays) — Family Travel Quiz ─────────────
+  //
+  // Phase 2 (PRD §4.7 "Travel Stall — family holidays sub-brand"). Five-
+  // question intake the advisor walks the lead through (or the public
+  // landing-page wizard renders unauthenticated). Score classifies the
+  // family into entry / primary / premium so the recommended itinerary
+  // type lands at the right price point without trial-and-error.
+  //
+  // Stand-in content until Yasin's Q13 brand-shaped Travel Stall question
+  // set arrives; same trajectory as the TMC/RFU placeholder banks above.
+  // Bank version 1; admin can publish v2 via POST /api/travel/diagnostic-
+  // banks once final copy lands without touching the seed.
+  await seedDiagnosticBank(tenant.id, "travelstall", {
+    questions: [
+      {
+        id: "q1",
+        text: "Who's travelling with you?",
+        type: "single-choice",
+        options: [
+          { value: "solo", label: "Solo or couple", weight: 1 },
+          { value: "family-young", label: "Family with kids under 12", weight: 3 },
+          { value: "family-teen", label: "Family with teens", weight: 3 },
+          { value: "multigen", label: "Multi-generational (kids + grandparents)", weight: 5 },
+        ],
+      },
+      {
+        id: "q2",
+        text: "How experienced are you with family international travel?",
+        type: "single-choice",
+        options: [
+          { value: "first", label: "First international trip", weight: 1 },
+          { value: "occasional", label: "1-2 trips taken before", weight: 2 },
+          { value: "regular", label: "3+ trips — comfortable", weight: 4 },
+        ],
+      },
+      {
+        id: "q3",
+        text: "Trip duration you're planning?",
+        type: "single-choice",
+        options: [
+          { value: "short", label: "Long weekend (3-4 days)", weight: 1 },
+          { value: "week", label: "About a week (6-8 days)", weight: 3 },
+          { value: "extended", label: "10+ days", weight: 5 },
+        ],
+      },
+      {
+        id: "q4",
+        text: "What pace fits your family?",
+        type: "single-choice",
+        options: [
+          { value: "relaxed", label: "Beach + downtime, minimal moves", weight: 1 },
+          { value: "balanced", label: "Mix of sightseeing + relaxation", weight: 3 },
+          { value: "packed", label: "Adventure / full itinerary", weight: 5 },
+        ],
+      },
+      {
+        id: "q5",
+        text: "Budget per traveller (excluding flights)?",
+        type: "single-choice",
+        options: [
+          { value: "value", label: "Value (under ₹50k)", weight: 1 },
+          { value: "mid", label: "Mid-range (₹50k - ₹1.5L)", weight: 3 },
+          { value: "premium", label: "Premium (₹1.5L+)", weight: 5 },
+        ],
+      },
+    ],
+  }, {
+    method: "weighted-sum",
+    bands: [
+      { minScore: 0, maxScore: 7, classification: "level_1", label: "Entry Family Adventurer", recommendedTier: "entry" },
+      { minScore: 8, maxScore: 15, classification: "level_2", label: "Confident Family Traveller", recommendedTier: "primary" },
+      { minScore: 16, maxScore: 99, classification: "level_3", label: "Premium Family Concierge", recommendedTier: "premium" },
+    ],
+  });
+
   // ── 4. Cost master rows ──────────────────────────────────────────────
   //
   // Placeholder rates so the /pricing/quote endpoint has something to

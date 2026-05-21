@@ -494,3 +494,84 @@ test.describe('Travel diagnostics API — list + fetch submissions', () => {
     console.log(`[travel-diag-spec] RUN_TAG=${RUN_TAG} bankIds=${JSON.stringify(created.bankIds)} diagIds=${JSON.stringify(created.diagnosticIds)}`);
   });
 });
+
+// Phase 2 (PRD §4.7) — Travel Stall Family Travel Quiz seed lands a
+// `travelstall` v1 bank with 5 Qs + 3 scoring bands. These tests pin
+// the seed contract so the admin's sub-brand picker has something to
+// list and the public landing-page wizard can render the quiz.
+test.describe('Travel diagnostics — Travel Stall Family Travel Quiz seed (PRD §4.7)', () => {
+  test('GET /diagnostic-banks?subBrand=travelstall&active=true returns the seeded bank', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const res = await get(request, token, '/api/travel/diagnostic-banks?subBrand=travelstall&active=true');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.banks)).toBe(true);
+    expect(body.banks.length).toBeGreaterThanOrEqual(1);
+    // v1 lives here; v2+ would land via admin POST after Yasin's final copy.
+    const v1 = body.banks.find((b) => b.version === 1);
+    expect(v1, 'travelstall v1 bank must be seeded').toBeTruthy();
+    expect(v1.subBrand).toBe('travelstall');
+    expect(v1.isActive).toBe(true);
+  });
+
+  test('GET /diagnostic-banks/:id renders the 5 Family Travel Quiz questions', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    // Resolve the seeded id via list, then fetch by id.
+    const listRes = await get(request, token, '/api/travel/diagnostic-banks?subBrand=travelstall&active=true');
+    if (!listRes.ok()) test.skip(true, 'travelstall bank not seeded on this stack');
+    const v1 = (await listRes.json()).banks.find((b) => b.version === 1);
+    if (!v1) test.skip(true, 'travelstall v1 not seeded');
+    const res = await get(request, token, `/api/travel/diagnostic-banks/${v1.id}`);
+    expect(res.status()).toBe(200);
+    const bank = await res.json();
+    const questions = JSON.parse(bank.questionsJson);
+    expect(Array.isArray(questions.questions)).toBe(true);
+    expect(questions.questions.length).toBe(5);
+    // Pin the question IDs so future copy changes don't silently break
+    // the scorer (answers map by id).
+    expect(questions.questions.map((q) => q.id)).toEqual(['q1', 'q2', 'q3', 'q4', 'q5']);
+  });
+
+  test('Travel Stall bank scoring rules classify into 3 family-tier bands', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const listRes = await get(request, token, '/api/travel/diagnostic-banks?subBrand=travelstall&active=true');
+    if (!listRes.ok()) test.skip(true, 'travelstall bank not seeded on this stack');
+    const v1 = (await listRes.json()).banks.find((b) => b.version === 1);
+    if (!v1) test.skip(true, 'travelstall v1 not seeded');
+    const res = await get(request, token, `/api/travel/diagnostic-banks/${v1.id}`);
+    const bank = await res.json();
+    const rules = JSON.parse(bank.scoringRulesJson);
+    expect(rules.method).toBe('weighted-sum');
+    expect(Array.isArray(rules.bands)).toBe(true);
+    expect(rules.bands.length).toBe(3);
+    const labels = rules.bands.map((b) => b.label);
+    expect(labels).toContain('Entry Family Adventurer');
+    expect(labels).toContain('Confident Family Traveller');
+    expect(labels).toContain('Premium Family Concierge');
+  });
+
+  test('POST /diagnostics against the Travel Stall bank computes a score + tier', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const listRes = await get(request, token, '/api/travel/diagnostic-banks?subBrand=travelstall&active=true');
+    if (!listRes.ok()) test.skip(true, 'travelstall bank not seeded on this stack');
+    const v1 = (await listRes.json()).banks.find((b) => b.version === 1);
+    if (!v1) test.skip(true, 'travelstall v1 not seeded');
+    // High-tier answer set: multigen (5) + regular (4) + extended (5) +
+    // packed (5) + premium (5) = 24 → level_3 "Premium Family Concierge".
+    const res = await post(request, token, '/api/travel/diagnostics', {
+      bankId: v1.id,
+      answers: { q1: 'multigen', q2: 'regular', q3: 'extended', q4: 'packed', q5: 'premium' },
+    });
+    expect(res.status(), `submit: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.subBrand).toBe('travelstall');
+    expect(body.classification).toBe('level_3');
+    expect(body.recommendedTier).toBe('premium');
+    expect(Number(body.score)).toBeGreaterThanOrEqual(16);
+    if (body.id) created.diagnosticIds.push(body.id);
+  });
+});

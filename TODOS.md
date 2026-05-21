@@ -4,6 +4,61 @@
 
 ---
 
+## 🏁 AUTONOMOUS-LOOP CLOSEOUT (2026-05-21 overnight)
+
+**HEAD on origin/main:** `9ae14b4`. **All 9 items (A–I) from the
+sleep-mode autonomous queue shipped.** Queue genuinely exhausted —
+the rest of the Phase 1 surface is cred-blocked, process / external,
+or Phase 2/3 and out of scope.
+
+### What shipped overnight (priority order, 12 commits)
+
+| Commit | Item | What |
+|---|---|---|
+| `22bb641` | fix | Itinerary /share defensive rewrite (status side-effect drop + null guard + e.stack logging) |
+| `fef099b` | fix | Itinerary /share `crypto.randomBytes is not a function` — missing `require("crypto")` |
+| `a6e80eb` | **A** | webCheckinScheduler cron (PRD §6.3 row 1) — pending→reminded→fallback-agent lifecycle + 8 unit tests |
+| `c18fe62` | **B** | Itinerary /pdf endpoint (PRD §6.1) — renderTravelItineraryPdf + %PDF magic-byte gate spec |
+| `7d162cd` | **C** | Aadhaar consent draft for counsel review (PRD §4.5 / Q2) — 254-line markdown with consent text + counsel questions |
+| `0ede126` | **D** | DigiLocker integration spec doc (PRD §4.5 / Q3) — 295-line blueprint with route shapes + schema + retention |
+| `f83b7c7` | **F** | Unified /travel/leads page (PRD §7) — backend deals route extended with subBrand filter + frontend page |
+| `cacb9ce` | **G** | RfuCustomerProfile.jsx (PRD §7) — full read/edit profile UI on the already-shipped routes/travel_rfu_profiles.js |
+| `bb0c620` | **H** | Sub-brand switcher (Q25) — sessionStorage-persisted ActiveSubBrandProvider + sidebar dropdown |
+| `fbf15a5` | **I** | Realistic demo seed (initial) — 3 TmcTrips + 1 microsite + 1 RFU itinerary + 9 participants |
+| `9ae14b4` | fix | seed-travel.js `where: { email }` → `where: { email_tenantId: { email, tenantId } }` (Contact compound-unique) |
+
+(Item E was a duplicate of B in the queue spec; no separate ship needed.)
+
+### CAP statistics
+
+- 3 fixes shipped for prior-gate failures (1× /share rewrite, 1× crypto import, 1× Contact compound-unique). All landed on the next gate cycle. No CAP-triggering "3 consecutive same-spec failures" hit.
+- 0 product-judgment skips. Every item had a clear-enough Phase 1 contract that the autonomous loop could pick a reasonable shape.
+- 0 risky-ops triggers (no schema migrations attempted; the seed extension uses additive upserts only).
+- 12 commits across the autonomous arc — actual ship cadence ~22 min/commit including investigations.
+
+### What remains on the Travel CRM queue (NOT autonomous)
+
+- **Cred-blocked** — Wati BSP (Q9), DigiLocker wiring (Q3), real Microsite OTP SMS (Q9). Stubs are in place; one-line cutovers when creds arrive.
+- **Process / external** — R11 infra-handover call, Yasin's Section 13 deliverables (real Q-sets per Q13, brand assets per Q22), Aadhaar consent counsel review.
+- **Phase 2** — Travel Stall sub-brand, Birthday/anniversary greetings, Booking.com/Expedia direct APIs.
+- **Phase 3** — Visa Sure (routes/UI/risk-flag engine), Flight Plugin Chrome extension, web-checkin browser automation (P1B).
+
+### State of the world on wake
+
+- Latest release tag: **v3.9.2** (backend package.json). Today's commits stack on top — recommend tagging `v3.10.0` for the cumulative Phase 1 surface (~30 commits since v3.9.0 morning of 2026-05-20).
+- Demo on `9ae14b4`. Login `yasin@travelstall.in / password123`; the Dashboard tiles now read non-zero (3 trips, 1 microsite, 1 RFU itinerary with revenue, populated cost-master + seasons + markup rules + diagnostic banks).
+- Cron `db01e70f` (the autonomous loop itself) is still live and will continue firing at :17/:47 of each hour until the user deletes it via `CronDelete`. On wake the loop will simply find the queue exhausted and write idempotent "🏁 queue empty" log lines without shipping anything new.
+
+### Cron-loop self-stop
+
+The autonomous loop will continue to detect queue exhaustion on every
+fire and log "🏁 queue empty" without taking action. To free the cron
+slot and stop the chatter, the user can: tell Claude "stop the
+autonomous loop" or "delete cron db01e70f" — this triggers a
+`CronDelete` on the recurring job.
+
+---
+
 ## 🏁 SESSION HANDOFF (2026-05-21 office — Travel CRM Phase 1 closeout + Phase 1.5 polish closed)
 
 **HEAD on origin/main:** `b40ef4a` (Owner Dashboard ship). Release **v3.9.2**. Working tree clean.

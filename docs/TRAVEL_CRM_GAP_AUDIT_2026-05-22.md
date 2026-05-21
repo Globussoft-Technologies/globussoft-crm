@@ -1,35 +1,44 @@
-# Travel CRM PRD Gap Audit — 2026-05-22
+# Travel CRM PRD Gap Audit — refreshed 2026-05-22
 
-**HEAD on audit:** `192de86` at time of audit.
-**Audit method:** PRD section-by-section verification against schema + routes + frontend + gate specs + cron engines + seed. Every "SHIPPED" claim points at a file + line. Stub-mode claims point at the stub marker; cred-blocked claims point at the Q-marker.
+**HEAD at refresh:** `a9095ba` (was `192de86` at original audit; 7 commits + 8 shipped items landed since).
+**Prior audit:** commit `93b1c96` (2026-05-22); cron drained the menu via 5 successful feature dispatches (Pipeline + lost-reason; WebCheckin route + auto-create; LLM router scaffold; talking-points endpoint; seed-travel TMC fixtures) plus 1 bugfix follow-up (`beef891`).
+**Method:** PRD section-by-section verification against schema + routes + frontend + gate specs + cron engines + seed at current HEAD. Every SHIPPED claim points at file:line or commit. Stub-mode claims point at the stub marker; cred-blocked claims point at the Q-marker.
 
 ---
 
 ## Executive summary
 
-- **Total PRD requirements counted:** **78** (44 in §4, 23 models in §5, 11 route bundles in §6.1, 22 frontend pages in §7, 5 vertical-config items in §8, 14 integrations in §9; some collapse — see per-section tables for the precise denominator)
-- **SHIPPED:** **52** (~67%) — up from 44 baseline; +8 since (pipeline + lost-reason, webcheckin route, LLM router, talking-points + diag-interpretation, seed-travel.js full fixture set)
-- **PARTIAL:** **8** (~10%) — seed-travel.js row flipped PARTIAL → SHIPPED with `78884e3`
-- **GAP-AUTONOMOUS:** **0** (~0%) — all original 8 closed
-- **GAP-STUB-ABLE:** **8** (~10%)
-- **GAP-CRED-BLOCKED:** **8** (~10%)
-- **GAP-PRODUCT-CALL:** **2** (~3%)
+- **Total PRD requirements counted:** **78** (unchanged denominator)
+- **SHIPPED:** **57** (~73%) — up from 52 (+5: Pipeline/lost-reason seed, WebCheckin route, LLM router, talking-points endpoint, seed-travel TMC fixtures)
+- **PARTIAL:** **6** (~8%) — webcheckin row promoted PARTIAL → SHIPPED-(backend); seed-travel row promoted PARTIAL → SHIPPED
+- **GAP-AUTONOMOUS:** **7** (~9%) — refreshed from the audit's prior "0"; surfaced from PARTIAL and SHIPPED-(backend-only) rows whose frontend / consumer side is still autonomous-doable
+- **GAP-STUB-ABLE:** **6** (~8%) — was 8; talking-points + LLM router consumed two slots
+- **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
+- **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
 
-**Queue-refill threshold tripped** — Recommended next 5 has 0 unstruck items; §4 tables have 0 GAP-AUTONOMOUS. Per cron Step 4, next tick dispatches a re-audit refill to refresh the menu (the remaining 8 GAP-STUB-ABLE rows are pickable but the audit's curated priority ordering needs a refresh to surface them).
+**Queue refilled.** The prior audit reached "0 GAP-AUTONOMOUS" because it scored a row SHIPPED the moment a backend route existed — but the PRD bundle (route + UI + cron-WA-wire + downstream consumer) was not yet whole for several of those rows. This refresh restores granular accounting:
 
-The Phase 1 contractual surface (TMC + RFU diagnostic + itinerary + microsite + supplier vault + cost master + rooming + payment plans + reports + DigiLocker scaffold) is **almost entirely shipped**. The remaining gaps cluster into three buckets: (a) the Chrome flight-quote plugin + airline web-check-in automation (Phase 1 W3-W4 scope, NOT yet started), (b) the LLM router + talking-points + form-vs-call (Phase 1 W2-W3 scope, NOT yet started), (c) the per-cron WhatsApp dispatch + microsite OTP SMS cutover (one-line edits, Q9 cred-blocked).
+- **WebCheckin backend ships** but `WebCheckinQueue.jsx` operator UI is autonomous-doable
+- **LLM router scaffold ships** but `LlmCallLog` model + admin daily-summary endpoint (PRD §9.1, R7 cost observability) was deliberately deferred — still autonomous
+- **Talking-points endpoint ships** but the `DiagnosticDetail.jsx` advisor-brief render UI is autonomous-doable
+- **Seed-travel TMC fixtures ship** but `WebCheckin` rows aren't in the seed yet — the cron has nothing to scan in the demo box
+- **Per-tenant `subBrandConfigJson`** column shipped but ZERO consumers still grep-confirmed (route layer + crons + microsite OTP all hardcode-fallback)
 
-### Top three "biggest remaining single-commit wins" the cron should pick next
+The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plugin + airline automation (Phase 1 W3-W4, NOT started), (b) Callified AI calling + form-vs-call mismatch, (c) per-cron WhatsApp dispatch + microsite OTP SMS cutover (Q9 cred-blocked).
 
-1. ~~**WebCheckin CRUD route + auto-create on Itinerary.accept** — `WebCheckin` model is shipped (`schema.prisma:4387`) and the cron `webCheckinScheduler.js` already runs; what's missing is the route that creates rows + the auto-create trigger on itinerary acceptance. The cron sweeps an empty table today. Single commit; small-to-medium. (PRD §4.6, §6.1 `travel_webcheckin.js`)~~ — ✅ **commit `9898e87`** (2026-05-22; 18 vitest + 17 gate-spec cases, 2641/2641 backend pass)
-2. ~~**Seed 8-status travel pipeline + 8 lost reasons** (Q10 decision is final). `seed-travel.js` does not create a Pipeline + 8 PipelineStage rows for the travel tenant; deals can't move through the contractual funnel until they're there. Single commit; small. (PRD §4.1)~~ — ✅ **commit `ab2f15f`**
-3. **Per-tenant subBrandConfigJson reader + usage in route layer** — schema column shipped (`schema.prisma:168`) but ZERO consumers grep-confirmed. Cron WhatsApp dispatch + microsite OTP can't pick the right WABA number without it. ~½ day; medium. (PRD §5.2 + §6 + §8.5 Q9)
+### Top 3 next-best cron picks (priority order)
 
-### Top three "biggest cred-blocked items" worth chasing the human on
+1. **`WebCheckinQueue.jsx` operator UI** — backend ships (commit `9898e87`); cron scans empty table. Build the list / filter / "upload boarding pass" / "deliver" UI on top of the 7-endpoint API. PRD §4.6 + §7 row 20. Pure-frontend single-commit. ~½ day.
 
-1. **Q9 — Meta Business Manager artifacts** (System User access token + 3×phoneNumberId + 3×wabaId + App ID/Secret + webhook verify token). Five cron engines + microsite OTP + itinerary `/share` are all stub-dispatching today. Single delivery unblocks ~8 features. See [WHATSAPP_INTEGRATION_PRD.md](WHATSAPP_INTEGRATION_PRD.md).
-2. **Q3 — DigiLocker `DIGILOCKER_CLIENT_ID` + `DIGILOCKER_CLIENT_SECRET`**. Schema + session model + stub + route + gate spec all shipped. One env-var drop swaps stub → real. See [DIGILOCKER_INTEGRATION_SPEC.md](DIGILOCKER_INTEGRATION_SPEC.md).
-3. **Q1 — Section 13 packet (Workspace admin creds + TMC school DB + brand assets pack)**. Google Drive folder auto-create is shipped as a stub against `GOOGLE_WORKSPACE_CLIENT_ID/SECRET/REFRESH_TOKEN`; Drive folders for confirmed trips would go live the moment those land.
+2. **`LlmCallLog` model + admin daily-summary endpoint** — PRD §9.1 explicitly calls for cost-attribution + per-task spend breakdown (R7 observability). Router scaffold (`583c06b`) wrote a structured log line as the swap-point contract; replacing `console.log` with `prisma.llmCallLog.create` + the GET endpoint closes that loop. Single migration + one route file. ~3 hrs.
+
+3. **Seed at least 1 `WebCheckin` row in `seed-travel.js`** — gives the cron something to find during demo; pairs with the Queue UI above. The 4 ItineraryItems on Itinerary `IT-SEED-RFU-1` are the trigger surface. ~1 hr.
+
+### Top 3 cred-blocked items worth chasing the human on (unchanged)
+
+1. **Q9 — Meta Business Manager artifacts** (System User access token + 3×phoneNumberId + 3×wabaId + App ID/Secret + webhook verify token). 8 crons / endpoints stub-dispatching today.
+2. **Q3 — DigiLocker `DIGILOCKER_CLIENT_ID` + `DIGILOCKER_CLIENT_SECRET`**. One env-var drop swaps the shipped stub to real.
+3. **Q11 — LLM API keys per provider** (Anthropic / Google / Perplexity / OpenAI). Router stub envelope-shape pins the swap point.
 
 ---
 
@@ -39,134 +48,132 @@ The Phase 1 contractual surface (TMC + RFU diagnostic + itinerary + microsite + 
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| Multi-source enquiry capture (web forms, WhatsApp, phone, email, ads) | SHIPPED (reuse) | `routes/contacts.js`, `routes/marketplace_leads.js`, `routes/lead_routing.js` | Existing CRM machinery; no travel-specific extension needed beyond `Contact.subBrand` tag (shipped `schema.prisma:439`) |
-| Rule-based brand assignment | PARTIAL | `routes/lead_routing.js` (existing) + `Contact.subBrand` + `User.subBrandAccess` (`schema.prisma:357`) | Schema + column shipped; LeadRoutingRule schema not yet extended to filter on `subBrand` |
-| 8-status pipeline (Q10 decision) | SHIPPED | `seed-travel.js` `seedPipelineTaxonomies()` (commit `ab2f15f`); 1 Pipeline `"Travel Default Pipeline"` + 8 PipelineStage rows + gate spec `e2e/tests/travel-seed-taxonomy-api.spec.js` | Q10 labels seeded in order: New · Diagnostic Complete · Qualifying · Quoted · Negotiating · Won · Lost · Dormant |
-| 8 lost-reason taxonomy (Q10 decision) | SHIPPED | Same helper as above (commit `ab2f15f`); 8 WinLossReason rows with `type=lost` | Shipped against PRD §4.1 prose labels: Price · No response · Chose competitor · Wrong requirement · Timing issue · Budget issue · Trust issue · Duplicate enquiry. **Discrepancy flag:** the audit row above originally listed a different Q10 label set (Date Conflict / No-Show / Compliance Block / Out of Service Area / Customer Withdrew / Other). PRD §4.1 prose was the authoritative source for the seed; verify against TRAVEL_CRM_OPEN_QUESTIONS.md if Yasin wants the other set |
-| Diagnostic-first guard on quotation routes | SHIPPED | `routes/travel_itineraries.js` (commit `1e7061b`); guard helper in `middleware/travelGuards.js` | POST/PUT Itinerary refuses creation for a Contact with no completed diagnostic in this sub-brand |
-| AI qualification call (Eng/Hin/Urdu, Callified.ai) | GAP-CRED-BLOCKED | Sandbox mock only at `backend/scripts/sandbox/callified-mock.js`; no `travel_callified.js` route | Q11 LLM-key decision is locked; what's missing is the Callified webhook handler + per-tenant API-key handover. See Q1 |
-| Form-vs-call answer comparison + mismatch flag (80/60% threshold) | GAP-AUTONOMOUS (after Callified ships) | No code grep-hits for `formVsCall` / `mismatch` | Logic can be written + tested against fixture transcripts WITHOUT real Callified — autonomous fixture-driven scaffold worth doing now |
-| AI-to-advisor handover (B2C) | PARTIAL | `cron/travelDiagnosticAdvisorAlerts.js` (commit `9729f01`) — diagnostic-complete-no-outreach-in-30min escalation | Only the diagnostic side ships; AI-call → advisor handover trigger is Callified-cred-blocked |
-| Manager view (pending/delayed/staff-wise) | SHIPPED (reuse) | `routes/staff.js` + existing dashboards | Existing CRM machinery serves this |
-| Lead source attribution + UTM tracking | SHIPPED (reuse) | `Contact.firstTouchSource` + `Touchpoint` model already wired | No travel-specific extension required |
+| Multi-source enquiry capture | SHIPPED (reuse) | `routes/contacts.js`, `routes/marketplace_leads.js`, `routes/lead_routing.js` | `Contact.subBrand` tag at `schema.prisma:439` |
+| Rule-based brand assignment | PARTIAL | `routes/lead_routing.js` + `Contact.subBrand` + `User.subBrandAccess` (`schema.prisma:357`) | `LeadRoutingRule` not yet extended to filter on `subBrand`. GAP-AUTONOMOUS |
+| 8-status pipeline (Q10) | SHIPPED | `seed-travel.js:518, 1046` `seedPipelineTaxonomies()`; gate spec `e2e/tests/travel-seed-taxonomy-api.spec.js` (commit `ab2f15f`) | Labels: New · Diagnostic Complete · Qualifying · Quoted · Negotiating · Won · Lost · Dormant |
+| 8 lost-reason taxonomy | SHIPPED | Same helper, `seed-travel.js:1095-1119` | Price · No response · Chose competitor · Wrong requirement · Timing issue · Budget issue · Trust issue · Duplicate enquiry |
+| Diagnostic-first guard on quotation routes | SHIPPED | `middleware/travelGuards.js`; refused on POST/PUT Itinerary | |
+| AI qualification call (Eng/Hin/Urdu) | GAP-CRED-BLOCKED | Sandbox mock `scripts/sandbox/callified-mock.js` only | Q1 — Callified.ai handover |
+| Form-vs-call answer comparison (80/60% threshold) | GAP-AUTONOMOUS | `lib/llmRouter.js` already lists `"form-vs-call"` task with Claude-primary routing; no consumer route grep-confirmed | Can ship fixture-driven now that router scaffold exists |
+| AI-to-advisor handover (B2C) | PARTIAL | `cron/travelDiagnosticAdvisorAlerts.js` (diagnostic side only) | Callified side cred-blocked |
+| Manager view (pending/delayed/staff-wise) | SHIPPED (reuse) | `routes/staff.js` + existing dashboards | |
+| Lead source attribution + UTM tracking | SHIPPED (reuse) | `Contact.firstTouchSource` + Touchpoint already wired | |
 
-### §4.2 Diagnostic engine (cross-cutting)
+### §4.2 Diagnostic engine
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| Diagnostic builder (Q-bank editor) | PARTIAL | Backend: `routes/travel_diagnostics.js:139` POST `/diagnostic-banks` admin endpoint shipped. Frontend: `pages/travel/DiagnosticBuilder.jsx` exists | Phase 1 = view-only per Q16; Phase 1.5 edit-with-audit not started |
-| Weighted scoring engine | SHIPPED | `lib/travelDiagnosticScoring.js` (commit `dd5fa42`) + 20+ vitest cases | Per-answer weights → score → band mapping all done |
-| Classification bands (4 levels per brand) | SHIPPED | `TravelDiagnostic.classification` + `.classificationLabel` + `.recommendedTier` (`schema.prisma:4090-4092`) | Q13 ready — TMC + RFU Q-sets uploadable via CSV import per `travel_csv_io.js` |
-| Auto-generated branded PDF report | SHIPPED | `routes/travel_diagnostics.js:43-78` `generateDiagnosticPdfBestEffort` (commit `47218e6`) | Per-sub-brand templates still placeholder until Q22 brand assets land (decision = "all ready") |
-| Auto CRM record creation (Contact + Diagnostic + Lead) | SHIPPED | `routes/travel_diagnostics.js:493-557` public submit creates Contact + Diagnostic + dedup via `findDuplicateContactFull` | No `Diagnostic pending` → `Qualified` Deal-stage transition yet (deals not auto-created today) |
-| Curriculum mapping logic (TMC-only) | GAP-PRODUCT-CALL | No code surface; PRD scope-ambiguous | Q13 says "scoring weights written + ready to share" but curriculum→tier mapping isn't spelled out in the PRD — likely Q-bank tagging covers it but needs confirmation |
-| Risk flagging (Visa Sure) | SHIPPED (schema) | `VisaApplication.advisorRiskFlag` (`schema.prisma:4459`) | Phase 3 model; no route handlers yet — `routes/travel_visa.js` does not exist |
-| LLM-generated talking points per advisor | SHIPPED | `POST /api/travel/diagnostics/:id/talking-points/regen` (commit `cf876af`) — first LLM router consumer; writes `{ text, model, generatedAt, stub }` envelope to `talkingPointsJson` | Stub-mode-ready; real Claude output lands when Q11 keys arrive |
-| AI summary notes (Visa Sure) | GAP-AUTONOMOUS | Phase 3 scope — out of Phase 1 | Defer; same shape as talking-points once that lands |
+| Diagnostic builder (Q-bank editor) | PARTIAL | Backend POST `/diagnostic-banks` admin endpoint shipped (`routes/travel_diagnostics.js:139`); `pages/travel/DiagnosticBuilder.jsx` exists | Phase 1 = view-only per Q16 |
+| Weighted scoring engine | SHIPPED | `lib/travelDiagnosticScoring.js` + 20+ vitest cases | |
+| Classification bands (4 levels per brand) | SHIPPED | `TravelDiagnostic.classification` + `.classificationLabel` + `.recommendedTier` (`schema.prisma:4080-4092`) | |
+| Auto-generated branded PDF report | SHIPPED | `routes/travel_diagnostics.js:43-78` | Per-sub-brand templates placeholder until Q22 |
+| Auto CRM record creation | SHIPPED | `routes/travel_diagnostics.js:493-557` public submit | No auto-Deal-creation; deal flow manual today |
+| Curriculum mapping logic (TMC-only) | GAP-PRODUCT-CALL | No code surface | Q13 |
+| Risk flagging (Visa Sure) | SHIPPED (schema) | `VisaApplication.advisorRiskFlag` (`schema.prisma:4459`) | Phase 3 |
+| LLM-generated talking points per advisor | SHIPPED | `POST /api/travel/diagnostics/:id/talking-points/regen` (`routes/travel_diagnostics.js:396`, commit `cf876af`); LLM router consumer | Stub-mode-ready; real Claude output lands when Q11 keys arrive. **NB:** no `DiagnosticDetail.jsx` UI yet renders the brief — GAP-AUTONOMOUS |
+| AI summary notes (Visa Sure) | GAP-AUTONOMOUS | Phase 3 | Same shape as talking-points |
 
 ### §4.3 Itinerary / package builder
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| RFU Umrah quotation engine (unified search flight+hotel+transport) | PARTIAL | `routes/travel_itineraries.js` ships full CRUD + items + version chain + share + PDF + accept/reject (commits `ec687c6` `45bef33` `c18fe62`) | Multi-product trip composition works; "unified-search lowest-rate auto-select" requires RateHawk wire-in which is cred-blocked |
-| Hotel rate comparator (RateHawk P1 per Q19) | GAP-CRED-BLOCKED | No `services/ratehawkClient.js` | Q1 RateHawk API key needed; Booking/Expedia explicitly P1.5 per Q19 |
-| Preference filters (RFU Haram-facing / floor / room category) | PARTIAL | `TravelCostMaster.attributesJson` (`schema.prisma:4196`) supports them; UI filters not built | Schema can carry the preferences but no filter UI / API consumer yet |
-| Rule-based transport pricing with seasonal logic | SHIPPED | `TravelSeasonCalendar` + `TravelMarkupRule` models (`schema.prisma:4211, 4226`) + `routes/travel_pricing.js` (`/pricing/quote`) + `lib/travelPricing.js` (commit `7d3e87f` — 21 vitest + 14 gate) | Admin-editable via PATCH endpoints |
-| Cost master admin panel | SHIPPED | `routes/travel_cost_master.js` (5 endpoints, commit `d572d56`); `pages/travel/CostMaster.jsx` | Plus CSV import/export (`routes/travel_csv_io.js`, commit `2840d46`) |
-| Branded itinerary PDF with version history | SHIPPED | `routes/travel_itineraries.js:706` GET `/itineraries/:id/pdf` (commit `c18fe62`); `Itinerary.parentItineraryId` + status enum (commit `45bef33`) | Version chain server-side; PDF endpoint produces real bytes |
-| Flight Quotation Chrome plugin | GAP-AUTONOMOUS | No `flight-plugin/` directory at repo root; no `quotations/flight/extract` route | Phase 1 W3 scope per PRD; ~10-15 engineer-days as a bundle (manifest v3 + content script + popup + signed-CRX update server) |
-| Trip itinerary template per TMC trip | SHIPPED | `TripMicrosite.itineraryHtml` is the rendered template (`schema.prisma:4523`); `routes/travel_microsites.js:154` POST | Inline editor with rich-text + image upload shipped (commit `02c304e`) |
+| RFU Umrah quotation engine (unified search) | PARTIAL | `routes/travel_itineraries.js` ships full CRUD + items + version chain + share + PDF + accept/reject | "Unified-search lowest-rate auto-select" requires RateHawk wire-in (Q19 cred-blocked) |
+| Hotel rate comparator (RateHawk P1) | GAP-CRED-BLOCKED | No `services/ratehawkClient.js` | Q19 |
+| Preference filters (RFU Haram-facing / floor / room) | PARTIAL | `TravelCostMaster.attributesJson` (`schema.prisma:4196`) supports them; no filter UI | GAP-AUTONOMOUS |
+| Rule-based transport pricing with seasonal logic | SHIPPED | `TravelSeasonCalendar` + `TravelMarkupRule` + `routes/travel_pricing.js` + `lib/travelPricing.js` | |
+| Cost master admin panel | SHIPPED | `routes/travel_cost_master.js` (5 endpoints) + `pages/travel/CostMaster.jsx` + CSV (`routes/travel_csv_io.js`) | |
+| Branded itinerary PDF with version history | SHIPPED | `routes/travel_itineraries.js:706` GET `/itineraries/:id/pdf`; `Itinerary.parentItineraryId` + status enum | |
+| Flight Quotation Chrome plugin | GAP-AUTONOMOUS | No `flight-plugin/` at repo root | Phase 1 W3 — ~10-15 engineer-days |
+| Trip itinerary template per TMC trip | SHIPPED | `TripMicrosite.itineraryHtml`; `routes/travel_microsites.js:154` POST | |
 
 ### §4.4 Quote / invoice / payment
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| Quotation upload (Travel Stall — manual attachment) | SHIPPED (reuse) | `routes/contacts.js` ContactAttachment + existing Quote model | Reuse existing |
-| Manual or structured quotation (Visa Sure) | PARTIAL (schema only) | `VisaApplication` model shipped; route handlers absent | Phase 3 |
-| Invoice generation with GST capture (CGST/SGST/IGST) | SHIPPED (reuse) | `routes/billing.js` + Invoice model + `Invoice.legalEntityCode` (`schema.prisma:814`) | Existing Invoice already supports tax fields |
-| CA / Tally export | SHIPPED | `routes/billing.js:130` GET `/export/tally.xml` + `:181` GET `/export/ca-summary.csv` (commit `4a07fca`); `lib/tallyXmlExport.js` + `lib/caCsvExport.js` | Q5 sample format pending counsel for parity but baseline format ships |
-| Excel Software for Travel bridge (P1 import / P1.5 API) | GAP-CRED-BLOCKED | No `services/excelSoftwareClient.js` | Q8 = "Has REST API — will share docs"; pending docs handover |
-| Per-entity payment tracking | SHIPPED | `Invoice.legalEntityCode` (`schema.prisma:814`) | One column carries the per-entity tag |
-| Payment plan tracking (TMC instalments + reminders) | PARTIAL | `TripPaymentPlan` + `TripInstalmentPayment` models + `routes/travel_trip_billing.js` (commit `31aabe2`) + `cron/tripPaymentReminders.js` (commit `e3e2cd9`) | Crons fire but WA dispatch is stub (Q9-blocked). NB: per TODOS line 167, the cron for `TripInstalmentPayment` instalments isn't yet looking at real instalment rows — `/instalments/from-plan` materialiser is Phase 1.5 per `travel_trip_billing.js:23` |
+| Quotation upload (Travel Stall) | SHIPPED (reuse) | `routes/contacts.js` ContactAttachment + Quote | |
+| Manual or structured quotation (Visa Sure) | PARTIAL (schema only) | `VisaApplication` model | Phase 3 |
+| Invoice generation with GST capture | SHIPPED (reuse) | `routes/billing.js` + Invoice + `Invoice.legalEntityCode` (`schema.prisma:814`) | |
+| CA / Tally export | SHIPPED | `routes/billing.js:130` `/export/tally.xml` + `:181` `/export/ca-summary.csv` (commit `4a07fca`) | Q5 |
+| Excel Software for Travel bridge | GAP-CRED-BLOCKED | No `services/excelSoftwareClient.js` | Q8 docs pending |
+| Per-entity payment tracking | SHIPPED | `Invoice.legalEntityCode` | |
+| Payment plan tracking (TMC) | PARTIAL | `TripPaymentPlan` + `TripInstalmentPayment` + `routes/travel_trip_billing.js` + `cron/tripPaymentReminders.js` | WA dispatch stub (Q9); `/instalments/from-plan` materialiser Phase 1.5 |
 
 ### §4.5 Booking + supplier coordination
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| Trip / Booking record (TMC) | SHIPPED | `TmcTrip` model + `routes/travel_trips.js` 12 endpoints (commit `97d78b6`) | Auto-creates microsite + Drive folder hooks |
-| TMC confirmed-trip microsite | SHIPPED | `TripMicrosite` model + `routes/travel_microsites.js` admin CRUD + `/microsites/public/:publicUuid` view (commit `9b9e193`) | Subdomain `trip-<code>` per Q21 |
-| Microsite OTP (4-digit, 10-min, WA delivery) | PARTIAL | `routes/travel_microsites.js:396` request-otp + `:469` verify-otp + `/full` PII reveal (commit `aca0781`) | OTP generation + verification + gated reveal shipped; WA delivery is stub (Q9-blocked) — logs to console today |
-| Parent / teacher registration portal w/ DigiLocker | PARTIAL | `routes/travel_trips.js:510, 546` `/digilocker/initiate` + `/callback` + `DigilockerSession` model (commit `1babe1b`) | Stub-mode wiring complete; real DigiLocker swap is one-line when Q3 creds land. The customer-facing "registration submit" form (passport upload + parent details all in one POST) doesn't exist as a separate endpoint — participants are created via `/trips/:id/participants` (admin path) instead of a public parent-facing path |
-| Rooming allocation interface + downloadable list | PARTIAL | `routes/travel_trip_billing.js:65-200` rooming CRUD + `RoomingAssignment` model | XLSX export per PRD §6.1 (`/rooming.xlsx`) NOT yet shipped |
-| Departure checklist + per-student doc checklist | SHIPPED | `TripDocumentRequirement` model + `routes/travel_trips.js:603-654` documents CRUD | Schema + CRUD; per-participant join not yet — checklist is trip-scoped not participant-scoped today |
-| RFU customer database (full profile) | SHIPPED | `RfuLeadProfile` model + `routes/travel_rfu_profiles.js` 6 endpoints (commit `8a1c287`) + `pages/travel/RfuCustomerProfile.jsx` | All PRD-listed fields present in schema |
-| Customer-duplicate detection (name + phone + passport) | PARTIAL | `findDuplicateContactFull` wired in `routes/travel_rfu_profiles.js` (commit `ea817fb`) and public diagnostic intake | Email + phone dedup ship; passport-number key not yet added to match keys per PRD §4.5 |
-| Login vault (supplier credentials, AES-256-GCM) | SHIPPED | `SupplierCredential` + access-log model + `routes/travel_suppliers.js` 7 endpoints (commit `4b6b95e`) + AES-256-GCM via `lib/fieldEncryption.js` | `/reveal` is the only decryption path; access-log on every reveal/rotate/delete |
+| Trip / Booking record (TMC) | SHIPPED | `TmcTrip` + `routes/travel_trips.js` 17 endpoints | |
+| TMC confirmed-trip microsite | SHIPPED | `TripMicrosite` + `routes/travel_microsites.js` + `/microsites/public/:publicUuid` | |
+| Microsite OTP (4-digit, 10-min, WA delivery) | PARTIAL | `routes/travel_microsites.js:396,469,536` — request/verify/full | OTP gen + verify + reveal shipped; WA delivery stub (Q9) |
+| Parent/teacher registration w/ DigiLocker | PARTIAL | `routes/travel_trips.js:510,546` DigiLocker initiate/callback (commit `1babe1b`) | Stub mode end-to-end; parent-facing public registration endpoint missing — GAP-AUTONOMOUS |
+| Rooming allocation interface | PARTIAL | `routes/travel_trip_billing.js:65-200` CRUD + `RoomingAssignment` model | XLSX export `/rooming.xlsx` NOT shipped — GAP-AUTONOMOUS |
+| Departure checklist + per-student doc checklist | SHIPPED | `TripDocumentRequirement` + `routes/travel_trips.js:603-654` | Trip-scoped (not per-participant); per-participant join is GAP-AUTONOMOUS |
+| RFU customer database | SHIPPED | `RfuLeadProfile` + `routes/travel_rfu_profiles.js` + `pages/travel/RfuCustomerProfile.jsx` | |
+| Customer-duplicate detection | PARTIAL | `findDuplicateContactFull` (commit `ea817fb`) | Email + phone keys; passport-number key not yet added — GAP-AUTONOMOUS |
+| Login vault (AES-256-GCM) | SHIPPED | `SupplierCredential` + access-log + `routes/travel_suppliers.js` 7 endpoints + `lib/fieldEncryption.js` | |
 
 ### §4.6 Web check-in
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| P1A tracking + delivery (auto-schedule T-48h/T-24h, WA reminder, agent task, manual upload, dashboard) | PARTIAL | `WebCheckin` model (`schema.prisma:4387`) + `cron/webCheckinScheduler.js` (commit `a6e80eb`) + `routes/travel_webcheckin.js` (commit `9898e87`) + `lib/webCheckinWindow.js` per-airline T-window helper + auto-create on `POST /itineraries/:id/accept` | Backend complete: cron + model + 7-endpoint CRUD + multer boarding-pass upload + auto-create on itinerary accept. **Still missing:** `WebCheckinQueue.jsx` operator UI; WhatsApp dispatch on `/deliver` is Q9-stub |
-| P1B top-4 airline automation (IndiGo, AI/Express, Vistara, Emirates per Q20) | GAP-AUTONOMOUS | No browser-automation engine | Phase 1 W4 scope; large single-commit (per-airline adapter pattern + retry + fallback). Pairs with Chrome plugin work |
-| Fallback (2 failed retries → agent task; portal-down >2h → all-passengers-to-agents) | PARTIAL | `WebCheckin.status` enum includes `fallback-agent` + `failed` (`schema.prisma:4400`) | Schema-level only; no code emits these transitions today |
-| Boarding-pass auto-delivery (WA + email) | GAP-STUB-ABLE | `WebCheckin.boardingPassUrl` + `deliveredAt` columns + `POST /webcheckins/:id/deliver` endpoint (commit `9898e87`) emits Wati-stub log line | Real WA send is one-line swap in `/deliver` handler when Q9 creds land. Email path still untouched; mirror the stub pattern |
+| P1A tracking + delivery (auto-schedule T-48h/T-24h, WA reminder, agent task, manual upload, dashboard) | PARTIAL (backend ships) | `WebCheckin` model (`schema.prisma:4387`) + `cron/webCheckinScheduler.js` + `routes/travel_webcheckin.js` 7 endpoints (commit `9898e87`) + `lib/webCheckinWindow.js` + auto-create on `POST /itineraries/:id/accept` | Backend complete; **`WebCheckinQueue.jsx` operator UI MISSING** — GAP-AUTONOMOUS. WA dispatch on `/deliver` is Q9-stub |
+| P1B top-4 airline automation (IndiGo, AI/Express, Vistara, Emirates per Q20) | GAP-AUTONOMOUS | No `webCheckinAutomation.js` engine | Phase 1 W4 — paired with Chrome plugin work |
+| Fallback (2 failed retries → agent task; portal-down >2h → all-passengers-to-agents) | PARTIAL | `WebCheckin.status` enum includes `fallback-agent` + `failed` (`schema.prisma:4400`) | Schema-only; no code emits transitions yet — GAP-AUTONOMOUS |
+| Boarding-pass auto-delivery (WA + email) | GAP-STUB-ABLE | `POST /webcheckins/:id/deliver` (`routes/travel_webcheckin.js:372`) emits Wati-stub log line; `boardingPassUrl` + `deliveredAt` columns ready | One-line swap on Q9 cred drop |
 
 ### §4.7 Visa documents + compliance
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| Structured document checklist + status tracking (per visa type / per passenger) | PARTIAL (schema only) | `VisaDocumentChecklistItem` model (`schema.prisma:4474`) | Phase 3 — no route handlers, no UI |
-| Passport OCR + secure storage | GAP-CRED-BLOCKED | `TripParticipant.passportNumber`/`passportExpiry`/`passportDocId` columns exist; no OCR call | Needs OCR provider creds (Google Document AI or Azure Form Recognizer). No service stub today |
-| Document security model (AWS Mumbai multi-AZ, AES-256, audit log, watermark, share-link expiry, retention) | PARTIAL | AES-256 via `lib/fieldEncryption.js` ✅; AuditLog ✅; retention engine ✅ (`cron/retentionEngine.js`) | Watermark + share-link expiry NOT shipped. Hosting decision is **on-prem** per Q6 — diverges from "AWS Mumbai" line in PRD §4.7 (PRD predates Q6 decision) |
-| Rejection-recovery program (Visa Sure) | PARTIAL (schema only) | `VisaApplication.recoveryProgramId` placeholder column | Phase 3 |
-| Aadhaar OCR via DigiLocker (offline-KYC) | PARTIAL (stub-mode) | `services/digilockerClient.js` + `DigilockerSession` model + initiate/callback routes (commit `1babe1b`) + `e2e/tests/travel-digilocker-stub-api.spec.js` | Stub shipped end-to-end; real swap = Q3 cred drop. See [DIGILOCKER_INTEGRATION_SPEC.md](DIGILOCKER_INTEGRATION_SPEC.md) |
-| Aadhaar consent legal copy | GAP-PRODUCT-CALL | Draft at [TRAVEL_AADHAAR_CONSENT_DRAFT.md](TRAVEL_AADHAAR_CONSENT_DRAFT.md) (commit `7d162cd`) | Pending Travel Stall counsel review per Q2 |
+| Structured document checklist + status tracking | PARTIAL (schema only) | `VisaDocumentChecklistItem` (`schema.prisma:4474`) | Phase 3 — no routes/UI |
+| Passport OCR + secure storage | GAP-CRED-BLOCKED | `TripParticipant.passportNumber/Expiry/DocId` columns exist | Needs Google Document AI / Azure FR creds |
+| Document security model | PARTIAL | AES-256 via `lib/fieldEncryption.js` ✅; AuditLog ✅; retention engine ✅; watermark + share-link expiry NOT shipped | On-prem per Q6 (PRD §4.7 "AWS Mumbai" line predates Q6 decision) |
+| Rejection-recovery program (Visa Sure) | PARTIAL (schema only) | `VisaApplication.recoveryProgramId` placeholder | Phase 3 |
+| Aadhaar OCR via DigiLocker | PARTIAL (stub-mode) | `services/digilockerClient.js` + `DigilockerSession` + initiate/callback + gate spec (commit `1babe1b`) | Q3 cred drop swaps stub → real |
+| Aadhaar consent legal copy | GAP-PRODUCT-CALL | Draft at `docs/TRAVEL_AADHAAR_CONSENT_DRAFT.md` (commit `7d162cd`) | Q2 counsel review pending |
 
 ### §4.8 Customer communications
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| Embedded WhatsApp Web for staff | SHIPPED (reuse) | `routes/whatsapp.js` existing | No travel-specific work needed |
-| WhatsApp Business API for automation (3 WABA via Wati BSP) | GAP-CRED-BLOCKED | `services/whatsappProvider.js` already talks Meta Cloud API; Wati onboarded the numbers upstream | Q9 — needs Meta Business Manager artifacts. Five crons + microsite OTP + itinerary `/share` are dispatching to stubs today. See [WHATSAPP_INTEGRATION_PRD.md](WHATSAPP_INTEGRATION_PRD.md) |
-| Email (Gmail + Mailgun + Nodemailer + IMAP) | SHIPPED (reuse) | `routes/email.js` + `services/*` | Existing |
-| Calendar / Meet booking (Google Workspace OAuth) | SHIPPED (reuse) | `routes/calendar_google.js` | Existing |
-| Drive folder auto-creation for confirmed TMC trips | PARTIAL (stub-mode) | `services/googleDriveClient.js` (commit `192de86`) + wire-in at `routes/travel_trips.js:140-166, 271-282` | Stub shipped; real swap = Q1 Workspace admin creds (`GOOGLE_WORKSPACE_CLIENT_ID/SECRET/REFRESH_TOKEN`) |
-| Umrah journey reminders (driver/hotel/group/departure) | PARTIAL | `cron/travelJourneyReminders.js` (commit `1e3c123`) | Cron fires; WA dispatch stub (Q9) |
-| Religious-guidance content delivery (RFU curated library, scheduled) | GAP-AUTONOMOUS | No code surface | Sequence + scheduledEmail reuse pattern; content library is Yasin packet (Q1) |
-| Trip reminders + post-trip feedback form (TMC) | PARTIAL | `cron/tripPostTripFeedback.js` (commit `893f60d`) | Cron fires; Survey reuse pattern. WA dispatch stub (Q9) |
-| Birthday / anniversary greetings | SHIPPED (Phase 2) | `cron/contactGreetingsEngine.js` + WhatsAppMessage row in `pending_dispatch` | Per PRD §4.8 this is Phase 2 — confirmed shipped early |
+| Embedded WhatsApp Web for staff | SHIPPED (reuse) | `routes/whatsapp.js` | |
+| WhatsApp Business API for automation (3 WABA) | GAP-CRED-BLOCKED | `services/whatsappProvider.js` Meta direct; Wati upstream | Q9 — 8 features stub-dispatching |
+| Email | SHIPPED (reuse) | `routes/email.js` + services | |
+| Calendar/Meet booking | SHIPPED (reuse) | `routes/calendar_google.js` | |
+| Drive folder auto-creation for confirmed TMC trips | PARTIAL (stub-mode) | `services/googleDriveClient.js` (commit `192de86`) + wire-in `routes/travel_trips.js:140-166, 271-282` | Q1 Workspace creds unlock real |
+| Umrah journey reminders | PARTIAL | `cron/travelJourneyReminders.js` | WA dispatch stub (Q9) |
+| Religious-guidance content delivery | GAP-AUTONOMOUS | No code surface | Sequence + scheduledEmail reuse pattern; library is Yasin packet (Q1) |
+| Trip reminders + post-trip feedback (TMC) | PARTIAL | `cron/tripPostTripFeedback.js` | WA dispatch stub (Q9) |
+| Birthday / anniversary greetings | SHIPPED | `cron/contactGreetingsEngine.js` | Phase 2 per PRD; shipped early |
 
 ### §4.9 Reports / dashboards
 
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
-| Management dashboard KPIs (cross-brand) | SHIPPED | `routes/travel_dashboard.js:57` + `pages/travel/Dashboard.jsx` (commit `b40ef4a`) | Aggregate replaces Day-1 stub |
-| TMC analytics (revenue-by-destination, repeat-school, margin, conversion-by-diagnostic-score) | SHIPPED | `routes/travel_reports.js:69` `/reports/tmc` (commit `aae1700`) | All 4 aggregates returned; conversion-by-diagnostic approximated via Deal.diagnosticId join |
-| RFU analytics (revenue-by-tier, conversion-by-tier, repeat-customer) | SHIPPED | `routes/travel_reports.js:193` `/reports/rfu` | Tier dimension reads `Itinerary.productTier` |
-| Travel Stall analytics | PARTIAL | Not in the current reports route; Phase 2 scope per Q17 | Schema is ready |
-| Visa Sure analytics | PARTIAL | Phase 3 scope per Q18 | Schema is ready |
-| Platform-wise marketing reports (AdsGPT integration) | GAP-CRED-BLOCKED | No AdsGPT route surface in travel namespace | Q1 — Travel Stall AdsGPT creds + handover |
-| TMC ops dashboard per confirmed trip | PARTIAL | `pages/travel/TripDetail.jsx` shipped; explicit "/trips/:id/ops-dashboard" endpoint NOT shipped | Detail page aggregates client-side over existing endpoints |
+| Management dashboard KPIs (cross-brand) | SHIPPED | `routes/travel_dashboard.js:57` + `pages/travel/Dashboard.jsx` | |
+| TMC analytics | SHIPPED | `routes/travel_reports.js:69` `/reports/tmc` | |
+| RFU analytics | SHIPPED | `routes/travel_reports.js:193` `/reports/rfu` | |
+| Travel Stall analytics | PARTIAL | Phase 2 per Q17 | Schema ready |
+| Visa Sure analytics | PARTIAL | Phase 3 per Q18 | Schema ready |
+| Platform-wise marketing reports (AdsGPT) | GAP-CRED-BLOCKED | No AdsGPT route in travel namespace | Q1 |
+| TMC ops dashboard per confirmed trip | PARTIAL | `pages/travel/TripDetail.jsx` shipped; explicit `/trips/:id/ops-dashboard` endpoint NOT shipped | GAP-AUTONOMOUS |
 
-### §4.10 Sub-vertical-specific call-outs
-
-Most rolled up into the above tables. Net:
+### §4.10 Sub-vertical call-outs
 
 | Item | State | Notes |
 |---|---|---|
-| TMC diagnostic-first + curriculum mapping + teacher OTP access | SHIPPED (partial — teacher OTP) | OTP flow supports `purpose=teacher-access` (`schema.prisma:4540`) but no dedicated teacher access UI |
-| RFU 4-tier tagging drives quotation tier | SHIPPED | `Itinerary.productTier` (commit `2612a7e`) defaults from latest diagnostic via `lib/travelLatestDiagnostic.js` |
+| TMC diagnostic-first + teacher OTP | SHIPPED (partial) | OTP supports `purpose=teacher-access` (`schema.prisma:4540`); no dedicated teacher access UI |
+| RFU 4-tier tagging drives quotation tier | SHIPPED | `Itinerary.productTier` (commit `2612a7e`) |
 | RFU Haram-facing hotel filters | PARTIAL | Schema-supported; no filter UI |
-| LLM-switchable layer for quotation engine | GAP-STUB-ABLE | `lib/llmRouter.js` scaffold shipped (commit `583c06b`); quotation-engine consumer call site still missing | Router exposes `routeRequest({task: "bulk-text", payload, tenantId})` for itinerary draft; quotation routes need to wire it in |
-| Aadhaar OCR via DigiLocker | PARTIAL (stub) | See §4.7 |
-| Passport OCR | GAP-CRED-BLOCKED | See §4.7 |
-| Religious-guidance content library | GAP-AUTONOMOUS | See §4.8 |
-| Umrah journey reminders | PARTIAL | See §4.8 |
-| Travel Stall Family Travel Quiz | SHIPPED | `pages/public/TravelStallQuiz.jsx` (commit `1260caa`) + backend endpoints `/diagnostics/public/*` |
-| Travel Stall 50% advance booking | SHIPPED | `routes/travel_itineraries.js:773, 833` public share-token + advance-payment endpoint (commit `8abf6f3`); per-tenant tunable advance ratio (commit `ee35d00`) |
-| Travel Stall personalised 3-5 recommendations PDF | GAP-AUTONOMOUS | Phase 2 — no current route surface | Needs LLM-router + per-sub-brand template |
-| Travel Stall email-first acquisition (zero paid ads model) | SHIPPED (reuse) | Existing email machinery + Sequence engine | No travel-specific work |
+| LLM-switchable layer for quotation engine | GAP-STUB-ABLE | `lib/llmRouter.js` shipped (commit `583c06b`); quotation-route consumer still missing | Itinerary draft = `bulk-text` task |
+| Aadhaar OCR via DigiLocker | PARTIAL (stub) | §4.7 |
+| Passport OCR | GAP-CRED-BLOCKED | §4.7 |
+| Religious-guidance content library | GAP-AUTONOMOUS | §4.8 |
+| Umrah journey reminders | PARTIAL | §4.8 |
+| Travel Stall Family Travel Quiz | SHIPPED | `pages/public/TravelStallQuiz.jsx` (commit `1260caa`) + `/diagnostics/public/*` |
+| Travel Stall 50% advance booking | SHIPPED | `routes/travel_itineraries.js:773,833` public share-token + advance-payment (commit `8abf6f3`); per-tenant ratio (commit `ee35d00`) |
+| Travel Stall personalised 3-5 PDF | GAP-AUTONOMOUS | LLM-router scaffold ships; consumer absent |
+| Travel Stall email-first acquisition | SHIPPED (reuse) | Email + Sequence engine |
 | Visa Sure 15Q readiness + risk-flag dashboard | PARTIAL (schema only) | Phase 3 |
 | Visa Sure rejection-recovery program | PARTIAL (schema only) | Phase 3 |
 
@@ -174,42 +181,43 @@ Most rolled up into the above tables. Net:
 
 ## §5 Data model
 
-### §5.1 New models — 23 models
+### §5.1 New models (23)
 
-| Model | State | Schema location | Notes |
-|---|---|---|---|
-| `TravelDiagnostic` | SHIPPED | `schema.prisma:4080` | All PRD fields present incl. `talkingPointsJson` (unused yet) |
-| `TravelDiagnosticQuestionBank` | SHIPPED | `schema.prisma:4104` | Versioned per `(tenantId, subBrand)` |
-| `Itinerary` | SHIPPED | `schema.prisma:4121` | Plus Phase 2 advance-payment columns + `productTier` |
-| `ItineraryItem` | SHIPPED | `schema.prisma:4169` | All PRD fields |
-| `TravelCostMaster` | SHIPPED | `schema.prisma:4189` | Plus attributesJson for hotel prefs |
-| `TravelSeasonCalendar` | SHIPPED | `schema.prisma:4211` | |
-| `TravelMarkupRule` | SHIPPED | `schema.prisma:4226` | Agent-level via `ownerUserId` |
-| `TmcTrip` | SHIPPED | `schema.prisma:4245` | + microsite/Drive folder cols |
-| `TripParticipant` | SHIPPED | `schema.prisma:4272` | Aadhaar + passport cols ready |
-| `RoomingAssignment` | SHIPPED | `schema.prisma:4328` | |
-| `TripPaymentPlan` | SHIPPED | `schema.prisma:4341` | 1:1 with trip |
-| `TripInstalmentPayment` | SHIPPED | `schema.prisma:4351` | |
-| `TripDocumentRequirement` | SHIPPED | `schema.prisma:4369` | Trip-scoped (not per-participant) |
-| `WebCheckin` | SHIPPED | `schema.prisma:4387` + `routes/travel_webcheckin.js` (commit `9898e87`) | Full CRUD + auto-create on Itinerary.accept |
-| `SupplierCredential` | SHIPPED | `schema.prisma:4418` | AES-256 fields |
-| `SupplierCredentialAccessLog` | SHIPPED | `schema.prisma:4436` | |
-| `VisaApplication` | SHIPPED (Phase 3) | `schema.prisma:4449` | Schema-defined; no routes |
-| `VisaDocumentChecklistItem` | SHIPPED (Phase 3) | `schema.prisma:4474` | Schema-only |
-| `RfuLeadProfile` | SHIPPED | `schema.prisma:4490` | |
-| `TripMicrosite` | SHIPPED | `schema.prisma:4517` | |
-| `TripMicrositeOtp` | SHIPPED | `schema.prisma:4536` | |
-| `DigilockerSession` | SHIPPED | `schema.prisma:4304` (commit `1babe1b`) | Stub-mode plumbed end-to-end |
-| `TenantSetting` | SHIPPED | `schema.prisma:2853` (commit `ee35d00`) | Per-tenant key/value; first consumer = travel advance ratio |
+| Model | State | Schema location |
+|---|---|---|
+| `TravelDiagnostic` | SHIPPED | `schema.prisma:4080` |
+| `TravelDiagnosticQuestionBank` | SHIPPED | `schema.prisma:4104` |
+| `Itinerary` | SHIPPED | `schema.prisma:4121` |
+| `ItineraryItem` | SHIPPED | `schema.prisma:4169` |
+| `TravelCostMaster` | SHIPPED | `schema.prisma:4189` |
+| `TravelSeasonCalendar` | SHIPPED | `schema.prisma:4211` |
+| `TravelMarkupRule` | SHIPPED | `schema.prisma:4226` |
+| `TmcTrip` | SHIPPED | `schema.prisma:4245` |
+| `TripParticipant` | SHIPPED | `schema.prisma:4272` |
+| `DigilockerSession` | SHIPPED | `schema.prisma:4304` |
+| `RoomingAssignment` | SHIPPED | `schema.prisma:4328` |
+| `TripPaymentPlan` | SHIPPED | `schema.prisma:4341` |
+| `TripInstalmentPayment` | SHIPPED | `schema.prisma:4351` |
+| `TripDocumentRequirement` | SHIPPED | `schema.prisma:4369` |
+| `WebCheckin` | SHIPPED + route consumer | `schema.prisma:4387` + `routes/travel_webcheckin.js` |
+| `SupplierCredential` | SHIPPED | `schema.prisma:4418` |
+| `SupplierCredentialAccessLog` | SHIPPED | `schema.prisma:4436` |
+| `VisaApplication` | SHIPPED (Phase 3) | `schema.prisma:4449` |
+| `VisaDocumentChecklistItem` | SHIPPED (Phase 3) | `schema.prisma:4474` |
+| `RfuLeadProfile` | SHIPPED | `schema.prisma:4490` |
+| `TripMicrosite` | SHIPPED | `schema.prisma:4517` |
+| `TripMicrositeOtp` | SHIPPED | `schema.prisma:4536` |
+| `TenantSetting` | SHIPPED | `schema.prisma:2853` |
+| **`LlmCallLog` (missing)** | GAP-AUTONOMOUS | Router scaffold pinned the log-line shape; model + admin daily-summary endpoint not yet shipped (PRD §9.1 + R7 observability) |
 
 ### §5.2 Extensions to existing models
 
-| Extension | State | Schema location |
+| Extension | State | Notes |
 |---|---|---|
-| `Tenant.subBrandConfigJson` (per-brand WhatsApp/WABA/legal entity/GSTIN/Drive root) | SHIPPED schema, **NOT YET CONSUMED** anywhere | `schema.prisma:168` — zero grep-hits in `routes/` or `lib/` |
+| `Tenant.subBrandConfigJson` (per-brand WA / WABA / legal entity / GSTIN / Drive root) | SHIPPED schema (`schema.prisma:168`), **STILL 0 CONSUMERS** confirmed via grep | Cron WA dispatch + microsite OTP can't pick correct WABA without this — partial unblock for Q9 cutover |
 | `Contact.subBrand` | SHIPPED | `schema.prisma:439` |
 | `Deal.subBrand` + `Deal.diagnosticId` | SHIPPED | `schema.prisma:589-590` |
-| `Booking.tripId` + `Booking.itineraryId` (FK bridge) | NOT NEEDED YET | Booking model not bridged to TmcTrip/Itinerary; PRD says "optional" — defer until a cross-model query needs it |
+| `Booking.tripId` + `Booking.itineraryId` | NOT NEEDED YET | Optional per PRD |
 | `Invoice.legalEntityCode` | SHIPPED | `schema.prisma:814` |
 | `User.subBrandAccess` | SHIPPED | `schema.prisma:357` |
 
@@ -217,81 +225,82 @@ Most rolled up into the above tables. Net:
 
 ## §6 Route plan
 
-### §6.1 New route files — 11 expected
+### §6.1 New route files (11 expected + bonus)
 
 | Expected file | State | Notes |
 |---|---|---|
-| `travel.js` | SHIPPED | `routes/travel.js` (`/health` only — minimal); cross-sub-brand dashboard lives in `travel_dashboard.js`; sub-brand switcher inferred client-side from `User.subBrandAccess` (no `/sub-brands/:code/switch` endpoint) |
-| `travel_diagnostics.js` | SHIPPED | 10 endpoints incl. public submit + report PDF + `/talking-points/regen` (commit `cf876af`) |
-| `travel_itineraries.js` | SHIPPED | 14 endpoints; `/share` shipped (commits `45bef33`, `22bb641`, `fef099b`) |
-| `travel_quotation_flight.js` | GAP-AUTONOMOUS (Chrome plugin) | Does not exist; Phase 1 W3 scope |
+| `travel.js` | SHIPPED | Minimal `/health`; cross-sub-brand dashboard in `travel_dashboard.js` |
+| `travel_diagnostics.js` | SHIPPED | 10+ endpoints incl. public submit + report PDF + `/talking-points/regen` (commit `cf876af`) |
+| `travel_itineraries.js` | SHIPPED | 14+ endpoints incl. `/share` + version chain + accept/reject |
+| `travel_quotation_flight.js` | GAP-AUTONOMOUS (plugin-paired) | Phase 1 W3 |
 | `travel_cost_master.js` | SHIPPED | 5 endpoints |
-| `travel_supplier_vault.js` | SHIPPED (as `travel_suppliers.js`) | 7 endpoints — file naming diverges from PRD but content matches |
-| `travel_trips.js` (TMC) | SHIPPED | 17 endpoints incl. participants + documents + DigiLocker |
-| `travel_trip_microsite_public.js` | SHIPPED (folded into `travel_microsites.js`) | Public endpoints under `/microsites/public/:publicUuid` |
-| `travel_payment_plans.js` | SHIPPED (as `travel_trip_billing.js`) | 11 endpoints incl. rooming + plan + instalments |
-| `travel_webcheckin.js` | SHIPPED | commit `9898e87`; 7 endpoints (list/upcoming/get/post/patch/upload-pass/deliver) + ADMIN-only DELETE |
+| `travel_suppliers.js` (was `travel_supplier_vault.js`) | SHIPPED | 7 endpoints |
+| `travel_trips.js` (TMC) | SHIPPED | 17 endpoints incl. DigiLocker initiate/callback |
+| `travel_microsites.js` (folds `travel_trip_microsite_public.js`) | SHIPPED | Public + admin |
+| `travel_trip_billing.js` (was `travel_payment_plans.js`) | SHIPPED | 11 endpoints incl. rooming + plan + instalments |
+| `travel_webcheckin.js` | SHIPPED | 7 endpoints (commit `9898e87`) + auto-create on Itinerary.accept |
 | `travel_visa.js` (Visa Sure) | GAP (Phase 3) | Schema-ready, no routes |
-| `travel_callified.js` | GAP-CRED-BLOCKED | Q11 routing locked; needs Callified.ai handover per Q1 |
+| `travel_callified.js` | GAP-CRED-BLOCKED | Q11/Q1 — Callified handover |
 
-**Bonus shipped routes not in original PRD §6.1:** `travel_dashboard.js`, `travel_reports.js`, `travel_rfu_profiles.js`, `travel_microsites.js`, `travel_pricing.js`, `travel_csv_io.js`, `travel_trip_billing.js`.
+**Bonus shipped routes:** `travel_dashboard.js`, `travel_reports.js`, `travel_rfu_profiles.js`, `travel_pricing.js`, `travel_csv_io.js`.
 
-### §6.2 Reused routes — all SHIPPED in main CRM, no travel-specific extension needed beyond seed templates / per-sub-brand config.
+### §6.2 Reused routes — all SHIPPED in main CRM.
 
-### §6.3 New cron engines — 6 expected
+### §6.3 New cron engines (6)
 
-| Engine | State | Evidence |
-|---|---|---|
-| `webCheckinScheduler.js` | SHIPPED | `cron/webCheckinScheduler.js` (commit `a6e80eb`) — now fed by `9898e87`'s auto-create on Itinerary.accept |
-| `webCheckinAutomation.js` (event-driven, browser-automation per airline) | GAP-AUTONOMOUS | NOT shipped; Phase 1 W4 scope |
-| `tripPaymentReminders.js` | SHIPPED | `cron/tripPaymentReminders.js` (commit `e3e2cd9`) |
-| `travelJourneyReminders.js` | SHIPPED | `cron/travelJourneyReminders.js` (commit `1e3c123`) |
-| `tripPostTripFeedback.js` | SHIPPED | `cron/tripPostTripFeedback.js` (commit `893f60d`) |
-| `travelDiagnosticAdvisorAlerts.js` | SHIPPED | `cron/travelDiagnosticAdvisorAlerts.js` (commit `9729f01`) |
+| Engine | State |
+|---|---|
+| `webCheckinScheduler.js` | SHIPPED — now fed by `9898e87`'s auto-create on Itinerary.accept |
+| `webCheckinAutomation.js` (event-driven, per-airline) | GAP-AUTONOMOUS — Phase 1 W4 |
+| `tripPaymentReminders.js` | SHIPPED |
+| `travelJourneyReminders.js` | SHIPPED |
+| `tripPostTripFeedback.js` | SHIPPED |
+| `travelDiagnosticAdvisorAlerts.js` | SHIPPED |
 
 ---
 
-## §7 Frontend page plan — 22 pages expected
-
-| Page | State | Path |
-|---|---|---|
-| `Dashboard.jsx` | SHIPPED | `pages/travel/Dashboard.jsx` |
-| `Leads.jsx` | SHIPPED | `pages/travel/Leads.jsx` |
-| `LeadDetail.jsx` | NOT SHIPPED | `/travel/leads/:id` route not in App.jsx |
-| `DiagnosticBuilder.jsx` | SHIPPED | `pages/travel/DiagnosticBuilder.jsx` |
-| `DiagnosticPreview.jsx` | NOT SHIPPED | No preview page |
-| `DiagnosticPublic.jsx` (`/p/diagnostic/:subBrand/:bankId`) | SHIPPED-equivalent | `TravelStallQuiz.jsx` mounted at `/travel-stall/quiz` (path differs from PRD) |
-| `ItineraryBuilder.jsx` | PARTIAL | `pages/travel/Itineraries.jsx` lists; explicit /new builder route NOT in App.jsx |
-| `ItineraryDetail.jsx` | NOT SHIPPED | Detail not mounted as separate route |
-| `CostMaster.jsx` | SHIPPED | `pages/travel/CostMaster.jsx` |
-| `FlightQuoteAgent.jsx` | NOT SHIPPED | In-CRM fallback for Chrome plugin |
-| `MarkupRules.jsx` (admin) | SHIPPED (as `PricingRules.jsx`) | `pages/travel/PricingRules.jsx` |
-| `SupplierVault.jsx` | SHIPPED (as `Suppliers.jsx`) | `pages/travel/Suppliers.jsx` |
-| `TmcTrips.jsx` | SHIPPED (as `Trips.jsx`) | `pages/travel/Trips.jsx` |
-| `TmcTripDetail.jsx` | SHIPPED (as `TripDetail.jsx`) | `pages/travel/TripDetail.jsx` |
-| `TmcRooming.jsx` | NOT SHIPPED | Folded into TripDetail today |
-| `TmcPaymentPlan.jsx` | NOT SHIPPED | Folded into TripDetail today |
-| `TmcDocumentChecklist.jsx` | NOT SHIPPED | Folded into TripDetail today |
-| `TmcMicrositePreview.jsx` | NOT SHIPPED | Admin preview not wired |
-| `WebCheckinQueue.jsx` | NOT SHIPPED | Pending §4.6 work |
-| `RfuCustomerProfile.jsx` | SHIPPED | `pages/travel/RfuCustomerProfile.jsx` |
-| `RfuJourneyReminders.jsx` | NOT SHIPPED | Reminder list view not yet |
-| `VisaApplications.jsx` + `VisaApplicationDetail.jsx` + `VisaAdvisorDashboard.jsx` | NOT SHIPPED (Phase 3) | |
-| `TravelStallFamilyQuiz.jsx` | SHIPPED | `pages/public/TravelStallQuiz.jsx` |
-| `TravelReports.jsx` | SHIPPED | `pages/travel/Reports.jsx` |
-| `TripBooking.jsx` (50%-advance flow, bonus) | SHIPPED | `pages/public/TripBooking.jsx` (mounted at `/trip/:shareToken`) |
-
-### §7.1 Public micro-sites
+## §7 Frontend page plan (22 expected)
 
 | Page | State | Notes |
 |---|---|---|
-| `TripMicrosite.jsx` (SSR via landingPageRenderer) | NOT SHIPPED | Public microsite served as JSON via `/microsites/public/:publicUuid`; no SSR'd HTML page rendered through `services/landingPageRenderer.js` yet |
+| `Dashboard.jsx` | SHIPPED | `pages/travel/Dashboard.jsx` |
+| `Leads.jsx` | SHIPPED | |
+| `LeadDetail.jsx` | NOT SHIPPED | `/travel/leads/:id` not mounted |
+| `DiagnosticBuilder.jsx` | SHIPPED | |
+| `DiagnosticPreview.jsx` | NOT SHIPPED | |
+| `DiagnosticPublic.jsx` (`/p/diagnostic/:subBrand/:bankId`) | SHIPPED-equivalent | `TravelStallQuiz.jsx` at `/travel-stall/quiz` |
+| `ItineraryBuilder.jsx` | PARTIAL | List ships; explicit `/new` builder route absent |
+| `ItineraryDetail.jsx` | NOT SHIPPED | |
+| `CostMaster.jsx` | SHIPPED | |
+| `FlightQuoteAgent.jsx` | NOT SHIPPED | In-CRM fallback for Chrome plugin |
+| `MarkupRules.jsx` (admin, shipped as `PricingRules.jsx`) | SHIPPED | |
+| `SupplierVault.jsx` (shipped as `Suppliers.jsx`) | SHIPPED | |
+| `TmcTrips.jsx` (shipped as `Trips.jsx`) | SHIPPED | |
+| `TmcTripDetail.jsx` (shipped as `TripDetail.jsx`) | SHIPPED | |
+| `TmcRooming.jsx` | NOT SHIPPED — folded into TripDetail | GAP-AUTONOMOUS if PRD wants standalone |
+| `TmcPaymentPlan.jsx` | NOT SHIPPED — folded into TripDetail | Same |
+| `TmcDocumentChecklist.jsx` | NOT SHIPPED — folded into TripDetail | Same |
+| `TmcMicrositePreview.jsx` | NOT SHIPPED | Admin preview not wired |
+| `WebCheckinQueue.jsx` | **NOT SHIPPED — GAP-AUTONOMOUS top pick** | Backend ships in `9898e87`; UI is the next bundle |
+| `RfuCustomerProfile.jsx` | SHIPPED | |
+| `RfuJourneyReminders.jsx` | NOT SHIPPED | |
+| `VisaApplications.jsx` + Detail + AdvisorDashboard | NOT SHIPPED (Phase 3) | |
+| `TravelStallFamilyQuiz.jsx` | SHIPPED | `pages/public/TravelStallQuiz.jsx` |
+| `TravelReports.jsx` | SHIPPED | `pages/travel/Reports.jsx` |
+| `TripBooking.jsx` (50%-advance bonus) | SHIPPED | `pages/public/TripBooking.jsx` |
+| `DiagnosticDetail.jsx` (renders talking-points brief) | **NOT SHIPPED — GAP-AUTONOMOUS** | New since prior audit — talking-points endpoint ships but no UI render |
+
+### §7.1 Public micro-sites
+
+| Page | State |
+|---|---|
+| `TripMicrosite.jsx` (SSR via landingPageRenderer) | NOT SHIPPED — public microsite is JSON-only today |
 
 ### §7.2 Chrome extension
 
 | Item | State |
 |---|---|
-| `flight-plugin/` package at repo root | NOT SHIPPED |
+| `flight-plugin/` at repo root | NOT SHIPPED — directory does not exist |
 
 ---
 
@@ -300,11 +309,11 @@ Most rolled up into the above tables. Net:
 | Item | State | Evidence |
 |---|---|---|
 | `Tenant.vertical = "travel"` value | SHIPPED | `seed-travel.js:45,55` |
-| `renderTravelNav()` in Sidebar | SHIPPED | `frontend/src/components/Sidebar.jsx:967, 625` |
+| `renderTravelNav()` in Sidebar | SHIPPED | `Sidebar.jsx:967, 625` |
 | Sub-brand switcher in sidebar | SHIPPED | `Sidebar.jsx:986-1019` |
-| Theme `frontend/src/theme/travel.css` | SHIPPED (placeholder palette) | 74 lines; per Q22 brand assets "all ready" but not yet applied to theme |
-| Landing route `/travel` | SHIPPED | `App.jsx:266-268` |
-| Seed `seed-travel.js` | SHIPPED | tenant + users + 4 diagnostic banks + cost master + seasons + 8-status Pipeline + 8 lost reasons (`ab2f15f`) + 3 TmcTrips + participants + Itinerary + microsite + RoomingAssignment + TripPaymentPlan + 4 TripInstalmentPayment + SupplierCredential (env-gated) + VisaApplication + checklist (`78884e3`). End-to-end demo fixtures complete |
+| Theme `theme/travel.css` | SHIPPED (placeholder palette) | Per Q22 brand assets pending |
+| Landing route `/travel` | SHIPPED | `App.jsx:888` |
+| Seed `seed-travel.js` | SHIPPED | tenant + users + 4 diagnostic banks + cost master + seasons + 8-status Pipeline + 8 lost reasons + 3 TmcTrips + participants + Itinerary + microsite + RoomingAssignment + TripPaymentPlan + 4 TripInstalmentPayment + SupplierCredential (env-gated) + VisaApplication + 4 checklist items (commit `78884e3`). **NB:** no `WebCheckin` rows seeded — cron has nothing to scan in demo |
 
 ---
 
@@ -312,151 +321,171 @@ Most rolled up into the above tables. Net:
 
 | Integration | State | Notes |
 |---|---|---|
-| **Wati BSP wrapper** (3 WABAs) | GAP-CRED-BLOCKED | Q9 — `whatsappProvider.js` talks Meta Cloud direct; Wati is upstream onboarding. 8 features dispatching to stubs. See [WHATSAPP_INTEGRATION_PRD.md](WHATSAPP_INTEGRATION_PRD.md) |
-| **Meta WhatsApp Cloud API** | SHIPPED (reuse) | `services/whatsappProvider.js` |
-| **Callified.ai / Exotel** (AI calling Eng/Hin/Urdu) | GAP-CRED-BLOCKED | Sandbox mock at `scripts/sandbox/callified-mock.js`; no client + no travel-callified route |
-| **Google Workspace** (Drive/Gmail/Calendar/Meet) | PARTIAL (stub-mode for Drive) | `services/googleDriveClient.js` stub (commit `192de86`); Gmail + Calendar already reuse existing |
-| **RateHawk** (hotel B2B) | GAP-CRED-BLOCKED | Q1 RateHawk key needed |
-| **Booking.com / Expedia** | GAP (Phase 1.5 per Q19) | |
-| **DigiLocker** (Aadhaar XML) | PARTIAL (stub-mode) | `services/digilockerClient.js` shipped; Q3 cred drop unlocks real |
-| **Passport OCR** (Google Document AI or MS Form Recognizer) | GAP-CRED-BLOCKED | No service stub |
-| **AdsGPT** | GAP-CRED-BLOCKED | Q1 — no travel-specific integration |
-| **LLM router** (Perplexity/Gemini/Claude/GPT, Q11 routing) | SHIPPED | `lib/llmRouter.js` scaffold (commit `583c06b`); stub-mode returns deterministic synthetic responses matching real-mode shape. Real provider call wires in when Q11 API keys land. `LlmCallLog` model + admin daily-summary endpoint deferred to first consumer |
-| **Meta/Google/LinkedIn/YouTube Ads APIs** | GAP-CRED-BLOCKED | Q1 |
-| **Excel Software for Travel** | GAP-CRED-BLOCKED | Q8 API docs pending |
-| **Airline portals** (IndiGo/AI/AI Express/Vistara/Emirates) | GAP-AUTONOMOUS | Browser-automation; Phase 1 W4 — paired with Chrome plugin |
-| **Razorpay** | SHIPPED (reuse) | `routes/payments.js` already wired per Q4 |
-| **Tally** | SHIPPED | `lib/tallyXmlExport.js` + `routes/billing.js:130` |
+| Wati BSP wrapper (3 WABAs) | GAP-CRED-BLOCKED | Q9; 8 features stub-dispatching |
+| Meta WhatsApp Cloud API | SHIPPED (reuse) | `services/whatsappProvider.js` |
+| Callified.ai / Exotel | GAP-CRED-BLOCKED | Sandbox mock only |
+| Google Workspace (Drive/Gmail/Calendar/Meet) | PARTIAL (stub for Drive) | `services/googleDriveClient.js` (commit `192de86`) |
+| RateHawk | GAP-CRED-BLOCKED | Q19 |
+| Booking.com / Expedia | GAP (Phase 1.5 per Q19) | |
+| DigiLocker | PARTIAL (stub) | `services/digilockerClient.js` (commit `1babe1b`) |
+| Passport OCR | GAP-CRED-BLOCKED | |
+| AdsGPT | GAP-CRED-BLOCKED | Q1 |
+| LLM router | SHIPPED | `lib/llmRouter.js` stub-mode (commit `583c06b`); 1 consumer live (talking-points) |
+| Meta/Google/LinkedIn/YouTube Ads APIs | GAP-CRED-BLOCKED | Q1 |
+| Excel Software for Travel | GAP-CRED-BLOCKED | Q8 docs pending |
+| Airline portals | GAP-AUTONOMOUS | Phase 1 W4 |
+| Razorpay | SHIPPED (reuse) | Q4 |
+| Tally | SHIPPED | `lib/tallyXmlExport.js` + `routes/billing.js:130` |
 
 ### §9.1 LLM routing defaults (Q11 locked)
 
-| Task | Locked model | Implementation state |
+| Task | Locked model | State |
 |---|---|---|
-| Diagnostic interpretation | Perplexity | SHIPPED via talking-points endpoint (commit `cf876af`) routing through Claude; stub-mode-ready until Q11 keys land |
-| Itinerary draft | Gemini 2.5 | GAP-AUTONOMOUS |
+| Diagnostic interpretation (talking-points) | Claude Opus | SHIPPED via talking-points endpoint (commit `cf876af`); stub-mode-ready |
+| Itinerary draft (bulk-text) | Gemini Flash | GAP-AUTONOMOUS — router exposes task; quotation routes need to wire it |
+| Form-vs-call comparison | Claude Opus | GAP-AUTONOMOUS — fixture-driven scaffold doable now |
 | AI qualification call | Gemini Live | GAP-CRED-BLOCKED (Callified front-end) |
-| Document OCR fallback | Gemini Vision | GAP-CRED-BLOCKED (passport OCR needs provider creds first) |
-| Sentiment / KPI insights | Gemini 2.5 | GAP-AUTONOMOUS (reuse existing Gemini wrapper) |
+| Document OCR fallback | Gemini Vision | GAP-CRED-BLOCKED |
+| Sentiment / KPI insights | Gemini Flash | GAP-AUTONOMOUS |
+| **Cost observability** (`LlmCallLog` model + admin daily summary) | — | **GAP-AUTONOMOUS** — router pinned the log-line shape as the swap-point contract; persistence layer + admin endpoint are the next bundle |
 
 ---
 
 ## §10 Phased plan — exit-gate verification
 
-### Phase 1 W1-W6 exit-gate state
+### Phase 1 W1-W6 state
 
-| Week | Contractual exit gate | Current state |
+| Week | Exit gate | State |
 |---|---|---|
-| W1 | SSO live; inbound WhatsApp creates enquiries; templates submitted | PARTIAL — SSO reuse (Workspace existing); WA enquiries cred-blocked (Q9); templates not in code |
-| W2 | Both diagnostics live; AI calling with summary attached | PARTIAL — Diagnostics ✅; AI calling 🔴 (Callified GAP) |
-| W3 | Flight plugin: 4-option quote in 60s; RFU quotation returns lowest rate | RED — Flight plugin not started; RFU returns multi-product itinerary but no rate auto-pick (RateHawk GAP) |
-| W4 | Web check-in live for top-4 airlines; TMC microsite pilot | PARTIAL — Microsite ✅ + cron ✅; airline automation GAP; WebCheckin route GAP |
-| W5 | Dashboards meet KPI list; CA export validated | SHIPPED — Reports + Dashboard + Tally export all ship |
-| W6 | UAT ≥90% P1A pass; go-live D42 | BLOCKED — UAT users (Q15) pending |
+| W1 | SSO live; inbound WA enquiries; templates submitted | PARTIAL — SSO reuse; WA cred-blocked (Q9) |
+| W2 | Both diagnostics live; AI call summary attached | PARTIAL — Diagnostics ✅ + talking-points ✅; AI calling 🔴 (Callified GAP) |
+| W3 | Flight plugin 4-option in 60s; RFU lowest-rate | RED — Plugin not started; RateHawk GAP |
+| W4 | Web check-in live top-4; TMC microsite pilot | PARTIAL — Microsite ✅ + cron ✅ + route ✅ (commit `9898e87`); operator UI MISSING; airline automation GAP |
+| W5 | Dashboards meet KPI list; CA export validated | SHIPPED — Reports + Dashboard + Tally export |
+| W6 | UAT ≥90% P1A pass; D42 go-live | BLOCKED — UAT users (Q15) pending; Phase 1 W3 + W4 items dominate the residual risk |
 
 ### Phase 1.5 follow-on state
 
 | Item | State |
 |---|---|
-| Web check-in Tier-2 airlines | GAP (downstream of Tier-1 GAP) |
-| Admin-editable diagnostic scoring with audit + sandbox | GAP-AUTONOMOUS (Q16 view-only confirmed for P1; edit-with-audit for P1.5 not started) |
+| Web check-in Tier-2 airlines | GAP (downstream of Tier-1) |
+| Admin-editable diagnostic scoring with audit + sandbox | GAP-AUTONOMOUS (Q16) |
 | Excel Software API bridge | GAP-CRED-BLOCKED (Q8) |
 | Booking.com + Expedia direct APIs | GAP-CRED-BLOCKED (Q19) |
-| Long-tail airline automation (captcha-aware) | GAP (downstream) |
+| Long-tail airline automation | GAP (downstream) |
 | Seasons + markup rules admin UI | SHIPPED (`PricingRules.jsx`) |
 
 ### Phase 2 (Travel Stall) state
 
-Per Q17 confirmed Phase 2. Already shipped: Family Travel Quiz, 50%-advance booking pattern, tunable per-tenant advance ratio, public diagnostic endpoints. GAPS: personalised 3-5 destination recommendation PDF (LLM-driven), customer-duplicate full pop-up flow, birthday/anniversary greetings (✅ shipped early), Booking.com+Expedia direct APIs.
+Already shipped: Family Travel Quiz, 50%-advance booking, tunable advance ratio, public diagnostic endpoints, birthday/anniversary greetings. GAPS: personalised 3-5 destination PDF (LLM-driven, GAP-AUTONOMOUS now that router scaffold ships), customer-duplicate full pop-up flow, Booking.com/Expedia APIs.
 
 ### Phase 3 (Visa Sure) state
 
-Per Q18 confirmed Phase 3. Schema-only state — `VisaApplication` + `VisaDocumentChecklistItem` models shipped; no route file (`routes/travel_visa.js` does not exist); no UI pages.
+Schema-only — `VisaApplication` + `VisaDocumentChecklistItem` models shipped (now seeded via `78884e3`); no route file `travel_visa.js`; no UI pages.
 
 ---
 
 ## §12 Open questions cross-reference
 
-All 25 questions decided 2026-05-20. Per-question implementation status:
-
 | # | Tier | Question | Decision | Code state |
 |---|---|---|---|---|
-| Q1 | CRITICAL | Section 13 packet | 🟢 Most ready | RESOLVED-pending-handover (Drive folder stub-ready) |
-| Q2 | HIGH | Aadhaar consent legal copy | 🟢 GS drafts → counsel | DRAFT (commit `7d162cd`); counsel review pending |
-| Q3 | CRITICAL | DigiLocker creds | 🟢 Travel Stall has them | RESOLVED-pending-handover; stub end-to-end ready |
-| Q4 | MEDIUM | Payment gateway | 🟢 Razorpay | RESOLVED (already wired) |
-| Q5 | MEDIUM | CA export sample | 🟢 Tally | RESOLVED-pending-sample; Tally exporter shipped |
-| Q6 | MEDIUM | Data residency | 🟢 On-prem (R11 added) | RESOLVED; R11 ops work pending |
-| Q7 | CRITICAL | SSO provider | 🟢 Google Workspace | RESOLVED (reuse) |
-| Q8 | MEDIUM | Excel SW integration | 🟢 REST API | RESOLVED-pending-docs |
-| Q9 | CRITICAL | WhatsApp numbers | 🟢 3 procured | RESOLVED-pending-handover; stubs in place. 8-feature unblock |
-| Q10 | CRITICAL | Pipeline labels | 🟢 GS defaults | DECIDED + SEEDED (commit `ab2f15f`) — both 8-stage Pipeline + 8 lost-reason rows live |
-| Q11 | HIGH | LLM defaults | 🟢 Routing locked | DECIDED + router scaffold shipped (commit `583c06b`); real API-key wire-in pending Q11 cred drop into `SupplierCredential` category `"llm-key"` |
-| Q12 | HIGH | KPI periods | 🟢 D/W/M | RESOLVED (reports support all 3) |
-| Q13 | CRITICAL | Diagnostic length | 🟢 Both ready | RESOLVED-pending-content (CSV import ready) |
-| Q14 | CRITICAL | Retention durations | 🟢 GS defaults | RESOLVED (retention engine ✅) |
-| Q15 | MEDIUM | UAT users | 🟢 All identified | RESOLVED-pending-handover |
-| Q16 | CONFLICT | RFU editable scoring | 🟢 View-only P1 | RESOLVED (Phase 1.5 work; Q-bank POST endpoint exists but admin UI gates) |
-| Q17 | CONFLICT | Travel Stall scope | 🟢 Phase 2 | RESOLVED |
-| Q18 | CONFLICT | Visa Sure scope | 🟢 Phase 3 | RESOLVED |
-| Q19 | HIGH | Hotel comparator | 🟢 RateHawk P1 | RESOLVED-pending-creds |
-| Q20 | HIGH | Top-N airlines | 🟢 4 in P1 | RESOLVED-pending-code (Chrome plugin + automation engine GAP) |
-| Q21 | HIGH | Subdomain | 🟢 tmc.travelstall.in | RESOLVED-pending-DNS |
-| Q22 | CRITICAL | Brand assets | 🟢 All ready | RESOLVED-pending-handover (theme placeholder palette in `travel.css`) |
-| Q23 | MEDIUM | Premium support | 🟢 Premium 90-day | RESOLVED (process) |
-| Q24 | HIGH | Decimal precision | 🟢 Decimal(15,2) | RESOLVED (schema uses `Decimal(15,2)` per `schema.prisma:4144` etc.) |
-| Q25 | HIGH | Tenancy | 🟢 Single tenant + tags | RESOLVED |
+| Q1 | CRITICAL | Section 13 packet | 🟢 | RESOLVED-pending-handover (Drive folder stub-ready) |
+| Q2 | HIGH | Aadhaar consent legal copy | 🟢 | DRAFT (commit `7d162cd`); counsel review pending |
+| Q3 | CRITICAL | DigiLocker creds | 🟢 | RESOLVED-pending-handover; stub end-to-end ready |
+| Q4 | MEDIUM | Payment gateway | 🟢 | RESOLVED (Razorpay wired) |
+| Q5 | MEDIUM | CA export sample | 🟢 | RESOLVED-pending-sample; Tally exporter shipped |
+| Q6 | MEDIUM | Data residency | 🟢 | RESOLVED on-prem; R11 ops work pending |
+| Q7 | CRITICAL | SSO provider | 🟢 | RESOLVED (Workspace reuse) |
+| Q8 | MEDIUM | Excel SW integration | 🟢 | RESOLVED-pending-docs |
+| Q9 | CRITICAL | WhatsApp numbers | 🟢 | RESOLVED-pending-handover; 8 features stub-dispatching |
+| Q10 | CRITICAL | Pipeline labels | 🟢 | DECIDED + SEEDED (commit `ab2f15f`) |
+| Q11 | HIGH | LLM defaults | 🟢 | DECIDED + scaffold shipped (commit `583c06b`); real-mode swap pending Q11 keys |
+| Q12 | HIGH | KPI periods | 🟢 | RESOLVED |
+| Q13 | CRITICAL | Diagnostic length | 🟢 | RESOLVED-pending-content |
+| Q14 | CRITICAL | Retention durations | 🟢 | RESOLVED |
+| Q15 | MEDIUM | UAT users | 🟢 | RESOLVED-pending-handover |
+| Q16 | CONFLICT | RFU editable scoring | 🟢 | RESOLVED (Phase 1 view-only; Phase 1.5 UI gates) |
+| Q17 | CONFLICT | Travel Stall scope | 🟢 | RESOLVED Phase 2 |
+| Q18 | CONFLICT | Visa Sure scope | 🟢 | RESOLVED Phase 3 |
+| Q19 | HIGH | Hotel comparator | 🟢 | RESOLVED-pending-creds |
+| Q20 | HIGH | Top-N airlines | 🟢 | RESOLVED-pending-code |
+| Q21 | HIGH | Subdomain | 🟢 | RESOLVED-pending-DNS |
+| Q22 | CRITICAL | Brand assets | 🟢 | RESOLVED-pending-handover |
+| Q23 | MEDIUM | Premium support | 🟢 | RESOLVED |
+| Q24 | HIGH | Decimal precision | 🟢 | RESOLVED (Decimal(15,2) confirmed `schema.prisma:4144`) |
+| Q25 | HIGH | Tenancy | 🟢 | RESOLVED (single-tenant + `subBrandAccess[]`) |
 
 ---
 
-## R-marker risk register cross-reference
+## R-marker risk register
 
-| # | Risk | Status | Code-side delta since 2026-05-20 |
+| # | Risk | Status | Delta since 2026-05-20 |
 |---|---|---|---|
-| R1 | Section 13 packet | 🟡 | No change — depends on Yasin's deliverables |
-| R2 | 6-week timeline | 🔴 | Calendar slip — large W3/W4 items (Chrome plugin + airline automation + Callified + LLM router) not yet started |
-| R3 | Chrome extension auto-update | 🔴 | Plugin not built; risk dormant until code exists |
+| R1 | Section 13 packet | 🟡 | No change |
+| R2 | 6-week timeline | 🔴 | Improved — 8 shipped items in 2 days; W3/W4 still the dominant slip |
+| R3 | Chrome extension auto-update | 🔴 | Plugin not built |
 | R4 | Hotel comparator scope drift | 🟢 | Resolved |
-| R5 | DigiLocker creds | 🟢 | Stub shipped; awaits cred handover |
-| R6 | Tenancy model irreversibility | 🟢 | Resolved + implemented (single-tenant + `subBrandAccess[]`) |
-| R7 | LLM cost + observability | 🟡 | Router NOT built; cost dashboard NOT built |
-| R8 | Aadhaar legal exposure | 🟡 | Consent draft shipped; counsel review pending |
+| R5 | DigiLocker creds | 🟢 | Stub shipped |
+| R6 | Tenancy model irreversibility | 🟢 | Resolved + implemented |
+| R7 | LLM cost + observability | 🟡 | Router scaffold ships (commit `583c06b`); `LlmCallLog` + cost dashboard NOT built — next-pick top-3 |
+| R8 | Aadhaar legal exposure | 🟡 | Counsel pending |
 | R9 | Multi-WABA timeline | 🟢 | Resolved |
-| R10 | Scope creep TS/VS | 🟢 | Resolved; Phase 2 Travel Stall has already shipped 50%-advance + public quiz |
-| R11 | On-prem hosting complexity | 🔴 | No infra-handover call evidence in commits |
+| R10 | Scope creep TS/VS | 🟢 | Resolved |
+| R11 | On-prem hosting complexity | 🔴 | No infra evidence in commits |
 
 ---
 
 ## Stub-mode swap-point inventory
 
-For each shipped stub, the file + line where the `// STUB:` marker lives, the Q-marker that unlocks the swap, and what the swap entails.
-
-| Stub file | Stub marker | Q-marker | Single-file swap |
+| Stub file | Stub marker | Q-marker | Swap |
 |---|---|---|---|
-| `backend/services/digilockerClient.js` | line 1 (`STUB MODE`) + line 19 (`STUB_DIGILOCKER_BASE`) | Q3 (DIGILOCKER_CLIENT_ID + DIGILOCKER_CLIENT_SECRET) | Replace `initiateSession` to sign the state with the client secret; replace `exchangeCallback` to POST to DigiLocker token endpoint + parse signed Aadhaar XML. Callers unchanged |
-| `backend/services/googleDriveClient.js` | line 1 + line 56 (`STUB: Google Drive folder.create`) | Q1 (GOOGLE_WORKSPACE_CLIENT_ID/SECRET/REFRESH_TOKEN) | Swap `createTripFolder` body to call `googleapis` library; preserve return shape |
-| `backend/cron/tripPaymentReminders.js` | "WhatsApp dispatch pending" log line | Q9 | Loop adds `await whatsappProvider.sendTemplate(...)` per row |
+| `backend/services/digilockerClient.js` | line 1 `STUB MODE` + line 19 `STUB_DIGILOCKER_BASE` | Q3 | Replace `initiateSession` + `exchangeCallback` to talk real DigiLocker token endpoint |
+| `backend/services/googleDriveClient.js` | line 1 + line 56 `STUB: Google Drive folder.create` | Q1 | Swap `createTripFolder` to `googleapis` |
+| `backend/lib/llmRouter.js` | line 1 `STUB MODE` | Q11 | Add `if (apiKey) return realProviderCall(...)` branches; preserve envelope `{ text, finishReason, usage, model, stub }` |
+| `backend/cron/tripPaymentReminders.js` | "WhatsApp dispatch pending" | Q9 | Loop adds `await whatsappProvider.sendTemplate(...)` |
 | `backend/cron/travelJourneyReminders.js` | "WhatsApp dispatch pending" | Q9 | Same |
 | `backend/cron/tripPostTripFeedback.js` | "WhatsApp dispatch pending" | Q9 | Same |
-| `backend/cron/webCheckinScheduler.js` | "WhatsApp dispatch pending" | Q9 | Same (also needs WebCheckin rows to actually exist — see autonomous gap above) |
+| `backend/cron/webCheckinScheduler.js` | "WhatsApp dispatch pending" | Q9 | Same; also needs WebCheckin rows seeded |
 | `backend/cron/contactGreetingsEngine.js` | "WhatsApp dispatch pending" | Q9 | Same |
 | `backend/cron/travelDiagnosticAdvisorAlerts.js` | "WhatsApp dispatch pending" | Q9 | Same |
-| `backend/routes/travel_microsites.js:396` | `sendOtpStub` logs OTP to console | Q9 | Replace stub call with `whatsappProvider.sendOtp(phone, otp)` |
-| `backend/routes/travel_itineraries.js:654` | `/share` returns URL; doesn't auto-WA | Q9 | Add `await whatsappProvider.sendTemplate(...)` after share-URL creation |
+| `backend/routes/travel_microsites.js:396` | `sendOtpStub` logs OTP to console | Q9 | Replace stub with `whatsappProvider.sendOtp(phone, otp)` |
+| `backend/routes/travel_itineraries.js:761` | `/share` returns URL; doesn't auto-WA | Q9 | Add `await whatsappProvider.sendTemplate(...)` after share-URL |
+| `backend/routes/travel_webcheckin.js:372` | `/deliver` emits Wati-stub log | Q9 | One-line swap to real WA send |
 
 ---
 
 ## Recommended next 5 cron dispatches (priority order)
 
-1. ~~**Seed travel 8-status Pipeline + 8 lost reasons** (PRD §4.1; Q10 decision locked). Scope: extend `prisma/seed-travel.js` with a single Pipeline + 8 PipelineStage rows + 8 WinLossReason rows scoped to the travel tenant. Effort: small (~2 hrs). Why next: every Deal on the travel tenant lacks a place to flow today; pipeline integrity is a Phase 1 deliverable; commit is fully autonomous + zero cred dependency.~~ — ✅ **commit `ab2f15f`** (2026-05-22, gate-verified 7/7 spec cases)
+1. **`WebCheckinQueue.jsx` operator UI** (PRD §4.6 + §7 row 20). New page under `frontend/src/pages/travel/WebCheckinQueue.jsx` consuming the 7-endpoint API: list (filter by status / upcoming) + per-row upload-boarding-pass + `/deliver` button + status badges. Mount as `/travel/webcheckin` in `App.jsx`. Add to sidebar `renderTravelNav()`. ~½ day. **Why next:** backend ships (`9898e87`); operator workflow is the missing piece that closes W4 exit-gate (excluding airline automation which is the next bundle); single-commit, zero cred deps.
 
-2. **Build WebCheckin CRUD route + auto-create on Itinerary.accept** (PRD §4.6, §6.1 row `travel_webcheckin.js`). Scope: new `routes/travel_webcheckin.js` with `GET /upcoming`, `POST /` (admin), `POST /:id/upload-boarding-pass`, `POST /:id/deliver`; auto-create row on `POST /itineraries/:id/accept` for each flight `ItineraryItem`. Effort: medium (~½ day). Why next: cron is already running over an empty table; this gives it something to scan AND unblocks W4 exit gate without needing browser automation.
+2. **`LlmCallLog` model + admin daily-summary endpoint** (PRD §9.1, R7). Add `model LlmCallLog { id String @id @default(cuid()) tenantId String task String model String tokensIn Int tokensOut Int costEstimate Decimal createdAt DateTime @default(now()) ... }` to `schema.prisma`. Swap `console.log` in `lib/llmRouter.js` for `prisma.llmCallLog.create`. New `GET /api/travel/llm/usage/daily` ADMIN endpoint aggregating spend by task. ~3 hrs. **Why next:** R7 is amber; router scaffold already pins the log-line shape as the swap-point contract; this is the persistence + observability layer.
 
-3. ~~**LLM router scaffold (`lib/llmRouter.js`)** with Q11 task→model routing + cost dashboard tile (PRD §9.1, R7). Scope: `lib/llmRouter.js` with `routeRequest({task, payload})` returning a normalized response; per-task provider selection (Perplexity for diagnostic interpretation, Gemini 2.5 for itinerary draft + sentiment, Gemini Vision for OCR fallback); cost-attribution log row per call; admin daily summary endpoint. Effort: medium (~1 day). Why next: prerequisite for talking-points + personalised recommendations + form-vs-call comparison; pure-code; locked routing means zero ambiguity.~~ — ✅ **commit `583c06b`** (stub-mode scaffold, 20 vitest cases; `LlmCallLog` model + admin daily-summary endpoint deferred to first real-mode consumer)
+3. **Seed at least 1 `WebCheckin` row in `seed-travel.js`** (PRD §8.5). Extend the existing trip + itinerary seed so that one of the 4 RFU `ItineraryItem` flight rows generates a `WebCheckin` row scheduled T+24h in the demo timeline. ~1 hr. **Why next:** the cron currently scans an empty WebCheckin table in demo; pairs with the Queue UI above; idempotent upsert pattern already in seed-travel.js.
 
-4. ~~**Diagnostic talking-points endpoint** (PRD §4.2; §6.1 row `/api/travel/diagnostics/:id/talking-points/regen`). Scope: new route + `lib/llmRouter` call + write to existing `TravelDiagnostic.talkingPointsJson` column. Effort: small (~3 hrs). Why next: column is shipped + unused; advisor needs context for the first call; depends on item 3 (LLM router) being green.~~ — ✅ **commit `cf876af`** (first LLM router consumer; ADMIN/MANAGER-only; PII-safe; stub-mode-ready)
+4. **`DiagnosticDetail.jsx` UI to render talking-points brief** (PRD §4.2 + §7). New page that fetches an existing TravelDiagnostic by `:id` + renders the `talkingPointsJson.text` block + a "Regenerate" button calling `POST /api/travel/diagnostics/:id/talking-points/regen`. Mount as `/travel/diagnostics/:id`. ~3 hrs. **Why next:** talking-points endpoint ships (commit `cf876af`) but advisor has no surface to read the brief — pure-frontend, zero cred deps.
 
-5. ~~**TMC sub-brand seed sample data** (PRD §8.5). Scope: extend `seed-travel.js` with 1 sample `TmcTrip` + 2 `TripParticipant` + 1 `RoomingAssignment` + 1 `TripPaymentPlan` + 4 `TripInstalmentPayment` + 1 `Itinerary` + 1 `SupplierCredential` (encrypted) + 1 `VisaApplication`. Effort: small (~3 hrs). Why next: every existing travel page renders empty against the demo seed because the demo data stops at diagnostic banks + cost master. UAT can't validate end-to-end flows until this lands. Idempotent upserts so demo re-seeds don't double-up.~~ — ✅ **commit `78884e3`** (audit was point-in-time stale: TmcTrip × 3 + participants + Itinerary + microsite already shipped earlier; `78884e3` added the remaining 5 fixture types — RoomingAssignment, TripPaymentPlan, TripInstalmentPayment × 4, SupplierCredential AES-256-GCM-encrypted with env-gate, VisaApplication + 4 nested checklist items)
+5. **Form-vs-call comparison fixture-driven scaffold** (PRD §4.1). New `lib/formVsCall.js` + 30 vitest cases against fixture transcripts (no real Callified needed); routes through `llmRouter.routeRequest({ task: "form-vs-call", payload })`; computes 80/60% mismatch threshold per PRD; returns `{ mismatchFlag, mismatches: [{ field, formValue, callValue }] }`. ~½ day. **Why next:** router scaffold lists the task; this is the consumer that proves the contract; mismatch flag is a Phase 1 W2 exit-gate item; works in pure-fixture mode until Callified ships.
 
 ---
 
-*End of audit. Document is a snapshot at HEAD `192de86`; re-run when a Phase 1 milestone lands or when any cred Q-marker resolves.*
+## Cred-blocked priority list (for human chase, NOT cron pick)
+
+1. **Q9 — Meta Business Manager artifacts** (System User access token + 3×phoneNumberId + 3×wabaId + App ID/Secret + webhook verify token). Owner: Yasin. Unblocks: 5 crons (`tripPaymentReminders`, `travelJourneyReminders`, `tripPostTripFeedback`, `webCheckinScheduler`, `contactGreetingsEngine`, `travelDiagnosticAdvisorAlerts`) + 3 endpoints (`travel_microsites.js:396` request-otp, `travel_itineraries.js:761` `/share`, `travel_webcheckin.js:372` `/deliver`). ~9-line swap each. See `docs/WHATSAPP_INTEGRATION_PRD.md`.
+
+2. **Q3 — DigiLocker `DIGILOCKER_CLIENT_ID` + `DIGILOCKER_CLIENT_SECRET`**. Owner: Yasin (Travel Stall has them). Unblocks: real Aadhaar-XML pull in `digilockerClient.js`. Single env-var drop. See `docs/DIGILOCKER_INTEGRATION_SPEC.md`.
+
+3. **Q11 — LLM API keys per provider** (`ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENAI_API_KEY`). Owner: Yasin (Travel Stall holds them). Unblocks: real-mode swap in `lib/llmRouter.js` (talking-points + form-vs-call + itinerary-draft consumers). Per-provider `if (apiKey) realCall(...)` branch.
+
+4. **Q1 — Section 13 packet** (Google Workspace admin creds → unblocks Drive folder auto-create; AdsGPT creds + handover → unblocks marketing reports; Callified.ai handover → unblocks AI calling + form-vs-call live mode; brand assets pack → unblocks themed PDF templates + travel.css palette). Owner: Yasin.
+
+5. **Q19 — RateHawk API key**. Owner: Yasin. Unblocks: RFU unified-search lowest-rate auto-pick + W3 exit-gate.
+
+6. **Q8 — Excel Software for Travel REST API docs**. Owner: Yasin. Unblocks: `services/excelSoftwareClient.js` + accounting bridge.
+
+7. **Q22 — Brand assets pack** (logos / palettes / PDF templates per sub-brand). Owner: Yasin. Unblocks: `theme/travel.css` palette swap + per-sub-brand PDF templates.
+
+8. **Q15 — UAT users handover**. Owner: Yasin / TMC / RFU stakeholders. Unblocks: W6 exit-gate.
+
+---
+
+*End of audit. Snapshot at HEAD `a9095ba`. Re-run when a Phase 1 milestone lands or any cred Q-marker resolves; the queue-refill threshold is "0 GAP-AUTONOMOUS items in §4 tables" or "fewer than 3 next-best picks in the priority list."*

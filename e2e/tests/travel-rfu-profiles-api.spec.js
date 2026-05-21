@@ -233,3 +233,133 @@ test.describe("Travel RFU profiles API — CRUD", () => {
     expect((await res.json()).code).toBe("EMPTY_BODY");
   });
 });
+
+// PRD §4.5 — Phase 2 customer-duplicate detection. Preflight endpoint +
+// passport-key collision on POST + PATCH. Shares the contact seeded in
+// beforeAll (it now has a profile with passportNumber K9876543); we
+// create a second contact in this describe to test the cross-contact
+// collision path.
+test.describe("Travel RFU profiles API — Phase 2 dedup (PRD §4.5)", () => {
+  const secondary = { contactId: null, profileId: null };
+  const secondPassport = "Z1112223";
+
+  test.beforeAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) return;
+    const cRes = await post(request, token, "/api/contacts", {
+      name: `${RUN_TAG} Pilgrim Yusuf`,
+      email: `${RUN_TAG.toLowerCase()}-pilgrim2@e2e.test`,
+      phone: `+91${String(Date.now() + 1).slice(-10)}`,
+      subBrand: "rfu",
+    });
+    if (cRes.ok()) secondary.contactId = (await cRes.json()).id;
+  });
+
+  test.afterAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) return;
+    if (secondary.profileId) {
+      await del(request, token, `/api/travel/rfu-profiles/${secondary.profileId}`).catch(() => {});
+    }
+    if (secondary.contactId) {
+      await del(request, token, `/api/contacts/${secondary.contactId}`).catch(() => {});
+    }
+  });
+
+  test("POST /check-duplicate with no keys → 400 MISSING_FIELDS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await post(request, token, "/api/travel/rfu-profiles/check-duplicate", {});
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_FIELDS");
+  });
+
+  test("POST /check-duplicate by passport returns matchedBy:'passport' + contact", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !contactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/rfu-profiles/check-duplicate", {
+      passportNumber: "K9876543",
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.duplicate).toBe(true);
+    expect(body.matchedBy).toBe("passport");
+    expect(body.contact?.id).toBe(contactId);
+    // UX-safe projection — must not leak portalPasswordHash etc.
+    expect(body.contact).not.toHaveProperty("portalPasswordHash");
+    expect(body.contact).not.toHaveProperty("territoryId");
+  });
+
+  test("POST /check-duplicate by email returns matchedBy:'email'", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !contactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/rfu-profiles/check-duplicate", {
+      email: `${RUN_TAG.toLowerCase()}-pilgrim@e2e.test`,
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.duplicate).toBe(true);
+    expect(body.matchedBy).toBe("email");
+    expect(body.contact?.id).toBe(contactId);
+  });
+
+  test("POST /check-duplicate with novel passport → duplicate:false", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await post(request, token, "/api/travel/rfu-profiles/check-duplicate", {
+      passportNumber: `NOPE_${Date.now()}`,
+      email: `nobody-${Date.now()}@e2e.test`,
+    });
+    expect(res.status()).toBe(200);
+    expect((await res.json()).duplicate).toBe(false);
+  });
+
+  test("POST /rfu-profiles for second contact with first contact's passport → 409 DUPLICATE_PASSPORT", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !secondary.contactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/rfu-profiles", {
+      contactId: secondary.contactId,
+      passportNumber: "K9876543",
+    });
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe("DUPLICATE_PASSPORT");
+    expect(body.existingContactId).toBe(contactId);
+    expect(typeof body.existingProfileId).toBe("number");
+  });
+
+  test("POST /rfu-profiles for second contact with novel passport → 201", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !secondary.contactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/rfu-profiles", {
+      contactId: secondary.contactId,
+      passportNumber: secondPassport,
+    });
+    expect(res.status(), `create: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.passportNumber).toBe(secondPassport);
+    secondary.profileId = body.id;
+  });
+
+  test("PATCH attempting to set passport to one already on another contact → 409 DUPLICATE_PASSPORT", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !secondary.profileId) test.skip(true, "deps missing");
+    const res = await patch(request, token, `/api/travel/rfu-profiles/${secondary.profileId}`, {
+      passportNumber: "K9876543",
+    });
+    expect(res.status()).toBe(409);
+    expect((await res.json()).code).toBe("DUPLICATE_PASSPORT");
+  });
+
+  test("PATCH passport to own existing value (no-op) → 200", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !secondary.profileId) test.skip(true, "deps missing");
+    // Re-setting your OWN passport to its current value must NOT collide
+    // with itself — the NOT:{ id: existing.id } guard handles that.
+    const res = await patch(request, token, `/api/travel/rfu-profiles/${secondary.profileId}`, {
+      passportNumber: secondPassport,
+    });
+    expect(res.status()).toBe(200);
+    expect((await res.json()).passportNumber).toBe(secondPassport);
+  });
+});

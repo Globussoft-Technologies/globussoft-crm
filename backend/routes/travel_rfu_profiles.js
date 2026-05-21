@@ -26,6 +26,7 @@ const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
+const { findDuplicateContactFull } = require("../utils/deduplication");
 
 const VALID_TIERS = ["entry", "primary", "premium"];
 
@@ -80,6 +81,32 @@ router.post("/rfu-profiles", verifyToken, requireTravelTenant, requireRfuAccess,
       return res.status(400).json({ error: "invalid productTier", code: "INVALID_TIER" });
     }
 
+    // PRD §4.5 — passport-key duplicate check. If a passport number is
+    // provided AND another profile in this tenant already has it (with a
+    // different contactId), surface a 409 so the caller's pop-up flow
+    // can offer "link to existing" / "edit existing" instead of silently
+    // creating a parallel profile that splits the pilgrim's history.
+    // Self-match (same contactId, e.g. accidental double-submit) is
+    // allowed through — the @unique contactId catches it as DUPLICATE_PROFILE.
+    if (req.body.passportNumber) {
+      const collision = await prisma.rfuLeadProfile.findFirst({
+        where: {
+          tenantId: req.travelTenant.id,
+          passportNumber: req.body.passportNumber,
+          NOT: { contactId: cid },
+        },
+        select: { id: true, contactId: true },
+      });
+      if (collision) {
+        return res.status(409).json({
+          error: "Another contact already has this passport number",
+          code: "DUPLICATE_PASSPORT",
+          existingProfileId: collision.id,
+          existingContactId: collision.contactId,
+        });
+      }
+    }
+
     const data = {
       tenantId: req.travelTenant.id,
       contactId: cid,
@@ -116,6 +143,64 @@ router.post("/rfu-profiles", verifyToken, requireTravelTenant, requireRfuAccess,
     res.status(500).json({ error: "Failed to create profile" });
   }
 });
+
+// ─── Phase 2 — preflight duplicate check (PRD §4.5) ──────────────────
+//
+// The Phase 2 "full pop-up flow with preferences" needs a check-without-
+// creating endpoint so the frontend modal can surface the duplicate
+// BEFORE the operator submits the form (and before any partial state
+// lands in the DB). Returns one of:
+//   { duplicate: false }
+//   { duplicate: true, matchedBy: 'passport'|'email'|'phone', contact: {...} }
+//
+// Try-order is passport → email → phone (signal strength descending).
+// Tenant-scoped + soft-delete filtered; same contract as the underlying
+// findDuplicateContactFull helper.
+//
+// MUST mount before the `/:id` routes so parseInt("check-duplicate") →
+// NaN doesn't capture it.
+router.post(
+  "/rfu-profiles/check-duplicate",
+  verifyToken,
+  requireTravelTenant,
+  requireRfuAccess,
+  async (req, res) => {
+    try {
+      const { email, phone, passportNumber } = req.body || {};
+      if (!email && !phone && !passportNumber) {
+        return res
+          .status(400)
+          .json({ error: "at least one of email/phone/passportNumber required", code: "MISSING_FIELDS" });
+      }
+      const hit = await findDuplicateContactFull({
+        email: email || null,
+        phone: phone || null,
+        passportNumber: passportNumber || null,
+        tenantId: req.travelTenant.id,
+      });
+      if (!hit) return res.json({ duplicate: false });
+      // Trim to a UX-safe contact projection — never leak fields the operator
+      // doesn't need (territoryId, portalPasswordHash, etc.).
+      const c = hit.contact;
+      res.json({
+        duplicate: true,
+        matchedBy: hit.matchedBy,
+        contact: {
+          id: c.id,
+          name: c.name,
+          email: c.email,
+          phone: c.phone,
+          company: c.company,
+          subBrand: c.subBrand,
+          status: c.status,
+        },
+      });
+    } catch (e) {
+      console.error("[travel-rfu] check-duplicate error:", e.message);
+      res.status(500).json({ error: "Failed to check duplicate" });
+    }
+  },
+);
 
 // ─── Lookup-by-contact ────────────────────────────────────────────────
 
@@ -199,6 +284,27 @@ router.patch("/rfu-profiles/:id", verifyToken, requireTravelTenant, requireRfuAc
     }
     if (Object.keys(data).length === 0) {
       return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+    }
+    // PRD §4.5 — passport-key collision check on UPDATE. If the passport
+    // is being changed to one already owned by a DIFFERENT contact in
+    // this tenant, surface 409. Matches POST guard above.
+    if (data.passportNumber) {
+      const collision = await prisma.rfuLeadProfile.findFirst({
+        where: {
+          tenantId: req.travelTenant.id,
+          passportNumber: data.passportNumber,
+          NOT: { id: existing.id },
+        },
+        select: { id: true, contactId: true },
+      });
+      if (collision) {
+        return res.status(409).json({
+          error: "Another contact already has this passport number",
+          code: "DUPLICATE_PASSPORT",
+          existingProfileId: collision.id,
+          existingContactId: collision.contactId,
+        });
+      }
     }
     const updated = await prisma.rfuLeadProfile.update({ where: { id }, data });
     res.json(updated);

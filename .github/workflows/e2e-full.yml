@@ -2,25 +2,33 @@ name: Full E2E suite (release validation)
 
 # Heavyweight Playwright run — the FULL chromium project (UI flows,
 # wellness deep, a11y, integration, auth, api-health) against the
-# deployed target URL. Runs ONLY on release-style events:
-#   - push of a tag matching v* (the normal release path: tag a green
-#     main commit AFTER its deploy.yml run has succeeded)
-#   - GitHub Release published (alternate)
+# deployed target URL. Fires on:
+#   - workflow_run: every main commit, AFTER its deploy.yml run goes green
+#     (auto-validation — the demo has the new code by then). Skips when
+#     deploy is red (no point validating a broken demo).
+#   - push of a tag matching v* (manual release tagging still works)
+#   - GitHub Release published (alternate manual path)
 #   - workflow_dispatch (manual; lets you point at any URL)
 #
 # Per-commit CI stays fast — deploy.yml's api_tests job keeps to the
-# 18 gated API specs (~2-3 min). This release validation runs the full
-# Playwright surface (~10-20 min) and is opt-in by tagging.
+# 18 gated API specs (~2-3 min). This heavyweight suite then runs after
+# the deploy lands (~30-60 min wall-clock across 4 parallel shards).
 #
-# Recommended release flow:
-#   1. Push to main — deploy.yml deploys to demo + smoke-checks
-#   2. Wait for the deploy job to go green
-#   3. Tag the commit:    git tag v3.2.6 && git push origin v3.2.6
-#   4. This workflow fires + runs the full suite against demo
-#   5. If green, the tag stands as a verified release. If red, the
-#      demo isn't broken (deploy.yml's smoke check already passed) but
-#      a deeper UI/flow regression has surfaced — fix it on main and
-#      retag.
+# Why workflow_run instead of `push: branches: [main]`?
+#   - workflow_run fires AFTER deploy.yml completes, so the demo
+#     actually has the new code when this suite hits it.
+#   - A bare `push:` trigger would race the deploy — the suite's
+#     `Wait for target health` would 200 against the PREVIOUS code on
+#     demo (because /api/health responds OK before the new code is
+#     deployed), giving false-green on stale code.
+#
+# Doc-only commits are skipped naturally: deploy.yml's paths-ignore
+# blocks them upstream, so they never reach this workflow_run trigger.
+#
+# CI-cost note: ~240 runner-minutes per fire (4 shards × 60-min ceiling).
+# Bumps total usage by 5-10× depending on commit cadence — confirm with
+# Actions billing before merging this trigger if Free-tier minutes
+# matter for the org.
 
 on:
   push:
@@ -28,6 +36,13 @@ on:
       - 'v*'
   release:
     types: [published]
+  # Auto-validate every main commit AFTER its deploy.yml goes green.
+  # The job-level `if:` below filters to conclusion == 'success', so
+  # red deploys don't waste a 4-shard run validating broken code.
+  workflow_run:
+    workflows: ['Deploy to demo server (crm.globusdemos.com)']
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       base_url:
@@ -57,6 +72,12 @@ jobs:
   # target needs a non-demo backing target (local docker stack per shard)
   # — see TODOS.md / #457 / handoff.
   e2e-full:
+    # workflow_run fires on BOTH success and failure of upstream deploy.yml;
+    # we only want to validate when it succeeded (broken-deploy demos
+    # would just light up the suite red for the wrong reason). For non-
+    # workflow_run triggers (tag, release, manual), the condition is true
+    # by default — those paths still run.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     # Per-shard wall-clock ceiling. History:
     #   30 min — original, fine until shard 1+2 audit-api serial-mode +

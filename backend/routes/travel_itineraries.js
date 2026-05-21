@@ -40,7 +40,14 @@ const {
 } = require("../middleware/travelGuards");
 
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
-const VALID_STATUSES = ["draft", "sent", "revised", "accepted", "rejected"];
+// Phase 2 (PRD §4.7) extends the enum with advance_paid / fully_paid for
+// the 50%-advance booking flow. Existing draft/sent/etc. semantics
+// unchanged — the two new values are only set by the public payment
+// endpoints. Routes that PATCH status accept all 7 values.
+const VALID_STATUSES = ["draft", "sent", "revised", "accepted", "rejected", "advance_paid", "fully_paid"];
+// Travel Stall default deposit ratio (PRD §4.7). Tunable per-tenant
+// later via TenantSetting; hard-coded for Phase 2 MVP.
+const ADVANCE_RATIO = 0.5;
 
 function assertValidItemType(itemType) {
   if (!VALID_ITEM_TYPES.includes(itemType)) {
@@ -708,6 +715,176 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-itin] pdf error:", e.message, "\nstack:", e.stack);
     res.status(500).json({ error: "Failed to render itinerary PDF", code: "PDF_FAILED" });
+  }
+});
+
+// ─── PUBLIC ENDPOINTS (no auth) — Phase 2 50%-advance booking (PRD §4.7) ──
+//
+// Lead receives a `shareToken` URL from the advisor (WhatsApp / email)
+// and views their itinerary + pays the 50% deposit without logging in.
+//
+// Allowlisted in server.js openPaths under `/travel/itineraries/public`.
+// shareToken is a 128-bit random slug (crypto.randomUUID() or 32-hex byte
+// stream depending on caller) and @@unique on the schema — sufficient
+// access control for a "share by link" surface, same model as the TMC
+// microsite publicUuid pattern.
+//
+// What's intentionally NOT exposed:
+//   - tenant id (only the slug-friendly tenant name)
+//   - contactId / leadId
+//   - cost / supplier / markup detail on items (only totalPrice +
+//     human-readable description)
+//   - portalPasswordHash and other PII (already scrubbed globally by
+//     scrubResponse middleware)
+
+// Strip an itinerary item to its public-safe projection.
+function publicItemProjection(item) {
+  return {
+    id: item.id,
+    itemType: item.itemType,
+    position: item.position,
+    description: item.description,
+    detailsJson: item.detailsJson, // already curated by the advisor; advisor controls what lands here
+    totalPrice: item.totalPrice,
+  };
+}
+
+// GET /api/travel/itineraries/public/:shareToken
+//
+// Public read-only fetch by share token. Returns the customer-facing
+// view of the itinerary including the 50%-advance summary so the
+// payment widget can render the right amount.
+router.get("/itineraries/public/:shareToken", async (req, res) => {
+  try {
+    const token = String(req.params.shareToken || "");
+    if (!token || token.length < 16) {
+      return res.status(400).json({ error: "shareToken required", code: "MISSING_TOKEN" });
+    }
+    const itin = await prisma.itinerary.findUnique({
+      where: { shareToken: token },
+      include: { items: { orderBy: { position: "asc" } }, tenant: { select: { name: true, slug: true } } },
+    });
+    if (!itin) {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    // Only advisor-completed itineraries (status >= sent) are publicly
+    // viewable. A draft is internal work-in-progress; surfacing it would
+    // be confusing for the lead.
+    if (itin.status === "draft") {
+      return res.status(404).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
+    }
+    const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
+    const advanceDue = total > 0 ? Math.round(total * ADVANCE_RATIO * 100) / 100 : 0;
+    const advancePaid = itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0;
+    const balanceDue = Math.max(0, total - advancePaid);
+    res.json({
+      shareToken: itin.shareToken,
+      tenantName: itin.tenant?.name || null,
+      tenantSlug: itin.tenant?.slug || null,
+      subBrand: itin.subBrand,
+      destination: itin.destination,
+      startDate: itin.startDate,
+      endDate: itin.endDate,
+      status: itin.status,
+      totalAmount: total,
+      currency: itin.currency,
+      advanceRatio: ADVANCE_RATIO,
+      advanceDue,
+      advancePaid,
+      advancePaidAt: itin.advancePaidAt,
+      balanceDue,
+      items: itin.items.map(publicItemProjection),
+      pdfUrl: itin.pdfUrl,
+    });
+  } catch (e) {
+    console.error("[travel-itin-public] get error:", e.message);
+    res.status(500).json({ error: "Failed to load itinerary" });
+  }
+});
+
+// POST /api/travel/itineraries/public/:shareToken/record-advance-payment
+//
+// Phase 2 demo-mode endpoint: records that an advance payment has
+// cleared. In production this will be hit by the payment gateway's
+// webhook (Razorpay/Stripe) after a successful charge — the body
+// fields map directly to gateway webhook payloads. Until those creds
+// land (Q9 + payment-provider track) the endpoint accepts the values
+// directly so the booking flow is operable end-to-end in demo/sandbox.
+//
+// Idempotent on paymentReference: re-submitting the same reference
+// no-ops with a 200 + the existing state (gateway webhooks retry).
+router.post("/itineraries/public/:shareToken/record-advance-payment", async (req, res) => {
+  try {
+    const token = String(req.params.shareToken || "");
+    if (!token || token.length < 16) {
+      return res.status(400).json({ error: "shareToken required", code: "MISSING_TOKEN" });
+    }
+    const { amount, paymentReference } = req.body || {};
+    if (amount == null || !paymentReference) {
+      return res.status(400).json({
+        error: "amount and paymentReference required",
+        code: "MISSING_FIELDS",
+      });
+    }
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be positive", code: "INVALID_AMOUNT" });
+    }
+
+    const itin = await prisma.itinerary.findUnique({ where: { shareToken: token } });
+    if (!itin) {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    if (itin.status === "draft") {
+      return res.status(409).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
+    }
+    if (itin.status === "rejected" || itin.status === "fully_paid") {
+      return res.status(409).json({
+        error: `Cannot record advance against an itinerary in '${itin.status}' status`,
+        code: "INVALID_STATE",
+      });
+    }
+
+    // Idempotent webhook re-delivery: same paymentReference → just return
+    // current state without mutating. Gateways re-fire on 5xx → idempotency
+    // prevents double-counting advances.
+    if (itin.paymentReference === String(paymentReference)) {
+      return res.json({
+        status: itin.status,
+        advancePaidAmount: itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0,
+        advancePaidAt: itin.advancePaidAt,
+        paymentReference: itin.paymentReference,
+        idempotent: true,
+      });
+    }
+
+    const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
+    const newAdvanceTotal = Number(itin.advancePaidAmount || 0) + amt;
+    // If the new running total equals or exceeds the trip total, mark
+    // fully_paid; otherwise advance_paid. Floating-point tolerance is
+    // 1 paisa (0.01) since totalAmount is stored as Decimal(15,2).
+    const nextStatus = total > 0 && newAdvanceTotal + 0.01 >= total ? "fully_paid" : "advance_paid";
+
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: {
+        status: nextStatus,
+        advancePaidAmount: newAdvanceTotal,
+        advancePaidAt: new Date(),
+        paymentReference: String(paymentReference),
+      },
+    });
+
+    res.status(201).json({
+      status: updated.status,
+      advancePaidAmount: Number(updated.advancePaidAmount),
+      advancePaidAt: updated.advancePaidAt,
+      paymentReference: updated.paymentReference,
+      balanceDue: Math.max(0, total - Number(updated.advancePaidAmount)),
+    });
+  } catch (e) {
+    console.error("[travel-itin-public] record-advance error:", e.message);
+    res.status(500).json({ error: "Failed to record advance" });
   }
 });
 

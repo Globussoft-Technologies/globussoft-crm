@@ -4087,7 +4087,11 @@ model Itinerary {
   subBrand          String
   contactId         Int
   leadId            Int?
-  status            String          @default("draft") // draft|sent|revised|accepted|rejected
+  // status enum extended for Phase 2 50%-advance booking:
+  //   draft | sent | revised | accepted | rejected | advance_paid | fully_paid
+  // advance_paid means the 50% deposit has been recorded; fully_paid means
+  // the balance has cleared. Existing draft/sent/etc. semantics unchanged.
+  status            String          @default("draft")
   version           Int             @default(1)
   parentItineraryId Int? // version-history chain
   destination       String
@@ -4098,6 +4102,18 @@ model Itinerary {
   currency          String          @default("INR")
   pdfUrl            String?
   shareToken        String?         @unique // WhatsApp/email share link
+  // Phase 2 — 50% advance booking pattern (PRD §4.7 Travel Stall). All
+  // three fields nullable + additive so existing Itinerary rows backfill
+  // implicitly. advancePaidAmount is the rupee amount the customer has
+  // paid as advance (typically 0.5 * totalAmount but the actual value is
+  // recorded — partial pays / over-pays are non-fatal). paymentReference
+  // stores the gateway charge id (Razorpay/Stripe) for reconciliation.
+  // Wati/payment-gateway integration arrives once Q9 / payment creds land;
+  // until then the route's demo-mode endpoint accepts the reference
+  // directly so the booking flow can be operated/tested end-to-end.
+  advancePaidAmount Decimal?        @db.Decimal(15, 2)
+  advancePaidAt     DateTime?
+  paymentReference  String?
   items             ItineraryItem[]
   tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt         DateTime        @default(now())

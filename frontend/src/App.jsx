@@ -156,6 +156,9 @@ const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
 const WellnessPublicBooking = lazy(
   () => import("./pages/wellness/PublicBooking"),
 );
+const TravelStallQuiz = lazy(
+  () => import("./pages/public/TravelStallQuiz"),
+);
 const WellnessTelecallerQueue = lazy(
   () => import("./pages/wellness/TelecallerQueue"),
 );
@@ -580,6 +583,14 @@ export default function App() {
                   <Route
                     path="/book/:slug"
                     element={<WellnessPublicBooking />}
+                  />
+                  {/* PRD §4.7 — Travel Stall public Family Travel Quiz wizard.
+                      Unauthenticated; calls /api/travel/diagnostics/public/*.
+                      Tenant slug optional via ?tenant=<slug>; defaults to
+                      "travel-stall" inside the page. */}
+                  <Route
+                    path="/travel-stall/quiz"
+                    element={<TravelStallQuiz />}
                   />
                   {/* #208: wellness patient portal lives under /wellness/portal so it
                 inherits the wellness theme + namespace. The generic /portal route

@@ -46,6 +46,47 @@ fixable by writing more code on this dev box.
 
 ---
 
+## 🏁 SESSION HANDOFF (2026-05-21 evening home session — EOD-menu A + C + 2 Yasin-handover PRDs)
+
+**HEAD on origin/main:** `0a8dbd6`. **4 commits this session — 2 features (gate-verified) + 2 docs.** Picks up from [docs/SESSION_HANDOFF_2026-05-21_EOD.md](docs/SESSION_HANDOFF_2026-05-21_EOD.md). Latest release tag still **v3.9.2**; today's commits stack on top — recommend tagging **v3.10.0** for the cumulative Phase 1 + early Phase 2 surface.
+
+### What shipped this session
+
+| Commit | Item | What | Gate |
+|---|---|---|---|
+| `2612a7e` | **EOD-menu A** — productTier wire-up (PRD §6.4) | New nullable `Itinerary.productTier` captured from latest diagnostic at creation. New `backend/lib/travelLatestDiagnostic.js` helper + 4 vitest cases. Frontend tier badge on Itineraries list. `POST /api/travel/itineraries` body override supported + 3 new e2e cases. | ✅ verified (7/7 + migration_check) |
+| `b18c5c4` | **EOD-menu C** — DuplicateContactModal | New frontend component mirroring the RFU passport-collision modal pattern (`106b7dc`). `Contacts.jsx` wires 409 `DUPLICATE_CONTACT` → modal with 3 paths (Open existing / Edit details / Create anyway via `?force=true`). 10 presentational vitest cases. | ✅ verified (7/7) |
+| `b16d1bc` | docs — DigiLocker use case | Narrative companion to `DIGILOCKER_INTEGRATION_SPEC.md`. Audience: Yasin / commercial / compliance. Explains why DigiLocker (not direct OCR), 3-screen traveller flow, what is stored vs deliberately NOT stored, failure modes, retention. **Hand directly to Yasin to unblock Q3.** | N/A (doc-only) |
+| `0a8dbd6` | docs — WhatsApp integration PRD | Single source of truth for Q9 hand-over. Lists the 8 features dispatching to stubs today. Spells out the 5 exact artifacts Travel Stall owes (System User access token + 3×phoneNumberId + 3×wabaId + Meta App ID/Secret + webhook verify token) and TWO delivery paths — A: Yasin produces the bundle himself with zero GS access to MBM, or B: Yasin adds GS to MBM. **Hand directly to Yasin to unblock Q9.** | N/A (doc-only) |
+
+### Three things to do first (next session)
+
+1. **Confirm last deploy is still green.** Last *code* commit was `b18c5c4` (✅ 7/7). The two doc commits after it were `paths-ignored` (no gate run). One-liner:
+   ```bash
+   gh run list --branch main --limit 3 --json conclusion,workflowName,headSha
+   ```
+
+2. **Pick from the autonomous queue** — three concrete options, in rough size order:
+
+   - **Task B — tunable per-tenant advance ratio.** Queued; **scope is bigger than the EOD handoff estimated** — the `TenantSetting` model doesn't exist yet, so the build set is: new `TenantSetting` model (`@@unique([tenantId, key])` — may need `[allow-unique]` bless marker on the commit), back-relation on `Tenant`, new `backend/lib/tenantSettings.js` helper + vitest, replace 2 callsites in `routes/travel_itineraries.js` (`ADVANCE_RATIO = 0.5` → `await getTravelAdvanceRatio(prisma, tenantId, subBrand)`). ~½ day true scope, single commit doable.
+
+   - **Phase 1.5 / 8e — Seasons + markup rules admin UI.** Older Phase 1.5 polish item I queued earlier. `TravelSeasonCalendar` + `TravelMarkupRule` models already exist (`schema.prisma:4152-4183`). Backend routes still need locating — likely fits as a new section on the existing `CostMaster.jsx`.
+
+   - **Pre-cred-drop DigiLocker autonomous follow-ups** (per [DIGILOCKER_INTEGRATION_SPEC.md](docs/DIGILOCKER_INTEGRATION_SPEC.md) §10): additive schema delta (`DigilockerSession` model + `TripParticipant.aadhaar*` columns), `digilockerClient.js` stub returning a fixed `last-4=9999` for local dev, gate spec scaffold with skipped tests pending real creds. **Lands the data layer without touching Q3.**
+
+3. **Send the two Yasin-handover PRDs to Yasin.** They are the most direct unblock paths for the top-two cred blockers:
+   - WA PRD (`docs/WHATSAPP_INTEGRATION_PRD.md`) §5 walks him through producing the Q9 bundle himself in ~30 min with zero GS access to his Meta Business Manager.
+   - DigiLocker use case (`docs/DIGILOCKER_USE_CASE.md`) is the narrative he can share with his compliance / counsel folks while GS waits for Q3 partner creds.
+
+### Notes / context still in force
+
+- **Windows-npm-lockfile** corruption — don't `npm install` frontend deps on the Windows dev box (memory at `project_frontend_npm_windows.md`). Bit me earlier this week; trip-wire still live.
+- **Travel route precedence** — `travelCsvIoRoutes` mounts BEFORE the `/:id` CRUD routes in `server.js` (per the 2026-05-20 PM handoff).
+- **Demo accounts have misleading labels** — `admin@travelstall.demo` is ADMIN despite the "Demo Admin" label; the real MANAGER on travel is `tmc-ops@travelstall.demo`. Don't infer role from the label.
+- **EOD menu state** — A + C shipped this session; B is the only EOD-menu item left. See [docs/SESSION_HANDOFF_2026-05-21_EOD.md](docs/SESSION_HANDOFF_2026-05-21_EOD.md) for the full menu and the cred-blocked list.
+
+---
+
 ## 🏁 AUTONOMOUS-LOOP CLOSEOUT (2026-05-21 overnight)
 
 **HEAD on origin/main:** `9ae14b4`. **All 9 items (A–I) from the

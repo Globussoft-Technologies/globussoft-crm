@@ -197,21 +197,37 @@ describe('deduplication — findDuplicateContact', () => {
     name: 'Rishu Goyal',
     email: 'rishu@enhancedwellness.in',
     phone: '919876543210',
+    deletedAt: null,
   };
 
-  test('returns email match without ever touching phone path', async () => {
+  test('throws when tenantId is missing', async () => {
+    await expect(findDuplicateContact('a@b.in', '9876543210')).rejects.toThrow(/tenantId/);
+    await expect(findDuplicateContact('a@b.in', '9876543210', null)).rejects.toThrow(/tenantId/);
+    await expect(findDuplicateContact('a@b.in', '9876543210', 0)).rejects.toThrow(/tenantId/);
+  });
+
+  test('email path uses compound (email_tenantId) finder, not bare email', async () => {
     fakePrisma.contact.findUnique.mockResolvedValue(rishu);
-    const out = await findDuplicateContact('rishu@enhancedwellness.in', '9999999999');
+    const out = await findDuplicateContact('rishu@enhancedwellness.in', '9999999999', 5);
     expect(out).toBe(rishu);
     expect(fakePrisma.contact.findUnique).toHaveBeenCalledWith({
-      where: { email: 'rishu@enhancedwellness.in' },
+      where: { email_tenantId: { email: 'rishu@enhancedwellness.in', tenantId: 5 } },
     });
     expect(fakePrisma.contact.findMany).not.toHaveBeenCalled();
   });
 
+  test('soft-deleted email match falls through to phone path', async () => {
+    fakePrisma.contact.findUnique.mockResolvedValue({ ...rishu, deletedAt: new Date('2026-01-01') });
+    fakePrisma.contact.findMany.mockResolvedValue([
+      { id: 2, phone: '919876543210', deletedAt: null },
+    ]);
+    const out = await findDuplicateContact('rishu@enhancedwellness.in', '9876543210', 1);
+    expect(out?.id).toBe(2);
+  });
+
   test('skips email lookup when email is empty', async () => {
     fakePrisma.contact.findMany.mockResolvedValue([]);
-    await findDuplicateContact('', '9876543210');
+    await findDuplicateContact('', '9876543210', 1);
     expect(fakePrisma.contact.findUnique).not.toHaveBeenCalled();
     expect(fakePrisma.contact.findMany).toHaveBeenCalled();
   });
@@ -221,10 +237,10 @@ describe('deduplication — findDuplicateContact', () => {
     fakePrisma.contact.findMany.mockResolvedValue([
       { id: 2, name: 'Other', phone: '+91 98765 43210' },
     ]);
-    const out = await findDuplicateContact('rishu@x.in', '9876543210');
+    const out = await findDuplicateContact('rishu@x.in', '9876543210', 1);
     expect(out).toEqual({ id: 2, name: 'Other', phone: '+91 98765 43210' });
     expect(fakePrisma.contact.findMany).toHaveBeenCalledWith({
-      where: { phone: { not: null } },
+      where: { tenantId: 1, phone: { not: null }, deletedAt: null },
     });
   });
 
@@ -233,7 +249,7 @@ describe('deduplication — findDuplicateContact', () => {
     fakePrisma.contact.findMany.mockResolvedValue([
       { id: 5, name: 'Stored Differently', phone: '+91-98765 43210' },
     ]);
-    const out = await findDuplicateContact(null, '9876543210');
+    const out = await findDuplicateContact(null, '9876543210', 1);
     expect(out).toEqual({ id: 5, name: 'Stored Differently', phone: '+91-98765 43210' });
   });
 
@@ -243,25 +259,25 @@ describe('deduplication — findDuplicateContact', () => {
       { id: 1, phone: '917777777777' },
       { id: 2, phone: '918888888888' },
     ]);
-    const out = await findDuplicateContact(null, '9876543210');
+    const out = await findDuplicateContact(null, '9876543210', 1);
     expect(out).toBeNull();
   });
 
   test('returns null when both email and phone are empty', async () => {
-    const out = await findDuplicateContact('', '');
+    const out = await findDuplicateContact('', '', 1);
     expect(out).toBeNull();
     expect(fakePrisma.contact.findUnique).not.toHaveBeenCalled();
     expect(fakePrisma.contact.findMany).not.toHaveBeenCalled();
   });
 
   test('returns null when both are null/undefined', async () => {
-    const out = await findDuplicateContact(null, undefined);
+    const out = await findDuplicateContact(null, undefined, 1);
     expect(out).toBeNull();
   });
 
   test('phone path is skipped if phone normalises to null', async () => {
     fakePrisma.contact.findUnique.mockResolvedValue(null);
-    const out = await findDuplicateContact('miss@x.in', '---');
+    const out = await findDuplicateContact('miss@x.in', '---', 1);
     expect(out).toBeNull();
     expect(fakePrisma.contact.findMany).not.toHaveBeenCalled();
   });
@@ -271,7 +287,7 @@ describe('deduplication — findDuplicateContact', () => {
     const first = { id: 1, phone: '919876543210' };
     const second = { id: 2, phone: '919876543210' };
     fakePrisma.contact.findMany.mockResolvedValue([first, second]);
-    const out = await findDuplicateContact(null, '9876543210');
+    const out = await findDuplicateContact(null, '9876543210', 1);
     expect(out).toBe(first);
   });
 
@@ -281,7 +297,7 @@ describe('deduplication — findDuplicateContact', () => {
       { id: 1, phone: '---' },
       { id: 2, phone: '919876543210' },
     ]);
-    const out = await findDuplicateContact(null, '9876543210');
+    const out = await findDuplicateContact(null, '9876543210', 1);
     expect(out.id).toBe(2);
   });
 });

@@ -56,25 +56,45 @@ function toE164(phone) {
 }
 
 /**
- * Find an existing contact by email or phone.
- * Returns the matching Contact or null.
+ * Find an existing contact by email or phone — tenant-scoped.
+ *
+ * Returns the matching Contact or null. Soft-deleted contacts (`deletedAt`
+ * set) are skipped.
+ *
+ * Schema-correctness note: Contact's unique constraint is the COMPOUND
+ * `@@unique([email, tenantId])` (since commit 7d84a75, 2026-04-16). The
+ * email path uses the `email_tenantId` compound finder; a bare
+ * `findUnique({ where: { email } })` is invalid Prisma input against the
+ * current schema and throws PrismaClientValidationError at runtime. The
+ * old signature `findDuplicateContact(email, phone)` masked this — its
+ * sole caller (`routes/marketplace_leads.js`) post-filtered the result
+ * by `existing.tenantId === req.user.tenantId`, which inadvertently
+ * compensated for the cross-tenant bleed but never surfaced the
+ * validation error in production because the email path is rarely hit
+ * (operator-triggered marketplace imports).
+ *
+ * @param {string|null} email
+ * @param {string|null} phone
+ * @param {number} tenantId  — REQUIRED. Throws if missing.
+ * @returns {Promise<Object|null>}
  */
-async function findDuplicateContact(email, phone) {
-  // Try email match first (most reliable)
-  if (email) {
-    const byEmail = await prisma.contact.findUnique({ where: { email } });
-    if (byEmail) return byEmail;
+async function findDuplicateContact(email, phone, tenantId) {
+  if (!tenantId) {
+    throw new Error("findDuplicateContact requires tenantId");
   }
 
-  // Try phone match (normalized)
+  if (email) {
+    const byEmail = await prisma.contact.findUnique({
+      where: { email_tenantId: { email, tenantId } },
+    });
+    if (byEmail && !byEmail.deletedAt) return byEmail;
+  }
+
   if (phone) {
     const normalized = normalizePhone(phone);
     if (normalized) {
-      // Check both raw and normalized forms
       const contacts = await prisma.contact.findMany({
-        where: {
-          phone: { not: null },
-        },
+        where: { tenantId, phone: { not: null }, deletedAt: null },
       });
       for (const c of contacts) {
         if (normalizePhone(c.phone) === normalized) return c;

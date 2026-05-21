@@ -500,12 +500,21 @@ async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
 
   const itinFull = await prisma.itinerary.findUnique({
     where: { id: itineraryId },
-    select: { contactId: true, tenantId: true, contact: { select: { name: true } } },
+    select: { contactId: true, tenantId: true },
   });
   if (!itinFull || itinFull.tenantId !== tenantId) {
     // Defensive — should never trip since the caller already guarded.
     return { created: 0, skipped: flightItems.length };
   }
+  // Itinerary has contactId (Int FK) but no `contact` relation pointing
+  // back to Contact, so we resolve the passenger-name fallback via a
+  // second findUnique on Contact. The first commit (9898e87) tried to
+  // join via `select: { contact: { … } }` which Prisma rejected with
+  // "Unknown field `contact`" — fix in 01bb911's follow-up.
+  const fallbackContact = await prisma.contact.findUnique({
+    where: { id: itinFull.contactId },
+    select: { name: true },
+  });
 
   let created = 0;
   let skipped = 0;
@@ -539,7 +548,7 @@ async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
           flightNumber: String(details.flightNumber),
           departureAt: dep,
           windowOpenAt: windowOpenAt || dep,
-          passengerName: details.passengerName || itinFull.contact?.name || "Passenger",
+          passengerName: details.passengerName || fallbackContact?.name || "Passenger",
           seatPref: details.seatPref || null,
           mealPref: details.mealPref || null,
           status: "pending",

@@ -144,10 +144,105 @@ function computeDuplicateGroupKey(primaryId, duplicateIds) {
   return crypto.createHash('sha256').update(ids.join(',')).digest('hex');
 }
 
+/**
+ * PRD §4.5 (Travel — RFU sub-brand) — duplicate detection by passport number.
+ *
+ * RFU pilgrim profiles store passport on `RfuLeadProfile.passportNumber`
+ * (1:1 with Contact via contactId), NOT directly on Contact. So the lookup
+ * joins through the profile and resolves the matching Contact.
+ *
+ * Scoped per-tenant: a passport that appears in multiple tenants must NOT
+ * cross-match (each tenant runs an independent CRM book). Passport itself
+ * is not @unique on RfuLeadProfile — multiple profile rows with the same
+ * passport in the same tenant ARE the duplicate we're detecting; findFirst
+ * returns the earliest row, which the caller can treat as the canonical
+ * parent. Soft-deleted Contacts (deletedAt set) are filtered out.
+ *
+ * @param {string} passportNumber  Raw passport string (no canonicalization
+ *   here — callers normalize to upper-case if their UX requires it).
+ * @param {number} tenantId
+ * @returns {Promise<Object|null>} matching Contact row or null
+ */
+async function findDuplicateContactByPassport(passportNumber, tenantId) {
+  if (!passportNumber || !tenantId) return null;
+  const profile = await prisma.rfuLeadProfile.findFirst({
+    where: { tenantId, passportNumber },
+    select: { contactId: true },
+  });
+  if (!profile?.contactId) return null;
+  const contact = await prisma.contact.findUnique({
+    where: { id: profile.contactId },
+  });
+  if (!contact || contact.deletedAt) return null;
+  return contact;
+}
+
+/**
+ * PRD §4.5 — Customer-duplicate detection — Phase 2 unified helper.
+ *
+ * Tries the three dedup keys in order of signal strength and returns the
+ * first match along with which key matched (so the caller can surface
+ * the right message — "this passport is already on file" beats "we found
+ * a contact with a similar phone number").
+ *
+ * Order: passport → email → phone. Passport wins because for RFU pilgrims
+ * it's near-canonical (no two travellers share a passport); email is
+ * tenant-unique by schema; phone is fuzzy (re-used family numbers, shared
+ * SIMs) so it's the weakest signal.
+ *
+ * All three checks are tenant-scoped. Soft-deleted contacts are skipped.
+ *
+ * @param {Object} opts
+ * @param {string} [opts.email]
+ * @param {string} [opts.phone]
+ * @param {string} [opts.passportNumber]
+ * @param {number} opts.tenantId
+ * @returns {Promise<{ contact: Object, matchedBy: 'passport'|'email'|'phone' }|null>}
+ */
+async function findDuplicateContactFull({ email, phone, passportNumber, tenantId } = {}) {
+  if (!tenantId) throw new Error("findDuplicateContactFull requires tenantId");
+
+  if (passportNumber) {
+    const c = await findDuplicateContactByPassport(passportNumber, tenantId);
+    if (c) return { contact: c, matchedBy: "passport" };
+  }
+
+  if (email) {
+    // Contact uses `@@unique([email, tenantId])` — must use the compound
+    // finder name. (Bare `findUnique({ where: { email } })` is the legacy
+    // shape used by `findDuplicateContact` above; kept untouched for back-
+    // compat but unsafe against the current schema.)
+    const byEmail = await prisma.contact.findUnique({
+      where: { email_tenantId: { email, tenantId } },
+    });
+    if (byEmail && !byEmail.deletedAt) {
+      return { contact: byEmail, matchedBy: "email" };
+    }
+  }
+
+  if (phone) {
+    const normalized = normalizePhone(phone);
+    if (normalized) {
+      const candidates = await prisma.contact.findMany({
+        where: { tenantId, phone: { not: null }, deletedAt: null },
+      });
+      for (const c of candidates) {
+        if (normalizePhone(c.phone) === normalized) {
+          return { contact: c, matchedBy: "phone" };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 module.exports = {
   normalizePhone,
   toE164,
   findDuplicateContact,
+  findDuplicateContactByPassport,
+  findDuplicateContactFull,
   findDuplicateMarketplaceLead,
   computeDuplicateGroupKey,
 };

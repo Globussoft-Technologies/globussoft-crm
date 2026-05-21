@@ -602,6 +602,15 @@ async function main() {
   // keyed on tripCode (TmcTrip.tripCode is @unique).
   await seedSampleTrips(tenant.id);
 
+  // ── 9. TMC operational extras — rooming + payment plan + instalments +
+  //         supplier credential + visa application ─────────────────────
+  // PRD §8.5 (Priority A #5 from docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md).
+  // Anchored on the Bali trip (`tmc-bali-2026`, confirmed status, 4
+  // participants) + the seeded Umrah pilgrim contact. Idempotent per
+  // schema's natural keys / findFirst guards. See seedTmcOperationalExtras
+  // doc-comment for the per-fixture idempotency strategy.
+  await seedTmcOperationalExtras(tenant.id);
+
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
 }
@@ -802,6 +811,218 @@ async function seedSampleTrips(tenantId) {
   } else {
     console.log(`[seed-travel] RFU itinerary already exists (id=${existingItin.id}) — skipping`);
   }
+}
+
+/**
+ * Seed the TMC operational fixture surface — rooming + payment plan +
+ * instalments + supplier credential + visa application. PRD §8.5
+ * (Priority A #5 from docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md).
+ *
+ * Anchored on the Bali trip (`tmc-bali-2026`, confirmed, 4 participants).
+ * The Umrah pilgrim contact seeded by seedSampleTrips() is reused as the
+ * VisaApplication subject.
+ *
+ * Idempotency per fixture (matches existing seed conventions):
+ *   - RoomingAssignment   → findFirst({ tripId, roomNumber }) → create
+ *   - TripPaymentPlan     → upsert on @unique tripId
+ *   - TripInstalmentPayment → findFirst({ tripId, instalmentIndex,
+ *                             participantId }) → create per row
+ *   - SupplierCredential  → findFirst({ tenantId, supplierName, category })
+ *                          → create. SKIPPED with warning if WELLNESS_
+ *                          FIELD_KEY env-var unset (encrypt() would no-op
+ *                          and the at-rest blob would be plaintext —
+ *                          better to leave the row absent than fake-encrypt).
+ *   - VisaApplication     → findFirst({ tenantId, contactId,
+ *                          applicationType, destinationCountry }) → create
+ *                          + nested VisaDocumentChecklistItem rows.
+ *
+ * Re-running seed-travel.js no-ops this section.
+ */
+async function seedTmcOperationalExtras(tenantId) {
+  // 1. Find the anchor Bali trip + its participants.
+  const baliTrip = await prisma.tmcTrip.findUnique({
+    where: { tripCode: "tmc-bali-2026" },
+    select: { id: true },
+  });
+  if (!baliTrip) {
+    console.log("[seed-travel] TMC extras skipped — tmc-bali-2026 trip missing");
+    return;
+  }
+  const participants = await prisma.tripParticipant.findMany({
+    where: { tripId: baliTrip.id },
+    orderBy: { fullName: "asc" },
+    select: { id: true, fullName: true },
+  });
+  if (participants.length < 4) {
+    console.log(`[seed-travel] TMC extras skipped — bali trip has ${participants.length} participants (need ≥4)`);
+    return;
+  }
+
+  // 2. RoomingAssignment — twin room with 2 of the 4 participants.
+  // Participant order is alphabetical by fullName: Aarav Sharma,
+  // Diya Patel, Saanvi Reddy, Vihaan Iyer. Twin = Aarav + Vihaan.
+  const roomNumber = "T-101";
+  const existingRoom = await prisma.roomingAssignment.findFirst({
+    where: { tripId: baliTrip.id, roomNumber },
+    select: { id: true },
+  });
+  if (!existingRoom) {
+    const twinIds = [participants[0].id, participants[3].id]; // Aarav + Vihaan
+    await prisma.roomingAssignment.create({
+      data: {
+        tripId: baliTrip.id,
+        roomNumber,
+        roomType: "twin",
+        participantIds: JSON.stringify(twinIds),
+      },
+    });
+    console.log(`[seed-travel] rooming assignment seeded (trip=${baliTrip.id} room=${roomNumber} twin)`);
+  } else {
+    console.log(`[seed-travel] rooming assignment already exists (id=${existingRoom.id}) — skipping`);
+  }
+
+  // 3. TripPaymentPlan — 4-instalment schedule. pricePerStudent = 75000;
+  // split into 4 × 18750 instalments, due T-90, T-60, T-30, T-7 days
+  // before departure. graceDays=5.
+  const departDate = (await prisma.tmcTrip.findUnique({
+    where: { id: baliTrip.id },
+    select: { departDate: true },
+  })).departDate;
+  const dayMs = 86400_000;
+  const instalmentSchedule = [
+    { dueDate: new Date(departDate.getTime() - 90 * dayMs).toISOString(), amount: 18750, reminderDays: 7 },
+    { dueDate: new Date(departDate.getTime() - 60 * dayMs).toISOString(), amount: 18750, reminderDays: 7 },
+    { dueDate: new Date(departDate.getTime() - 30 * dayMs).toISOString(), amount: 18750, reminderDays: 5 },
+    { dueDate: new Date(departDate.getTime() -  7 * dayMs).toISOString(), amount: 18750, reminderDays: 2 },
+  ];
+  const plan = await prisma.tripPaymentPlan.upsert({
+    where: { tripId: baliTrip.id },
+    update: {}, // do NOT overwrite a live demo plan if the admin edited it
+    create: {
+      tripId: baliTrip.id,
+      instalmentsJson: JSON.stringify(instalmentSchedule),
+      graceDays: 5,
+    },
+  });
+  console.log(`[seed-travel] trip payment plan seeded (id=${plan.id}, 4 instalments × ₹18,750)`);
+
+  // 4. TripInstalmentPayment — materialise the plan for ONE participant
+  // (Aarav Sharma, the alphabetical first). B2B school trips are usually
+  // billed at the school level but the per-participant ledger is what the
+  // backend models — seed 4 rows so the GET /instalments endpoint has
+  // something to render. Each row is idempotently guarded.
+  const aarav = participants[0];
+  let instalmentCount = 0;
+  for (let idx = 0; idx < instalmentSchedule.length; idx++) {
+    const existing = await prisma.tripInstalmentPayment.findFirst({
+      where: { tripId: baliTrip.id, participantId: aarav.id, instalmentIndex: idx },
+      select: { id: true },
+    });
+    if (existing) continue;
+    await prisma.tripInstalmentPayment.create({
+      data: {
+        tripId: baliTrip.id,
+        participantId: aarav.id,
+        instalmentIndex: idx,
+        dueDate: new Date(instalmentSchedule[idx].dueDate),
+        amount: instalmentSchedule[idx].amount,
+        // First two are paid (the trip is `confirmed`, so a couple of
+        // instalments should already be settled to look realistic).
+        paidAmount: idx < 2 ? instalmentSchedule[idx].amount : 0,
+        paidAt: idx < 2 ? new Date() : null,
+        status: idx < 2 ? "paid" : "pending",
+      },
+    });
+    instalmentCount++;
+  }
+  console.log(`[seed-travel] trip instalments seeded for ${aarav.fullName}: +${instalmentCount} of 4 (idempotent)`);
+
+  // 5. SupplierCredential — VFS Global (visa portal). Skipped gracefully
+  // if WELLNESS_FIELD_KEY is unset so we don't write plaintext into the
+  // `*Encrypted` columns (encrypt() is a no-op without the key).
+  if (!process.env.WELLNESS_FIELD_KEY) {
+    console.log("[seed-travel] WARNING: SupplierCredential seed skipped — set WELLNESS_FIELD_KEY env to enable");
+  } else {
+    const { encrypt } = require("../lib/fieldEncryption");
+    const supplierName = "VFS Global (demo)";
+    const category = "visa-portal";
+    const existingCred = await prisma.supplierCredential.findFirst({
+      where: { tenantId, supplierName, category },
+      select: { id: true },
+    });
+    if (!existingCred) {
+      // CLEARLY-FAKE values that obviously won't authenticate against any
+      // real portal. Documented in commit body + on every demo handoff.
+      const cred = await prisma.supplierCredential.create({
+        data: {
+          tenantId,
+          category,
+          supplierName,
+          loginIdEncrypted: encrypt("demo_supplier_user"),
+          passwordEncrypted: encrypt("demo-supplier-password-do-not-use"),
+          metadataJson: encrypt(JSON.stringify({
+            notes: "Demo seed only — replace with real ops credential before going live.",
+            twoFactorBackup: ["demo-code-1", "demo-code-2"],
+          })),
+          ownerUserId: null,
+        },
+        select: { id: true },
+      });
+      console.log(`[seed-travel] supplier credential seeded (id=${cred.id}, ${supplierName}, AES-256-GCM encrypted)`);
+    } else {
+      console.log(`[seed-travel] supplier credential already exists (id=${existingCred.id}) — skipping`);
+    }
+  }
+
+  // 6. VisaApplication — Umrah pilgrim, status documents_pending +
+  // checklist of 4 standard items. No /api/travel/visa-applications
+  // route exists yet (Phase 3), so this row exists for the future surface
+  // + for direct prisma reads from cron / reports.
+  const pilgrim = await prisma.contact.findFirst({
+    where: { tenantId, email: "ahmed.pilgrim@demo.test" },
+    select: { id: true, name: true },
+  });
+  if (!pilgrim) {
+    console.log("[seed-travel] visa application skipped — pilgrim contact missing");
+  } else {
+    const existingVisa = await prisma.visaApplication.findFirst({
+      where: {
+        tenantId,
+        contactId: pilgrim.id,
+        applicationType: "umrah",
+        destinationCountry: "SA",
+      },
+      select: { id: true },
+    });
+    if (!existingVisa) {
+      const visa = await prisma.visaApplication.create({
+        data: {
+          tenantId,
+          contactId: pilgrim.id,
+          applicationType: "umrah",
+          destinationCountry: "SA",
+          status: "docs-pending",
+          readinessLevel: 2,
+          complexCase: false,
+          advisorRiskFlag: "low",
+          documentChecklist: {
+            create: [
+              { docType: "passport", required: true, status: "uploaded" },
+              { docType: "photo-2x2", required: true, status: "pending" },
+              { docType: "umrah-mehram-letter", required: true, status: "pending" },
+              { docType: "vaccination-certificate", required: true, status: "pending" },
+            ],
+          },
+        },
+        select: { id: true },
+      });
+      console.log(`[seed-travel] visa application seeded (id=${visa.id}, ${pilgrim.name}, status=docs-pending, 4 checklist items)`);
+    } else {
+      console.log(`[seed-travel] visa application already exists (id=${existingVisa.id}) — skipping`);
+    }
+  }
+
+  console.log("[seed-travel] sample TMC fixtures: rooming + payment plan + instalments + supplier credential + visa application (PRD §8.5)");
 }
 
 /**

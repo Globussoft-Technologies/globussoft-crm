@@ -6,7 +6,7 @@ const audienceController = require("../controllers/audienceController");
 const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, ensureGst, ensureDateInRange, httpFromPrismaError } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
-const { normalizePhone, computeDuplicateGroupKey } = require("../utils/deduplication");
+const { normalizePhone, computeDuplicateGroupKey, findDuplicateContactFull } = require("../utils/deduplication");
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
 // FieldPermissions UI had zero effect on read/write payloads. Default
@@ -234,6 +234,56 @@ router.post('/', async (req, res) => {
     // the contact they just created. Mirrors POST /api/deals which sets
     // ownerId = req.user.userId. Explicit body.assignedToId still wins.
     if (normalised.assignedToId == null) normalised.assignedToId = req.user.userId;
+
+    // PRD §4.5 — Phase 2 dedup preflight. Before letting Prisma's
+    // @@unique([email, tenantId]) throw a P2002, run the richer
+    // findDuplicateContactFull helper so the route can surface a
+    // friendly 409 DUPLICATE_CONTACT with `{ existingContactId,
+    // matchedBy, contact: {...projection} }` — frontend renders this
+    // as the "merge or keep both" pop-up (same shape as the RFU
+    // passport-collision modal). Phone match is fuzzy (normalised),
+    // so this catches "+91 98765 43210" vs "919876543210" duplicates
+    // that the bare email-only unique constraint misses entirely.
+    //
+    // Bypass with ?force=true for the rare legitimate "yes, I know
+    // there's a similar contact, create anyway" case (CSV bulk import
+    // already has its own merge flow). The P2002 catch in the outer
+    // try block stays as defense-in-depth against the race window
+    // between preflight and create.
+    const force = req.query.force === "true" || req.query.force === "1";
+    if (!force) {
+      try {
+        const dup = await findDuplicateContactFull({
+          email: normalised.email || null,
+          phone: normalised.phone || null,
+          tenantId: req.user.tenantId,
+        });
+        if (dup) {
+          const c = dup.contact;
+          return res.status(409).json({
+            error: "A contact with this email or phone already exists in your CRM",
+            code: "DUPLICATE_CONTACT",
+            matchedBy: dup.matchedBy,
+            existingContactId: c.id,
+            contact: {
+              id: c.id,
+              name: c.name,
+              email: c.email,
+              phone: c.phone,
+              company: c.company,
+              status: c.status,
+              subBrand: c.subBrand,
+            },
+          });
+        }
+      } catch (e) {
+        // Helper failure is non-fatal — log + fall through to the
+        // normal create path so a transient dedup outage doesn't block
+        // contact creation. P2002 still catches genuine email collisions.
+        console.error("[contacts] dedup preflight error:", e.message);
+      }
+    }
+
     const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
     try { const { emitEvent } = require('../lib/eventBus'); emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
     // #179: audit row for new contact.

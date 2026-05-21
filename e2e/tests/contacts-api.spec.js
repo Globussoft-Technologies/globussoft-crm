@@ -298,6 +298,70 @@ test.describe('Contacts API — POST /', () => {
     expect([409]).toContain(res.status());
   });
 
+  // PRD §4.5 — Phase 2 dedup preflight. Before Prisma's P2002 fires the
+  // route calls findDuplicateContactFull and returns a friendly 409
+  // DUPLICATE_CONTACT with merge metadata so the frontend renders the
+  // "use existing / keep both" pop-up.
+  test('409 DUPLICATE_CONTACT on email-match preflight (PRD §4.5)', async ({ request }) => {
+    const sharedEmail = uniqueEmail('dup-pre-email');
+    const first = await createContact(request, { label: 'dup-pre-1st', email: sharedEmail });
+
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} dup-pre-second`,
+      email: sharedEmail,
+      phone: `+91${String(Date.now() + 99).slice(-10)}`,
+    });
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe('DUPLICATE_CONTACT');
+    expect(body.matchedBy).toBe('email');
+    expect(body.existingContactId).toBe(first.id);
+    expect(body.contact.email).toBe(sharedEmail);
+    // UX-safe projection — must not leak portalPasswordHash, territoryId, etc.
+    expect(body.contact).not.toHaveProperty('portalPasswordHash');
+    expect(body.contact).not.toHaveProperty('territoryId');
+  });
+
+  test('409 DUPLICATE_CONTACT on phone-match preflight even with different email', async ({ request }) => {
+    const phoneRaw = `+91${String(Date.now()).slice(-10)}`;
+    const first = await createContact(request, {
+      label: 'dup-pre-phone-1st',
+      phone: phoneRaw,
+    });
+
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} dup-pre-phone-2nd`,
+      // Different email, but the normalised phone matches → preflight catches.
+      email: uniqueEmail('dup-pre-phone-2nd'),
+      phone: phoneRaw,
+    });
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe('DUPLICATE_CONTACT');
+    expect(body.matchedBy).toBe('phone');
+    expect(body.existingContactId).toBe(first.id);
+  });
+
+  test('?force=true bypasses dedup preflight (legitimate dup-create)', async ({ request }) => {
+    const phoneRaw = `+91${String(Date.now() + 1).slice(-10)}`;
+    await createContact(request, { label: 'force-1st', phone: phoneRaw });
+
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/contacts?force=true', {
+      name: `${RUN_TAG} force-2nd`,
+      email: uniqueEmail('force-2nd'),
+      phone: phoneRaw,
+    });
+    // Should create successfully (phone is duplicated but ?force=true
+    // bypasses preflight; email differs so P2002 doesn't fire either).
+    expect(res.status(), `force-create: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.phone).toBe(phoneRaw);
+    createdContactIds.push(body.id);
+  });
+
   test('accepts every documented status value', async ({ request }) => {
     const statuses = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
     for (const s of statuses) {

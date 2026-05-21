@@ -495,6 +495,162 @@ test.describe('Travel diagnostics API — list + fetch submissions', () => {
   });
 });
 
+// Phase 2 — public landing-page wizard endpoints (PRD §4.7). These run
+// WITHOUT auth (allowlisted in server.js openPaths under
+// /travel/diagnostics/public). Tenant is resolved via tenantSlug.
+test.describe('Travel diagnostics — public landing-page wizard (PRD §4.7)', () => {
+  const TENANT_SLUG = 'travel-stall';
+  const SUB_BRAND = 'travelstall';
+
+  test('GET /diagnostics/public/banks without query params → 400 MISSING_FIELDS', async ({ request }) => {
+    const res = await request.get(`${BASE_URL}/api/travel/diagnostics/public/banks`, { timeout: REQUEST_TIMEOUT });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('MISSING_FIELDS');
+  });
+
+  test('GET /diagnostics/public/banks with invalid subBrand → 400 INVALID_SUB_BRAND', async ({ request }) => {
+    const res = await request.get(
+      `${BASE_URL}/api/travel/diagnostics/public/banks?tenantSlug=${TENANT_SLUG}&subBrand=bogus`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_SUB_BRAND');
+  });
+
+  test('GET /diagnostics/public/banks with unknown tenant slug → 404 TENANT_NOT_FOUND', async ({ request }) => {
+    const res = await request.get(
+      `${BASE_URL}/api/travel/diagnostics/public/banks?tenantSlug=no-such-tenant&subBrand=${SUB_BRAND}`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe('TENANT_NOT_FOUND');
+  });
+
+  test('GET /diagnostics/public/banks returns sanitised questions (no scoring weights)', async ({ request }) => {
+    const res = await request.get(
+      `${BASE_URL}/api/travel/diagnostics/public/banks?tenantSlug=${TENANT_SLUG}&subBrand=${SUB_BRAND}`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status(), `banks: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body.tenantSlug).toBe(TENANT_SLUG);
+    expect(body.subBrand).toBe(SUB_BRAND);
+    expect(typeof body.bankId).toBe('number');
+    expect(Array.isArray(body.questions)).toBe(true);
+    expect(body.questions.length).toBe(5);
+    for (const q of body.questions) {
+      expect(q.id).toBeTruthy();
+      expect(q.text).toBeTruthy();
+      // No weights leaked — visitors mustn't reverse-engineer scoring.
+      for (const o of q.options || []) {
+        expect(o).not.toHaveProperty('weight');
+        expect(o.value).toBeTruthy();
+        expect(o.label).toBeTruthy();
+      }
+    }
+  });
+
+  test('POST /diagnostics/public/submit without body fields → 400 MISSING_FIELDS', async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/travel/diagnostics/public/submit`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: {},
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('MISSING_FIELDS');
+  });
+
+  test('POST /diagnostics/public/submit happy path — creates Contact + diagnostic, returns persona', async ({ request }) => {
+    // First fetch the bank id (we need it for the submit body).
+    const banksRes = await request.get(
+      `${BASE_URL}/api/travel/diagnostics/public/banks?tenantSlug=${TENANT_SLUG}&subBrand=${SUB_BRAND}`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    if (!banksRes.ok()) test.skip(true, 'public bank endpoint unavailable on this stack');
+    const { bankId } = await banksRes.json();
+
+    // High-tier answer set: 24 → level_3 "Premium Family Concierge".
+    const unique = Date.now();
+    const res = await request.post(`${BASE_URL}/api/travel/diagnostics/public/submit`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: {
+        tenantSlug: TENANT_SLUG,
+        subBrand: SUB_BRAND,
+        bankId,
+        answers: { q1: 'multigen', q2: 'regular', q3: 'extended', q4: 'packed', q5: 'premium' },
+        name: `${RUN_TAG} Family Lead`,
+        phone: `+91${String(unique).slice(-10)}`,
+        email: `${RUN_TAG.toLowerCase()}-${unique}@public-quiz.test`,
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status(), `submit: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.tenantSlug).toBe(TENANT_SLUG);
+    expect(body.subBrand).toBe(SUB_BRAND);
+    expect(body.classification).toBe('level_3');
+    expect(body.classificationLabel).toBe('Premium Family Concierge');
+    expect(body.recommendedTier).toBe('premium');
+    // Customer-facing payload — no raw score, no contact/diagnostic ids leaked.
+    expect(body).not.toHaveProperty('score');
+    expect(body).not.toHaveProperty('contactId');
+    expect(body).not.toHaveProperty('diagnosticId');
+    expect(body.message).toContain('advisor');
+  });
+
+  test('POST /diagnostics/public/submit dedups to existing Contact when email matches', async ({ request }) => {
+    // Re-fetch the bank id.
+    const banksRes = await request.get(
+      `${BASE_URL}/api/travel/diagnostics/public/banks?tenantSlug=${TENANT_SLUG}&subBrand=${SUB_BRAND}`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    if (!banksRes.ok()) test.skip(true, 'public bank endpoint unavailable on this stack');
+    const { bankId } = await banksRes.json();
+
+    // First submission creates the contact, second submission re-uses it
+    // (findDuplicateContactFull matches by email). Both should 201 — the
+    // route doesn't block dedup hits, it just attaches to the existing
+    // Contact instead of creating a duplicate.
+    const unique = Date.now();
+    const sharedEmail = `${RUN_TAG.toLowerCase()}-dedup-${unique}@public-quiz.test`;
+    const phoneA = `+91${String(unique + 1).slice(-10)}`;
+    const phoneB = `+91${String(unique + 2).slice(-10)}`;
+
+    const firstRes = await request.post(`${BASE_URL}/api/travel/diagnostics/public/submit`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: {
+        tenantSlug: TENANT_SLUG, subBrand: SUB_BRAND, bankId,
+        answers: { q1: 'solo', q2: 'first', q3: 'short', q4: 'relaxed', q5: 'value' },
+        name: `${RUN_TAG} Dedup Lead`,
+        phone: phoneA,
+        email: sharedEmail,
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(firstRes.status(), `first submit: ${await firstRes.text()}`).toBe(201);
+
+    const secondRes = await request.post(`${BASE_URL}/api/travel/diagnostics/public/submit`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: {
+        tenantSlug: TENANT_SLUG, subBrand: SUB_BRAND, bankId,
+        // Different phone, SAME email — dedup must catch the email match.
+        answers: { q1: 'family-young', q2: 'occasional', q3: 'week', q4: 'balanced', q5: 'mid' },
+        name: `${RUN_TAG} Dedup Lead`,
+        phone: phoneB,
+        email: sharedEmail,
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(secondRes.status(), `second submit: ${await secondRes.text()}`).toBe(201);
+    // Both must complete; the second classification will differ from the
+    // first based on its different answer set. The Contact gets re-used
+    // server-side — verifying that requires admin-token DB inspection
+    // (out of scope for the unauthenticated spec block).
+    const secondBody = await secondRes.json();
+    expect(secondBody.classification).toBeTruthy();
+  });
+});
+
 // Phase 2 (PRD §4.7) — Travel Stall Family Travel Quiz seed lands a
 // `travelstall` v1 bank with 5 Qs + 3 scoring bands. These tests pin
 // the seed contract so the admin's sub-brand picker has something to

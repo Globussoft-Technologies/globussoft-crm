@@ -28,6 +28,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
 const { renderTravelDiagnosticPdf } = require("../services/pdfRenderer");
+const { findDuplicateContactFull } = require("../utils/deduplication");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -363,6 +364,218 @@ router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res
   } catch (e) {
     console.error("[travel-diag] get diagnostic error:", e.message);
     res.status(500).json({ error: "Failed to get diagnostic" });
+  }
+});
+
+// ─── PUBLIC ENDPOINTS (no auth) — PRD §4.7 Travel Stall landing-page wizard ──
+//
+// Public-facing quiz flow for unauthenticated leads (Travel Stall family
+// audience, Phase 2). Allowlisted in server.js openPaths under prefix
+// `/travel/diagnostics/public`.
+//
+// Tenant is resolved via `?tenantSlug=...` query/body — required because
+// the public path has no auth context. Refuses non-travel tenants.
+//
+// Sub-brand can be any of VALID_SUB_BRANDS but the immediate consumer is
+// `travelstall`; the route stays generic so the same flow lights up for
+// other sub-brands once their content lands.
+//
+// What's deliberately NOT exposed:
+//   - scoringRulesJson is stripped from GET so visitors can't reverse-
+//     engineer band thresholds to manipulate their classification.
+//   - raw numeric score is omitted from POST submit response; only the
+//     human-readable label + recommendedTier come back (UX choice — the
+//     advisor can see the score, the customer sees the persona).
+//   - tenant.id is never leaked in the response — only the slug echoed
+//     back so the wizard can confirm it's talking to the right brand.
+
+async function resolveTravelTenantBySlug(slug) {
+  if (!slug) return null;
+  const tenant = await prisma.tenant.findFirst({
+    where: { slug: String(slug), vertical: "travel", isActive: true },
+    select: { id: true, slug: true, name: true, vertical: true },
+  });
+  return tenant;
+}
+
+// GET /api/travel/diagnostics/public/banks?tenantSlug=X&subBrand=Y
+//
+// Returns the active v1 bank's questions for the (tenant, subBrand) pair,
+// stripped of scoring rules. Caller renders the quiz from the response.
+router.get("/diagnostics/public/banks", async (req, res) => {
+  try {
+    const { tenantSlug, subBrand } = req.query;
+    if (!tenantSlug || !subBrand) {
+      return res.status(400).json({
+        error: "tenantSlug and subBrand query params required",
+        code: "MISSING_FIELDS",
+      });
+    }
+    try { assertValidSubBrand(String(subBrand)); }
+    catch (e) { return res.status(e.status || 400).json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" }); }
+
+    const tenant = await resolveTravelTenantBySlug(tenantSlug);
+    if (!tenant) {
+      return res.status(404).json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
+    }
+
+    const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+      where: { tenantId: tenant.id, subBrand: String(subBrand), isActive: true },
+      orderBy: { version: "desc" },
+    });
+    if (!bank) {
+      return res.status(404).json({ error: "No active bank for this sub-brand", code: "BANK_NOT_FOUND" });
+    }
+
+    let questions;
+    try { questions = JSON.parse(bank.questionsJson); }
+    catch { return res.status(500).json({ error: "Bank questions JSON unparseable", code: "BANK_CORRUPTED" }); }
+
+    // Strip per-option weights so the public payload can't be used to
+    // reverse-engineer the scoring. Keeps id + text + label + value.
+    const sanitisedQuestions = (questions.questions || []).map((q) => ({
+      id: q.id,
+      text: q.text,
+      type: q.type,
+      options: (q.options || []).map((o) => ({ value: o.value, label: o.label })),
+    }));
+
+    res.json({
+      tenantSlug: tenant.slug,
+      tenantName: tenant.name,
+      subBrand: bank.subBrand,
+      bankId: bank.id,
+      version: bank.version,
+      questions: sanitisedQuestions,
+    });
+  } catch (e) {
+    console.error("[travel-diag-public] banks error:", e.message);
+    res.status(500).json({ error: "Failed to load bank" });
+  }
+});
+
+// POST /api/travel/diagnostics/public/submit
+//
+// Body: { tenantSlug, subBrand, bankId, answers, name, phone, email? }
+//
+// Captures the lead, runs dedup against the tenant's Contacts via
+// findDuplicateContactFull (email + phone), creates/links the Contact,
+// scores the diagnostic, persists, and returns the customer-facing
+// classification.
+router.post("/diagnostics/public/submit", async (req, res) => {
+  try {
+    const { tenantSlug, subBrand, bankId, answers, name, phone, email } = req.body || {};
+    if (!tenantSlug || !subBrand || !bankId || !answers || !name || !phone) {
+      return res.status(400).json({
+        error: "tenantSlug, subBrand, bankId, answers, name, phone all required",
+        code: "MISSING_FIELDS",
+      });
+    }
+    try { assertValidSubBrand(String(subBrand)); }
+    catch (e) { return res.status(e.status || 400).json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" }); }
+
+    const tenant = await resolveTravelTenantBySlug(tenantSlug);
+    if (!tenant) {
+      return res.status(404).json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
+    }
+
+    const bankIdNum = parseInt(bankId, 10);
+    if (!Number.isFinite(bankIdNum)) {
+      return res.status(400).json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
+    }
+    const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+      where: { id: bankIdNum, tenantId: tenant.id, subBrand: String(subBrand), isActive: true },
+    });
+    if (!bank) {
+      return res.status(404).json({ error: "Bank not found or not active", code: "BANK_NOT_FOUND" });
+    }
+
+    // PRD §4.5 dedup: try to attach to an existing Contact by email or
+    // phone before creating a new one — prevents the duplicate-pop-up
+    // problem and keeps the pilgrim's history on one record.
+    let contactId = null;
+    let dedupResult = null;
+    try {
+      dedupResult = await findDuplicateContactFull({
+        email: email || null,
+        phone,
+        tenantId: tenant.id,
+      });
+    } catch (e) {
+      console.error("[travel-diag-public] dedup error:", e.message);
+    }
+    if (dedupResult) {
+      contactId = dedupResult.contact.id;
+    } else {
+      // Public-intake contact create. subBrand stamped so the lead lands
+      // in the right pipeline. Email defaults to a synthetic placeholder
+      // when not provided — the @@unique([email, tenantId]) constraint
+      // requires SOMETHING; the synthetic form sidesteps it.
+      const safeEmail = email || `public-diag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@public.local`;
+      const newContact = await prisma.contact.create({
+        data: {
+          tenantId: tenant.id,
+          name: String(name).trim() || "Anonymous lead",
+          email: safeEmail,
+          phone,
+          subBrand: bank.subBrand,
+          status: "Lead",
+          source: "Travel Stall public quiz",
+        },
+      });
+      contactId = newContact.id;
+    }
+
+    // Score the diagnostic.
+    const { bank: parsed, warnings: parseWarnings } = parseBank(bank.questionsJson, bank.scoringRulesJson);
+    if (!parsed) {
+      return res.status(500).json({ error: "Bank JSON unparseable", code: "BANK_CORRUPTED", warnings: parseWarnings });
+    }
+    const result = scoreDiagnostic(parsed, answers);
+
+    const snapshot = JSON.stringify({
+      bankId: bank.id,
+      bankVersion: bank.version,
+      questionsJson: bank.questionsJson,
+      scoringRulesJson: bank.scoringRulesJson,
+      scoringWarnings: result.warnings,
+    });
+
+    const diag = await prisma.travelDiagnostic.create({
+      data: {
+        tenantId: tenant.id,
+        subBrand: bank.subBrand,
+        contactId,
+        questionBankId: bank.id,
+        questionsJson: snapshot,
+        answersJson: JSON.stringify(answers),
+        score: result.score,
+        classification: result.classification,
+        classificationLabel: result.classificationLabel,
+        recommendedTier: result.recommendedTier,
+      },
+    });
+
+    // PDF generation best-effort — Phase 2 will email/WhatsApp the report
+    // to the lead once Wati BSP creds (Q9) land.
+    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank).catch(() => null);
+
+    // Customer-facing payload: NO raw score, NO contact id, NO diagnostic id.
+    // The advisor sees those internally. The public confirmation just
+    // surfaces the persona ("you're a Confident Family Traveller") +
+    // recommended tier so the next-step booking widget can theme itself.
+    res.status(201).json({
+      tenantSlug: tenant.slug,
+      subBrand: bank.subBrand,
+      classification: result.classification,
+      classificationLabel: result.classificationLabel,
+      recommendedTier: result.recommendedTier,
+      reportPdfUrl: reportPdfUrl || null,
+      message: `Thanks ${String(name).split(" ")[0]} — our advisor will reach out to you on ${phone} shortly.`,
+    });
+  } catch (e) {
+    console.error("[travel-diag-public] submit error:", e.message);
+    res.status(500).json({ error: "Failed to submit diagnostic" });
   }
 });
 

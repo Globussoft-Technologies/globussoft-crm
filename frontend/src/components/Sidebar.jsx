@@ -87,6 +87,7 @@ import { fetchApi } from "../utils/api";
 import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
 import { launchCallifiedSSO } from '../utils/callified';
 import { useNotify } from '../utils/notify';
+import { useActiveSubBrand } from '../utils/subBrand';
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -102,10 +103,25 @@ const Sidebar = ({
 }) => {
   const { user, tenant } = useContext(AuthContext);
   const notify = useNotify();
+  const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand();
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
   const wellnessRole = user?.wellnessRole || null;
+
+  // Parse User.subBrandAccess (stored as JSON-string array on the User row).
+  // null/empty/garbage => null = "no restriction" = all sub-brands visible.
+  // Admins always see all sub-brands regardless of this column.
+  const subBrandAccess = (() => {
+    if (isAdmin) return null;
+    const raw = user?.subBrandAccess;
+    if (!raw) return null;
+    try {
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr) || arr.length === 0) return null;
+      return arr;
+    } catch { return null; }
+  })();
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
   const location = useLocation();
@@ -612,6 +628,9 @@ const Sidebar = ({
                 isManager,
                 sectionLabelStyle,
                 counts,
+                subBrandAccess,
+                activeSubBrand,
+                setActiveSubBrand,
               })
             : renderGenericNav({
                 Link,
@@ -951,11 +970,52 @@ function renderTravelNav({
   isManager,
   sectionLabelStyle,
   counts = {},
+  subBrandAccess = null,
+  activeSubBrand = null,
+  setActiveSubBrand = () => {},
 }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
+  // Q25 sub-brand switcher. Only render the dropdown when the user
+  // either has full access (subBrandAccess === null, includes admins)
+  // or has access to ≥2 sub-brands — a single-sub-brand user has no
+  // choice to make, so the dropdown would be noise. Selecting "All"
+  // clears the active filter back to null.
+  const ALL_SUB_BRANDS = [
+    { value: "tmc", label: "TMC" },
+    { value: "rfu", label: "RFU" },
+    { value: "travelstall", label: "Travel Stall" },
+    { value: "visasure", label: "Visa Sure" },
+  ];
+  const visibleSubBrands = subBrandAccess === null
+    ? ALL_SUB_BRANDS
+    : ALL_SUB_BRANDS.filter((s) => subBrandAccess.includes(s.value));
+  const showSwitcher = visibleSubBrands.length >= 2;
   return (
     <>
       <div style={labelStyle}>Travel</div>
+      {showSwitcher && (
+        <div style={{ padding: "4px 12px 8px", display: "flex", alignItems: "center", gap: 6 }}>
+          <label htmlFor="travel-sub-brand-switcher" style={{ fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Sub-brand
+          </label>
+          <select
+            id="travel-sub-brand-switcher"
+            value={activeSubBrand || ""}
+            onChange={(e) => setActiveSubBrand(e.target.value || null)}
+            style={{
+              flex: 1, fontSize: 12, padding: "4px 6px", borderRadius: 4,
+              border: "1px solid var(--border-color)",
+              background: "var(--surface-color)", color: "var(--text-primary)",
+            }}
+            aria-label="Switch active sub-brand"
+          >
+            <option value="">All ({visibleSubBrands.length})</option>
+            {visibleSubBrands.map((s) => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
       <Link to="/travel" icon={Compass} label="Dashboard" />
       <Link to="/travel/leads" icon={UserPlus} label="Leads" />
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" />

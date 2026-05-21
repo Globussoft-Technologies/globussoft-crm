@@ -21,6 +21,7 @@ import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
 import { NotifyProvider } from "./utils/notify";
+import { ActiveSubBrandProvider } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
 import {
   setAuthToken,
@@ -544,6 +545,7 @@ export default function App() {
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       <AuthContext.Provider value={authValue}>
         <NotifyProvider>
+          <ActiveSubBrandProvider>
           <BrowserRouter>
             <RouteErrorBoundary>
               <Suspense
@@ -1087,6 +1089,7 @@ export default function App() {
               </Suspense>
             </RouteErrorBoundary>
           </BrowserRouter>
+          </ActiveSubBrandProvider>
         </NotifyProvider>
       </AuthContext.Provider>
     </ThemeContext.Provider>

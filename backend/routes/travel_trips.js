@@ -43,6 +43,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const digilockerClient = require("../services/digilockerClient");
+const googleDriveClient = require("../services/googleDriveClient");
 
 const VALID_TRIP_STATUSES = ["confirmed", "in-trip", "completed", "cancelled"];
 
@@ -128,6 +129,28 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
       return res.status(400).json({ error: "returnDate must be on or after departDate", code: "INVERTED_DATES" });
     }
 
+    // PRD §4.8 — Drive folder auto-create on confirmed-trip trigger.
+    // If the operator explicitly supplied driveFolderId in the body,
+    // HONOUR it (manual override). Otherwise, when the new row's
+    // status is "confirmed", call the stub Drive client to mint a
+    // folder. Best-effort: a stub failure logs but never blocks trip
+    // creation — the trip's primary contract is its own row, not the
+    // optional Drive linkage. Pending Q1 (Workspace admin creds).
+    const finalStatus = status || "confirmed";
+    let resolvedDriveFolderId = driveFolderId || null;
+    if (!resolvedDriveFolderId && finalStatus === "confirmed") {
+      try {
+        const folder = await googleDriveClient.createTripFolder({
+          tripCode: String(tripCode),
+          destination: String(destination),
+          departDate: depart,
+        });
+        resolvedDriveFolderId = folder.folderId;
+      } catch (driveErr) {
+        console.warn(`[travel-trips] drive auto-create failed for tripCode=${tripCode}: ${driveErr.message} — persisting NULL`);
+      }
+    }
+
     const created = await prisma.tmcTrip.create({
       data: {
         tenantId: req.travelTenant.id,
@@ -138,9 +161,9 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
         returnDate: ret,
         legalEntity: legalEntity || "tmc_nexus",
         pricePerStudent: pricePerStudent != null ? Number(pricePerStudent) : null,
-        status: status || "confirmed",
+        status: finalStatus,
         micrositeUrl: micrositeUrl || null,
-        driveFolderId: driveFolderId || null,
+        driveFolderId: resolvedDriveFolderId,
       },
     });
     res.status(201).json(created);
@@ -186,7 +209,14 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
     }
     const existing = await prisma.tmcTrip.findFirst({
       where: { id, tenantId: req.travelTenant.id },
-      select: { id: true },
+      select: {
+        id: true,
+        status: true,
+        driveFolderId: true,
+        tripCode: true,
+        destination: true,
+        departDate: true,
+      },
     });
     if (!existing) return res.status(404).json({ error: "Trip not found", code: "NOT_FOUND" });
 
@@ -225,6 +255,32 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
     // Cross-field check: if both dates being amended, verify ordering.
     if (data.departDate && data.returnDate && data.returnDate < data.departDate) {
       return res.status(400).json({ error: "returnDate must be on or after departDate", code: "INVERTED_DATES" });
+    }
+
+    // PRD §4.8 — Drive folder auto-create on confirmed-trip trigger.
+    // Fire when the operator flips status from non-confirmed to
+    // "confirmed" AND the existing row has no driveFolderId AND the
+    // body did not explicitly supply one (operator override always
+    // wins). Trip that already has a folder keeps it (no re-create
+    // on status churn). Best-effort: a stub failure logs but does
+    // NOT block the PATCH. Pending Q1 (Workspace admin creds).
+    const flippingToConfirmed =
+      data.status === "confirmed" && existing.status !== "confirmed";
+    if (
+      flippingToConfirmed &&
+      !existing.driveFolderId &&
+      driveFolderId === undefined
+    ) {
+      try {
+        const folder = await googleDriveClient.createTripFolder({
+          tripCode: existing.tripCode,
+          destination: data.destination ?? existing.destination,
+          departDate: data.departDate ?? existing.departDate,
+        });
+        data.driveFolderId = folder.folderId;
+      } catch (driveErr) {
+        console.warn(`[travel-trips] drive auto-create failed for tripCode=${existing.tripCode}: ${driveErr.message} — leaving driveFolderId unchanged`);
+      }
     }
 
     const updated = await prisma.tmcTrip.update({ where: { id }, data });

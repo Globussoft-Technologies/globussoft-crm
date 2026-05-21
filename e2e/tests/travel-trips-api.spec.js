@@ -361,3 +361,136 @@ test.describe("Travel trips API — document requirements", () => {
     expect((await res.json()).deleted).toBe(true);
   });
 });
+
+// ─── Drive folder auto-create on confirmed-trip trigger (PRD §4.8) ───
+//
+// Pins the stub-mode auto-trigger behaviour:
+//   - POST status=confirmed (default) auto-mints a stub-folder-... id
+//   - POST with explicit driveFolderId honours the operator override
+//   - POST status=draft does NOT auto-create
+//   - PATCH flipping draft → confirmed auto-mints
+//   - PATCH on a trip that already has driveFolderId preserves it
+//
+// Real OAuth + drive.files.create wires in when Q1 Workspace admin
+// creds land; the stub-folder- shape is the swap point.
+
+test.describe("Travel trips API — Drive folder auto-create (stub)", () => {
+  const STUB_FOLDER_RE = /^stub-folder-[0-9a-f]+$/;
+
+  test("POST with status=confirmed auto-mints driveFolderId", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !schoolContactId) test.skip(true, "deps missing");
+    const code = `${RUN_TAG.toLowerCase()}_drive_auto`;
+    const res = await post(request, token, "/api/travel/trips", {
+      tripCode: code,
+      schoolContactId,
+      destination: `${RUN_TAG} Auto-Drive Tour`,
+      departDate: "2026-10-01",
+      returnDate: "2026-10-10",
+      status: "confirmed",
+    });
+    expect(res.status(), `create: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.driveFolderId).toMatch(STUB_FOLDER_RE);
+    created.tripIds.push(body.id);
+  });
+
+  test("POST with explicit driveFolderId honours operator override", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !schoolContactId) test.skip(true, "deps missing");
+    const code = `${RUN_TAG.toLowerCase()}_drive_override`;
+    const overrideId = "manual-override-folder-id-12345";
+    const res = await post(request, token, "/api/travel/trips", {
+      tripCode: code,
+      schoolContactId,
+      destination: `${RUN_TAG} Override Tour`,
+      departDate: "2026-10-15",
+      returnDate: "2026-10-22",
+      status: "confirmed",
+      driveFolderId: overrideId,
+    });
+    expect(res.status(), `create: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.driveFolderId).toBe(overrideId);
+    created.tripIds.push(body.id);
+  });
+
+  test("POST with status=cancelled does NOT auto-create", async ({ request }) => {
+    // status=cancelled stays non-confirmed → no auto-trigger. We test
+    // cancelled rather than draft because the route's enum only allows
+    // confirmed/in-trip/completed/cancelled (no "draft" status).
+    const token = await getTravelAdmin(request);
+    if (!token || !schoolContactId) test.skip(true, "deps missing");
+    const code = `${RUN_TAG.toLowerCase()}_drive_noauto`;
+    const res = await post(request, token, "/api/travel/trips", {
+      tripCode: code,
+      schoolContactId,
+      destination: `${RUN_TAG} Cancelled Tour`,
+      departDate: "2026-11-01",
+      returnDate: "2026-11-05",
+      status: "cancelled",
+    });
+    expect(res.status(), `create: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.driveFolderId).toBeNull();
+    created.tripIds.push(body.id);
+  });
+
+  test("PATCH flipping cancelled → confirmed auto-mints driveFolderId", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !schoolContactId) test.skip(true, "deps missing");
+    const code = `${RUN_TAG.toLowerCase()}_drive_flip`;
+    // Create as cancelled so no auto-mint happens up front.
+    const create = await post(request, token, "/api/travel/trips", {
+      tripCode: code,
+      schoolContactId,
+      destination: `${RUN_TAG} Flip Tour`,
+      departDate: "2026-12-01",
+      returnDate: "2026-12-08",
+      status: "cancelled",
+    });
+    expect(create.status()).toBe(201);
+    const createdRow = await create.json();
+    expect(createdRow.driveFolderId).toBeNull();
+    created.tripIds.push(createdRow.id);
+
+    // Now flip to confirmed.
+    const flip = await patch(request, token, `/api/travel/trips/${createdRow.id}`, {
+      status: "confirmed",
+    });
+    expect(flip.status(), `patch: ${await flip.text()}`).toBe(200);
+    const flipped = await flip.json();
+    expect(flipped.status).toBe("confirmed");
+    expect(flipped.driveFolderId).toMatch(STUB_FOLDER_RE);
+  });
+
+  test("PATCH on a trip that already has driveFolderId preserves it", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !schoolContactId) test.skip(true, "deps missing");
+    const code = `${RUN_TAG.toLowerCase()}_drive_preserve`;
+    // Create with status=cancelled + explicit driveFolderId.
+    const explicitId = "pre-existing-folder-xyz";
+    const create = await post(request, token, "/api/travel/trips", {
+      tripCode: code,
+      schoolContactId,
+      destination: `${RUN_TAG} Preserve Tour`,
+      departDate: "2026-09-15",
+      returnDate: "2026-09-22",
+      status: "cancelled",
+      driveFolderId: explicitId,
+    });
+    expect(create.status()).toBe(201);
+    const createdRow = await create.json();
+    expect(createdRow.driveFolderId).toBe(explicitId);
+    created.tripIds.push(createdRow.id);
+
+    // Flip to confirmed without supplying a new driveFolderId — the
+    // existing folder must be preserved (no auto-recreate).
+    const flip = await patch(request, token, `/api/travel/trips/${createdRow.id}`, {
+      status: "confirmed",
+    });
+    expect(flip.status()).toBe(200);
+    const flipped = await flip.json();
+    expect(flipped.driveFolderId).toBe(explicitId);
+  });
+});

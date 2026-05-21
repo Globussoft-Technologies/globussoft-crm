@@ -756,6 +756,11 @@ test.describe("Travel itineraries API — Phase 2 public 50%-advance flow (PRD �
     expect(body.shareToken).toBe(shared.shareToken);
     expect(body.subBrand).toBe("travelstall");
     expect(body.totalAmount).toBe(100000);
+    // PRD §4.7 — advanceRatio is now sourced from the TenantSetting
+    // helper (lib/tenantSettings.js). With no setting row seeded for
+    // Travel Stall, the helper falls through to its hard-coded 0.5
+    // baseline. RFU or other sub-brands with admin-set overrides
+    // would return their override here instead.
     expect(body.advanceRatio).toBe(0.5);
     expect(body.advanceDue).toBe(50000);
     expect(body.advancePaid).toBe(0);
@@ -773,6 +778,30 @@ test.describe("Travel itineraries API — Phase 2 public 50%-advance flow (PRD �
       expect(item).not.toHaveProperty("markup");
       expect(item).not.toHaveProperty("supplierId");
     }
+  });
+
+  test("GET /itineraries/public/:shareToken advanceRatio reflects the TenantSetting helper default (PRD §4.7)", async ({ request }) => {
+    if (!shared.shareToken) test.skip(true, "seed itinerary missing");
+    // Pins the post-Phase-2 contract: the public projection's
+    // advanceRatio is sourced from getTravelAdvanceRatio() in
+    // lib/tenantSettings.js. With no TenantSetting row for the demo
+    // Travel Stall sub-brand, the helper falls through to its
+    // hard-coded 0.5 baseline. If a future admin sets
+    // `travel.advanceRatio.travelstall` to 0.4, this assertion will
+    // need to flex — that's the whole point of the move.
+    const res = await request.get(
+      `${BASE_URL}/api/travel/itineraries/public/${shared.shareToken}`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // Ratio is in-bounds (0, 1].
+    expect(body.advanceRatio).toBeGreaterThan(0);
+    expect(body.advanceRatio).toBeLessThanOrEqual(1);
+    // advanceDue is computed from ratio × total, rounded to 2dp.
+    expect(body.advanceDue).toBe(
+      Math.round(body.totalAmount * body.advanceRatio * 100) / 100,
+    );
   });
 
   test("POST /record-advance-payment without body → 400 MISSING_FIELDS", async ({ request }) => {

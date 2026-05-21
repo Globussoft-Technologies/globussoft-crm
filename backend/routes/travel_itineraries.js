@@ -39,6 +39,7 @@ const {
   assertCompletedDiagnostic,
 } = require("../middleware/travelGuards");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
+const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
 
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
 // Phase 2 (PRD §4.7) extends the enum with advance_paid / fully_paid for
@@ -46,9 +47,12 @@ const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "in
 // unchanged — the two new values are only set by the public payment
 // endpoints. Routes that PATCH status accept all 7 values.
 const VALID_STATUSES = ["draft", "sent", "revised", "accepted", "rejected", "advance_paid", "fully_paid"];
-// Travel Stall default deposit ratio (PRD §4.7). Tunable per-tenant
-// later via TenantSetting; hard-coded for Phase 2 MVP.
-const ADVANCE_RATIO = 0.5;
+// Advance-deposit ratio is now per-tenant + per-sub-brand tunable via
+// the TenantSetting table — see lib/tenantSettings.js. The Phase 2
+// baseline (Travel Stall 50/50) is the helper's hard-coded fallback
+// when no setting row exists; RFU pilgrim packages can override to
+// 0.3 (30/70), TMC school trips will use their TripPaymentPlan
+// instead. Keep the public GET + record-advance shapes unchanged.
 
 function assertValidItemType(itemType) {
   if (!VALID_ITEM_TYPES.includes(itemType)) {
@@ -786,7 +790,8 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
       return res.status(404).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
     }
     const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
-    const advanceDue = total > 0 ? Math.round(total * ADVANCE_RATIO * 100) / 100 : 0;
+    const advanceRatio = await getTravelAdvanceRatio(prisma, itin.tenantId, itin.subBrand);
+    const advanceDue = total > 0 ? Math.round(total * advanceRatio * 100) / 100 : 0;
     const advancePaid = itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0;
     const balanceDue = Math.max(0, total - advancePaid);
     res.json({
@@ -800,7 +805,7 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
       status: itin.status,
       totalAmount: total,
       currency: itin.currency,
-      advanceRatio: ADVANCE_RATIO,
+      advanceRatio,
       advanceDue,
       advancePaid,
       advancePaidAt: itin.advancePaidAt,

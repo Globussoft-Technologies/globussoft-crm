@@ -309,6 +309,12 @@ model Tenant {
 
   // Notification preferences (per-user opt-in/out)
   notificationPreferences NotificationPreference[]
+
+  // Phase 2 (PRD §4.7) — per-tenant key/value settings table. First
+  // consumer is the travel advance-ratio (`travel.advanceRatio.<subBrand>`
+  // override + `travel.advanceRatio.default`); future per-tenant tunables
+  // can land here without adding a column to Tenant for each one.
+  settings TenantSetting[]
 }
 
 model User {
@@ -2824,6 +2830,32 @@ model ConsentTemplate {
 
   @@unique([tenantId, key])
   @@index([tenantId, isActive])
+}
+
+/// Generic per-tenant key/value settings (PRD §4.7). Each row is a
+/// freeform string value keyed by `(tenantId, key)`; callers parse
+/// `value` into whatever shape they need (number, JSON blob, boolean
+/// string). First consumer is the travel advance-ratio override:
+///   key = "travel.advanceRatio.default"             value = "0.5"
+///   key = "travel.advanceRatio.travelstall"         value = "0.5"
+///   key = "travel.advanceRatio.rfu"                 value = "0.3"
+/// Lookup chain in backend/lib/tenantSettings.js:
+///   sub-brand-scoped → tenant default → hard-coded 0.5 fallback.
+/// The `@@unique([tenantId, key])` is intentional — every key is
+/// per-tenant unique. Brand-new table, zero existing rows, so the
+/// migration-safety detector's unique-constraint guard is blessed
+/// in the introducing commit (`[allow-unique]`).
+model TenantSetting {
+  id        Int      @id @default(autoincrement())
+  tenantId  Int
+  key       String // dotted namespace, e.g. "travel.advanceRatio.travelstall"
+  value     String   @db.Text // freeform; caller parses
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId, key])
 }
 
 model TreatmentPlan {

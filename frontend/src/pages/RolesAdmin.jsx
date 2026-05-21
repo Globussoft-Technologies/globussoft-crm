@@ -5,15 +5,17 @@ import { useNotify } from '../utils/notify';
 import { usePermissions, invalidatePermissionCache } from '../hooks/usePermissions';
 import AccessDenied from '../components/AccessDenied';
 
-// Admin UI for the RBAC role + permission system. Mirrors the 12 endpoints
+// Admin UI for the RBAC role + permission system. Mirrors the endpoints
 // under /api/roles (see backend/routes/roles.js). Tenant scoping is enforced
 // server-side — non-OWNER admins only see their own tenant's roles.
 //
-// Permission catalogue: this list is purely cosmetic (what the matrix UI
-// shows as checkboxes). The server is authoritative — adding a row here
-// without a backend route that enforces the permission is a no-op. Pick
-// modules + actions to match the real route surface.
-const PERMISSION_MODULES = [
+// Permission catalogue: the live matrix is fetched from
+// `GET /api/roles/catalog` so the server's permissionCatalog stays the
+// single source of truth (prevents the UI-vs-validator drift bug). The
+// constant below is the fallback shape used (a) on first render before
+// the fetch resolves, and (b) if a frontend deploy lands ahead of the
+// catalog endpoint. Keep it loosely in sync with the catalog.
+const PERMISSION_MODULES_FALLBACK = [
   { module: 'contacts',      actions: ['read', 'write', 'update', 'delete', 'export'] },
   { module: 'deals',         actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
   { module: 'leads',         actions: ['read', 'write', 'update', 'delete', 'export'] },
@@ -48,6 +50,9 @@ export default function RolesAdmin() {
   const [roles, setRoles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [permissionModules, setPermissionModules] = useState(
+    PERMISSION_MODULES_FALLBACK,
+  );
 
   const [createOpen, setCreateOpen] = useState(false);
   const [permRole, setPermRole] = useState(null);
@@ -67,6 +72,26 @@ export default function RolesAdmin() {
       setIsLoading(false);
     }
   }, []);
+
+  // Fetch the server's permission catalog so the matrix can never offer a
+  // checkbox the validator will reject. If the endpoint is unavailable
+  // (older backend), the fallback constant keeps the page functional.
+  useEffect(() => {
+    if (permLoading || !canRead) return;
+    let cancelled = false;
+    fetchApi('/api/roles/catalog')
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res?.modules) ? res.modules : null;
+        if (list && list.length) setPermissionModules(list);
+      })
+      .catch(() => {
+        // Stay on the fallback; fetchApi already surfaced any toast.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [permLoading, canRead]);
 
   useEffect(() => {
     if (!permLoading && canRead) loadRoles();
@@ -255,7 +280,7 @@ export default function RolesAdmin() {
                     </button>
                   </Td>
                   <Td>
-                    {!r.isSystem && canManage ? (
+                    {canManage ? (
                       <button
                         type="button"
                         onClick={() => handleDelete(r)}
@@ -276,7 +301,7 @@ export default function RolesAdmin() {
                           color: 'var(--text-secondary)',
                         }}
                       >
-                        {r.isSystem ? 'Immutable' : '—'}
+                        —
                       </span>
                     )}
                   </Td>
@@ -298,7 +323,8 @@ export default function RolesAdmin() {
       {permRole && (
         <PermissionsModal
           role={permRole}
-          readOnly={!canManage || permRole.isSystem}
+          modules={permissionModules}
+          readOnly={!canManage}
           onClose={() => setPermRole(null)}
           onSaved={async () => {
             await refreshAll();
@@ -309,7 +335,7 @@ export default function RolesAdmin() {
       {usersRole && (
         <UsersModal
           role={usersRole}
-          canManage={canManage && !usersRole.isSystem}
+          canManage={canManage}
           onClose={() => setUsersRole(null)}
           onChange={() => refreshAll()}
         />
@@ -429,7 +455,11 @@ function CreateRoleModal({ onClose, onSuccess }) {
 
 // ──────────────────────── Permissions matrix modal ───────────────────
 
-function PermissionsModal({ role, readOnly, onClose, onSaved }) {
+function PermissionsModal({ role, modules, readOnly, onClose, onSaved }) {
+  const matrix =
+    Array.isArray(modules) && modules.length
+      ? modules
+      : PERMISSION_MODULES_FALLBACK;
   // Hydrate from role.permissions (the list endpoint already includes them).
   // We keep a Set of "module.action" strings for O(1) lookup + toggle.
   const initial = useMemo(() => {
@@ -493,9 +523,7 @@ function PermissionsModal({ role, readOnly, onClose, onSaved }) {
       title={`Permissions: ${role.name}`}
       subtitle={
         readOnly
-          ? role.isSystem
-            ? 'System role — read-only.'
-            : 'You do not have permission to edit roles.'
+          ? 'You do not have permission to edit roles.'
           : `Check the actions this role can perform.`
       }
       onClose={onClose}
@@ -517,7 +545,7 @@ function PermissionsModal({ role, readOnly, onClose, onSaved }) {
             gap: '0.75rem',
           }}
         >
-          {PERMISSION_MODULES.map(({ module, actions }) => {
+          {matrix.map(({ module, actions }) => {
             const allSelected = actions.every((a) =>
               selected.has(`${module}.${a}`),
             );
@@ -726,9 +754,7 @@ function UsersModal({ role, canManage, onClose, onChange }) {
       subtitle={
         canManage
           ? 'Assign or remove users from this role. Changes apply immediately.'
-          : role.isSystem
-            ? 'System role — assignments cannot be changed.'
-            : 'You do not have permission to manage role assignments.'
+          : 'You do not have permission to manage role assignments.'
       }
       onClose={onClose}
       width={620}

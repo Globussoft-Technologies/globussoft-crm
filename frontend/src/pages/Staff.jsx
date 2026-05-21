@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X } from 'lucide-react';
+import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X, UserPlus } from 'lucide-react';
 import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { formatDate } from '../utils/date';
@@ -93,6 +93,11 @@ export default function Staff() {
   // wellnessRole } when an admin clicked Edit on a row.
   const [editing, setEditing] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  // Add-Staff modal state. null when closed; the form draft when open.
+  // POSTs to /api/staff which creates a user inside the current tenant.
+  // The created user lands on the role-aware Dashboard variant on first login.
+  const [creating, setCreating] = useState(null);
+  const [savingCreate, setSavingCreate] = useState(false);
   // PRD Gap §1.5 — commission profiles are listed in the edit modal as a
   // dropdown so admins can assign payroll rules per staff member.
   const [commissionProfiles, setCommissionProfiles] = useState([]);
@@ -198,6 +203,47 @@ export default function Staff() {
     }
   };
 
+  // Open the Add-Staff modal with empty defaults. Role defaults to USER (the
+  // most common new hire). wellnessRole stays empty so the field is hidden
+  // for generic tenants — the backend accepts null and a separate Edit pass
+  // can promote a member to doctor / professional / telecaller later.
+  const openCreate = () => {
+    setCreating({ name: '', email: '', password: '', role: 'USER', wellnessRole: '' });
+  };
+
+  const saveCreate = async () => {
+    if (!creating) return;
+    // Quick client-side gate so we don't ask the backend for a round-trip
+    // on obviously-incomplete forms. Backend still re-validates everything.
+    const name = (creating.name || '').trim();
+    const email = (creating.email || '').trim();
+    const password = creating.password || '';
+    if (!name) { notify.error('Please enter the staff member’s name.'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { notify.error('Please enter a valid work email address.'); return; }
+    if (password.length < 6) { notify.error('Password must be at least 6 characters.'); return; }
+    if (!['ADMIN', 'MANAGER', 'USER'].includes(creating.role)) { notify.error('Please choose a role.'); return; }
+    setSavingCreate(true);
+    try {
+      await fetchApi('/api/staff', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          email,
+          password,
+          role: creating.role,
+          wellnessRole: creating.wellnessRole || null,
+        }),
+      });
+      notify.success(`${name} added to the team.`);
+      setCreating(null);
+      loadStaff();
+    } catch (err) {
+      notify.error(err.message || 'Failed to add staff member.');
+    } finally {
+      setSavingCreate(false);
+    }
+  };
+
   const toggleActive = async (member) => {
     const goingInactive = !member.deactivatedAt;
     const verb = goingInactive ? 'Deactivate' : 'Reactivate';
@@ -288,13 +334,45 @@ export default function Staff() {
 
   return (
     <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <UsersRound size={26} color="var(--accent-color)" /> Staff Directory
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Manage team members, roles, and access levels.
-        </p>
+      <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <UsersRound size={26} color="var(--accent-color)" /> Staff Directory
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Manage team members, roles, and access levels.
+          </p>
+        </div>
+        {/* Admin-only Add Staff CTA. Uses the wellness teal token first and
+            falls back to the generic accent color — matches the standing
+            rule for primary CTAs (CLAUDE.md). Non-admins never see it. */}
+        {canManageStaff && (
+          <button
+            type="button"
+            onClick={openCreate}
+            data-testid="staff-add-button"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              padding: '0.55rem 1rem',
+              borderRadius: '8px',
+              background: 'var(--primary-color, var(--accent-color))',
+              color: '#fff',
+              border: '1px solid var(--primary-color, var(--accent-color))',
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(38,88,85,0.25)',
+              transition: 'filter 0.15s',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.1)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
+            title="Add a new staff member to this organization"
+          >
+            <UserPlus size={16} /> Add Staff
+          </button>
+        )}
       </header>
 
       {/* Stats bar */}
@@ -628,6 +706,140 @@ export default function Staff() {
           </div>
         )}
       </div>
+
+      {/* Add-Staff modal. Mirrors the edit-modal shape so both share the
+          same overlay/card chrome. On success the new user can log in with
+          the chosen email + password; their role decides the dashboard
+          variant rendered on first nav to /dashboard. */}
+      {creating && (
+        <div
+          data-testid="staff-create-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setCreating(null); }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: '1rem',
+          }}
+        >
+          <div className="card" style={{ width: '100%', maxWidth: 460, padding: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <UserPlus size={18} color="var(--primary-color, var(--accent-color))" /> Add staff member
+              </h3>
+              <button
+                onClick={() => setCreating(null)}
+                aria-label="Close"
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p style={{ margin: '0 0 1rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              The new member will be added to your organization and can sign in immediately with the credentials below.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Working name
+                <input
+                  type="text"
+                  className="input-field"
+                  value={creating.name}
+                  onChange={(e) => setCreating({ ...creating, name: e.target.value })}
+                  placeholder="e.g. Dr. Priyambada"
+                  data-testid="staff-create-name"
+                  autoFocus
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                />
+              </label>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Work email <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(not a personal address)</span>
+                <input
+                  type="email"
+                  className="input-field"
+                  value={creating.email}
+                  onChange={(e) => setCreating({ ...creating, email: e.target.value })}
+                  placeholder="name@yourclinic.com"
+                  data-testid="staff-create-email"
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                />
+              </label>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Temporary password <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(min 6 characters)</span>
+                <input
+                  type="text"
+                  className="input-field"
+                  value={creating.password}
+                  onChange={(e) => setCreating({ ...creating, password: e.target.value })}
+                  placeholder="Share securely with the new staff member"
+                  data-testid="staff-create-password"
+                  autoComplete="new-password"
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                />
+              </label>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Role
+                <select
+                  className="input-field"
+                  value={creating.role}
+                  onChange={(e) => setCreating({ ...creating, role: e.target.value })}
+                  data-testid="staff-create-role"
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                >
+                  <option value="USER">USER — sees their own tasks + pipeline</option>
+                  <option value="MANAGER">MANAGER — team overview + reports</option>
+                  <option value="ADMIN">ADMIN — full enterprise overview</option>
+                </select>
+              </label>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Wellness role <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(optional)</span>
+                <select
+                  className="input-field"
+                  value={creating.wellnessRole}
+                  onChange={(e) => setCreating({ ...creating, wellnessRole: e.target.value })}
+                  data-testid="staff-create-wellness-role"
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                >
+                  <option value="">— None —</option>
+                  <option value="doctor">Doctor</option>
+                  <option value="professional">Professional</option>
+                  <option value="telecaller">Telecaller</option>
+                  <option value="helper">Helper</option>
+                  <option value="stylist">Stylist</option>
+                </select>
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button
+                onClick={() => setCreating(null)}
+                disabled={savingCreate}
+                style={{
+                  background: 'transparent', color: 'var(--text-secondary)',
+                  border: '1px solid var(--border-color)', borderRadius: '6px',
+                  padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.85rem',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveCreate}
+                disabled={savingCreate}
+                data-testid="staff-create-save"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                  background: 'var(--primary-color, var(--accent-color))',
+                  color: '#fff',
+                  border: '1px solid var(--primary-color, var(--accent-color))',
+                  borderRadius: '6px',
+                  padding: '0.4rem 0.9rem', cursor: savingCreate ? 'wait' : 'pointer',
+                  fontSize: '0.85rem', fontWeight: 600,
+                }}
+              >
+                {savingCreate ? 'Adding…' : (<><UserPlus size={14} /> Add staff member</>)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* #618 — edit modal. Opens when an admin clicks Edit on a row. */}
       {editing && (

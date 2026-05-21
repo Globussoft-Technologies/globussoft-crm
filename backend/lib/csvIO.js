@@ -190,9 +190,92 @@ function parseCsv(text) {
   return { headers, rows };
 }
 
+// ── XLSX helpers ──────────────────────────────────────────────────
+//
+// Thin wrappers over the `xlsx` SheetJS dependency (already in
+// backend/package.json — used by the patient export/template path). Kept
+// behind a lazy require so a missing install can't crash module load.
+// Used by routes/wellnessCsv.js to emit XLSX template + export buffers and
+// to parse uploaded `.xlsx` imports into the same `{ headers, rows }`
+// shape parseCsv returns, so the downstream import loop stays format-blind.
+
+let _xlsxLib = null;
+function loadXlsx() {
+  if (_xlsxLib) return _xlsxLib;
+  // eslint-disable-next-line global-require
+  _xlsxLib = require("xlsx");
+  return _xlsxLib;
+}
+
+function toXlsxBuffer(headers, rows, sheetName = "Sheet1") {
+  if (!Array.isArray(headers) || headers.length === 0) {
+    throw new Error("toXlsxBuffer: headers must be a non-empty array");
+  }
+  const XLSX = loadXlsx();
+  const aoa = [headers.slice()];
+  for (const row of rows || []) {
+    if (Array.isArray(row)) {
+      aoa.push(headers.map((_h, i) => normalizeXlsxCell(row[i])));
+    } else if (row && typeof row === "object") {
+      aoa.push(headers.map((h) => normalizeXlsxCell(row[h])));
+    } else {
+      aoa.push(headers.map(() => ""));
+    }
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+}
+
+function normalizeXlsxCell(value) {
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? "" : value.toISOString();
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return value;
+}
+
+// parseXlsxBuffer(buffer) -> { headers, rows } matching parseCsv's contract.
+// Reads the first sheet, treats row 1 as headers, coerces every cell to a
+// string so the row callbacks (which assume CSV semantics) keep working.
+function parseXlsxBuffer(buffer) {
+  if (!Buffer.isBuffer(buffer)) {
+    throw new Error("parseXlsxBuffer: input must be a Buffer");
+  }
+  const XLSX = loadXlsx();
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const firstSheetName = wb.SheetNames[0];
+  if (!firstSheetName) return { headers: [], rows: [] };
+  const ws = wb.Sheets[firstSheetName];
+  // header:1 -> array of arrays; raw:false -> formatted strings; defval:""
+  // so missing trailing cells render as "" instead of undefined.
+  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+  if (!aoa.length) return { headers: [], rows: [] };
+  const headers = (aoa[0] || []).map((h) => String(h ?? "").trim());
+  const rows = [];
+  for (let r = 1; r < aoa.length; r += 1) {
+    const cells = aoa[r] || [];
+    // Skip completely-blank rows (Excel often pads with empty trailing rows).
+    const nonEmpty = cells.some((c) => String(c ?? "").trim() !== "");
+    if (!nonEmpty) continue;
+    const obj = {};
+    for (let h = 0; h < headers.length; h += 1) {
+      const key = headers[h];
+      if (!key) continue;
+      const cell = h < cells.length ? cells[h] : "";
+      obj[key] = cell === null || cell === undefined ? "" : String(cell);
+    }
+    Object.defineProperty(obj, "__row", { value: r + 1, enumerable: false });
+    rows.push(obj);
+  }
+  return { headers, rows };
+}
+
 module.exports = {
   parseCsv,
   toCsv,
   withBom,
   escapeCell,
+  toXlsxBuffer,
+  parseXlsxBuffer,
 };

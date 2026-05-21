@@ -105,6 +105,7 @@ export default function Drugs() {
             entity="products"
             label="Drugs"
             filters={{ q: search }}
+            formats={['csv', 'xlsx']}
             onImported={() => load(search)}
           />
           <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>

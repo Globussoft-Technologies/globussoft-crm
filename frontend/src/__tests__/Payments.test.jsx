@@ -158,10 +158,11 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getByText('#103')).toBeInTheDocument();
     // Status badge labels.
     expect(screen.getByText(/^Success$/)).toBeInTheDocument();
-    // "Pending" + "Failed" also appear in the stat-card labels above; use
-    // getAllByText.
-    expect(screen.getAllByText(/^Pending$/).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText(/^Failed$/).length).toBeGreaterThanOrEqual(2);
+    // Stat-card labels now include a window suffix (e.g. "Pending (Last 30
+    // Days)") so the bare-word badges only appear in row cells. >= 1 each
+    // is enough — the row count + amount assertions above pin the table.
+    expect(screen.getAllByText(/^Pending$/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^Failed$/).length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows the empty-state "No payments yet" CTA when /api/payments returns []', async () => {

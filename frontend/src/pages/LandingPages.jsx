@@ -4,6 +4,7 @@ import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
 import { useNotify } from '../utils/notify';
 import { Link, useNavigate } from 'react-router-dom';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
 
 const STATUS_COLORS = { DRAFT: { bg: 'rgba(59,130,246,0.1)', color: '#3b82f6' }, PUBLISHED: { bg: 'rgba(16,185,129,0.1)', color: '#10b981' }, ARCHIVED: { bg: 'rgba(107,114,128,0.1)', color: '#6b7280' } };
 
@@ -14,6 +15,17 @@ export default function LandingPages() {
   const [loading, setLoading] = useState(true);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const navigate = useNavigate();
+  const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+  // Filter by createdAt so users can scope to "pages created this month" etc.
+  // The analytics (visits/leads/conv) shown on each card are still all-time;
+  // a per-page analytics-window filter belongs on the page-detail screen.
+  const visiblePages = (rangeStart && rangeEnd)
+    ? pages.filter((p) => {
+        const ts = new Date(p.createdAt).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : pages;
 
   const loadPages = () => {
     setLoading(true);
@@ -99,8 +111,22 @@ export default function LandingPages() {
           <button className="btn-primary" onClick={() => setShowTemplatePicker(true)}><Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Create Page</button>
         </div>
       ) : (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+            <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by created date" />
+            {visiblePages.length !== pages.length && (
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {visiblePages.length} of {pages.length}
+              </span>
+            )}
+          </div>
+          {visiblePages.length === 0 ? (
+            <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              No pages in the selected range.
+            </div>
+          ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
-          {pages.map(page => {
+          {visiblePages.map(page => {
             const sc = STATUS_COLORS[page.status] || STATUS_COLORS.DRAFT;
             // #639 — keep the raw numeric so formatPercent renders consistently
             // (1-decimal "0.0%") on list, detail, and CSV. Pre-fix the list used
@@ -149,6 +175,8 @@ export default function LandingPages() {
             );
           })}
         </div>
+          )}
+        </>
       )}
 
       {/* Template Picker Modal */}

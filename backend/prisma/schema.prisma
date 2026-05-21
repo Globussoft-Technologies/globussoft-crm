@@ -295,6 +295,9 @@ model Tenant {
 
   // Wave 3 — Staff availability blocks (breaks, leave, etc.)
   blockTimes BlockTime[] @relation("TenantBlockTimes")
+
+  // Patient tag system — tenant-scoped labels assignable to many patients.
+  tags Tag[]
 }
 
 model User {
@@ -2502,6 +2505,13 @@ model Patient {
   anniversary   DateTime?
   walletBalance Float?
 
+  // CRM-style classification used by the create-customer modal.
+  //   taxType         : "individual" | "business" — drives downstream
+  //                     invoice / accounting flow.
+  //   instagramHandle : free-text social handle (no leading @ enforced).
+  taxType         String?
+  instagramHandle String?
+
   // #413 — Restrict (not Cascade) on Tenant deletion. Patient is PHI
   // (medical history, allergies, photos, prescriptions cascade-from-here).
   // A misclick on tenant.delete() must NOT silently destroy clinical
@@ -2548,6 +2558,11 @@ model Patient {
   deletedAt DateTime?
   // Wave 2 Agent II — POS sales rung up against this patient.
   sales     Sale[]
+
+  // Patient tag join rows. Soft-deletes leave PatientTag rows orphaned —
+  // the route handler filters by patient.deletedAt at read time, so dangling
+  // tag links resurrect on patient restore.
+  tags      PatientTag[]
 
   /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
   // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
@@ -4129,4 +4144,38 @@ model BlockTime {
   @@index([userId, tenantId])
   @@index([startAt, endAt])
   @@index([tenantId])
+}
+
+// Tenant-scoped tag (label) assignable to patients. Cross-resource use
+// later (e.g. visits, contacts) can extend with additional join tables;
+// for now PatientTag is the only join. Soft-delete deferred — drop the
+// tag and the @@unique constraint will reject a recreate; we keep this
+// simple to start.
+model Tag {
+  id        Int       @id @default(autoincrement())
+  name      String
+  // Optional hex like #265855 for chip rendering. Falls back to a
+  // deterministic theme colour at the UI layer when null.
+  color     String?
+  tenantId  Int
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  patients  PatientTag[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model PatientTag {
+  patientId Int
+  tagId     Int
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([patientId, tagId])
+  @@index([patientId])
+  @@index([tagId])
 }

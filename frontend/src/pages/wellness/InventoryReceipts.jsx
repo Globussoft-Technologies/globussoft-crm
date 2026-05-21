@@ -4,11 +4,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ArrowDownToLine, Plus, Calendar, Search, Eye, Pencil, Trash2,
+  ArrowDownToLine, Plus, Search, Eye, Pencil, Trash2,
   Copy, Check, Phone, X, FileText, AlertTriangle, Lock,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { DateRangeFilter, resolveDateRangeYmd, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 
 const EMPTY = {
   productId: '', vendorId: '', quantity: '', unitCost: '',
@@ -27,7 +28,8 @@ export default function InventoryReceipts() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
-  const [filter, setFilter] = useState({ from: '', to: '' });
+  const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
+  const [from, to] = resolveDateRangeYmd(dateFilter);
   const [searchQuery, setSearchQuery] = useState('');
   const [viewing, setViewing] = useState(null);
   const [copiedKey, setCopiedKey] = useState(null);
@@ -35,8 +37,8 @@ export default function InventoryReceipts() {
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
-    if (filter.from) qs.set('from', filter.from);
-    if (filter.to) qs.set('to', filter.to);
+    if (from) qs.set('from', from);
+    if (to) qs.set('to', to);
     Promise.all([
       fetchApi(`/api/wellness/inventory/receipts${qs.toString() ? `?${qs}` : ''}`).catch(() => []),
       fetchApi('/api/wellness/products').catch(() => []),
@@ -47,7 +49,9 @@ export default function InventoryReceipts() {
       setVendors(Array.isArray(vens) ? vens.filter((v) => v.isActive) : []);
     }).finally(() => setLoading(false));
   };
-  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Refetch when the picker changes — "All time" returns [null, null] which
+  // omits the qs params and lets the backend return its default window.
+  useEffect(load, [from, to]);
 
   const resetForm = () => { setForm(EMPTY); setEditing(null); setShowForm(false); };
 
@@ -195,7 +199,14 @@ export default function InventoryReceipts() {
         </button>
       </header>
 
-      <div className="glass" style={{ padding: '0.85rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+      <div
+        className="glass"
+        style={{
+          padding: '0.85rem 1rem', marginBottom: '1rem',
+          display: 'flex', alignItems: 'center', gap: '0.75rem',
+          flexWrap: 'wrap',
+        }}
+      >
         <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 420 }}>
           <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
           <input
@@ -206,11 +217,8 @@ export default function InventoryReceipts() {
             style={{ ...inputStyle, width: '100%', paddingLeft: 30 }}
           />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <Calendar size={16} />
-          <label style={{ fontSize: '0.85rem' }}>From <input type="date" value={filter.from} onChange={(e) => setFilter({ ...filter, from: e.target.value })} style={inputStyle} /></label>
-          <label style={{ fontSize: '0.85rem' }}>To <input type="date" value={filter.to} onChange={(e) => setFilter({ ...filter, to: e.target.value })} style={inputStyle} /></label>
-          <button onClick={load} style={secondaryBtnStyle}>Apply</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginLeft: 'auto' }}>
+          <DateRangeFilter value={dateFilter} onChange={setDateFilter} />
         </div>
       </div>
 
@@ -468,8 +476,31 @@ function Field({ label, value, hint, strong }) {
 const inputStyle = { padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: '0.9rem', minWidth: 0, background: 'transparent', color: 'inherit', width: '100%' };
 const lockedStyle = { ...inputStyle, opacity: 0.55, cursor: 'not-allowed', background: 'rgba(148,163,184,0.08)' };
 const lockBadgeStyle = { position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' };
-const primaryBtnStyle = { display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.55rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' };
-const secondaryBtnStyle = { padding: '0.4rem 0.75rem', background: 'transparent', color: 'var(--text)', border: '1px solid var(--border-color)', borderRadius: 6, cursor: 'pointer' };
+// Primary CTA — teal in wellness (var --primary-color), falls back to --accent
+// in generic. Subtle shadow + fontWeight 600 give it more visual weight than
+// the plain flat fill it had before.
+const primaryBtnStyle = {
+  display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+  padding: '0.55rem 1.1rem',
+  background: 'var(--primary-color, var(--accent-color))',
+  color: '#fff', border: 'none', borderRadius: 8,
+  fontSize: '0.875rem', fontWeight: 600,
+  cursor: 'pointer',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
+  transition: 'transform 0.12s ease, box-shadow 0.12s ease',
+};
+// Secondary — outline that picks up the teal primary on hover so it ties back
+// to the active CTA without competing with it at rest.
+const secondaryBtnStyle = {
+  padding: '0.45rem 0.9rem',
+  background: 'transparent',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 8,
+  fontSize: '0.85rem', fontWeight: 500,
+  cursor: 'pointer',
+  transition: 'border-color 0.12s ease, color 0.12s ease',
+};
 const cellStyle = { padding: '0.6rem 0.85rem', fontSize: '0.9rem', verticalAlign: 'top' };
 const iconBtnStyle = { background: 'transparent', border: 'none', cursor: 'pointer', padding: '0.25rem 0.4rem', color: 'var(--text-secondary)' };
 const inlineCopyBtnStyle = { background: 'transparent', border: 'none', cursor: 'pointer', padding: '0 0.25rem', color: 'var(--text-secondary)', verticalAlign: 'middle', marginLeft: 2 };

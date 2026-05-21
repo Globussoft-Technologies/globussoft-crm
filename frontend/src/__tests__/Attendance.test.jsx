@@ -310,7 +310,7 @@ describe('<Attendance /> — 30-day history table', () => {
 
     renderAttendance();
 
-    await waitFor(() => expect(screen.getByText(/My Last 30 Days/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/My attendance/i)).toBeInTheDocument());
     // 6 column headers (Date, Clock-in, Clock-out, Total, Status, Source).
     expect(screen.getByRole('columnheader', { name: /^Date$/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /^Clock-in$/ })).toBeInTheDocument();
@@ -360,7 +360,7 @@ describe('<Attendance /> — manager Staff section', () => {
 
     renderAttendance({ user: regularUser });
 
-    await waitFor(() => expect(screen.getByText(/My Last 30 Days/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/My attendance/i)).toBeInTheDocument());
     // The manager-only "Today — All Staff" heading must not be present.
     expect(screen.queryByText(/Today — All Staff/i)).not.toBeInTheDocument();
     // /summary must not have been called.

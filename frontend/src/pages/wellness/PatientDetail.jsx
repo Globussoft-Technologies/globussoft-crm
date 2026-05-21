@@ -6,9 +6,13 @@ import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
 import { formatDate } from '../../utils/date';
 import { currencySymbol, formatMoney } from '../../utils/money';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 
 const tabStyle = (active) => ({
-  padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--accent-color)' : 'transparent',
+  // Primary CTA uses --primary-color (teal #265855 in wellness) with a fallback to
+  // --accent-color (blush) so generic theme — which has no --primary-color — still
+  // gets its blue accent. See CLAUDE.md "Primary CTAs use var(--primary-color,...)".
+  padding: '0.5rem 1rem', border: 'none', background: active ? 'var(--primary-color, var(--accent-color))' : 'transparent',
   color: active ? '#fff' : 'var(--text-primary)', cursor: 'pointer', borderRadius: 8, fontSize: '0.85rem',
   display: 'flex', alignItems: 'center', gap: '0.35rem',
 });
@@ -320,17 +324,60 @@ function WalletTab({ patient }) {
 function CaseHistoryTab({ patient }) {
   // #278: clicking an Rx card pops a detail modal with all fields + PDF download.
   const [openRx, setOpenRx] = useState(null);
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
 
-  const events = [
+  const allEvents = [
     ...patient.visits.map((v) => ({ kind: 'visit', date: v.visitDate, data: v })),
     ...patient.prescriptions.map((p) => ({ kind: 'rx', date: p.createdAt, data: p })),
     ...patient.consents.map((c) => ({ kind: 'consent', date: c.signedAt, data: c })),
   ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
-  if (events.length === 0) return <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history yet.</div>;
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
+  const events = (rangeStart && rangeEnd)
+    ? allEvents.filter((e) => {
+        const ts = new Date(e.date).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : allEvents;
+
+  const filterBar = (
+    <div
+      className="glass"
+      style={{
+        padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap',
+        alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem',
+      }}
+    >
+      <DateRangeFilter value={filter} onChange={setFilter} />
+      <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+        {events.length === allEvents.length
+          ? `${allEvents.length} event${allEvents.length === 1 ? '' : 's'}`
+          : `${events.length} of ${allEvents.length} events`}
+      </span>
+    </div>
+  );
+
+  if (allEvents.length === 0) {
+    return (
+      <>
+        {filterBar}
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history yet.</div>
+      </>
+    );
+  }
+
+  if (events.length === 0) {
+    return (
+      <>
+        {filterBar}
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No case history in the selected range.</div>
+      </>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      {filterBar}
       {events.map((e, i) => {
         const clickable = e.kind === 'rx';
         return (
@@ -1141,7 +1188,15 @@ function ConsentTab({ patient, services, onSaved }) {
   // has already been captured for this patient/template/service before
   // recapturing. patient.consents already arrives ordered desc by signedAt
   // from the parent fetch (see routes/wellness.js GET /patients/:id include).
-  const priorConsents = Array.isArray(patient?.consents) ? patient.consents : [];
+  const allPriorConsents = Array.isArray(patient?.consents) ? patient.consents : [];
+  const [consentFilter, setConsentFilter] = useState(EMPTY_DATE_FILTER);
+  const [consentRangeStart, consentRangeEnd] = resolveDateRange(consentFilter);
+  const priorConsents = (consentRangeStart && consentRangeEnd)
+    ? allPriorConsents.filter((c) => {
+        const ts = new Date(c.signedAt).getTime();
+        return ts >= consentRangeStart.getTime() && ts <= consentRangeEnd.getTime();
+      })
+    : allPriorConsents;
   const formatPriorDate = (iso) => {
     if (!iso) return '';
     try {
@@ -1169,10 +1224,26 @@ function ConsentTab({ patient, services, onSaved }) {
           borderRadius: 8,
         }}
       >
-        <h3 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1rem' }}>Recent consents</h3>
-        {priorConsents.length === 0 ? (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+          <h3 style={{ margin: 0, fontSize: '1rem' }}>Recent consents</h3>
+          {allPriorConsents.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <DateRangeFilter value={consentFilter} onChange={setConsentFilter} label={null} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {priorConsents.length === allPriorConsents.length
+                  ? `${allPriorConsents.length}`
+                  : `${priorConsents.length} of ${allPriorConsents.length}`}
+              </span>
+            </div>
+          )}
+        </div>
+        {allPriorConsents.length === 0 ? (
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
             No prior consents on file.
+          </p>
+        ) : priorConsents.length === 0 ? (
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            No consents in the selected range.
           </p>
         ) : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
@@ -1346,6 +1417,15 @@ function PlansTab({ patient, services, onSaved }) {
   const setTotalSessions = (v) => setDraft((s) => ({ ...s, totalSessions: v }));
   const setTotalPrice = (v) => setDraft((s) => ({ ...s, totalPrice: v }));
   const setServiceId = (v) => setDraft((s) => ({ ...s, serviceId: v }));
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
+  const allPlans = patient.treatmentPlans || [];
+  const plans = (rangeStart && rangeEnd)
+    ? allPlans.filter((tp) => {
+        const ts = new Date(tp.createdAt).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : allPlans;
   // #225: rapid double-clicks on Add were creating duplicate treatment plans.
   // Guard the submit with a `submitting` flag and disable the button while
   // the POST is in flight.
@@ -1375,11 +1455,30 @@ function PlansTab({ patient, services, onSaved }) {
 
   return (
     <div>
+      {allPlans.length > 0 && (
+        <div
+          className="glass"
+          style={{
+            padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap',
+            alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem',
+          }}
+        >
+          <DateRangeFilter value={filter} onChange={setFilter} label="Filter by created date" />
+          <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            {plans.length === allPlans.length
+              ? `${allPlans.length} plan${allPlans.length === 1 ? '' : 's'}`
+              : `${plans.length} of ${allPlans.length} plans`}
+          </span>
+        </div>
+      )}
       <div style={{ marginBottom: '1rem', display: 'grid', gap: '0.5rem' }}>
-        {patient.treatmentPlans.length === 0 && (
+        {allPlans.length === 0 && (
           <div className="glass" style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No treatment plans yet.</div>
         )}
-        {patient.treatmentPlans.map((tp) => (
+        {allPlans.length > 0 && plans.length === 0 && (
+          <div className="glass" style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No plans in the selected range.</div>
+        )}
+        {plans.map((tp) => (
           <div key={tp.id} className="glass" style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontWeight: 500 }}>{tp.name}</div>
@@ -1387,6 +1486,7 @@ function PlansTab({ patient, services, onSaved }) {
                 {tp.service?.name && <>{tp.service.name} • </>}
                 Session {tp.completedSessions}/{tp.totalSessions}
                 {tp.totalPrice > 0 && <> • ₹{Math.round(tp.totalPrice).toLocaleString('en-IN')}</>}
+                {tp.createdAt && <> • Started {formatDate(tp.createdAt)}</>}
               </div>
             </div>
             <div style={{ width: 100, background: 'rgba(255,255,255,0.05)', borderRadius: 20, height: 6, overflow: 'hidden' }}>
@@ -1651,6 +1751,14 @@ function PhotosTab({ patient, onSaved }) {
   const [kind, setKind] = useState('before');
   const [uploading, setUploading] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
+  const visibleVisits = (rangeStart && rangeEnd)
+    ? patient.visits.filter((v) => {
+        const ts = new Date(v.visitDate).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : patient.visits;
 
   const visit = patient.visits.find((v) => v.id === parseInt(visitId));
   const before = visit?.photosBefore ? JSON.parse(visit.photosBefore) : [];
@@ -1686,13 +1794,20 @@ function PhotosTab({ patient, onSaved }) {
 
   return (
     <div className="glass" style={{ padding: '1.5rem' }}>
-      <h3 style={{ marginBottom: '1rem' }}>Visit photos</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+        <h3 style={{ margin: 0 }}>Visit photos</h3>
+        {patient.visits.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <DateRangeFilter value={filter} onChange={setFilter} label={null} />
+          </div>
+        )}
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr auto', gap: '0.5rem', marginBottom: '1rem', alignItems: 'end' }}>
         <div>
           <label style={labelStyle}>Visit</label>
           <select value={visitId} onChange={(e) => setVisitId(e.target.value)} style={inputStyle}>
             <option value="">— select visit —</option>
-            {patient.visits.map((v) => (
+            {visibleVisits.map((v) => (
               <option key={v.id} value={v.id}>
                 {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
               </option>
@@ -2010,6 +2125,14 @@ function InventoryTab({ patient, onSaved }) {
   const [loading, setLoading] = useState(false);
   // #225: debounce guard so rapid clicks don't create duplicate consumption rows.
   const [submitting, setSubmitting] = useState(false);
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
+  const visibleVisits = (rangeStart && rangeEnd)
+    ? patient.visits.filter((v) => {
+        const ts = new Date(v.visitDate).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : patient.visits;
 
   useEffect(() => {
     if (!visitId) { setItems([]); return; }
@@ -2049,12 +2172,19 @@ function InventoryTab({ patient, onSaved }) {
 
   return (
     <div className="glass" style={{ padding: '1.5rem' }}>
-      <h3 style={{ marginBottom: '1rem' }}>Inventory used</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+        <h3 style={{ margin: 0 }}>Inventory used</h3>
+        {patient.visits.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <DateRangeFilter value={filter} onChange={setFilter} label={null} />
+          </div>
+        )}
+      </div>
       <div style={{ marginBottom: '1rem' }}>
         <label style={labelStyle}>Visit</label>
         <select value={visitId} onChange={(e) => setVisitId(e.target.value)} style={inputStyle}>
           <option value="">— select visit —</option>
-          {patient.visits.map((v) => (
+          {visibleVisits.map((v) => (
             <option key={v.id} value={v.id}>
               {formatDate(v.visitDate)} — {v.service?.name || 'Consultation'}
             </option>
@@ -2327,10 +2457,18 @@ function TelehealthTab({ patient, onSaved }) {
   const [activeRoom, setActiveRoom] = useState(null); // string room name
   const [busyVisitId, setBusyVisitId] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(filter);
 
-  const visits = (patient.visits || []).slice().sort(
+  const allVisits = (patient.visits || []).slice().sort(
     (a, b) => new Date(b.visitDate) - new Date(a.visitDate),
   );
+  const visits = (rangeStart && rangeEnd)
+    ? allVisits.filter((v) => {
+        const ts = new Date(v.visitDate).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : allVisits;
 
   const startOrJoin = async (visit) => {
     let room = visit.videoRoom;
@@ -2372,7 +2510,7 @@ function TelehealthTab({ patient, onSaved }) {
     }
   };
 
-  if (visits.length === 0) {
+  if (allVisits.length === 0) {
     return (
       <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
         No visits yet — log a visit first to start a video consult.
@@ -2382,10 +2520,29 @@ function TelehealthTab({ patient, onSaved }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div
+        className="glass"
+        style={{
+          padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap',
+          alignItems: 'center', gap: '0.6rem',
+        }}
+      >
+        <DateRangeFilter value={filter} onChange={setFilter} label="Filter by visit date" />
+        <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+          {visits.length === allVisits.length
+            ? `${allVisits.length} visit${allVisits.length === 1 ? '' : 's'}`
+            : `${visits.length} of ${allVisits.length} visits`}
+        </span>
+      </div>
       <div className="glass" style={{ padding: '1rem' }}>
         <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
           Each visit can host one video room. Patients join the same link from the patient portal.
         </div>
+        {visits.length === 0 && (
+          <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            No visits in the selected range.
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {visits.map((v) => {
             const has = !!v.videoRoom;

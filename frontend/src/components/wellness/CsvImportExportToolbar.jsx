@@ -20,7 +20,7 @@
 // "<a href=…>" path would skip the header and 401.
 
 import { useEffect, useRef, useState } from "react";
-import { Upload, Download, X, FileText, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Upload, Download, X, FileText, AlertTriangle, CheckCircle2, ChevronDown } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -32,30 +32,60 @@ const ENTITY_LABELS = {
   bookings: "Bookings",
 };
 
+// Mime + extension lookup for the supported formats.
+const FORMAT_META = {
+  csv: { label: "CSV", ext: "csv" },
+  xlsx: { label: "Excel (XLSX)", ext: "xlsx" },
+};
+
 export default function CsvImportExportToolbar({
   entity,
   filters = {},
   label = null,
   onImported = null,
+  // Patient-list opt-in: when caller passes ['csv','xlsx'] the export button
+  // becomes a dropdown and the Import modal offers both template formats.
+  // Other entities keep the default single-CSV UX.
+  formats = ["csv"],
+  // Optional endpoint overrides — Patients routes to the new
+  // /api/wellness/patients/{export,import-template} routes that understand
+  // the source/gender/tags/dates filters; other entities stay on the
+  // generic /api/wellness/csv/:entity/{export,template} pipeline.
+  endpoints = null,
 }) {
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef(null);
   const displayLabel = label || ENTITY_LABELS[entity] || entity;
 
-  const buildQueryString = () => {
+  const exportUrl = endpoints?.export || `/api/wellness/csv/${entity}/export`;
+  const templateUrl = endpoints?.template || `/api/wellness/csv/${entity}/template`;
+
+  const buildQueryString = (extra = {}) => {
     const parts = [];
-    for (const [k, v] of Object.entries(filters || {})) {
+    const merged = { ...filters, ...extra };
+    for (const [k, v] of Object.entries(merged)) {
       if (v === null || v === undefined || v === "") continue;
-      parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+      if (Array.isArray(v)) {
+        for (const item of v) {
+          if (item === null || item === undefined || item === "") continue;
+          parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(item)}`);
+        }
+      } else {
+        parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+      }
     }
     return parts.length ? `?${parts.join("&")}` : "";
   };
 
-  const doExport = async () => {
+  const doExport = async (format = "csv") => {
     setExporting(true);
+    setExportMenuOpen(false);
     try {
-      const url = `/api/wellness/csv/${entity}/export${buildQueryString()}`;
+      const qs = formats.length > 1 ? buildQueryString({ format }) : buildQueryString();
+      const url = `${exportUrl}${qs}`;
       const token = getAuthToken();
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -68,7 +98,8 @@ export default function CsvImportExportToolbar({
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `${entity}-${new Date().toISOString().slice(0, 10)}.csv`;
+      const ext = FORMAT_META[format]?.ext || "csv";
+      a.download = `${entity}-${new Date().toISOString().slice(0, 10)}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -81,25 +112,75 @@ export default function CsvImportExportToolbar({
     }
   };
 
+  // Close the export dropdown on outside click.
+  useEffect(() => {
+    if (!exportMenuOpen) return undefined;
+    const onDocClick = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [exportMenuOpen]);
+
+  const multiFormat = formats.length > 1;
+
   return (
     <>
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-        <button
-          type="button"
-          onClick={doExport}
-          disabled={exporting}
-          aria-label={`Export ${displayLabel} as CSV`}
-          style={secondaryBtnStyle}
-        >
-          <Download size={14} /> {exporting ? "Exporting…" : "Export CSV"}
-        </button>
+        {multiFormat ? (
+          <div ref={exportMenuRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setExportMenuOpen((v) => !v)}
+              disabled={exporting}
+              aria-haspopup="menu"
+              aria-expanded={exportMenuOpen}
+              aria-label={`Export ${displayLabel}`}
+              style={secondaryBtnStyle}
+            >
+              <Download size={14} /> {exporting ? "Exporting…" : "Export"}
+              <ChevronDown size={12} style={{ marginLeft: "0.15rem" }} />
+            </button>
+            {exportMenuOpen && (
+              <div
+                role="menu"
+                aria-label={`Export ${displayLabel} format`}
+                style={dropdownMenuStyle}
+              >
+                {formats.map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => doExport(f)}
+                    style={dropdownItemStyle}
+                  >
+                    {FORMAT_META[f]?.label || f.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => doExport("csv")}
+            disabled={exporting}
+            aria-label={`Export ${displayLabel} as CSV`}
+            style={secondaryBtnStyle}
+          >
+            <Download size={14} /> {exporting ? "Exporting…" : "Export CSV"}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setShowImport(true)}
-          aria-label={`Import ${displayLabel} from CSV`}
+          aria-label={`Import ${displayLabel}`}
           style={secondaryBtnStyle}
         >
-          <Upload size={14} /> Import CSV
+          <Upload size={14} /> {multiFormat ? "Import" : "Import CSV"}
         </button>
       </div>
 
@@ -107,6 +188,8 @@ export default function CsvImportExportToolbar({
         <ImportModal
           entity={entity}
           label={displayLabel}
+          formats={formats}
+          templateUrl={templateUrl}
           onClose={() => setShowImport(false)}
           onImported={(result) => {
             // Only refresh the parent's list if at least one row landed.
@@ -120,7 +203,7 @@ export default function CsvImportExportToolbar({
 
 // ── Import modal ──────────────────────────────────────────────────
 
-function ImportModal({ entity, label, onClose, onImported }) {
+function ImportModal({ entity, label, onClose, onImported, formats = ["csv"], templateUrl = null }) {
   const notify = useNotify();
   const fileInputRef = useRef(null);
   const [file, setFile] = useState(null);
@@ -144,10 +227,14 @@ function ImportModal({ entity, label, onClose, onImported }) {
       .catch(() => { /* gate denied — submit will show the real error */ });
   }, [entity]);
 
-  const downloadTemplate = async () => {
+  const downloadTemplate = async (format = "csv") => {
     try {
       const token = getAuthToken();
-      const res = await fetch(`/api/wellness/csv/${entity}/template`, {
+      const base = templateUrl || `/api/wellness/csv/${entity}/template`;
+      // Multi-format template endpoints accept ?format=csv|xlsx. The legacy
+      // single-format endpoint ignores the param (always returns CSV) — fine.
+      const url = formats.length > 1 ? `${base}?format=${encodeURIComponent(format)}` : base;
+      const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) {
@@ -158,7 +245,8 @@ function ImportModal({ entity, label, onClose, onImported }) {
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `${entity}-template.csv`;
+      const ext = FORMAT_META[format]?.ext || "csv";
+      a.download = `${entity}-template.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -176,6 +264,13 @@ function ImportModal({ entity, label, onClose, onImported }) {
     setPreviewRows([]);
     setPreviewHeaders([]);
     if (!f) return;
+    // XLSX is binary — we don't ship a SheetJS bundle to the client just for
+    // preview. The header + per-row validation still runs server-side on
+    // submit, and any errors come back in the result.errors[] envelope.
+    const looksXlsx = /\.xlsx$/i.test(f.name || "")
+      || f.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      || f.type === "application/vnd.ms-excel";
+    if (looksXlsx) return;
     try {
       const text = await f.text();
       const { headers, rows } = parseCsvClient(text);
@@ -301,8 +396,13 @@ function ImportModal({ entity, label, onClose, onImported }) {
           overflow: "auto",
           padding: "2rem",
           position: "relative",
-          background: "var(--bg-elev, #1e293b)",
-          color: "var(--text-primary, #f1f5f9)",
+          // Theme-adaptive: drop the hardcoded dark fallback; rely on .glass
+          // for the background (cream-tinted in light, dark-teal-tinted in
+          // dark). Explicit text colour so the modal body inherits the
+          // theme's foreground regardless of where it's portalled to.
+          color: "var(--text-primary, inherit)",
+          border: "1px solid var(--border-color, rgba(0,0,0,0.1))",
+          boxShadow: "var(--shadow-lg, 0 24px 60px rgba(0,0,0,0.25))",
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -324,30 +424,44 @@ function ImportModal({ entity, label, onClose, onImported }) {
         </button>
 
         <h2 id="csv-import-title" style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <Upload size={20} /> Import {label} from CSV
+          <Upload size={20} /> Import {label} from {formats.length > 1 ? "CSV / Excel" : "CSV"}
         </h2>
 
         <p style={{ color: "var(--text-secondary)", marginBottom: "1rem" }}>
-          Upload a CSV with these columns:{" "}
+          Upload a {formats.length > 1 ? "CSV or Excel (XLSX) file" : "CSV"} with these columns:{" "}
           <code style={{ fontSize: "0.85em" }}>{expectedHeaders.join(", ") || "(loading…)"}</code>.
           Extra columns are ignored. Files over {Math.round(thresholds.bytes / (1024 * 1024))}MB or {thresholds.rows.toLocaleString()} rows are processed in the background and emailed when done.
         </p>
 
-        <div style={{ marginBottom: "1rem" }}>
-          <button type="button" onClick={downloadTemplate} style={linkBtnStyle}>
-            <FileText size={14} /> Download CSV template
-          </button>
+        <div style={{ marginBottom: "1rem", display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+          {formats.map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => downloadTemplate(f)}
+              style={linkBtnStyle}
+            >
+              <FileText size={14} /> Download {FORMAT_META[f]?.label || f.toUpperCase()} template
+            </button>
+          ))}
         </div>
 
         <div style={{ marginBottom: "1rem" }}>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,text/csv"
+            accept={formats.length > 1
+              ? ".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              : ".csv,text/csv"}
             onChange={(e) => handleFile(e.target.files?.[0] || null)}
             style={{ width: "100%" }}
-            aria-label="Select CSV file"
+            aria-label={formats.length > 1 ? "Select CSV or Excel file" : "Select CSV file"}
           />
+          {file && /\.xlsx$/i.test(file.name || "") && !result && (
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", marginTop: "0.4rem" }}>
+              Excel file selected — column + row validation runs on the server when you click Confirm.
+            </p>
+          )}
         </div>
 
         {previewError && (
@@ -558,4 +672,33 @@ const alertStyle = {
   border: "1px solid",
   marginBottom: "0.8rem",
   fontSize: "0.9rem",
+};
+
+const dropdownMenuStyle = {
+  position: "absolute",
+  top: "calc(100% + 4px)",
+  right: 0,
+  minWidth: 160,
+  // --bg-color: opaque in both themes. (--surface-color is rgba(...,0.6)
+  // in dark wellness, which makes menu items hard to read against the
+  // page behind them.)
+  background: "var(--bg-color, #fff)",
+  border: "1px solid var(--border-color, rgba(0,0,0,0.18))",
+  borderRadius: 8,
+  boxShadow: "var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.25))",
+  padding: "0.25rem",
+  zIndex: 100,
+  display: "flex",
+  flexDirection: "column",
+};
+
+const dropdownItemStyle = {
+  textAlign: "left",
+  padding: "0.5rem 0.75rem",
+  background: "transparent",
+  color: "var(--text-primary, inherit)",
+  border: "none",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontSize: "0.85rem",
 };

@@ -14,6 +14,7 @@ import { Calendar, CheckCircle2, XCircle, Send, Clock as ClockIcon } from 'lucid
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 
 function fmtDate(s) {
   if (!s) return '—';
@@ -45,6 +46,17 @@ export default function Leave() {
   const [policies, setPolicies] = useState([]);
   const [balances, setBalances] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
+  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+  // Filter by leave start date — matches the natural mental model "show me
+  // leaves that begin in this window."
+  const visibleRequests = (rangeStart && rangeEnd)
+    ? requests.filter((r) => {
+        if (!r.startDate) return false;
+        const ts = new Date(r.startDate).getTime();
+        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+      })
+    : requests;
   const [form, setForm] = useState(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -238,11 +250,25 @@ export default function Leave() {
 
       {/* History */}
       <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <ClockIcon size={20} aria-hidden /> {isManager ? 'All Leave Requests' : 'My Leave Requests'}
-        </h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: 12 }}>
+          <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ClockIcon size={20} aria-hidden /> {isManager ? 'All Leave Requests' : 'My Leave Requests'}
+          </h2>
+          {requests.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by start date" />
+              {visibleRequests.length !== requests.length && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #888)' }}>
+                  {visibleRequests.length} of {requests.length}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
         {requests.length === 0 ? (
           <div style={{ color: 'var(--text-secondary, #888)' }}>No requests yet.</div>
+        ) : visibleRequests.length === 0 ? (
+          <div style={{ color: 'var(--text-secondary, #888)' }}>No requests in the selected range.</div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -257,7 +283,7 @@ export default function Leave() {
               </tr>
             </thead>
             <tbody>
-              {requests.map((r) => (
+              {visibleRequests.map((r) => (
                 <tr key={r.id}>
                   {isManager && <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>User #{r.userId}</td>}
                   <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{r.policy?.name || `#${r.policyId}`}</td>

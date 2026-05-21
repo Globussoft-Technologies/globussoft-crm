@@ -49,6 +49,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Copy, Code, Layout, Blocks, CheckCircle2, Megaphone, Plus, BarChart, Send, MousePointerClick, MessageSquare, X, Save, Trash2, Edit3, Calendar, FileText } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
 
 const NAME_MAX = 100;
 const SMS_BODY_MAX = 480; // 3 segments worth — provider chunks into 160-char SMSes
@@ -99,6 +100,14 @@ export default function Marketing() {
   const [showCreateCampaign, setShowCreateCampaign] = useState(false);
   const [newCampaignName, setNewCampaignName] = useState('');
   const [editingCampaign, setEditingCampaign] = useState(null); // { id, name, subject, body, ... } open in detail modal
+  const [campaignDateFilter, setCampaignDateFilter] = useState(EMPTY_DATE_FILTER);
+  const [campaignRangeStart, campaignRangeEnd] = resolveDateRange(campaignDateFilter);
+  const visibleCampaigns = (campaignRangeStart && campaignRangeEnd)
+    ? campaigns.filter((c) => {
+        const ts = new Date(c.createdAt).getTime();
+        return ts >= campaignRangeStart.getTime() && ts <= campaignRangeEnd.getTime();
+      })
+    : campaigns;
 
   // ───── SMS Blast Composer State (#502) ─────
   const [smsTo, setSmsTo] = useState('');
@@ -536,14 +545,24 @@ ${fields.map(f => {
       {/* ─── Email Campaigns Tab ─── */}
       {activeTab === 'campaigns' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem' }}>
+            {campaigns.length > 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <DateRangeFilter value={campaignDateFilter} onChange={setCampaignDateFilter} label="Filter by created date" />
+                {visibleCampaigns.length !== campaigns.length && (
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    {visibleCampaigns.length} of {campaigns.length}
+                  </span>
+                )}
+              </div>
+            ) : <span />}
             <button className="btn-primary" onClick={() => setShowCreateCampaign(true)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Plus size={18} /> Create Campaign
             </button>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.5rem' }}>
-            {campaigns.map(camp => (
+            {visibleCampaigns.map(camp => (
               // #495: card is now a button so click + keyboard (Enter/Space)
               // both open the editor. role=button + tabIndex make it
               // discoverable by accessibility tooling.

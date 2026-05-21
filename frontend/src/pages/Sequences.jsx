@@ -5,6 +5,7 @@ import 'reactflow/dist/style.css';
 import { Network, Play, Plus, Save, Clock, Mail, Trash2, Users, RefreshCw, MessageSquare, MessageCircle, Bell, ListOrdered } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
 
 const initialNodes = [
   { id: '1', type: 'input', data: { label: 'TRIGGER: Contact Subscribed' }, position: { x: 250, y: 50 }, style: { background: '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 'bold', width: 220, textAlign: 'center' } },
@@ -99,6 +100,14 @@ export default function Sequences() {
   const [edges, setEdges] = useState(initial?.edges ?? []);
   const [saving, setSaving] = useState(false);
   const [sequences, setSequences] = useState([]);
+  const [seqDateFilter, setSeqDateFilter] = useState(EMPTY_DATE_FILTER);
+  const [seqRangeStart, seqRangeEnd] = resolveDateRange(seqDateFilter);
+  const visibleSequences = (seqRangeStart && seqRangeEnd)
+    ? sequences.filter((s) => {
+        const ts = new Date(s.createdAt).getTime();
+        return ts >= seqRangeStart.getTime() && ts <= seqRangeEnd.getTime();
+      })
+    : sequences;
   const [activeSeqId, setActiveSeqId] = useState(() => {
     try {
       const raw = sessionStorage.getItem(ACTIVE_SEQ_KEY);
@@ -348,11 +357,21 @@ export default function Sequences() {
 
         {/* Existing Sequences Sidebar */}
         <div className="sequence-list card" style={{ flex: 1, minWidth: '220px', maxWidth: '280px', borderLeft: '1px solid rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.4)', padding: '1.5rem', overflowY: 'auto' }}>
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#ec4899' }}>
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#ec4899' }}>
             <Network size={18} /> Saved Sequences
           </h3>
+          {sequences.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <DateRangeFilter value={seqDateFilter} onChange={setSeqDateFilter} label={null} />
+              {visibleSequences.length !== sequences.length && (
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  {visibleSequences.length}/{sequences.length}
+                </span>
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {sequences.map(seq => (
+            {visibleSequences.map(seq => (
               <div
                 key={seq.id}
                 onClick={() => loadSequenceIntoCanvas(seq)}

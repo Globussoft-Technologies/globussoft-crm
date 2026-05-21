@@ -8,9 +8,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (44 in §4, 23 models in §5, 11 route bundles in §6.1, 22 frontend pages in §7, 5 vertical-config items in §8, 14 integrations in §9; some collapse — see per-section tables for the precise denominator)
-- **SHIPPED:** **44** (~56%)
+- **SHIPPED:** **46** (~59%) — up from 44 baseline; +2 since: pipeline (`ab2f15f`) + lost-reason (`ab2f15f`)
 - **PARTIAL:** **9** (~12%)
-- **GAP-AUTONOMOUS:** **8** (~10%)
+- **GAP-AUTONOMOUS:** **6** (~8%) — down from 8; -2 since (both shipped above)
 - **GAP-STUB-ABLE:** **6** (~8%)
 - **GAP-CRED-BLOCKED:** **9** (~12%)
 - **GAP-PRODUCT-CALL:** **2** (~3%)
@@ -20,7 +20,7 @@ The Phase 1 contractual surface (TMC + RFU diagnostic + itinerary + microsite + 
 ### Top three "biggest remaining single-commit wins" the cron should pick next
 
 1. **WebCheckin CRUD route + auto-create on Itinerary.accept** — `WebCheckin` model is shipped (`schema.prisma:4387`) and the cron `webCheckinScheduler.js` already runs; what's missing is the route that creates rows + the auto-create trigger on itinerary acceptance. The cron sweeps an empty table today. Single commit; small-to-medium. (PRD §4.6, §6.1 `travel_webcheckin.js`)
-2. **Seed 8-status travel pipeline + 8 lost reasons** (Q10 decision is final). `seed-travel.js` does not create a Pipeline + 8 PipelineStage rows for the travel tenant; deals can't move through the contractual funnel until they're there. Single commit; small. (PRD §4.1)
+2. ~~**Seed 8-status travel pipeline + 8 lost reasons** (Q10 decision is final). `seed-travel.js` does not create a Pipeline + 8 PipelineStage rows for the travel tenant; deals can't move through the contractual funnel until they're there. Single commit; small. (PRD §4.1)~~ — ✅ **commit `ab2f15f`**
 3. **Per-tenant subBrandConfigJson reader + usage in route layer** — schema column shipped (`schema.prisma:168`) but ZERO consumers grep-confirmed. Cron WhatsApp dispatch + microsite OTP can't pick the right WABA number without it. ~½ day; medium. (PRD §5.2 + §6 + §8.5 Q9)
 
 ### Top three "biggest cred-blocked items" worth chasing the human on
@@ -39,8 +39,8 @@ The Phase 1 contractual surface (TMC + RFU diagnostic + itinerary + microsite + 
 |---|---|---|---|
 | Multi-source enquiry capture (web forms, WhatsApp, phone, email, ads) | SHIPPED (reuse) | `routes/contacts.js`, `routes/marketplace_leads.js`, `routes/lead_routing.js` | Existing CRM machinery; no travel-specific extension needed beyond `Contact.subBrand` tag (shipped `schema.prisma:439`) |
 | Rule-based brand assignment | PARTIAL | `routes/lead_routing.js` (existing) + `Contact.subBrand` + `User.subBrandAccess` (`schema.prisma:357`) | Schema + column shipped; LeadRoutingRule schema not yet extended to filter on `subBrand` |
-| 8-status pipeline (Q10 decision) | GAP-AUTONOMOUS | `seed-travel.js` does NOT create the Pipeline + PipelineStage rows | Single commit. Q10 labels: New · Diagnostic Complete · Qualifying · Quoted · Negotiating · Won · Lost · Dormant |
-| 8 lost-reason taxonomy (Q10 decision) | GAP-AUTONOMOUS | Same as above; no WinLossReason seed for travel | Single commit. Q10 labels: Price · Date Conflict · Competitor · No-Show · Compliance Block · Out of Service Area · Customer Withdrew · Other |
+| 8-status pipeline (Q10 decision) | SHIPPED | `seed-travel.js` `seedPipelineTaxonomies()` (commit `ab2f15f`); 1 Pipeline `"Travel Default Pipeline"` + 8 PipelineStage rows + gate spec `e2e/tests/travel-seed-taxonomy-api.spec.js` | Q10 labels seeded in order: New · Diagnostic Complete · Qualifying · Quoted · Negotiating · Won · Lost · Dormant |
+| 8 lost-reason taxonomy (Q10 decision) | SHIPPED | Same helper as above (commit `ab2f15f`); 8 WinLossReason rows with `type=lost` | Shipped against PRD §4.1 prose labels: Price · No response · Chose competitor · Wrong requirement · Timing issue · Budget issue · Trust issue · Duplicate enquiry. **Discrepancy flag:** the audit row above originally listed a different Q10 label set (Date Conflict / No-Show / Compliance Block / Out of Service Area / Customer Withdrew / Other). PRD §4.1 prose was the authoritative source for the seed; verify against TRAVEL_CRM_OPEN_QUESTIONS.md if Yasin wants the other set |
 | Diagnostic-first guard on quotation routes | SHIPPED | `routes/travel_itineraries.js` (commit `1e7061b`); guard helper in `middleware/travelGuards.js` | POST/PUT Itinerary refuses creation for a Contact with no completed diagnostic in this sub-brand |
 | AI qualification call (Eng/Hin/Urdu, Callified.ai) | GAP-CRED-BLOCKED | Sandbox mock only at `backend/scripts/sandbox/callified-mock.js`; no `travel_callified.js` route | Q11 LLM-key decision is locked; what's missing is the Callified webhook handler + per-tenant API-key handover. See Q1 |
 | Form-vs-call answer comparison + mismatch flag (80/60% threshold) | GAP-AUTONOMOUS (after Callified ships) | No code grep-hits for `formVsCall` / `mismatch` | Logic can be written + tested against fixture transcripts WITHOUT real Callified — autonomous fixture-driven scaffold worth doing now |
@@ -302,7 +302,7 @@ Most rolled up into the above tables. Net:
 | Sub-brand switcher in sidebar | SHIPPED | `Sidebar.jsx:986-1019` |
 | Theme `frontend/src/theme/travel.css` | SHIPPED (placeholder palette) | 74 lines; per Q22 brand assets "all ready" but not yet applied to theme |
 | Landing route `/travel` | SHIPPED | `App.jsx:266-268` |
-| Seed `seed-travel.js` | PARTIAL | 829 lines: tenant + 4 users (`yasin@`, `admin@`, etc.) + diagnostic banks for tmc/rfu/travelstall/visasure + cost master + seasons. **MISSING: the 8-status Pipeline + 8 PipelineStage rows per Q10**, sample TmcTrip, sample Itinerary, sample VisaApplication, sample SupplierCredential |
+| Seed `seed-travel.js` | PARTIAL | tenant + users + diagnostic banks for tmc/rfu/travelstall/visasure + cost master + seasons + **8-status Pipeline + 8 PipelineStage rows + 8 WinLossReason rows** (commit `ab2f15f`). **Still missing:** sample TmcTrip, sample Itinerary, sample VisaApplication, sample SupplierCredential |
 
 ---
 
@@ -387,7 +387,7 @@ All 25 questions decided 2026-05-20. Per-question implementation status:
 | Q7 | CRITICAL | SSO provider | 🟢 Google Workspace | RESOLVED (reuse) |
 | Q8 | MEDIUM | Excel SW integration | 🟢 REST API | RESOLVED-pending-docs |
 | Q9 | CRITICAL | WhatsApp numbers | 🟢 3 procured | RESOLVED-pending-handover; stubs in place. 8-feature unblock |
-| Q10 | CRITICAL | Pipeline labels | 🟢 GS defaults | DECIDED but NOT yet seeded into `seed-travel.js` — GAP-AUTONOMOUS |
+| Q10 | CRITICAL | Pipeline labels | 🟢 GS defaults | DECIDED + SEEDED (commit `ab2f15f`) — both 8-stage Pipeline + 8 lost-reason rows live |
 | Q11 | HIGH | LLM defaults | 🟢 Routing locked | DECIDED but `lib/llmRouter.js` not built — GAP-AUTONOMOUS |
 | Q12 | HIGH | KPI periods | 🟢 D/W/M | RESOLVED (reports support all 3) |
 | Q13 | CRITICAL | Diagnostic length | 🟢 Both ready | RESOLVED-pending-content (CSV import ready) |
@@ -445,7 +445,7 @@ For each shipped stub, the file + line where the `// STUB:` marker lives, the Q-
 
 ## Recommended next 5 cron dispatches (priority order)
 
-1. **Seed travel 8-status Pipeline + 8 lost reasons** (PRD §4.1; Q10 decision locked). Scope: extend `prisma/seed-travel.js` with a single Pipeline + 8 PipelineStage rows + 8 WinLossReason rows scoped to the travel tenant. Effort: small (~2 hrs). Why next: every Deal on the travel tenant lacks a place to flow today; pipeline integrity is a Phase 1 deliverable; commit is fully autonomous + zero cred dependency.
+1. ~~**Seed travel 8-status Pipeline + 8 lost reasons** (PRD §4.1; Q10 decision locked). Scope: extend `prisma/seed-travel.js` with a single Pipeline + 8 PipelineStage rows + 8 WinLossReason rows scoped to the travel tenant. Effort: small (~2 hrs). Why next: every Deal on the travel tenant lacks a place to flow today; pipeline integrity is a Phase 1 deliverable; commit is fully autonomous + zero cred dependency.~~ — ✅ **commit `ab2f15f`** (2026-05-22, gate-verified 7/7 spec cases)
 
 2. **Build WebCheckin CRUD route + auto-create on Itinerary.accept** (PRD §4.6, §6.1 row `travel_webcheckin.js`). Scope: new `routes/travel_webcheckin.js` with `GET /upcoming`, `POST /` (admin), `POST /:id/upload-boarding-pass`, `POST /:id/deliver`; auto-create row on `POST /itineraries/:id/accept` for each flight `ItineraryItem`. Effort: medium (~½ day). Why next: cron is already running over an empty table; this gives it something to scan AND unblocks W4 exit gate without needing browser automation.
 

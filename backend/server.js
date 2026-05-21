@@ -956,6 +956,13 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initWebCheckinSchedulerCron } = require('./cron/webCheckinScheduler');
   initWebCheckinSchedulerCron();
 
+  // Initialize Travel CRM contact greetings (daily 08:13 IST) — Phase 2.
+  // PRD §4.8 Phase 2 birthday/anniversary greetings. Year-agnostic
+  // month+day match on Contact.birthDate + Contact.anniversary; one
+  // Notification per occasion per year. Wati dispatch deferred to Q9.
+  const { initContactGreetingsCron } = require('./cron/contactGreetingsEngine');
+  initContactGreetingsCron();
+
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require('./cron/lowStockEngine');
   initLowStockCron();

@@ -4,6 +4,48 @@
 
 ---
 
+## 🚧 KEY BLOCKERS — Travel CRM (snapshot as of Phase 1 close)
+
+All Phase 1 autonomous-doable work is shipped. The Phase 1 surface
+that ISN'T live yet falls into three buckets — none of them are
+fixable by writing more code on this dev box.
+
+### 🔑 Cred-blocked (waiting on a key / API key / partner onboarding)
+
+| Item | Blocker | Where the cred lives once it arrives |
+|---|---|---|
+| **DigiLocker wiring** (Aadhaar OCR) | Travel Stall partner registration on DigiLocker portal → issues `DIGILOCKER_CLIENT_ID` + `DIGILOCKER_CLIENT_SECRET` (Q3) | `backend/.env` per [DIGILOCKER_INTEGRATION_SPEC.md](docs/DIGILOCKER_INTEGRATION_SPEC.md) |
+| **Wati BSP wrapper** (3 WABAs) | Meta Business Manager access for Yasin's 3 WhatsApp Business numbers (Q9) | `backend/.env` + per-tenant `WhatsAppConfig` row |
+| **Microsite OTP real SMS** | Same Wati BSP creds as above — `sendOtpStub` swaps to `prisma.whatsAppMessage.create` | One-line cutover in `routes/travel_microsites.js` |
+| **Cron dispatch stubs** (5 crons) | Same Wati BSP — all 5 crons log "WhatsApp dispatch pending" today | One-line addition per cron loop |
+| **LLM talking-points generator** | Gemini / Claude / Perplexity API keys (Q11 decided routing; keys not yet shared) | `backend/.env` + `lib/llm-router.js` (not yet built) |
+| **AdsGPT marketing reports** | AdsGPT integration creds (cross-product wiring) | Per-tenant `Integration` row |
+
+### 📋 Process / external (waiting on a person, not a key)
+
+| Item | Who owes it | Status |
+|---|---|---|
+| **R11 infra-handover call** | Travel Stall ops → GS | 🔴 Not scheduled. On-prem decision adds W0-W1 work not in 6-week scope. Need SSH bastion / DNS API / backup / DR targets in writing. |
+| **Yasin's Section 13 deliverables** | Yasin → GS | 🟡 9 items in [TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md). Biggest unlock: real diagnostic Q-sets per Q13 (now uploadable via CSV import or visual builder). |
+| **Aadhaar consent counsel review** | Travel Stall counsel | 🟡 GS draft shipped (`7d162cd`). Counsel reviews language; final-approved text replaces the draft. |
+| **Brand assets pack** (Q22) | Yasin → GS | 🟡 Placeholder navy + gold in `frontend/src/theme/travel.css`. Real palette + logos drop in when design pack arrives. |
+| **UAT users** (Q15) | Travel Stall | 🟡 1 lead + 3 testers × 2 brands = 8 user accounts to seed. |
+| **Tally CA export sample** (Q5) | Travel Stall accountant | 🟡 Sample needed to drive export endpoint shape. |
+| **Excel Software for Travel API docs** (Q8) | Travel Stall vendor | 🟡 For the P1.5 API bridge. |
+
+### 🛑 Out of Phase 1 scope (intentional — don't autonomous-ship)
+
+- **Phase 2** — Travel Stall sub-brand end-to-end (Family Travel Quiz, 50% advance pattern, personalised PDFs, birthday/anniversary greetings, Booking.com / Expedia direct APIs).
+- **Phase 3** — Visa Sure (routes / UI / risk-flag engine / rejection-recovery), Flight Plugin Chrome extension (separate repo, Manifest V3 + per-airline DOM adapters), Web check-in browser automation (P1B; tracking-side shipped in `a6e80eb`).
+
+### Already-shipped-but-flaggable
+
+- **Itinerary `/pdf`** template (`c18fe62`) is functional but minimal — page-2+ (T&Cs, brand footer per Yasin asset pack) lands when the brand pack arrives.
+- **Microsite OTP end-to-end happy-path** can't be exercised in the gate spec until the stub is swapped for real SMS (only structural gate tests run).
+- **Sub-brand switcher** (`bb0c620`) state is built and persisted, but no page currently *reads* `useActiveSubBrand` to pre-seed its filter — incremental UX adoption, not a Phase 1 contract.
+
+---
+
 ## 🏁 AUTONOMOUS-LOOP CLOSEOUT (2026-05-21 overnight)
 
 **HEAD on origin/main:** `9ae14b4`. **All 9 items (A–I) from the

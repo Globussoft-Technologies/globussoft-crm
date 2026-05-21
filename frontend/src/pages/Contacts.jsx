@@ -3,6 +3,7 @@ import { useNotify } from '../utils/notify';
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import DuplicateContactModal from '../components/DuplicateContactModal';
 
 const parseCSV = (text) => {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
@@ -75,6 +76,12 @@ const Contacts = () => {
   // point at the email field. We reuse the same EMAIL_RE the CSV importer
   // uses so the two surfaces stay consistent.
   const [emailError, setEmailError] = useState('');
+
+  // PRD §4.5 — duplicate-contact pop-up driven by the backend's
+  // 409 DUPLICATE_CONTACT response. Backend payload populates the modal;
+  // creatingContact disables the "Create anyway" button during the force-retry.
+  const [dupModal, setDupModal] = useState(null);
+  const [creatingContact, setCreatingContact] = useState(false);
 
   // #461: search + status filter inputs were rendered without value/onChange
   // and the table read straight from `contacts`, so neither one filtered.
@@ -181,14 +188,39 @@ const Contacts = () => {
       return;
     }
     setEmailError('');
-    await fetchApi('/api/contacts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newContact)
-    });
-    setShowModal(false);
-    setNewContact({ name: '', email: '', phone: '', company: '', title: '', status: 'Lead' });
-    fetchContacts();
+    await submitNewContact(false);
+  };
+
+  // Performs the actual POST. `force=true` retries past the PRD §4.5 dedup
+  // preflight when the operator confirms via DuplicateContactModal.
+  // On 409 DUPLICATE_CONTACT (and only the first attempt) we open the modal
+  // instead of toast-erroring; any other failure falls through to a toast.
+  const submitNewContact = async (force) => {
+    setCreatingContact(true);
+    try {
+      const path = force ? '/api/contacts?force=true' : '/api/contacts';
+      await fetchApi(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newContact),
+      });
+      setShowModal(false);
+      setDupModal(null);
+      setNewContact({ name: '', email: '', phone: '', company: '', title: '', status: 'Lead' });
+      fetchContacts();
+    } catch (err) {
+      if (!force && err?.body?.code === 'DUPLICATE_CONTACT') {
+        setDupModal({
+          existingContactId: err.body.existingContactId,
+          matchedBy: err.body.matchedBy,
+          contact: err.body.contact,
+        });
+      } else {
+        notify.error(err?.body?.error || 'Failed to create contact');
+      }
+    } finally {
+      setCreatingContact(false);
+    }
   };
 
   const handleFileSelect = (e) => {
@@ -654,6 +686,17 @@ const Contacts = () => {
             )}
           </div>
         </div>
+      )}
+
+      {dupModal && (
+        <DuplicateContactModal
+          existingContactId={dupModal.existingContactId}
+          matchedBy={dupModal.matchedBy}
+          contact={dupModal.contact}
+          creating={creatingContact}
+          onEditDetails={() => setDupModal(null)}
+          onCreateAnyway={() => submitNewContact(true)}
+        />
       )}
     </div>
   );

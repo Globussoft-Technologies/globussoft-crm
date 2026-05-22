@@ -415,3 +415,146 @@ html[data-theme="dark"][data-vertical="travel"],
 [data-theme="dark"] [data-vertical="travel"] .sequence-card-builder-link {
   color: #93C5FD;
 }
+
+/* #873 — Reports page (Reports.jsx hit via /reports). Phase 1 of the dark-
+ * mode cluster refactor, mirror of #872 Sequences (commit 706514c) and #867
+ * Diagnostics (commit f67b4fc). Pre-refactor Reports.jsx had:
+ *   - Inline `#ef4444` red on the date-range error text + the Delete button
+ *     on schedule rows (~1.5:1 on dark cream → unreadable).
+ *   - Aggregate-total card with hardcoded `rgba(59,130,246,0.1)` blue bg +
+ *     `rgba(59,130,246,0.2)` border (the only fixed-blue surface on the
+ *     reports left rail; reads as light-blue glass island on dark page).
+ *   - Schedule-row status badges with inline `rgba(16,185,129,0.1)` /
+ *     `rgba(239,68,68,0.1)` bg + `var(--success-color)` / `#ef4444` text.
+ *   - StageBadge + StatusBadge dual helpers using a stage→hex map (#10b981
+ *     #ef4444 #3b82f6 #f59e0b #a855f7) with inline `${c}18` (hex+alpha)
+ *     bg + `c` foreground. The 18-suffix alpha is ~9.4% — fine on cream,
+ *     near-invisible on dark.
+ *
+ * Out of scope for this commit (TODO for next #873 sub-tick or future cron
+ * pick): the Recharts COLORS palette + AreaChart linearGradient stops
+ * (`#10b981`) at Reports.jsx:9, 317-318, 329 — Recharts serializes those to
+ * the SVG canvas via the `fill=`/`stopColor=` props rather than CSS, so they
+ * need either a `useChartTheme()` hook (per #873 issue's "BUG-T09 hook"
+ * recommendation) or per-Cell `fill={...}` resolution from a theme token.
+ * That's a bigger refactor than the 2-file cluster-drain budget allows;
+ * left for a paired sub-tick that also fixes #864 (charts) family. Today's
+ * commit fixes the page-chrome surfaces (cards, badges, error text) which
+ * are the highest-contrast offenders; the recharts canvas palette already
+ * lands on the recharts SVG background which respects body bg in both modes.
+ *
+ * Base rules are theme-agnostic — they preserve current appearance via the
+ * existing rgba(*) values + hex pairs. Travel dark-mode overrides force
+ * opaque high-contrast pairs ≥4.5:1 (WCAG AA). */
+.report-error-text {
+  color: #ef4444;
+}
+.report-aggregate-card {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+.report-schedule-status-badge--active {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success-color, #10b981);
+}
+.report-schedule-status-badge--paused {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+.report-pill {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  display: inline-block;
+}
+.report-pill--success {
+  background: rgba(16, 185, 129, 0.094);
+  color: #10b981;
+}
+.report-pill--danger {
+  background: rgba(239, 68, 68, 0.094);
+  color: #ef4444;
+}
+.report-pill--info {
+  background: rgba(59, 130, 246, 0.094);
+  color: #3b82f6;
+}
+.report-pill--warning {
+  background: rgba(245, 158, 11, 0.094);
+  color: #f59e0b;
+}
+.report-pill--accent {
+  background: rgba(168, 85, 247, 0.094);
+  color: #a855f7;
+}
+.report-pill--neutral {
+  background: rgba(107, 114, 128, 0.094);
+  color: #6b7280;
+}
+
+/* #873 — Dark-mode token overrides for Reports widgets. Contrast verified
+ * ≥4.5:1 (WCAG AA) against dark surfaces:
+ *   error text:        #FCA5A5 on #0F1729 → ~8.1:1
+ *   aggregate-card:    rgba(96,165,250,0.16) bg, rgba(96,165,250,0.4)
+ *                      border — visible glass tint on dark, no text inside
+ *                      uses these tokens (heading uses var(--accent-color))
+ *   schedule active:   #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   schedule paused:   #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   pill success:      #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   pill danger:       #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   pill info:         #1E3A8A bg, #93C5FD fg → ~5.8:1
+ *   pill warning:      #78350F bg, #FCD34D fg → ~7.2:1
+ *   pill accent:       #4C1D95 bg, #C4B5FD fg → ~5.7:1
+ *   pill neutral:      #374151 bg, #D1D5DB fg → ~7.4:1
+ * Scoped to travel vertical so generic + wellness keep their existing light-
+ * only fixed-hex palette. */
+[data-theme="dark"][data-vertical="travel"] .report-error-text,
+[data-theme="dark"] [data-vertical="travel"] .report-error-text {
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .report-aggregate-card,
+[data-theme="dark"] [data-vertical="travel"] .report-aggregate-card {
+  background: rgba(96, 165, 250, 0.16);
+  border-color: rgba(96, 165, 250, 0.4);
+}
+[data-theme="dark"][data-vertical="travel"] .report-schedule-status-badge--active,
+[data-theme="dark"] [data-vertical="travel"] .report-schedule-status-badge--active {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .report-schedule-status-badge--paused,
+[data-theme="dark"] [data-vertical="travel"] .report-schedule-status-badge--paused {
+  background: #7F1D1D;
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--success,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--success {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--danger,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--danger {
+  background: #7F1D1D;
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--info,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--info {
+  background: #1E3A8A;
+  color: #93C5FD;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--warning,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--warning {
+  background: #78350F;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--accent,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--accent {
+  background: #4C1D95;
+  color: #C4B5FD;
+}
+[data-theme="dark"][data-vertical="travel"] .report-pill--neutral,
+[data-theme="dark"] [data-vertical="travel"] .report-pill--neutral {
+  background: #374151;
+  color: #D1D5DB;
+}

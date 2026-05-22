@@ -146,6 +146,24 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - 5 phantom-carry-over instances caught by verify-before-pickup (running total since session start)
 - Zero rebase conflicts, zero over-commits across all 19 commits
 
+**Tick #7 (cron) — 3/3 SHIPPED clean, drift sweep complete + #867 closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `4d70d35` | Phase 3 SHELL | V16-V18 Visa Reports.jsx analytics SHELL at `/travel/visa/reports`; 3 recharts placeholders for rejection-recovery / conversion / lead-source metrics; **completes all 5 P1 Visa Sure scaffolds** (V19 / V8-V10 / V5-V7 cron / V1-V4 seed / V16-V18 Reports) |
+| `f67b4fc` | Dark-mode Phase 1 | Diagnostics.jsx TIER_COLORS inline-styles → `.tier-badge--{entry,primary,premium}` CSS classes + 3 WCAG-AA dark-mode token pairs in travel.css; closes #867; **pattern documented for the other 16 cluster issues** |
+| `175e34a` | Portal-matrix refresh | 12 row-state flips + 4 evidence refreshes + 9 PRD cross-references + 1 LLM-consumer count update; new "Last refreshed" header + drift-resolution appendix; **refreshed counts: ✅ 80 / 🟡 36 / 🔴 4 / ⏸️ 12 / 🏗️ 2** (134-row baseline corrected from prior 130) |
+
+**Phase 3 Visa Sure scaffolding milestone:** ALL 5 cron-prompt P1 items now SHIPPED (V1-V4 seed at 46c315d + V5-V7 risk-flag cron at 9e8c28f + V8-V10 AdvisorDashboard at 90b58fa + V19 + 3 shell pages at 875c082 + V16-V18 Reports at 4d70d35). Real implementation gated on PRD §5's 7 product calls + Q1/Q11 cred unlocks.
+
+**Dark-mode cluster pattern documented:** Diagnostics had the simplest case (single TIER_COLORS object → single tier-badge span). The other 16 cluster issues (#866 #871 #872 #873 #877-#883) need per-page audit since each may have multiple badge types. Pattern is repeatable: per-page commit = (refactor inline-style object → CSS classes) + (add dark-mode tokens to travel.css block).
+
+**Cumulative session totals (7 ticks):**
+- 22 commits (8 features/scaffolds + 12 PRDs + 1 backlog + 1 matrix refresh)
+- 5 phantom-carry-over instances caught (count stable — no new phantoms tick #7)
+- 1 GitHub issue closed (#867 via dark-mode refactor)
+- Zero rebase conflicts, zero over-commits across all 22 commits
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

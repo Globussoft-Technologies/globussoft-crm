@@ -106,6 +106,7 @@ model Tenant {
   projects             Project[]
   notifications        Notification[]
   auditLogs            AuditLog[]
+  llmCalls             LlmCallLog[]
   pipelineStages       PipelineStage[]
   emailTemplates       EmailTemplate[]
   reportSchedules      ReportSchedule[]
@@ -1189,6 +1190,46 @@ model AuditLog {
 
   @@index([tenantId, entity])
   @@index([tenantId, createdAt])
+}
+
+// PRD §9.1 + R7 — LLM cost observability.
+//
+// One row written per LLM router call (backend/lib/llmRouter.js) — captures
+// task class, chosen model, token counts, cost estimate, and stub-vs-real
+// mode. Powers the admin daily-summary endpoint at GET /api/admin/llm-spend.
+// Append-only: no @@unique, no UPDATE path; rows are inserted fire-and-
+// forget so a DB-write failure never breaks the LLM call itself.
+//
+// In stub mode (current state — Q11 keys held by Travel Stall) `costEstimate`
+// is always 0 and `stub: true`. Real-mode wire-in will compute per-token
+// pricing from a config map and set `stub: false`.
+model LlmCallLog {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @default(1)
+  // Mirrors the router's task taxonomy (TASK_ROUTING in
+  // backend/lib/llmRouter.js). Stored as a string so adding a new task
+  // class is a code-only change — no schema migration.
+  task             String // search | citation | reasoning | talking-points | form-vs-call | bulk-text | call-summary | <unknown>
+  model            String // claude-opus-4-7 | gemini-flash | perplexity-sonar | gpt-4 | claude-haiku
+  reason           String? // primary | unknown-task-fallback | <future: fallback-after-primary-failure>
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0)
+  costEstimate     Decimal  @default(0) @db.Decimal(12, 6) // up to 6dp; USD by convention
+  stub             Boolean  @default(true)
+  // Optional caller context — useful for "which user / which surface burned
+  // the most tokens". Both nullable so public-endpoint callers (no req.user)
+  // just leave them null.
+  userId           Int?
+  surface          String? // free-form caller tag, e.g. "talking-points-regen", "form-vs-call-comparison"
+  errorMessage     String?  @db.Text // populated only when the call failed
+  createdAt        DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, task, createdAt])
+  @@index([tenantId, model, createdAt])
 }
 
 model PipelineStage {

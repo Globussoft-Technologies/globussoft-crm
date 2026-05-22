@@ -13,7 +13,7 @@
 //     - buildStubText(task, payload) — exported for introspection only
 //     - estimateTokens(s)            — exported for introspection only
 //
-// Surface area covered (18 cases):
+// Surface area covered (24 cases):
 //   - module shape (3): exports + TASK_ROUTING matches PRD §9.1 + VALID_TASKS
 //   - llmEnabled (4):   no-env false, reasoning-with-Anthropic-key true,
 //                       call-summary-with-Gemini-key true, unknown-task false
@@ -28,6 +28,11 @@
 //                       usage.totalTokens === promptTokens + completionTokens,
 //                       unknown task does NOT throw + logs warning,
 //                       deterministic stub text for same (task, payload)
+//   - LlmCallLog persist (5): one row per call with correct shape,
+//                             tenantId defaults to 1 when omitted,
+//                             __userId + __surface payload hints land on the row,
+//                             missing __userId / __surface → null columns,
+//                             DB-write rejection does NOT throw out of routeRequest
 //   - estimateTokens (2): empty → 0, Math.ceil(length / 4) heuristic
 //
 // Pin the contract that the REAL implementation MUST honour when the
@@ -39,6 +44,35 @@ import { describe, test, expect, afterEach, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCjs = createRequire(import.meta.url);
+
+// Hoisted Prisma mock — captures create() args so the persist tests
+// can assert the LlmCallLog row shape. The router uses CJS
+// `require("./prisma")` from inside routeRequest, which bypasses
+// vitest's ESM-level vi.mock. Install a fake module record into
+// Node's Module._cache BEFORE the router loads (same pattern as
+// backend/test/utils/deduplication.test.js).
+const prismaMock = vi.hoisted(() => {
+  const mock = {
+    llmCallLog: {
+      create: vi.fn().mockResolvedValue({ id: 1 }),
+    },
+  };
+  const Module = require('node:module');
+  const requireFromCwd = Module.createRequire(process.cwd() + '/');
+  // Resolve the lib/prisma.js path the router will require. cwd at
+  // vitest invocation is the backend/ dir, so the helper resolves
+  // "./lib/prisma" against it.
+  const prismaLibPath = requireFromCwd.resolve('./lib/prisma');
+  Module._cache[prismaLibPath] = {
+    id: prismaLibPath,
+    filename: prismaLibPath,
+    loaded: true,
+    exports: mock,
+    children: [],
+    paths: [],
+  };
+  return mock;
+});
 
 // Snapshot the LLM-key env vars so tests can flip-flop them safely.
 const ORIGINAL_ENV = {
@@ -304,5 +338,85 @@ describe('estimateTokens', () => {
     expect(r.estimateTokens('abcde')).toBe(2);
     expect(r.estimateTokens('a'.repeat(12))).toBe(3);
     expect(r.estimateTokens('a'.repeat(13))).toBe(4);
+  });
+});
+
+// PRD §9.1 + R7 — LlmCallLog persistence.
+//
+// routeRequest writes one row per call to LlmCallLog (fire-and-forget).
+// The hoisted `prismaMock` near the top of this file intercepts the
+// `require("./prisma")` so we can assert call shape + verify the failure
+// path is non-fatal.
+describe('routeRequest — LlmCallLog persistence (PRD §9.1, R7)', () => {
+  test('writes one row per call with the right shape', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    prismaMock.llmCallLog.create.mockClear();
+    const r = loadRouter();
+    await r.routeRequest({ task: 'talking-points', payload: { sample: 'x' }, tenantId: 42 });
+
+    // Persist is fire-and-forget — the create() may not be awaited by
+    // routeRequest, but it IS called synchronously. Yield to the
+    // microtask queue once to flush the lazy require + create kickoff.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(prismaMock.llmCallLog.create).toHaveBeenCalledTimes(1);
+    const arg = prismaMock.llmCallLog.create.mock.calls[0][0];
+    expect(arg.data).toMatchObject({
+      tenantId: 42,
+      task: 'talking-points',
+      model: 'claude-opus-4-7',
+      reason: 'primary',
+      stub: true,
+      costEstimate: 0,
+    });
+    expect(typeof arg.data.promptTokens).toBe('number');
+    expect(typeof arg.data.completionTokens).toBe('number');
+    expect(arg.data.totalTokens).toBe(arg.data.promptTokens + arg.data.completionTokens);
+    logSpy.mockRestore();
+  });
+
+  test('__userId + __surface payload hints land on the row', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    prismaMock.llmCallLog.create.mockClear();
+    const r = loadRouter();
+    await r.routeRequest({
+      task: 'reasoning',
+      payload: { sample: 'x', __userId: 17, __surface: 'talking-points-regen' },
+      tenantId: 3,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const arg = prismaMock.llmCallLog.create.mock.calls[0][0];
+    expect(arg.data.userId).toBe(17);
+    expect(arg.data.surface).toBe('talking-points-regen');
+    logSpy.mockRestore();
+  });
+
+  test('missing __userId / __surface → null columns', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    prismaMock.llmCallLog.create.mockClear();
+    const r = loadRouter();
+    await r.routeRequest({ task: 'reasoning', payload: { sample: 'x' }, tenantId: 1 });
+    await new Promise((resolve) => setImmediate(resolve));
+    const arg = prismaMock.llmCallLog.create.mock.calls[0][0];
+    expect(arg.data.userId).toBeNull();
+    expect(arg.data.surface).toBeNull();
+    logSpy.mockRestore();
+  });
+
+  test('DB-write rejection does NOT throw out of routeRequest', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    prismaMock.llmCallLog.create.mockRejectedValueOnce(new Error('DB transient failure'));
+    const r = loadRouter();
+    // Should resolve normally — the persist is fire-and-forget + the
+    // catch handler swallows the rejection.
+    const out = await r.routeRequest({ task: 'reasoning', payload: {}, tenantId: 1 });
+    expect(out.stub).toBe(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    // Verify the error was logged (non-fatal trail).
+    const errMsg = errSpy.mock.calls.flat().join(' ');
+    expect(errMsg).toMatch(/LlmCallLog persist failed|DB transient failure/);
+    logSpy.mockRestore();
+    errSpy.mockRestore();
   });
 });

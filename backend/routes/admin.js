@@ -23,6 +23,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const { runBackup, listBackups, getBackupDir } = require('../cron/backupEngine');
 
@@ -164,6 +165,201 @@ router.get('/backup/file/:name', verifyRole(['ADMIN']), async (req, res) => {
   } catch (err) {
     console.error('[admin/backup/file] error:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
+// GET /api/admin/llm-spend — LLM cost observability daily summary
+// ──────────────────────────────────────────────────────────────────
+//
+// PRD §9.1 + R7 — surfaces the per-day + per-task + per-model breakdown
+// of LLM router activity for the requesting admin's tenant. Backed by
+// LlmCallLog rows written fire-and-forget by backend/lib/llmRouter.js's
+// routeRequest.
+//
+// Query params:
+//   ?days=N   default 7, max 90 (400 INVALID_RANGE otherwise; non-numeric
+//             ?days=abc falls back silently to the default — keeps the
+//             happy path forgiving for hand-typed curls)
+//
+// Response shape (200):
+//   {
+//     days: 7,
+//     from: ISO-string,           // 7-day window starts at midnight UTC
+//     to:   ISO-string,
+//     totals: {
+//       calls, promptTokens, completionTokens, totalTokens,
+//       costEstimate, stubCalls, realCalls
+//     },
+//     byDay:   [{ date: "YYYY-MM-DD", calls, totalTokens, costEstimate }],
+//     byTask:  [{ task,  calls, totalTokens, costEstimate }],
+//     byModel: [{ model, calls, totalTokens, costEstimate }],
+//   }
+//
+// byTask + byModel sorted descending by costEstimate then by calls.
+// byDay sorted ascending by date (chronological).
+//
+// Costs are Decimal in storage; the response converts them to plain
+// JS numbers via Number() so JSON consumers don't need a Decimal lib.
+// Stub-mode costs are all 0 today (router is in stub mode); the shape
+// is forward-compatible with real-mode wire-in.
+router.get('/llm-spend', verifyRole(['ADMIN']), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    // ?days parsing: clamp to [1, 90]; non-numeric → default. >90 →
+    // 400 INVALID_RANGE (explicit upper bound is the gate spec's contract).
+    const DEFAULT_DAYS = 7;
+    const MAX_DAYS = 90;
+    let days = DEFAULT_DAYS;
+    if (req.query.days !== undefined && req.query.days !== '') {
+      const parsed = parseInt(req.query.days, 10);
+      if (Number.isFinite(parsed)) {
+        if (parsed > MAX_DAYS || parsed < 1) {
+          return res.status(400).json({
+            error: `days must be between 1 and ${MAX_DAYS}`,
+            code: 'INVALID_RANGE',
+          });
+        }
+        days = parsed;
+      }
+      // NaN / non-numeric → silently fall back to default. The contract
+      // is "?days=N filters the window"; garbage in → default behaviour.
+    }
+
+    const to = new Date();
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const where = {
+      tenantId,
+      createdAt: { gte: from, lte: to },
+    };
+
+    // ── Aggregate queries (parallel; same tenant scope). groupBy + count
+    // gives us per-bucket call counts; we lift token + cost sums in the
+    // same groupBy via _sum so we don't need a second pass.
+    const [allRows, byTaskRaw, byModelRaw, totalCalls, stubCount] =
+      await Promise.all([
+        // Per-day rollup is built in JS from the full row set because
+        // Prisma's groupBy can't bucket by a date-trunc expression
+        // portably across MySQL / SQLite. The row count for a 90-day
+        // window is bounded by call volume; even at ~10k calls/day this
+        // pulls 900k rows max which is fine for an admin endpoint.
+        // If volume becomes an issue, swap for a raw SQL DATE() groupBy.
+        prisma.llmCallLog.findMany({
+          where,
+          select: {
+            createdAt: true,
+            totalTokens: true,
+            costEstimate: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        }),
+        prisma.llmCallLog.groupBy({
+          by: ['task'],
+          where,
+          _count: { _all: true },
+          _sum: { totalTokens: true, costEstimate: true },
+        }),
+        prisma.llmCallLog.groupBy({
+          by: ['model'],
+          where,
+          _count: { _all: true },
+          _sum: { totalTokens: true, costEstimate: true },
+        }),
+        prisma.llmCallLog.count({ where }),
+        prisma.llmCallLog.count({ where: { ...where, stub: true } }),
+      ]);
+
+    // Totals — derived from the same row set so they always match
+    // byTask / byModel aggregates (no risk of drift between queries).
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
+    let totalTotalTokens = 0;
+    let totalCost = 0;
+
+    // byDay buckets — map ISO date (YYYY-MM-DD UTC) → bucket. We re-pull
+    // promptTokens / completionTokens via a separate aggregate for the
+    // top-line totals so the byDay row set stays narrow.
+    const dayBuckets = new Map();
+    for (const row of allRows) {
+      const dateKey = row.createdAt.toISOString().slice(0, 10);
+      const bucket =
+        dayBuckets.get(dateKey) || { calls: 0, totalTokens: 0, costEstimate: 0 };
+      bucket.calls += 1;
+      bucket.totalTokens += row.totalTokens || 0;
+      bucket.costEstimate += Number(row.costEstimate) || 0;
+      dayBuckets.set(dateKey, bucket);
+    }
+    const byDay = Array.from(dayBuckets.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, b]) => ({
+        date,
+        calls: b.calls,
+        totalTokens: b.totalTokens,
+        costEstimate: b.costEstimate,
+      }));
+
+    // Separate aggregate for promptTokens + completionTokens — these
+    // aren't carried in the allRows select to keep the row payload small.
+    const tokensAgg = await prisma.llmCallLog.aggregate({
+      where,
+      _sum: {
+        promptTokens: true,
+        completionTokens: true,
+        totalTokens: true,
+        costEstimate: true,
+      },
+    });
+    totalPromptTokens = tokensAgg._sum.promptTokens || 0;
+    totalCompletionTokens = tokensAgg._sum.completionTokens || 0;
+    totalTotalTokens = tokensAgg._sum.totalTokens || 0;
+    totalCost = Number(tokensAgg._sum.costEstimate) || 0;
+
+    const formatGroupRow = (row, keyField) => ({
+      [keyField]: row[keyField],
+      calls: row._count._all,
+      totalTokens: row._sum.totalTokens || 0,
+      costEstimate: Number(row._sum.costEstimate) || 0,
+    });
+
+    const sortByCostThenCalls = (a, b) => {
+      if (b.costEstimate !== a.costEstimate) {
+        return b.costEstimate - a.costEstimate;
+      }
+      return b.calls - a.calls;
+    };
+
+    const byTask = byTaskRaw
+      .map((r) => formatGroupRow(r, 'task'))
+      .sort(sortByCostThenCalls);
+    const byModel = byModelRaw
+      .map((r) => formatGroupRow(r, 'model'))
+      .sort(sortByCostThenCalls);
+
+    res.json({
+      days,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      totals: {
+        calls: totalCalls,
+        promptTokens: totalPromptTokens,
+        completionTokens: totalCompletionTokens,
+        totalTokens: totalTotalTokens,
+        costEstimate: totalCost,
+        stubCalls: stubCount,
+        realCalls: totalCalls - stubCount,
+      },
+      byDay,
+      byTask,
+      byModel,
+    });
+  } catch (err) {
+    console.error('[admin/llm-spend] error:', err);
+    res.status(500).json({
+      error: err.message || 'Failed to fetch LLM spend summary',
+      code: 'INTERNAL_ERROR',
+    });
   }
 });
 

@@ -18,10 +18,15 @@
 // Cost attribution: every call emits a structured log line:
 //   [llm-router] task=X model=Y tenant=Z tokens_in=N tokens_out=M
 //                cost_estimate=$ stub=<bool> reason=<routing-reason>
-// When real-mode lands, swap the console.log for a
-// prisma.llmCallLog.create — the LlmCallLog model + admin daily-summary
-// endpoint are OUT OF SCOPE for this commit; the log-line format
-// is the swap-point contract.
+// AND persists an LlmCallLog row (PRD §9.1 + R7). The DB write is fire-
+// and-forget — a Prisma failure logs an error but never throws out of
+// routeRequest. Powers GET /api/admin/llm-spend daily summary.
+//
+// Caller-supplied __userId + __surface payload hints land on the
+// LlmCallLog row when present; existing callers (talking-points endpoint
+// at routes/travel_diagnostics.js) pass none today, so those columns
+// stay null until a follow-up wires them through. The __ prefix avoids
+// collision with real payload fields the prompt cares about.
 //
 // PII discipline: payload contents (talking-points input, call
 // transcripts) are NEVER logged — only the token count. The structured
@@ -108,6 +113,42 @@ async function routeRequest({ task, payload, tenantId } = {}) {
     `[llm-router] task=${task} model=${model} tenant=${tenantId || "?"} ` +
     `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=true reason=${reason}`,
   );
+
+  // PRD §9.1 + R7 — persist one LlmCallLog row per call for the admin
+  // daily-summary endpoint (GET /api/admin/llm-spend). Best-effort: a
+  // DB-write failure must NEVER fail the LLM call (the in-memory response
+  // is the primary contract, the audit row is observability). Prisma is
+  // required lazily so test harnesses / seed scripts that hand-roll their
+  // own PrismaClient don't trigger a circular-import bomb.
+  try {
+    const prisma = require("./prisma");
+    prisma.llmCallLog
+      .create({
+        data: {
+          tenantId: tenantId || 1,
+          task,
+          model,
+          reason,
+          promptTokens: tokensIn,
+          completionTokens: tokensOut,
+          totalTokens: tokensIn + tokensOut,
+          costEstimate: 0, // stub mode = $0; real-mode wire-in adds per-token pricing
+          stub: true,
+          userId: (payload && payload.__userId) || null,
+          surface: (payload && payload.__surface) || null,
+        },
+      })
+      .catch((e) => {
+        // Log + swallow. Don't let observability break the primary call.
+        console.error(
+          `[llm-router] LlmCallLog persist failed (non-fatal): ${e.message}`,
+        );
+      });
+  } catch (e) {
+    console.error(
+      `[llm-router] LlmCallLog require failed (non-fatal): ${e.message}`,
+    );
+  }
 
   return {
     text: stubText,

@@ -9,7 +9,7 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **73** (~94%) — up from 72 (+1: `ItineraryDetail.jsx` detail page + clickable list rows `c51f7e4` — surfaces `f02fa5a`'s draftSummary LLM consumer)
+- **SHIPPED:** **74** (~95%) — up from 73 (+1: `LeadDetail.jsx` unified contact-centric lead view `a84289e` — aggregates contact + diagnostic + itineraries + trips at `/travel/leads/:contactId`)
 - **PARTIAL:** **5** (~6%) — unchanged
 - **GAP-AUTONOMOUS:** **0** (0%) — down from 1 since `ReligiousPackets.jsx` admin UI shipped (`f903f4b`); recommended-next-5 pool is now exhausted of autonomous-doable PRD-blocking work
 - **GAP-STUB-ABLE:** **5** (~6%) — unchanged
@@ -270,7 +270,7 @@ After those, what remains is dominated by:
 |---|---|---|
 | `Dashboard.jsx` | SHIPPED | `pages/travel/Dashboard.jsx` |
 | `Leads.jsx` | SHIPPED | |
-| `LeadDetail.jsx` | NOT SHIPPED — GAP-AUTONOMOUS | `/travel/leads/:id` not mounted; row-click from `Leads.jsx` is dead |
+| `LeadDetail.jsx` | SHIPPED | commit `a84289e` — `/travel/leads/:contactId` aggregates contact + latest diagnostic + itineraries + TMC trips + RFU profile link; Contact column in `Leads.jsx` now links into it; 6 vitest cases |
 | `DiagnosticBuilder.jsx` | SHIPPED | |
 | `DiagnosticPreview.jsx` | NOT SHIPPED | |
 | `DiagnosticPublic.jsx` (`/p/diagnostic/:subBrand/:bankId`) | SHIPPED-equivalent | `TravelStallQuiz.jsx` at `/travel-stall/quiz` |
@@ -473,7 +473,7 @@ The autonomous queue is **getting thin but not exhausted**. Picks #1–#3 are ge
 
 3. ~~**`ItineraryDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/ItineraryDetail.jsx`; fetches itinerary + items + draftSummary; renders items grid + accept/reject actions + draft-summary block. Mount at `/travel/itineraries/:id`.~~ — ✅ **commit `c51f7e4`** (page mounts, clickable list rows, 8 vitest cases)
 
-4. **`LeadDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/LeadDetail.jsx`; fetches contact + diagnostic + linked itineraries + linked trips for the unified lead view. Mount at `/travel/leads/:id`. Reuses generic `Contacts/ContactDetail.jsx` for shape. ~3-4 hrs. **Why fourth:** lowest-cost UI fill-in; the `Leads.jsx` list ships but row-click is dead today. Not a hard PRD requirement (Leads list does the job for now).
+4. ~~**`LeadDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/LeadDetail.jsx`; fetches contact + diagnostic + linked itineraries + linked trips for the unified lead view. Mount at `/travel/leads/:id`.~~ — ✅ **commit `a84289e`** (page mounts at `/travel/leads/:contactId`, Contact-column link from Leads.jsx, 4-section layout with partial-data graceful degradation, 6 vitest cases)
 
 5. **`LlmSpendDashboard.jsx` admin observability page** (PRD §4.9 row + R7). New page under `frontend/src/pages/admin/LlmSpendDashboard.jsx` consuming `GET /api/admin/llm-spend?days=N` (commit `f5c9518`). Renders the `{ totals, byDay, byTask, byModel }` envelope as 4 widgets (line chart of daily totals, bar by task, bar by model, summary cards). ADMIN-only sidebar link. ~½ day, pure frontend, zero cred deps. **Why fifth:** the backend daily-summary endpoint ships without an admin surface; visibility into R7 LLM cost observability stays internal until this lands.
 

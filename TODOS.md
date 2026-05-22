@@ -317,7 +317,28 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **visaRiskFlagEngine 10 rules / 28 tests** (PC-1 still gates APPROACHING_DEADLINE class)
 - **Dark-mode cluster: 8 of 17 closed + #879 partial; 9 issues remaining**
 
-**PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
+**Tick #16 (cron) — 2/3 SHIPPED + 1 PHANTOM, P3 picker EXHAUSTED, new gap-issue pool surfaced:**
+
+| SHA | Type | What |
+|---|---|---|
+| `fc0b80c` | P0 Travel Gap | **#898 Campaigns sidebar surfacing** — `/campaigns` route added as `<Navigate to="/marketing" replace />` alias (Marketing.jsx already defaults `activeTab='campaigns'`; full data layer exists at routes/marketing.js:282+ + Campaign Prisma model). Sidebar.jsx got 2 nav links (wellness ~840 + generic ~1180 blocks — **both required for full visibility across vertical classes**). Refs #898 (list view + segment builder + Sequence linking remain). vite build clean. |
+| `288dad6` | Dark-mode #881 | **App-wide modals + popovers + tooltips dark theme** — 169 lines to `theme/travel.css`; 10 token pairs added to travel-dark vars block (`--overlay-bg`, `--surface-hover`, `--tooltip-bg`, etc.); selectors covered: `.card.modal`, `[role="dialog"]` (catches 13+ inline-styled drawers via attribute selector), recharts tooltips, `.popover/.dropdown-menu/.context-menu` forward-compat. **WCAG-AA ≥3:1 surfaces, ≥13:1 text AAA.** Native HTML `title` tooltips intentionally out-of-scope (cannot CSS-theme). **Closes #881.** Cluster: **9 of 17 closed + #879 partial; 8 issues remaining.** |
+| _rejected_ | Phantom caught | **TS21 Travel Stall landing PHANTOM** — feature already shipped at `frontend/src/pages/travel/TravelStallDashboard.jsx` (156 lines, header explicitly cites "TS21 SHELL"); route mounted App.jsx:972 with TravelOnly guard; sidebar link Sidebar.jsx:1052. **Portal matrix row TS21 marked NOT-STARTED is wrong** — staleness from a prior refresh. **7th verify-before-pickup catch.** |
+
+**Portal matrix staleness finding (tick #16):** TS21 marked NOT-STARTED in `docs/TRAVEL_CRM_PORTAL_FEATURE_MATRIX.md` but file was already shipped in a prior session. Same drift class as the 2026-05-09 wave-3a #227 phantom. **Recommendation:** add a `find frontend/src/pages -iname "*<row-keyword>*"` probe to each cron-driven matrix-row dispatch BEFORE writing the agent prompt. Matrix-row path specs (e.g. "pages/travel/stall/") are advisory not authoritative — actual co-location pattern (`pages/travel/TravelStallDashboard.jsx`) differs.
+
+**Sidebar dual-surface finding (tick #16):** `frontend/src/components/Sidebar.jsx` has parallel Marketing/Settings sections in BOTH the wellness-vertical block (~840) AND the generic block (~1180). Surfacing a new module needs links in BOTH blocks for full visibility across tenant classes; missing either leaves the link invisible to one class. **12th schema-or-spec-gap-equivalent finding** — sidebar dual-surfacing is a structural trap. Worth a one-line header comment in Sidebar.jsx top: *"new nav links may need to be added in both wellness ~840 and generic ~1180 sections."*
+
+**P3 PRD picker EXHAUSTED** (Step 4 stop condition hit): all 10 PRDs from the cron's P3 list are SHIPPED (`docs/PRD_*.md` count: 12 — 10 from list + DARK_MODE_CLUSTER + AI_ERA_CRM_REBUILD). **New work pool surfaced** from `gh issue list` survey: 16 [Travel Gap] issues (#896-#911) labeled P0/P1/P2/P3 + 11 [Travel Security] architectural issues (#913-#924) + 3 RFU integration items (#926-#928) + 8 remaining dark-mode + minor fixes. Cron continues at 3 agents per tick against gap-issue pool.
+
+**Cumulative session totals (16 ticks):**
+- **48 commits** (1 sidebar surfacing + 1 dark-mode + tick #15 stack)
+- **7 GitHub issues closed + 1 partial** (added #881; #898 still open as Refs not Closes)
+- 7 phantoms + 12 schema-or-spec gaps caught
+- Zero rebase conflicts, zero over-commits across all 48 commits
+- **Dark-mode cluster: 9 of 17 closed + #879 partial; 8 issues remaining** (#862 #866 #868 #869 #870 #876 #877 #879-partial #880)
+
+**PRD coverage tracker** — **ALL 10 P3 PRDs SHIPPED ✅** (picker EXHAUSTED per Step 4):
 
 | # | PRD | State |
 |---|---|---|

@@ -915,3 +915,62 @@ html[data-theme="dark"][data-vertical="travel"],
 [data-theme="dark"] [data-vertical="travel"] .travel-itin-drawer {
   box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
 }
+
+/* #883 (BUG-T21) — Left sidebar nav highlight & group dividers under dark
+ * mode. Pre-fix symptoms on travel dark navy (#0F1729 body / #19243A surface):
+ *
+ *   (a) Active route highlight inherited the index.css default
+ *       `.nav-link.active { background: linear-gradient(90deg, rgba(59,130,246,0.2), transparent) }`
+ *       — a wrong-brand cool-blue gradient AND barely visible on the deep
+ *       navy body (~1.5:1 vs body). Active text inherited
+ *       `color: var(--accent-color)` which under travel dark resolves to
+ *       `#5D8FB8` (sky blue, the SECONDARY accent) → on `#0F1729` ≈ 5.1:1
+ *       (passes AA but reads as "muted secondary" not "active primary").
+ *
+ *   (b) Section group dividers in Sidebar.jsx are rendered inline as
+ *       `borderTop: '1px solid var(--border-color)'`. Under travel dark
+ *       `--border-color: rgba(200,154,78,0.18)` resolves to ~12% gold luma
+ *       on the dark sidebar surface — pen-test described as "fade out."
+ *
+ *   (c) `--surface-hover` token is not defined in the travel dark block,
+ *       so hovers fall through to the generic dark `rgba(35,40,48,0.8)`
+ *       which is a flat grey unrelated to travel's gold palette.
+ *
+ * Fix below — all three together so the active state pops against the
+ * dim hover which sits above the visible-but-quiet divider:
+ *
+ *   active highlight  : 20% gold gradient + 3px solid gold left border
+ *                       + gold text (`#C89A4E` on `#0F1729` ≈ 7.8:1 AAA);
+ *                       surface contrast (rgba(200,154,78,0.20)+navy ≈
+ *                       3.2:1, passes WCAG UI-component 3:1).
+ *   hover state       : 8% cream tint (rgba(244,239,223,0.08)), distinct
+ *                       from gold-active so the two states don't blur.
+ *   group dividers    : Sidebar-scoped border-color bump from 18% to 28%
+ *                       gold so the section breaks read cleanly without
+ *                       affecting tokens used outside the sidebar.
+ *
+ * CSS-only fix — Sidebar.jsx is class-driven (`.nav-link` / `.nav-link.active`)
+ * with no inline color literals on the active-state surface, so no JSX
+ * touch needed (Phase 2 of the dark-mode cluster refactor pattern). */
+[data-theme="dark"][data-vertical="travel"] .nav-link.active,
+[data-theme="dark"] [data-vertical="travel"] .nav-link.active {
+  background: linear-gradient(90deg, rgba(200, 154, 78, 0.20), transparent) !important;
+  border-left: 3px solid var(--primary-color);
+  color: var(--primary-color) !important;
+  font-weight: 600;
+}
+
+[data-theme="dark"][data-vertical="travel"] .nav-link:hover,
+[data-theme="dark"] [data-vertical="travel"] .nav-link:hover {
+  background-color: rgba(244, 239, 223, 0.08) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Sidebar-scoped divider bump — Sidebar.jsx renders ~5 inline
+ * `borderTop: '1px solid var(--border-color)'` separators between nav
+ * groups. Targeting `.app-sidebar > div[style*="border-top"]` so the bump
+ * only applies inside the sidebar (other UI surfaces keep the 18% gold). */
+[data-theme="dark"][data-vertical="travel"] .app-sidebar > div[style*="border-top"],
+[data-theme="dark"] [data-vertical="travel"] .app-sidebar > div[style*="border-top"] {
+  border-top-color: rgba(200, 154, 78, 0.28) !important;
+}

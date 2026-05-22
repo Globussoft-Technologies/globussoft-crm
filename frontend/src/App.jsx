@@ -143,6 +143,8 @@ const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
 const TravelVisaDashboard = lazy(() => import("./pages/travel/visa/Dashboard"));
 const TravelVisaApplications = lazy(() => import("./pages/travel/visa/Applications"));
 const TravelVisaChecklists = lazy(() => import("./pages/travel/visa/Checklists"));
+// Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
+const TravelStallDashboard = lazy(() => import("./pages/travel/TravelStallDashboard"));
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
   () => import("./pages/wellness/OwnerDashboard"),
@@ -954,6 +956,9 @@ export default function App() {
               <Route path="travel/visa" element={<TravelOnly><TravelVisaDashboard /></TravelOnly>} />
               <Route path="travel/visa/applications" element={<TravelOnly><TravelVisaApplications /></TravelOnly>} />
               <Route path="travel/visa/checklists" element={<TravelOnly><TravelVisaChecklists /></TravelOnly>} />
+              {/* Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
+                  Each card CTAs to an existing route filtered by ?subBrand=travelstall. */}
+              <Route path="travel-stall" element={<TravelOnly><TravelStallDashboard /></TravelOnly>} />
                     {/* Wellness vertical — gated by WellnessOnly so generic-CRM
                   tenants can't surface wellness pages by URL (#325). */}
               <Route path="wellness" element={<WellnessOnly><WellnessOwnerOnly><WellnessOwnerDashboard /></WellnessOwnerOnly></WellnessOnly>} />

@@ -1044,6 +1044,15 @@ function renderTravelNav({
         </>
       )}
 
+      {/* Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
+          Operator-facing surface, visible to admin + manager. */}
+      {isManager && (
+        <>
+          <div style={labelStyle}>Travel Stall</div>
+          <Link to="/travel-stall" icon={Sparkles} label="Dashboard" />
+        </>
+      )}
+
       <div style={labelStyle}>Sales pipeline</div>
       <Link to="/leads" icon={UserPlus} label="Leads" />
       <Link to="/contacts" icon={Users} label="Contacts" />

@@ -529,8 +529,12 @@ router.post(
       }
 
       const { callAnswers, callTranscript } = req.body || {};
-      const hasCallAnswers =
-        callAnswers && typeof callAnswers === "object" && !Array.isArray(callAnswers);
+      // Coerce to boolean — bare `&&` propagates `undefined` when
+      // callAnswers is missing, which then poisons `matched: hasCallAnswers && ...`
+      // downstream (gate spec at travel-diagnostics-api.spec.js:984 caught this).
+      const hasCallAnswers = Boolean(
+        callAnswers && typeof callAnswers === "object" && !Array.isArray(callAnswers),
+      );
       const hasCallTranscript =
         typeof callTranscript === "string" && callTranscript.trim().length > 0;
       if (!hasCallAnswers && !hasCallTranscript) {

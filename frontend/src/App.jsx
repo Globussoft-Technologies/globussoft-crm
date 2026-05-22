@@ -697,6 +697,12 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
+                    {/* #898: /campaigns deep-link alias. The Email / SMS / Push
+                        Campaign list lives at /marketing as the default tab
+                        (Marketing.jsx:82 — useState('campaigns')). Surfaces the
+                        Campaign entity in the sidebar without duplicating the
+                        UI. Mirrors the #822 /reports/pnl redirect pattern. */}
+                    <Route path="campaigns" element={<Navigate to="/marketing" replace />} />
                     <Route path="reports" element={<Reports />} />
                     {/* #822: /reports/pnl deep-link alias. The P&L + Attribution
                         report lives at /wellness/reports as the default tab

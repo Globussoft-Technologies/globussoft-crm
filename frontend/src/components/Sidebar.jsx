@@ -77,6 +77,8 @@ import {
   Ban,
   // Cron PRD Priority A #1 — LLM Spend admin dashboard
   Activity,
+  // #898 — Campaigns sidebar surfacing (Email / SMS / Push)
+  Megaphone,
   // Travel CRM vertical (Day 1 scaffolding — Phase 1 per docs/TRAVEL_CRM_PRD.md §7)
   Compass,
   ClipboardCheck,
@@ -844,6 +846,15 @@ function renderWellnessNav({
       {isManager && (
         <>
           <div style={labelStyle}>Marketing</div>
+          {/* #898: Campaigns sidebar surfacing. Deep-links to the existing
+              Marketing page (Email / SMS / Push Campaigns tab is the default).
+              Backed by Campaign rows via GET /api/marketing/campaigns. */}
+          <Link
+            to="/campaigns"
+            icon={Megaphone}
+            label="Campaigns"
+            managerOnly
+          />
           <Link
             to="/marketing"
             icon={Send}
@@ -1179,6 +1190,9 @@ function renderGenericNav({
       <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly />
       <Link to="/territories" icon={Network} label="Territories" managerOnly />
 
+      {/* #898: Campaigns alias for the generic sidebar (deep-links to /marketing
+          which defaults to the Email Campaigns tab). */}
+      <Link to="/campaigns" icon={Megaphone} label="Campaigns" managerOnly />
       <Link to="/marketing" icon={Send} label="Marketing" managerOnly />
       <Link to="/sequences" icon={Network} label="Sequences" managerOnly />
       <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly />

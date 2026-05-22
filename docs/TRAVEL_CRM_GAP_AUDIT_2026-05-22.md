@@ -9,9 +9,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **59** (~76%) — up from 58 (+1: LlmCallLog + admin daily-summary endpoint `f5c9518`)
+- **SHIPPED:** **60** (~77%) — up from 59 (+1: WebCheckin seed row `cb478bb`)
 - **PARTIAL:** **6** (~8%)
-- **GAP-AUTONOMOUS:** **5** (~6%) — down from 6 since LlmCallLog shipped
+- **GAP-AUTONOMOUS:** **4** (~5%) — down from 5 since WebCheckin seed shipped
 - **GAP-STUB-ABLE:** **6** (~8%) — was 8; talking-points + LLM router consumed two slots
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
@@ -32,7 +32,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 
 2. ~~**`LlmCallLog` model + admin daily-summary endpoint** — PRD §9.1 explicitly calls for cost-attribution + per-task spend breakdown (R7 observability). Router scaffold (`583c06b`) wrote a structured log line as the swap-point contract; replacing `console.log` with `prisma.llmCallLog.create` + the GET endpoint closes that loop. Single migration + one route file. ~3 hrs.~~ — ✅ **commit `f5c9518`** (additive nullable schema + fire-and-forget persist + `GET /api/admin/llm-spend?days=N` ADMIN endpoint with totals/byDay/byTask/byModel envelope; 24 vitest + 9 gate-spec cases)
 
-3. **Seed at least 1 `WebCheckin` row in `seed-travel.js`** — gives the cron something to find during demo; pairs with the Queue UI above. The 4 ItineraryItems on Itinerary `IT-SEED-RFU-1` are the trigger surface. ~1 hr.
+3. ~~**Seed at least 1 `WebCheckin` row in `seed-travel.js`** — gives the cron something to find during demo; pairs with the Queue UI above. The 4 ItineraryItems on Itinerary `IT-SEED-RFU-1` are the trigger surface. ~1 hr.~~ — ✅ **commit `cb478bb`** (EK-571 BLR→DXB for Ahmed Khan, +21d departure, T-48h window, idempotent on `(tenantId, pnr=RFUDEMO<n>)`; 2 new gate-spec cases)
 
 ### Top 3 cred-blocked items worth chasing the human on (unchanged)
 
@@ -313,7 +313,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Sub-brand switcher in sidebar | SHIPPED | `Sidebar.jsx:986-1019` |
 | Theme `theme/travel.css` | SHIPPED (placeholder palette) | Per Q22 brand assets pending |
 | Landing route `/travel` | SHIPPED | `App.jsx:888` |
-| Seed `seed-travel.js` | SHIPPED | tenant + users + 4 diagnostic banks + cost master + seasons + 8-status Pipeline + 8 lost reasons + 3 TmcTrips + participants + Itinerary + microsite + RoomingAssignment + TripPaymentPlan + 4 TripInstalmentPayment + SupplierCredential (env-gated) + VisaApplication + 4 checklist items (commit `78884e3`). **NB:** no `WebCheckin` rows seeded — cron has nothing to scan in demo |
+| Seed `seed-travel.js` | SHIPPED | tenant + users + 4 diagnostic banks + cost master + seasons + 8-status Pipeline + 8 lost reasons + 3 TmcTrips + participants + Itinerary + microsite + RoomingAssignment + TripPaymentPlan + 4 TripInstalmentPayment + SupplierCredential (env-gated) + VisaApplication + 4 checklist items (`78884e3`) + 1 WebCheckin row (EK-571 BLR→DXB for the RFU pilgrim, `cb478bb`). End-to-end demo data complete |
 
 ---
 

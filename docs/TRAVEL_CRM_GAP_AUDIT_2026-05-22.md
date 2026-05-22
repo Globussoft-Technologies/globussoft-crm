@@ -9,9 +9,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **58** (~74%) — up from 57 (+1: WebCheckinQueue.jsx operator UI `bfe956c`)
+- **SHIPPED:** **59** (~76%) — up from 58 (+1: LlmCallLog + admin daily-summary endpoint `f5c9518`)
 - **PARTIAL:** **6** (~8%)
-- **GAP-AUTONOMOUS:** **6** (~8%) — down from 7 since WebCheckinQueue.jsx shipped
+- **GAP-AUTONOMOUS:** **5** (~6%) — down from 6 since LlmCallLog shipped
 - **GAP-STUB-ABLE:** **6** (~8%) — was 8; talking-points + LLM router consumed two slots
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
@@ -30,7 +30,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 
 1. ~~**`WebCheckinQueue.jsx` operator UI** — backend ships (commit `9898e87`); cron scans empty table. Build the list / filter / "upload boarding pass" / "deliver" UI on top of the 7-endpoint API. PRD §4.6 + §7 row 20. Pure-frontend single-commit. ~½ day.~~ — ✅ **commit `bfe956c`** (filter + upcoming toggle + multipart upload + deliver + reassign + status-color badges + 10 vitest cases; route mounted; sidebar link added)
 
-2. **`LlmCallLog` model + admin daily-summary endpoint** — PRD §9.1 explicitly calls for cost-attribution + per-task spend breakdown (R7 observability). Router scaffold (`583c06b`) wrote a structured log line as the swap-point contract; replacing `console.log` with `prisma.llmCallLog.create` + the GET endpoint closes that loop. Single migration + one route file. ~3 hrs.
+2. ~~**`LlmCallLog` model + admin daily-summary endpoint** — PRD §9.1 explicitly calls for cost-attribution + per-task spend breakdown (R7 observability). Router scaffold (`583c06b`) wrote a structured log line as the swap-point contract; replacing `console.log` with `prisma.llmCallLog.create` + the GET endpoint closes that loop. Single migration + one route file. ~3 hrs.~~ — ✅ **commit `f5c9518`** (additive nullable schema + fire-and-forget persist + `GET /api/admin/llm-spend?days=N` ADMIN endpoint with totals/byDay/byTask/byModel envelope; 24 vitest + 9 gate-spec cases)
 
 3. **Seed at least 1 `WebCheckin` row in `seed-travel.js`** — gives the cron something to find during demo; pairs with the Queue UI above. The 4 ItineraryItems on Itinerary `IT-SEED-RFU-1` are the trigger surface. ~1 hr.
 
@@ -208,7 +208,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | `TripMicrosite` | SHIPPED | `schema.prisma:4517` |
 | `TripMicrositeOtp` | SHIPPED | `schema.prisma:4536` |
 | `TenantSetting` | SHIPPED | `schema.prisma:2853` |
-| **`LlmCallLog` (missing)** | GAP-AUTONOMOUS | Router scaffold pinned the log-line shape; model + admin daily-summary endpoint not yet shipped (PRD §9.1 + R7 observability) |
+| `LlmCallLog` | SHIPPED | `backend/prisma/schema.prisma` model + fire-and-forget persist in `lib/llmRouter.js` + `GET /api/admin/llm-spend` (commit `f5c9518`); 3 indexes on (tenantId, createdAt / task / model) |
 
 ### §5.2 Extensions to existing models
 
@@ -347,7 +347,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | AI qualification call | Gemini Live | GAP-CRED-BLOCKED (Callified front-end) |
 | Document OCR fallback | Gemini Vision | GAP-CRED-BLOCKED |
 | Sentiment / KPI insights | Gemini Flash | GAP-AUTONOMOUS |
-| **Cost observability** (`LlmCallLog` model + admin daily summary) | — | **GAP-AUTONOMOUS** — router pinned the log-line shape as the swap-point contract; persistence layer + admin endpoint are the next bundle |
+| Cost observability (`LlmCallLog` model + admin daily summary) | — | SHIPPED via `GET /api/admin/llm-spend` (commit `f5c9518`); fire-and-forget persist from router |
 
 ---
 
@@ -427,7 +427,7 @@ Schema-only — `VisaApplication` + `VisaDocumentChecklistItem` models shipped (
 | R4 | Hotel comparator scope drift | 🟢 | Resolved |
 | R5 | DigiLocker creds | 🟢 | Stub shipped |
 | R6 | Tenancy model irreversibility | 🟢 | Resolved + implemented |
-| R7 | LLM cost + observability | 🟡 | Router scaffold ships (commit `583c06b`); `LlmCallLog` + cost dashboard NOT built — next-pick top-3 |
+| R7 | LLM cost + observability | 🟢 | Router scaffold (`583c06b`) + `LlmCallLog` model + `GET /api/admin/llm-spend` daily summary (`f5c9518`). Real-mode per-token pricing wires in with Q11 keys |
 | R8 | Aadhaar legal exposure | 🟡 | Counsel pending |
 | R9 | Multi-WABA timeline | 🟢 | Resolved |
 | R10 | Scope creep TS/VS | 🟢 | Resolved |

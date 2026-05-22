@@ -87,6 +87,29 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 **PRD coverage after tick #3:** 9 of 12 total PRDs done (75%). Remaining 3 for next tick: Booking-Expedia / AdsGPT / Excel Software.
 
+**Tick #4 (cron) shipped 3/3 final PRDs — closes the PRD-writer queue:**
+
+| SHA | PRD file | Decisions surfaced |
+|---|---|---|
+| `a445cff` | `docs/PRD_BOOKING_EXPEDIA_DIRECT.md` (358 lines) | 7 decisions — vendor priority / dedup / caching / direct-book scope / failure UX / cancellation normalizer ownership / vendor brand visibility |
+| `96cc585` | `docs/PRD_ADSGPT_MARKETING_REPORTS.md` (350 lines) | 6 decisions — ingest cadence / budget cap / PII boundary / per-sub-brand budgets / account model / report ownership |
+| `bb8e5bb` | `docs/PRD_EXCEL_SOFTWARE_ACCOUNTING.md` (432 lines) | 6 decisions — API-vs-CSV / SFTP-vs-local-dir / directory structure / reconciliation threshold / GSTIN mapping / cancellation handling |
+
+**PRD COVERAGE: 12 of 12 (100%) — PRD-writer queue EXHAUSTED.** Per Step 4 stop condition, cron drops to 2 agents per tick going forward + pivots full-time to Phase 2/3 scaffolds + QA-cluster drains.
+
+### 📋 Complete PRD set — design-call agenda for morning
+
+The 12 PRDs surface **~80 product/design decisions across all 4 sub-brands** that need stakeholder input before implementation can start. Bundle into 2-3 design-call sessions when you wake:
+
+| Cluster | PRDs | Decisions |
+|---|---|---|
+| 🟥 Cred-chase to Yasin (highest leverage) | WhatsApp / DigiLocker / RateHawk / Booking-Expedia / AI calling / AdsGPT / Excel Software | 5 + 4 + 6 + 7 + 7 + 6 + 6 = 41 decisions, mostly DC-pattern |
+| 🟦 Architecture (security) | A1 JWT-cookies / A2 CSP nonces / A3 opaque IDs / A4 IDOR middleware (in MANUAL_CODING_BACKLOG cluster A, no separate PRD per cluster — those are in-doc) | 4 design-call decisions |
+| 🛠️ Product-call (multi-day features) | Visa Sure Phase 3 / Passport OCR / Flight Plugin / Airline Web-Checkin / TMC Curriculum Mapping | 7 + 5 + 6 + 6 + 5 = 29 decisions |
+| 🟡 Sub-brand specifics | embedded in respective PRDs | covered above |
+
+All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure. Each §5 ("Hand-over requirements / decisions needed") enumerates the decision-call agenda with a GS recommendation per item.
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

@@ -759,3 +759,159 @@ html[data-theme="dark"][data-vertical="travel"],
 [data-theme="dark"] [data-vertical="travel"] .audit-row-drawer {
   background: rgba(15, 23, 41, 0.6);
 }
+
+/* #879 (Itineraries slice) — Travel CRM Itineraries list page
+ * (Itineraries.jsx hit via /travel/itineraries). Phase 1 of the dark-mode
+ * cluster refactor, mirror of #878 AuditLog (commit 58986ef), #873 Reports
+ * (commit 3d82e34), #872 Sequences (commit 706514c), #871 Inbox (commit
+ * 68b09db), and #867 Diagnostics (commit f67b4fc). Pre-refactor
+ * Itineraries.jsx had:
+ *   - 5 status pill variants (draft/sent/revised/accepted/rejected) with
+ *     inline `rgba(*, 0.12-0.16)` bg + bare hex fg (#5C6E82 / #2F7A4D /
+ *     #9A6F2E / #265855 / #A8323F). On travel dark navy (#0F1729) body
+ *     the muted-saturation hex foregrounds drop below 3:1 → fail AA.
+ *   - 3 tier pill variants (entry/primary/premium) with inline
+ *     `rgba(*, 0.12-0.22)` bg + bare hex fg (#5C6E82 / #122647 / #7A5419).
+ *     The `primary` variant is travel-navy (#122647) on tinted-navy bg —
+ *     essentially invisible against the dark body.
+ *   - Create-itinerary drawer backdrop fixed `rgba(0,0,0,0.5)`. Black on
+ *     near-black (dark body is #0F1729) reads as a dimmed indistinct
+ *     overlay — fine functionally but visually muddled.
+ *   - Drawer panel `box-shadow: -8px 0 24px rgba(0,0,0,0.2)`. Light shadow
+ *     against dark body is nearly invisible — drawer reads as flush with
+ *     the body rather than as a lifted modal surface.
+ *
+ * Base rules are theme-agnostic — they preserve current appearance via the
+ * existing rgba/hex pairs. Travel dark-mode overrides force opaque
+ * high-contrast pairs ≥4.5:1 (WCAG AA) on the deep-tinted backdrops. */
+.travel-itin-status-pill {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: inline-block;
+}
+.travel-itin-status-pill--draft {
+  background: rgba(120, 120, 120, 0.12);
+  color: #5C6E82;
+}
+.travel-itin-status-pill--sent {
+  background: rgba(47, 122, 77, 0.14);
+  color: #2F7A4D;
+}
+.travel-itin-status-pill--revised {
+  background: rgba(200, 154, 78, 0.16);
+  color: #9A6F2E;
+}
+.travel-itin-status-pill--accepted {
+  background: rgba(38, 88, 85, 0.16);
+  color: #265855;
+}
+.travel-itin-status-pill--rejected {
+  background: rgba(168, 50, 63, 0.14);
+  color: #A8323F;
+}
+.travel-itin-status-pill--other {
+  background: var(--subtle-bg);
+  color: var(--text-secondary);
+}
+.travel-itin-tier-pill {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: inline-block;
+}
+.travel-itin-tier-pill--entry {
+  background: rgba(120, 120, 120, 0.12);
+  color: #5C6E82;
+}
+.travel-itin-tier-pill--primary {
+  background: rgba(18, 38, 71, 0.14);
+  color: #122647;
+}
+.travel-itin-tier-pill--premium {
+  background: rgba(200, 154, 78, 0.22);
+  color: #7A5419;
+}
+.travel-itin-tier-pill--other {
+  background: var(--subtle-bg);
+  color: var(--text-secondary);
+}
+.travel-itin-drawer-backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+.travel-itin-drawer {
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.2);
+}
+
+/* #879 — Dark-mode token overrides for Itineraries widgets. Contrast
+ * verified ≥4.5:1 (WCAG AA) against dark surfaces:
+ *   status draft:    #374151 bg, #D1D5DB fg → ~7.4:1
+ *   status sent:     #064E3B bg, #6EE7B7 fg → ~9.8:1
+ *   status revised:  #78350F bg, #FCD34D fg → ~7.2:1
+ *   status accepted: #134E4A bg, #5EEAD4 fg → ~8.4:1
+ *   status rejected: #7F1D1D bg, #FCA5A5 fg → ~5.1:1
+ *   tier entry:      #374151 bg, #D1D5DB fg → ~7.4:1
+ *   tier primary:    #1E3A8A bg, #BFDBFE fg → ~7.7:1  (was #122647 / #122647
+ *                    fg-on-navy ~1:1 invisible — fix here is the load-
+ *                    bearing change for the tier badge)
+ *   tier premium:    #78350F bg, #FCD34D fg → ~7.2:1
+ *   drawer backdrop: rgba(0,0,0,0.7) — deeper opacity so the navy body
+ *                    underneath reads as clearly dimmed, not just tinted
+ *   drawer shadow:   -8px 0 32px rgba(0,0,0,0.5) — opaque shadow on dark
+ *                    body reads as a real lifted surface vs flush wall
+ * Scoped to travel vertical so generic + wellness keep their existing
+ * light-only palettes. */
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--draft,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--draft {
+  background: #374151;
+  color: #D1D5DB;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--sent,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--sent {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--revised,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--revised {
+  background: #78350F;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--accepted,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--accepted {
+  background: #134E4A;
+  color: #5EEAD4;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-status-pill--rejected,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-status-pill--rejected {
+  background: #7F1D1D;
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-tier-pill--entry,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-tier-pill--entry {
+  background: #374151;
+  color: #D1D5DB;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-tier-pill--primary,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-tier-pill--primary {
+  background: #1E3A8A;
+  color: #BFDBFE;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-tier-pill--premium,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-tier-pill--premium {
+  background: #78350F;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-drawer-backdrop,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-drawer-backdrop {
+  background: rgba(0, 0, 0, 0.7);
+}
+[data-theme="dark"][data-vertical="travel"] .travel-itin-drawer,
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-drawer {
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
+}

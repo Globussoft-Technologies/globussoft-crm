@@ -37,21 +37,28 @@ const STATUSES = [
   { value: "rejected", label: "Rejected" },
 ];
 
-const STATUS_COLORS = {
-  draft: { bg: "rgba(120,120,120,0.12)", color: "#5C6E82" },
-  sent: { bg: "rgba(47,122,77,0.14)", color: "#2F7A4D" },
-  revised: { bg: "rgba(200,154,78,0.16)", color: "#9A6F2E" },
-  accepted: { bg: "rgba(38,88,85,0.16)", color: "#265855" },
-  rejected: { bg: "rgba(168,50,63,0.14)", color: "#A8323F" },
+// #879 (Itineraries slice) — pre-refactor used inline `${bg}` + `${color}`
+// from a hex/rgba lookup map for each status pill. Refactored to a
+// `.travel-itin-status-pill .travel-itin-status-pill--<variant>` class
+// pair so travel dark-mode can override the tinted-pill bg+fg without JS.
+// Unknown statuses fall through to `other`.
+const STATUS_VARIANT = {
+  draft: "draft",
+  sent: "sent",
+  revised: "revised",
+  accepted: "accepted",
+  rejected: "rejected",
 };
 
 // PRD §6.4 — tier badge palette. productTier on each Itinerary is captured
 // at creation from the contact's latest diagnostic (recommendedTier).
 // Neutral / travel-navy / warm-gold for entry / primary / premium.
-const TIER_COLORS = {
-  entry: { bg: "rgba(120,120,120,0.12)", color: "#5C6E82" },
-  primary: { bg: "rgba(18,38,71,0.14)", color: "#122647" },
-  premium: { bg: "rgba(200,154,78,0.22)", color: "#7A5419" },
+// #879 refactor: same class-pair pattern as STATUS_VARIANT above so the
+// tier-pill bg+fg tokens can be overridden per-theme via CSS-only.
+const TIER_VARIANT = {
+  entry: "entry",
+  primary: "primary",
+  premium: "premium",
 };
 
 const ITEM_ICONS = {
@@ -88,13 +95,9 @@ function fmtMoney(amt, currency = "INR") {
 
 function TierBadge({ tier }) {
   if (!tier) return <span style={{ color: "var(--text-secondary)" }}>—</span>;
-  const tc = TIER_COLORS[tier] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
+  const variant = TIER_VARIANT[tier] || "other";
   return (
-    <span style={{
-      background: tc.bg, color: tc.color,
-      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-      textTransform: "uppercase", letterSpacing: 0.5,
-    }}>
+    <span className={`travel-itin-tier-pill travel-itin-tier-pill--${variant}`}>
       {tier}
     </span>
   );
@@ -249,7 +252,7 @@ export default function Itineraries() {
             </thead>
             <tbody>
               {items.map((it) => {
-                const sc = STATUS_COLORS[it.status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
+                const statusVariant = STATUS_VARIANT[it.status] || "other";
                 return (
                   <tr
                     key={it.id}
@@ -288,11 +291,7 @@ export default function Itineraries() {
                     </td>
                     <td style={td}>{fmtMoney(it.totalAmount, it.currency)}</td>
                     <td style={td}>
-                      <span style={{
-                        background: sc.bg, color: sc.color,
-                        padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-                        textTransform: "uppercase", letterSpacing: 0.5,
-                      }}>
+                      <span className={`travel-itin-status-pill travel-itin-status-pill--${statusVariant}`}>
                         {it.status}
                       </span>
                     </td>
@@ -309,13 +308,14 @@ export default function Itineraries() {
       {creating && (
         <div
           onClick={(e) => { if (e.target === e.currentTarget) setCreating(false); }}
+          className="travel-itin-drawer-backdrop"
           style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+            position: "fixed", inset: 0,
             display: "flex", alignItems: "flex-start", justifyContent: "flex-end",
             zIndex: 1000,
           }}
         >
-          <form onSubmit={submitCreate} style={drawerStyle}>
+          <form onSubmit={submitCreate} style={drawerStyle} className="travel-itin-drawer">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>New Itinerary</h2>
               <button type="button" onClick={() => setCreating(false)} aria-label="Close" style={iconBtn}>
@@ -464,10 +464,13 @@ const primaryBtn = {
   cursor: "pointer",
 };
 
+// #879 — boxShadow refactored to a CSS class so the dark-mode override can
+// deepen the shadow opacity (`rgba(0,0,0,0.5)`) to read as a real lifted
+// surface against the dark body. Light-mode preserved byte-for-byte.
 const drawerStyle = {
   background: "var(--surface-color)", color: "var(--text-primary)",
   width: "100%", maxWidth: 460, height: "100vh", overflowY: "auto",
-  padding: 20, boxShadow: "-8px 0 24px rgba(0,0,0,0.2)",
+  padding: 20,
 };
 
 const iconBtn = {

@@ -327,6 +327,127 @@ test.describe("Voyagr lead-capture — body validation", () => {
 
 // ── Spam guard: honeypot ───────────────────────────────────────────
 
+// ── F3: GET /api/attribution/voyagr/summary ────────────────────────
+//
+// F3 (cluster F) — voyagr attribution reporting endpoint. Surfaces the
+// Contact + Touchpoint rows written by F1 as a per-sub-brand / per-utm
+// summary for the operator's marketing screen.
+//
+// Auth: JWT (admin or manager). We reuse `jwtToken` minted in
+// `ensureApiKey` so we don't double-login.
+//
+// SCHEMA-DRIFT NOTE: Touchpoint has no siteSlug / utm_campaign columns.
+// The summary's bySiteSlug array is always []; byUtmSource reflects
+// Touchpoint.source (which F1 writes from utm_source). See
+// backend/routes/attribution.js — "SCHEMA-DRIFT NOTE" block.
+test.describe("Voyagr attribution summary — F3", () => {
+  async function getSummary(request, query = "") {
+    if (!jwtToken) await ensureApiKey(request); // mints + caches jwtToken
+    return request.get(
+      `${BASE_URL}/api/attribution/voyagr/summary${query ? "?" + query : ""}`,
+      {
+        headers: { Authorization: `Bearer ${jwtToken}` },
+        timeout: REQUEST_TIMEOUT,
+      }
+    );
+  }
+
+  test("happy path — 200 + shape", async ({ request }) => {
+    await requireKey(request); // ensure jwtToken populated
+    // Seed at least 1 voyagr lead so totalLeads > 0 (cumulative across
+    // happy-path describe runs — but we don't depend on a specific value).
+    const seedEmail = `${RUN_TAG.toLowerCase()}-summary-${Date.now()}@e2e.voyagr.test`;
+    const seed = await postLead(
+      request,
+      validBody({ email: seedEmail, subBrand: "tmc" })
+    );
+    expect(seed.status()).toBe(201);
+
+    const r = await getSummary(request);
+    expect(r.status()).toBe(200);
+    const j = await r.json();
+    expect(j).toHaveProperty("windowDays", 30);
+    expect(typeof j.totalLeads).toBe("number");
+    expect(j.totalLeads).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(j.bySubBrand)).toBe(true);
+    expect(Array.isArray(j.byUtmSource)).toBe(true);
+    expect(Array.isArray(j.byChannel)).toBe(true);
+    expect(Array.isArray(j.bySiteSlug)).toBe(true);
+    // At least one sub-brand bucket should be present (we just seeded tmc).
+    const tmcBucket = j.bySubBrand.find((b) => b.subBrand === "tmc");
+    expect(tmcBucket).toBeTruthy();
+    expect(tmcBucket.count).toBeGreaterThanOrEqual(1);
+    // wonValue is numeric (and 0 since seeded deals are stage='lead', not 'won').
+    expect(typeof tmcBucket.wonValue).toBe("number");
+    // byUtmSource should contain 'google' (F1 maps utm_source → Touchpoint.source;
+    // validBody() sends utm_source='google').
+    const googleBucket = j.byUtmSource.find((b) => b.utmSource === "google");
+    expect(googleBucket).toBeTruthy();
+    expect(googleBucket.count).toBeGreaterThanOrEqual(1);
+  });
+
+  test("custom days param honored — windowDays echoes the request", async ({ request }) => {
+    await requireKey(request);
+    const r = await getSummary(request, "days=7");
+    expect(r.status()).toBe(200);
+    const j = await r.json();
+    expect(j.windowDays).toBe(7);
+  });
+
+  test("days clamp — 0 returns 400 INVALID_DAYS", async ({ request }) => {
+    await requireKey(request);
+    const r = await getSummary(request, "days=0");
+    expect(r.status()).toBe(400);
+    const j = await r.json();
+    expect(j.code).toBe("INVALID_DAYS");
+  });
+
+  test("days clamp — 999 returns 400 INVALID_DAYS", async ({ request }) => {
+    await requireKey(request);
+    const r = await getSummary(request, "days=999");
+    expect(r.status()).toBe(400);
+    const j = await r.json();
+    expect(j.code).toBe("INVALID_DAYS");
+  });
+
+  test("days clamp — non-numeric returns 400 INVALID_DAYS", async ({ request }) => {
+    await requireKey(request);
+    const r = await getSummary(request, "days=abc");
+    expect(r.status()).toBe(400);
+    const j = await r.json();
+    expect(j.code).toBe("INVALID_DAYS");
+  });
+
+  test("auth gate — no token returns 401", async ({ request }) => {
+    const r = await request.get(
+      `${BASE_URL}/api/attribution/voyagr/summary`,
+      { timeout: REQUEST_TIMEOUT }
+    );
+    expect(r.status()).toBe(401);
+  });
+
+  test("auth gate — USER role returns 403", async ({ request }) => {
+    // wellness has user@wellness.demo / password123 — non-admin/manager.
+    const login = await request.post(`${BASE_URL}/api/auth/login`, {
+      data: { email: "user@wellness.demo", password: "password123" },
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (!login.ok()) {
+      test.skip(true, "user@wellness.demo not seeded on this BASE_URL");
+    }
+    const { token } = await login.json();
+    const r = await request.get(
+      `${BASE_URL}/api/attribution/voyagr/summary`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: REQUEST_TIMEOUT,
+      }
+    );
+    expect(r.status()).toBe(403);
+  });
+});
+
 test.describe("Voyagr lead-capture — honeypot guard", () => {
   test("200 silent fake-OK when _hp honeypot is non-empty (no Contact created)", async ({ request }) => {
     const key = await requireKey(request);

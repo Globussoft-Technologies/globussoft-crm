@@ -246,6 +246,25 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **Visa Sure now SHIPPED end-to-end frontend↔backend** for the read-only operator surface (Dashboard / Applications list / AdvisorDashboard detail / Reports analytics)
 - **Dark-mode cluster: 6 of 17 closed; 11 remaining**
 
+**Tick #12 (cron) — 3/3 SHIPPED, Visa CREATE lands + #878 closed + PRD flipped:**
+
+| SHA | Type | What |
+|---|---|---|
+| `6c084cb` | Visa write surface | **POST /api/travel/visa/applications** — extends ce5f5db GETs with CREATE flow; 8 new spec cases (20 total); sub-brand validated via Contact. **4 schema drifts caught**: column `destinationCountry` (not `destination`), no `notes` column, no `priorityLevel`, enum `tourist/business/student/work/umrah/hajj` (not `family`/`other`) |
+| `58986ef` | Dark-mode drain | **#878 AuditLog.jsx** — 9 inline-style objects → 13 CSS classes (ActionBadge variants / integrity chips / backfill banner / table header); 14 dark-mode token pairs (WCAG 5.1+). **Full close.** Cluster: **7 of 17 closed; 10 remaining** |
+| `6c28486` | PRD audit flip | PRD_DARK_MODE_CLUSTER.md §10 — #872 ✅ + #873 🟡 PARTIAL with evidence; cluster-progress note refreshed |
+
+**Schema-vs-PRD drifts pattern strengthening:** 6th tick catching dispatch-prose-vs-actual-schema mismatches. Visa CREATE agent caught 4 in one dispatch. **Pattern is structural** — schema is authoritative; future agents should keep the schema-first grep that this agent did.
+
+**Cumulative session totals (12 ticks):**
+- **37 commits** (13 features/scaffolds + 13 PRDs + 1 backlog + 1 matrix refresh + 3 backend endpoints + 4 dark-mode refactors + 1 rule extension + 2 visa frontend wires + 1 PRD audit flip)
+- **5 GitHub issues closed** (#867 #871 #872 #873-partial #878)
+- 5 phantoms + **9 schema-or-spec gaps** caught (4 new this tick)
+- Zero rebase conflicts, zero over-commits across all 37 commits
+- ~6,200 lines of PRD documentation across 13 PRDs
+- **Visa Sure now SHIPPED both read AND write surfaces** (GET list + GET :id + POST CREATE)
+- **Dark-mode cluster: 7 of 17 closed; 10 remaining**
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

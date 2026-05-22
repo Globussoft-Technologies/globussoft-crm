@@ -9,9 +9,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **66** (~85%) — up from 65 (+1: DiagnosticDetail.jsx UI `2440b4a`)
+- **SHIPPED:** **68** (~87%) — up from 66 (+2: religious-guidance content delivery + library both shipped via `1e62ee9`)
 - **PARTIAL:** **5** (~6%) — unchanged
-- **GAP-AUTONOMOUS:** **2** (~3%) — down from 3 since DiagnosticDetail.jsx shipped (religious-guidance cron + Itinerary draft consumer remain as Priority A #2/#3)
+- **GAP-AUTONOMOUS:** **0** (~0%) — down from 2 (religious-guidance delivery + library both closed by `1e62ee9`; only Itinerary draft LLM consumer remains in Recommended next 5)
 - **GAP-STUB-ABLE:** **5** (~6%) — was 6; one consumer (LLM router for talking-points + form-vs-call) cleared
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
@@ -24,7 +24,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 
 1. ~~**`DiagnosticDetail.jsx` UI that renders BOTH talking-points brief AND the form-vs-call comparison panel** (PRD §4.1 + §4.2 + §7). New page under `frontend/src/pages/travel/DiagnosticDetail.jsx`; fetches `GET /api/travel/diagnostics/:id` for the bank + answers + persisted `talkingPointsJson`; renders the brief block + "Regenerate" button calling `POST /api/travel/diagnostics/:id/talking-points/regen`; renders a "Compare with call" section that POSTs to `/api/travel/diagnostics/:id/form-vs-call/compare` with a textarea for `callTranscript` and shows the `{ classification, scorePercent, perFieldDiff }` response. Mount at `/travel/diagnostics/:id` in `App.jsx`. ~½ day, pure frontend, zero cred deps. **Why next:** both backend endpoints ship (`cf876af` + `4a7c623`); advisor has no surface to consume either; closes the diagnostic interpretation loop for W2 exit gate.~~ — ✅ **commit `2440b4a`** (3-section page + STUB pill + role-gated regenerate button + color-coded form-vs-call badge + perFieldDiff ✓/✗ table; 10 vitest cases; Diagnostics.jsx list rows link through)
 
-2. **Religious-guidance content delivery cron + admin-editable content library** (PRD §4.8 + §4.10). Mirror `cron/contactGreetingsEngine.js` shape: schedule daily, scan upcoming Umrah-bound `Itinerary` rows (RFU sub-brand) within T-14d window, fan out content packets (Hajj/Umrah ritual guidance, dua copy, dress-code reminder) per upcoming pilgrim. New model `ReligiousGuidancePacket { id, subBrand, dayOffset, title, contentHtml, channel }` + 3 seed packets. WA dispatch stays Q9-stub; SMS + email work today. ~½ day. **Why next:** §4.8 row reads "GAP-AUTONOMOUS" since 2026-05-20; mirrors a shipped cron pattern; library is Yasin packet (Q1 cred-blocked) but the engine + admin CRUD ship now.
+2. ~~**Religious-guidance content delivery cron + admin-editable content library** (PRD §4.8 + §4.10). Mirror `cron/contactGreetingsEngine.js` shape: schedule daily, scan upcoming Umrah-bound `Itinerary` rows (RFU sub-brand) within T-14d window, fan out content packets (Hajj/Umrah ritual guidance, dua copy, dress-code reminder) per upcoming pilgrim. New model `ReligiousGuidancePacket { id, subBrand, dayOffset, title, contentHtml, channel }` + 3 seed packets. WA dispatch stays Q9-stub; SMS + email work today. ~½ day. **Why next:** §4.8 row reads "GAP-AUTONOMOUS" since 2026-05-20; mirrors a shipped cron pattern; library is Yasin packet (Q1 cred-blocked) but the engine + admin CRUD ship now.~~ — ✅ **commit `1e62ee9`** (full bundle: model + cron + 5-endpoint admin CRUD + 3 placeholder packets + 17 vitest + 16 gate-spec cases)
 
 3. **Itinerary draft via LLM router (consumer wiring)** (PRD §4.3 + §9.1). Add `POST /api/travel/itineraries/:id/draft/regen` (ADMIN/MANAGER) that pulls the diagnostic + cost-master rows + season + markup rules for the sub-brand and routes through `llmRouter.routeRequest({ task: "bulk-text", payload })` returning a draft summary block to render in ItineraryBuilder. Persist as `Itinerary.draftSummary` (new nullable column) so the next GET serves the cached draft. Stub-mode returns synthetic copy; Q11 keys swap to Gemini Flash. ~3-4 hrs. **Why next:** Itinerary draft is the SECOND LLM-router consumer the PRD names (after talking-points which ships and form-vs-call which ships); proves the bulk-text task taxonomy cited in `LlmCallLog.task`; pairs with the §9.1 default-model map.
 
@@ -136,7 +136,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Calendar/Meet booking | SHIPPED (reuse) | `routes/calendar_google.js` | |
 | Drive folder auto-creation for confirmed TMC trips | PARTIAL (stub-mode) | `services/googleDriveClient.js` (commit `192de86`) + wire-in `routes/travel_trips.js:140-166, 271-282` | Q1 Workspace creds unlock real |
 | Umrah journey reminders | PARTIAL | `cron/travelJourneyReminders.js` | WA dispatch stub (Q9) |
-| Religious-guidance content delivery | GAP-AUTONOMOUS | No code surface | Sequence + scheduledEmail reuse pattern; library is Yasin packet (Q1) |
+| Religious-guidance content delivery | SHIPPED | `cron/religiousGuidanceEngine.js` (commit `1e62ee9`) — daily 09:13 IST, scans RFU itineraries T-14d window, dayOffset-matched fan-out via Notification rows + Wati-stub; sub-brand-scoped; year-tagged dedup mirrors `contactGreetingsEngine` | Real WA/email/SMS dispatch pending Q9 cred drop; placeholder content pending Yasin Q1 (admin PATCH replaces text without schema change) |
 | Trip reminders + post-trip feedback (TMC) | PARTIAL | `cron/tripPostTripFeedback.js` | WA dispatch stub (Q9) |
 | Birthday / anniversary greetings | SHIPPED | `cron/contactGreetingsEngine.js` | Phase 2 per PRD; shipped early |
 
@@ -163,7 +163,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | LLM-switchable layer for quotation engine | GAP-AUTONOMOUS | `lib/llmRouter.js` shipped (`583c06b`); 2 consumers live (talking-points + form-vs-call); itinerary draft = `bulk-text` task — consumer wiring pending |
 | Aadhaar OCR via DigiLocker | PARTIAL (stub) | §4.7 |
 | Passport OCR | GAP-CRED-BLOCKED | §4.7 |
-| Religious-guidance content library | GAP-AUTONOMOUS | §4.8 |
+| Religious-guidance content library | SHIPPED | `ReligiousGuidancePacket` model + `routes/travel_religious_packets.js` 5-endpoint admin CRUD + 3 RFU placeholder packets seeded (commit `1e62ee9`). Yasin Q1 final copy lands via admin PATCH |
 | Umrah journey reminders | PARTIAL | §4.8 |
 | Travel Stall Family Travel Quiz | SHIPPED | `pages/public/TravelStallQuiz.jsx` (commit `1260caa`) + `/diagnostics/public/*` |
 | Travel Stall 50% advance booking | SHIPPED | `routes/travel_itineraries.js:773,833` public share-token + advance-payment (commit `8abf6f3`); per-tenant ratio (commit `ee35d00`) |

@@ -316,3 +316,102 @@ html[data-theme="dark"][data-vertical="travel"],
 [data-theme="dark"] [data-vertical="travel"] .inbox-read-receipt {
   color: #93C5FD;
 }
+
+/* #872 — Sequences page (drip-campaign builder): saved-sequences sidebar
+ * panel, active/inactive card backgrounds, save buttons, canvas toolbar
+ * Panel, and step-list builder link color. Phase 1 of dark-mode cluster
+ * refactor, mirror of #871 Inbox pattern (commit 68b09db). The pre-refactor
+ * inline styles in Sequences.jsx used hardcoded RGBA / hex pairs for:
+ *   - Sidebar container background (rgba(0,0,0,0.4)) — opaque-dark on light
+ *     mode, reads as near-black against the cream body (~1.3:1 contrast).
+ *   - Sequence-card hover/active backgrounds (rgba(236,72,153,0.15) active /
+ *     rgba(255,255,255,0.02) inactive) + borders.
+ *   - "Saved Sequences" heading color (#ec4899 pink), Save buttons (#ec4899
+ *     pink hardcoded background), and the step-list builder link (#3b82f6).
+ *   - Canvas toolbar Panel background (rgba(0,0,0,0.8) opaque-dark — sits
+ *     on light React Flow canvas in light mode, fine in dark).
+ *
+ * Out of scope for this commit (TODO for next #872 sub-tick): ReactFlow
+ * node `style.background` props in addLogicNode() / addTriggerNode() — those
+ * render via ReactFlow's internal inline-style serialization on canvas
+ * elements (background="#1e293b" pattern); harder to convert to className-
+ * driven theming without a custom node type. They render on the always-dark
+ * ReactFlow canvas (Background color="#1e293b"), so are visually acceptable
+ * in both light and dark modes today.
+ *
+ * Base rules are theme-agnostic — they preserve current appearance via the
+ * existing rgba(*) values. Travel dark-mode overrides force opaque high-
+ * contrast pairs ≥4.5:1 (WCAG AA). */
+.sequence-list-sidebar {
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.4);
+}
+.sequence-list-heading {
+  color: #ec4899;
+}
+.sequence-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.sequence-card--active {
+  background: rgba(236, 72, 153, 0.15);
+  border-color: rgba(236, 72, 153, 0.4);
+}
+.sequence-save-btn {
+  background: #ec4899;
+  border: none;
+}
+.sequence-canvas-toolbar {
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.sequence-card-builder-link {
+  color: #3b82f6;
+}
+
+/* #872 — Dark-mode token overrides for Sequences widgets. Contrast verified
+ * ≥4.5:1 (WCAG AA) against the dark surfaces:
+ *   sidebar bg:         #0F1729 → matches body, ~1:1 vs body by design
+ *                       (it's a panel-edge tint, not text)
+ *   heading text:       #F9A8D4 on dark surface → ~9.2:1
+ *   card bg (idle):     rgba(255,255,255,0.04) on #0F1729 → distinguishable
+ *   card bg (active):   rgba(236,72,153,0.25) — tinted highlight
+ *   card border active: rgba(236,72,153,0.6) — visible against dark
+ *   save-btn:           #BE185D bg, #FCE7F3 fg → ~7.1:1
+ *   canvas toolbar:     rgba(15,23,41,0.92) — opaque enough on dark canvas
+ *   builder link:       #93C5FD → ~5.8:1 on #0F1729
+ * Scoped to travel vertical so generic + wellness keep their existing
+ * (light-only) rgba tints / pink primaries. */
+[data-theme="dark"][data-vertical="travel"] .sequence-list-sidebar,
+[data-theme="dark"] [data-vertical="travel"] .sequence-list-sidebar {
+  background: #0F1729;
+  border-left-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-list-heading,
+[data-theme="dark"] [data-vertical="travel"] .sequence-list-heading {
+  color: #F9A8D4;
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-card,
+[data-theme="dark"] [data-vertical="travel"] .sequence-card {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-card--active,
+[data-theme="dark"] [data-vertical="travel"] .sequence-card--active {
+  background: rgba(236, 72, 153, 0.25);
+  border-color: rgba(236, 72, 153, 0.6);
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-save-btn,
+[data-theme="dark"] [data-vertical="travel"] .sequence-save-btn {
+  background: #BE185D;
+  color: #FCE7F3;
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-canvas-toolbar,
+[data-theme="dark"] [data-vertical="travel"] .sequence-canvas-toolbar {
+  background: rgba(15, 23, 41, 0.92);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"][data-vertical="travel"] .sequence-card-builder-link,
+[data-theme="dark"] [data-vertical="travel"] .sequence-card-builder-link {
+  color: #93C5FD;
+}

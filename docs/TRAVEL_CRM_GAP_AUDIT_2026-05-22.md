@@ -224,7 +224,7 @@
 
 | Extension | State | Notes |
 |---|---|---|
-| `Tenant.subBrandConfigJson` (per-brand WA / WABA / legal entity / GSTIN / Drive root) | SHIPPED schema (`schema.prisma:170`), **STILL 0 CONSUMERS** — verified via `Grep` over `backend/` at refresh; only hit is the schema file itself | Cron WA dispatch + microsite OTP can't pick correct WABA without this — partial unblock for Q9 cutover. Consumer wiring is GAP-AUTONOMOUS — **pick #1 below** |
+| `Tenant.subBrandConfigJson` (per-brand WA / WABA / legal entity / GSTIN / Drive root) | SHIPPED | commit `621aab7` — schema column + `backend/lib/subBrandConfig.js` helper + 7 cron + 3 endpoint consumers all resolve per-subBrand config and log resolved wabaId. Q9 cred-drop is now a 1-line stub→real swap per consumer (was: 1-line swap + per-callsite WABA-routing decision) |
 | `Contact.subBrand` | SHIPPED | `schema.prisma:439` |
 | `Deal.subBrand` + `Deal.diagnosticId` | SHIPPED | `schema.prisma:589-590` |
 | `Booking.tripId` + `Booking.itineraryId` | NOT NEEDED YET | Optional per PRD |
@@ -481,7 +481,7 @@ Schema-only — `VisaApplication` + `VisaDocumentChecklistItem` models shipped (
 
 **Queue state: NEAR-EXHAUSTED.** The §4 PRD-requirement queue is empty (every row is SHIPPED, PARTIAL-pending-creds-or-product-call, or GAP-labelled-big-scope). The §7 page-row + Phase 1.5 queue has 1 high-confidence single-commit pick remaining. After that, the cron has no autonomous-doable work and should `CronDelete`.
 
-1. **`Tenant.subBrandConfigJson` consumer wiring (defensive — no-op until Q9 lands)** (§5.2 row, autonomous-doable). The column ships at `schema.prisma:170` but `Grep` over `backend/` confirms zero readers (only hit is the schema file itself). Add `backend/lib/subBrandConfig.js` helper that reads `tenant.subBrandConfigJson` and returns `{ wabaId, phoneNumberId, legalEntityCode, gstin, driveRootFolderId }` per sub-brand. Update the 7 WA-stub crons + 3 endpoints to call this helper at the would-be WA-send site so `wabaId` is correctly selected per sub-brand BEFORE the actual send happens (which stays stubbed today). Add a vitest unit test for the helper covering parse + per-subBrand resolution + missing-config fallback. ~3-4 hrs. **Why next:** entirely defensive — has no visible effect until Q9 creds land — BUT removes one of the highest-risk Q9 cut-over surprises (incorrect-WABA dispatch routing TMC enquiries to RFU's WABA). Once shipped, the Q9 cred-drop changes from "8 crons × WABA-selection-decision + WA-send-decision" to "8 crons × WA-send-decision only". Parallel-safe with whoever lands Q9 creds.
+1. ~~**`Tenant.subBrandConfigJson` consumer wiring (defensive — no-op until Q9 lands)** (§5.2 row, autonomous-doable). Helper + 7 cron + 3 endpoint consumer wiring.~~ — ✅ **commit `621aab7`** (new `backend/lib/subBrandConfig.js` with parseConfig + resolveForSubBrand + whitelist guard + empty-string strip; 26 vitest cases pinning the contract; 7 cron engines + 3 route endpoints all resolve per-sub-brand config and include wabaId in the existing stub log lines; STUB discipline held — no real WA send code added; 19 files touched, full backend suite stays green at 2708/2710 pass)
 
 **Pick #5 from prior audit (re-evaluation):** This was the same pick as #1 above — the prior audit's pick #5. Re-promoted to #1 because the queue collapsed around it. **Verdict: KEPT** (not dropped). Reasoning: it's the only remaining cron-doable pick with a clear contract (defensive, single-commit, parallel-safe, doesn't require Q9 creds to ship). The "zero immediate user value" caveat from the prior audit stands — this is purely Q9 cut-over insurance. If user feedback says "don't bother, we'll fix WABA selection inline when Q9 lands," drop it.
 
@@ -522,7 +522,7 @@ If the user wants the cron to keep dispatching, the right move is the **TripDocu
 
 **§7 page-row + Phase 1.5 queue: NEAR-EXHAUSTED — 1 viable pick listed above.** After this refresh:
 
-- **Genuinely cron-doable today:** 1 pick (`subBrandConfigJson` consumer wiring). After it ships, the cron has no parallel-safe single-commit work left.
+- **Genuinely cron-doable today:** ~~1 pick (`subBrandConfigJson` consumer wiring)~~. ✅ **SHIPPED at `621aab7`** — **queue is now empty**. Cron has no parallel-safe single-commit work left per the prior verdict; recommend user `CronDelete` per §10's verbatim handoff below.
 - **What the cron should NOT pick** (and the audit labels as `GAP-AUTONOMOUS (big-scope)` to make this explicit):
   - Chrome flight-quote plugin (~10-15 engineer-days; requires browser-extension infra not in repo)
   - Airline web-checkin automation (paired with plugin work)
@@ -544,7 +544,7 @@ If the user wants the cron to keep dispatching, the right move is the **TripDocu
 - `formVsCallJson` ✅ confirmed present in schema + route + 2 gate-spec cases
 - `DuplicateContactModal.jsx` ✅ confirmed present (component + Contacts.jsx import + test file)
 - `rooming/export.xlsx` ✅ confirmed present in `travel_trip_billing.js:233` + TripDetail CTA + 4 gate-spec cases
-- `subBrandConfigJson` consumer wiring ✅ confirmed genuinely absent (only `schema.prisma` hit; no `backend/lib/subBrandConfig.js` file; zero references in routes/cron/services)
+- ~~`subBrandConfigJson` consumer wiring ✅ confirmed genuinely absent~~ — ✅ **SHIPPED at `621aab7`** (helper + 7 cron + 3 endpoint consumers all live; 26 vitest cases green; full backend suite 2708/2710 pass)
 - All §7 "NOT SHIPPED" page rows (`FlightQuoteAgent`, `TmcRooming`, `TmcPaymentPlan`, `TmcDocumentChecklist`, `TmcMicrositePreview`, `RfuJourneyReminders`, `VisaApplications*`, `TripMicrosite.jsx` SSR) ✅ confirmed absent via `Glob`
 - `flight-plugin/` directory ✅ confirmed absent via `Glob`
 - `travel_visa.js` / `travel_callified.js` / `travel_quotation_flight.js` routes ✅ confirmed absent via `Glob`

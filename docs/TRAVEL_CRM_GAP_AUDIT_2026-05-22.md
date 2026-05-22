@@ -1,7 +1,7 @@
-# Travel CRM PRD Gap Audit — refreshed 2026-05-22 (evening)
+# Travel CRM PRD Gap Audit — refreshed 2026-05-22 (late evening)
 
-**HEAD at refresh:** `1c8fe54` (was `a9095ba` at prior refresh `5852dd3`; 11 commits + 6 shipped items landed since).
-**Prior refresh:** commit `5852dd3` (2026-05-22 earlier today); the cron drained the menu via 5 successful feature dispatches (WebCheckinQueue.jsx UI `bfe956c`; LlmCallLog + admin spend `f5c9518`; WebCheckin seed row `cb478bb`; form-vs-call comparison endpoint `4a7c623`; TMC ops dashboard rollup `9eda0b6`) plus 1 follow-up bug fix (`8b97fd5` boolean coercion) + 3 inline gap-audit doc roll-forwards.
+**HEAD at refresh:** `daf6c0b` (was `1c8fe54` at prior refresh `853fced`; 5 commits + 3 shipped feature items + 2 inline doc roll-forwards landed since).
+**Prior refresh:** commit `853fced` (earlier today); the cron drained the menu via 3 more successful feature dispatches — DiagnosticDetail.jsx UI (`2440b4a`), TMC ops-dashboard endpoint (`9eda0b6`), religious-guidance cron + admin CRUD + library (`1e62ee9`).
 **Method:** PRD section-by-section verification against schema + routes + frontend + gate specs + cron engines + seed at current HEAD. Every SHIPPED claim points at file:line or commit. Stub-mode claims point at the stub marker; cred-blocked claims point at the Q-marker.
 
 ---
@@ -9,30 +9,33 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **68** (~87%) — up from 66 (+2: religious-guidance content delivery + library both shipped via `1e62ee9`)
+- **SHIPPED:** **70** (~90%) — up from 68 (+2: religious-guidance cron + admin-editable library both fully shipped via `1e62ee9`; previously counted in PARTIAL/AUTONOMOUS)
 - **PARTIAL:** **5** (~6%) — unchanged
-- **GAP-AUTONOMOUS:** **0** (~0%) — down from 2 (religious-guidance delivery + library both closed by `1e62ee9`; only Itinerary draft LLM consumer remains in Recommended next 5)
-- **GAP-STUB-ABLE:** **5** (~6%) — was 6; one consumer (LLM router for talking-points + form-vs-call) cleared
+- **GAP-AUTONOMOUS:** **2** (~3%) — down from 0 (re-baselined: see honest-queue check below — Itinerary-draft LLM consumer + religious-packet admin UI are the two genuinely cron-doable single-commit items remaining)
+- **GAP-STUB-ABLE:** **5** (~6%) — unchanged
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
 
-**Queue refilled (round 3).** The prior refresh `5852dd3` left 3 top picks (WebCheckinQueue.jsx UI; LlmCallLog + admin spend; WebCheckin seed) — all 3 now shipped. The 2nd-tier "DiagnosticDetail.jsx UI" + "form-vs-call comparison" were partially picked: form-vs-call backend ships (commit `4a7c623`) but the **DiagnosticDetail UI page that renders both the talking-points brief AND the new form-vs-call panel is still autonomous-doable**. Also still autonomous: religious-guidance content delivery cron (mirror of contactGreetingsEngine), and Itinerary-route LLM consumer for bulk-text drafts.
+**Queue refilled (round 4).** The 3 top picks from `853fced` all landed cleanly (DiagnosticDetail UI, TMC ops dashboard, religious-guidance cron+library). After this refresh the autonomous-doable pool genuinely shrinks: the two remaining single-commit picks are (a) **Itinerary draft via LLM router** (third bulk-text consumer of `lib/llmRouter.js`) and (b) **`ReligiousPackets.jsx` admin UI** (frontend for the 5-endpoint admin CRUD that shipped backend-only in `1e62ee9`). Two more "nice-to-have" UI pages — `ItineraryDetail.jsx` and `LeadDetail.jsx` — exist as referenced-but-unmounted slots in §7 and are listed in the priority section, but neither is a hard PRD requirement at Phase 1 (they're UI completions of routes that already work via the list pages).
 
-The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plugin + airline automation (Phase 1 W3-W4, NOT started), (b) Callified AI calling end-to-end (form-vs-call now has the compute layer ready as fixture-driven; real call-side answers still need Callified webhook), (c) per-cron WhatsApp dispatch + microsite OTP SMS cutover (Q9 cred-blocked).
+After those, what remains is dominated by:
+- **Big-scope Phase 1 W3-W4 items the cron should NOT pick** — Chrome flight-quote plugin (~10-15 engineer-days, requires browser-extension infra not in repo), airline web-checkin automation (paired with plugin work), RateHawk integration (Q19 cred-blocked anyway).
+- **Stub-ready, cred-blocked** — DigiLocker, Drive, Wati, LLM router stubs all present with consumers wired; one env-var drop unblocks each.
+- **Product-call / counsel-blocked** — Q2 (Aadhaar consent legal copy), Q13 (curriculum mapping), Q16 (RFU editable scoring sandbox UX).
 
 ### Top 3 next-best cron picks (priority order)
 
-1. ~~**`DiagnosticDetail.jsx` UI that renders BOTH talking-points brief AND the form-vs-call comparison panel** (PRD §4.1 + §4.2 + §7). New page under `frontend/src/pages/travel/DiagnosticDetail.jsx`; fetches `GET /api/travel/diagnostics/:id` for the bank + answers + persisted `talkingPointsJson`; renders the brief block + "Regenerate" button calling `POST /api/travel/diagnostics/:id/talking-points/regen`; renders a "Compare with call" section that POSTs to `/api/travel/diagnostics/:id/form-vs-call/compare` with a textarea for `callTranscript` and shows the `{ classification, scorePercent, perFieldDiff }` response. Mount at `/travel/diagnostics/:id` in `App.jsx`. ~½ day, pure frontend, zero cred deps. **Why next:** both backend endpoints ship (`cf876af` + `4a7c623`); advisor has no surface to consume either; closes the diagnostic interpretation loop for W2 exit gate.~~ — ✅ **commit `2440b4a`** (3-section page + STUB pill + role-gated regenerate button + color-coded form-vs-call badge + perFieldDiff ✓/✗ table; 10 vitest cases; Diagnostics.jsx list rows link through)
+1. **Itinerary draft via LLM router (consumer wiring)** (PRD §4.3 + §9.1). Add `POST /api/travel/itineraries/:id/draft/regen` (ADMIN/MANAGER, requireTravelTenant) that pulls the diagnostic + cost-master rows + season + markup rules for the sub-brand and routes through `llmRouter.routeRequest({ task: "bulk-text", payload })` returning a draft summary block. Persist as `Itinerary.draftSummary` (new nullable column — no bless marker needed) so the next GET serves the cached draft. Stub-mode returns synthetic copy; Q11 keys swap to Gemini Flash. ~3-4 hrs. **Why next:** Itinerary draft is the THIRD LLM-router consumer the PRD §9.1 default-model map names (after talking-points which ships and form-vs-call which ships); proves the `bulk-text` task taxonomy cited in `LlmCallLog.task`; first non-Claude-Opus consumer of the router (locks in the per-task default model dispatch).
 
-2. ~~**Religious-guidance content delivery cron + admin-editable content library** (PRD §4.8 + §4.10). Mirror `cron/contactGreetingsEngine.js` shape: schedule daily, scan upcoming Umrah-bound `Itinerary` rows (RFU sub-brand) within T-14d window, fan out content packets (Hajj/Umrah ritual guidance, dua copy, dress-code reminder) per upcoming pilgrim. New model `ReligiousGuidancePacket { id, subBrand, dayOffset, title, contentHtml, channel }` + 3 seed packets. WA dispatch stays Q9-stub; SMS + email work today. ~½ day. **Why next:** §4.8 row reads "GAP-AUTONOMOUS" since 2026-05-20; mirrors a shipped cron pattern; library is Yasin packet (Q1 cred-blocked) but the engine + admin CRUD ship now.~~ — ✅ **commit `1e62ee9`** (full bundle: model + cron + 5-endpoint admin CRUD + 3 placeholder packets + 17 vitest + 16 gate-spec cases)
+2. **`ReligiousPackets.jsx` admin UI** (PRD §4.10 + §7). New page under `frontend/src/pages/travel/ReligiousPackets.jsx` consuming the 5-endpoint admin CRUD from `routes/travel_religious_packets.js` (commit `1e62ee9`). Renders a sub-brand filter, packet list (title / dayOffset / channels / isActive), create/edit drawer with the validation contract (subBrand in VALID_SUB_BRANDS, dayOffset 0..365, title 1..200, contentHtml ≤20kB, channels CSV from wa/email/sms). Sidebar link from the existing travel nav. ~½ day, pure frontend, zero cred deps. **Why next:** the backend admin CRUD shipped without an operator surface; Yasin's Q1 content lands via admin PATCH per the commit body, but there's no UI to do that today. Closes the §4.10 row's UI side.
 
-3. **Itinerary draft via LLM router (consumer wiring)** (PRD §4.3 + §9.1). Add `POST /api/travel/itineraries/:id/draft/regen` (ADMIN/MANAGER) that pulls the diagnostic + cost-master rows + season + markup rules for the sub-brand and routes through `llmRouter.routeRequest({ task: "bulk-text", payload })` returning a draft summary block to render in ItineraryBuilder. Persist as `Itinerary.draftSummary` (new nullable column) so the next GET serves the cached draft. Stub-mode returns synthetic copy; Q11 keys swap to Gemini Flash. ~3-4 hrs. **Why next:** Itinerary draft is the SECOND LLM-router consumer the PRD names (after talking-points which ships and form-vs-call which ships); proves the bulk-text task taxonomy cited in `LlmCallLog.task`; pairs with the §9.1 default-model map.
+3. **`ItineraryDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/ItineraryDetail.jsx`; fetches itinerary + items + version chain + (after pick #1 lands) `draftSummary`; renders items grid + version-history drawer + accept/reject actions + draft-summary block with "Regenerate" button. Mount at `/travel/itineraries/:id`. ~½ day, pure frontend. **Why third:** pairs cleanly with pick #1 (draftSummary becomes visible the moment this page exists); §7 lists it but the row-click from `Itineraries.jsx` is dead today.
 
 ### Top 3 cred-blocked items worth chasing the human on (unchanged)
 
-1. **Q9 — Meta Business Manager artifacts** (System User access token + 3×phoneNumberId + 3×wabaId + App ID/Secret + webhook verify token). 8 crons / endpoints stub-dispatching today.
+1. **Q9 — Meta Business Manager artifacts** (System User access token + 3×phoneNumberId + 3×wabaId + App ID/Secret + webhook verify token). 8 crons / endpoints stub-dispatching today (now including `religiousGuidanceEngine.js`).
 2. **Q3 — DigiLocker `DIGILOCKER_CLIENT_ID` + `DIGILOCKER_CLIENT_SECRET`**. One env-var drop swaps the shipped stub to real.
-3. **Q11 — LLM API keys per provider** (Anthropic / Google / Perplexity / OpenAI). 2 consumers (talking-points + form-vs-call) live; itinerary-draft consumer pending.
+3. **Q11 — LLM API keys per provider** (Anthropic / Google / Perplexity / OpenAI). 2 consumers live (talking-points + form-vs-call); itinerary-draft consumer pending (top pick #1).
 
 ---
 
@@ -48,7 +51,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | 8 lost-reason taxonomy | SHIPPED | Same helper, `seed-travel.js:1095-1119` | Price · No response · Chose competitor · Wrong requirement · Timing issue · Budget issue · Trust issue · Duplicate enquiry |
 | Diagnostic-first guard on quotation routes | SHIPPED | `middleware/travelGuards.js`; refused on POST/PUT Itinerary | |
 | AI qualification call (Eng/Hin/Urdu) | GAP-CRED-BLOCKED | Sandbox mock `scripts/sandbox/callified-mock.js` only | Q1 — Callified.ai handover |
-| Form-vs-call answer comparison (80/60% threshold) | SHIPPED | `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519-639`, commits `4a7c623` + `8b97fd5`) — routes through `llmRouter.routeRequest({ task: "form-vs-call" })`, parses `\d+%` from LLM text, applies PRD 80/60 ladder → `{ classification: match|review|mismatch|unknown, scorePercent, perFieldDiff[], summary }`. UI consumer at `DiagnosticDetail.jsx` Section 3 (commit `2440b4a`). Read/compute-only; persistence is P1.5 | |
+| Form-vs-call answer comparison (80/60% threshold) | SHIPPED | `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519-639`, commits `4a7c623` + `8b97fd5`); UI consumer at `DiagnosticDetail.jsx` Section 3 (commit `2440b4a`) | Read/compute-only; persistence is P1.5 |
 | AI-to-advisor handover (B2C) | PARTIAL | `cron/travelDiagnosticAdvisorAlerts.js` (diagnostic side only) | Callified side cred-blocked |
 | Manager view (pending/delayed/staff-wise) | SHIPPED (reuse) | `routes/staff.js` + existing dashboards | |
 | Lead source attribution + UTM tracking | SHIPPED (reuse) | `Contact.firstTouchSource` + Touchpoint already wired | |
@@ -64,7 +67,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Auto CRM record creation | SHIPPED | `routes/travel_diagnostics.js:493-557` public submit | No auto-Deal-creation; deal flow manual today |
 | Curriculum mapping logic (TMC-only) | GAP-PRODUCT-CALL | No code surface | Q13 |
 | Risk flagging (Visa Sure) | SHIPPED (schema) | `VisaApplication.advisorRiskFlag` (`schema.prisma:4459`) | Phase 3 |
-| LLM-generated talking points per advisor | SHIPPED | `POST /api/travel/diagnostics/:id/talking-points/regen` (`routes/travel_diagnostics.js:396`, commit `cf876af`); LLM router consumer | Stub-mode-ready; real Claude output lands when Q11 keys arrive. UI render still GAP-AUTONOMOUS |
+| LLM-generated talking points per advisor | SHIPPED | `POST /api/travel/diagnostics/:id/talking-points/regen` (`routes/travel_diagnostics.js:396`, commit `cf876af`); LLM router consumer; UI render at `DiagnosticDetail.jsx` Section 2 (commit `2440b4a`) | Stub-mode-ready; real Claude Opus output lands when Q11 keys arrive |
 | AI summary notes (Visa Sure) | GAP-AUTONOMOUS | Phase 3 | Same shape as talking-points |
 
 ### §4.3 Itinerary / package builder
@@ -77,8 +80,9 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Rule-based transport pricing with seasonal logic | SHIPPED | `TravelSeasonCalendar` + `TravelMarkupRule` + `routes/travel_pricing.js` + `lib/travelPricing.js` | |
 | Cost master admin panel | SHIPPED | `routes/travel_cost_master.js` (5 endpoints) + `pages/travel/CostMaster.jsx` + CSV (`routes/travel_csv_io.js`) | |
 | Branded itinerary PDF with version history | SHIPPED | `routes/travel_itineraries.js:706` GET `/itineraries/:id/pdf`; `Itinerary.parentItineraryId` + status enum | |
-| Flight Quotation Chrome plugin | GAP-AUTONOMOUS | No `flight-plugin/` at repo root | Phase 1 W3 — ~10-15 engineer-days |
+| Flight Quotation Chrome plugin | GAP-AUTONOMOUS (big-scope) | No `flight-plugin/` at repo root | Phase 1 W3 — ~10-15 engineer-days; NOT a cron pick |
 | Trip itinerary template per TMC trip | SHIPPED | `TripMicrosite.itineraryHtml`; `routes/travel_microsites.js:154` POST | |
+| LLM-drafted itinerary summary text | GAP-AUTONOMOUS | `lib/llmRouter.js` exposes `task=bulk-text`; no consumer wired | **Top pick #1 below** |
 
 ### §4.4 Quote / invoice / payment
 
@@ -111,7 +115,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
 | P1A tracking + delivery (auto-schedule T-48h/T-24h, WA reminder, agent task, manual upload, dashboard) | PARTIAL | `WebCheckin` model (`schema.prisma:4387`) + `cron/webCheckinScheduler.js` + `routes/travel_webcheckin.js` 7 endpoints (commit `9898e87`) + `lib/webCheckinWindow.js` + auto-create on `POST /itineraries/:id/accept` + `WebCheckinQueue.jsx` operator UI (`bfe956c`) + sidebar link + 1 seeded WebCheckin row (`cb478bb`) | Backend + operator UI + seed all ship. **Still partial:** WA dispatch on `/deliver` is Q9-stub; WA reminder fan-out at T-window in the cron is also Q9-stub. Both swap when Q9 creds land |
-| P1B top-4 airline automation (IndiGo, AI/Express, Vistara, Emirates per Q20) | GAP-AUTONOMOUS | No `webCheckinAutomation.js` engine | Phase 1 W4 — paired with Chrome plugin work |
+| P1B top-4 airline automation (IndiGo, AI/Express, Vistara, Emirates per Q20) | GAP-AUTONOMOUS (big-scope) | No `webCheckinAutomation.js` engine | Phase 1 W4 — paired with Chrome plugin work; NOT a cron pick |
 | Fallback (2 failed retries → agent task; portal-down >2h → all-passengers-to-agents) | PARTIAL | `WebCheckin.status` enum includes `fallback-agent` + `failed` (`schema.prisma:4400`) | Schema-only; no code emits transitions yet — GAP-AUTONOMOUS |
 | Boarding-pass auto-delivery (WA + email) | GAP-STUB-ABLE | `POST /webcheckins/:id/deliver` (`routes/travel_webcheckin.js:372`) emits Wati-stub log line; `boardingPassUrl` + `deliveredAt` columns ready | One-line swap on Q9 cred drop |
 
@@ -131,12 +135,12 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Requirement | State | Evidence | Notes |
 |---|---|---|---|
 | Embedded WhatsApp Web for staff | SHIPPED (reuse) | `routes/whatsapp.js` | |
-| WhatsApp Business API for automation (3 WABA) | GAP-CRED-BLOCKED | `services/whatsappProvider.js` Meta direct; Wati upstream | Q9 — 8 features stub-dispatching |
+| WhatsApp Business API for automation (3 WABA) | GAP-CRED-BLOCKED | `services/whatsappProvider.js` Meta direct; Wati upstream | Q9 — 8 features stub-dispatching (now incl. religious-guidance) |
 | Email | SHIPPED (reuse) | `routes/email.js` + services | |
 | Calendar/Meet booking | SHIPPED (reuse) | `routes/calendar_google.js` | |
 | Drive folder auto-creation for confirmed TMC trips | PARTIAL (stub-mode) | `services/googleDriveClient.js` (commit `192de86`) + wire-in `routes/travel_trips.js:140-166, 271-282` | Q1 Workspace creds unlock real |
 | Umrah journey reminders | PARTIAL | `cron/travelJourneyReminders.js` | WA dispatch stub (Q9) |
-| Religious-guidance content delivery | SHIPPED | `cron/religiousGuidanceEngine.js` (commit `1e62ee9`) — daily 09:13 IST, scans RFU itineraries T-14d window, dayOffset-matched fan-out via Notification rows + Wati-stub; sub-brand-scoped; year-tagged dedup mirrors `contactGreetingsEngine` | Real WA/email/SMS dispatch pending Q9 cred drop; placeholder content pending Yasin Q1 (admin PATCH replaces text without schema change) |
+| Religious-guidance content delivery | SHIPPED | `cron/religiousGuidanceEngine.js` (commit `1e62ee9`) — daily 09:13 IST, scans RFU itineraries T-14d window, dayOffset-matched fan-out via Notification rows + Wati-stub; sub-brand-scoped; year-tagged dedup mirrors `contactGreetingsEngine` | Real WA/email/SMS dispatch pending Q9 cred drop; placeholder content pending Yasin Q1 (admin PATCH replaces text without schema change). Admin UI is GAP-AUTONOMOUS — top pick #2 below |
 | Trip reminders + post-trip feedback (TMC) | PARTIAL | `cron/tripPostTripFeedback.js` | WA dispatch stub (Q9) |
 | Birthday / anniversary greetings | SHIPPED | `cron/contactGreetingsEngine.js` | Phase 2 per PRD; shipped early |
 
@@ -150,24 +154,24 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Travel Stall analytics | PARTIAL | Phase 2 per Q17 | Schema ready |
 | Visa Sure analytics | PARTIAL | Phase 3 per Q18 | Schema ready |
 | Platform-wise marketing reports (AdsGPT) | GAP-CRED-BLOCKED | No AdsGPT route in travel namespace | Q1 |
-| TMC ops dashboard per confirmed trip | SHIPPED | `pages/travel/TripDetail.jsx` + `GET /api/travel/trips/:id/ops-dashboard` rollup endpoint (`routes/travel_trips.js:235-418`, commit `9eda0b6`); parallel-fetch envelope with participants / payments / documents / rooming counts + 30/30/30/10 weighted `departureReadiness.score` | **Schema drift noted in route header:** `TripDocumentRequirement` has no `status` / `participantId` columns — `submittedCount=0` placeholder until submission tracking ships; `docsFrac` defaults to 1 to avoid penalising trips with no doc tracking. `TmcTrip.targetStudentCount` doesn't exist — `participants.target` always null. Frontend dashboard widget is P1.5 |
+| TMC ops dashboard per confirmed trip | SHIPPED | `pages/travel/TripDetail.jsx` + `GET /api/travel/trips/:id/ops-dashboard` rollup endpoint (`routes/travel_trips.js:235-418`, commit `9eda0b6`); parallel-fetch envelope with participants / payments / documents / rooming counts + 30/30/30/10 weighted `departureReadiness.score` | **Schema drift noted in route header:** `TripDocumentRequirement` has no `status` / `participantId` columns — `submittedCount=0` placeholder until submission tracking ships; `docsFrac` defaults to 1 to avoid penalising trips with no doc tracking. `TmcTrip.targetStudentCount` doesn't exist — `participants.target` always null. Frontend dashboard widget rendering the envelope is P1.5 |
 | LLM cost observability daily summary | SHIPPED | `GET /api/admin/llm-spend?days=N` (`routes/admin.js:172-358`, commit `f5c9518`) — ADMIN-gated, returns `{ totals, byDay, byTask, byModel }` envelope; backed by `LlmCallLog` fire-and-forget persist from `lib/llmRouter.js` | Stub-mode costs all 0; forward-compatible with real-mode per-token pricing |
 
 ### §4.10 Sub-vertical call-outs
 
 | Item | State | Notes |
 |---|---|---|
-| TMC diagnostic-first + teacher OTP | SHIPPED (partial) | OTP supports `purpose=teacher-access` (`schema.prisma:4540`); no dedicated teacher access UI |
+| TMC diagnostic-first + teacher OTP | SHIPPED (partial) | OTP supports `purpose=teacher-access` (`schema.prisma:4631`, `routes/travel_microsites.js:45`); no dedicated teacher access UI |
 | RFU 4-tier tagging drives quotation tier | SHIPPED | `Itinerary.productTier` (commit `2612a7e`) |
 | RFU Haram-facing hotel filters | PARTIAL | Schema-supported; no filter UI |
-| LLM-switchable layer for quotation engine | GAP-AUTONOMOUS | `lib/llmRouter.js` shipped (`583c06b`); 2 consumers live (talking-points + form-vs-call); itinerary draft = `bulk-text` task — consumer wiring pending |
+| LLM-switchable layer for quotation engine | GAP-AUTONOMOUS | `lib/llmRouter.js` shipped (`583c06b`); 2 consumers live (talking-points + form-vs-call); itinerary draft = `bulk-text` task — consumer wiring pending (top pick #1) |
 | Aadhaar OCR via DigiLocker | PARTIAL (stub) | §4.7 |
 | Passport OCR | GAP-CRED-BLOCKED | §4.7 |
-| Religious-guidance content library | SHIPPED | `ReligiousGuidancePacket` model + `routes/travel_religious_packets.js` 5-endpoint admin CRUD + 3 RFU placeholder packets seeded (commit `1e62ee9`). Yasin Q1 final copy lands via admin PATCH |
+| Religious-guidance content library | SHIPPED | `ReligiousGuidancePacket` model (`schema.prisma:4590-4605`) + `routes/travel_religious_packets.js` 5-endpoint admin CRUD + 3 RFU placeholder packets seeded (commit `1e62ee9`). Yasin Q1 final copy lands via admin PATCH. Admin UI is top pick #2 below |
 | Umrah journey reminders | PARTIAL | §4.8 |
 | Travel Stall Family Travel Quiz | SHIPPED | `pages/public/TravelStallQuiz.jsx` (commit `1260caa`) + `/diagnostics/public/*` |
 | Travel Stall 50% advance booking | SHIPPED | `routes/travel_itineraries.js:773,833` public share-token + advance-payment (commit `8abf6f3`); per-tenant ratio (commit `ee35d00`) |
-| Travel Stall personalised 3-5 PDF | GAP-AUTONOMOUS | LLM-router scaffold ships; consumer absent |
+| Travel Stall personalised 3-5 PDF | GAP-AUTONOMOUS | LLM-router scaffold ships; consumer absent (pairs with top pick #1's `bulk-text` task) |
 | Travel Stall email-first acquisition | SHIPPED (reuse) | Email + Sequence engine |
 | Visa Sure 15Q readiness + risk-flag dashboard | PARTIAL (schema only) | Phase 3 |
 | Visa Sure rejection-recovery program | PARTIAL (schema only) | Phase 3 |
@@ -176,7 +180,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 
 ## §5 Data model
 
-### §5.1 New models (24)
+### §5.1 New models (25)
 
 | Model | State | Schema location |
 |---|---|---|
@@ -204,6 +208,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | `TripMicrositeOtp` | SHIPPED | `schema.prisma:4536` |
 | `TenantSetting` | SHIPPED | `schema.prisma:2853` |
 | `LlmCallLog` | SHIPPED | `schema.prisma:1206-1230` (commit `f5c9518`); 3 indexes (tenantId+createdAt, tenantId+task, tenantId+model); fire-and-forget persist from `lib/llmRouter.js` |
+| `ReligiousGuidancePacket` | SHIPPED | `schema.prisma:4590-4605` (commit `1e62ee9`); 2 indexes (tenantId+subBrand+isActive, tenantId+subBrand+dayOffset); no UNIQUE on (tenantId, subBrand, dayOffset) — multi-packet per offset intentional |
 
 ### §5.2 Extensions to existing models
 
@@ -215,7 +220,9 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | `Booking.tripId` + `Booking.itineraryId` | NOT NEEDED YET | Optional per PRD |
 | `Invoice.legalEntityCode` | SHIPPED | `schema.prisma:814` |
 | `User.subBrandAccess` | SHIPPED | `schema.prisma:357` |
-| `TravelDiagnostic.talkingPointsJson` (LLM brief cache) | SHIPPED | persisted by talking-points/regen route (commit `cf876af`); read by next GET |
+| `TravelDiagnostic.talkingPointsJson` (LLM brief cache) | SHIPPED | persisted by talking-points/regen route (commit `cf876af`); read by next GET; consumed by DiagnosticDetail.jsx (commit `2440b4a`) |
+| `Tenant.religiousGuidancePackets` back-relation | SHIPPED | `schema.prisma:164` (commit `1e62ee9`) |
+| `Itinerary.draftSummary` (LLM bulk-text cache) | NOT SHIPPED | GAP-AUTONOMOUS — lands with top pick #1 |
 
 ---
 
@@ -227,8 +234,8 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 |---|---|---|
 | `travel.js` | SHIPPED | Minimal `/health`; cross-sub-brand dashboard in `travel_dashboard.js` |
 | `travel_diagnostics.js` | SHIPPED | 11+ endpoints incl. public submit + report PDF + `/talking-points/regen` (`cf876af`) + `/form-vs-call/compare` (`4a7c623` + `8b97fd5`) |
-| `travel_itineraries.js` | SHIPPED | 14+ endpoints incl. `/share` + version chain + accept/reject + auto-WebCheckin on accept |
-| `travel_quotation_flight.js` | GAP-AUTONOMOUS (plugin-paired) | Phase 1 W3 |
+| `travel_itineraries.js` | SHIPPED | 14+ endpoints incl. `/share` + version chain + accept/reject + auto-WebCheckin on accept; **`/draft/regen` LLM consumer pending (top pick #1)** |
+| `travel_quotation_flight.js` | GAP-AUTONOMOUS (big-scope, plugin-paired) | Phase 1 W3; NOT a cron pick |
 | `travel_cost_master.js` | SHIPPED | 5 endpoints |
 | `travel_suppliers.js` (was `travel_supplier_vault.js`) | SHIPPED | 7 endpoints |
 | `travel_trips.js` (TMC) | SHIPPED | 17 endpoints incl. DigiLocker initiate/callback + ops-dashboard (`9eda0b6`) |
@@ -238,37 +245,38 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | `travel_visa.js` (Visa Sure) | GAP (Phase 3) | Schema-ready, no routes |
 | `travel_callified.js` | GAP-CRED-BLOCKED | Q11/Q1 — Callified handover |
 
-**Bonus shipped routes:** `travel_dashboard.js`, `travel_reports.js`, `travel_rfu_profiles.js`, `travel_pricing.js`, `travel_csv_io.js`.
+**Bonus shipped routes:** `travel_dashboard.js`, `travel_reports.js`, `travel_rfu_profiles.js`, `travel_pricing.js`, `travel_csv_io.js`, `travel_religious_packets.js` (commit `1e62ee9`).
 **Bonus admin route:** `routes/admin.js` extended with `/llm-spend` (commit `f5c9518`).
 
 ### §6.2 Reused routes — all SHIPPED in main CRM.
 
-### §6.3 New cron engines (6)
+### §6.3 New cron engines (6 expected + bonus)
 
 | Engine | State |
 |---|---|
 | `webCheckinScheduler.js` | SHIPPED — fed by Itinerary.accept auto-create + 1 seeded row |
-| `webCheckinAutomation.js` (event-driven, per-airline) | GAP-AUTONOMOUS — Phase 1 W4 |
+| `webCheckinAutomation.js` (event-driven, per-airline) | GAP-AUTONOMOUS (big-scope) — Phase 1 W4; NOT a cron pick |
 | `tripPaymentReminders.js` | SHIPPED |
 | `travelJourneyReminders.js` | SHIPPED |
 | `tripPostTripFeedback.js` | SHIPPED |
 | `travelDiagnosticAdvisorAlerts.js` | SHIPPED |
+| `religiousGuidanceEngine.js` (bonus, PRD §4.8) | SHIPPED — commit `1e62ee9` |
 
 ---
 
-## §7 Frontend page plan (23 expected; 1 new since prior refresh)
+## §7 Frontend page plan (24 expected; 1 new since prior refresh)
 
 | Page | State | Notes |
 |---|---|---|
 | `Dashboard.jsx` | SHIPPED | `pages/travel/Dashboard.jsx` |
 | `Leads.jsx` | SHIPPED | |
-| `LeadDetail.jsx` | NOT SHIPPED — GAP-AUTONOMOUS | `/travel/leads/:id` not mounted |
+| `LeadDetail.jsx` | NOT SHIPPED — GAP-AUTONOMOUS | `/travel/leads/:id` not mounted; row-click from `Leads.jsx` is dead |
 | `DiagnosticBuilder.jsx` | SHIPPED | |
 | `DiagnosticPreview.jsx` | NOT SHIPPED | |
 | `DiagnosticPublic.jsx` (`/p/diagnostic/:subBrand/:bankId`) | SHIPPED-equivalent | `TravelStallQuiz.jsx` at `/travel-stall/quiz` |
 | `DiagnosticDetail.jsx` (renders talking-points brief + form-vs-call panel) | SHIPPED | `frontend/src/pages/travel/DiagnosticDetail.jsx` (commit `2440b4a`); route `/travel/diagnostics/:id`; consumes `cf876af` talking-points + `4a7c623` form-vs-call endpoints + GET /diagnostics/:id; STUB pill for stub-mode LLM output; role-gated Regenerate button |
 | `ItineraryBuilder.jsx` | PARTIAL | List ships (`Itineraries.jsx`); explicit `/new` builder route absent |
-| `ItineraryDetail.jsx` | NOT SHIPPED — GAP-AUTONOMOUS | Pairs with ItineraryBuilder pick when itinerary-draft LLM consumer wires |
+| `ItineraryDetail.jsx` | NOT SHIPPED — GAP-AUTONOMOUS | Pairs with top pick #1 LLM consumer (top pick #3) |
 | `CostMaster.jsx` | SHIPPED | |
 | `FlightQuoteAgent.jsx` | NOT SHIPPED | In-CRM fallback for Chrome plugin |
 | `MarkupRules.jsx` (admin, shipped as `PricingRules.jsx`) | SHIPPED | |
@@ -286,7 +294,8 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | `TravelStallFamilyQuiz.jsx` | SHIPPED | `pages/public/TravelStallQuiz.jsx` |
 | `TravelReports.jsx` | SHIPPED | `pages/travel/Reports.jsx` |
 | `TripBooking.jsx` (50%-advance bonus) | SHIPPED | `pages/public/TripBooking.jsx` |
-| `LlmSpendDashboard.jsx` (admin observability surface for `/api/admin/llm-spend`) | NOT SHIPPED — GAP-AUTONOMOUS | Single-page admin chart consuming the daily summary; pairs nicely with R7 observability |
+| `LlmSpendDashboard.jsx` (admin observability surface for `/api/admin/llm-spend`) | NOT SHIPPED — GAP-AUTONOMOUS | Single-page admin chart consuming the daily summary; pairs with R7 observability |
+| `ReligiousPackets.jsx` (admin CRUD UI for `/api/travel/religious-packets`) | NOT SHIPPED — GAP-AUTONOMOUS | **Top pick #2 below** — 5-endpoint backend ships; no operator surface |
 
 ### §7.1 Public micro-sites
 
@@ -311,7 +320,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | Sub-brand switcher in sidebar | SHIPPED | `Sidebar.jsx:986-1019` |
 | Theme `theme/travel.css` | SHIPPED (placeholder palette) | Per Q22 brand assets pending |
 | Landing route `/travel` | SHIPPED | `App.jsx:888` |
-| Seed `seed-travel.js` | SHIPPED | tenant + users + 4 diagnostic banks + cost master + seasons + 8-status Pipeline + 8 lost reasons + 3 TmcTrips + participants + Itinerary + microsite + RoomingAssignment + TripPaymentPlan + 4 TripInstalmentPayment + SupplierCredential (env-gated) + VisaApplication + 4 checklist items (`78884e3`) + 1 WebCheckin row (EK-571 BLR→DXB for the RFU pilgrim, `cb478bb`). End-to-end demo data complete |
+| Seed `seed-travel.js` | SHIPPED | tenant + users + 4 diagnostic banks + cost master + seasons + 8-status Pipeline + 8 lost reasons + 3 TmcTrips + participants + Itinerary + microsite + RoomingAssignment + TripPaymentPlan + 4 TripInstalmentPayment + SupplierCredential (env-gated) + VisaApplication + 4 checklist items (`78884e3`) + 1 WebCheckin row (`cb478bb`) + 3 ReligiousGuidancePacket placeholders (`1e62ee9`). End-to-end demo data complete |
 
 ---
 
@@ -319,7 +328,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 
 | Integration | State | Notes |
 |---|---|---|
-| Wati BSP wrapper (3 WABAs) | GAP-CRED-BLOCKED | Q9; 8 features stub-dispatching |
+| Wati BSP wrapper (3 WABAs) | GAP-CRED-BLOCKED | Q9; 8 features stub-dispatching (incl. religious-guidance) |
 | Meta WhatsApp Cloud API | SHIPPED (reuse) | `services/whatsappProvider.js` |
 | Callified.ai / Exotel | GAP-CRED-BLOCKED | Sandbox mock only |
 | Google Workspace (Drive/Gmail/Calendar/Meet) | PARTIAL (stub for Drive) | `services/googleDriveClient.js` (commit `192de86`) |
@@ -328,10 +337,10 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | DigiLocker | PARTIAL (stub) | `services/digilockerClient.js` (commit `1babe1b`) |
 | Passport OCR | GAP-CRED-BLOCKED | |
 | AdsGPT | GAP-CRED-BLOCKED | Q1 |
-| LLM router | SHIPPED | `lib/llmRouter.js` stub-mode (commit `583c06b`); 2 consumers live (talking-points `cf876af` + form-vs-call `4a7c623`); persist sink `LlmCallLog` (`f5c9518`) |
+| LLM router | SHIPPED | `lib/llmRouter.js` stub-mode (commit `583c06b`); 2 consumers live (talking-points `cf876af` + form-vs-call `4a7c623`); persist sink `LlmCallLog` (`f5c9518`); itinerary-draft consumer pending (top pick #1) |
 | Meta/Google/LinkedIn/YouTube Ads APIs | GAP-CRED-BLOCKED | Q1 |
 | Excel Software for Travel | GAP-CRED-BLOCKED | Q8 docs pending |
-| Airline portals | GAP-AUTONOMOUS | Phase 1 W4 |
+| Airline portals | GAP-AUTONOMOUS (big-scope) | Phase 1 W4; NOT a cron pick |
 | Razorpay | SHIPPED (reuse) | Q4 |
 | Tally | SHIPPED | `lib/tallyXmlExport.js` + `routes/billing.js:130` |
 
@@ -339,9 +348,9 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 
 | Task | Locked model | State |
 |---|---|---|
-| Diagnostic interpretation (talking-points) | Claude Opus | SHIPPED via talking-points endpoint (commit `cf876af`); stub-mode-ready |
-| Itinerary draft (bulk-text) | Gemini Flash | GAP-AUTONOMOUS — router exposes task; quotation routes need to wire it (see top-3 pick #3) |
-| Form-vs-call comparison | Claude Opus | SHIPPED via `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519`, commit `4a7c623`); 80/60% ladder + perFieldDiff inline |
+| Diagnostic interpretation (talking-points) | Claude Opus | SHIPPED via talking-points endpoint (commit `cf876af`); stub-mode-ready; UI consumer DiagnosticDetail.jsx (`2440b4a`) |
+| Itinerary draft (bulk-text) | Gemini Flash | GAP-AUTONOMOUS — router exposes task; consumer wiring is top pick #1 |
+| Form-vs-call comparison | Claude Opus | SHIPPED via `POST /api/travel/diagnostics/:id/form-vs-call/compare` (`routes/travel_diagnostics.js:519`, commit `4a7c623`); 80/60% ladder + perFieldDiff inline; UI consumer DiagnosticDetail.jsx Section 3 (`2440b4a`) |
 | AI qualification call | Gemini Live | GAP-CRED-BLOCKED (Callified front-end) |
 | Document OCR fallback | Gemini Vision | GAP-CRED-BLOCKED |
 | Sentiment / KPI insights | Gemini Flash | GAP-AUTONOMOUS |
@@ -421,7 +430,7 @@ Schema-only — `VisaApplication` + `VisaDocumentChecklistItem` models shipped (
 | # | Risk | Status | Delta since prior refresh |
 |---|---|---|---|
 | R1 | Section 13 packet | 🟡 | No change |
-| R2 | 6-week timeline | 🔴 | Improved — 6 more shipped items today; W3/W4 still the dominant slip |
+| R2 | 6-week timeline | 🔴 | Improved — 3 more shipped feature items today; W3/W4 still the dominant slip |
 | R3 | Chrome extension auto-update | 🔴 | Plugin not built |
 | R4 | Hotel comparator scope drift | 🟢 | Resolved |
 | R5 | DigiLocker creds | 🟢 | Stub shipped |
@@ -447,6 +456,7 @@ Schema-only — `VisaApplication` + `VisaDocumentChecklistItem` models shipped (
 | `backend/cron/webCheckinScheduler.js` | "WhatsApp dispatch pending" | Q9 | Same; now scans a non-empty table |
 | `backend/cron/contactGreetingsEngine.js` | "WhatsApp dispatch pending" | Q9 | Same |
 | `backend/cron/travelDiagnosticAdvisorAlerts.js` | "WhatsApp dispatch pending" | Q9 | Same |
+| `backend/cron/religiousGuidanceEngine.js` | `[wati-stub]` log lines | Q9 | Replace with `whatsappProvider.sendTemplate(...)` per channel |
 | `backend/routes/travel_microsites.js:396` | `sendOtpStub` logs OTP to console | Q9 | Replace stub with `whatsappProvider.sendOtp(phone, otp)` |
 | `backend/routes/travel_itineraries.js:761` | `/share` returns URL; doesn't auto-WA | Q9 | Add `await whatsappProvider.sendTemplate(...)` after share-URL |
 | `backend/routes/travel_webcheckin.js:372` | `/deliver` emits Wati-stub log | Q9 | One-line swap to real WA send |
@@ -455,21 +465,23 @@ Schema-only — `VisaApplication` + `VisaDocumentChecklistItem` models shipped (
 
 ## Recommended next 5 cron dispatches (priority order)
 
-1. **`DiagnosticDetail.jsx` UI rendering BOTH talking-points brief AND form-vs-call comparison panel** (PRD §4.1 + §4.2 + §7). New page; mount at `/travel/diagnostics/:id`. Sidebar link from existing `Diagnostics.jsx` list. Renders cached `talkingPointsJson` + "Regenerate" button + a "Compare with call" section that posts to `/form-vs-call/compare`. ~½ day, pure frontend, zero cred deps. **Why next:** both backend endpoints ship; advisor has no UI surface; closes W2 exit-gate UI side.
+The autonomous queue is **getting thin but not exhausted**. Picks #1–#3 are genuinely cron-doable single-commit items; picks #4–#5 are UI-completion items that the cron can pick but neither is a hard PRD Phase 1 requirement (their parent list pages already serve the user need).
 
-2. **Religious-guidance content delivery cron + admin-editable packet library** (PRD §4.8 + §4.10). New `cron/religiousGuidanceEngine.js` mirroring `contactGreetingsEngine.js`; new model `ReligiousGuidancePacket { id, subBrand, dayOffset, title, contentHtml, channel }`; 3 seed packets (Day-3 dua, Day-7 ritual, T-1 dress code); admin POST/PUT/DELETE for the library. WA dispatch stays Q9-stub. ~½ day. **Why next:** §4.8 row reads "GAP-AUTONOMOUS" since 2026-05-20; mirrors shipped cron pattern; pairs with the journey reminders work.
+1. **Itinerary draft via LLM router (consumer wiring)** (PRD §4.3 + §9.1). New `POST /api/travel/itineraries/:id/draft/regen` (ADMIN/MANAGER + requireTravelTenant) routing through `llmRouter.routeRequest({ task: "bulk-text", payload })`; persists `Itinerary.draftSummary` (new nullable column — additive, no bless marker); GET `/itineraries/:id` returns it. ~3-4 hrs. **Why next:** itinerary draft is the THIRD LLM-router consumer the PRD §9.1 default-model map names; proves the `bulk-text` task taxonomy + first non-Claude-Opus model dispatch (Gemini Flash). Also unblocks pick #3.
 
-3. **Itinerary draft LLM consumer** (PRD §4.3 + §9.1). New `POST /api/travel/itineraries/:id/draft/regen` (ADMIN/MANAGER) routing through `llmRouter.routeRequest({ task: "bulk-text", payload })`; persists `Itinerary.draftSummary` (new nullable column); ItineraryBuilder UI will render the cached draft on next GET. ~3-4 hrs. **Why next:** itinerary draft is the THIRD LLM-router consumer the PRD names; proves the `bulk-text` task taxonomy; pairs with §9.1 default-model map.
+2. **`ReligiousPackets.jsx` admin UI** (PRD §4.10 + §7). New page under `frontend/src/pages/travel/ReligiousPackets.jsx` consuming the 5-endpoint admin CRUD from `routes/travel_religious_packets.js` (commit `1e62ee9`). Sub-brand filter + packet list + create/edit drawer with full validation contract (subBrand, dayOffset 0..365, title 1..200, contentHtml ≤20kB, channels CSV). Sidebar link. ~½ day, pure frontend, zero cred deps. **Why next:** backend CRUD shipped without an operator surface; Yasin's Q1 content lands via admin PATCH per the commit body but there's no UI to do that today.
 
-4. **`ItineraryDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/ItineraryDetail.jsx`; fetches itinerary + items + version chain + `draftSummary`; renders items grid + version-history drawer + accept/reject actions + (if pick #3 lands) draft-summary block with "Regenerate" button. Mount at `/travel/itineraries/:id`. ~½ day, pure frontend. **Why next:** finishes the itinerary surface in tandem with pick #3.
+3. **`ItineraryDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/ItineraryDetail.jsx`; fetches itinerary + items + version chain + `draftSummary` (after pick #1); renders items grid + version-history drawer + accept/reject actions + draft-summary block with "Regenerate" button. Mount at `/travel/itineraries/:id`. ~½ day, pure frontend. **Why third:** pairs with pick #1; §7 lists it but row-click from `Itineraries.jsx` is dead today.
 
-5. **`LeadDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/LeadDetail.jsx`; fetches contact + diagnostic + linked itineraries + linked trips for the unified lead view. Mount at `/travel/leads/:id`. Reuses generic `Contacts/ContactDetail.jsx` for shape. ~3-4 hrs. **Why next:** lowest-cost UI fill-in; the `Leads.jsx` list ships but row-click is dead today.
+4. **`LeadDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/LeadDetail.jsx`; fetches contact + diagnostic + linked itineraries + linked trips for the unified lead view. Mount at `/travel/leads/:id`. Reuses generic `Contacts/ContactDetail.jsx` for shape. ~3-4 hrs. **Why fourth:** lowest-cost UI fill-in; the `Leads.jsx` list ships but row-click is dead today. Not a hard PRD requirement (Leads list does the job for now).
+
+5. **`LlmSpendDashboard.jsx` admin observability page** (PRD §4.9 row + R7). New page under `frontend/src/pages/admin/LlmSpendDashboard.jsx` consuming `GET /api/admin/llm-spend?days=N` (commit `f5c9518`). Renders the `{ totals, byDay, byTask, byModel }` envelope as 4 widgets (line chart of daily totals, bar by task, bar by model, summary cards). ADMIN-only sidebar link. ~½ day, pure frontend, zero cred deps. **Why fifth:** the backend daily-summary endpoint ships without an admin surface; visibility into R7 LLM cost observability stays internal until this lands.
 
 ---
 
 ## Cred-blocked priority list (for human chase, NOT cron pick)
 
-1. **Q9 — Meta Business Manager artifacts** (System User access token + 3×phoneNumberId + 3×wabaId + App ID/Secret + webhook verify token). Owner: Yasin. Unblocks: 6 crons (`tripPaymentReminders`, `travelJourneyReminders`, `tripPostTripFeedback`, `webCheckinScheduler`, `contactGreetingsEngine`, `travelDiagnosticAdvisorAlerts`) + 3 endpoints (`travel_microsites.js:396` request-otp, `travel_itineraries.js:761` `/share`, `travel_webcheckin.js:372` `/deliver`). ~9-line swap each. See `docs/WHATSAPP_INTEGRATION_PRD.md`.
+1. **Q9 — Meta Business Manager artifacts** (System User access token + 3×phoneNumberId + 3×wabaId + App ID/Secret + webhook verify token). Owner: Yasin. Unblocks: 7 crons (`tripPaymentReminders`, `travelJourneyReminders`, `tripPostTripFeedback`, `webCheckinScheduler`, `contactGreetingsEngine`, `travelDiagnosticAdvisorAlerts`, `religiousGuidanceEngine`) + 3 endpoints (`travel_microsites.js:396` request-otp, `travel_itineraries.js:761` `/share`, `travel_webcheckin.js:372` `/deliver`). ~9-line swap each. See `docs/WHATSAPP_INTEGRATION_PRD.md`.
 
 2. **Q3 — DigiLocker `DIGILOCKER_CLIENT_ID` + `DIGILOCKER_CLIENT_SECRET`**. Owner: Yasin (Travel Stall has them). Unblocks: real Aadhaar-XML pull in `digilockerClient.js`. Single env-var drop. See `docs/DIGILOCKER_INTEGRATION_SPEC.md`.
 
@@ -487,4 +499,21 @@ Schema-only — `VisaApplication` + `VisaDocumentChecklistItem` models shipped (
 
 ---
 
-*End of audit. Snapshot at HEAD `1c8fe54`. Re-run when a Phase 1 milestone lands or any cred Q-marker resolves; the queue-refill threshold is "0 GAP-AUTONOMOUS items in §4 tables" or "fewer than 3 next-best picks in the priority list."*
+## Honest "is the queue actually empty?" check
+
+**No — the autonomous queue has 5 viable picks but is approaching exhaustion.** After this refresh:
+
+- **Genuinely cron-doable today:** 5 picks listed above (Itinerary draft LLM consumer, ReligiousPackets.jsx admin UI, ItineraryDetail.jsx, LeadDetail.jsx, LlmSpendDashboard.jsx). Of these, only #1 and #2 close documented PRD requirements; #3–#5 are UI completions of routes whose parent list pages already serve the user.
+- **What the cron should NOT pick** (and the audit labels as `GAP-AUTONOMOUS (big-scope)` to make this explicit):
+  - Chrome flight-quote plugin (~10-15 engineer-days; requires browser-extension infra not in repo)
+  - Airline web-checkin automation (paired with plugin work)
+  - These are W3/W4 multi-day items, not single-commit cron picks.
+- **What the cron is barred from** (cred-blocked + product-call):
+  - Q9 (Wati WhatsApp), Q3 (DigiLocker), Q11 (LLM keys), Q19 (RateHawk), Q8 (Excel Software), Q1 (Section 13 packet), Q22 (brand assets) — 8 cred-blocked items
+  - Q2 (Aadhaar consent legal copy), Q13 (curriculum mapping) — 2 product-call items
+
+**Recommendation for Step 5:** the cron can confidently pick #1 (Itinerary draft LLM consumer) and #2 (ReligiousPackets.jsx admin UI) in this round and the next. After that, picks #3–#5 will further drain the queue, at which point the only autonomous-doable work left will be the schema-only Phase 3 (Visa Sure) routes + UI — that's a multi-commit Phase 3 program, not a single-commit cron pick, and the audit should re-baseline before recommending it. **If the cron returns and finds picks #1–#5 all shipped, it should `CronDelete` and surface a "queue exhausted; needs human menu refresh" report rather than spin on busywork.**
+
+---
+
+*End of audit. Snapshot at HEAD `daf6c0b`. Re-run when a Phase 1 milestone lands or any cred Q-marker resolves; the queue-refill threshold is "≤2 GAP-AUTONOMOUS items in §4 tables" or "fewer than 3 next-best picks in the priority list."*

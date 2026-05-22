@@ -284,6 +284,39 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **Visa Sure operator surface SHIPPED end-to-end** (read + write + analytics; AdvisorDashboard detail)
 - **Dark-mode cluster: 7 of 17 closed + #879 partial; 10 issues remaining (of which #879 has 2 pages still)**
 
+**Tick #14 (cron) — 2/3 SHIPPED + 1 PHANTOM-REJECTED, Visa PATCH lands + #879 PRD flipped:**
+
+| SHA | Type | What |
+|---|---|---|
+| `ed3ccdb` | Visa write surface | **PATCH /api/travel/visa/applications/:id** — extends 6c084cb POST with status transitions (VALID_STATUSES `intake/docs-pending/filed/approved/rejected/appeal`); advisorRiskFlag enum `low/medium/high/priority` pinned from schema; field-by-field opt-in shape; 7 new spec cases (total 27); DELETE intentionally deferred per PC-2 |
+| `2d1f7f8` | PRD #879 flip | PRD §10 — #879 row flipped to 🟡 PARTIAL with `8169ce8` (Itineraries slice) evidence; §10.1 progress + §10.2 footer counts refreshed |
+| _rejected_ | Phantom caught | **CostMaster.jsx dark-mode** — agent correctly REJECTED: only 1 hardcoded literal (`#fff` on primaryBtn), well below 5+ inline-literal threshold; file already uses CSS variables throughout. **Verify-before-pickup 6th catch — cron heuristic continues to hold.** |
+
+**Verdict commit recovery note:** tick #14's verdict commit was missed (conversation ran out of context immediately after ship); recovered inline in tick #15's verdict.
+
+**Tick #15 (cron) — 3/3 SHIPPED, F3 voyagr attribution + visaRiskFlag rules + #883 sidebar dark-mode:**
+
+| SHA | Type | What |
+|---|---|---|
+| `4770054` | F3 voyagr attribution | **GET /api/attribution/voyagr/summary?days=N** — surfaces voyagr-sourced leads via `bySubBrand` (Contact.subBrand) + `byUtmSource` (Touchpoint.source) + `byChannel` + `wonValue` per subBrand (joined to Deal). 6 new gate-spec cases (15 → 21). **Schema-drift caught**: Touchpoint has only `channel/source/medium/url/campaignId` — `siteSlug`/`utm_campaign`/`utm_term`/`utm_content` are written to AuditLog.details JSON only (not queryable). `bySiteSlug` ships as `[]` forward-compat placeholder with gap documented inline. |
+| `e849acb` | Visa risk engine | **visaRiskFlagEngine R8-R10 (PC-1-independent)** — R8 stale-intake (status='intake' >7d); R9 rejected-reopen (outcome='rejected' + updatedAt > decidedAt+grace within 30d); R10 new-destination (tenant has never filed for this country, via dual-findMany pattern). 7→10 rules, 18→28 tests (all green 516ms). Dropped APPROACHING_DEADLINE (needs `deadlineAt` column — PC-1 blocked) + HIGH_VALUE_APPLICATION_TYPE (R1 already covers complex types). |
+| `a2da4bf` | Dark-mode #883 | **Sidebar nav highlight + group dividers** under `[data-theme="dark"][data-vertical="travel"]` — gold-gradient active background (3.2:1 surface, 7.8:1 text AAA), 3px gold border-left, distinct hover state, 28% gold divider lines (bumped from 18%). **Phase 2 CSS-only fix** — Sidebar.jsx is class-driven (only 2 inline literals, below threshold). vite build clean. **Closes #883.** Cluster: **8 of 17 closed + #879 partial; 9 issues remaining.** |
+
+**Schema-vs-spec gap (tick #15 Agent 1):** F1→F3 handoff drift — F1's spec-header field-list documents siteSlug/utm_campaign as voyagr-write fields, but F1's actual `.create()` call writes them only to AuditLog.details JSON. **11th schema-or-spec gap** this session — pattern now extends from "dispatch prose vs schema" to "spec-header vs schema" (i.e. it's not just the dispatch author drifting; the route-header itself can lie about what's persisted as queryable columns). Worth standing-rule consideration: *when picking up cluster item N+1, grep the `.create()` calls in N's route to confirm what columns are persisted — spec-header field lists drift from schema reality.*
+
+**Concurrency note (tick #15):** Agent 1 found sibling agent's WIP on `backend/cron/visaRiskFlagEngine.js` in tree; used path-scoped `git stash push <file>` + `git commit --only` + `git stash pop`. Sibling's WIP preserved intact. **Standing-rule `git commit --only` continues to hold across 46+ commits — 0 over-commits.**
+
+**Cumulative session totals (15 ticks):**
+- **46 commits** (14 features/scaffolds + 13 PRDs + 1 backlog + 1 matrix refresh + 4 backend endpoints + 6 dark-mode refactors + 2 rule extensions + 3 visa frontend wires + 2 PRD audit flips)
+- **6 GitHub issues closed + 1 partial** (#867 #871 #872 #873-partial #878 #883; #879 partial)
+- 6 phantoms + **11 schema-or-spec gaps** caught
+- Zero rebase conflicts, zero over-commits across all 46 commits
+- ~6,200 lines of PRD documentation across 13 PRDs
+- **Voyagr integration F1 + F3 SHIPPED** (lead capture endpoint + attribution summary; remaining cluster F: F2/F4 voyagr-side forms, F5 outbound webhook, F6 deploy runbook)
+- **Visa Sure operator surface SHIPPED end-to-end** (GET list + GET :id + POST CREATE + PATCH update + analytics + AdvisorDashboard detail)
+- **visaRiskFlagEngine 10 rules / 28 tests** (PC-1 still gates APPROACHING_DEADLINE class)
+- **Dark-mode cluster: 8 of 17 closed + #879 partial; 9 issues remaining**
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

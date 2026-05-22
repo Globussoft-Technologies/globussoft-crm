@@ -41,7 +41,7 @@ router.get("/", async (req, res) => {
 
 router.post("/", adminGate, async (req, res) => {
   try {
-    const { name, parentId, displayOrder, isActive } = req.body;
+    const { name, parentId, displayOrder, isActive, imageUrl, color, description } = req.body;
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
     }
@@ -59,6 +59,9 @@ router.post("/", adminGate, async (req, res) => {
           parentId: parentId ? parseInt(parentId) : null,
           displayOrder: typeof displayOrder === "number" ? displayOrder : 0,
           isActive: isActive !== false,
+          imageUrl: imageUrl || null,
+          color: color || null,
+          description: description || null,
           tenantId: req.user.tenantId,
         },
       });
@@ -87,8 +90,12 @@ router.put("/:id", adminGate, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Service category not found" });
 
     const data = {};
-    const allowed = ["name", "parentId", "displayOrder", "isActive"];
+    const allowed = ["name", "parentId", "displayOrder", "isActive", "imageUrl", "color", "description"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    // Normalize empty strings to null for nullable fields.
+    if (data.imageUrl === "") data.imageUrl = null;
+    if (data.color === "") data.color = null;
+    if (data.description === "") data.description = null;
 
     if (data.parentId === id) {
       return res.status(400).json({ error: "category cannot be its own parent", code: "PARENT_SELF_REFERENCE" });

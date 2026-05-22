@@ -216,6 +216,12 @@ model Tenant {
   cannedResponses      CannedResponse[]
   surveys              Survey[]
   surveyResponses      SurveyResponse[]
+  // Parent-child review system — Survey owns ordered SurveyQuestion rows
+  // and per-question SurveyAnswer rows. Survey itself already has its
+  // back-relation above; the two child tables need their own so the
+  // Prisma client validates.
+  surveyQuestions      SurveyQuestion[]
+  surveyAnswers        SurveyAnswer[]
   documentTemplates    DocumentTemplate[]
   dashboards           Dashboard[]
   customReports        CustomReport[]
@@ -2055,14 +2061,41 @@ model CannedResponse {
 
 model Survey {
   id        Int      @id @default(autoincrement())
+  // `name` is the legacy short-id key used by the NPS cron
+  // (wellnessOpsEngine.js); keep it so existing surveys + the
+  // auto-NPS flow keep working unchanged.
   name      String
-  type      String   @default("NPS") // NPS, CSAT, CUSTOM
-  question  String
+  // `title` is the human-readable form name used by the multi-question
+  // builder. Nullable so legacy NPS rows aren't forced to backfill.
+  title     String?
+  // String-as-enum (matches the codebase convention — see Tenant.vertical,
+  // SignatureRequest.documentType, etc.). Allowed values:
+  //   Legacy single-question: NPS | CSAT | CUSTOM
+  //   New multi-question:     PRODUCT | SERVICE | DOCTOR
+  // The wellnessOpsEngine cron continues to write NPS rows; the new
+  // builder writes PRODUCT / SERVICE / DOCTOR / CUSTOM rows.
+  type      String   @default("NPS")
+  // Legacy single-question text — nullable because new multi-question
+  // surveys carry their questions in SurveyQuestion rows instead.
+  question  String?
+  // Polymorphic FK; the route validates by `type`:
+  //   PRODUCT → relatedEntityId references Product.id
+  //   SERVICE → references Service.id
+  //   DOCTOR  → references User.id (wellnessRole=doctor)
+  //   CUSTOM / NPS / CSAT → null
+  // Not enforced as a Prisma relation because it spans multiple tables.
+  relatedEntityId Int?
+  // Admin who created the survey. Nullable so cron-created NPS rows
+  // (which have no user actor) don't need a synthetic user.
+  createdById     Int?
   isActive  Boolean  @default(true)
   tenantId  Int      @default(1)
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  questions SurveyQuestion[]
+  answers   SurveyAnswer[]
 }
 
 model SurveyResponse {
@@ -2076,6 +2109,81 @@ model SurveyResponse {
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, surveyId])
+}
+
+// Multi-question review form child table — each Survey of type
+// PRODUCT/SERVICE/DOCTOR/CUSTOM owns an ordered list of SurveyQuestion
+// rows. Legacy NPS/CSAT Survey rows have zero SurveyQuestion children
+// (they store their single question in Survey.question).
+model SurveyQuestion {
+  id         Int      @id @default(autoincrement())
+  surveyId   Int
+  survey     Survey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  question   String
+  // String-as-enum: TEXT | TEXTAREA | SELECT | RATE | RADIO | YES_NO
+  fieldType  String
+  // JSON-encoded array of option strings — only set for SELECT, RADIO,
+  // and YES_NO (server-forced to ["True","False"] for YES_NO).
+  // Storage layer follows the JSON-string-column standing rule from
+  // CLAUDE.md: the column is text, callers stringify before write.
+  options    String?  @db.Text
+  // Rating bounds — only set for fieldType=RATE. Both required when set.
+  minRating  Int?
+  maxRating  Int?
+  // Ordering within the parent Survey form (0-based, ascending).
+  order      Int      @default(0)
+  isRequired Boolean  @default(true)
+  isActive   Boolean  @default(true)
+  tenantId   Int      @default(1)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  answers    SurveyAnswer[]
+
+  @@index([tenantId, surveyId, order])
+}
+
+// Per-question submission row — one row per (questionId, submission).
+// SurveyResponse remains the legacy single-score table used by the NPS
+// flow; SurveyAnswer is the new per-question store. Both can coexist on
+// the same Survey if needed (e.g. an NPS-tagged survey that later grows
+// custom questions), and reports consume each independently.
+model SurveyAnswer {
+  id         Int      @id @default(autoincrement())
+  surveyId   Int
+  survey     Survey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  questionId Int
+  question   SurveyQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  userId     Int?
+  // Free-form text storage — RATE answers stringify the number,
+  // YES_NO stringify "True"/"False", SELECT/RADIO stringify the chosen
+  // option label. Keeps the schema uniform regardless of fieldType.
+  answer     String?  @db.Text
+  // Submission grouping key. All SurveyAnswer rows produced by one
+  // POST /respond/:token/submit (or POST /:id/submit) share the same
+  // submissionId — generated server-side per submit call via crypto
+  // (UUID-shaped, 32 hex chars). Nullable so pre-v3.7.17 rows (single-
+  // row "submission") still load; the answers endpoint treats null as
+  // a one-row group keyed by id.
+  submissionId String?
+  // Recipient identification — copied from the responseTokens entry on
+  // submit so the admin's submission detail view can show WHO answered
+  // (Contact name + email, Patient name + phone). Both nullable: any
+  // given submission resolves to ONE of these (the token carried either
+  // contactId or patientId, never both) and rows submitted before this
+  // column existed leave both null. Not declared as Prisma relations
+  // because Contact and Patient already cascade on tenant delete and
+  // this row's lifetime tracks Survey, not its recipient.
+  contactId  Int?
+  patientId  Int?
+  tenantId   Int      @default(1)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, surveyId])
+  @@index([tenantId, questionId])
+  @@index([tenantId, surveyId, submissionId])
 }
 
 // ── E-Signature ──────────────────────────────────────────────────
@@ -3468,18 +3576,20 @@ model Coupon {
 }
 
 model CashbackRule {
-  id          Int      @id @default(autoincrement())
-  tenantId    Int      @default(1)
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id          Int       @id @default(autoincrement())
+  tenantId    Int       @default(1)
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
   earnPercent Float
-  serviceIds  String?  @db.Text
+  serviceIds  String?   @db.Text
   minSpend    Float?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isActive    Boolean   @default(true)
+  expiresAt   DateTime? // After this instant the rule is skipped at apply-time; null = no expiry
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([tenantId, isActive])
+  @@index([tenantId, expiresAt])
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -3509,16 +3619,20 @@ model Resource {
 }
 
 model Holiday {
-  id         Int       @id @default(autoincrement())
-  tenantId   Int       @default(1)
-  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  date       DateTime
-  name       String
-  locationId Int?
-  location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
-  doctorId   Int?
-  doctor     User?     @relation("DoctorHolidays", fields: [doctorId], references: [id], onDelete: SetNull)
-  createdAt  DateTime  @default(now())
+  id                Int       @id @default(autoincrement())
+  tenantId          Int       @default(1)
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  date              DateTime
+  name              String
+  locationId        Int?
+  location          Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  doctorId          Int?
+  doctor            User?     @relation("DoctorHolidays", fields: [doctorId], references: [id], onDelete: SetNull)
+  // When true, the holiday repeats every year on the same month/day —
+  // the booking-availability gate matches on month+day instead of the
+  // exact stored date. Lets admins mark Diwali / Republic Day once.
+  recurringAnnually Boolean   @default(false)
+  createdAt         DateTime  @default(now())
 
   @@unique([tenantId, date, locationId, doctorId])
   @@index([tenantId, date])

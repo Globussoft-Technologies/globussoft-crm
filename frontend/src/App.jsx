@@ -140,6 +140,9 @@ const WellnessPatientDetail = lazy(
 const WellnessServices = lazy(() => import("./pages/wellness/Services"));
 const WellnessLocations = lazy(() => import("./pages/wellness/Locations"));
 const WellnessMemberships = lazy(() => import("./pages/wellness/Memberships"));
+// Unified CSV import / export hub — single dropdown picks the entity then
+// delegates to the existing CsvImportExportToolbar component.
+const DataImportExport = lazy(() => import("./pages/DataImportExport"));
 // Wave 7 Agent A — ServiceCategory + Drug catalogue (PRD Gap §10 #1 + #2)
 const WellnessServiceCategories = lazy(() => import("./pages/wellness/ServiceCategories"));
 const WellnessDrugs = lazy(() => import("./pages/wellness/Drugs"));
@@ -195,6 +198,10 @@ const WellnessLeave = lazy(() => import("./pages/wellness/Leave"));
 const WellnessPointOfSale = lazy(() => import("./pages/wellness/PointOfSale"));
 // Public customer-facing survey page (no admin chrome — see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
+// v3.7.17 — token-based respondent landing page (the email link target).
+// Renders the survey form (legacy NPS/CSAT or new multi-question types)
+// and posts answers back to the matching /respond endpoint.
+const SurveyRespond = lazy(() => import("./pages/SurveyRespond"));
 // Public customer-facing knowledge-base article view (no auth, no admin chrome).
 // Replaces the raw-JSON backend response that the KB "View" button used to open.
 const KbArticleView = lazy(() => import("./pages/KbArticleView"));
@@ -333,8 +340,13 @@ export default function App() {
     }
     return initial || null;
   });
-  const setToken = (next) => {
-    setAuthToken(next);
+  // setToken accepts an optional `opts` object — currently only `remember`,
+  // which the Login form passes from its "Keep me signed in" checkbox. When
+  // set, the token is mirrored to localStorage so deep links opened in new
+  // tabs can rehydrate without forcing a re-login. See utils/api.js for the
+  // security trade-off.
+  const setToken = (next, opts) => {
+    setAuthToken(next, opts);
     setTokenState(next || null);
   };
   // #347: gate initial mount until we've finished rehydrating the token
@@ -459,6 +471,14 @@ export default function App() {
     if (tenantArg) {
       setTenant(tenantArg);
       localStorage.setItem("tenant", JSON.stringify(tenantArg));
+      // Set data-vertical synchronously here (not just in the useEffect that
+      // fires after re-render) so navigation immediately following login sees
+      // the correct attribute — the React state update + useEffect cycle is
+      // async and tests / route guards landing on /wellness can otherwise read
+      // body[data-vertical="generic"] for one frame.
+      const v = tenantArg.vertical || "generic";
+      document.documentElement.setAttribute("data-vertical", v);
+      document.body.setAttribute("data-vertical", v);
     }
     const res = await fetch("/api/auth/me", {
       headers: { Authorization: `Bearer ${tokenArg}` },
@@ -577,6 +597,9 @@ export default function App() {
                   />
                   {/* #184: customer-facing survey landing page from SMS — no auth, no admin chrome */}
                   <Route path="/survey/:id" element={<SurveyPublic />} />
+                  {/* v3.7.17 — token-based respondent landing page. The
+                      Send-Survey email link points here. */}
+                  <Route path="/surveys/respond/:token" element={<SurveyRespond />} />
                   {/* Public knowledge-base article view (no auth). Replaces the raw
                       backend JSON URL that the KB "View" button used to open. */}
                   <Route
@@ -675,6 +698,14 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Settings requires admin access.">
                           <Settings />
+                        </RoleGuard>
+                      }
+                    />
+                    <Route
+                      path="data-import-export"
+                      element={
+                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Import / Export requires admin or manager access.">
+                          <DataImportExport />
                         </RoleGuard>
                       }
                     />

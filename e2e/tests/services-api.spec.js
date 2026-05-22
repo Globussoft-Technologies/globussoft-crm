@@ -486,6 +486,62 @@ test.describe('#274 — PUT 4xx responses carry structured error body', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// imageUrls round-trip — backend accepts array OR pre-stringified JSON,
+// PUT can clear with null/empty. Added 2026-05-21 alongside the wellness
+// service detail modal that displays the image gallery.
+// ──────────────────────────────────────────────────────────────────────
+
+test.describe('imageUrls field — accepted on POST + PUT, round-trips intact', () => {
+  test('POST with imageUrls array stores it as a JSON-stringified array', async ({ request }) => {
+    const urls = ['https://cdn.example.com/svc-a.png', 'https://cdn.example.com/svc-b.jpg'];
+    const r = await authPost(request, '/wellness/services', {
+      name: `${RUN_TAG} ImgArr`,
+      basePrice: 1500,
+      durationMin: 45,
+      imageUrls: urls,
+    }, 'admin');
+    expect(r.status(), `POST: ${await r.text()}`).toBe(201);
+    const body = await r.json();
+    createdServiceIds.push(body.id);
+    // The Prisma column stores a JSON-encoded array; the API echoes that
+    // raw string back. Parse to confirm both URLs round-tripped.
+    const parsed = JSON.parse(body.imageUrls);
+    expect(parsed).toEqual(urls);
+  });
+
+  test('POST with pre-stringified imageUrls is stored verbatim', async ({ request }) => {
+    const stringified = JSON.stringify(['https://cdn.example.com/svc-c.png']);
+    const r = await authPost(request, '/wellness/services', {
+      name: `${RUN_TAG} ImgStr`,
+      basePrice: 1500,
+      durationMin: 45,
+      imageUrls: stringified,
+    }, 'admin');
+    expect(r.status()).toBe(201);
+    const body = await r.json();
+    createdServiceIds.push(body.id);
+    expect(body.imageUrls).toBe(stringified);
+  });
+
+  test('PUT imageUrls: null clears the column', async ({ request }) => {
+    // Seed a row with images, then null the column.
+    const seed = await authPost(request, '/wellness/services', {
+      name: `${RUN_TAG} ImgClear`,
+      basePrice: 1500,
+      durationMin: 45,
+      imageUrls: ['https://cdn.example.com/x.png'],
+    }, 'admin');
+    const created = await seed.json();
+    createdServiceIds.push(created.id);
+
+    const upd = await authPut(request, `/wellness/services/${created.id}`, { imageUrls: null }, 'admin');
+    expect(upd.status()).toBe(200);
+    const body = await upd.json();
+    expect(body.imageUrls).toBeNull();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
 // RBAC matrix — POST gate (admin/manager only)
 // ──────────────────────────────────────────────────────────────────────
 

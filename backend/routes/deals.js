@@ -466,7 +466,7 @@ router.post("/:id/won", async (req, res) => {
     }
 
     await audit("UPDATE", deal.id, req.user.userId, req.user.tenantId, { action: "won", from: existing.stage });
-    try { require("../lib/eventBus").emitEvent("deal.won", { dealId: deal.id, title: deal.title, amount: deal.amount, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
+    try { await require("../lib/eventBus").emitEvent("deal.won", { dealId: deal.id, title: deal.title, amount: deal.amount, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
     if (req.io) req.io.emit("deal_updated", deal);
     res.json(deal);

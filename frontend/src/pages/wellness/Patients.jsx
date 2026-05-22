@@ -114,8 +114,21 @@ export default function Patients() {
   };
 
   // ── Page-local state ────────────────────────────────────────────────
+  // `q` and `page` are URL-driven (declared above from `searchParams`);
+  // do NOT shadow them with local useState — the search bar and pager
+  // both call setQ/setPage defined below as URL writers.
   const [patients, setPatients] = useState([]);
   const [total, setTotal] = useState(0);
+  // Pagination — backend at /api/wellness/patients accepts ?limit (cap 200)
+  // + ?offset and returns { patients, total }. `pageSize` stays local
+  // (not in URL) so the dropdown choice persists per-tab without polluting
+  // shareable links. `page` itself lives in the URL via setPage below.
+  const [pageSize, setPageSize] = useState(50);
+  // #331-bug fix: form-create flag added so handleCreate can request a refresh
+  // without re-introducing a stale-state read. The previous direct `load()`
+  // call inside handleCreate re-fetched with whatever `q` the closure had
+  // captured when the form was rendered, which raced against the debounced
+  // search effect.
   const [reloadTick, setReloadTick] = useState(0);
   const [loading, setLoading] = useState(true);
   const [locations, setLocations] = useState([]);
@@ -151,25 +164,13 @@ export default function Patients() {
   const reqIdRef = useRef(0);
   const didMountRef = useRef(false);
 
-  // Build a fetch URL out of the current filters. Centralized so /export
-  // can mirror it byte-for-byte from this hook.
-  const buildListQuery = (pageNum) => {
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    if (sourceFilter.length) params.set("source", sourceFilter.join(","));
-    if (genderFilter.length) params.set("gender", genderFilter.join(","));
-    if (tagFilter.length) params.set("tags", tagFilter.join(","));
-    if (addedFrom) params.set("addedFrom", addedFrom);
-    if (addedTo) params.set("addedTo", addedTo);
-    params.set("limit", String(PAGE_SIZE));
-    params.set("offset", String((pageNum - 1) * PAGE_SIZE));
-    return params.toString();
-  };
-
-  const load = (pageNum) => {
+  const load = (currentQ) => {
     const myReqId = ++reqIdRef.current;
     setLoading(true);
-    fetchApi(`/api/wellness/patients?${buildListQuery(pageNum)}`)
+    const url = currentQ
+      ? `/api/wellness/patients?q=${encodeURIComponent(currentQ)}`
+      : "/api/wellness/patients";
+    fetchApi(url)
       .then((d) => {
         if (myReqId !== reqIdRef.current) return;
         setPatients(d.patients || []);
@@ -186,6 +187,14 @@ export default function Patients() {
       });
   };
 
+  // Snap back to page 1 whenever the search query OR page-size changes —
+  // otherwise typing into the search box with `page=5` selected would
+  // request offset=200 on a result set that may only have 3 matches and
+  // render an empty table even though matches exist.
+  useEffect(() => {
+    setPage(1);
+  }, [q, pageSize]);
+
   const loadTags = () => {
     fetchApi("/api/wellness/patients/tags")
       .then((d) => setAllTags(d.tags || []))
@@ -196,13 +205,15 @@ export default function Patients() {
   useEffect(() => {
     if (!didMountRef.current) {
       didMountRef.current = true;
-      load(page);
+      load("");
       return;
     }
-    const t = setTimeout(() => load(page), SEARCH_DEBOUNCE_MS);
+    // #548: standardised on SEARCH_DEBOUNCE_MS (300ms) — was 250ms; pen-test
+    // flagged drift between Patients (250) and Omnibar (300). One source of
+    // truth in utils/timing.js.
+    const t = setTimeout(() => load(qRef.current), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, page, searchParams.toString(), reloadTick]);
+  }, [q, reloadTick]);
 
   useEffect(() => {
     fetchApi("/api/wellness/locations").then(setLocations).catch(() => setLocations([]));
@@ -745,7 +756,9 @@ export default function Patients() {
                   </td>
                   <td style={tdStyle}>{p.gender || "—"}</td>
                   <td style={tdStyle}>{p.source || "—"}</td>
-                  <td style={tdStyle}>{formatDate(p.createdAt)}</td>
+                  <td style={tdStyle}>
+                    {formatDate(p.createdAt)}
+                  </td>
                   <td style={{ ...tdStyle, textAlign: "center" }}>
                     <button
                       onClick={() => startEdit(p)}
@@ -774,6 +787,13 @@ export default function Patients() {
               )}
             </tbody>
           </table>
+          <PatientPager
+            total={total}
+            page={page}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
         </div>
       )}
 
@@ -824,6 +844,95 @@ export default function Patients() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// Pagination footer — Prev / numbered pages (windowed) / Next + items-per-
+// page selector. Rendered below the table so it's always reachable even
+// with a tall list. Hides itself when total fits within a single page.
+function PatientPager({ total, page, pageSize, onPageChange, onPageSizeChange }) {
+  const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const pages = useMemo(() => {
+    // Compact window: always show 1, the current page ±2, and pageCount,
+    // with ellipses where there's a gap. Keeps the bar narrow on long
+    // lists (e.g. 600+ patients = 13+ pages of 50).
+    const out = new Set([1, pageCount, safePage]);
+    for (let i = Math.max(2, safePage - 2); i <= Math.min(pageCount - 1, safePage + 2); i++) {
+      out.add(i);
+    }
+    const sorted = Array.from(out).sort((a, b) => a - b);
+    const withGaps = [];
+    sorted.forEach((p, i) => {
+      if (i > 0 && p - sorted[i - 1] > 1) withGaps.push("…");
+      withGaps.push(p);
+    });
+    return withGaps;
+  }, [pageCount, safePage]);
+
+  if (total === 0) return null;
+  const start = (safePage - 1) * pageSize + 1;
+  const end = Math.min(start + pageSize - 1, total);
+
+  const pillBtn = (active, disabled) => ({
+    minWidth: 32, height: 32, padding: "0 0.5rem",
+    background: active ? "var(--primary-color, var(--accent-color))" : "transparent",
+    color: active ? "#fff" : "var(--text-primary)",
+    border: "1px solid var(--border-color, rgba(255,255,255,0.18))",
+    borderRadius: 6, cursor: disabled ? "not-allowed" : "pointer",
+    fontSize: "0.85rem", display: "inline-flex", alignItems: "center", justifyContent: "center",
+    opacity: disabled ? 0.4 : 1,
+  });
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", justifyContent: "space-between", padding: "0.85rem 1rem", borderTop: "1px solid var(--border-color, rgba(255,255,255,0.08))", fontSize: "0.85rem" }}>
+      <div style={{ color: "var(--text-secondary)" }}>
+        Showing <strong style={{ color: "var(--text-primary)" }}>{start}–{end}</strong> of <strong style={{ color: "var(--text-primary)" }}>{total}</strong> patients
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+        <label style={{ color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+          Rows
+          <select
+            value={pageSize}
+            onChange={(e) => onPageSizeChange(parseInt(e.target.value, 10))}
+            style={{ padding: "0.3rem 0.5rem", borderRadius: 6, border: "1px solid var(--border-color, rgba(255,255,255,0.18))", background: "var(--surface-color, rgba(255,255,255,0.04))", color: "var(--text-primary)" }}
+          >
+            {[25, 50, 100, 200].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={() => onPageChange(safePage - 1)}
+          disabled={safePage <= 1}
+          aria-label="Previous page"
+          style={pillBtn(false, safePage <= 1)}
+        >
+          <ChevronLeft size={14} />
+        </button>
+        {pages.map((p, i) => (
+          p === "…"
+            ? <span key={`gap-${i}`} style={{ color: "var(--text-secondary)", padding: "0 0.2rem" }}>…</span>
+            : <button
+                key={p}
+                type="button"
+                onClick={() => onPageChange(p)}
+                aria-current={p === safePage ? "page" : undefined}
+                style={pillBtn(p === safePage, false)}
+              >
+                {p}
+              </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => onPageChange(safePage + 1)}
+          disabled={safePage >= pageCount}
+          aria-label="Next page"
+          style={pillBtn(false, safePage >= pageCount)}
+        >
+          <ChevronRight size={14} />
+        </button>
+      </div>
     </div>
   );
 }

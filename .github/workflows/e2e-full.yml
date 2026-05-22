@@ -129,7 +129,7 @@ jobs:
 
       - name: Upload blob report (will be merged across shards)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: blob-report-${{ matrix.shard }}
           path: e2e/blob-report
@@ -137,7 +137,7 @@ jobs:
 
       - name: Upload test results on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-results-shard-${{ matrix.shard }}-${{ github.run_id }}
           path: e2e/test-results/
@@ -164,7 +164,7 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Download all blob reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: e2e/all-blob-reports
           pattern: blob-report-*
@@ -175,7 +175,7 @@ jobs:
         run: npx playwright merge-reports --reporter html ./all-blob-reports
 
       - name: Upload merged HTML report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: e2e-full-html-report-${{ github.ref_name }}-${{ github.run_id }}
           path: e2e/playwright-report/

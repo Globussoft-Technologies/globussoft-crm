@@ -25,6 +25,28 @@ function genderLabel(g) {
   return g;
 }
 
+// Strip every customer-facing reference to the Zylu POS — patient.source
+// values like "zylu-import", inline "[ZYLU-#nnn]" markers, and visit-note
+// strings like "Zylu booking #15029981". The data stays untouched at
+// rest; we just don't render those tokens to the end user.
+function isZyluSource(v) {
+  return typeof v === 'string' && /^zylu/i.test(v.trim());
+}
+function displaySource(v) {
+  if (!v || isZyluSource(v)) return '—';
+  return v;
+}
+function scrubZylu(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  // "Zylu booking #1234" / "ZYLU booking 1234" (with optional #)
+  let t = text.replace(/\bzylu\s+booking\s*#?\s*\d+\.?/gi, '').trim();
+  // "[ZYLU-#1234]" tag form used by imported prescriptions.
+  t = t.replace(/\[\s*zylu-?#?\d+\s*\]/gi, '').trim();
+  // Collapse the double-blank line + stray punctuation left behind.
+  t = t.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return t;
+}
+
 function PatientSummaryDownloadButton({ patientId, patientName }) {
   const [downloading, setDownloading] = useState(false);
   const notify = useNotify();
@@ -173,7 +195,7 @@ export default function PatientDetail() {
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-          <span>Source: <strong style={{ color: 'var(--text-primary)' }}>{patient.source || '—'}</strong></span>
+          <span>Source: <strong style={{ color: 'var(--text-primary)' }}>{displaySource(patient.source)}</strong></span>
           <span>{patient.visits.length} visits • {patient.prescriptions.length} Rx • {patient.treatmentPlans.length} treatment plans</span>
         </div>
       </div>
@@ -409,7 +431,7 @@ function CaseHistoryTab({ patient }) {
               </div>
               {e.kind === 'visit' && (
                 <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                  {e.data.notes || 'No notes'}
+                  {scrubZylu(e.data.notes) || 'No notes'}
                   {e.data.amountCharged && <> • <strong style={{ color: 'var(--success-color)' }}>₹{Math.round(e.data.amountCharged).toLocaleString('en-IN')}</strong></>}
                 </div>
               )}
@@ -613,7 +635,7 @@ function RxDetailModal({ rx, patient, onClose }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h2 style={{ fontSize: '1.05rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <FileText size={18} /> Prescription #{rx.id}
-            {parsed.zyluId && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 400 }}>(ZYLU-#{parsed.zyluId})</span>}
+            {/* Internal ZYLU id intentionally hidden from the UI. */}
           </h2>
           <button onClick={onClose} aria-label="Close" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
             <X size={18} />

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import { Shield, UserPlus, Trash2, Key, Sun, Moon, Plus, ArrowUp, ArrowDown, Layers, Building2, Image as ImageIcon, Palette, Monitor, Mail, FileSignature, Bell, Eye, EyeOff, Check, X, Loader, PhoneCall } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -29,6 +29,13 @@ export default function Settings() {
   // Branding (logo + brand color) — backed by /api/wellness/branding
   const [branding, setBranding] = useState({ logoUrl: null, brandColor: '' });
   const [brandingSaving, setBrandingSaving] = useState(false);
+  // Logo upload UX: pick a file → preview it locally → click "Save logo"
+  // to actually upload. Previously the upload fired on file-pick which
+  // gave no way to review before commit + no preview of the picked file.
+  const [stagedLogo, setStagedLogo] = useState(null); // File or null
+  const [stagedPreviewUrl, setStagedPreviewUrl] = useState(null);
+  const [logoBroken, setLogoBroken] = useState(false);
+  const logoInputRef = useRef(null);
   const [logoUploading, setLogoUploading] = useState(false);
   const [brandingMsg, setBrandingMsg] = useState('');
   // AdsGPT configuration
@@ -71,14 +78,39 @@ export default function Settings() {
       .catch(() => setCallifiedLoading(false));
   }, []);
 
-  const handleUploadLogo = async (e) => {
+  // Stage a picked file locally — render a preview, wait for the user to
+  // hit "Save logo" before doing the actual upload. URL.createObjectURL
+  // returns a blob: URL we must revoke when replacing or unmounting to
+  // avoid leaking the blob.
+  const handlePickLogo = (e) => {
     const file = e.target.files && e.target.files[0];
+    // Reset the input so picking the same file twice fires onChange again.
+    if (e.target) e.target.value = '';
     if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+      setBrandingMsg('Image too large — max 20 MB.');
+      return;
+    }
+    if (stagedPreviewUrl) URL.revokeObjectURL(stagedPreviewUrl);
+    setStagedLogo(file);
+    setStagedPreviewUrl(URL.createObjectURL(file));
+    setBrandingMsg('');
+  };
+
+  const cancelStagedLogo = () => {
+    if (stagedPreviewUrl) URL.revokeObjectURL(stagedPreviewUrl);
+    setStagedLogo(null);
+    setStagedPreviewUrl(null);
+    setBrandingMsg('');
+  };
+
+  const handleSaveLogo = async () => {
+    if (!stagedLogo) return;
     setLogoUploading(true);
     setBrandingMsg('');
     try {
       const fd = new FormData();
-      fd.append('logo', file);
+      fd.append('logo', stagedLogo);
       const token = getAuthToken();
       const resp = await fetch('/api/wellness/branding/logo', {
         method: 'POST',
@@ -88,15 +120,25 @@ export default function Settings() {
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(json.error || 'Upload failed');
       setBranding((b) => ({ ...b, logoUrl: json.logoUrl }));
+      setLogoBroken(false);
       // Reflect into sidebar instantly
       if (setTenant && ctxTenant) setTenant({ ...ctxTenant, logoUrl: json.logoUrl });
       setBrandingMsg('Logo updated.');
+      cancelStagedLogo();
     } catch (err) {
       setBrandingMsg(err.message || 'Logo upload failed');
     } finally {
       setLogoUploading(false);
     }
   };
+
+  // Revoke the staged blob URL on unmount so we don't leak it.
+  useEffect(() => {
+    return () => {
+      if (stagedPreviewUrl) URL.revokeObjectURL(stagedPreviewUrl);
+    };
+
+  }, []);
 
   const handleSaveBrandColor = async () => {
     setBrandingSaving(true);
@@ -581,28 +623,89 @@ export default function Settings() {
               <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
                 <ImageIcon size={14} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} /> Logo
               </label>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem' }}>
-                {branding.logoUrl ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                {/* Preview tile — staged file wins over saved logo so the
+                    user can see what they're about to commit. Broken
+                    logoUrl falls back to a dashed placeholder instead of
+                    leaving the classic broken-image icon in place. */}
+                {stagedPreviewUrl ? (
+                  <div style={{ position: 'relative' }}>
+                    <img
+                      src={stagedPreviewUrl}
+                      alt="New logo preview"
+                      style={{ width: 80, height: 80, borderRadius: 8, objectFit: 'cover', border: '2px solid var(--accent-color)' }}
+                    />
+                    <span style={{ position: 'absolute', bottom: -8, left: '50%', transform: 'translateX(-50%)', background: 'var(--accent-color)', color: '#fff', fontSize: '0.65rem', padding: '0.1rem 0.45rem', borderRadius: 999, whiteSpace: 'nowrap', fontWeight: 600 }}>
+                      Pending
+                    </span>
+                  </div>
+                ) : branding.logoUrl && !logoBroken ? (
                   <img
                     src={branding.logoUrl}
                     alt="Current logo"
-                    style={{ width: 56, height: 56, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border-color)' }}
+                    onError={() => setLogoBroken(true)}
+                    style={{ width: 80, height: 80, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border-color)' }}
                   />
                 ) : (
-                  <div style={{ width: 56, height: 56, borderRadius: 8, border: '1px dashed var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-                    <ImageIcon size={20} />
+                  <div style={{ width: 80, height: 80, borderRadius: 8, border: '1px dashed var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '0.7rem', textAlign: 'center', flexDirection: 'column', gap: '0.2rem' }}>
+                    <ImageIcon size={22} />
+                    <span>{logoBroken ? 'Image broken' : 'No logo'}</span>
                   </div>
                 )}
+
+                {/* Hidden native input; visible buttons trigger it. */}
                 <input
+                  ref={logoInputRef}
                   type="file"
                   accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
-                  onChange={handleUploadLogo}
-                  disabled={logoUploading}
-                  style={{ flex: 1, fontSize: '0.85rem' }}
+                  onChange={handlePickLogo}
+                  style={{ display: 'none' }}
                 />
+
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  {stagedLogo ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={handleSaveLogo}
+                        disabled={logoUploading}
+                        style={{ whiteSpace: 'nowrap' }}
+                      >
+                        {logoUploading ? 'Uploading…' : 'Save logo'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => logoInputRef.current?.click()}
+                        disabled={logoUploading}
+                        style={{ padding: '0.5rem 0.9rem', background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 6, color: 'var(--text-primary)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      >
+                        Pick another
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelStagedLogo}
+                        disabled={logoUploading}
+                        style={{ padding: '0.5rem 0.9rem', background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 6, color: 'var(--danger-color, #ef4444)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => logoInputRef.current?.click()}
+                      disabled={logoUploading}
+                      style={{ whiteSpace: 'nowrap' }}
+                    >
+                      {branding.logoUrl && !logoBroken ? 'Replace logo' : 'Upload logo'}
+                    </button>
+                  )}
+                </div>
               </div>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                PNG, JPG, GIF, WEBP or SVG. Max 2 MB. Square works best.
+                PNG, JPG, GIF, WEBP or SVG. Max 20 MB. Square works best.
               </p>
             </div>
 

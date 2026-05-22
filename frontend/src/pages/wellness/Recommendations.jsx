@@ -138,6 +138,11 @@ export default function Recommendations() {
       } else {
         notify.success('Recommendation rejected');
       }
+      // Optimistic removal: the next load() refresh is async (two fetches: the
+      // status-filtered list + the unfiltered counter pull), and tests / users
+      // landing immediately after the click otherwise see the card stuck in
+      // the "pending" tab for ~300ms. Drop it now; load() will reconcile.
+      setItems((prev) => prev.filter((r) => r.id !== id));
       load();
     } catch (err) {
       // fetchApi already toasted the underlying message. Page-specific hint:

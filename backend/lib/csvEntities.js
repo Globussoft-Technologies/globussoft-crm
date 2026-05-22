@@ -112,7 +112,7 @@ function formatDateTime(d) {
 // pick whichever is relevant.
 
 async function buildLookupContext(prisma, tenantId) {
-  const [services, drugs, patients, staff] = await Promise.all([
+  const [services, drugs, patients, staff, contacts] = await Promise.all([
     prisma.service.findMany({
       where: { tenantId },
       select: { id: true, name: true },
@@ -126,6 +126,13 @@ async function buildLookupContext(prisma, tenantId) {
       select: { id: true, name: true, phone: true, normalizedPhone: true, email: true },
     }),
     prisma.user.findMany({
+      where: { tenantId },
+      select: { id: true, name: true, email: true },
+    }),
+    // Contact lookups for the invoices entity — resolves a CSV's
+    // `contactEmail` column to a numeric contactId on import. Matched by
+    // email (case-insensitive). Falls back to name if no email match.
+    prisma.contact.findMany({
       where: { tenantId },
       select: { id: true, name: true, email: true },
     }),
@@ -146,6 +153,8 @@ async function buildLookupContext(prisma, tenantId) {
   );
   const staffByName = new Map(staff.map((u) => [norm(u.name), u.id]));
   const staffByEmail = new Map(staff.filter((u) => u.email).map((u) => [norm(u.email), u.id]));
+  const contactsByEmail = new Map(contacts.filter((c) => c.email).map((c) => [norm(c.email), c.id]));
+  const contactsByName = new Map(contacts.map((c) => [norm(c.name), c.id]));
 
   return {
     servicesByName,
@@ -154,12 +163,18 @@ async function buildLookupContext(prisma, tenantId) {
     patientsByEmail,
     staffByName,
     staffByEmail,
+    contactsByEmail,
+    contactsByName,
     findService: (name) => servicesByName.get(norm(name)) || null,
     findDrug: (name) => drugsByName.get(norm(name)) || null,
     findPatientByPhone: (phone) => patientsByPhone.get(normPhone(phone)) || null,
     findStaff: (nameOrEmail) => {
       const k = norm(nameOrEmail);
       return staffByName.get(k) || staffByEmail.get(k) || null;
+    },
+    findContact: (emailOrName) => {
+      const k = norm(emailOrName);
+      return contactsByEmail.get(k) || contactsByName.get(k) || null;
     },
   };
 }
@@ -729,7 +744,139 @@ const bookings = {
   },
 };
 
-const ENTITIES = { services, packages, products, customers, bookings };
+// ── Invoices ──────────────────────────────────────────────────────
+// Natural key is `invoiceNum` (the Prisma column is @unique). On import
+// we resolve the buyer via `contactEmail` → contactId using the lookup
+// context. Status defaults to UNPAID and must be one of the four allowed
+// values matching backend/routes/billing.js.
+const INVOICE_STATUSES = new Set(["UNPAID", "PAID", "OVERDUE", "VOIDED"]);
+const INVOICE_RECUR_FREQUENCIES = new Set(["monthly", "quarterly", "yearly"]);
+
+const invoices = {
+  model: "invoice",
+  headers: ["invoiceNum", "contactEmail", "amount", "status", "dueDate", "issuedDate", "isRecurring", "recurFrequency"],
+  sample: {
+    invoiceNum: "INV-2026-0001",
+    contactEmail: "client@example.com",
+    amount: "15000",
+    status: "UNPAID",
+    dueDate: "2026-06-30",
+    issuedDate: "2026-05-21",
+    isRecurring: "false",
+    recurFrequency: "",
+  },
+  readGate: ["admin", "manager"],
+  writeGate: ["admin", "manager"],
+  buildWhere: (req) => {
+    const where = { tenantId: req.user.tenantId };
+    const { status, q } = req.query;
+    if (status && INVOICE_STATUSES.has(status)) where.status = status;
+    if (q) where.OR = [{ invoiceNum: { contains: q } }, { contact: { name: { contains: q } } }];
+    return where;
+  },
+  orderBy: [{ issuedDate: "desc" }],
+  // Include contact email so the export round-trips: re-uploading the
+  // exported CSV resolves contactEmail back to the same contactId.
+  exportInclude: { contact: { select: { email: true, name: true } } },
+  serialize: (i) => [
+    i.invoiceNum || "",
+    i.contact?.email || "",
+    i.amount ?? "",
+    i.status || "UNPAID",
+    i.dueDate ? new Date(i.dueDate).toISOString().slice(0, 10) : "",
+    i.issuedDate ? new Date(i.issuedDate).toISOString().slice(0, 10) : "",
+    i.isRecurring ? "true" : "false",
+    i.recurFrequency || "",
+  ],
+  async parseRow(raw, ctx) {
+    const errors = [];
+
+    const invoiceNumErr = requireString(raw.invoiceNum, "invoiceNum", 64);
+    if (invoiceNumErr) errors.push(invoiceNumErr);
+
+    const amountErr = requirePositiveNumber(raw.amount, "amount", { max: 100_000_000 });
+    if (amountErr) errors.push(amountErr);
+
+    // dueDate is required; issuedDate falls back to today on import.
+    const dueDateStr = trimOrNull(raw.dueDate);
+    if (!dueDateStr) {
+      errors.push({ column: "dueDate", value: "", message: "dueDate is required (YYYY-MM-DD)" });
+    }
+    const dueDate = dueDateStr ? new Date(dueDateStr) : null;
+    if (dueDate && Number.isNaN(dueDate.getTime())) {
+      errors.push({ column: "dueDate", value: String(raw.dueDate), message: "dueDate must be a valid date (YYYY-MM-DD)" });
+    }
+
+    const issuedDateStr = trimOrNull(raw.issuedDate);
+    const issuedDate = issuedDateStr ? new Date(issuedDateStr) : new Date();
+    if (issuedDateStr && Number.isNaN(issuedDate.getTime())) {
+      errors.push({ column: "issuedDate", value: String(raw.issuedDate), message: "issuedDate must be a valid date (YYYY-MM-DD)" });
+    }
+
+    // contactEmail → contactId via lookup context.
+    const contactEmail = trimOrNull(raw.contactEmail);
+    if (!contactEmail) {
+      errors.push({ column: "contactEmail", value: "", message: "contactEmail is required so we can attach the invoice to a contact" });
+    }
+    let contactId = null;
+    if (contactEmail && ctx?.lookups) {
+      contactId = ctx.lookups.findContact(contactEmail);
+      if (!contactId) {
+        errors.push({ column: "contactEmail", value: contactEmail, message: "no contact found with this email — create the contact first or correct the address" });
+      }
+    }
+
+    const status = trimOrNull(raw.status) || "UNPAID";
+    if (!INVOICE_STATUSES.has(status)) {
+      errors.push({ column: "status", value: String(raw.status), message: `status must be one of ${Array.from(INVOICE_STATUSES).join(" / ")}` });
+    }
+
+    const isRecurring = parseBool(raw.isRecurring);
+    if (isRecurring === undefined) {
+      errors.push({ column: "isRecurring", value: String(raw.isRecurring), message: "isRecurring must be true/false/yes/no/1/0 (blank = false)" });
+    }
+
+    const recurFrequency = trimOrNull(raw.recurFrequency);
+    if (recurFrequency && !INVOICE_RECUR_FREQUENCIES.has(recurFrequency)) {
+      errors.push({ column: "recurFrequency", value: recurFrequency, message: `recurFrequency must be one of ${Array.from(INVOICE_RECUR_FREQUENCIES).join(" / ")}` });
+    }
+    if (isRecurring === true && !recurFrequency) {
+      errors.push({ column: "recurFrequency", value: "", message: "recurFrequency is required when isRecurring=true" });
+    }
+
+    if (errors.length) return { data: null, errors };
+
+    return {
+      data: {
+        invoiceNum: String(raw.invoiceNum).trim(),
+        amount: parseNumber(raw.amount),
+        status,
+        dueDate,
+        issuedDate,
+        isRecurring: isRecurring || false,
+        recurFrequency: recurFrequency || null,
+        contactId,
+      },
+      errors: [],
+    };
+  },
+  naturalKey: (data) => data.invoiceNum.toLowerCase(),
+  async naturalKeyMatch(prisma, tenantId, data) {
+    return prisma.invoice.findFirst({
+      where: { tenantId, invoiceNum: data.invoiceNum },
+    });
+  },
+  async persist(prisma, tenantId, data, existing) {
+    if (existing) {
+      const record = await prisma.invoice.update({ where: { id: existing.id }, data });
+      return { action: "updated", record };
+    }
+    const record = await prisma.invoice.create({ data: { ...data, tenantId } });
+    return { action: "inserted", record };
+  },
+};
+
+const ENTITIES = { services, packages, products, customers, bookings, invoices };
 
 function getEntity(name) {
   return Object.prototype.hasOwnProperty.call(ENTITIES, name) ? ENTITIES[name] : null;

@@ -181,6 +181,28 @@ test.describe('inventory backbone — RBAC: plain USER blocked from admin gates'
   });
 });
 
+// ── Service image upload routes (added 2026-05-21) ────────────────
+// Both endpoints sit alongside /upload/product-image and use the same
+// S3 helper — the happy-path codepath is covered by the product tests
+// elsewhere. We just pin that the new endpoints exist + reject unauth.
+
+test.describe('service image-upload routes — auth gate', () => {
+  test('POST /upload/service-image without token → 401/403', async ({ request }) => {
+    const r = await request.post(`${BASE_URL}/api/wellness/upload/service-image`, {
+      timeout: REQUEST_TIMEOUT,
+      multipart: { file: { name: 'x.png', mimeType: 'image/png', buffer: Buffer.from([137, 80, 78, 71]) } },
+    });
+    expect([401, 403]).toContain(r.status());
+  });
+  test('POST /upload/service-category-image without token → 401/403', async ({ request }) => {
+    const r = await request.post(`${BASE_URL}/api/wellness/upload/service-category-image`, {
+      timeout: REQUEST_TIMEOUT,
+      multipart: { file: { name: 'x.png', mimeType: 'image/png', buffer: Buffer.from([137, 80, 78, 71]) } },
+    });
+    expect([401, 403]).toContain(r.status());
+  });
+});
+
 // ── ProductCategory CRUD ──────────────────────────────────────────
 
 test.describe('ProductCategory CRUD', () => {

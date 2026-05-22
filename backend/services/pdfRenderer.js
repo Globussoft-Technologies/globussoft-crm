@@ -94,6 +94,73 @@ function drawClinicHeader(doc, clinic) {
   doc.fillColor("#111");
 }
 
+// Render an array of [label, value] pairs as one continued line with the
+// labels bold and the values regular weight. Used by the case-history
+// visit summary so "Service: …  •  Doctor: …" shows each label clearly.
+function renderBoldLabeledLine(doc, pairs, x, width, sep = "   •   ") {
+  const startX = x;
+  doc.fillColor("#111").fontSize(10);
+  pairs.forEach(([label, value], i) => {
+    if (i === 0) {
+      doc.font("Helvetica-Bold").text(`${label}: `, startX, doc.y, { continued: true });
+    } else {
+      doc.font("Helvetica").fillColor("#9ca3af").text(sep, { continued: true });
+      doc.font("Helvetica-Bold").fillColor("#111").text(`${label}: `, { continued: true });
+    }
+    const isLast = i === pairs.length - 1;
+    doc.font("Helvetica").fillColor("#333")
+      .text(String(value), isLast ? { width } : { continued: true });
+  });
+}
+
+// Render a free-text notes block where embedded "Label:" tokens
+// (Services:, Products:, Employee:, Location: …) become bold AND start
+// on their own line. The legacy free-text format mashed every labelled
+// section onto one wrapping paragraph which made the structure invisible
+// — e.g. "AFTProducts: …" with no separator between value and next
+// label. Splitting into one line per label gives a clean list view.
+function renderNotesWithBoldLabels(doc, raw, x, width) {
+  if (!raw || typeof raw !== "string") return;
+  doc.fillColor("#111").fontSize(10);
+  const indent = 12;
+
+  // Always lead with a bold "Notes:" header on its own line so the row
+  // is clearly a notes block and not a continuation of the summary line
+  // above.
+  doc.font("Helvetica-Bold").fillColor("#111").text("Notes:", x, doc.y, { width });
+
+  // Tokenize: split on the capture group so the alternating array
+  // yields [pre, label, mid, label, …, post]. The "pre" before the
+  // first label is any free-text that came BEFORE any labelled chunk
+  // (rare in practice but we still print it). After that, every
+  // (label, value) pair gets its OWN line, indented under the Notes
+  // header so the structure reads as a list.
+  const labelRe = /(\b[A-Z][A-Za-z][\w&/-]*:)/g;
+  const parts = raw.split(labelRe);
+
+  // Stitch into rows: { label, value }. The very first segment (parts[0])
+  // is any unlabelled prefix.
+  const rows = [];
+  if (parts[0] && parts[0].trim()) rows.push({ label: null, value: parts[0].trim() });
+  for (let i = 1; i < parts.length; i += 2) {
+    const label = parts[i];
+    const value = (parts[i + 1] || "").trim();
+    rows.push({ label, value });
+  }
+
+  for (const row of rows) {
+    if (row.label) {
+      doc.font("Helvetica-Bold").fillColor("#111")
+        .text(`${row.label} `, x + indent, doc.y, { continued: true });
+      doc.font("Helvetica").fillColor("#333")
+        .text(row.value || "—", { width: width - indent });
+    } else {
+      doc.font("Helvetica").fillColor("#333")
+        .text(row.value, x + indent, doc.y, { width: width - indent });
+    }
+  }
+}
+
 function parseDrugs(drugs) {
   if (!drugs) return [];
   if (Array.isArray(drugs)) return drugs;
@@ -489,6 +556,21 @@ async function renderBrandedInvoicePdf(invoice, contact, clinic) {
 // chronologically), detailed prescriptions, treatment plans, wallet ledger,
 // and memberships. One file per patient, downloadable from PatientDetail.
 
+// Strip every customer-facing reference to the upstream Zylu POS — source
+// values like "zylu-import", "[ZYLU-#nnn]" markers, "Zylu booking #N"
+// strings — mirroring the same UI rule applied in PatientDetail.jsx.
+function scrubZyluText(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  let t = text.replace(/\bzylu\s+booking\s*#?\s*\d+\.?/gi, '').trim();
+  t = t.replace(/\[\s*zylu-?#?\d+\s*\]/gi, '').trim();
+  t = t.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return t;
+}
+function scrubZyluSource(v) {
+  if (!v || (typeof v === 'string' && /^zylu/i.test(v.trim()))) return null;
+  return v;
+}
+
 async function renderPatientSummaryPdf({
   patient,
   tenant,
@@ -511,22 +593,43 @@ async function renderPatientSummaryPdf({
     }
   };
 
+  // Section heading — light-grey fill band with a teal accent stripe on
+  // the left so every section is unambiguously distinct from body text.
+  // Adds extra vertical breathing room before the band so consecutive
+  // sections never visually crash into each other.
   const sectionTitle = (text) => {
-    ensureSpace(40);
-    doc.moveDown(0.4);
-    doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text(text, leftX);
-    doc.moveTo(leftX, doc.y + 2).lineTo(pageRight, doc.y + 2)
-      .lineWidth(0.6).strokeColor("#999").stroke();
+    ensureSpace(50);
+    doc.moveDown(1.0);
+    const barY = doc.y;
+    const barH = 26;
+    doc.save();
+    doc.rect(leftX, barY, usableW, barH).fillColor("#f3f4f6").fill();
+    doc.rect(leftX, barY, 4, barH).fillColor("#265855").fill();
+    doc.restore();
+    doc.font("Helvetica-Bold").fontSize(12).fillColor("#111")
+      .text(text, leftX + 14, barY + 8, { width: usableW - 24 });
+    doc.y = barY + barH;
     doc.moveDown(0.5);
   };
 
+  // Label-value row — two fixed columns (uppercase grey label, then the
+  // value in normal weight). The previous `continued: true` approach
+  // made the value butt directly against the label with no breathing
+  // room and ran the two together when the label wrapped — replaced
+  // with absolute-positioned columns that always align.
+  const KV_LABEL_W = 140;
   const kv = (label, value, opts = {}) => {
     const v = value == null || value === "" ? "—" : String(value);
-    ensureSpace(16);
+    ensureSpace(18);
     const y = doc.y;
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#333")
-      .text(`${label}: `, leftX, y, { continued: true, width: opts.width || usableW });
-    doc.font("Helvetica").fillColor("#222").text(v);
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#6b7280")
+      .text(String(label).toUpperCase(), leftX, y + 2, { width: opts.labelWidth || KV_LABEL_W });
+    doc.font("Helvetica").fontSize(10).fillColor("#111")
+      .text(v, leftX + (opts.labelWidth || KV_LABEL_W), y, {
+        width: usableW - (opts.labelWidth || KV_LABEL_W),
+      });
+    doc.y = Math.max(doc.y, y + 16);
+    doc.moveDown(0.15);
   };
 
   const currency = wallet?.currency || patient?.currency || "INR";
@@ -603,7 +706,7 @@ async function renderPatientSummaryPdf({
   kv("Email", patient?.email);
   if (patient?.bloodGroup) kv("Blood Group", patient.bloodGroup);
   if (patient?.address) kv("Address", patient.address);
-  if (patient?.source) kv("Source", patient.source);
+  { const src = scrubZyluSource(patient?.source); if (src) kv("Source", src); }
   if (patient?.allergies) kv("Allergies", patient.allergies);
   if (patient?.medicalHistory) kv("Medical History", patient.medicalHistory);
   if (patient?.notes) kv("Notes", patient.notes);
@@ -620,36 +723,74 @@ async function renderPatientSummaryPdf({
 
   if (events.length > 0) {
     sectionTitle(`Case History (${events.length})`);
-    doc.font("Helvetica").fontSize(10).fillColor("#222");
-    for (const e of events) {
-      ensureSpace(36);
-      const y = doc.y;
-      doc.font("Helvetica-Bold").fillColor("#111")
-        .text(`${formatDate(e.date)} — ${e.kind}`, leftX, y);
-      doc.font("Helvetica").fillColor("#333");
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
+      ensureSpace(46);
+      // Date pill + event-kind badge. Visits = blue, Rx = teal, Consent
+      // = amber — colour-coded so the page is glanceable instead of one
+      // wall of black text.
+      const KIND_COLORS = { Visit: "#1d4ed8", Prescription: "#0f766e", Consent: "#b45309" };
+      const kindColor = KIND_COLORS[e.kind] || "#374151";
+      const headY = doc.y;
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111")
+        .text(formatDate(e.date), leftX, headY, { continued: true })
+        .fillColor("#9ca3af").text("   •   ", { continued: true })
+        .fillColor(kindColor).text(e.kind);
+      doc.moveDown(0.2);
+
+      doc.font("Helvetica").fontSize(10).fillColor("#333");
       if (e.kind === "Visit") {
         const v = e.data;
-        const line = [
-          v.service?.name && `Service: ${v.service.name}`,
-          v.doctor?.name && `Doctor: ${v.doctor.name}`,
-          v.amount != null && `Amount: ${formatMoney(v.amount, currency)}`,
-          v.status && `Status: ${v.status}`,
-        ].filter(Boolean).join("  •  ");
-        if (line) doc.text(line, leftX + 10, doc.y, { width: usableW - 10 });
-        if (v.notes) doc.text(`Notes: ${v.notes}`, leftX + 10, doc.y, { width: usableW - 10 });
+        // Bold each "Label: value" pair so the keys stand out from the
+        // values. Rendered as one continued line with font/colour
+        // flipped per segment; pdfkit auto-wraps when the line overflows.
+        const pairs = [
+          ["Service", v.service?.name],
+          ["Doctor", v.doctor?.name],
+          ["Amount", v.amount != null ? formatMoney(v.amount, currency) : null],
+          ["Status", v.status],
+        ].filter(([, val]) => val);
+        if (pairs.length) {
+          renderBoldLabeledLine(doc, pairs, leftX + 14, usableW - 14, "   •   ");
+        }
+        const n = scrubZyluText(v.notes);
+        if (n) renderNotesWithBoldLabels(doc, n, leftX + 14, usableW - 14);
       } else if (e.kind === "Prescription") {
         const p = e.data;
         const drugs = parseDrugs(p.drugs);
         const summary = drugs.length
           ? drugs.map((d) => d.name || d.drug || "").filter(Boolean).join(", ")
           : "(no medications listed)";
-        doc.text(`Rx #${p.id} — ${summary}`, leftX + 10, doc.y, { width: usableW - 10 });
-        if (p.doctor?.name) doc.text(`Prescribed by: ${p.doctor.name}`, leftX + 10, doc.y, { width: usableW - 10 });
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#111")
+          .text(`Rx #${p.id}`, leftX + 14, doc.y, { continued: true })
+          .font("Helvetica").fillColor("#333")
+          .text(` — ${summary}`, { width: usableW - 14 });
+        if (p.doctor?.name) {
+          doc.font("Helvetica-Bold").fillColor("#111")
+            .text(`Prescribed by: `, leftX + 14, doc.y, { continued: true })
+            .font("Helvetica").fillColor("#333")
+            .text(p.doctor.name, { width: usableW - 14 });
+        }
       } else if (e.kind === "Consent") {
         const c = e.data;
-        doc.text(`${c.templateName || "general"}${c.service?.name ? ` — ${c.service.name}` : ""}`, leftX + 10, doc.y, { width: usableW - 10 });
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#111")
+          .text(`${c.templateName || "general"}`, leftX + 14, doc.y, { continued: Boolean(c.service?.name) });
+        if (c.service?.name) {
+          doc.font("Helvetica").fillColor("#333").text(` — ${c.service.name}`, { width: usableW - 14 });
+        }
       }
-      doc.moveDown(0.3);
+
+      // Thin row separator between events so they don't smear into one
+      // another. Skipped after the last row to keep the trailing gap clean.
+      if (i < events.length - 1) {
+        doc.moveDown(0.35);
+        ensureSpace(8);
+        doc.moveTo(leftX, doc.y).lineTo(pageRight, doc.y)
+          .lineWidth(0.3).strokeColor("#e5e7eb").stroke();
+        doc.moveDown(0.35);
+      } else {
+        doc.moveDown(0.3);
+      }
     }
   }
 
@@ -658,28 +799,40 @@ async function renderPatientSummaryPdf({
     doc.addPage();
     doc.y = 60;
     sectionTitle(`Visits (${visits.length})`);
-    doc.font("Helvetica").fontSize(10).fillColor("#222");
-    for (const v of visits) {
-      ensureSpace(60);
-      const y = doc.y;
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111")
-        .text(`Visit #${v.id} — ${formatDate(v.visitDate)}`, leftX, y);
-      doc.font("Helvetica").fillColor("#333");
+    for (let i = 0; i < visits.length; i++) {
+      const v = visits[i];
+      ensureSpace(80);
+      // Visit header bar — bold ID + date so each visit is clearly its
+      // own card, not one continuous wall of text.
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+        .text(`Visit #${v.id}`, leftX, doc.y, { continued: true })
+        .font("Helvetica").fontSize(10).fillColor("#555")
+        .text(`   ·   ${formatDate(v.visitDate)}`);
+      doc.moveDown(0.3);
+
       const rows = [
         ["Service", v.service?.name],
         ["Doctor", v.doctor?.name],
         ["Status", v.status],
         ["Amount", v.amount != null ? formatMoney(v.amount, currency) : null],
         ["Payment", v.paymentMode],
-        ["Notes", v.notes],
+        ["Notes", scrubZyluText(v.notes)],
       ];
       for (const [k, val] of rows) {
         if (val == null || val === "") continue;
-        ensureSpace(14);
-        doc.font("Helvetica-Bold").text(`  ${k}: `, leftX, doc.y, { continued: true });
-        doc.font("Helvetica").text(String(val));
+        kv(k, val);
       }
-      doc.moveDown(0.4);
+
+      // Thin separator between consecutive visits (skipped for last row).
+      if (i < visits.length - 1) {
+        doc.moveDown(0.4);
+        ensureSpace(8);
+        doc.moveTo(leftX, doc.y).lineTo(pageRight, doc.y)
+          .lineWidth(0.4).strokeColor("#e5e7eb").stroke();
+        doc.moveDown(0.5);
+      } else {
+        doc.moveDown(0.4);
+      }
     }
   }
 
@@ -836,18 +989,29 @@ async function renderPatientSummaryPdf({
   // ── Treatment plans ───────────────────────────────────────────────
   if (treatmentPlans.length > 0) {
     sectionTitle(`Treatment Plans (${treatmentPlans.length})`);
-    for (const t of treatmentPlans) {
-      ensureSpace(40);
+    for (let i = 0; i < treatmentPlans.length; i++) {
+      const t = treatmentPlans[i];
+      ensureSpace(60);
       doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-        .text(`Plan #${t.id} — ${t.service?.name || "—"}`, leftX);
-      doc.font("Helvetica").fontSize(10).fillColor("#333");
+        .text(`Plan #${t.id}`, leftX, doc.y, { continued: true })
+        .font("Helvetica").fontSize(10).fillColor("#555")
+        .text(`   ·   ${t.service?.name || "—"}`);
+      doc.moveDown(0.3);
       if (t.sessionsTotal != null || t.sessionsCompleted != null) {
         kv("Sessions", `${t.sessionsCompleted ?? 0} / ${t.sessionsTotal ?? "—"}`);
       }
       if (t.totalPrice != null) kv("Total Price", formatMoney(t.totalPrice, currency));
       if (t.status) kv("Status", t.status);
       if (t.notes) kv("Notes", t.notes);
-      doc.moveDown(0.5);
+      if (i < treatmentPlans.length - 1) {
+        doc.moveDown(0.4);
+        ensureSpace(8);
+        doc.moveTo(leftX, doc.y).lineTo(pageRight, doc.y)
+          .lineWidth(0.4).strokeColor("#e5e7eb").stroke();
+        doc.moveDown(0.5);
+      } else {
+        doc.moveDown(0.4);
+      }
     }
   }
 
@@ -899,11 +1063,14 @@ async function renderPatientSummaryPdf({
   // ── Memberships ───────────────────────────────────────────────────
   if (membershipList.length > 0) {
     sectionTitle(`Memberships (${membershipList.length})`);
-    for (const m of membershipList) {
-      ensureSpace(50);
+    for (let i = 0; i < membershipList.length; i++) {
+      const m = membershipList[i];
+      ensureSpace(60);
       doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-        .text(`${m.plan?.name || "Plan"} — Membership #${m.id}`, leftX);
-      doc.font("Helvetica").fontSize(10).fillColor("#333");
+        .text(m.plan?.name || "Plan", leftX, doc.y, { continued: true })
+        .font("Helvetica").fontSize(10).fillColor("#555")
+        .text(`   ·   Membership #${m.id}`);
+      doc.moveDown(0.3);
       if (m.status) kv("Status", m.status);
       if (m.startDate) kv("Start", formatDate(m.startDate));
       if (m.endDate) kv("End", formatDate(m.endDate));
@@ -913,14 +1080,22 @@ async function renderPatientSummaryPdf({
         try {
           const bal = typeof m.balanceJson === "string" ? JSON.parse(m.balanceJson) : (m.balanceJson || m.balance);
           if (bal && typeof bal === "object") {
-            balText = Object.entries(bal).map(([k, v]) => `${k}: ${v}`).join("  •  ");
+            balText = Object.entries(bal).map(([k, v]) => `${k}: ${v}`).join("   •   ");
           }
         } catch {
           /* ignore */
         }
         if (balText) kv("Balance", balText);
       }
-      doc.moveDown(0.5);
+      if (i < membershipList.length - 1) {
+        doc.moveDown(0.4);
+        ensureSpace(8);
+        doc.moveTo(leftX, doc.y).lineTo(pageRight, doc.y)
+          .lineWidth(0.4).strokeColor("#e5e7eb").stroke();
+        doc.moveDown(0.5);
+      } else {
+        doc.moveDown(0.4);
+      }
     }
   }
 
@@ -933,4 +1108,7 @@ module.exports = {
   renderConsentPdf,
   renderBrandedInvoicePdf,
   renderPatientSummaryPdf,
+  // Exported for vitest coverage of the customer-facing zylu mask.
+  scrubZyluText,
+  scrubZyluSource,
 };

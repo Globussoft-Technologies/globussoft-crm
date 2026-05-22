@@ -65,8 +65,10 @@ router.get('/status', verifyToken, verifyRole(['ADMIN', 'OWNER']), async (req, r
   }
 });
 
-// Get available subscription plans
-router.get('/plans', verifyToken, verifyRole(['ADMIN', 'OWNER']), async (req, res) => {
+// Get available subscription plans — plans are catalog/metadata, readable by
+// any authenticated user. Purchase (create-order / verify-payment) stays
+// gated to ADMIN/OWNER below.
+router.get('/plans', verifyToken, async (req, res) => {
   try {
     const plans = await prisma.subscriptionPlan.findMany({
       where: { isActive: true },

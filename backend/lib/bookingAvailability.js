@@ -172,21 +172,38 @@ async function assertVisitSlotAvailable(visit) {
   }
 
   // ── 1. HOLIDAY_BLOCKED ───────────────────────────────────────────────
-  // Match Holiday rows where (tenantId match) AND (date == startOfIstDay).
+  // Match Holiday rows where (tenantId match) AND either
+  //   (a) date == startOfIstDay (exact-date non-recurring holiday), OR
+  //   (b) recurringAnnually=true AND stored date's MM-DD == visit's MM-DD.
   // Then filter in JS by scope precedence: tenant-wide always blocks;
   // location-scoped blocks if visit.locationId matches; doctor-scoped
   // blocks if visit.doctorId matches. Doing the OR-of-NULLs filter at the
   // Prisma query layer is clumsy; one round-trip + JS filter is simpler
-  // and the row count for any one tenant on any one date is tiny (≤ 5).
+  // and the row count for any one tenant is tiny (≤ a few dozen).
   const dateKey = istDateKey(visitDateObj);
+  const visitMonthDay = dateKey.slice(5); // "MM-DD"
   const dayStart = new Date(`${dateKey}T00:00:00Z`);
   const dayEnd = new Date(`${dateKey}T23:59:59.999Z`);
-  const holidays = await prisma.holiday.findMany({
-    where: {
-      tenantId,
-      date: { gte: dayStart, lte: dayEnd },
-    },
-  });
+  const [exactDateHolidays, recurringHolidays] = await Promise.all([
+    prisma.holiday.findMany({
+      where: { tenantId, date: { gte: dayStart, lte: dayEnd } },
+    }),
+    prisma.holiday.findMany({
+      where: { tenantId, recurringAnnually: true },
+    }),
+  ]);
+  // Filter recurring rows down to ones whose stored MM-DD matches the
+  // visit's MM-DD (year-agnostic), then merge + de-dupe by id.
+  const recurringMatches = recurringHolidays.filter(
+    (h) => istDateKey(h.date).slice(5) === visitMonthDay,
+  );
+  const seenIds = new Set();
+  const holidays = [];
+  for (const h of [...exactDateHolidays, ...recurringMatches]) {
+    if (seenIds.has(h.id)) continue;
+    seenIds.add(h.id);
+    holidays.push(h);
+  }
   for (const h of holidays) {
     // Tenant-wide (no location, no doctor restriction)
     if (h.locationId == null && h.doctorId == null) {

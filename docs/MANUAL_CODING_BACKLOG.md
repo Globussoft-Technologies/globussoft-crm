@@ -373,21 +373,21 @@ These don't need an engineer — they need a stakeholder decision. Once the deci
 
 ### F1. CRM-side public lead-capture endpoint
 **Labels:** `multi-day-feature`, `backend`, `voyagr-integration`, `gbs-crm-repo`
+**Design decision LOCKED 2026-05-23:** API-key auth (Option 1) — mirror `/api/v1/external` partner-API pattern at `backend/routes/external.js` + `backend/middleware/externalAuth.js`. Per-site API key issued via CRM admin UI; voyagr stores in env vars; sent as `X-API-Key` header from a tiny Next.js API route so the key never reaches the browser.
 
-**Why manual:** new public endpoint with API-key auth (mirror `backend/routes/external.js` / `middleware/externalAuth.js` shape — the existing `/api/v1/external` partner API is the canonical pattern). Needs CORS allowlist update for voyagr site domains, spam guards, source attribution (sub-brand + UTM + page URL), dedup against existing Contacts. ~2-3 days.
+**Why manual:** new public endpoint with API-key auth + CORS allowlist update for voyagr site domains + spam guards + source attribution (sub-brand + UTM + page URL) + dedup against existing Contacts. ~2-3 days.
 
 **Acceptance criteria:**
-- New `POST /api/v1/voyagr/leads` endpoint (or `/api/public/lead-capture` if we choose unauthenticated webhook model — see design decision below)
+- New `POST /api/v1/voyagr/leads` endpoint (NOT `/api/public/...` — auth-required path stays under `/api/v1/`)
+- `X-API-Key` header validated via `backend/middleware/externalAuth.js` (extend existing middleware OR clone the pattern into a `voyagrAuth.js` if scope differs)
+- API key issuance UI: new `frontend/src/pages/admin/VoyagrApiKeys.jsx` (mirror `backend/routes/external.js`'s admin-issued key pattern; per-site keys with rotation + revocation)
 - Body shape: `{ subBrand, name, email, phone, source: { siteSlug, pageUrl, utm? }, payload: <form-specific fields> }`
 - Creates Contact (with dedup against `[email, tenantId]` unique) + Deal in the correct sub-brand's pipeline with stage `lead`
-- CORS allowlist extension: each voyagr site's domain added to `corsAllowlist` in `backend/server.js`
-- Rate limit: 60 req/min per IP (mirror marketplace-leads webhook pattern)
-- Spam guards: honeypot field + optional hCaptcha integration (config-driven)
-- Audit log row per capture (`writeAudit("voyagr.lead.captured", {...})`)
-- E2E spec: `e2e/tests/voyagr-lead-capture-api.spec.js` covering happy path + dedup + spam guard + CORS preflight + per-sub-brand routing
-
-**Design decision needed first:**
-- **Auth model:** API key (mirror partner API, more secure but requires voyagr-side key storage) vs unauthenticated public webhook (simpler, relies purely on rate-limit + spam guards). Lean toward API key.
+- CORS allowlist extension: each voyagr site's domain added to `corsAllowlist` in `backend/server.js` (still needed for browser → voyagr-Next.js-API-route preflight; CRM endpoint itself doesn't need it since voyagr's server-to-server call has no Origin header)
+- Rate limit: 60 req/min per IP + 1000 req/hr per API key (mirror marketplace-leads webhook pattern + add the per-key budget)
+- Spam guards: honeypot field + optional hCaptcha integration (config-driven; defense-in-depth on top of the API key)
+- Audit log row per capture (`writeAudit("voyagr.lead.captured", {...})`) including the API key's `name` for forensic attribution
+- E2E spec: `e2e/tests/voyagr-lead-capture-api.spec.js` covering happy path + dedup + spam guard + missing/wrong API key (401) + per-sub-brand routing
 
 ---
 

@@ -1,31 +1,35 @@
 /**
- * Visa Sure Advisor Dashboard — Phase 3 scaffolding shell (cluster B3, rows V8-V10)
+ * Visa Sure Advisor Dashboard — Phase 3 per-application advisor view
+ * (cluster B3, rows V8-V10).
  *
  * Read-only per-application advisor view per docs/PRD_VISA_SURE_PHASE_3.md
  * §3 FR-4. Mounted at /travel/visa/applications/:applicationId — drilldown
  * from the existing Visa Applications list (875c082 sibling scaffold).
  *
- * Three SHELL sections (no real data flow yet — the backend endpoint
- * GET /api/travel/visa/applications/:id is the wider PRD §3 FR-5 surface
- * tracked as cluster B3 in MANUAL_CODING_BACKLOG; this page renders the
- * empty state until that lands):
+ * WIRED to the GET /api/travel/visa/applications/:id backend endpoint
+ * shipped at ce5f5db. Three sections render from real data:
  *
- *   1. Diagnostic answers (V8) — Q/A list rendered from
- *      VisaApplication.diagnosticAnswersJson; placeholder grid until the
- *      backend ships.
+ *   1. Diagnostic answers (V8) — surfaces TravelDiagnostic.classificationLabel
+ *      + score from the joined diagnostic projection. Renders a
+ *      "View full diagnostic" link when a diagnostic row exists.
  *
  *   2. AI summary notes (V9) — LLM-router `visa-summary` task consumer
- *      per PRD §3 FR-4 + §6 (LLM consumer list). Stub-mode pending
- *      Q11 LLM-keys product call.
+ *      per PRD §3 FR-4 + §6 (LLM consumer list). Placeholder text pending
+ *      Q11 LLM-keys product call — there is no `aiSummary` field on
+ *      VisaApplication yet (FR-4 LLM consumer is post-Q11).
  *
  *   3. Risk indicators (V10) — three coloured pills mapped to FR-3.1
- *      (complex case), FR-3.2 (prior rejection history), and FR-3.3
- *      (high readinessLevel / advisorRiskFlag). The visaRiskFlagEngine
- *      shell shipped at 9e8c28f computes these flags; this page surfaces
- *      them once the backend GET endpoint lands.
+ *      (complex case), FR-3.2 (prior rejection history), FR-3.3
+ *      (high readinessLevel / advisorRiskFlag). Pills go RED on FR-3.1
+ *      + FR-3.2 trip conditions, YELLOW on FR-3.3 advisor flag, otherwise
+ *      remain neutral.
  *
- * Mirrors frontend/src/pages/travel/visa/Dashboard.jsx (875c082) shell
- * shape for visual consistency across under-construction Visa surfaces.
+ *   4. Document checklist progress (bonus) — "X of Y required documents
+ *      verified" derived from the documentChecklist relation included
+ *      by the backend.
+ *
+ * Mirrors frontend/src/pages/travel/LeadDetail.jsx parallel-fetch shape
+ * for the data flow; visual shell matches the 875c082 SHELL it replaces.
  */
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
@@ -37,6 +41,8 @@ import {
   ShieldAlert,
   ClipboardList,
   Sparkles,
+  CheckCircle2,
+  ArrowRight,
 } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 
@@ -79,33 +85,73 @@ const RISK_PILL_BASE = {
   border: '1px solid',
 };
 
-// Risk pill palettes — neutral until backend lands, then active when the
-// FR-3 risk-flag engine populates the corresponding fields.
+// Risk pill palettes — neutral until the FR-3 risk-flag engine populates
+// the corresponding fields, then active (red for hard risk, yellow for
+// soft / advisor-tagged risk).
 const PILL_NEUTRAL = {
   background: 'rgba(255, 255, 255, 0.04)',
   borderColor: 'rgba(255, 255, 255, 0.08)',
   color: 'var(--text-secondary)',
 };
 
+const PILL_RED = {
+  background: 'rgba(255, 90, 90, 0.12)',
+  borderColor: 'rgba(255, 90, 90, 0.4)',
+  color: 'rgb(255, 160, 160)',
+};
+
+const PILL_YELLOW = {
+  background: 'rgba(255, 200, 80, 0.12)',
+  borderColor: 'rgba(255, 200, 80, 0.4)',
+  color: 'rgb(255, 220, 140)',
+};
+
+// Helpers — keep the JSX readable by hoisting the boolean checks here.
+
+// FR-3.2: rejectionHistoryJson is a String? @db.Text — treat null /
+// empty string / "[]" / "{}" as "no rejection history". Anything else
+// is treated as a hit (the engine writes JSON arrays of prior decisions).
+const hasRejectionHistory = (raw) => {
+  if (!raw) return false;
+  const s = String(raw).trim();
+  if (s === '' || s === '[]' || s === '{}' || s === 'null') return false;
+  return true;
+};
+
+// FR-3.3: advisorRiskFlag is a freeform String? — the visaRiskFlagEngine
+// sets it to 'high' or 'priority' for elevated cases. Any non-empty
+// value goes yellow; the canonical values are reflected in the title.
+const isAdvisorRiskActive = (flag) => {
+  if (!flag) return false;
+  const f = String(flag).toLowerCase();
+  return f === 'high' || f === 'priority';
+};
+
 const VisaAdvisorDashboard = () => {
   const { applicationId } = useParams();
   const [application, setApplication] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [endpointMissing, setEndpointMissing] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
-    // STUB: GET /api/travel/visa/applications/:id (PRD §3 FR-5).
-    // Endpoint not yet implemented; degrade gracefully to the empty
-    // SHELL state when the route 404s.
+    setLoading(true);
+    setError(null);
     fetchApi(`/api/travel/visa/applications/${applicationId}`)
       .then((res) => {
         if (cancelled) return;
         setApplication(res || null);
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
-        setEndpointMissing(true);
+        // Surface the route's structured error code when present so
+        // 404 NOT_FOUND / 404 NOT_VISA_SURE render the right copy.
+        const code =
+          (err && (err.code || (err.body && err.body.code))) || null;
+        const message =
+          (err && (err.message || (err.body && err.body.error))) ||
+          'Failed to load visa application';
+        setError({ code, message });
         setApplication(null);
       })
       .finally(() => {
@@ -115,6 +161,23 @@ const VisaAdvisorDashboard = () => {
       cancelled = true;
     };
   }, [applicationId]);
+
+  // Document checklist progress (bonus). Required items only — optional
+  // items don't gate the application moving forward, per FR-5 docs flow.
+  const checklist = Array.isArray(application?.documentChecklist)
+    ? application.documentChecklist
+    : [];
+  const requiredItems = checklist.filter((i) => i?.required);
+  const verifiedRequired = requiredItems.filter(
+    (i) => i?.status === 'verified',
+  );
+
+  // Risk-pill state — re-evaluated on every render off the loaded row.
+  const complexCaseActive = Boolean(application?.complexCase);
+  const rejectionActive = hasRejectionHistory(
+    application?.rejectionHistoryJson,
+  );
+  const advisorRiskActive = isAdvisorRiskActive(application?.advisorRiskFlag);
 
   return (
     <div style={{ padding: 24, maxWidth: 980, margin: '0 auto' }}>
@@ -154,139 +217,253 @@ const VisaAdvisorDashboard = () => {
             #{applicationId}
           </code>
         </h1>
-        <div
-          style={{
-            display: 'inline-block',
-            marginTop: 8,
-            padding: '0.2rem 0.7rem',
-            borderRadius: 999,
-            background: 'rgba(255, 200, 100, 0.12)',
-            border: '1px solid rgba(255, 200, 100, 0.25)',
-            color: 'var(--text-secondary)',
-            fontSize: '0.75rem',
-            letterSpacing: 0.3,
-          }}
-        >
-          Phase 3 — Advisor dashboard SHELL (FR-4)
-        </div>
+        {application?.contact?.name && (
+          <div
+            style={{
+              marginTop: 6,
+              color: 'var(--text-secondary)',
+              fontSize: '0.9rem',
+            }}
+          >
+            {application.contact.name}
+            {application.applicationType ? (
+              <>
+                {' '}&middot; <span style={{ opacity: 0.85 }}>
+                  {application.applicationType}
+                </span>
+              </>
+            ) : null}
+            {application.status ? (
+              <>
+                {' '}&middot;{' '}
+                <span style={{ opacity: 0.85 }}>{application.status}</span>
+              </>
+            ) : null}
+          </div>
+        )}
       </header>
 
       {loading && (
         <div style={EMPTY_LINE}>Loading application&hellip;</div>
       )}
 
-      {!loading && endpointMissing && (
+      {!loading && error && (
         <div
           style={{
             ...SECTION,
-            borderColor: 'rgba(255, 200, 100, 0.2)',
-            background: 'rgba(255, 200, 100, 0.05)',
+            borderColor: 'rgba(255, 120, 120, 0.25)',
+            background: 'rgba(255, 120, 120, 0.05)',
           }}
         >
           <p style={EMPTY_LINE}>
-            Backend endpoint{' '}
-            <code>GET /api/travel/visa/applications/:id</code> not yet
-            implemented (PRD §3 FR-5, cluster B3 in
-            <code> MANUAL_CODING_BACKLOG</code>). This page renders the
-            empty SHELL until the route lands.
+            {error.code === 'NOT_FOUND' || error.code === 'NOT_VISA_SURE'
+              ? 'Visa application not found, or you do not have access to it.'
+              : error.message}
           </p>
         </div>
       )}
 
-      {/* Section 1 — Diagnostic answers (V8 / PRD §3 FR-4)
-          TODO(FR-4): render diagnosticAnswersJson as Q/A list grouped by
-          diagnostic section; pull section labels from TravelDiagnosticBank. */}
-      <section style={SECTION}>
-        <h2 style={SECTION_HEADER}>
-          <ClipboardList size={16} aria-hidden /> Diagnostic answers
-        </h2>
-        <div
-          style={{
-            display: 'grid',
-            gap: 8,
-            gridTemplateColumns:
-              'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
-          }}
-        >
-          <div style={EMPTY_LINE}>
-            {application?.diagnosticAnswersJson
-              ? 'Diagnostic answers will render here.'
-              : 'No diagnostic submitted yet.'}
-          </div>
-        </div>
-      </section>
+      {!loading && !error && application && (
+        <>
+          {/* Section 1 — Diagnostic answers (V8 / PRD §3 FR-4) */}
+          <section style={SECTION}>
+            <h2 style={SECTION_HEADER}>
+              <ClipboardList size={16} aria-hidden /> Diagnostic answers
+            </h2>
+            {application.diagnostic ? (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  fontSize: '0.9rem',
+                }}
+              >
+                <div>
+                  <strong>Classification:</strong>{' '}
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    {application.diagnostic.classificationLabel ||
+                      application.diagnostic.classification ||
+                      '—'}
+                  </span>
+                </div>
+                <div>
+                  <strong>Score:</strong>{' '}
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    {application.diagnostic.score != null
+                      ? application.diagnostic.score
+                      : '—'}
+                  </span>
+                </div>
+                {application.diagnostic.recommendedTier && (
+                  <div>
+                    <strong>Recommended tier:</strong>{' '}
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      {application.diagnostic.recommendedTier}
+                    </span>
+                  </div>
+                )}
+                {application.diagnostic.id != null && (
+                  <Link
+                    to={`/travel/diagnostics/${application.diagnostic.id}`}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      marginTop: 6,
+                      color:
+                        'var(--primary-color, var(--accent-color))',
+                      textDecoration: 'none',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                    }}
+                  >
+                    View full diagnostic <ArrowRight size={14} />
+                  </Link>
+                )}
+              </div>
+            ) : (
+              <div style={EMPTY_LINE}>
+                No diagnostic submitted yet for this contact.
+              </div>
+            )}
+          </section>
 
-      {/* Section 2 — AI summary notes (V9 / PRD §3 FR-4 LLM consumer)
-          TODO(FR-4): consume LLM router `visa-summary` task; render
-          (a) what jumped out from the diagnostic, (b) which risks elevate
-          the case, (c) suggested talking points. Stub-mode pending Q11
-          LLM-keys product call. */}
-      <section style={SECTION}>
-        <h2 style={SECTION_HEADER}>
-          <Sparkles size={16} aria-hidden /> AI summary notes
-        </h2>
-        <div style={EMPTY_LINE}>
-          {application?.aiSummary
-            ? application.aiSummary
-            : 'AI summary not generated yet — pending Q11 LLM-keys product call.'}
-        </div>
-      </section>
+          {/* Section 2 — AI summary notes (V9 / PRD §3 FR-4 LLM consumer).
+              Placeholder pending Q11 LLM-keys product call — there is no
+              aiSummary field on VisaApplication yet. */}
+          <section style={SECTION}>
+            <h2 style={SECTION_HEADER}>
+              <Sparkles size={16} aria-hidden /> AI summary notes
+            </h2>
+            <div style={EMPTY_LINE}>
+              Pending LLM rollout — the <code>visa-summary</code> task in
+              the LLM router lands with Q11 (LLM-keys product call) per
+              PRD §6.
+            </div>
+          </section>
 
-      {/* Section 3 — Risk indicators (V10 / PRD §3 FR-3.1 + FR-3.2 + FR-3.3)
-          Three pills mapped to the visaRiskFlagEngine outputs (engine shell
-          shipped at 9e8c28f). Neutral until backend GET endpoint lands. */}
-      <section style={SECTION}>
-        <h2 style={SECTION_HEADER}>
-          <ShieldAlert size={16} aria-hidden /> Risk indicators
-        </h2>
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-            alignItems: 'center',
-          }}
-        >
-          {/* FR-3.1 — Complex case (applicationType / family / high-rejection embassy) */}
-          <span
-            style={{ ...RISK_PILL_BASE, ...PILL_NEUTRAL }}
-            title="Complex case flag (FR-3.1)"
-          >
-            <AlertTriangle size={12} aria-hidden /> Complex case&nbsp;
-            <span style={{ opacity: 0.7 }}>
-              {application?.complexCase ? 'yes' : '—'}
-            </span>
-          </span>
+          {/* Section 3 — Risk indicators (V10 / PRD §3 FR-3.1+3.2+3.3).
+              Pills are red on FR-3.1 + FR-3.2 trip conditions and yellow
+              on FR-3.3 advisor flag. */}
+          <section style={SECTION}>
+            <h2 style={SECTION_HEADER}>
+              <ShieldAlert size={16} aria-hidden /> Risk indicators
+            </h2>
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 8,
+                alignItems: 'center',
+              }}
+            >
+              {/* FR-3.1 — Complex case */}
+              <span
+                style={{
+                  ...RISK_PILL_BASE,
+                  ...(complexCaseActive ? PILL_RED : PILL_NEUTRAL),
+                }}
+                title="Complex case flag (FR-3.1)"
+              >
+                <AlertTriangle size={12} aria-hidden /> Complex case&nbsp;
+                <span style={{ opacity: 0.8 }}>
+                  {complexCaseActive ? 'yes' : 'no'}
+                </span>
+              </span>
 
-          {/* FR-3.2 — Prior rejection history */}
-          <span
-            style={{ ...RISK_PILL_BASE, ...PILL_NEUTRAL }}
-            title="Prior rejection history (FR-3.2)"
-          >
-            <History size={12} aria-hidden /> Rejection history&nbsp;
-            <span style={{ opacity: 0.7 }}>
-              {application?.priorRejectionCount ?? '—'}
-            </span>
-          </span>
+              {/* FR-3.2 — Prior rejection history */}
+              <span
+                style={{
+                  ...RISK_PILL_BASE,
+                  ...(rejectionActive ? PILL_RED : PILL_NEUTRAL),
+                }}
+                title="Prior rejection history (FR-3.2)"
+              >
+                <History size={12} aria-hidden /> Rejection history&nbsp;
+                <span style={{ opacity: 0.8 }}>
+                  {rejectionActive ? 'on file' : 'none'}
+                </span>
+              </span>
 
-          {/* FR-3.3 — High readinessLevel / advisorRiskFlag */}
-          <span
-            style={{ ...RISK_PILL_BASE, ...PILL_NEUTRAL }}
-            title="High-risk flag (FR-3.3)"
-          >
-            <ShieldAlert size={12} aria-hidden /> Advisor risk flag&nbsp;
-            <span style={{ opacity: 0.7 }}>
-              {application?.advisorRiskFlag || '—'}
-            </span>
-          </span>
-        </div>
-        <p style={{ ...EMPTY_LINE, marginTop: 12 }}>
-          Risk flags populated by{' '}
-          <code>backend/cron/visaRiskFlagEngine.js</code> (shell at
-          commit <code>9e8c28f</code>); pills go active once the engine
-          + GET endpoint both land.
-        </p>
-      </section>
+              {/* FR-3.3 — Advisor risk flag (yellow = high / priority) */}
+              <span
+                style={{
+                  ...RISK_PILL_BASE,
+                  ...(advisorRiskActive ? PILL_YELLOW : PILL_NEUTRAL),
+                }}
+                title="Advisor risk flag (FR-3.3)"
+              >
+                <ShieldAlert size={12} aria-hidden /> Advisor risk flag&nbsp;
+                <span style={{ opacity: 0.8 }}>
+                  {application.advisorRiskFlag || '—'}
+                </span>
+              </span>
+            </div>
+            <p style={{ ...EMPTY_LINE, marginTop: 12 }}>
+              Risk flags populated by{' '}
+              <code>backend/cron/visaRiskFlagEngine.js</code> (shell at
+              commit <code>9e8c28f</code>).
+            </p>
+          </section>
+
+          {/* Section 4 (bonus) — Document checklist progress.
+              Surfaces the X-of-Y verified ratio across REQUIRED items;
+              optional items don't gate forward motion per FR-5. */}
+          <section style={SECTION}>
+            <h2 style={SECTION_HEADER}>
+              <CheckCircle2 size={16} aria-hidden /> Document checklist
+            </h2>
+            {requiredItems.length === 0 ? (
+              <div style={EMPTY_LINE}>
+                No document checklist items recorded for this application
+                yet.
+              </div>
+            ) : (
+              <>
+                <div
+                  style={{
+                    fontSize: '0.9rem',
+                    color: 'var(--text-primary, #fff)',
+                    marginBottom: 8,
+                  }}
+                >
+                  <strong>{verifiedRequired.length}</strong> of{' '}
+                  <strong>{requiredItems.length}</strong> required
+                  documents verified
+                </div>
+                <div
+                  style={{
+                    height: 6,
+                    width: '100%',
+                    borderRadius: 999,
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    overflow: 'hidden',
+                  }}
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={requiredItems.length}
+                  aria-valuenow={verifiedRequired.length}
+                  aria-label="Required documents verified"
+                >
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${
+                        (verifiedRequired.length / requiredItems.length) *
+                        100
+                      }%`,
+                      background:
+                        'var(--primary-color, var(--accent-color))',
+                      transition: 'width 200ms ease',
+                    }}
+                  />
+                </div>
+              </>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 };

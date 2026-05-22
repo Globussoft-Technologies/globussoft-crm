@@ -432,6 +432,7 @@ const emailThreadingRoutes = require("./routes/email_threading");
 // Hosts TMC (school trips), RFU (Umrah), Travel Stall, Visa Sure sub-brands.
 const travelRoutes = require("./routes/travel");
 const travelDiagnosticsRoutes = require("./routes/travel_diagnostics");
+const travelVisaAnalyticsRoutes = require("./routes/travel_visa_analytics");
 const travelItinerariesRoutes = require("./routes/travel_itineraries");
 const travelTripsRoutes = require("./routes/travel_trips");
 const travelCostMasterRoutes = require("./routes/travel_cost_master");
@@ -651,6 +652,7 @@ app.use("/api/travel", travelCsvIoRoutes);
 app.use("/api/travel", travelDashboardRoutes);
 app.use("/api/travel", travelReportsRoutes);
 app.use("/api/travel", travelDiagnosticsRoutes);
+app.use("/api/travel/visa/analytics", travelVisaAnalyticsRoutes);
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
 app.use("/api/travel", travelCostMasterRoutes);

@@ -78,6 +78,14 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 | `4c350e4` | #836 | OwnerDashboard "Top recommendation" surfaces freshness chip + manual Refresh button + honest empty state. Critical insight: root cause was a stale seeded AgentRecommendation row at `seed-wellness.js:833-834`, NOT frontend hard-coding. Frontend always read live data; demo never re-fired orchestrator. Fix surfaces staleness explicitly. 10/10 vitest cases. |
 | — | #828 | REJECTED (phantom) — already fixed by `d567ce2` 2026-05-15; surface code at `Sidebar.jsx:697-699` already carries `wellnessRoles=["doctor", "professional", "telecaller"]`. Issue was a stale repro against pre-deploy staging. Closed via `gh issue close` with comment pointing at d567ce2 + redeploy recommendation. |
 
+**Tick #5 — 3/3 SHIPPED including F1 voyagr endpoint.**
+
+| SHA | Issue | What |
+|---|---|---|
+| `0299031` | F1 (voyagr) | `POST /api/v1/voyagr/leads` endpoint + `voyagrAuth.js` middleware (mirror partner-API) + 15 gate-spec cases + deploy.yml + coverage.yml wire-in. Auth-model decision locked yesterday at `5de05a7`. Cluster F #1 of 6 shipped. |
+| `125057a` | #822 | `/reports/pnl` 404 → route alias to `/wellness/reports` (Path A; Reports.jsx already defaults to `pnl` tab on mount). |
+| `22fe62c` | #831 | OwnerDashboard AdsGPT card reads live `/api/integrations` state — 3 distinct render branches (linked / not-linked / error) + 14 vitest cases. Additive to `4c350e4`'s freshness chip. |
+
 Cron continues at :07/:22/:37/:52.
 
 Cron will continue at :07/:22/:37/:52 until empty-tick threshold trips or user CronDeletes (`00d468d5`).

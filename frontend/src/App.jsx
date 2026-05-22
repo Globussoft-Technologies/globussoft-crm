@@ -144,6 +144,7 @@ const TravelVisaDashboard = lazy(() => import("./pages/travel/visa/Dashboard"));
 const TravelVisaApplications = lazy(() => import("./pages/travel/visa/Applications"));
 const TravelVisaChecklists = lazy(() => import("./pages/travel/visa/Checklists"));
 const TravelVisaAdvisorDashboard = lazy(() => import("./pages/travel/visa/AdvisorDashboard"));
+const TravelVisaReports = lazy(() => import("./pages/travel/visa/Reports"));
 // Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
 const TravelStallDashboard = lazy(() => import("./pages/travel/TravelStallDashboard"));
 // Wellness vertical
@@ -961,6 +962,9 @@ export default function App() {
                   /api/travel/visa/applications/:id (PRD §3 FR-5) pending. */}
               <Route path="travel/visa/applications/:applicationId" element={<TravelOnly><TravelVisaAdvisorDashboard /></TravelOnly>} />
               <Route path="travel/visa/checklists" element={<TravelOnly><TravelVisaChecklists /></TravelOnly>} />
+              {/* Phase 3 FR-7 analytics SHELL (V16-V18) — backend
+                  /api/travel/reports/visa wiring pending (cluster B3). */}
+              <Route path="travel/visa/reports" element={<TravelOnly><TravelVisaReports /></TravelOnly>} />
               {/* Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
                   Each card CTAs to an existing route filtered by ?subBrand=travelstall. */}
               <Route path="travel-stall" element={<TravelOnly><TravelStallDashboard /></TravelOnly>} />

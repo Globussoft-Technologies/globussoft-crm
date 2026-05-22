@@ -145,3 +145,59 @@ html[data-theme="dark"][data-vertical="travel"],
 [data-theme="dark"] [data-vertical="travel"] table th {
   background: rgba(244, 239, 223, 0.05);
 }
+
+/* #867 — Diagnostics tier-badge component (Phase 1 of dark-mode cluster
+ * refactor). Mirrors the inline-style values previously hardcoded in
+ * Diagnostics.jsx's TIER_COLORS object — refactored to CSS-class-driven
+ * so dark-mode overrides below can act without JS changes. The same
+ * pattern (inline-styled badge → CSS class + dark token override) will
+ * apply to the remaining 16 issues in the dark-mode cluster (#866 #871
+ * #872 #873 #877..#883).
+ *
+ * Base rule is theme-agnostic (sizing/typography); colours are picked by
+ * the modifier classes (--entry / --primary / --premium) which the
+ * dark-mode block below overrides for WCAG-AA contrast on dark navy. */
+.tier-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--subtle-bg);
+  color: var(--text-secondary);
+}
+.tier-badge--entry {
+  background: rgba(95, 110, 130, 0.12);
+  color: #5C6E82;
+}
+.tier-badge--primary {
+  background: rgba(47, 122, 77, 0.14);
+  color: #2F7A4D;
+}
+.tier-badge--premium {
+  background: rgba(200, 154, 78, 0.18);
+  color: #9A6F2E;
+}
+
+/* #867 — Dark-mode token overrides for tier-badge variants. Contrast
+ * verified ≥4.5:1 (WCAG AA) against the dark surfaces below:
+ *   entry   : #A8B5C8 on #2A3645 → ~5.5:1
+ *   primary : #A8D8B9 on #1A4D3A → ~6.2:1
+ *   premium : #E0C088 on #3A2E18 → ~7.4:1
+ * Scoped to travel vertical so generic + wellness aren't impacted. */
+[data-theme="dark"][data-vertical="travel"] .tier-badge--entry,
+[data-theme="dark"] [data-vertical="travel"] .tier-badge--entry {
+  background: #2A3645;
+  color: #A8B5C8;
+}
+[data-theme="dark"][data-vertical="travel"] .tier-badge--primary,
+[data-theme="dark"] [data-vertical="travel"] .tier-badge--primary {
+  background: #1A4D3A;
+  color: #A8D8B9;
+}
+[data-theme="dark"][data-vertical="travel"] .tier-badge--premium,
+[data-theme="dark"] [data-vertical="travel"] .tier-badge--premium {
+  background: #3A2E18;
+  color: #E0C088;
+}

@@ -28,12 +28,6 @@ const SUB_BRANDS = [
   { value: 'visasure', label: 'Visa Sure' },
 ];
 
-const TIER_COLORS = {
-  entry: { bg: 'rgba(95, 110, 130, 0.12)', color: '#5C6E82' },
-  primary: { bg: 'rgba(47, 122, 77, 0.14)', color: '#2F7A4D' },
-  premium: { bg: 'rgba(200, 154, 78, 0.18)', color: '#9A6F2E' },
-};
-
 function fmt(d) {
   if (!d) return '—';
   return new Date(d).toLocaleString();
@@ -159,7 +153,9 @@ export default function Diagnostics() {
             <tbody>
               {diagnostics.map((d) => {
                 const tier = (d.recommendedTier || '').toLowerCase();
-                const tc = TIER_COLORS[tier] || { bg: 'var(--subtle-bg)', color: 'var(--text-secondary)' };
+                const tierClass = ['entry', 'primary', 'premium'].includes(tier)
+                  ? `tier-badge tier-badge--${tier}`
+                  : 'tier-badge';
                 return (
                   <tr key={d.id} style={{ borderTop: '1px solid var(--border-light)' }}>
                     <td style={td}>
@@ -178,7 +174,7 @@ export default function Diagnostics() {
                       {d.classificationLabel || d.classification || '—'}
                     </td>
                     <td style={td}>
-                      <span style={{ ...tierBadge, background: tc.bg, color: tc.color }}>
+                      <span className={tierClass}>
                         {d.recommendedTier || '—'}
                       </span>
                     </td>
@@ -242,11 +238,6 @@ const td = {
 const brandBadge = {
   padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
   background: 'var(--subtle-bg-3)', color: 'var(--primary-color)',
-  textTransform: 'uppercase', letterSpacing: 0.5,
-};
-
-const tierBadge = {
-  padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
   textTransform: 'uppercase', letterSpacing: 0.5,
 };
 

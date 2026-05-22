@@ -9,9 +9,9 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **60** (~77%) — up from 59 (+1: WebCheckin seed row `cb478bb`)
+- **SHIPPED:** **61** (~78%) — up from 60 (+1: form-vs-call comparison endpoint `4a7c623`)
 - **PARTIAL:** **6** (~8%)
-- **GAP-AUTONOMOUS:** **4** (~5%) — down from 5 since WebCheckin seed shipped
+- **GAP-AUTONOMOUS:** **3** (~4%) — down from 4 since form-vs-call shipped (closes both the §4.1 row and the §9.1 task-routing row from the same dispatch)
 - **GAP-STUB-ABLE:** **6** (~8%) — was 8; talking-points + LLM router consumed two slots
 - **GAP-CRED-BLOCKED:** **8** (~10%) — unchanged
 - **GAP-PRODUCT-CALL:** **2** (~3%) — unchanged
@@ -54,7 +54,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 | 8 lost-reason taxonomy | SHIPPED | Same helper, `seed-travel.js:1095-1119` | Price · No response · Chose competitor · Wrong requirement · Timing issue · Budget issue · Trust issue · Duplicate enquiry |
 | Diagnostic-first guard on quotation routes | SHIPPED | `middleware/travelGuards.js`; refused on POST/PUT Itinerary | |
 | AI qualification call (Eng/Hin/Urdu) | GAP-CRED-BLOCKED | Sandbox mock `scripts/sandbox/callified-mock.js` only | Q1 — Callified.ai handover |
-| Form-vs-call answer comparison (80/60% threshold) | GAP-AUTONOMOUS | `lib/llmRouter.js` already lists `"form-vs-call"` task with Claude-primary routing; no consumer route grep-confirmed | Can ship fixture-driven now that router scaffold exists |
+| Form-vs-call answer comparison (80/60% threshold) | SHIPPED | `POST /api/travel/diagnostics/:id/form-vs-call/compare` (commit `4a7c623`) — fixture-driven, parses `\d+%` from LLM text, applies PRD 80/60 ladder, returns per-field diff. Read/compute-only (audit-log-aware persistence is Phase 1.5) | |
 | AI-to-advisor handover (B2C) | PARTIAL | `cron/travelDiagnosticAdvisorAlerts.js` (diagnostic side only) | Callified side cred-blocked |
 | Manager view (pending/delayed/staff-wise) | SHIPPED (reuse) | `routes/staff.js` + existing dashboards | |
 | Lead source attribution + UTM tracking | SHIPPED (reuse) | `Contact.firstTouchSource` + Touchpoint already wired | |
@@ -343,7 +343,7 @@ The remaining cred-blocked gaps cluster identically: (a) Chrome flight-quote plu
 |---|---|---|
 | Diagnostic interpretation (talking-points) | Claude Opus | SHIPPED via talking-points endpoint (commit `cf876af`); stub-mode-ready |
 | Itinerary draft (bulk-text) | Gemini Flash | GAP-AUTONOMOUS — router exposes task; quotation routes need to wire it |
-| Form-vs-call comparison | Claude Opus | GAP-AUTONOMOUS — fixture-driven scaffold doable now |
+| Form-vs-call comparison | Claude Opus | SHIPPED via `POST /api/travel/diagnostics/:id/form-vs-call/compare` (commit `4a7c623`) |
 | AI qualification call | Gemini Live | GAP-CRED-BLOCKED (Callified front-end) |
 | Document OCR fallback | Gemini Vision | GAP-CRED-BLOCKED |
 | Sentiment / KPI insights | Gemini Flash | GAP-AUTONOMOUS |

@@ -1,4 +1,4 @@
-// Travel CRM — Visa Sure applications read-only endpoints (Phase 3 backend SHELL).
+// Travel CRM — Visa Sure applications endpoints (Phase 3 backend SHELL + CREATE).
 //
 // Backend wire-up for the Phase 3 cluster B3 Visa Sure frontend SHELLs:
 //   - frontend/src/pages/travel/visa/Applications.jsx (875c082) — list view
@@ -6,13 +6,13 @@
 //     detail (V8 diagnostic answers / V9 AI summary / V10 risk indicators)
 //
 // Endpoints:
-//   GET /api/travel/visa/applications              — paginated list with filters
-//   GET /api/travel/visa/applications/:id          — single application detail
+//   GET  /api/travel/visa/applications              — paginated list with filters
+//   GET  /api/travel/visa/applications/:id          — single application detail
+//   POST /api/travel/visa/applications              — create new application (intake)
 //
-// CREATE / PATCH / DELETE are intentionally NOT in this commit. Those need
-// body validation + tenant-scope writes + sub-brand-aware audit and were
-// blocked out as a separate multi-file scope (PRD §3 FR-5/FR-6) to keep
-// this dispatch single-commit-shippable.
+// PATCH / DELETE are intentionally NOT in this commit. Status transitions
+// (intake → docs-pending → filed → approved/rejected) need an explicit
+// state-machine + audit; complex enough to warrant a separate scope.
 //
 // Mounted under /api/travel/visa by server.js (parallel to the analytics
 // sub-mount at /api/travel/visa/analytics). The path-precedence rule of
@@ -85,6 +85,21 @@ const VALID_STATUSES = [
   "approved",
   "rejected",
   "appeal",
+];
+
+// Pinned to `model VisaApplication.applicationType` schema comment
+// (prisma/schema.prisma:4502): `String // tourist | business | student |
+// work | umrah | hajj`. Matches docs/TRAVEL_CRM_PRD.md §VisaApplication
+// (line 429) verbatim. The dispatch brief named additional values like
+// `family` / `other` — NOT in the schema today; if a future card needs
+// them the migration is a single ALTER + this list update.
+const VALID_APPLICATION_TYPES = [
+  "tourist",
+  "business",
+  "student",
+  "work",
+  "umrah",
+  "hajj",
 ];
 
 // ─── GET /api/travel/visa/applications ──────────────────────────────
@@ -342,6 +357,173 @@ router.get(
       console.error("[travel-visa/detail] error:", e.message);
       res.status(500).json({
         error: "Failed to load visa application",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+// ─── POST /api/travel/visa/applications ─────────────────────────────
+//
+// CREATE a new Visa Sure application in intake state. Drives the
+// Applications.jsx (c0ab496) "Create Application" drawer (future follow-
+// up tick wiring the UI side — this dispatch is backend only).
+//
+// Body shape:
+//   {
+//     contactId: <Int> (REQUIRED) — existing Contact on this tenant; must
+//                                  carry subBrand="visasure" or 403
+//                                  NOT_VISA_SURE. 404 NOT_FOUND if the
+//                                  contact doesn't exist on this tenant.
+//     applicationType: <String> (REQUIRED) — one of VALID_APPLICATION_TYPES
+//                                  (tourist | business | student | work |
+//                                  umrah | hajj). 400 INVALID_APPLICATION_TYPE
+//                                  on anything else.
+//     destinationCountry: <String> (REQUIRED) — 1..200 chars. 400
+//                                  MISSING_FIELDS / INVALID_DESTINATION
+//                                  outside that range.
+//   }
+//
+// SCHEMA NOTES (drift from dispatch brief):
+//   - The dispatch named a `notes` body field. VisaApplication has NO
+//     `notes` column today; notes live on VisaDocumentChecklistItem
+//     (per-document, not per-application). DROPPED from the body.
+//     If a future card needs an application-level note, that's a
+//     schema migration (`notes String? @db.Text`) — separate scope.
+//   - The dispatch named a `priorityLevel` body field. NOT in schema
+//     today. The closest signal is `advisorRiskFlag` (null | low |
+//     medium | high | priority), but that's a derived signal owned by
+//     visaRiskFlagEngine, NOT a body-supplied field. DROPPED from the
+//     body.
+//   - The dispatch named `destination`; schema column is
+//     `destinationCountry`. Renamed in the body contract to match.
+//
+// Behavior: create the row with `status="intake"` (the schema default;
+// pinned explicitly here for shape clarity), `tenantId` from
+// req.travelTenant.id, all other optional columns left null.
+//
+// Audit log: writeAudit("VisaApplication", "CREATE", id, ...) — same
+// envelope as the GET endpoints, but with the new id surfaced for the
+// audit-viewer drilldown.
+//
+// Errors:
+//   400 MISSING_FIELDS              — contactId / applicationType /
+//                                     destinationCountry missing or wrong type
+//   400 INVALID_APPLICATION_TYPE    — applicationType not in enum
+//   400 INVALID_DESTINATION         — destinationCountry empty or > 200 chars
+//   404 NOT_FOUND                   — contactId not on this tenant
+//   403 NOT_VISA_SURE               — contact exists but Contact.subBrand
+//                                     != "visasure" (sub-brand isolation)
+//   500 INTERNAL_ERROR              — Prisma error or unexpected
+router.post(
+  "/applications",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const body = req.body || {};
+
+      // contactId presence + type.
+      const contactId =
+        typeof body.contactId === "number" ? body.contactId : null;
+      if (!Number.isFinite(contactId)) {
+        return res.status(400).json({
+          error: "contactId is required and must be a number",
+          code: "MISSING_FIELDS",
+        });
+      }
+
+      // applicationType presence + enum.
+      const applicationType =
+        typeof body.applicationType === "string"
+          ? body.applicationType.trim()
+          : "";
+      if (!applicationType) {
+        return res.status(400).json({
+          error: "applicationType is required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      if (!VALID_APPLICATION_TYPES.includes(applicationType)) {
+        return res.status(400).json({
+          error: `applicationType must be one of: ${VALID_APPLICATION_TYPES.join(", ")}`,
+          code: "INVALID_APPLICATION_TYPE",
+        });
+      }
+
+      // destinationCountry presence + length.
+      const destinationCountry =
+        typeof body.destinationCountry === "string"
+          ? body.destinationCountry.trim()
+          : "";
+      if (!destinationCountry) {
+        return res.status(400).json({
+          error: "destinationCountry is required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      if (destinationCountry.length > 200) {
+        return res.status(400).json({
+          error: "destinationCountry must be 1..200 chars",
+          code: "INVALID_DESTINATION",
+        });
+      }
+
+      // Contact existence + tenant + sub-brand verification. Single
+      // findFirst with tenantId scope avoids cross-tenant leakage; the
+      // sub-brand check is the second layer (defense-in-depth — same
+      // posture as the GET /:id detail handler).
+      const contact = await prisma.contact.findFirst({
+        where: { id: contactId, tenantId },
+        select: { id: true, subBrand: true },
+      });
+      if (!contact) {
+        return res.status(404).json({
+          error: "Contact not found on this tenant",
+          code: "NOT_FOUND",
+        });
+      }
+      if (contact.subBrand !== VISA_SUB_BRAND) {
+        return res.status(403).json({
+          error:
+            "Contact is not in the Visa Sure sub-brand; visa applications can only be created for visasure contacts",
+          code: "NOT_VISA_SURE",
+        });
+      }
+
+      // Create. `status` is pinned to "intake" here for shape clarity even
+      // though the schema default would land us at the same value.
+      const created = await prisma.visaApplication.create({
+        data: {
+          tenantId,
+          contactId,
+          applicationType,
+          destinationCountry,
+          status: "intake",
+        },
+      });
+
+      // Best-effort audit — never blocks the response.
+      writeAudit(
+        "VisaApplication",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        tenantId,
+        {
+          subBrand: VISA_SUB_BRAND,
+          contactId,
+          applicationType,
+          destinationCountry,
+        },
+      ).catch(() => {});
+
+      res.status(201).json(created);
+    } catch (e) {
+      console.error("[travel-visa/create] error:", e.message);
+      res.status(500).json({
+        error: "Failed to create visa application",
         code: "INTERNAL_ERROR",
       });
     }

@@ -284,6 +284,7 @@ jobs:
             tests/voyagr-lead-capture-api.spec.js \
             tests/travel-travelstall-personalised-pdf-api.spec.js \
             tests/travel-visa-analytics-api.spec.js \
+            tests/travel-visa-applications-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

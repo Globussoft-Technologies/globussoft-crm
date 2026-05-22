@@ -479,6 +479,163 @@ router.post(
   },
 );
 
+// POST /api/travel/diagnostics/:id/form-vs-call/compare
+//
+// PRD §4.1 — form-vs-call comparison panel. The customer fills the web
+// diagnostic (stored in TravelDiagnostic.answersJson) AND independently
+// answers the same Qs via the AI qualification call (Callified.ai, Q1
+// cred-blocked). This endpoint reconciles the two answer sets and
+// classifies the lead into match / review / mismatch by the 80% / 60%
+// confidence thresholds so the advisor knows whether they can run
+// straight at the quote OR need to resolve a contradiction first.
+//
+// Callified.ai itself is cred-blocked, but the comparison logic is
+// fixture-driven — the caller supplies BOTH answer sets in the body
+// (the form side parsed back from the stored diagnostic, the call side
+// from the request body). Same shape works today against synthetic
+// call answers AND lights up the moment Callified delivers real ones.
+//
+// ADMIN/MANAGER-gated (same as talking-points): comparison surfaces a
+// follow-up recommendation that drives advisor action; we don't want
+// every USER firing it on every page load.
+//
+// Body: { callAnswers?: object, callTranscript?: string }
+//   At least ONE of callAnswers / callTranscript must be present —
+//   the LLM can derive a comparison from either (the answers set is
+//   the cleaner structured input; the raw transcript fallback lets
+//   the call side land before Callified maps to question IDs).
+//
+// Response: { diagnosticId, classification, scorePercent, summary,
+//             model, stub, perFieldDiff[], generatedAt }
+//
+// Does NOT persist anything — endpoint is read/compute-only. The
+// audit-log-aware persistence (snapshot the comparison on the
+// TravelDiagnostic row so the next GET serves the cached panel)
+// is a P1.5 follow-up.
+//
+// PII discipline: payload contents (answers + transcripts) are
+// forwarded to the router but NEVER logged from the route — the
+// router's own log line only emits token counts.
+router.post(
+  "/diagnostics/:id/form-vs-call/compare",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const { callAnswers, callTranscript } = req.body || {};
+      const hasCallAnswers =
+        callAnswers && typeof callAnswers === "object" && !Array.isArray(callAnswers);
+      const hasCallTranscript =
+        typeof callTranscript === "string" && callTranscript.trim().length > 0;
+      if (!hasCallAnswers && !hasCallTranscript) {
+        return res.status(400).json({
+          error: "callAnswers (object) or callTranscript (string) required",
+          code: "MISSING_FIELDS",
+        });
+      }
+
+      const diag = await prisma.travelDiagnostic.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!diag) {
+        return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, diag.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Parse the stored form answers. Tolerate corruption by treating
+      // as an empty set — the comparison still runs (the perFieldDiff
+      // will be empty and the LLM still produces a summary against
+      // the call side alone).
+      let formAnswers = {};
+      try {
+        formAnswers = JSON.parse(diag.answersJson || "{}");
+        if (!formAnswers || typeof formAnswers !== "object" || Array.isArray(formAnswers)) {
+          formAnswers = {};
+        }
+      } catch (_e) {
+        formAnswers = {};
+      }
+
+      const payload = {
+        subBrand: diag.subBrand,
+        classification: diag.classification,
+        classificationLabel: diag.classificationLabel,
+        formAnswers,
+        callAnswers: hasCallAnswers ? callAnswers : null,
+        callTranscript: hasCallTranscript ? callTranscript : null,
+      };
+
+      const result = await llmRouter.routeRequest({
+        task: "form-vs-call",
+        payload,
+        tenantId: req.travelTenant.id,
+      });
+
+      // Parse the LLM text for a confidence percentage. The stub
+      // returns "85% match (synthetic)"; real Claude output is
+      // expected to surface a "\d+%" token in the prose. When
+      // absent we return null + classify as "unknown" so the UI
+      // can render an advisor-review prompt rather than guessing.
+      let scorePercent = null;
+      const pctMatch = typeof result.text === "string" ? result.text.match(/(\d{1,3})\s*%/) : null;
+      if (pctMatch) {
+        const n = parseInt(pctMatch[1], 10);
+        if (Number.isFinite(n) && n >= 0 && n <= 100) scorePercent = n;
+      }
+
+      let classification = "unknown";
+      if (scorePercent !== null) {
+        if (scorePercent >= 80) classification = "match";
+        else if (scorePercent >= 60) classification = "review";
+        else classification = "mismatch";
+      }
+
+      // Per-field diff via key intersection. The form-side keys are
+      // the canonical set (they come from the bank's question IDs);
+      // call-side answers that DON'T map to a form key are ignored
+      // for the diff (the LLM still sees them in its payload).
+      const perFieldDiff = Object.keys(formAnswers).map((k) => {
+        const formValue = formAnswers[k] ?? null;
+        const callValue =
+          hasCallAnswers && Object.prototype.hasOwnProperty.call(callAnswers, k)
+            ? callAnswers[k] ?? null
+            : null;
+        return {
+          question: k,
+          formValue,
+          callValue,
+          matched: hasCallAnswers && formValue === callValue,
+        };
+      });
+
+      res.json({
+        diagnosticId: diag.id,
+        classification,
+        scorePercent,
+        summary: result.text,
+        model: result.model,
+        stub: Boolean(result.stub),
+        perFieldDiff,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] form-vs-call compare error:", e.message);
+      res.status(500).json({ error: "Failed to compute form-vs-call comparison" });
+    }
+  },
+);
+
 // ─── PUBLIC ENDPOINTS (no auth) — PRD §4.7 Travel Stall landing-page wizard ──
 //
 // Public-facing quiz flow for unauthenticated leads (Travel Stall family

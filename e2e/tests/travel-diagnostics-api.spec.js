@@ -851,6 +851,178 @@ test.describe('Travel diagnostics — Travel Stall Family Travel Quiz seed (PRD 
   });
 });
 
+// PRD §4.1 — form-vs-call comparison endpoint.
+//
+// Second consumer of lib/llmRouter.js (commit 583c06b) — task
+// "form-vs-call" routes to Claude Opus primary per PRD §9.1, GPT-4
+// fallback. CI runs without LLM API keys so the router returns the
+// deterministic [STUB-FORM-VS-CALL] envelope. The stub text contains
+// "85% match" which → scorePercent=85 → classification="match" per
+// the 80% threshold. Real Claude output replaces this when Q11 keys
+// land; the envelope shape stays identical.
+//
+// Tests pin:
+//   - auth gate (401/403 without token)
+//   - RBAC gate (USER role denied — ADMIN/MANAGER only)
+//   - happy-path with matching callAnswers → 200 with per-field-diff all matched
+//   - mismatching callAnswers → 200 with per-field-diff all mismatched
+//   - callTranscript-only (no callAnswers) → 200 with empty perFieldDiff
+//   - neither callAnswers nor callTranscript → 400 MISSING_FIELDS
+//   - 404 for unknown / 400 for non-numeric id
+//
+// Uses an existing diagnostic from the earlier "submission + scoring"
+// block (created.diagnosticIds[0]) so the form answers are known
+// deterministically — high-tier answers: { q1: 'many', q2: 'large' }.
+test.describe('Travel diagnostics API — form-vs-call comparison (PRD §4.1)', () => {
+  let userToken = null;
+  async function getTravelUser(request) {
+    if (!userToken) {
+      userToken = await loginAs(request, 'telecaller@travelstall.demo', 'password123');
+    }
+    return userToken;
+  }
+
+  test('POST /diagnostics/:id/form-vs-call/compare without auth → 401/403', async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/travel/diagnostics/1/form-vs-call/compare`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: { callAnswers: { q1: 'many' } },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test('POST /diagnostics/:id/form-vs-call/compare as USER role → 403 RBAC_DENIED', async ({ request }) => {
+    const token = await getTravelUser(request);
+    if (!token) test.skip(true, 'telecaller@travelstall.demo not seeded — skipping RBAC test');
+    if (created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    const id = created.diagnosticIds[0];
+    const res = await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
+      callAnswers: { q1: 'many', q2: 'large' },
+    });
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('RBAC_DENIED');
+  });
+
+  test('POST /diagnostics/:id/form-vs-call/compare with neither body field → 400 MISSING_FIELDS', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    const id = created.diagnosticIds[0];
+    const res = await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {});
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('MISSING_FIELDS');
+  });
+
+  test('POST /diagnostics/:id/form-vs-call/compare happy path with matching call answers → 200', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    // The first diagnostic in the suite was created with { q1: 'many', q2: 'large' }
+    // (the high-tier submission). Sending identical callAnswers means every
+    // perFieldDiff entry must be matched=true.
+    const id = created.diagnosticIds[0];
+    const res = await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
+      callAnswers: { q1: 'many', q2: 'large' },
+    });
+    expect(res.status(), `compare: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body.diagnosticId).toBe(id);
+    // PRD §9.1 — form-vs-call task routes to Claude Opus primary.
+    expect(body.model).toBe('claude-opus-4-7');
+    // CI runs without LLM API keys → stub mode.
+    expect(body.stub).toBe(true);
+    expect(body.summary).toMatch(/STUB-FORM-VS-CALL/);
+    // Stub text says "85% match" → scorePercent=85, ≥80 → classification=match.
+    expect(body.scorePercent).toBe(85);
+    expect(body.classification).toBe('match');
+    expect(Array.isArray(body.perFieldDiff)).toBe(true);
+    expect(body.perFieldDiff.length).toBe(2);
+    for (const row of body.perFieldDiff) {
+      expect(typeof row.question).toBe('string');
+      expect(row.matched).toBe(true);
+      expect(row.formValue).toBe(row.callValue);
+    }
+    expect(Number.isFinite(Date.parse(body.generatedAt))).toBe(true);
+  });
+
+  test('POST /diagnostics/:id/form-vs-call/compare with mismatching call answers → 200, perFieldDiff all unmatched', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    const id = created.diagnosticIds[0];
+    // Send opposite-tier call answers so every diff row is matched=false.
+    const res = await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
+      callAnswers: { q1: 'first', q2: 'small' },
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.perFieldDiff.length).toBe(2);
+    for (const row of body.perFieldDiff) {
+      expect(row.matched).toBe(false);
+      expect(row.formValue).not.toBe(row.callValue);
+    }
+    // The score parsing is deterministic from the stub (85%); the LLM
+    // payload changed but the stub text is fixed, so classification
+    // STILL says match — the diff is what surfaces the underlying
+    // disagreement, regardless of the LLM's confidence claim. Real
+    // Claude output will line the two up.
+    expect(body.scorePercent).toBe(85);
+  });
+
+  test('POST /diagnostics/:id/form-vs-call/compare with callTranscript only → 200, empty perFieldDiff', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    const id = created.diagnosticIds[0];
+    const res = await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
+      callTranscript: 'Customer mentioned they travel often and prefer large group bookings.',
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // No callAnswers → every diff row's callValue is null and matched=false.
+    expect(Array.isArray(body.perFieldDiff)).toBe(true);
+    for (const row of body.perFieldDiff) {
+      expect(row.callValue).toBeNull();
+      expect(row.matched).toBe(false);
+    }
+    expect(body.classification).toBe('match'); // stub still says 85%
+  });
+
+  test('POST /diagnostics/:id/form-vs-call/compare with unknown id → 404 NOT_FOUND', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const res = await post(request, token, '/api/travel/diagnostics/9999999/form-vs-call/compare', {
+      callAnswers: { q1: 'many' },
+    });
+    expect(res.status()).toBe(404);
+    const body = await res.json();
+    expect(body.code).toBe('NOT_FOUND');
+  });
+
+  test('POST /diagnostics/:id/form-vs-call/compare with non-numeric id → 400 INVALID_ID', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+    const res = await post(request, token, '/api/travel/diagnostics/abc/form-vs-call/compare', {
+      callAnswers: { q1: 'many' },
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('INVALID_ID');
+  });
+
+  test('POST /diagnostics/:id/form-vs-call/compare against a generic-tenant id → 403 WRONG_VERTICAL', async ({ request }) => {
+    // Mirrors the talking-points cross-vertical guard — non-travel admin
+    // can NEVER reach this endpoint regardless of id.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, 'admin@globussoft.com not seeded — skipping cross-tenant guard');
+    const id = created.diagnosticIds[0] || 1;
+    const res = await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
+      callAnswers: { q1: 'many' },
+    });
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('WRONG_VERTICAL');
+  });
+});
+
 // Phase 3 (PRD §4.7 + §4.10) — Visa Sure 15Q Readiness Assessment seed
 // lands a `visasure` v1 bank with 15 Qs + 4 scoring bands. These tests
 // pin the seed contract so the admin's sub-brand picker has something to

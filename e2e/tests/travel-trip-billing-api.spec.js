@@ -186,6 +186,113 @@ test.describe("Travel trip billing — rooming", () => {
   });
 });
 
+// ─── Rooming XLSX export ─────────────────────────────────────────────
+//
+// Pins the GET /api/travel/trips/:tripId/rooming/export.xlsx surface
+// added alongside the audit's Priority A #4 pick (PRD §4.5 row from
+// PARTIAL → SHIPPED). Verifies:
+//   - happy path returns 200 with the right Content-Type +
+//     Content-Disposition + the buffer starts with the ZIP magic bytes
+//     0x50 0x4B (xlsx is a zip archive)
+//   - empty trip (no rooms) still streams a header-only XLSX (200)
+//   - travel-tenant USER role is denied (403 RBAC_DENIED) — endpoint
+//     restricted to ADMIN+MANAGER, mirrors the destructive rooming
+//     handlers' gate so the "viewer can list rooms but not bulk-export"
+//     separation holds
+
+test.describe("Travel trip billing — rooming XLSX export", () => {
+  let emptyTripId = null;
+
+  test.beforeAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) return;
+    // A second trip with NO rooming rows → header-only XLSX case.
+    const tRes = await post(request, token, "/api/travel/trips", {
+      tripCode: `${RUN_TAG.toLowerCase()}_empty`,
+      schoolContactId,
+      destination: `${RUN_TAG} Manali`,
+      departDate: "2026-11-01",
+      returnDate: "2026-11-05",
+    });
+    if (tRes.ok()) emptyTripId = (await tRes.json()).id;
+  });
+
+  test.afterAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) return;
+    if (emptyTripId) await del(request, token, `/api/travel/trips/${emptyTripId}`).catch(() => {});
+  });
+
+  test("GET /rooming/export.xlsx returns XLSX with rooming rows", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId) test.skip(true, "no trip");
+    const res = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/trips/${tripId}/rooming/export.xlsx`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(res.status(), `xlsx: ${res.status()}`).toBe(200);
+    expect(res.headers()["content-type"]).toContain("spreadsheetml.sheet");
+    const cd = res.headers()["content-disposition"] || "";
+    expect(cd).toContain("attachment");
+    expect(cd).toContain("rooming-trip-");
+    expect(cd).toContain(".xlsx");
+    const buf = await res.body();
+    // XLSX files are ZIP archives — the first 2 bytes are 'PK' (0x50 0x4B).
+    expect(buf.length).toBeGreaterThan(4);
+    expect(buf[0]).toBe(0x50);
+    expect(buf[1]).toBe(0x4b);
+  });
+
+  test("GET /rooming/export.xlsx on a trip with zero rooms → 200 header-only XLSX", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !emptyTripId) test.skip(true, "no empty trip");
+    const res = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/trips/${emptyTripId}/rooming/export.xlsx`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toContain("spreadsheetml.sheet");
+    const buf = await res.body();
+    // Still a valid XLSX (PK ZIP magic) even when the sheet only has
+    // the header row.
+    expect(buf[0]).toBe(0x50);
+    expect(buf[1]).toBe(0x4b);
+  });
+
+  test("GET /rooming/export.xlsx as USER role → 403 RBAC_DENIED", async ({ request }) => {
+    if (!tripId) test.skip(true, "no trip");
+    const userToken = await loginAs(request, "telecaller@travelstall.demo", "password123");
+    if (!userToken) test.skip(true, "travel USER login unavailable on this stack");
+    const res = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/trips/${tripId}/rooming/export.xlsx`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(res.status()).toBe(403);
+    const body = await res.json().catch(() => ({}));
+    expect(body.code).toBe("RBAC_DENIED");
+  });
+
+  test("GET /rooming/export.xlsx on a non-existent trip → 404 TRIP_NOT_FOUND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no admin token");
+    const res = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/trips/9999999/rooming/export.xlsx`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(res.status()).toBe(404);
+    const body = await res.json().catch(() => ({}));
+    expect(body.code).toBe("TRIP_NOT_FOUND");
+  });
+});
+
 // ─── Payment plan ────────────────────────────────────────────────────
 
 test.describe("Travel trip billing — payment plan", () => {

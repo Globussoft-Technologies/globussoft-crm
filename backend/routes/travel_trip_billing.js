@@ -8,6 +8,7 @@
 //   POST   /api/travel/trips/:tripId/rooming                  ADMIN+MGR
 //   PATCH  /api/travel/trips/:tripId/rooming/:roomId          ADMIN+MGR
 //   DELETE /api/travel/trips/:tripId/rooming/:roomId          ADMIN
+//   GET    /api/travel/trips/:tripId/rooming/export.xlsx      ADMIN+MGR
 //
 //   GET    /api/travel/trips/:tripId/payment-plan             — single plan
 //   PUT    /api/travel/trips/:tripId/payment-plan             ADMIN+MGR (upsert)
@@ -207,6 +208,103 @@ router.delete(
       if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
       console.error("[travel-trip-billing] rooming delete error:", err.message);
       res.status(500).json({ error: "Failed to delete rooming" });
+    }
+  },
+);
+
+// GET /api/travel/trips/:tripId/rooming/export.xlsx
+//
+// Streams a single-sheet XLSX of this trip's rooming assignments.
+// Columns: Room # / Room type / Capacity / Occupancy / Participants
+// (joined names looked up from TripParticipant.fullName via the
+// participantIds JSON-array column on RoomingAssignment).
+//
+// URL shape: path segment (`/rooming/export.xlsx`) rather than dot-on-
+// param (`/rooming.xlsx`). A repo-wide grep for `/:\w+\.\w+["']` returns
+// zero hits, so the established pattern is path-segment delimiting
+// (compare `/itineraries/:id/pdf` in travel_itineraries.js:925). Keeps
+// route-matcher behaviour unambiguous — `:tripId` cannot accidentally
+// swallow a trailing `.xlsx`.
+//
+// Auth: same gates as the destructive rooming routes — verifyToken +
+// ADMIN/MANAGER + requireTravelTenant + requireTmcAccess. The viewer
+// already has GET /rooming so we deliberately don't tighten further.
+router.get(
+  "/trips/:tripId/rooming/export.xlsx",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      // Load rooms + the trip's participant roster in parallel — we
+      // join participantIds (JSON-string array of TripParticipant.id)
+      // to fullName via the roster map.
+      const [rooms, participants] = await Promise.all([
+        prisma.roomingAssignment.findMany({
+          where: { tripId: trip.id },
+          orderBy: { roomNumber: "asc" },
+        }),
+        prisma.tripParticipant.findMany({
+          where: { tripId: trip.id },
+          select: { id: true, fullName: true },
+        }),
+      ]);
+      const nameById = new Map(participants.map((p) => [p.id, p.fullName]));
+
+      const XLSX = require("xlsx");
+      const ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
+      const aoa = [
+        ["Room #", "Room type", "Capacity", "Occupancy", "Participants"],
+      ];
+      for (const room of rooms) {
+        let pids = [];
+        try {
+          pids = JSON.parse(room.participantIds || "[]");
+        } catch (_e) {
+          pids = [];
+        }
+        if (!Array.isArray(pids)) pids = [];
+        const names = pids
+          .map((pid) => nameById.get(Number(pid)) || `#${pid}`)
+          .join(", ");
+        const capacity = ROOM_CAPACITY[room.roomType] || pids.length;
+        aoa.push([
+          room.roomNumber,
+          room.roomType,
+          capacity,
+          pids.length,
+          names,
+        ]);
+      }
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      // Column widths — rough heuristic for readability in Excel.
+      ws["!cols"] = [
+        { wch: 10 }, // Room #
+        { wch: 10 }, // Room type
+        { wch: 10 }, // Capacity
+        { wch: 10 }, // Occupancy
+        { wch: 60 }, // Participants
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, "Rooming");
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="rooming-trip-${trip.id}.xlsx"`,
+      );
+      res.send(buf);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trip-billing] rooming xlsx error:", e.message);
+      res.status(500).json({ error: "Failed to export rooming XLSX" });
     }
   },
 );

@@ -12,7 +12,7 @@ import { useParams, Link } from "react-router-dom";
 import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
-  Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye,
+  Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye, Download,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -404,6 +404,15 @@ function RoomingTab({ trip, notify }) {
 
   if (loading) return <div style={empty}>Loading&hellip;</div>;
 
+  // XLSX download uses a plain link; back-end accepts cookie OR bearer.
+  // Append the bearer token via ?_t= when present (mirrors the PDF link
+  // pattern at ItineraryDetail.jsx:281). target=_blank so the download
+  // doesn't replace the current SPA route.
+  const xlsxToken = typeof getAuthToken === "function" ? getAuthToken() : null;
+  const xlsxHref =
+    `/api/travel/trips/${trip.id}/rooming/export.xlsx` +
+    (xlsxToken ? `?_t=${encodeURIComponent(xlsxToken)}` : "");
+
   return (
     <div>
       <div style={{
@@ -414,11 +423,22 @@ function RoomingTab({ trip, notify }) {
           {rooms.length} room{rooms.length === 1 ? "" : "s"} ·{" "}
           {unassignedCount} of {participants.length} participant{participants.length === 1 ? "" : "s"} unassigned
         </span>
-        {!newRoom && (
-          <button type="button" onClick={startNew} style={addBtn}>
-            <Plus size={14} aria-hidden /> Add room
-          </button>
-        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <a
+            href={xlsxHref}
+            target="_blank"
+            rel="noreferrer"
+            style={{ ...secondaryBtn, textDecoration: "none" }}
+            aria-label="Download rooming as XLSX"
+          >
+            <Download size={14} aria-hidden /> Download XLSX
+          </a>
+          {!newRoom && (
+            <button type="button" onClick={startNew} style={addBtn}>
+              <Plus size={14} aria-hidden /> Add room
+            </button>
+          )}
+        </div>
       </div>
 
       {newRoom && (

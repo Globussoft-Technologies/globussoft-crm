@@ -375,19 +375,37 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor) {
       rowY += rowH;
     }
   }
+  // After the drug-table rows pdfkit's `doc.x` is wherever the last cell
+  // wrote (typically the Instructions column, x≈435). Subsequent
+  // `doc.text("Additional Advice")` / `text("Notes")` calls without an
+  // explicit x would inherit that offset and render the body starting
+  // from ~x=435 with width=495 — pushing the tail off the right edge of
+  // the page (the visible chop on the last line of Notes). Reset the
+  // cursor to the left margin before continuing.
+  doc.x = leftCol;
   doc.y = rowY + 8;
+  const bodyWidth = pageRight - leftCol;
 
   // ── Additional Advice.
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Additional Advice");
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+    .text("Additional Advice", leftCol, doc.y, { width: bodyWidth });
   doc.font("Helvetica").fontSize(10).fillColor("#222")
-    .text(parsed.advice || "—", { width: 495 });
+    .text(parsed.advice || "—", leftCol, doc.y, { width: bodyWidth });
   doc.moveDown(0.5);
+  doc.x = leftCol;
 
   // ── Notes.
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Notes");
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+    .text("Notes", leftCol, doc.y, { width: bodyWidth });
   doc.font("Helvetica").fontSize(10).fillColor("#222")
-    .text(parsed.notes || "No clinical notes recorded.", { width: 495 });
+    .text(
+      parsed.notes || "No clinical notes recorded.",
+      leftCol,
+      doc.y,
+      { width: bodyWidth },
+    );
   doc.moveDown(1.5);
+  doc.x = leftCol;
 
   // ── Doctor's signature.
   const sigY = Math.max(doc.y + 30, 680);
@@ -971,15 +989,32 @@ async function renderPatientSummaryPdf({
           rowY += rowH;
         }
       }
+      // Same cursor-reset as the standalone Rx PDF — after the drug table
+      // rows pdfkit's doc.x is parked at the Instructions column; without
+      // resetting it the Additional Advice / Notes body wraps from x≈435
+      // and tails off the right edge. Pin x to leftX before continuing.
+      doc.x = leftX;
       doc.y = rowY + 8;
+      const noteWidth = pageRight - leftX;
 
       // Additional Advice + Notes.
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Additional Advice");
-      doc.font("Helvetica").fontSize(10).fillColor("#222").text(parsed.advice || "—", { width: 495 });
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+        .text("Additional Advice", leftX, doc.y, { width: noteWidth });
+      doc.font("Helvetica").fontSize(10).fillColor("#222")
+        .text(parsed.advice || "—", leftX, doc.y, { width: noteWidth });
       doc.moveDown(0.5);
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Notes");
-      doc.font("Helvetica").fontSize(10).fillColor("#222").text(parsed.notes || "No clinical notes recorded.", { width: 495 });
+      doc.x = leftX;
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
+        .text("Notes", leftX, doc.y, { width: noteWidth });
+      doc.font("Helvetica").fontSize(10).fillColor("#222")
+        .text(
+          parsed.notes || "No clinical notes recorded.",
+          leftX,
+          doc.y,
+          { width: noteWidth },
+        );
       doc.moveDown(0.4);
+      doc.x = leftX;
       doc.font("Helvetica-Bold").fontSize(9).fillColor("#222")
         .text("Status: ", leftX, doc.y, { continued: true })
         .font("Helvetica").text(status);

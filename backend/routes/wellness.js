@@ -8827,6 +8827,77 @@ router.get("/portal/prescriptions", verifyPatientToken, async (req, res) => {
   }
 });
 
+// GET /portal/prescriptions/:id/pdf — patient self-download of an Rx PDF.
+//
+// Staff use the sibling `/prescriptions/:id/pdf` endpoint which runs under
+// the global staff-JWT guard. Patients arrive with a portal token
+// (carries `patientId`, NOT `userId` / `tenantId`) so they hit /portal/*
+// instead — the openPaths whitelist in server.js routes /portal/* around
+// the global guard, and verifyPatientToken below proves the patient
+// owns the prescription before we render a PDF.
+//
+// Scope discipline: filter on `patientId: req.patient.id` (NOT tenantId
+// alone — the patient already proved tenancy via the OTP login flow, and
+// filtering on tenantId would leak Rx for OTHER patients in the same
+// clinic). The Rx's own tenantId then drives the clinic letterhead.
+router.get(
+  "/portal/prescriptions/:id/pdf",
+  verifyPatientToken,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "Invalid prescription id" });
+      }
+      const rx = await prisma.prescription.findFirst({
+        where: { id, patientId: req.patient.id },
+        include: {
+          patient: true,
+          doctor: { select: { id: true, name: true, email: true } },
+        },
+      });
+      if (!rx) return res.status(404).json({ error: "Prescription not found" });
+      const clinic = await primaryClinic(rx.tenantId);
+      const doctor = rx.doctor || null;
+      const buf = await renderPrescriptionPdf(rx, rx.patient, clinic, doctor);
+      // PRD §11: PDF downloads of PHI go to the audit ledger. ONE row per
+      // request; actorType='patient' so the staff-side audit viewer can
+      // distinguish self-downloads from clinician-pulled copies.
+      try {
+        await writeAudit(
+          "Prescription",
+          "PRESCRIPTION_PDF_DOWNLOAD",
+          rx.id,
+          null,
+          rx.tenantId,
+          {
+            prescriptionId: rx.id,
+            visitId: rx.visitId,
+            patientId: rx.patientId,
+            source: "portal",
+          },
+          { actorType: "patient", patientId: req.patient.id },
+        );
+      } catch (auditErr) {
+        console.warn(
+          "[wellness] audit portal PRESCRIPTION_PDF_DOWNLOAD failed:",
+          auditErr.message,
+        );
+      }
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="rx-${id}.pdf"`);
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.send(buf);
+    } catch (e) {
+      console.error("[wellness] portal prescription pdf error:", e.message);
+      res.status(500).json({ error: "Failed to render prescription PDF" });
+    }
+  },
+);
+
 // POST /portal/export — patient self-DSAR (DPDP Act §15 / GDPR Article 15).
 // Closes v3.4.8 carry-over #2: prior to this endpoint, wellness-portal
 // patients had NO mechanism to obtain a copy of their own data — they

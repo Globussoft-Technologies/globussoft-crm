@@ -258,6 +258,9 @@ jobs:
             tests/developer-api.spec.js \
             tests/security-validation-2026-05-12-api.spec.js \
             tests/wellness-csv-io-api.spec.js \
+            tests/role-landing-path-api.spec.js \
+            tests/widgets-api.spec.js \
+            tests/page-catalog-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

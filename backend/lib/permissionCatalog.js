@@ -94,6 +94,14 @@ const PERMISSION_CATALOG = {
   prescriptions: ['read', 'write', 'update', 'delete', 'export'],
   consents: ['read', 'write', 'update', 'delete'],
   visits: ['read', 'write', 'update', 'delete'],
+  // `products` and `inventory` are deliberately separate modules. `products`
+  // covers the master catalog (Product Categories, Product master, Auto-
+  // consumption rules) — the "what" you can sell or consume. `inventory`
+  // covers operational stock-movement (Vendors, Receipts, Adjustments) —
+  // the "how much you have and how it changed". A clinic might grant
+  // store managers `products.*` (curating the catalogue) without giving
+  // them write access to the stock ledger, or vice-versa.
+  products: ['read', 'write', 'update', 'delete', 'manage'],
   inventory: ['read', 'write', 'update', 'delete', 'manage'],
   pos: ['read', 'write', 'manage'],
 
@@ -108,6 +116,81 @@ const PERMISSION_CATALOG = {
   integrations: ['read', 'write', 'update', 'delete', 'manage'],
   developer: ['read', 'manage'],
 };
+
+// Domain grouping — the Roles & Permissions matrix renders modules
+// clustered under these section headers so the long flat list (40+ boxes)
+// becomes readable. Order matters; modules within each domain render in
+// catalog order. Any module not listed here falls into the "Other"
+// bucket at the bottom — keep this map current when adding new modules.
+const PERMISSION_DOMAINS = [
+  {
+    domain: 'CRM Core',
+    modules: ['contacts', 'deals', 'leads', 'tasks', 'projects', 'pipeline', 'quotes', 'forecasting', 'quotas'],
+  },
+  {
+    domain: 'Communications',
+    modules: ['communications', 'email', 'sms', 'whatsapp'],
+  },
+  {
+    domain: 'Marketing',
+    modules: ['marketing'],
+  },
+  {
+    domain: 'Service & Support',
+    modules: ['tickets', 'knowledge_base', 'surveys', 'chatbots'],
+  },
+  {
+    domain: 'Financial',
+    modules: ['billing', 'accounting', 'payments', 'expenses'],
+  },
+  {
+    domain: 'Analytics',
+    modules: ['reports', 'dashboards', 'analytics'],
+  },
+  {
+    domain: 'Automation',
+    modules: ['workflows', 'sequences'],
+  },
+  {
+    domain: 'Documents',
+    modules: ['documents', 'contracts', 'signatures', 'estimates'],
+  },
+  {
+    domain: 'Wellness Clinical',
+    modules: ['patients', 'appointments', 'services', 'prescriptions', 'consents', 'visits'],
+  },
+  {
+    domain: 'Wellness Inventory',
+    modules: ['products', 'inventory', 'pos'],
+  },
+  {
+    domain: 'Admin & Platform',
+    modules: ['staff', 'roles', 'settings', 'audit', 'integrations', 'developer'],
+  },
+];
+
+/**
+ * Returns the catalog with each module annotated by its domain. Used by
+ * /api/roles/catalog so the Permissions modal can render section headers
+ * instead of a flat grid of 40+ boxes. Modules not listed in
+ * PERMISSION_DOMAINS land in a final "Other" bucket.
+ */
+function getGroupedCatalog() {
+  const moduleToDomain = new Map();
+  for (const { domain, modules } of PERMISSION_DOMAINS) {
+    for (const m of modules) moduleToDomain.set(m, domain);
+  }
+  const groups = new Map();
+  for (const { domain } of PERMISSION_DOMAINS) groups.set(domain, []);
+  groups.set('Other', []);
+  for (const [module, actions] of Object.entries(PERMISSION_CATALOG)) {
+    const domain = moduleToDomain.get(module) || 'Other';
+    groups.get(domain).push({ module, actions: [...actions] });
+  }
+  return Array.from(groups.entries())
+    .filter(([, modules]) => modules.length > 0)
+    .map(([domain, modules]) => ({ domain, modules }));
+}
 
 /**
  * Validate a (module, action) pair against the catalog.
@@ -142,8 +225,10 @@ function getCatalog() {
 
 module.exports = {
   PERMISSION_CATALOG,
+  PERMISSION_DOMAINS,
   isValidPermission,
   getModules,
   getActions,
   getCatalog,
+  getGroupedCatalog,
 };

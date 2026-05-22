@@ -47,6 +47,10 @@ const MANAGER_PERMISSIONS = [
   'documents.read', 'documents.write', 'documents.update',
   'contracts.read', 'contracts.write', 'contracts.update',
   'estimates.read', 'estimates.write', 'estimates.update', 'estimates.export',
+  // Wellness master catalog — Manager curates products + auto-consumption
+  // rules so they can keep what's billable in sync with what's actually
+  // delivered. (Inventory ledger ops are still admin-only by default.)
+  'products.read', 'products.write', 'products.update',
 ];
 
 const CUSTOMER_PERMISSIONS = [
@@ -79,17 +83,86 @@ const USER_PERMISSIONS = [
   'estimates.read',
 ];
 
-async function ensureRole(stats, { tenantId, key, name, description, isSystem, userType }) {
+// Wellness vertical-specific custom roles. Each one carries the
+// permissions its day-to-day workflow needs — defined here so the seed
+// + boot-time ensure script + admin UI all converge on the same starting
+// state. Admins can pare these back per-tenant via the Roles &
+// Permissions UI; the ensure step won't overwrite existing roles, only
+// create-if-missing.
+
+const DOCTOR_PERMISSIONS = [
+  'patients.read', 'patients.write', 'patients.update',
+  'appointments.read', 'appointments.write', 'appointments.update',
+  'visits.read', 'visits.write', 'visits.update',
+  'prescriptions.read', 'prescriptions.write', 'prescriptions.update',
+  'consents.read', 'consents.write',
+  'services.read',
+  // Doctor sees the product catalog (to know what's available to order)
+  // and the inventory level (to know what's in stock), but doesn't write
+  // either — that's Nurse + storeroom work.
+  'products.read',
+  'inventory.read',
+  'documents.read', 'documents.write',
+];
+
+const NURSE_PERMISSIONS = [
+  'patients.read', 'patients.update',
+  'appointments.read', 'appointments.update',
+  'visits.read', 'visits.write', 'visits.update',
+  // Nurse manages BOTH catalog (recording new products as they arrive)
+  // AND ledger (logging receipts + adjustments on consumption). They're
+  // the day-to-day stockroom operator. Manage-tier (category taxonomy,
+  // vendor master, auto-consumption rules) stays with admin.
+  'products.read', 'products.write', 'products.update',
+  'inventory.read', 'inventory.write', 'inventory.update',
+  'services.read',
+  'consents.read',
+];
+
+const RECEPTIONIST_PERMISSIONS = [
+  'patients.read', 'patients.write',
+  'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete',
+  'services.read',
+  // Receptionist views the product catalog to look up items for POS
+  // sales but doesn't edit it; no stock-ledger access.
+  'products.read',
+  'billing.read', 'billing.write',
+  'pos.read', 'pos.write', 'pos.manage',
+  'contacts.read', 'contacts.write',
+  'leads.read', 'leads.write',
+  'communications.read', 'communications.write',
+  'email.read', 'email.write',
+  'sms.read', 'sms.write',
+  'whatsapp.read', 'whatsapp.write',
+];
+
+const TELECALLER_PERMISSIONS = [
+  'leads.read', 'leads.write', 'leads.update',
+  'contacts.read', 'contacts.write',
+  'appointments.read', 'appointments.write',
+  'communications.read', 'communications.write',
+  'sms.read', 'sms.write',
+  'whatsapp.read', 'whatsapp.write',
+  'email.read', 'email.write',
+  'reports.read',
+];
+
+async function ensureRole(stats, { tenantId, key, name, description, isSystem, userType, landingPath }) {
   const existing = await prisma.role.findFirst({ where: { tenantId, key } });
   if (existing) {
     stats.rolesExisting++;
-    return existing;
+    // PRINCIPLE: never touch existing rows. An operator who has cleared
+    // landingPath (or edited it via the Roles & Permissions UI) should
+    // keep their choice across boots. A null landingPath is now safe
+    // anyway — Login.jsx's smart-fallback resolves it via /api/pages/me
+    // → first accessible page → /home. No backfill needed.
+    return { role: existing, wasCreated: false };
   }
   const created = await prisma.role.create({
-    data: { tenantId, key, name, description, isSystem, isActive: true, userType },
+    data: { tenantId, key, name, description, isSystem, isActive: true, userType, landingPath: landingPath || null },
   });
   stats.rolesCreated++;
-  return created;
+  return { role: created, wasCreated: true };
 }
 
 async function ensureRolePermission(stats, roleId, module, action) {
@@ -105,8 +178,13 @@ async function ensureRolePermission(stats, roleId, module, action) {
 }
 
 async function ensureUserRole(stats, userId, roleId) {
-  const existing = await prisma.userRole.findFirst({ where: { userId, roleId } });
-  if (existing) {
+  // Backfill semantics only: if the user has ANY UserRole row already,
+  // leave it alone — admins may have re-assigned them to a custom role
+  // via the Roles & Permissions UI, and silently overwriting that would
+  // destroy their work. Single-role-per-user enforcement happens at the
+  // assign endpoint (routes/roles.js delete-then-create), not here.
+  const existingCount = await prisma.userRole.count({ where: { userId } });
+  if (existingCount > 0) {
     stats.assignmentsExisting++;
     return;
   }
@@ -150,6 +228,7 @@ async function ensureRbacOnBoot() {
     description: 'Unrestricted access across all organizations',
     isSystem: true,
     userType: 'OWNER',
+    landingPath: '/dashboard',
   });
 
   // OWNER users get the platform OWNER role. The role itself carries no
@@ -165,46 +244,183 @@ async function ensureRbacOnBoot() {
     orderBy: { id: 'asc' },
   });
 
+  // Per-tenant default landing paths. Only set for ADMIN + MANAGER because
+  // those map cleanly to a single page (owner dashboard or generic dash).
+  // CUSTOMER + USER stay null so the App.jsx fallback (wellnessLandingFor)
+  // can keep using legacy wellnessRole-based routing — a wellness telecaller
+  // is currently User.role='USER' + wellnessRole='telecaller' and routes to
+  // /wellness/telecaller; pinning USER.landingPath='/wellness/calendar'
+  // would silently break that. Once admins create per-function roles
+  // (DOCTOR / TELECALLER / RECEPTIONIST / NURSE) with their own landingPath
+  // and reassign users, this fallback drops out naturally.
+  const wellnessTenantIds = new Set(
+    (
+      await prisma.tenant.findMany({
+        where: { vertical: 'wellness' },
+        select: { id: true },
+      })
+    ).map((t) => t.id),
+  );
+
   for (const t of tenants) {
-    const adminRole = await ensureRole(stats, {
+    const isWellness = wellnessTenantIds.has(t.id);
+    const adminLanding = isWellness ? '/wellness' : '/dashboard';
+    const managerLanding = isWellness ? '/wellness' : '/dashboard';
+
+    // Seed-on-creation only: permissions are granted to a system role
+    // ONLY the FIRST time we provision it. On subsequent boots, we leave
+    // the role's existing grants alone — operators can fine-tune them
+    // through Roles & Permissions and our scheduled re-runs won't undo
+    // their edits. This was a real bug: removing inventory.read from
+    // ADMIN, restarting the backend, then refreshing the browser would
+    // show inventory back because the boot script re-granted everything.
+    // The seed (`prisma/seed.js`) handles the first-time provisioning
+    // for the demo seed; this script handles tenants that pre-date the
+    // RBAC migration by creating the role then backfilling perms once.
+    const { role: adminRole, wasCreated: adminCreated } = await ensureRole(stats, {
       tenantId: t.id,
       key: 'ADMIN',
       name: 'Admin',
       description: 'Full access to all features within the organization',
       isSystem: true,
       userType: 'STAFF',
+      landingPath: adminLanding,
     });
-    await grantAllPermissions(stats, adminRole.id);
+    if (adminCreated) await grantAllPermissions(stats, adminRole.id);
 
-    const managerRole = await ensureRole(stats, {
+    const { role: managerRole, wasCreated: managerCreated } = await ensureRole(stats, {
       tenantId: t.id,
       key: 'MANAGER',
       name: 'Manager',
       description: 'Manager role with broad staff access',
       isSystem: false,
       userType: 'STAFF',
+      landingPath: managerLanding,
     });
-    await grantPermissionList(stats, managerRole.id, MANAGER_PERMISSIONS);
+    if (managerCreated) await grantPermissionList(stats, managerRole.id, MANAGER_PERMISSIONS);
 
-    const customerRole = await ensureRole(stats, {
+    const { role: customerRole, wasCreated: customerCreated } = await ensureRole(stats, {
       tenantId: t.id,
       key: 'CUSTOMER',
       name: 'Customer',
       description: 'Customer access to booking and appointments only',
       isSystem: true,
       userType: 'CUSTOMER',
+      landingPath: null, // fallback to vertical default (wellness: book-appointment, generic: dashboard)
     });
-    await grantPermissionList(stats, customerRole.id, CUSTOMER_PERMISSIONS);
+    if (customerCreated) await grantPermissionList(stats, customerRole.id, CUSTOMER_PERMISSIONS);
 
-    const userRole = await ensureRole(stats, {
+    const { role: userRole, wasCreated: userCreated } = await ensureRole(stats, {
       tenantId: t.id,
       key: 'USER',
       name: 'User',
       description: 'Basic user role with limited CRM access',
       isSystem: false,
       userType: 'STAFF',
+      landingPath: null, // fallback honours legacy wellnessRole-based routing
     });
-    await grantPermissionList(stats, userRole.id, USER_PERMISSIONS);
+    if (userCreated) await grantPermissionList(stats, userRole.id, USER_PERMISSIONS);
+
+    // Wellness-vertical custom roles. Auto-provisioned only for wellness
+    // tenants so a generic CRM tenant doesn't end up with empty Doctor /
+    // Nurse roles cluttering its Roles & Permissions matrix. Admins can
+    // still create them manually via the UI.
+    if (isWellness) {
+      const { role: doctorRole, wasCreated: doctorCreated } = await ensureRole(stats, {
+        tenantId: t.id,
+        key: 'DOCTOR',
+        name: 'Doctor',
+        description: 'Clinical practitioner — patients, prescriptions, consents, visits',
+        isSystem: false,
+        userType: 'STAFF',
+        landingPath: '/home',
+      });
+      if (doctorCreated) await grantPermissionList(stats, doctorRole.id, DOCTOR_PERMISSIONS);
+
+      const { role: nurseRole, wasCreated: nurseCreated } = await ensureRole(stats, {
+        tenantId: t.id,
+        key: 'NURSE',
+        name: 'Nurse',
+        description: 'Clinical assistant — patient prep, procedures, inventory',
+        isSystem: false,
+        userType: 'STAFF',
+        landingPath: '/home',
+      });
+      if (nurseCreated) await grantPermissionList(stats, nurseRole.id, NURSE_PERMISSIONS);
+
+      const { role: receptionistRole, wasCreated: receptionistCreated } = await ensureRole(stats, {
+        tenantId: t.id,
+        key: 'RECEPTIONIST',
+        name: 'Receptionist',
+        description: 'Front desk — calendar, walk-ins, POS, birthdays',
+        isSystem: false,
+        userType: 'STAFF',
+        landingPath: '/home',
+      });
+      if (receptionistCreated) await grantPermissionList(stats, receptionistRole.id, RECEPTIONIST_PERMISSIONS);
+
+      const { role: telecallerRole, wasCreated: telecallerCreated } = await ensureRole(stats, {
+        tenantId: t.id,
+        key: 'TELECALLER',
+        name: 'Telecaller',
+        description: 'Outbound calls + lead conversion',
+        isSystem: false,
+        userType: 'STAFF',
+        landingPath: '/home',
+      });
+      if (telecallerCreated) await grantPermissionList(stats, telecallerRole.id, TELECALLER_PERMISSIONS);
+
+      // Seed default home widget layout for each clinical role only if it
+      // has none. Admins can re-arrange via the Widgets modal — we won't
+      // overwrite an existing layout. Picks widgets whose
+      // catalogue.defaultRoleKeys list contains this role's key.
+      //
+      // Wrapped in try/catch because the RoleWidget table is new — if a
+      // tenant deploy lands this code BEFORE `prisma db push` runs, the
+      // table won't exist and the create() throws. We don't want server
+      // boot to fail over a deferred feature; log once and continue. The
+      // next boot after the migration applies will pick up the seeding.
+      try {
+        const { WIDGET_CATALOG } = require('../lib/widgetCatalog');
+        // Same wasCreated discipline as role permissions: seed default
+        // widgets ONLY on first creation of the role. If an operator has
+        // ever curated the home layout (including deleting every widget),
+        // their choice sticks across boots — we don't re-seed.
+        const seedDefaultWidgets = async (role, wasCreated) => {
+          if (!wasCreated) return;
+          const defaults = WIDGET_CATALOG.filter((w) =>
+            w.defaultRoleKeys.includes(role.key),
+          );
+          for (let i = 0; i < defaults.length; i++) {
+            await prisma.roleWidget.create({
+              data: {
+                roleId: role.id,
+                widgetKey: defaults[i].key,
+                position: (i + 1) * 10,
+                isEnabled: true,
+              },
+            });
+          }
+          if (defaults.length > 0) {
+            stats.widgetsCreated = (stats.widgetsCreated || 0) + defaults.length;
+          }
+        };
+        await seedDefaultWidgets(doctorRole, doctorCreated);
+        await seedDefaultWidgets(nurseRole, nurseCreated);
+        await seedDefaultWidgets(receptionistRole, receptionistCreated);
+        await seedDefaultWidgets(telecallerRole, telecallerCreated);
+        await seedDefaultWidgets(adminRole, adminCreated);
+        await seedDefaultWidgets(managerRole, managerCreated);
+        await seedDefaultWidgets(customerRole, customerCreated);
+      } catch (err) {
+        console.warn(
+          '[ensureRbacOnBoot] widget seeding skipped — RoleWidget table missing? ' +
+            'Run `npx prisma db push` to apply the new schema. ' +
+            (err && err.message ? `Cause: ${err.message}` : ''),
+        );
+        stats.widgetsSkipped = (stats.widgetsSkipped || 0) + 1;
+      }
+    }
 
     const users = await prisma.user.findMany({ where: { tenantId: t.id } });
     for (const u of users) {

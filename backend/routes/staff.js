@@ -98,9 +98,39 @@ router.get("/", async (req, res) => {
         // (UI renders an "Inactive" badge; the row stays in the list so an
         // admin can re-activate it instead of having to soul-search the audit log).
         deactivatedAt: true,
+        // Per-row primary RBAC role assignment so the Staff page can
+        // display + edit the new Custom roles (DOCTOR / NURSE / etc.)
+        // without a per-row roundtrip. Includes nested Role for the
+        // display badge. Single-role-per-user enforced upstream, so
+        // findFirst with desc order is deterministic.
+        userRoles: {
+          take: 1,
+          orderBy: { assignedAt: "desc" },
+          select: {
+            roleId: true,
+            role: {
+              select: { id: true, key: true, name: true, landingPath: true },
+            },
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
     });
+
+    // Flatten userRoles[0] → primaryRole on each row so the frontend can
+    // render `member.primaryRole?.key` without poking at the join shape.
+    for (const u of users) {
+      u.primaryRole =
+        u.userRoles && u.userRoles[0] && u.userRoles[0].role
+          ? {
+              id: u.userRoles[0].role.id,
+              key: u.userRoles[0].role.key,
+              name: u.userRoles[0].role.name,
+              landingPath: u.userRoles[0].role.landingPath || null,
+            }
+          : null;
+      delete u.userRoles;
+    }
     // #682: apply PII masking + audit emission.
     const mustMask = shouldMaskForViewer(req);
     let out;
@@ -144,7 +174,7 @@ router.get("/", async (req, res) => {
 // renders the correct landing view on their first login.
 router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    const { name, email, password, role, wellnessRole } = req.body || {};
+    const { name, email, password, role, wellnessRole, rbacRoleId } = req.body || {};
 
     // Basic field presence + shape checks. Mirror auth.js/signup so the
     // error envelope is uniform across signup and admin-create paths.
@@ -164,6 +194,27 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
       return res.status(400).json({ error: `Invalid wellness role. Must be one of: ${VALID_WELLNESS_ROLES.join(", ")}` });
     }
 
+    // Optional rbacRoleId: pre-validate before we create the user, so a bad
+    // role id doesn't leave a half-created user behind. Must be an integer
+    // pointing at a Role row in THIS tenant with userType='STAFF' (CUSTOMER
+    // roles can't be assigned to staff via this endpoint).
+    let rbacRole = null;
+    if (rbacRoleId !== undefined && rbacRoleId !== null && rbacRoleId !== "") {
+      const roleIdNum = parseInt(rbacRoleId, 10);
+      if (!Number.isInteger(roleIdNum) || roleIdNum <= 0) {
+        return res.status(400).json({ error: "Invalid rbacRoleId." });
+      }
+      rbacRole = await prisma.role.findFirst({
+        where: { id: roleIdNum, tenantId: req.user.tenantId },
+      });
+      if (!rbacRole) {
+        return res.status(404).json({ error: "Role not found in this tenant." });
+      }
+      if (rbacRole.userType && rbacRole.userType !== "STAFF") {
+        return res.status(400).json({ error: "Cannot assign a CUSTOMER role to a staff member." });
+      }
+    }
+
     // Email is globally unique (Prisma @unique). Pre-check inside the
     // tenant so the admin gets a meaningful 409 instead of Prisma's raw
     // P2002 unique-constraint error.
@@ -173,25 +224,41 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const created = await prisma.user.create({
-      data: {
-        name: name.trim(),
-        email: email.toLowerCase(),
-        password: passwordHash,
-        role,
-        wellnessRole: wellnessRole || null,
-        tenantId: req.user.tenantId,
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        wellnessRole: true,
-        commissionProfileId: true,
-        createdAt: true,
-        deactivatedAt: true,
-      },
+
+    // Atomic: create user + the UserRole junction in one transaction. If
+    // either fails, the entire create rolls back. Avoids "user created
+    // but role assignment failed" half-state that requires manual cleanup.
+    const created = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          name: name.trim(),
+          email: email.toLowerCase(),
+          password: passwordHash,
+          role,
+          wellnessRole: wellnessRole || null,
+          tenantId: req.user.tenantId,
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          wellnessRole: true,
+          commissionProfileId: true,
+          createdAt: true,
+          deactivatedAt: true,
+        },
+      });
+      if (rbacRole) {
+        await tx.userRole.create({
+          data: {
+            userId: user.id,
+            roleId: rbacRole.id,
+            assignedById: req.user.userId,
+          },
+        });
+      }
+      return user;
     });
 
     await writeAudit(
@@ -200,10 +267,23 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
       created.id,
       req.user.userId,
       req.user.tenantId,
-      { targetEmail: created.email, role: created.role, wellnessRole: created.wellnessRole || null },
+      {
+        targetEmail: created.email,
+        role: created.role,
+        wellnessRole: created.wellnessRole || null,
+        rbacRoleId: rbacRole ? rbacRole.id : null,
+        rbacRoleKey: rbacRole ? rbacRole.key : null,
+      },
     ).catch((e) => console.warn("[staff] audit User CREATE failed:", e.message));
 
-    res.status(201).json(created);
+    res.status(201).json({
+      ...created,
+      // Echo the assignment so the frontend can update its row state
+      // without a refetch.
+      primaryRole: rbacRole
+        ? { id: rbacRole.id, key: rbacRole.key, name: rbacRole.name, landingPath: rbacRole.landingPath || null }
+        : null,
+    });
   } catch (err) {
     if (err && err.code === "P2002") {
       return res.status(409).json({ error: "A user with that email already exists." });
@@ -265,9 +345,34 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
     const target = await prisma.user.findFirst({ where: { id: userId, tenantId: req.user.tenantId } });
     if (!target) return res.status(404).json({ error: "User not found." });
 
-    const { name, email, role, wellnessRole, commissionProfileId } = req.body || {};
+    const { name, email, role, wellnessRole, commissionProfileId, rbacRoleId } = req.body || {};
     const data = {};
     const changed = {};
+    // rbacRoleId handled outside the User.update because it lives on the
+    // UserRole junction table. Validate up-front so we don't mutate User
+    // and then fail the junction write.
+    let nextRbacRoleId = undefined; // undefined = no change requested
+    let validatedRbacRole = null;
+    if (rbacRoleId !== undefined) {
+      if (rbacRoleId === null || rbacRoleId === "") {
+        nextRbacRoleId = null; // explicit clear
+      } else {
+        const roleIdNum = parseInt(rbacRoleId, 10);
+        if (!Number.isInteger(roleIdNum) || roleIdNum <= 0) {
+          return res.status(400).json({ error: "Invalid rbacRoleId." });
+        }
+        validatedRbacRole = await prisma.role.findFirst({
+          where: { id: roleIdNum, tenantId: req.user.tenantId },
+        });
+        if (!validatedRbacRole) {
+          return res.status(404).json({ error: "Role not found in this tenant." });
+        }
+        if (validatedRbacRole.userType && validatedRbacRole.userType !== "STAFF") {
+          return res.status(400).json({ error: "Cannot assign a CUSTOMER role to a staff member." });
+        }
+        nextRbacRoleId = roleIdNum;
+      }
+    }
 
     // #714 (HIGH): server-side validation. Name is REQUIRED when included
     // (no clearing-to-empty), email must look like an email when included.
@@ -337,7 +442,20 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
       }
     }
 
-    if (Object.keys(data).length === 0) {
+    // rbacRoleId is the only field that lives outside the User table, so
+    // it's handled separately. Snapshot whether the RBAC role actually
+    // changed so we can audit + skip-no-op without an extra UserRole read.
+    const currentRbacRow = nextRbacRoleId !== undefined
+      ? await prisma.userRole.findFirst({
+          where: { userId: target.id },
+          orderBy: { assignedAt: "desc" },
+        })
+      : null;
+    const currentRbacRoleId = currentRbacRow ? currentRbacRow.roleId : null;
+    const rbacRoleChanged =
+      nextRbacRoleId !== undefined && nextRbacRoleId !== currentRbacRoleId;
+
+    if (Object.keys(data).length === 0 && !rbacRoleChanged) {
       // No-op edit — return current row without writing audit.
       return res.json({
         id: target.id,
@@ -353,19 +471,42 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
 
     let user;
     try {
-      user = await prisma.user.update({
-        where: { id: target.id },
-        data,
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          wellnessRole: true,
-          commissionProfileId: true,
-          createdAt: true,
-          deactivatedAt: true,
-        },
+      // Wrap the User.update + UserRole swap in a transaction so a failure
+      // on either half rolls back. Single-role-per-user is application-
+      // enforced: deleteMany existing rows then create the new one.
+      user = await prisma.$transaction(async (tx) => {
+        const updated = Object.keys(data).length === 0
+          ? target
+          : await tx.user.update({
+              where: { id: target.id },
+              data,
+              select: {
+                id: true,
+                email: true,
+                name: true,
+                role: true,
+                wellnessRole: true,
+                commissionProfileId: true,
+                createdAt: true,
+                deactivatedAt: true,
+              },
+            });
+
+        if (rbacRoleChanged) {
+          await tx.userRole.deleteMany({ where: { userId: target.id } });
+          if (nextRbacRoleId !== null) {
+            await tx.userRole.create({
+              data: {
+                userId: target.id,
+                roleId: nextRbacRoleId,
+                assignedById: req.user.userId,
+              },
+            });
+          }
+          changed.rbacRoleId = { from: currentRbacRoleId, to: nextRbacRoleId };
+        }
+
+        return updated;
       });
     } catch (err) {
       if (err.code === "P2002") {
@@ -380,7 +521,28 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
       changed,
     });
 
-    res.json(user);
+    // Echo the resolved RBAC role on the response so the staff list can
+    // update its row state without a refetch.
+    const echoedRbacRole = (() => {
+      if (nextRbacRoleId === undefined) {
+        // RBAC role not part of this PUT — surface the current assignment
+        // from the snapshot read above.
+        return currentRbacRow && validatedRbacRole === null
+          ? { id: currentRbacRoleId }
+          : null;
+      }
+      if (validatedRbacRole) {
+        return {
+          id: validatedRbacRole.id,
+          key: validatedRbacRole.key,
+          name: validatedRbacRole.name,
+          landingPath: validatedRbacRole.landingPath || null,
+        };
+      }
+      return null; // explicit clear
+    })();
+
+    res.json({ ...user, primaryRole: echoedRbacRole });
   } catch (err) {
     if (err.code === "P2025") {
       return res.status(404).json({ error: "User not found." });

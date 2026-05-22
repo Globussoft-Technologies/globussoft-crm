@@ -227,6 +227,25 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - **Visa Sure backend now fully shippable end-to-end**: V1-V4 seed ✅ + V5-V7 risk-flag cron 🟡 (18 cases) + V8-V10 AdvisorDashboard 🟡 (endpoint now exists) + V16-V18 analytics ✅ + V19 + 3 shell pages ✅ + Applications GET ✅
 - **Dark-mode cluster: 5 of 17 closed; 12 remaining**
 
+**Tick #11 (cron) — 3/3 SHIPPED, Visa V8-V10 graduates ✅ + #873 partial-closed:**
+
+| SHA | Type | What |
+|---|---|---|
+| `3d82e34` | Dark-mode drain | **#873 Reports.jsx** (Wellness `/reports`) — 5 inline-style objects → 11 CSS classes (StageBadge + StatusBadge collapsed to shared `.report-pill` family); 10 dark-mode token pairs (WCAG-AA 5.1+). Recharts COLORS palette deferred per issue's own `useChartTheme()` hook recommendation. Cluster: **6 of 17 closed (partial #873)** |
+| `b2a4292` | V8-V10 graduation | **AdvisorDashboard.jsx wired** to `GET /api/travel/visa/applications/:id` — 4 sections: diagnostic (classification + score + tier + link) / AI summary placeholder / 3-pill risk indicators (FR-3.1/3.2/3.3) / **bonus**: document checklist progress bar. Handles 404 NOT_FOUND + NOT_VISA_SURE error codes |
+| `c0ab496` | V8 graduation | **Applications.jsx wired** to `GET /api/travel/visa/applications` — 6 columns (ID / Contact / Type / Status / 3 risk pills / Updated); status filter pinned to backend's real VALID_STATUSES (intake / docs-pending / filed / approved / rejected / appeal — drift from dispatch prose caught + corrected); 50/page pagination + a11y (tabIndex + Enter/Space row-nav) |
+
+**Dispatch-drift caught (tick #11 Agent 3):** dispatch prose listed status enum `docs-collected`/`submitted` which DON'T exist in backend's actual `VALID_STATUSES`. Agent pinned to reality + documented inline. Pattern matches recent schema-vs-PRD divergences — **5th schema-or-spec gap** this session.
+
+**Cumulative session totals (11 ticks):**
+- **34 commits** (12 features/scaffolds + 13 PRDs + 1 backlog + 1 matrix refresh + 2 backend endpoints + 3 dark-mode refactors + 1 rule extension + 2 visa frontend wires)
+- **4 GitHub issues closed** (#867 #871 #872 #873-partial)
+- 5 phantom-carry-over + **5 schema-or-spec gaps** caught
+- Zero rebase conflicts, zero over-commits across all 34 commits
+- ~6,200 lines of PRD documentation across 13 PRDs
+- **Visa Sure now SHIPPED end-to-end frontend↔backend** for the read-only operator surface (Dashboard / Applications list / AdvisorDashboard detail / Reports analytics)
+- **Dark-mode cluster: 6 of 17 closed; 11 remaining**
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

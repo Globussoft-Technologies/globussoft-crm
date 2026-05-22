@@ -1026,6 +1026,7 @@ function renderTravelNav({
       {isAdmin && <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" />}
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Suppliers" />}
+      {isAdmin && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" />}
 
       <div style={labelStyle}>Sales pipeline</div>
       <Link to="/leads" icon={UserPlus} label="Leads" />

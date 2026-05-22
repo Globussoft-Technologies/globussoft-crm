@@ -129,6 +129,7 @@ const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
 const TravelRfuCustomerProfile = lazy(() => import("./pages/travel/RfuCustomerProfile"));
 const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
+const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
   () => import("./pages/wellness/OwnerDashboard"),
@@ -902,6 +903,7 @@ export default function App() {
               <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />
               <Route path="travel/reports" element={<TravelOnly><TravelReports /></TravelOnly>} />
               <Route path="travel/suppliers" element={<TravelOnly><TravelSuppliers /></TravelOnly>} />
+              <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
                     {/* Wellness vertical — gated by WellnessOnly so generic-CRM
                   tenants can't surface wellness pages by URL (#325). */}
               <Route path="wellness" element={<WellnessOnly><WellnessOwnerOnly><WellnessOwnerDashboard /></WellnessOwnerOnly></WellnessOnly>} />

@@ -9,7 +9,7 @@
 ## Executive summary
 
 - **Total PRD requirements counted:** **78** (unchanged denominator)
-- **SHIPPED:** **72** (~92%) — up from 71 (+1: `ReligiousPackets.jsx` admin UI `f903f4b` — closes the §4.10 UI side of `1e62ee9`'s backend CRUD)
+- **SHIPPED:** **73** (~94%) — up from 72 (+1: `ItineraryDetail.jsx` detail page + clickable list rows `c51f7e4` — surfaces `f02fa5a`'s draftSummary LLM consumer)
 - **PARTIAL:** **5** (~6%) — unchanged
 - **GAP-AUTONOMOUS:** **0** (0%) — down from 1 since `ReligiousPackets.jsx` admin UI shipped (`f903f4b`); recommended-next-5 pool is now exhausted of autonomous-doable PRD-blocking work
 - **GAP-STUB-ABLE:** **5** (~6%) — unchanged
@@ -29,7 +29,7 @@ After those, what remains is dominated by:
 
 2. ~~**`ReligiousPackets.jsx` admin UI** (PRD §4.10 + §7). New page under `frontend/src/pages/travel/ReligiousPackets.jsx` consuming the 5-endpoint admin CRUD from `routes/travel_religious_packets.js` (commit `1e62ee9`). Renders a sub-brand filter, packet list (title / dayOffset / channels / isActive), create/edit drawer with the validation contract (subBrand in VALID_SUB_BRANDS, dayOffset 0..365, title 1..200, contentHtml ≤20kB, channels CSV from wa/email/sms). Sidebar link from the existing travel nav.~~ — ✅ **commit `f903f4b`** (new page + lazy import + admin sidebar link + 8 vitest cases pinning header/empty-state/row-rendering/filter-URL/POST-shape/DELETE/PATCH/blank-title-rejection contracts)
 
-3. **`ItineraryDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/ItineraryDetail.jsx`; fetches itinerary + items + version chain + (after pick #1 lands) `draftSummary`; renders items grid + version-history drawer + accept/reject actions + draft-summary block with "Regenerate" button. Mount at `/travel/itineraries/:id`. ~½ day, pure frontend. **Why third:** pairs cleanly with pick #1 (draftSummary becomes visible the moment this page exists); §7 lists it but the row-click from `Itineraries.jsx` is dead today.
+3. ~~**`ItineraryDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/ItineraryDetail.jsx`; fetches itinerary + items + version chain + `draftSummary`; renders items grid + accept/reject actions + draft-summary block with "Regenerate" button. Mount at `/travel/itineraries/:id`.~~ — ✅ **commit `c51f7e4`** (page mounts at `/travel/itineraries/:id`, list rows now clickable with cursor:pointer + aria-label, 8 vitest cases pinning header/items/empty/draftSummary/regen/add-item/delete/edit-modal contracts)
 
 ### Top 3 cred-blocked items worth chasing the human on (unchanged)
 
@@ -276,7 +276,7 @@ After those, what remains is dominated by:
 | `DiagnosticPublic.jsx` (`/p/diagnostic/:subBrand/:bankId`) | SHIPPED-equivalent | `TravelStallQuiz.jsx` at `/travel-stall/quiz` |
 | `DiagnosticDetail.jsx` (renders talking-points brief + form-vs-call panel) | SHIPPED | `frontend/src/pages/travel/DiagnosticDetail.jsx` (commit `2440b4a`); route `/travel/diagnostics/:id`; consumes `cf876af` talking-points + `4a7c623` form-vs-call endpoints + GET /diagnostics/:id; STUB pill for stub-mode LLM output; role-gated Regenerate button |
 | `ItineraryBuilder.jsx` | PARTIAL | List ships (`Itineraries.jsx`); explicit `/new` builder route absent |
-| `ItineraryDetail.jsx` | NOT SHIPPED — GAP-AUTONOMOUS | Pairs with top pick #1 LLM consumer (top pick #3) |
+| `ItineraryDetail.jsx` | SHIPPED | commit `c51f7e4` — 3-section page (header + draftSummary + items table), clickable list rows, 8 vitest cases |
 | `CostMaster.jsx` | SHIPPED | |
 | `FlightQuoteAgent.jsx` | NOT SHIPPED | In-CRM fallback for Chrome plugin |
 | `MarkupRules.jsx` (admin, shipped as `PricingRules.jsx`) | SHIPPED | |
@@ -471,7 +471,7 @@ The autonomous queue is **getting thin but not exhausted**. Picks #1–#3 are ge
 
 2. **`ReligiousPackets.jsx` admin UI** (PRD §4.10 + §7). New page under `frontend/src/pages/travel/ReligiousPackets.jsx` consuming the 5-endpoint admin CRUD from `routes/travel_religious_packets.js` (commit `1e62ee9`). Sub-brand filter + packet list + create/edit drawer with full validation contract (subBrand, dayOffset 0..365, title 1..200, contentHtml ≤20kB, channels CSV). Sidebar link. ~½ day, pure frontend, zero cred deps. **Why next:** backend CRUD shipped without an operator surface; Yasin's Q1 content lands via admin PATCH per the commit body but there's no UI to do that today.
 
-3. **`ItineraryDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/ItineraryDetail.jsx`; fetches itinerary + items + version chain + `draftSummary` (after pick #1); renders items grid + version-history drawer + accept/reject actions + draft-summary block with "Regenerate" button. Mount at `/travel/itineraries/:id`. ~½ day, pure frontend. **Why third:** pairs with pick #1; §7 lists it but row-click from `Itineraries.jsx` is dead today.
+3. ~~**`ItineraryDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/ItineraryDetail.jsx`; fetches itinerary + items + draftSummary; renders items grid + accept/reject actions + draft-summary block. Mount at `/travel/itineraries/:id`.~~ — ✅ **commit `c51f7e4`** (page mounts, clickable list rows, 8 vitest cases)
 
 4. **`LeadDetail.jsx` UI page** (PRD §7 row). New page under `frontend/src/pages/travel/LeadDetail.jsx`; fetches contact + diagnostic + linked itineraries + linked trips for the unified lead view. Mount at `/travel/leads/:id`. Reuses generic `Contacts/ContactDetail.jsx` for shape. ~3-4 hrs. **Why fourth:** lowest-cost UI fill-in; the `Leads.jsx` list ships but row-click is dead today. Not a hard PRD requirement (Leads list does the job for now).
 

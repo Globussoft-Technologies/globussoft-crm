@@ -53,6 +53,46 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 ---
 
+## 🌙 OVERNIGHT MODE — 2026-05-23 evening into 2026-05-24 morning
+
+**Cron `5a0ad5d3` running** (15-min cadence at :08/:23/:38/:53; expanded scope = Phase 1.5 + Phase 2 + Phase 3 work + PRD writer for blockers). Old QA-only cron `00d468d5` deleted.
+
+**Tick #1 (manual, before sleep) shipped 3/3 clean:**
+
+| SHA | Type | What |
+|---|---|---|
+| `28fbcf4` | PRD | `docs/PRD_VISA_SURE_PHASE_3.md` — 489 lines, 7 product calls + 7 open questions; mirrors WA PRD structure; sub-brand brief + 12-page blueprint cross-referenced |
+| `875c082` | Phase 3 scaffold | Visa Sure `/travel/visa/*` landing + sidebar Visa Sure group (admin-only) + 3 shell pages (Dashboard / Applications / Checklists) all linking to the PRD |
+| `46c61d8` | Phase 2 LLM consumer | Travel Stall personalised 3-5 destination PDF endpoint (4th LLM-router consumer); STUB markers for Q11 LLM keys + Q22 brand assets; 12 gate spec cases wired into deploy.yml + coverage.yml |
+
+**PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
+
+| # | PRD | State |
+|---|---|---|
+| 1 | `docs/WHATSAPP_INTEGRATION_PRD.md` | ✅ ALREADY-EXISTED + updated this session |
+| 2 | `docs/DIGILOCKER_USE_CASE.md` | ✅ ALREADY-EXISTED |
+| 3 | `docs/PRD_VISA_SURE_PHASE_3.md` | ✅ tick #1 (`28fbcf4`) |
+| 4 | `docs/PRD_PASSPORT_OCR.md` | 🔴 pending — cron pick |
+| 5 | `docs/PRD_FLIGHT_PLUGIN_CHROME_EXTENSION.md` | 🔴 pending — cron pick |
+| 6 | `docs/PRD_AIRLINE_WEBCHECKIN_AUTOMATION.md` | 🔴 pending — cron pick |
+| 7 | `docs/PRD_RATEHAWK_INTEGRATION.md` | 🔴 pending — cron pick |
+| 8 | `docs/PRD_BOOKING_EXPEDIA_DIRECT.md` | 🔴 pending — cron pick |
+| 9 | `docs/PRD_AI_CALLING_CALLIFIED.md` | 🔴 pending — cron pick |
+| 10 | `docs/PRD_ADSGPT_MARKETING_REPORTS.md` | 🔴 pending — cron pick |
+| 11 | `docs/PRD_EXCEL_SOFTWARE_ACCOUNTING.md` | 🔴 pending — cron pick |
+| 12 | `docs/PRD_TMC_CURRICULUM_MAPPING.md` | 🔴 pending — cron pick |
+
+At 15-min cadence × ~8 hours of sleep × 3 agents = ~96 agent dispatches available. Plenty for the 9 remaining PRDs + many scaffolds.
+
+**Wake-up checklist:**
+1. `git log --oneline origin/main` to see what landed (commit messages auto-prefix `feat(...)` / `fix(...)` / `docs(...)`)
+2. Skim `docs/TRAVEL_CRM_PORTAL_FEATURE_MATRIX.md` for status flips
+3. Skim new PRD files for product-call decisions needed from you
+4. `gh issue list --state closed --search "closed:>2026-05-23T19:00"` for any GH issues auto-closed by trailers
+5. Review TODOS section below for tick-by-tick handoff
+
+---
+
 ## 🎯 SEND TO YASIN (one-line action)
 
 **Send [`docs/WHATSAPP_INTEGRATION_PRD.md`](docs/WHATSAPP_INTEGRATION_PRD.md) to Yasin.** It's the formal answer to his 2026-05-13 clarifications email (the "Vati (WhatsApp)" paragraph asking for cost model + template approval timelines + message-volume limits + per-sub-brand separation). PRD now has a §5.4 that maps his 4 questions to GS answers point-by-point. Once he sees this, he can deliver the Q9 bundle (§5.2 Path A — ~30 min one-time work) to unblock 10 stubbed call sites in one cred drop.

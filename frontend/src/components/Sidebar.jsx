@@ -75,6 +75,8 @@ import {
   Banknote,
   // Zylu-Gap #800 (WA-005) — Blocked WhatsApp numbers admin entry
   Ban,
+  // Cron PRD Priority A #1 — LLM Spend admin dashboard
+  Activity,
   // Travel CRM vertical (Day 1 scaffolding — Phase 1 per docs/TRAVEL_CRM_PRD.md §7)
   Compass,
   ClipboardCheck,
@@ -1199,6 +1201,9 @@ function renderGenericNav({
         >
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
+          {/* Cron PRD Priority A #1 — LLM observability dashboard. ADMIN-only;
+              surfaces /api/admin/llm-spend rollups. */}
+          <Link to="/llm-spend" icon={Activity} label="LLM Spend" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
           <Link
             to="/field-permissions"

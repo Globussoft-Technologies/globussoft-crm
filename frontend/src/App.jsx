@@ -71,6 +71,11 @@ const Channels = lazy(() => import("./pages/Channels"));
 const LandingPages = lazy(() => import("./pages/LandingPages"));
 const LandingPageBuilder = lazy(() => import("./pages/LandingPageBuilder"));
 const AuditLog = lazy(() => import("./pages/AuditLog"));
+// Cron PRD Priority A #1 — ADMIN-only LLM spend dashboard. Surfaces
+// /api/admin/llm-spend (commit f5c9518) which aggregates LlmCallLog rows
+// produced by the 4 router consumers (talking-points / form-vs-call /
+// itinerary-draft / religious-guidance).
+const LlmSpend = lazy(() => import("./pages/LlmSpend"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const CalendarSync = lazy(() => import("./pages/CalendarSync"));
 const Profile2FA = lazy(() => import("./pages/Profile2FA"));
@@ -767,6 +772,18 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Audit Log requires admin access.">
                           <AuditLog />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Cron PRD Priority A #1 — LLM observability surface
+                        for the /api/admin/llm-spend endpoint (commit
+                        f5c9518). ADMIN-only mirrors the backend gate
+                        (verifyRole(['ADMIN']) on the route). */}
+                    <Route
+                      path="llm-spend"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="LLM Spend requires admin access.">
+                          <LlmSpend />
                         </RoleGuard>
                       }
                     />

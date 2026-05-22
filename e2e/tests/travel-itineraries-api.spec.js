@@ -920,3 +920,145 @@ test.describe("Travel itineraries API — Phase 2 public 50%-advance flow (PRD �
     expect((await pubRes.json()).code).toBe("NOT_SHARED");
   });
 });
+
+// ─── LLM draft regen (PRD §4.3 + §9.1) ───────────────────────────────
+//
+// Pins the 3rd-LLM-router-consumer endpoint at POST /itineraries/:id/draft/regen.
+// First non-Claude-Opus consumer — exercises the bulk-text → gemini-flash
+// routing path per PRD §9.1's locked Q11 routing table.
+//
+// CI runs without LLM API keys → router returns deterministic
+// [STUB-BULK-TEXT] synthetic text and `stub: true`. When Q11 keys land
+// the model identifier stays `gemini-flash` (primary for bulk-text);
+// the stub flag flips to false and the text becomes real.
+test.describe("Travel itineraries API — LLM draft regen (PRD §4.3 + §9.1)", () => {
+  const shared = { itineraryId: null, shareToken: null };
+  let userToken = null;
+
+  async function getTravelUser(request) {
+    if (!userToken) {
+      userToken = await loginAs(request, "telecaller@travelstall.demo", "password123");
+    }
+    return userToken;
+  }
+
+  test.beforeAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) return;
+    // Mint a fresh itinerary with items so the LLM payload has content
+    // to summarise. shareToken set so the post-regen public-projection
+    // test can read draftSummary back through the share endpoint.
+    const shareToken = `e2e-draft-llm-${Date.now()}-${Math.random().toString(36).slice(2, 12)}-pad`;
+    const res = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: testContactId,
+      destination: `${RUN_TAG} Draft-regen Umrah`,
+      startDate: "2026-08-01",
+      endDate: "2026-08-10",
+      totalAmount: 125000,
+      currency: "INR",
+      status: "sent",
+      shareToken,
+      items: [
+        { itemType: "flight", description: "BOM-JED economy", totalPrice: 40000 },
+        { itemType: "hotel", description: "Mecca 5-star 7n", totalPrice: 80000 },
+      ],
+    });
+    if (res.ok()) {
+      const body = await res.json();
+      shared.itineraryId = body.id;
+      shared.shareToken = body.shareToken || shareToken;
+      created.itineraryIds.push(body.id);
+    }
+  });
+
+  test("POST /itineraries/:id/draft/regen without auth → 401/403", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/travel/itineraries/1/draft/regen`, {
+      headers: { "Content-Type": "application/json" },
+      data: {},
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test("POST /itineraries/:id/draft/regen as USER role → 403 RBAC_DENIED (ADMIN/MANAGER only)", async ({ request }) => {
+    const token = await getTravelUser(request);
+    if (!token) test.skip(true, "telecaller@travelstall.demo not seeded — skipping RBAC test");
+    if (!shared.itineraryId) test.skip(true, "seed itinerary missing");
+    const res = await post(request, token, `/api/travel/itineraries/${shared.itineraryId}/draft/regen`, {});
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe("RBAC_DENIED");
+  });
+
+  test("POST /itineraries/:id/draft/regen happy path → 201 with stub envelope", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !shared.itineraryId) test.skip(true, "seed itinerary missing");
+    const res = await post(request, token, `/api/travel/itineraries/${shared.itineraryId}/draft/regen`, {});
+    expect(res.status(), `regen: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.id).toBe(shared.itineraryId);
+    // PRD §9.1 — bulk-text task routes to Gemini Flash primary.
+    expect(body.model).toBe("gemini-flash");
+    // CI runs without LLM API keys → stub mode.
+    expect(body.stub).toBe(true);
+    expect(typeof body.draftSummary).toBe("string");
+    expect(body.draftSummary.length).toBeGreaterThan(0);
+    expect(body.draftSummary).toMatch(/STUB-BULK-TEXT/);
+    // generatedAt must parse back to a valid Date.
+    expect(Number.isFinite(Date.parse(body.generatedAt))).toBe(true);
+  });
+
+  test("GET /itineraries/:id after regen returns persisted draftSummary", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !shared.itineraryId) test.skip(true, "seed itinerary missing");
+    const res = await get(request, token, `/api/travel/itineraries/${shared.itineraryId}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(typeof body.draftSummary).toBe("string");
+    expect(body.draftSummary).toMatch(/STUB-BULK-TEXT/);
+  });
+
+  test("GET /itineraries/public/:shareToken after regen surfaces draftSummary in the public projection", async ({ request }) => {
+    if (!shared.shareToken) test.skip(true, "seed itinerary share token missing");
+    const res = await request.get(
+      `${BASE_URL}/api/travel/itineraries/public/${shared.shareToken}`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status(), `public-get: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty("draftSummary");
+    expect(typeof body.draftSummary).toBe("string");
+    expect(body.draftSummary).toMatch(/STUB-BULK-TEXT/);
+  });
+
+  test("POST /itineraries/:id/draft/regen with unknown id → 404 NOT_FOUND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/9999999/draft/regen", {});
+    expect(res.status()).toBe(404);
+    const body = await res.json();
+    expect(body.code).toBe("NOT_FOUND");
+  });
+
+  test("POST /itineraries/:id/draft/regen with non-numeric id → 400 INVALID_ID", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/abc/draft/regen", {});
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_ID");
+  });
+
+  test("POST /itineraries/:id/draft/regen from generic-vertical caller → 403 WRONG_VERTICAL (cross-tenant guard)", async ({ request }) => {
+    // requireTravelTenant rejects FIRST so a non-travel ADMIN can never
+    // reach this endpoint regardless of itinerary id.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "admin@globussoft.com not seeded");
+    const id = shared.itineraryId || 1;
+    const res = await post(request, token, `/api/travel/itineraries/${id}/draft/regen`, {});
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe("WRONG_VERTICAL");
+  });
+});

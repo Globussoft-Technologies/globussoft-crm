@@ -8,6 +8,7 @@
 //   POST   /api/travel/itineraries/:id/items                — append a polymorphic item
 //   PATCH  /api/travel/itineraries/:id/items/:itemId        — amend an item
 //   DELETE /api/travel/itineraries/:id/items/:itemId        — remove an item
+//   POST   /api/travel/itineraries/:id/draft/regen          — regen LLM-drafted summary (PRD §4.3 + §9.1)
 //
 // Mounted at /api/travel by server.js. Shares the requireTravelTenant
 // guard + sub-brand access check with travel_diagnostics.js (extracted
@@ -41,6 +42,7 @@ const {
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
+const llmRouter = require("../lib/llmRouter");
 
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
 // Phase 2 (PRD §4.7) extends the enum with advance_paid / fully_paid for
@@ -625,6 +627,110 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
   }
 });
 
+// POST /api/travel/itineraries/:id/draft/regen
+//
+// PRD §4.3 + §9.1: regenerate the customer-facing draft summary block
+// via the LLM router (bulk-text task class → Gemini Flash primary,
+// Claude Haiku fallback per PRD §9.1's locked Q11 routing table). Third
+// consumer of the lib/llmRouter.js scaffold (commit 583c06b) after
+// talking-points (cf876af) and form-vs-call (4a7c623), and the FIRST
+// non-Claude-Opus consumer — exercises the bulk-text → gemini-flash
+// route per PRD §9.1. Until Q11 keys arrive the router returns
+// deterministic [STUB-BULK-TEXT] synthetic text so the customer-facing
+// PDF + share page can render SOMETHING and tests can pin the contract.
+//
+// ADMIN/MANAGER-gated: regenerating costs LLM tokens (in real mode) +
+// surfaces a fresh block that propagates to the customer-facing share
+// page; we don't want every USER firing it. USERs read the
+// already-persisted summary via GET /itineraries/:id (draftSummary).
+//
+// Persists result.text to Itinerary.draftSummary so the next render
+// serves the cached prose without re-billing the LLM. Operator-triggered
+// only — DO NOT auto-trigger on itinerary create (respects LLM cost).
+//
+// PII discipline: contact name only — no email / phone / address in
+// the payload. Mirrors the talking-points pattern. The router's own
+// log line only emits token counts; don't add a console.log of
+// `payload` here.
+router.post(
+  "/itineraries/:id/draft/regen",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      // Re-fetch with the columns the LLM payload needs.
+      // loadItineraryWithGuard's select is narrow (id + subBrand).
+      const full = await prisma.itinerary.findFirst({
+        where: { id: itin.id, tenantId: req.travelTenant.id },
+        include: { items: { orderBy: { position: "asc" } } },
+      });
+      if (!full) {
+        // Belt-and-braces — loadItineraryWithGuard just succeeded, so
+        // this should never fire. Defensive in case of a concurrent
+        // delete between the two reads.
+        return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+      }
+
+      // Contact for prompt context (name only). Tolerant of
+      // contact-not-found — draft still renders against the itinerary
+      // structure alone, just without the recipient framing.
+      const contact = full.contactId
+        ? await prisma.contact.findFirst({
+            where: { id: full.contactId, tenantId: req.travelTenant.id },
+            select: { name: true },
+          })
+        : null;
+
+      // PII-minimal payload — mirrors talking-points pattern. NO contact
+      // email / phone / address. totalAmount sent as Number so the LLM
+      // sees a clean numeric (Prisma returns Decimal as string).
+      const payload = {
+        subBrand: full.subBrand,
+        destination: full.destination,
+        startDate: full.startDate,
+        endDate: full.endDate,
+        totalAmount: full.totalAmount != null ? Number(full.totalAmount) : null,
+        currency: full.currency,
+        items: full.items.map((it) => ({
+          itemType: it.itemType,
+          description: it.description,
+          totalPrice: it.totalPrice != null ? Number(it.totalPrice) : null,
+        })),
+        contact: {
+          name: contact?.name || null,
+        },
+      };
+
+      const result = await llmRouter.routeRequest({
+        task: "bulk-text",
+        payload,
+        tenantId: req.travelTenant.id,
+      });
+
+      const generatedAt = new Date().toISOString();
+
+      await prisma.itinerary.update({
+        where: { id: full.id },
+        data: { draftSummary: result.text },
+      });
+
+      res.status(201).json({
+        id: full.id,
+        draftSummary: result.text,
+        model: result.model,
+        stub: Boolean(result.stub),
+        generatedAt,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] draft regen error:", e.message);
+      res.status(500).json({ error: "Failed to regenerate draft summary" });
+    }
+  },
+);
+
 // POST /api/travel/itineraries/:id/reject
 //
 // Body: { reason?: string } — optional rejection reason stored on the
@@ -925,6 +1031,10 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
       balanceDue,
       items: itin.items.map(publicItemProjection),
       pdfUrl: itin.pdfUrl,
+      // PRD §4.3 — operator-generated executive summary block (null
+      // until first POST /draft/regen lands). Customer-facing share
+      // page + PDF render conditionally on this field.
+      draftSummary: itin.draftSummary,
     });
   } catch (e) {
     console.error("[travel-itin-public] get error:", e.message);

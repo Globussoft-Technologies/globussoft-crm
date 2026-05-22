@@ -4199,6 +4199,12 @@ model Itinerary {
   advancePaidAmount Decimal?        @db.Decimal(15, 2)
   advancePaidAt     DateTime?
   paymentReference  String?
+  // LLM-generated draft summary block. Persisted so re-renders don't burn
+  // tokens. Operator triggers regeneration via POST /draft/regen. Stays
+  // null until the first regen call lands; the customer-facing PDF + share
+  // page render conditionally on it. Bulk-text task per PRD §9.1 (Gemini
+  // Flash when Q11 keys arrive; stub-mode placeholder text until then).
+  draftSummary      String?         @db.Text
   items             ItineraryItem[]
   tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt         DateTime        @default(now())

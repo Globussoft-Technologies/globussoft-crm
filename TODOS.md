@@ -164,6 +164,31 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - 1 GitHub issue closed (#867 via dark-mode refactor)
 - Zero rebase conflicts, zero over-commits across all 22 commits
 
+**Tick #8 (cron) — 3/3 SHIPPED, drains last P1 🔴 NOT-STARTED + ships 13th PRD:**
+
+| SHA | Type | What |
+|---|---|---|
+| `0ae29ea` | Phase 2 SHELL | **T22** TMC microsite preview admin at `/travel/tmc/microsite-preview` (admin-only); lists TMC TripMicrosite rows with Preview / Copy URL actions. Drains last P1 🔴 NOT-STARTED row |
+| `45dde56` | Phase 3 backend | **V16-V18** Visa analytics — 3 endpoints under `/api/travel/visa/analytics/*` (rejection-recovery / conversion-by-readiness / lead-source-rate); 13 gate-spec cases; wired into deploy.yml + coverage.yml. Reports.jsx frontend SHELL (`4d70d35`) can now wire to real endpoints |
+| `b75cf79` | PRD #13 | `docs/PRD_DARK_MODE_CLUSTER.md` — 391 lines, 5 design decisions, 17-row per-page audit table. Codifies the architectural finding from ticks #6-#7 (inline JSX hardcoded RGBA → Phase 1 refactor before Phase 2 CSS-token extension). Reference `f67b4fc` for canonical pattern |
+
+**Schema-vs-PRD divergences flagged this tick (V16-V18 backend):**
+- `VisaApplication.originalStatus` doesn't exist → used `recoveryProgramId IS NOT NULL` as recovery-attempt marker + TODO
+- `VisaApplication.subBrand` doesn't exist → scoping via `Contact.subBrand="visasure"` (upstream owner)
+- Reports.jsx SHELL hardcoded `/api/travel/reports/visa` placeholder; follow-up commit swaps to the 3 new `/api/travel/visa/analytics/*` URLs
+
+**Queue state:** **P1 🔴 NOT-STARTED queue now exhausted** (T22 drained; V16-V18 graduate 🔴 → 🟡 PARTIAL with backend shell). Cron pivots next to:
+- PARTIAL → SHIPPED graduations
+- Dark-mode cluster per-page drain (14 issues remaining at ~30-60min/page)
+- ⏸️ BLOCKED items awaiting cred unlocks
+
+**Cumulative session totals (8 ticks):**
+- 25 commits (9 features/scaffolds + 13 PRDs + 1 backlog + 1 matrix refresh + 1 backend endpoint)
+- 1 GitHub issue closed (#867)
+- 5 phantom-carry-over instances caught (stable — no new this tick)
+- Zero rebase conflicts, zero over-commits across all 25 commits
+- ~6,000 lines of PRD documentation across 13 PRDs
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

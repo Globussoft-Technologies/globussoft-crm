@@ -53,6 +53,53 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 ---
 
+## 🏁 SESSION HANDOFF (2026-05-22 afternoon — QA issue triage: 10 closures across 4 batches)
+
+**HEAD on origin/main:** `c031ba0`. Working tree clean. All 4 batches pushed sequentially; deploy gate green 4/4 with auto-close trailers firing on every PR (8 unique issue numbers + 2 phantom-closures = **10 GitHub issues closed**).
+
+User asked "fix these issues" against [the open issue tracker](https://github.com/Globussoft-Technologies/globussoft-crm/issues). Triaged with the phantom-carry-over standing rule (30-sec verify per item before pickup), then shipped in fix-then-watch-gate cycles.
+
+### What shipped this arc (4 commits)
+
+| Commit | Batch | Closes | What |
+|---|---|---|---|
+| `ef4d8dc` | 1a | #922 | `middleware/auth.js` — drop realm qualifier from `WWW-Authenticate` header (was `Bearer realm="api"`, now `Bearer`). Reduces server-fingerprinting surface; 20 vitest cases updated to match |
+| `05059a3` | 1b | #912 | `App.jsx` + `Sidebar.jsx` — add `/travel/web-checkins` route alongside existing `/travel/webcheckins`; sidebar Link updated to canonical kebab-case. Both URLs work so existing bookmarks survive |
+| `306e193` | 2 | #885, #882 | `Layout.jsx` — TenantChip text uses `var(--accent-text, var(--text-primary))` instead of raw `--text-primary`. Theme files already defined `--accent-text: #FFFFFF` for dark `--accent-bg`; chip just wasn't consuming it. Fixes ~1.2:1 contrast on Travel Stall |
+| `bb634d5` | 3 | #874, #875 (+ #865 phantom) | `Settings.jsx` — theme picker wrapper gets `role="radiogroup"` + `aria-labelledby`; `onChange` adds `notify.success(\`Theme set to ${label}\`)`. #865 closed as already-fixed (`<label>` wrapping is in place at lines 365-412) |
+| `c031ba0` | 4 | #888, #890, #891 | Three "+ Create X" CTA + drawer pairs landed at `/travel/leads`, `/travel/trips`, `/staff`. Backend `deals.js` POST extended to accept `subBrand` so new travel leads stay filterable on the same page. Drawers fetch `/api/contacts` for contact/school picker |
+
+Also shipped pre-batch: `f82f663` closing **#913** — `Pricing.jsx` had 9 `console.log` calls one of which logged the JWT prefix. All `console.log` stripped (kept the 4 `console.error` calls — allowed by no-console ESLint rule). Counts in the 10-closure total above.
+
+### Pending gaps after this arc
+
+Open count: **104 → 98**. Remaining issues group into 7 clusters (see [docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md](docs/TRAVEL_CRM_GAP_AUDIT_2026-05-22.md) for the PRD-side picture; the QA-side clusters are below).
+
+| Cluster | Count | Examples | Next step |
+|---|---|---|---|
+| **Dark mode / theme** | 17 | #863-#883 (page body bg, form fields, modals, sidebar, tables) | Most cascade from 2 root causes (#863 body bg + #864 form fields). Needs visual review cycle — not safe to ship blind from Bash sandbox |
+| **Travel module / UX bugs** | 9 | #886 /quotes 404, #887 /pipeline → dashboard redirect, #889-#895 missing CTAs / inline-vs-drawer | Smaller cousins of Batch 4. #889 + #892 + #893 + #894 + #895 are the next clean batch (same pattern). #886 + #887 overlap with PRD gaps #900 + #897 — bigger scope |
+| **Zylu / wellness shell gaps** | 8 | #771 / #775 / #788 / #816 / #834 / #835 (POS sale tabs, invoice schema, wallet, CSV I/O, inventory + memberships engines) | Multi-day rebuilds; not single-commit work |
+| **Travel security audit** | 9 | #914-#924 (JWT in localStorage, CSP unsafe-inline, IDOR audit, sequential IDs) | Architecture changes (HttpOnly cookies, opaque IDs); needs design call before code |
+| **Travel PRD P0-P3** | 16 | #896 Stripe, #897 Pipeline Kanban, #900 Quote Builder, #901-#911 (billing/GST/suppliers/lead capture/AI/mobile/branding) | Documented in KEY BLOCKERS above — multi-day per item |
+| **Wellness QA bugs** | 15 | #820-#843 (prescriptions, patient PDF, inventory filters, POS 404, Owner Dashboard copy) | Concrete bug surfaces; mostly fixable; needs wellness-vertical session |
+| **Other / Zylu admin** | 24 | #847-#859 (purchase orders, payment gateway UI, billing self-serve, global search, integrations hub) | Mix of features + chores |
+
+### What to do next session (in priority order)
+
+1. **Travel module/UX cluster — next-cleanest batch.** #889 (Itineraries CTA), #892 (Leads inline → drawer), #893 (Tasks inline → drawer), #894 (Invoices inline → drawer), #895 (Payments Record action). Same Create-button + drawer pattern as Batch 4; ~1-2 hour fix-batch with the gate cycle.
+
+2. **Dark mode root-cause** — investigate #863 (page body bg) + #864 (form fields). If both stem from a missing `[data-theme="dark"]` block in `frontend/src/index.css` for travel vertical, fixing them might cascade-close 10+ of the 17 dark-mode issues. Needs visual validation cycle, but the diagnosis is greppable.
+
+3. **Cred-blocked chase** — Q9 + Q11 + Q3 still the highest-leverage unblocks (see KEY BLOCKERS table). Two PRDs ready to send to Yasin.
+
+### Phantom-carry-over discipline at work
+
+- **#865** was filed against Theme picker missing `<label>` wrappers. Grep against current `Settings.jsx` lines 365-412 showed the wrappers already in place — closed as already-fixed in Batch 3 with the same trailer commit. Zero wasted commits.
+- All 10 batch issues were grep-verified via `gh issue view <N>` + targeted source grep BEFORE writing edits. Zero phantoms shipped.
+
+---
+
 ## 🏁 SESSION HANDOFF (2026-05-22 — autonomous PRD-drive cron arc: Phase 1.5 100% closed + queue exhausted)
 
 **HEAD on origin/main:** `9bd107b`. **Cron deleted** (`630c781c`); working tree clean. The autonomous PRD-drive loop fired ~9 productive ticks then went idle once the menu emptied — user manually CronDeleted after 8 consecutive idle ticks (4 hrs of empty syncs).

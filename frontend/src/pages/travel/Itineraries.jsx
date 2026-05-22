@@ -10,6 +10,7 @@
 // operator's daily working surface.
 
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -89,6 +90,7 @@ function TierBadge({ tier }) {
 
 export default function Itineraries() {
   const notify = useNotify();
+  const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [subBrand, setSubBrand] = useState("");
@@ -165,7 +167,12 @@ export default function Itineraries() {
               {items.map((it) => {
                 const sc = STATUS_COLORS[it.status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
                 return (
-                  <tr key={it.id} style={{ borderTop: "1px solid var(--border-light)" }}>
+                  <tr
+                    key={it.id}
+                    onClick={() => navigate(`/travel/itineraries/${it.id}`)}
+                    style={{ borderTop: "1px solid var(--border-light)", cursor: "pointer" }}
+                    aria-label={`Open itinerary ${it.destination}`}
+                  >
                     <td style={td}><strong>{it.destination}</strong></td>
                     <td style={td}><span style={brandBadge}>{it.subBrand}</span></td>
                     <td style={td}>{it.contactId ? `#${it.contactId}` : "—"}</td>

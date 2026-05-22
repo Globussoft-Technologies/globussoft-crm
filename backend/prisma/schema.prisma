@@ -150,23 +150,24 @@ model Tenant {
 
   // Travel vertical — Day 2 schema migration. Back-relations only (FK
   // cascade behavior lives on each child via @relation onDelete).
-  travelDiagnostics       TravelDiagnostic[]
-  travelDiagQuestionBanks TravelDiagnosticQuestionBank[]
-  itineraries             Itinerary[]
-  travelCostMasters       TravelCostMaster[]
-  travelSeasonCalendars   TravelSeasonCalendar[]
-  travelMarkupRules       TravelMarkupRule[]
-  tmcTrips                TmcTrip[]
-  webCheckins             WebCheckin[]
-  supplierCredentials     SupplierCredential[]
-  visaApplications        VisaApplication[]
-  rfuLeadProfiles         RfuLeadProfile[]
-  tripMicrosites          TripMicrosite[]
+  travelDiagnostics        TravelDiagnostic[]
+  travelDiagQuestionBanks  TravelDiagnosticQuestionBank[]
+  itineraries              Itinerary[]
+  travelCostMasters        TravelCostMaster[]
+  travelSeasonCalendars    TravelSeasonCalendar[]
+  travelMarkupRules        TravelMarkupRule[]
+  tmcTrips                 TmcTrip[]
+  webCheckins              WebCheckin[]
+  supplierCredentials      SupplierCredential[]
+  visaApplications         VisaApplication[]
+  rfuLeadProfiles          RfuLeadProfile[]
+  religiousGuidancePackets ReligiousGuidancePacket[]
+  tripMicrosites           TripMicrosite[]
   // Sub-brand config (Q9, Q14, Q21) — JSON keyed by sub-brand storing
   // per-brand WhatsApp number / Wati WABA id / legal entity / GSTIN /
   // Drive folder root / microsite domain. Nullable; sub-brands without
   // an entry inherit tenant-level defaults.
-  subBrandConfigJson      String?                        @db.Text
+  subBrandConfigJson       String?                        @db.Text
 
   // Subscriptions
   subscriptions Subscription[]
@@ -4552,6 +4553,55 @@ model RfuLeadProfile {
   updatedAt             DateTime  @updatedAt
 
   @@index([tenantId, productTier])
+}
+
+// ── Religious-guidance content library (RFU) ─────────────────────────
+//
+// PRD §4.8 + §4.10 RFU sub-brand. Admin-curated content packets fired
+// at fixed pre-departure offsets (T-14d / T-7d / T-1d, etc.) for
+// pilgrims on the RFU (Reach for Umrah) journey. Library is editable
+// via /api/travel/religious-packets; cron firing lives in
+// backend/cron/religiousGuidanceEngine.js.
+//
+// Phase 1 ships placeholder copy at dayOffset 14 / 7 / 1; Yasin's Q1
+// canonical Hajj/Umrah ritual guidance replaces the placeholder via
+// admin PATCH — no schema change required.
+//
+// subBrand kept as a freeform string (not enum) so the same library
+// pattern can be reused for future sub-brands (TMC parent-trip prep,
+// Travel Stall destination tips) without a schema migration. Phase 1
+// only seeds "rfu" rows.
+//
+// dayOffset semantics: positive = days BEFORE departure (14 = T-14d).
+// Negative reserved for future "thank-you / share-your-journey"
+// post-trip packets but Phase 1 ships only pre-trip (positive).
+//
+// channels = comma-separated subset of "wa","email","sms". Phase 1
+// defaults to "wa,email"; wa goes through the Wati stub (Q9-blocked),
+// email + sms log dispatch intent only until the scheduledEmail engine
+// wire-in lands.
+//
+// NOT user-input-bound — admin-only CRUD; contentHtml passes through
+// the standard sanitizeHtml pipeline at create time.
+//
+// No UNIQUE on (tenantId, subBrand, dayOffset) — multiple packets at
+// the same offset (e.g. "ritual prep" + "documents reminder" both at
+// T-7d) are intentional.
+model ReligiousGuidancePacket {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  subBrand    String // "rfu" | future "tmc" | "travelstall" | "visasure"
+  dayOffset   Int // 14, 7, 3, 1, 0 (= day of departure); positive = pre-trip
+  title       String
+  contentHtml String   @db.Text
+  channels    String   @default("wa,email") // CSV: wa|email|sms
+  isActive    Boolean  @default(true)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, subBrand, isActive])
+  @@index([tenantId, subBrand, dayOffset])
 }
 
 // ── Trip microsite (TMC) — public, OTP-gated for sensitive views ─────

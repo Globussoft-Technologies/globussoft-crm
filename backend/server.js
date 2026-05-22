@@ -438,6 +438,7 @@ const travelCostMasterRoutes = require("./routes/travel_cost_master");
 const travelSuppliersRoutes = require("./routes/travel_suppliers");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
 const travelRfuProfilesRoutes = require("./routes/travel_rfu_profiles");
+const travelReligiousPacketsRoutes = require("./routes/travel_religious_packets");
 const travelPricingRoutes = require("./routes/travel_pricing");
 const travelTripBillingRoutes = require("./routes/travel_trip_billing");
 const travelWebcheckinRoutes = require("./routes/travel_webcheckin");
@@ -647,6 +648,7 @@ app.use("/api/travel", travelCostMasterRoutes);
 app.use("/api/travel", travelSuppliersRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
+app.use("/api/travel", travelReligiousPacketsRoutes);
 app.use("/api/travel", travelPricingRoutes);
 app.use("/api/travel", travelTripBillingRoutes);
 app.use("/api/travel", travelWebcheckinRoutes);
@@ -964,6 +966,14 @@ if (process.env.DISABLE_CRONS === '1') {
   // Notification per occasion per year. Wati dispatch deferred to Q9.
   const { initContactGreetingsCron } = require('./cron/contactGreetingsEngine');
   initContactGreetingsCron();
+
+  // Initialize Travel CRM religious-guidance delivery (daily 09:13 IST) —
+  // PRD §4.8 + §4.10 RFU sub-brand. Scans RFU itineraries in the next
+  // 14-day window; for each active ReligiousGuidancePacket whose
+  // dayOffset === daysToDeparture, creates one Notification per
+  // (packet, itinerary, year) dedup window. WA dispatch deferred to Q9.
+  const { initReligiousGuidanceCron } = require('./cron/religiousGuidanceEngine');
+  initReligiousGuidanceCron();
 
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require('./cron/lowStockEngine');

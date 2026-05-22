@@ -611,6 +611,15 @@ async function main() {
   // doc-comment for the per-fixture idempotency strategy.
   await seedTmcOperationalExtras(tenant.id);
 
+  // ── 10. Religious-guidance content library (PRD §4.8 + §4.10 RFU) ─
+  // 3 placeholder packets at T-14d / T-7d / T-1d for the RFU sub-brand.
+  // Yasin's Q1 canonical Hajj/Umrah ritual guidance replaces the
+  // placeholder copy via admin PATCH (no schema change required).
+  // Idempotent — `findFirst` guard keyed on (tenantId, subBrand,
+  // dayOffset, title); re-running seed-travel.js does NOT create
+  // duplicates. Consumed by backend/cron/religiousGuidanceEngine.js.
+  await seedReligiousGuidancePackets(tenant.id);
+
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
 }
@@ -1202,6 +1211,86 @@ async function seedDiagnosticBank(tenantId, subBrand, questions, scoringRules) {
     },
   });
   console.log(`[seed-travel] diagnostic bank v1 seeded for ${subBrand} (id=${bank.id}, ${questions.questions.length} Qs)`);
+}
+
+/**
+ * Seed 3 placeholder ReligiousGuidancePacket rows for the RFU sub-brand.
+ * PRD §4.8 + §4.10. Idempotent — `findFirst` keyed on (tenantId,
+ * subBrand, dayOffset, title); re-running seed-travel.js no-ops.
+ *
+ * Placeholder copy intentionally flagged as such — Yasin's Q1 canonical
+ * content (Hajj/Umrah ritual guidance, dua copy, brand-themed HTML)
+ * replaces the placeholder via admin PATCH at /api/travel/religious-packets/:id.
+ * No schema change required at hand-off.
+ *
+ * Other sub-brands (TMC parent-trip prep, Travel Stall destination
+ * tips, Visa Sure document-prep reminders) get their own packets when
+ * their PRDs land — DO NOT bulk-seed them prematurely.
+ */
+async function seedReligiousGuidancePackets(tenantId) {
+  const packets = [
+    {
+      dayOffset: 14,
+      title: "Your Umrah journey begins in 2 weeks",
+      contentHtml:
+        "<p>As you prepare for Umrah, here are some essential considerations:</p>" +
+        "<ul><li>Pack 2 sets of ihram (men) or modest cotton clothing (women)</li>" +
+        "<li>Comfortable footwear for the Haram</li>" +
+        "<li>Prayer mat + small dua book</li>" +
+        "<li>Confirm your vaccination certificate is in your travel pouch</li></ul>" +
+        "<p><em>(Placeholder — Yasin Q1 content will replace this with Travel Stall's curated packet.)</em></p>",
+      channels: "wa,email",
+    },
+    {
+      dayOffset: 7,
+      title: "One week to Umrah — final checklist",
+      contentHtml:
+        "<p>Final preparations as your departure approaches:</p>" +
+        "<ul><li>Confirm passport + visa are in your carry-on bag</li>" +
+        "<li>Bring small denominations (SAR 5/10/50) for Madinah + Makkah</li>" +
+        "<li>Download an offline Quran app + offline Madinah/Makkah maps</li>" +
+        "<li>Note your hotel's WhatsApp number for in-country contact</li></ul>" +
+        "<p><em>(Placeholder content; final copy pending Yasin Q1.)</em></p>",
+      channels: "wa,email",
+    },
+    {
+      dayOffset: 1,
+      title: "Tomorrow: your spiritual journey",
+      contentHtml:
+        "<p>May your Umrah be accepted. Brief reminders for tomorrow:</p>" +
+        "<ul><li>Make niyyah (intention) before crossing the Miqat</li>" +
+        "<li>Begin reciting the Talbiyah on the way</li>" +
+        "<li>Stay hydrated — Saudi heat is unforgiving</li>" +
+        "<li>Keep your group's WhatsApp group active for coordination</li></ul>" +
+        "<p><em>(Placeholder; Yasin Q1 will deliver the canonical dua + intention copy.)</em></p>",
+      channels: "wa,email",
+    },
+  ];
+
+  let created = 0;
+  let skipped = 0;
+  for (const p of packets) {
+    const existing = await prisma.religiousGuidancePacket.findFirst({
+      where: { tenantId, subBrand: "rfu", dayOffset: p.dayOffset, title: p.title },
+      select: { id: true },
+    });
+    if (existing) {
+      skipped++;
+      continue;
+    }
+    await prisma.religiousGuidancePacket.create({
+      data: {
+        tenantId,
+        subBrand: "rfu",
+        isActive: true,
+        ...p,
+      },
+    });
+    created++;
+  }
+  console.log(
+    `[seed-travel] religious-guidance packets: ${created} created, ${skipped} already existed (RFU placeholder set)`,
+  );
 }
 
 main()

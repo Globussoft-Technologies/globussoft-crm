@@ -4,14 +4,19 @@
 // status filters. Each row shows the destination, status, contact,
 // total amount, and item count. Click → detail view (TBD — Phase 1.5).
 //
-// Phase 1 doesn't ship a creation UI here — itineraries are usually
-// drafted from a Deal page (the "Build itinerary from this lead" CTA
-// lands in Day 7's Deal-extension pass). The list view itself is the
-// operator's daily working surface.
+// The header CTA "+ Create Itinerary" opens a drawer with contact picker
+// + sub-brand + destination + dates + currency + total amount. Posts to
+// /api/travel/itineraries; the backend enforces the diagnostic-first
+// guard (PRD §4.1) — if the contact hasn't completed a diagnostic for
+// the chosen sub-brand, the POST returns 403 and notify.error surfaces
+// the message. Itineraries can still be drafted from a Deal page once
+// the Day 7 Deal-extension CTA lands.
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield } from "lucide-react";
+import {
+  Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
+} from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -58,6 +63,13 @@ const ITEM_ICONS = {
   insurance: Shield,
 };
 
+const EMPTY_FORM = {
+  contactId: "", subBrand: "tmc", destination: "",
+  startDate: "", endDate: "", currency: "INR", totalAmount: "",
+};
+
+const CURRENCIES = ["INR", "USD", "EUR"];
+
 function fmt(d) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString();
@@ -95,6 +107,54 @@ export default function Itineraries() {
   const [loading, setLoading] = useState(true);
   const [subBrand, setSubBrand] = useState("");
   const [status, setStatus] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [saving, setSaving] = useState(false);
+  const [contacts, setContacts] = useState([]);
+
+  const openCreate = () => {
+    setForm(EMPTY_FORM);
+    setCreating(true);
+    fetchApi("/api/contacts?limit=200")
+      .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
+      .catch(() => setContacts([]));
+  };
+
+  const submitCreate = async (e) => {
+    e.preventDefault();
+    if (!form.contactId) {
+      notify.error("Contact is required");
+      return;
+    }
+    if (!form.destination.trim()) {
+      notify.error("Destination is required");
+      return;
+    }
+    setSaving(true);
+    try {
+      const body = {
+        contactId: parseInt(form.contactId, 10),
+        subBrand: form.subBrand,
+        destination: form.destination.trim(),
+        status: "draft",
+        currency: form.currency,
+      };
+      if (form.startDate) body.startDate = form.startDate;
+      if (form.endDate) body.endDate = form.endDate;
+      if (form.totalAmount) body.totalAmount = Number(form.totalAmount);
+      await fetchApi("/api/travel/itineraries", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      notify.success("Itinerary created");
+      setCreating(false);
+      load();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to create itinerary");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const load = () => {
     setLoading(true);
@@ -113,15 +173,38 @@ export default function Itineraries() {
 
   useEffect(load, [subBrand, status]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Close drawer on Escape
+  useEffect(() => {
+    if (!creating) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setCreating(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [creating]);
+
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
-      <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, marginBottom: 4 }}>
-        <Map size={28} aria-hidden /> Itineraries
-      </h1>
-      <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
-        Multi-product trip itineraries (RFU + Travel Stall + visa). Build new ones
-        from the linked Deal in the sales pipeline.
-      </p>
+      <header style={{
+        display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+        gap: 12, marginBottom: 4,
+      }}>
+        <div>
+          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, marginBottom: 4 }}>
+            <Map size={28} aria-hidden /> Itineraries
+          </h1>
+          <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
+            Multi-product trip itineraries (RFU + Travel Stall + visa). Create one
+            here or build from a linked Deal in the sales pipeline.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={openCreate}
+          style={primaryBtn}
+          aria-label="Create a new itinerary"
+        >
+          <Plus size={14} /> Create Itinerary
+        </button>
+      </header>
 
       <div style={{
         display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center",
@@ -146,7 +229,8 @@ export default function Itineraries() {
           <div style={empty}>Loading&hellip;</div>
         ) : items.length === 0 ? (
           <div style={empty}>
-            No itineraries yet. New itineraries are built from the linked Deal in the sales pipeline.
+            No itineraries yet. Use the &quot;Create Itinerary&quot; button above, or
+            build one from a linked Deal in the sales pipeline.
           </div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -221,6 +305,115 @@ export default function Itineraries() {
           </table>
         )}
       </div>
+
+      {creating && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setCreating(false); }}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+            display: "flex", alignItems: "flex-start", justifyContent: "flex-end",
+            zIndex: 1000,
+          }}
+        >
+          <form onSubmit={submitCreate} style={drawerStyle}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>New Itinerary</h2>
+              <button type="button" onClick={() => setCreating(false)} aria-label="Close" style={iconBtn}>
+                <X size={16} />
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <label style={fieldLabel}>
+                Contact
+                <select
+                  required
+                  value={form.contactId}
+                  onChange={(e) => setForm({ ...form, contactId: e.target.value })}
+                  style={inputStyle}
+                >
+                  <option value="">— select contact —</option>
+                  {contacts.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name || c.email || `Contact #${c.id}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={fieldLabel}>
+                Sub-brand
+                <select
+                  value={form.subBrand}
+                  onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+                  style={inputStyle}
+                >
+                  {SUB_BRANDS.filter((s) => s.value).map((s) => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={fieldLabel}>
+                Destination
+                <input
+                  required type="text" value={form.destination}
+                  onChange={(e) => setForm({ ...form, destination: e.target.value })}
+                  style={inputStyle}
+                  placeholder='e.g. "Andaman Islands"'
+                />
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <label style={fieldLabel}>
+                  Start date
+                  <input
+                    type="date" value={form.startDate}
+                    onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+                    style={inputStyle}
+                  />
+                </label>
+                <label style={fieldLabel}>
+                  End date
+                  <input
+                    type="date" value={form.endDate}
+                    onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+                    style={inputStyle}
+                  />
+                </label>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8 }}>
+                <label style={fieldLabel}>
+                  Currency
+                  <select
+                    value={form.currency}
+                    onChange={(e) => setForm({ ...form, currency: e.target.value })}
+                    style={inputStyle}
+                  >
+                    {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </label>
+                <label style={fieldLabel}>
+                  Total amount
+                  <input
+                    type="number" min="0" step="any" value={form.totalAmount}
+                    onChange={(e) => setForm({ ...form, totalAmount: e.target.value })}
+                    style={inputStyle}
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+              <p style={{ margin: 0, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                The contact must have completed a diagnostic for this sub-brand
+                (PRD &sect;4.1). If not, the server will reject and you can route
+                them through the diagnostic first.
+              </p>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
+              <button type="button" onClick={() => setCreating(false)} style={refreshBtn}>Cancel</button>
+              <button type="submit" disabled={saving} style={primaryBtn}>
+                {saving ? "Creating…" : "Create Itinerary"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -260,4 +453,36 @@ const brandBadge = {
   padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
   background: "var(--subtle-bg-3)", color: "var(--primary-color)",
   textTransform: "uppercase", letterSpacing: 0.5,
+};
+
+const primaryBtn = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  padding: "6px 12px", borderRadius: 6, fontWeight: 600, fontSize: 13,
+  background: "var(--primary-color, var(--accent-color))",
+  color: "var(--accent-text, #fff)",
+  border: "1px solid var(--primary-color, var(--accent-color))",
+  cursor: "pointer",
+};
+
+const drawerStyle = {
+  background: "var(--surface-color)", color: "var(--text-primary)",
+  width: "100%", maxWidth: 460, height: "100vh", overflowY: "auto",
+  padding: 20, boxShadow: "-8px 0 24px rgba(0,0,0,0.2)",
+};
+
+const iconBtn = {
+  background: "transparent", border: "none", color: "var(--text-secondary)",
+  cursor: "pointer", padding: 4,
+};
+
+const fieldLabel = {
+  display: "flex", flexDirection: "column", gap: 4,
+  fontSize: 12, color: "var(--text-secondary)", fontWeight: 500,
+};
+
+const inputStyle = {
+  padding: "8px 10px", borderRadius: 6,
+  border: "1px solid var(--border-color)",
+  background: "var(--input-bg, var(--surface-color))", color: "var(--text-primary)",
+  fontSize: 14,
 };

@@ -110,6 +110,23 @@ The 12 PRDs surface **~80 product/design decisions across all 4 sub-brands** tha
 
 All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure. Each §5 ("Hand-over requirements / decisions needed") enumerates the decision-call agenda with a GS recommendation per item.
 
+**Tick #5 (cron) shipped 3/3 — first post-PRD scaffold tick:**
+
+| SHA | Type | What |
+|---|---|---|
+| `9e8c28f` | Phase 3 SHELL | `backend/cron/visaRiskFlagEngine.js` — V5-V7 risk-flag stub cron (every 6h); 12 vitest cases pinning return shape + iteration + notification-write contract; server.js cron registration |
+| `5511594` | Phase 2 SHELL | `frontend/src/pages/travel/TravelStallDashboard.jsx` — TS21 operator landing at `/travel-stall` with 4 quick-action cards (lead capture / family quiz / inquiries / stats); Sidebar Travel Stall group (admin+manager) |
+| `a864db5` | Backlog filer | Cluster G added to MANUAL_CODING_BACKLOG.md for 3 newly-surfaced RFU gaps; 3 GitHub issues filed: **#926 Zikr Cabs ground-transfer / #927 5-portal hotel-scraper / #928 Haramain HSR rail pricing** — all labeled enhancement+travel-crm+rfu+cred-dependent |
+
+**Tick #5 incident-free:** stash/pop discipline held; `git commit --only` standing rule held across all 3; no rebase conflicts; agent flagged a minor stub-rule divergence from PRD §3 (used VisaApplication columns that actually exist rather than the dispatch prompt's suggested `applicantAge` which isn't in schema). Self-corrected with TODO marker for future rule-set tuning.
+
+**Cumulative session totals (5 ticks: 1 manual + 4 cron PRD + 1 cron scaffold):**
+- 18 commits (5 features + 12 PRDs + 1 backlog/GH-issues)
+- ~5,500 lines of PRD docs + 3 new scaffold pages/crons
+- 3 new GitHub issues filed (#926-#928)
+- Yasin's cred chase: 7 → 10 items (Zikr / 5-portal / Haramain)
+- Zero rebase conflicts, zero over-commits across all 18 commits
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

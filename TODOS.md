@@ -189,6 +189,25 @@ All PRDs are at `docs/PRD_*.md` + mirror the WhatsApp PRD's 10-section structure
 - Zero rebase conflicts, zero over-commits across all 25 commits
 - ~6,000 lines of PRD documentation across 13 PRDs
 
+**Tick #9 (cron) — 3/3 SHIPPED, dark-mode drain + V16-V18 graduation + risk-flag rule extension:**
+
+| SHA | Type | What |
+|---|---|---|
+| `68b09db` | Dark-mode drain | **#871 Inbox.jsx** — 6 inline-style objects refactored to 11 CSS classes; 9 dark-mode token pairs in travel.css; WCAG-AA verified (lowest 5.4:1, highest 7.4:1). Cluster progress: **4 of 17 closed** (#863 #864 #867 #871) |
+| `d049548` | V16-V18 graduation | **Visa Reports.jsx** wired to 3 real `/api/travel/visa/analytics/*` endpoints from tick #8's `45dde56`. **V16-V18 graduates 🟡 PARTIAL → ✅ SHIPPED.** Handled 3 shape mismatches inline (V16 time-series vs aggregate / 0-1 vs 0-100 unit conversion / V18 field rename) |
+| `b7f336f` | Visa rules extension | **2 new risk-flag rules** (R6 docs-incomplete + R7 stale-application) added to `visaRiskFlagEngine.js`; **12 → 18 vitest cases** (3 per new rule); skipped R8 high-risk-destination (PRD §5 PC-3 product call) + R9 multi-flag escalation (deferred until PC-1). Schema gap surfaced: family/dependents detection blocked by missing column |
+
+**Concurrency observation (3rd instance candidate for cron-learning):** Agent 1 reported that `git stash push --include-untracked` didn't reliably catch sibling-edited files; **file-scoped `git stash push <file>` is more reliable** in active-parallel waves. Worth promoting to standing rule on next instance.
+
+**Cumulative session totals (9 ticks):**
+- 28 commits (10 features/scaffolds + 13 PRDs + 1 backlog + 1 matrix refresh + 1 backend endpoint + 1 dark-mode refactor + 1 rule extension)
+- **2 GitHub issues closed** (#867 #871)
+- 5 phantom-carry-over instances caught (stable)
+- Zero rebase conflicts, zero over-commits across all 28 commits
+- ~6,000 lines of PRD documentation across 13 PRDs
+- **V16-V18 graduated** to fully ✅ SHIPPED (frontend wired to live backend endpoints)
+- **Dark-mode cluster: 4 of 17 closed; 13 remaining at ~30-60min per page**
+
 **PRD coverage tracker** (10 P3 PRDs targeted overnight; cron tick allocates ~1 PRD per tick alongside scaffolds):
 
 | # | PRD | State |

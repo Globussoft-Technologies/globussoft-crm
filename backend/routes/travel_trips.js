@@ -6,6 +6,7 @@
 //   GET    /api/travel/trips/:id                               — fetch with children
 //   PATCH  /api/travel/trips/:id                               — amend trip
 //   DELETE /api/travel/trips/:id                               — ADMIN only (cascades)
+//   GET    /api/travel/trips/:id/ops-dashboard                 — PRD §4.9 operational rollup (ADMIN/MANAGER)
 //
 //   GET    /api/travel/trips/:id/participants                  — list participants
 //   POST   /api/travel/trips/:id/participants                  — add participant
@@ -199,6 +200,232 @@ router.get("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, asy
     res.status(500).json({ error: "Failed to get trip" });
   }
 });
+
+// GET /api/travel/trips/:id/ops-dashboard — PRD §4.9 operational rollup.
+//
+// Single-shot rollup endpoint that aggregates the 5 sources of truth a
+// trip operator needs at-a-glance for a confirmed trip:
+//   - TmcTrip                  (header)
+//   - TripParticipant          (count + consent capture)
+//   - TripInstalmentPayment    (expected vs received + status buckets)
+//   - TripDocumentRequirement  (required-doc count)
+//   - RoomingAssignment        (rooms + roomed-vs-unroomed)
+//
+// Computes a departureReadiness score (0–100) as a weighted average:
+//   30% consent capture · 30% documents · 30% payment · 10% rooming.
+// Returns score=null when a denominator is zero (zero participants OR
+// zero expected payments) so the UI can show "Insufficient data"
+// rather than rendering a fabricated percentage.
+//
+// Notes on schema realities (do NOT assume from the PRD prose):
+//   - TripDocumentRequirement has { tripId, docType, required } only —
+//     it has no `status` or `participantId`. The model lists what docs
+//     the trip REQUIRES, not which participant has submitted. With no
+//     submitted-tracking on this model we conservatively count
+//     submittedCount as 0 (departure readiness should undercount
+//     rather than fabricate progress per the PRD's caution).
+//   - RoomingAssignment.participantIds is a JSON-stringified array;
+//     parse-failures are tolerated and counted as zero for that row.
+//   - TmcTrip has no targetStudentCount column, so participants.target
+//     is always null today (UI surfaces "no target set" gracefully).
+//
+// ADMIN + MANAGER only (operational dashboard is for trip operators,
+// not end-users). Sub-brand gate inherited from requireTmcAccess.
+router.get(
+  "/trips/:id/ops-dashboard",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Header fetch is sequential because the parallel children only
+      // make sense if the trip exists + belongs to this tenant.
+      const trip = await prisma.tmcTrip.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: {
+          id: true,
+          tripCode: true,
+          destination: true,
+          departDate: true,
+          returnDate: true,
+          status: true,
+          legalEntity: true,
+          pricePerStudent: true,
+        },
+      });
+      if (!trip) return res.status(404).json({ error: "Trip not found", code: "NOT_FOUND" });
+
+      // Parallel-fetch the 4 child collections. TMC trips have tens of
+      // participants, not thousands — no pagination needed; aggregate
+      // in JS (simpler than Prisma groupBy with parsed JSON columns).
+      const [participants, payments, docs, roomings] = await Promise.all([
+        prisma.tripParticipant.findMany({
+          where: { tripId: trip.id },
+          select: { id: true, consentCapturedAt: true },
+        }),
+        prisma.tripInstalmentPayment.findMany({
+          where: { tripId: trip.id },
+          select: { amount: true, paidAmount: true, status: true },
+        }),
+        prisma.tripDocumentRequirement.findMany({
+          where: { tripId: trip.id },
+          select: { required: true },
+        }),
+        prisma.roomingAssignment.findMany({
+          where: { tripId: trip.id },
+          select: { participantIds: true },
+        }),
+      ]);
+
+      // Participants
+      const participantsCount = participants.length;
+      const capturedConsent = participants.filter((p) => p.consentCapturedAt != null).length;
+
+      // Payments — Decimal columns come back as Prisma.Decimal; coerce
+      // with Number(). Demo amounts are well within Number-safe range.
+      let expectedTotalRupees = 0;
+      let receivedRupees = 0;
+      let pendingCount = 0;
+      let partialCount = 0;
+      let paidCount = 0;
+      let overdueCount = 0;
+      for (const p of payments) {
+        expectedTotalRupees += Number(p.amount) || 0;
+        receivedRupees += Number(p.paidAmount) || 0;
+        switch (p.status) {
+          case "paid": paidCount++; break;
+          case "partial": partialCount++; break;
+          case "overdue": overdueCount++; break;
+          case "pending":
+          default: pendingCount++; break;
+        }
+      }
+      // Round to 2 dp to avoid IEEE-754 trailing noise in JSON.
+      expectedTotalRupees = Math.round(expectedTotalRupees * 100) / 100;
+      receivedRupees = Math.round(receivedRupees * 100) / 100;
+
+      // Documents — only the `required: true` rows count toward the
+      // denominator. No submitted-tracking exists on this model today,
+      // so submittedCount = 0 / missingCount = requirementCount. When
+      // a submission tracking column lands, flip this to count rows
+      // whose status is the most-restrictive "actually-done" bucket.
+      const requirementCount = docs.filter((d) => d.required).length;
+      const submittedCount = 0;
+      const missingCount = requirementCount - submittedCount;
+
+      // Rooming — participantIds is a JSON-string array. Parse-failure
+      // is tolerated (counts as 0 for that row, never throws).
+      let participantsRoomed = 0;
+      let assignmentCount = 0;
+      for (const r of roomings) {
+        assignmentCount++;
+        try {
+          const arr = JSON.parse(r.participantIds || "[]");
+          if (Array.isArray(arr)) participantsRoomed += arr.length;
+        } catch (_e) {
+          // Tolerate malformed JSON — counted as 0 for this row.
+        }
+      }
+      // Clamp roomed at participants count — an over-assigned room
+      // (participant in two rooms) shouldn't push the rooming
+      // percentage above 100%.
+      if (participantsCount > 0 && participantsRoomed > participantsCount) {
+        participantsRoomed = participantsCount;
+      }
+      const participantsUnroomed = Math.max(0, participantsCount - participantsRoomed);
+
+      // Departure-readiness score. Each component is a 0-1 fraction;
+      // weighted average; final * 100 rounded to integer. Score is
+      // null when the data is too thin to make sense of:
+      //   - 0 participants (consent + rooming are degenerate)
+      //   - 0 expected payments (payment % is degenerate)
+      let consentPct = null;
+      let docsPct = null;
+      let paymentPct = null;
+      let roomingPct = null;
+      let score = null;
+      if (participantsCount > 0 && expectedTotalRupees > 0) {
+        const consentFrac = clampFrac(capturedConsent / participantsCount);
+        const docsFrac = requirementCount > 0
+          ? clampFrac(submittedCount / requirementCount)
+          : 1; // No docs required → component is 100% (don't penalise)
+        const paymentFrac = clampFrac(receivedRupees / expectedTotalRupees);
+        const roomingFrac = clampFrac(participantsRoomed / participantsCount);
+        const weighted = (consentFrac * 0.3) + (docsFrac * 0.3) + (paymentFrac * 0.3) + (roomingFrac * 0.1);
+        consentPct = Math.round(consentFrac * 100);
+        docsPct = Math.round(docsFrac * 100);
+        paymentPct = Math.round(paymentFrac * 100);
+        roomingPct = Math.round(roomingFrac * 100);
+        score = Math.round(weighted * 100);
+      }
+
+      res.json({
+        trip: {
+          id: trip.id,
+          tripCode: trip.tripCode,
+          destination: trip.destination,
+          departDate: trip.departDate,
+          returnDate: trip.returnDate,
+          status: trip.status,
+          legalEntity: trip.legalEntity,
+          pricePerStudent: trip.pricePerStudent != null ? Number(trip.pricePerStudent) : null,
+        },
+        participants: {
+          count: participantsCount,
+          target: null, // TmcTrip has no targetStudentCount column (deferred — see route header)
+          capturedConsent,
+        },
+        payments: {
+          expectedTotalRupees,
+          receivedRupees,
+          pendingCount,
+          partialCount,
+          paidCount,
+          overdueCount,
+        },
+        documents: {
+          requirementCount,
+          submittedCount,
+          missingCount,
+        },
+        rooming: {
+          assignmentCount,
+          participantsRoomed,
+          participantsUnroomed,
+        },
+        departureReadiness: {
+          score,
+          components: {
+            consentPct,
+            docsPct,
+            paymentPct,
+            roomingPct,
+          },
+        },
+        computedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error("[travel-trips] ops-dashboard error:", e.message);
+      res.status(500).json({ error: "Failed to compute ops dashboard" });
+    }
+  },
+);
+
+// Clamp a fraction to [0, 1]. NaN / Infinity from a zero-denominator
+// degenerate computation defaults to 0. Hoisted as a module-local
+// helper so the ops-dashboard handler reads cleanly.
+function clampFrac(x) {
+  if (!Number.isFinite(x)) return 0;
+  if (x < 0) return 0;
+  if (x > 1) return 1;
+  return x;
+}
 
 // PATCH /api/travel/trips/:id
 router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {

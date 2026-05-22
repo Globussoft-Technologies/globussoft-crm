@@ -494,3 +494,229 @@ test.describe("Travel trips API — Drive folder auto-create (stub)", () => {
     expect(flipped.driveFolderId).toBe(explicitId);
   });
 });
+
+// ─── Ops dashboard (PRD §4.9) ────────────────────────────────────────
+//
+// Pins the GET /trips/:id/ops-dashboard rollup contract — the single
+// endpoint the TMC trip operator dashboard consumes to render student
+// count vs target, pending payments, missing documents, rooming
+// status, and the departure-readiness score (0-100). All five source
+// collections (participants / payments / docs / rooming + the trip
+// header) come back in one envelope so the frontend only needs one
+// round-trip per trip.
+//
+// Zero-state behaviour: a trip with no participants / no expected
+// payments returns the envelope with zeros and score=null (the UI
+// renders "Insufficient data" rather than a fabricated %).
+
+test.describe("Travel trips API — ops dashboard (PRD §4.9)", () => {
+  let opsTripId = null;
+  let emptyTripId = null;
+
+  test.beforeAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !schoolContactId) return;
+
+    // Populated trip: 2 participants (one with consent capture), 2
+    // instalments (one paid, one pending), 1 doc requirement,
+    // 1 rooming assignment via direct API where the route exists.
+    // (RoomingAssignment + TripInstalmentPayment have no public POST
+    // routes yet — Phase 1.5 deferred. We exercise what's reachable
+    // and let the score gate gracefully on "no payment data".)
+    const code = `${RUN_TAG.toLowerCase()}_ops_pop`;
+    const r = await post(request, token, "/api/travel/trips", {
+      tripCode: code,
+      schoolContactId,
+      destination: `${RUN_TAG} Ops Dashboard Tour`,
+      departDate: "2027-01-15",
+      returnDate: "2027-01-22",
+      pricePerStudent: 50000,
+      status: "confirmed",
+    });
+    if (r.ok()) {
+      const body = await r.json();
+      opsTripId = body.id;
+      created.tripIds.push(opsTripId);
+
+      // 1 participant with consent captured
+      await post(request, token, `/api/travel/trips/${opsTripId}/participants`, {
+        fullName: `${RUN_TAG} Aarav Singh`,
+        consentCapturedAt: new Date().toISOString(),
+      });
+      // 1 participant without consent
+      await post(request, token, `/api/travel/trips/${opsTripId}/participants`, {
+        fullName: `${RUN_TAG} Diya Patel`,
+      });
+      // 1 doc requirement
+      await post(request, token, `/api/travel/trips/${opsTripId}/documents`, {
+        docType: "passport",
+      });
+    }
+
+    // Empty trip: no children. Exercises score=null + zero-counters.
+    const emptyCode = `${RUN_TAG.toLowerCase()}_ops_empty`;
+    const e = await post(request, token, "/api/travel/trips", {
+      tripCode: emptyCode,
+      schoolContactId,
+      destination: `${RUN_TAG} Empty Ops Tour`,
+      departDate: "2027-02-15",
+      returnDate: "2027-02-20",
+      pricePerStudent: 30000,
+      status: "confirmed",
+    });
+    if (e.ok()) {
+      const body = await e.json();
+      emptyTripId = body.id;
+      created.tripIds.push(emptyTripId);
+    }
+  });
+
+  test("GET /trips/:id/ops-dashboard without auth → 401/403", async ({ request }) => {
+    if (!opsTripId) test.skip(true, "ops trip not seeded");
+    const res = await request.get(
+      `${BASE_URL}/api/travel/trips/${opsTripId}/ops-dashboard`,
+      { timeout: REQUEST_TIMEOUT },
+    );
+    expect([401, 403]).toContain(res.status());
+  });
+
+  test("GET /trips/:id/ops-dashboard with non-numeric id → 400 INVALID_ID", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/trips/not-a-number/ops-dashboard");
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_ID");
+  });
+
+  test("GET /trips/:id/ops-dashboard for unknown trip id → 404 NOT_FOUND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/trips/99999999/ops-dashboard");
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("NOT_FOUND");
+  });
+
+  test("GET /trips/:id/ops-dashboard returns the full envelope shape (populated trip)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !opsTripId) test.skip(true, "ops trip not seeded");
+
+    const res = await get(request, token, `/api/travel/trips/${opsTripId}/ops-dashboard`);
+    expect(res.status(), `ops-dashboard: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+
+    // Header
+    expect(body.trip).toBeDefined();
+    expect(body.trip.id).toBe(opsTripId);
+    expect(body.trip.tripCode).toBe(`${RUN_TAG.toLowerCase()}_ops_pop`);
+    expect(body.trip.status).toBe("confirmed");
+    expect(body.trip.legalEntity).toBe("tmc_nexus");
+    expect(Number(body.trip.pricePerStudent)).toBe(50000);
+
+    // Participants
+    expect(body.participants.count).toBe(2);
+    expect(body.participants.target).toBeNull();
+    expect(body.participants.capturedConsent).toBe(1);
+
+    // Payments — no payment route exists, so the populated trip has
+    // zero expected/received. score consequently is null because
+    // expectedTotalRupees is 0 (degenerate denominator).
+    expect(body.payments.expectedTotalRupees).toBe(0);
+    expect(body.payments.receivedRupees).toBe(0);
+    expect(body.payments.pendingCount).toBe(0);
+    expect(body.payments.partialCount).toBe(0);
+    expect(body.payments.paidCount).toBe(0);
+    expect(body.payments.overdueCount).toBe(0);
+
+    // Documents — 1 required doc, none submitted (no submission-tracking column)
+    expect(body.documents.requirementCount).toBe(1);
+    expect(body.documents.submittedCount).toBe(0);
+    expect(body.documents.missingCount).toBe(1);
+
+    // Rooming — no rooming route exists, so assignmentCount=0
+    expect(body.rooming.assignmentCount).toBe(0);
+    expect(body.rooming.participantsRoomed).toBe(0);
+    expect(body.rooming.participantsUnroomed).toBe(2);
+
+    // Departure readiness — null because expectedTotalRupees is 0
+    expect(body.departureReadiness.score).toBeNull();
+    expect(body.departureReadiness.components.consentPct).toBeNull();
+    expect(body.departureReadiness.components.docsPct).toBeNull();
+    expect(body.departureReadiness.components.paymentPct).toBeNull();
+    expect(body.departureReadiness.components.roomingPct).toBeNull();
+
+    // Timestamp
+    expect(typeof body.computedAt).toBe("string");
+    expect(Number.isFinite(new Date(body.computedAt).getTime())).toBe(true);
+  });
+
+  test("GET /trips/:id/ops-dashboard for empty trip returns zeros + score=null", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !emptyTripId) test.skip(true, "empty trip not seeded");
+
+    const res = await get(request, token, `/api/travel/trips/${emptyTripId}/ops-dashboard`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+
+    expect(body.participants.count).toBe(0);
+    expect(body.participants.capturedConsent).toBe(0);
+    expect(body.payments.expectedTotalRupees).toBe(0);
+    expect(body.documents.requirementCount).toBe(0);
+    expect(body.rooming.assignmentCount).toBe(0);
+    expect(body.departureReadiness.score).toBeNull();
+  });
+
+  test("GET /trips/:id/ops-dashboard rejects generic admin with 403 WRONG_VERTICAL", async ({ request }) => {
+    if (!opsTripId) test.skip(true, "ops trip not seeded");
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "admin@globussoft.com not seeded");
+    const res = await get(request, token, `/api/travel/trips/${opsTripId}/ops-dashboard`);
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe("WRONG_VERTICAL");
+  });
+
+  test("departureReadiness.score is a 0-100 integer when participants AND payments both have data", async ({ request }) => {
+    // The populated trip above has zero payments (no payment POST
+    // route exists), so its score is null. To exercise the non-null
+    // score branch we'd need to seed TripInstalmentPayment directly
+    // — out of scope for a Playwright API spec. This test asserts
+    // the SHAPE of the score field is correct: either an integer
+    // 0-100 OR null. We exercise both null (populated trip) and
+    // null (empty trip) above; this test pins the type contract
+    // explicitly on the bali seed if it's present in the env.
+    //
+    // On local stack the bali trip (tripCode=tmc-bali-2026) has 4
+    // participants + 4 instalments seeded. On demo the same is
+    // true. Skip gracefully if neither environment has it (e.g.
+    // a fresh test DB before seed-travel.js ran).
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+
+    const list = await get(request, token, "/api/travel/trips?status=confirmed&limit=50");
+    if (!list.ok()) test.skip(true, "trip list unavailable");
+    const { trips } = await list.json();
+    const bali = trips.find((t) => t.tripCode === "tmc-bali-2026");
+    if (!bali) test.skip(true, "tmc-bali-2026 seed not present");
+
+    const res = await get(request, token, `/api/travel/trips/${bali.id}/ops-dashboard`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+
+    expect(body.participants.count).toBeGreaterThanOrEqual(4);
+    expect(body.payments.expectedTotalRupees).toBeGreaterThan(0);
+    // Score must be an integer 0..100 (or null if seed shape changed)
+    if (body.departureReadiness.score !== null) {
+      expect(Number.isInteger(body.departureReadiness.score)).toBe(true);
+      expect(body.departureReadiness.score).toBeGreaterThanOrEqual(0);
+      expect(body.departureReadiness.score).toBeLessThanOrEqual(100);
+    }
+    // Rooming + each component pct should be integers in [0,100] or null
+    for (const k of ["consentPct", "docsPct", "paymentPct", "roomingPct"]) {
+      const v = body.departureReadiness.components[k];
+      if (v !== null) {
+        expect(Number.isInteger(v)).toBe(true);
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+});

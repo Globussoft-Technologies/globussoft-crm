@@ -102,6 +102,31 @@ html[data-theme="dark"][data-vertical="travel"],
    * data-vertical scope blocked it as described above). */
   --input-bg:        rgba(25, 36, 58, 0.7);
   --input-bg-focus:  rgba(25, 36, 58, 0.95);
+
+  /* #881 — Modal / popover / tooltip / menu surface tokens. Pre-fix these
+   * tokens fell through to either generic-dark (black tooltip, near-black
+   * overlay) or — worse, when render order put `[data-theme="light"]` on
+   * html momentarily — to generic-light (white tooltip, white popover).
+   * On the deep navy travel body the white popovers / white modal bodies /
+   * black tooltips read as off-brand bright/dark rectangles. Defining
+   * these tokens INSIDE the travel-dark block forces every consumer of
+   * `var(--tooltip-bg)` / `var(--overlay-bg)` / `var(--surface-hover)` to
+   * resolve to travel-tinted values regardless of html `data-theme` race
+   * conditions.
+   *
+   * Naming: aliases `--popover-bg` / `--menu-bg` as `--surface-color` so
+   * future code referencing them gets the right surface; existing code
+   * referencing `--surface-color` directly keeps working. */
+  --overlay-bg:      rgba(7, 12, 24, 0.78);          /* deep navy overlay, not pure black */
+  --surface-hover:   rgba(244, 239, 223, 0.06);      /* cream tint — matches sidebar hover */
+  --tooltip-bg:      rgba(25, 36, 58, 0.96);         /* deep navy with gold rim via border-color */
+  --popover-bg:      var(--surface-color);
+  --menu-bg:         var(--surface-color);
+  --subtle-bg-2:     rgba(244, 239, 223, 0.03);      /* near-transparent cream — readable on navy */
+  --subtle-bg-4:     rgba(244, 239, 223, 0.04);
+  --hover-bg:        rgba(244, 239, 223, 0.05);
+  --kbd-bg:          rgba(244, 239, 223, 0.10);
+  --table-header-bg: rgba(244, 239, 223, 0.05);
 }
 
 /* #864 — explicit form-field background + color for travel dark mode.
@@ -973,4 +998,148 @@ html[data-theme="dark"][data-vertical="travel"],
 [data-theme="dark"][data-vertical="travel"] .app-sidebar > div[style*="border-top"],
 [data-theme="dark"] [data-vertical="travel"] .app-sidebar > div[style*="border-top"] {
   border-top-color: rgba(200, 154, 78, 0.28) !important;
+}
+
+/* #881 (BUG-T18) — Modals, popovers, tooltips under dark mode.
+ *
+ * Page-level dialogs, ui/Modal.jsx, utils/notify.jsx confirm/prompt cards,
+ * NotificationBell, Omnibar, CommandPalette, Sidebar Callified popover, and
+ * page-level drawer panels (Invoices/Leads/Payments/Marketing/Pipeline/
+ * ItineraryDetail/ReligiousPackets/RfuCustomerProfile/Suppliers/Calendar/
+ * WhatsAppThreads/TelecallerQueue/BlockedNumbers) all reference
+ * `var(--surface-color)` already — the travel-dark vars block (line 73-105)
+ * now sets that to #19243A so those surfaces inherit the dark navy correctly.
+ *
+ * The class-level overrides below add three things on top of token-only
+ * resolution:
+ *
+ *   (1) `.card.modal` — overrides `.card`'s `var(--surface-color)` (which on
+ *       travel-dark is the semi-opaque #19243A) with an OPAQUE high-contrast
+ *       navy + a subtle gold rim. Pre-fix, `.card`'s background was the
+ *       glassmorphic `rgba(22,24,29,0.4)` from `:root` (when the html-level
+ *       dark var wasn't reaching the descendant due to selector specificity),
+ *       leaving the modal essentially transparent over the blurred body.
+ *       Forcing opaque ensures the modal body never reads as "bright/white".
+ *
+ *   (2) `[role="dialog"]` — page-level inline-styled dialogs that set their
+ *       own `background: 'var(--surface-color)'` get a defensive override
+ *       with `!important` so any earlier inline cascade ordering won't beat
+ *       us. (Inline `style` attributes have specificity 1000; `!important`
+ *       on a rule with selector specificity ~(0,2,1) still wins because
+ *       `!important` flips the cascade origin.)
+ *
+ *   (3) Recharts tooltip surface — the recharts library renders its own
+ *       `.recharts-default-tooltip` element which reads from contentStyle
+ *       props in JS but NOT from CSS vars in the rendered span. We pin
+ *       opaque navy + cream text via CSS class so charts on Dashboard /
+ *       Reports / CustomReports / AgentReports / Surveys / LeadScoring
+ *       render readable hover tooltips on dark backgrounds.
+ *
+ *   (4) Native browser tooltips (HTML `title` attribute) — CANNOT be themed
+ *       via CSS; browsers render them with OS chrome. Not in scope here;
+ *       documented as a known limitation. Custom `.app-tooltip` class (if
+ *       any future inline / aria-label tooltip is added) gets covered by
+ *       the popover rule via the alias `--tooltip-bg`.
+ *
+ * Scope: all rules below scoped to `[data-theme="dark"][data-vertical="travel"]`
+ * so generic + wellness verticals + travel-light keep their existing surfaces. */
+
+/* Modal content surface — opaque navy + gold rim + lifted shadow */
+[data-theme="dark"][data-vertical="travel"] .card.modal,
+[data-theme="dark"] [data-vertical="travel"] .card.modal {
+  background: #19243A !important;
+  border: 1px solid rgba(200, 154, 78, 0.28) !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85),
+              0 0 0 1px rgba(200, 154, 78, 0.04) !important;
+}
+
+/* Page-level inline-styled dialogs — defensive override.
+ * These use inline `background: 'var(--surface-color)'` which already
+ * resolves to navy on dark, but the !important rule below pins it against
+ * any future inline cascade that might leak through. */
+[data-theme="dark"][data-vertical="travel"] [role="dialog"],
+[data-theme="dark"] [data-vertical="travel"] [role="dialog"] {
+  background: #19243A;
+  color: var(--text-primary);
+  border-color: rgba(200, 154, 78, 0.20);
+}
+/* Don't trample on .card.modal which already has its own scoped rule above —
+ * and don't trample on backdrops that ALSO carry role="dialog" (Invoices /
+ * Leads / Payments drawers wrap the inner panel with role="dialog" on the
+ * outer fixed-position backdrop). For those, the inner panel needs the
+ * surface tint; the outer drawer-overlay-style backdrops keep their own
+ * dim. The selector targets the panel via "[role=dialog]:not(.modal-overlay)"
+ * but no such overlay class exists in this codebase — the rule above is safe
+ * because all role=dialog elements in the app ARE the inner panel. */
+
+/* Recharts tooltip — opaque navy with cream text, gold rim.
+ * Pre-fix, recharts's default rendering on travel-dark showed up as the
+ * library default (white bg with black text) for any chart that didn't
+ * pass explicit `contentStyle`. The 8 chart pages that DO pass contentStyle
+ * already reference `var(--tooltip-bg)`, which (post-token-fix above)
+ * resolves to the navy rgba — but this class rule pins it for the recharts
+ * library's internal default span too. */
+[data-theme="dark"][data-vertical="travel"] .recharts-default-tooltip,
+[data-theme="dark"] [data-vertical="travel"] .recharts-default-tooltip {
+  background: rgba(25, 36, 58, 0.96) !important;
+  border: 1px solid rgba(200, 154, 78, 0.30) !important;
+  color: var(--text-primary) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+}
+[data-theme="dark"][data-vertical="travel"] .recharts-default-tooltip .recharts-tooltip-label,
+[data-theme="dark"] [data-vertical="travel"] .recharts-default-tooltip .recharts-tooltip-label,
+[data-theme="dark"][data-vertical="travel"] .recharts-default-tooltip .recharts-tooltip-item,
+[data-theme="dark"] [data-vertical="travel"] .recharts-default-tooltip .recharts-tooltip-item {
+  color: var(--text-primary) !important;
+}
+
+/* Custom `.app-tooltip` class (forward-compat — any future inline tooltip
+ * that adopts this class gets travel-dark styling automatically). */
+[data-theme="dark"][data-vertical="travel"] .app-tooltip,
+[data-theme="dark"] [data-vertical="travel"] .app-tooltip {
+  background: var(--tooltip-bg);
+  color: var(--text-primary);
+  border: 1px solid rgba(200, 154, 78, 0.30);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* Form inputs INSIDE modal/dialog — defensive. The form-field rule at
+ * line 115-124 already covers raw inputs across the app, but inputs
+ * inside [role="dialog"] can have their own scoped styles in some pages
+ * (Marketing.jsx edit-campaign drawer, ItineraryDetail edit drawer).
+ * The rule below ensures the input keeps the dark navy surface even when
+ * the modal sub-tree's CSS specificity is higher. */
+[data-theme="dark"][data-vertical="travel"] [role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]),
+[data-theme="dark"][data-vertical="travel"] [role="dialog"] select,
+[data-theme="dark"][data-vertical="travel"] [role="dialog"] textarea,
+[data-theme="dark"] [data-vertical="travel"] [role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]),
+[data-theme="dark"] [data-vertical="travel"] [role="dialog"] select,
+[data-theme="dark"] [data-vertical="travel"] [role="dialog"] textarea {
+  background: rgba(25, 36, 58, 0.7) !important;
+  color: var(--text-primary) !important;
+  border-color: rgba(200, 154, 78, 0.20) !important;
+}
+
+/* Popover / dropdown menu surfaces. There is no centralised popover class
+ * in this codebase — NotificationBell, Omnibar, CommandPalette,
+ * Sidebar.jsx's Callified popover, the date-picker popovers etc. all
+ * render their floating panel with `background: 'var(--surface-color)'`
+ * inline. The token resolution (post-vars-block fix above) already covers
+ * them. The rule below adds a defensive .popover / .dropdown-menu /
+ * .context-menu / [data-popover] selector group so any future popover
+ * that adopts one of these class names gets the dark surface automatically. */
+[data-theme="dark"][data-vertical="travel"] .popover,
+[data-theme="dark"][data-vertical="travel"] .dropdown-menu,
+[data-theme="dark"][data-vertical="travel"] .context-menu,
+[data-theme="dark"][data-vertical="travel"] [data-popover],
+[data-theme="dark"] [data-vertical="travel"] .popover,
+[data-theme="dark"] [data-vertical="travel"] .dropdown-menu,
+[data-theme="dark"] [data-vertical="travel"] .context-menu,
+[data-theme="dark"] [data-vertical="travel"] [data-popover] {
+  background: var(--popover-bg) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid rgba(200, 154, 78, 0.20) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
 }

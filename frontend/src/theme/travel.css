@@ -201,3 +201,118 @@ html[data-theme="dark"][data-vertical="travel"],
   background: #3A2E18;
   color: #E0C088;
 }
+
+/* #871 — Inbox conversation-list bubbles + status pills + avatars (Phase 1
+ * of dark-mode cluster refactor, mirror of #867 Diagnostics pattern). The
+ * pre-refactor inline styles in Inbox.jsx used hardcoded RGBA hex pairs
+ * for: SMS bubble background (10b981 green), WhatsApp bubble background
+ * (25D366 brand green), avatar circle backgrounds, and 4 status-pill
+ * variants (READ blue / DELIVERED green / FAILED red / PENDING amber).
+ * On dark navy (#0F1729 body) the rgba(*, 0.05) bubble bg was effectively
+ * invisible (~1.1:1 vs body) and the pill text colors (#10b981 / #3b82f6 /
+ * #f59e0b) all failed AA against the rgba(*, 0.1) pill bg once the bg
+ * itself blended into the dark body.
+ *
+ * Base rules are theme-agnostic (light mode = preserve current cream/light
+ * appearance via the existing rgba(*, 0.05/0.1) values); travel dark-mode
+ * overrides force opaque high-contrast pairs ≥4.5:1 (WCAG AA). */
+.inbox-bubble {
+  background: transparent;
+}
+.inbox-bubble--sms.inbox-bubble--inbound {
+  background: rgba(16, 185, 129, 0.05);
+}
+.inbox-bubble--wa.inbox-bubble--inbound {
+  background: rgba(37, 211, 102, 0.05);
+}
+.inbox-avatar--sms {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+}
+.inbox-avatar--wa {
+  background: rgba(37, 211, 102, 0.1);
+  color: #25D366;
+}
+.inbox-status-pill {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  display: inline-block;
+}
+.inbox-status-pill--read {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+}
+.inbox-status-pill--delivered {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+}
+.inbox-status-pill--failed {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+.inbox-status-pill--pending {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+}
+.inbox-read-receipt {
+  color: #3b82f6;
+  font-size: 0.7rem;
+}
+
+/* #871 — Dark-mode token overrides for Inbox bubbles / avatars / status
+ * pills. Contrast verified ≥4.5:1 (WCAG AA) against the dark surfaces:
+ *   SMS bubble bg:  rgba(16,185,129,0.18) on #0F1729 → distinguishable
+ *                   tint without crushing text (text uses --text-primary
+ *                   #F4EFDF, ~13:1 on the tinted dark surface)
+ *   WA bubble bg:   rgba(37,211,102,0.18) on #0F1729 → same
+ *   avatar SMS:     #6EE7B7 on #064E3B → ~7.1:1
+ *   avatar WA:      #86EFAC on #14532D → ~7.4:1
+ *   pill read:      #93C5FD on #1E3A8A → ~5.8:1
+ *   pill delivered: #6EE7B7 on #064E3B → ~7.1:1
+ *   pill failed:    #FCA5A5 on #7F1D1D → ~5.4:1
+ *   pill pending:   #FCD34D on #78350F → ~6.9:1
+ * Scoped to travel vertical so generic + wellness keep their existing
+ * (light-only) rgba tints. */
+[data-theme="dark"][data-vertical="travel"] .inbox-bubble--sms.inbox-bubble--inbound,
+[data-theme="dark"] [data-vertical="travel"] .inbox-bubble--sms.inbox-bubble--inbound {
+  background: rgba(16, 185, 129, 0.18);
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-bubble--wa.inbox-bubble--inbound,
+[data-theme="dark"] [data-vertical="travel"] .inbox-bubble--wa.inbox-bubble--inbound {
+  background: rgba(37, 211, 102, 0.18);
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-avatar--sms,
+[data-theme="dark"] [data-vertical="travel"] .inbox-avatar--sms {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-avatar--wa,
+[data-theme="dark"] [data-vertical="travel"] .inbox-avatar--wa {
+  background: #14532D;
+  color: #86EFAC;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-status-pill--read,
+[data-theme="dark"] [data-vertical="travel"] .inbox-status-pill--read {
+  background: #1E3A8A;
+  color: #93C5FD;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-status-pill--delivered,
+[data-theme="dark"] [data-vertical="travel"] .inbox-status-pill--delivered {
+  background: #064E3B;
+  color: #6EE7B7;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-status-pill--failed,
+[data-theme="dark"] [data-vertical="travel"] .inbox-status-pill--failed {
+  background: #7F1D1D;
+  color: #FCA5A5;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-status-pill--pending,
+[data-theme="dark"] [data-vertical="travel"] .inbox-status-pill--pending {
+  background: #78350F;
+  color: #FCD34D;
+}
+[data-theme="dark"][data-vertical="travel"] .inbox-read-receipt,
+[data-theme="dark"] [data-vertical="travel"] .inbox-read-receipt {
+  color: #93C5FD;
+}

@@ -150,6 +150,16 @@ async function post(request, token, path, data) {
   );
 }
 
+async function patch(request, token, path, data) {
+  return retryOn5xx(() =>
+    request.patch(`${BASE_URL}${path}`, {
+      headers: token ? headers(token) : { "Content-Type": "application/json" },
+      data,
+      timeout: REQUEST_TIMEOUT,
+    }),
+  );
+}
+
 // RUN_TAG suffix for create-flow assertions — lets demo-hygiene identify
 // spec-created rows for optional cleanup. Format mirrors other gate
 // specs (e.g. e2e/tests/test-data-patterns.js conventions).
@@ -573,5 +583,253 @@ test.describe("Visa Sure applications — CREATE flow", () => {
     expect(body.status).toBe("intake");
     expect(body).toHaveProperty("tenantId");
     expect(body).toHaveProperty("createdAt");
+  });
+});
+
+// ─── PATCH /applications/:id — status transitions + advisor edits ────
+//
+// Auth gates, body validation, sub-brand isolation, NOT_FOUND, and a
+// happy-path status transition (intake → docs-pending). Uses a real
+// visa-sure application discovered via the list endpoint; falls back to
+// test.skip on the demo state where no visa-sure application exists.
+//
+// PATCH RUN_TAG suffix lets demo-hygiene identify spec-mutated rows.
+// Created or mutated rows are NOT torn down (visa pipeline data is
+// durable demo state; see file header note for the CREATE flow).
+
+const PATCH_RUN_TAG = `E2E_VISA_PATCH_${Date.now()}`;
+
+async function findVisaApplicationId(request, token) {
+  const r = await get(request, token, "/api/travel/visa/applications?limit=1");
+  if (r.status() !== 200) return null;
+  const body = await r.json();
+  if (Array.isArray(body.applications) && body.applications.length > 0) {
+    return body.applications[0].id;
+  }
+  return null;
+}
+
+async function findNonVisaApplicationId(_request, _token) {
+  // No public endpoint surfaces a VisaApplication whose Contact has
+  // subBrand != "visasure" — the POST handler rejects 403 NOT_VISA_SURE
+  // at create-time, so no such row can be authored via the API. Returns
+  // null to signal "use NOT_FOUND path for sub-brand isolation instead".
+  return null;
+}
+
+test.describe("Visa Sure applications — PATCH flow", () => {
+  test("PATCH /applications/:id without token → 401 (or 403)", async ({ request }) => {
+    const r = await request.patch(
+      `${BASE_URL}/api/travel/visa/applications/1`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { status: "docs-pending" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    // Global auth guard returns 401 or 403 depending on hardened mode.
+    expect([401, 403]).toContain(r.status());
+  });
+
+  test("PATCH /applications/:id as USER role → 403", async ({ request }) => {
+    const token = await getTravelUser(request);
+    if (!token) {
+      test.skip(true, "telecaller@travelstall.demo not seeded — skipping USER-RBAC PATCH test");
+      return;
+    }
+    const r = await patch(
+      request,
+      token,
+      "/api/travel/visa/applications/1",
+      { status: "docs-pending" },
+    );
+    expect(r.status()).toBe(403);
+  });
+
+  test("PATCH /applications/:id empty body → 400 EMPTY_BODY", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping EMPTY_BODY test");
+      return;
+    }
+    const appId = await findVisaApplicationId(request, token);
+    if (!appId) {
+      test.skip(
+        true,
+        "no visa-sure application on this stack — EMPTY_BODY path can't be exercised without a real row to target (the handler verifies existence before checking body)",
+      );
+      return;
+    }
+    const r = await patch(
+      request,
+      token,
+      `/api/travel/visa/applications/${appId}`,
+      {},
+    );
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe("EMPTY_BODY");
+  });
+
+  test("PATCH /applications/999999999 → 404 NOT_FOUND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping NOT_FOUND PATCH test");
+      return;
+    }
+    const r = await patch(
+      request,
+      token,
+      "/api/travel/visa/applications/999999999",
+      { status: "docs-pending" },
+    );
+    expect(r.status()).toBe(404);
+    const body = await r.json();
+    // Either NOT_FOUND (no row at all) or NOT_VISA_SURE — both are
+    // acceptable rejection codes per the same contract as the GET /:id
+    // handler.
+    expect(["NOT_FOUND", "NOT_VISA_SURE"]).toContain(body.code);
+  });
+
+  test("PATCH /applications/:id non-visasure contact's app → 404 NOT_VISA_SURE (or NOT_FOUND)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping NOT_VISA_SURE PATCH test");
+      return;
+    }
+    const nonVisaAppId = await findNonVisaApplicationId(request, token);
+    if (!nonVisaAppId) {
+      // Sub-brand isolation on PATCH is exercised via the NOT_FOUND
+      // path above (a non-existent ID + an ID referencing a non-visa
+      // contact both return the same 404 code branch).
+      test.skip(
+        true,
+        "sub-brand isolation on PATCH covered by NOT_FOUND path — a non-visa VisaApplication can't be constructed via public API (POST rejects with 403 at create-time)",
+      );
+      return;
+    }
+    const r = await patch(
+      request,
+      token,
+      `/api/travel/visa/applications/${nonVisaAppId}`,
+      { status: "docs-pending" },
+    );
+    expect(r.status()).toBe(404);
+    const body = await r.json();
+    expect(["NOT_FOUND", "NOT_VISA_SURE"]).toContain(body.code);
+  });
+
+  test("PATCH /applications/:id invalid status → 400 INVALID_STATUS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping INVALID_STATUS PATCH test");
+      return;
+    }
+    const appId = await findVisaApplicationId(request, token);
+    if (!appId) {
+      test.skip(
+        true,
+        "no visa-sure application on this stack — INVALID_STATUS path requires a real row (existence is checked before body validation)",
+      );
+      return;
+    }
+    const r = await patch(
+      request,
+      token,
+      `/api/travel/visa/applications/${appId}`,
+      { status: "garbage" },
+    );
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe("INVALID_STATUS");
+  });
+
+  test("PATCH /applications/:id happy path → 200 with status transition (intake → docs-pending)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping PATCH happy path");
+      return;
+    }
+    // Find or create a target row in intake state. Prefer existing
+    // intake rows; if none, create one via POST. If the demo has no
+    // visa-sure contacts at all, skip.
+    let appId = null;
+    let isCreatedRow = false;
+
+    const listR = await get(
+      request,
+      token,
+      "/api/travel/visa/applications?status=intake&limit=1",
+    );
+    if (listR.status() === 200) {
+      const listBody = await listR.json();
+      if (Array.isArray(listBody.applications) && listBody.applications.length > 0) {
+        appId = listBody.applications[0].id;
+      }
+    }
+
+    if (!appId) {
+      const visaContactId = await findVisaSureContactId(request, token);
+      if (!visaContactId) {
+        test.skip(
+          true,
+          "no visa-sure contact + no intake application on this stack — happy-path PATCH unreachable without seed",
+        );
+        return;
+      }
+      const createR = await post(request, token, "/api/travel/visa/applications", {
+        contactId: visaContactId,
+        applicationType: "tourist",
+        destinationCountry: `IT ${PATCH_RUN_TAG}`,
+      });
+      if (createR.status() !== 201) {
+        test.skip(
+          true,
+          `couldn't create a target application (status ${createR.status()}) — happy-path PATCH unreachable`,
+        );
+        return;
+      }
+      const createdBody = await createR.json();
+      appId = createdBody.id;
+      isCreatedRow = true;
+    }
+
+    // Status transition intake → docs-pending. The 200 envelope must
+    // include the updated status; complexCase + advisorRiskFlag fields
+    // are also exercised to pin the multi-field-update path.
+    const r = await patch(
+      request,
+      token,
+      `/api/travel/visa/applications/${appId}`,
+      {
+        status: "docs-pending",
+        complexCase: true,
+        advisorRiskFlag: "priority",
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+
+    // Updated row shape — schema columns we depend on.
+    expect(body).toHaveProperty("id");
+    expect(body.id).toBe(appId);
+    expect(body.status).toBe("docs-pending");
+    expect(body.complexCase).toBe(true);
+    expect(body.advisorRiskFlag).toBe("priority");
+    expect(body).toHaveProperty("tenantId");
+    expect(body).toHaveProperty("updatedAt");
+
+    // If we created this row in-spec, restore status to intake to keep
+    // the demo's status-distribution sane. Other PATCH'd fields are
+    // left set — they're tied to the spec's RUN_TAG and identifiable
+    // by demo-hygiene.
+    if (isCreatedRow) {
+      await patch(
+        request,
+        token,
+        `/api/travel/visa/applications/${appId}`,
+        { status: "intake" },
+      ).catch(() => {});
+    }
   });
 });

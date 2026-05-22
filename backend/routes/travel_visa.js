@@ -102,6 +102,12 @@ const VALID_APPLICATION_TYPES = [
   "hajj",
 ];
 
+// Pinned to `model VisaApplication.advisorRiskFlag` schema comment
+// (prisma/schema.prisma:4508): `String? // null | low | medium | high |
+// priority`. PATCH callers may clear the flag by sending null OR an empty
+// string (normalized to null before write).
+const VALID_RISK_FLAGS = ["low", "medium", "high", "priority"];
+
 // ─── GET /api/travel/visa/applications ──────────────────────────────
 //
 // Paginated list of Visa Sure applications scoped to the caller's tenant
@@ -524,6 +530,201 @@ router.post(
       console.error("[travel-visa/create] error:", e.message);
       res.status(500).json({
         error: "Failed to create visa application",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+// ─── PATCH /api/travel/visa/applications/:id ────────────────────────
+//
+// Status transitions + advisor edits. Drives the AdvisorDashboard
+// per-row action surface (status pill click, "mark complex case" toggle,
+// "set risk flag = priority" button, applicationType correction). Mirrors
+// the field-by-field opt-in PATCH pattern in routes/travel_itineraries.js
+// (PATCH /itineraries/:id) — only fields present in the body are mutated,
+// everything else is left alone.
+//
+// Body shape (every field OPTIONAL — at least one must be present):
+//   {
+//     status?:             <enum>  — VALID_STATUSES (intake|docs-pending|
+//                                    filed|approved|rejected|appeal)
+//     applicationType?:    <enum>  — VALID_APPLICATION_TYPES
+//     destinationCountry?: <str>   — 1..200 chars
+//     advisorRiskFlag?:    <enum|null|""> — VALID_RISK_FLAGS, or null/""
+//                                    to clear the flag
+//     complexCase?:        <bool>  — flips the complex-case marker
+//   }
+//
+// SCHEMA NOTES (drift from dispatch brief):
+//   - The dispatch named a `notes` field. VisaApplication has NO `notes`
+//     column today (per-application notes live nowhere on the row;
+//     per-document notes live on VisaDocumentChecklistItem). DROPPED from
+//     the PATCH body. If a future card needs an application-level note
+//     that's a schema migration + separate scope. Same drift as the POST
+//     handler's brief.
+//
+// Behavior: load the application, verify Contact.subBrand="visasure"
+// (sub-brand isolation — identical posture to the GET /:id and POST
+// handlers), build an update object with ONLY the provided fields, write,
+// audit, return 200 + the updated row.
+//
+// Audit log: writeAudit("VisaApplication", "UPDATE", id, ..., {
+//   changedFields: [...keys of update object] }) — surfaces exactly which
+// columns the PATCH mutated, for the audit-viewer drilldown.
+//
+// Errors:
+//   400 INVALID_ID                — :id not numeric
+//   400 EMPTY_BODY                — request body had zero updatable fields
+//   400 INVALID_STATUS            — status not in enum
+//   400 INVALID_APPLICATION_TYPE  — applicationType not in enum
+//   400 INVALID_DESTINATION       — destinationCountry empty or > 200 chars
+//   400 INVALID_RISK_FLAG         — advisorRiskFlag not in enum (and not
+//                                   null/"" clear)
+//   400 INVALID_COMPLEX_CASE      — complexCase not a boolean
+//   404 NOT_FOUND                 — no application for this tenant
+//   404 NOT_VISA_SURE             — application exists but its Contact has
+//                                   subBrand != "visasure"
+//   500 INTERNAL_ERROR            — Prisma error or unexpected
+router.patch(
+  "/applications/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          error: "id must be a number",
+          code: "INVALID_ID",
+        });
+      }
+
+      // Verify application exists on this tenant.
+      const existing = await prisma.visaApplication.findFirst({
+        where: { id, tenantId },
+        select: { id: true, contactId: true },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: "Visa application not found",
+          code: "NOT_FOUND",
+        });
+      }
+
+      // Sub-brand isolation: load the upstream Contact and reject if its
+      // subBrand isn't visasure. Same defense-in-depth as GET /:id.
+      const contact = await prisma.contact.findFirst({
+        where: { id: existing.contactId, tenantId },
+        select: { id: true, subBrand: true },
+      });
+      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+        return res.status(404).json({
+          error: "Visa application not found",
+          code: "NOT_VISA_SURE",
+        });
+      }
+
+      // Field-by-field opt-in. Only fields present in the body are
+      // mutated; everything else stays put. Matches travel_itineraries.js
+      // PATCH pattern (line 271+).
+      const body = req.body || {};
+      const data = {};
+
+      if (body.status !== undefined) {
+        if (typeof body.status !== "string" || !VALID_STATUSES.includes(body.status)) {
+          return res.status(400).json({
+            error: `status must be one of: ${VALID_STATUSES.join(", ")}`,
+            code: "INVALID_STATUS",
+          });
+        }
+        data.status = body.status;
+      }
+
+      if (body.applicationType !== undefined) {
+        if (
+          typeof body.applicationType !== "string" ||
+          !VALID_APPLICATION_TYPES.includes(body.applicationType)
+        ) {
+          return res.status(400).json({
+            error: `applicationType must be one of: ${VALID_APPLICATION_TYPES.join(", ")}`,
+            code: "INVALID_APPLICATION_TYPE",
+          });
+        }
+        data.applicationType = body.applicationType;
+      }
+
+      if (body.destinationCountry !== undefined) {
+        const dest =
+          typeof body.destinationCountry === "string"
+            ? body.destinationCountry.trim()
+            : "";
+        if (!dest || dest.length > 200) {
+          return res.status(400).json({
+            error: "destinationCountry must be 1..200 chars",
+            code: "INVALID_DESTINATION",
+          });
+        }
+        data.destinationCountry = dest;
+      }
+
+      if (body.advisorRiskFlag !== undefined) {
+        // null OR empty string clears the flag.
+        if (body.advisorRiskFlag === null || body.advisorRiskFlag === "") {
+          data.advisorRiskFlag = null;
+        } else if (
+          typeof body.advisorRiskFlag !== "string" ||
+          !VALID_RISK_FLAGS.includes(body.advisorRiskFlag)
+        ) {
+          return res.status(400).json({
+            error: `advisorRiskFlag must be one of: ${VALID_RISK_FLAGS.join(", ")} (or null/"" to clear)`,
+            code: "INVALID_RISK_FLAG",
+          });
+        } else {
+          data.advisorRiskFlag = body.advisorRiskFlag;
+        }
+      }
+
+      if (body.complexCase !== undefined) {
+        if (typeof body.complexCase !== "boolean") {
+          return res.status(400).json({
+            error: "complexCase must be a boolean",
+            code: "INVALID_COMPLEX_CASE",
+          });
+        }
+        data.complexCase = body.complexCase;
+      }
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({
+          error: "no updatable fields provided",
+          code: "EMPTY_BODY",
+        });
+      }
+
+      const updated = await prisma.visaApplication.update({
+        where: { id },
+        data,
+      });
+
+      writeAudit(
+        "VisaApplication",
+        "UPDATE",
+        id,
+        req.user.userId,
+        tenantId,
+        {
+          subBrand: VISA_SUB_BRAND,
+          changedFields: Object.keys(data),
+        },
+      ).catch(() => {});
+
+      res.json(updated);
+    } catch (e) {
+      console.error("[travel-visa/patch] error:", e.message);
+      res.status(500).json({
+        error: "Failed to update visa application",
         code: "INTERNAL_ERROR",
       });
     }

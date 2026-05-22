@@ -365,6 +365,96 @@ These don't need an engineer — they need a stakeholder decision. Once the deci
 
 ---
 
+## F. CROSS-REPO INTEGRATION — Voyagr (OJR) CMS → CRM lead capture
+
+**Repo:** [Globussoft-Technologies/voyagr](https://github.com/Globussoft-Technologies/voyagr) (Next.js 14 + Prisma multi-tenant CMS, locally at `c:/Users/Admin/gbs-projects/voyagr/`).
+
+**Context:** voyagr powers the 4 travel sub-brand websites (TMC / RFU / Travel Stall / Visa Sure). Lead capturing + the full top-of-funnel happen on the websites; the CRM is the system of record for captured leads. Implementation spans TWO repos with coordinated CORS / auth / schema work.
+
+### F1. CRM-side public lead-capture endpoint
+**Labels:** `multi-day-feature`, `backend`, `voyagr-integration`, `gbs-crm-repo`
+
+**Why manual:** new public endpoint with API-key auth (mirror `backend/routes/external.js` / `middleware/externalAuth.js` shape — the existing `/api/v1/external` partner API is the canonical pattern). Needs CORS allowlist update for voyagr site domains, spam guards, source attribution (sub-brand + UTM + page URL), dedup against existing Contacts. ~2-3 days.
+
+**Acceptance criteria:**
+- New `POST /api/v1/voyagr/leads` endpoint (or `/api/public/lead-capture` if we choose unauthenticated webhook model — see design decision below)
+- Body shape: `{ subBrand, name, email, phone, source: { siteSlug, pageUrl, utm? }, payload: <form-specific fields> }`
+- Creates Contact (with dedup against `[email, tenantId]` unique) + Deal in the correct sub-brand's pipeline with stage `lead`
+- CORS allowlist extension: each voyagr site's domain added to `corsAllowlist` in `backend/server.js`
+- Rate limit: 60 req/min per IP (mirror marketplace-leads webhook pattern)
+- Spam guards: honeypot field + optional hCaptcha integration (config-driven)
+- Audit log row per capture (`writeAudit("voyagr.lead.captured", {...})`)
+- E2E spec: `e2e/tests/voyagr-lead-capture-api.spec.js` covering happy path + dedup + spam guard + CORS preflight + per-sub-brand routing
+
+**Design decision needed first:**
+- **Auth model:** API key (mirror partner API, more secure but requires voyagr-side key storage) vs unauthenticated public webhook (simpler, relies purely on rate-limit + spam guards). Lean toward API key.
+
+---
+
+### F2. Voyagr-side: lead-capture form components (× 4 form types)
+**Labels:** `multi-day-feature`, `frontend`, `voyagr-integration`, `voyagr-repo`
+
+**Why manual:** lives in the **voyagr repo**, not gbs-crm. Next.js components + a thin CRM client SDK + form validation + per-sub-brand styling. ~5-7 days for all 4 form types.
+
+**Acceptance criteria** (one per form type, ship as separate commits in voyagr repo):
+1. **Basic lead-capture form** — name + email + phone + interest area + free-text message. Lives on Contact page + footer of every page.
+2. **TMC school-trip enquiry** — school name + class + student count + preferred dates + destination interest. Lives on TMC sub-brand site.
+3. **RFU Umrah enquiry** — pilgrim count + preferred Hajj/Umrah season + budget range + visa status. Lives on RFU sub-brand site.
+4. **Travel Stall family-holiday quiz** — 5-7 question diagnostic-style form (matches the existing `frontend/src/pages/public/TravelStallQuiz.jsx` quiz in the CRM repo). Lives on Travel Stall sub-brand site.
+
+**Shared infrastructure:**
+- New `voyagr/src/lib/crmClient.ts` — typed POST helper that hits `/api/v1/voyagr/leads`
+- New `voyagr/src/components/forms/LeadCaptureForm.tsx` — shared form shell (name/email/phone + sub-brand selector + form-specific payload slot)
+- Per-form components extending the shell
+- Form validation via zod or similar
+- Submit success/error UI per voyagr's theme system
+
+---
+
+### F3. Cross-system attribution + UTM tracking
+**Labels:** `multi-day-feature`, `backend`, `voyagr-integration`, `analytics`
+
+**Why manual:** captures need to flow through to the existing `Touchpoint` model (already exists at `backend/prisma/schema.prisma`) + tie into the marketing attribution reports. ~1-2 days.
+
+**Acceptance criteria:**
+- Lead-capture endpoint persists UTM params (utm_source / utm_medium / utm_campaign / utm_term / utm_content) on the Contact row + creates a Touchpoint
+- Marketing report (`backend/routes/attribution.js` already exists) extended to filter by `voyagr` source
+- Admin UI surface in `frontend/src/pages/MarketingDashboard.jsx` (or similar) showing voyagr-sourced leads per sub-brand × campaign
+
+---
+
+### F4. Diagnostic-quiz parity (Travel Stall) between voyagr and CRM
+**Labels:** `multi-day-feature`, `frontend`, `voyagr-integration`, `coordinated-deploy`
+
+**Why manual:** the CRM already ships `frontend/src/pages/public/TravelStallQuiz.jsx` (mounted publicly, no auth). Voyagr's quiz needs to be the same shape so a lead captured on voyagr → enters the same `TravelDiagnostic` pipeline → diagnostic score → tier recommendation → auto-itinerary draft. ~2-3 days.
+
+**Acceptance criteria:**
+- Voyagr quiz component matches the question bank shape used by `backend/routes/travel_diagnostics.js` `/diagnostics/public/banks` + `/diagnostics/public/submit` endpoints
+- Submission flows through the same public endpoint; same DiagnosticBank rows serve both surfaces
+- Result page (or post-submit redirect) shows the same classification label + recommended tier
+- Decision: should voyagr quiz redirect to CRM's public itinerary preview URL, or render its own result page? (cleaner deploy if voyagr renders inline)
+
+---
+
+### F5. Webhook outbound — CRM → voyagr on Contact status change (optional, Phase 2)
+**Labels:** `multi-day-feature`, `backend`, `voyagr-integration`, `optional`
+
+**Why manual:** when a Contact moves through pipeline stages, voyagr's CMS can surface tailored content per stage (e.g. "thank you for booking" hero swap for "won" leads). Webhook out from CRM → voyagr signs requests with HMAC. ~1-2 days. **Optional** — only build if voyagr-side content personalization is on the roadmap.
+
+---
+
+### F6. Joint deployment + smoke test infrastructure
+**Labels:** `devops`, `voyagr-integration`, `cross-repo`
+
+**Why manual:** changes that span both repos (e.g. F1 endpoint shape change → F2 client SDK update) need coordinated deploy ordering: CRM ships endpoint first, voyagr ships client second. ~1 day for runbook + smoke tests.
+
+**Acceptance criteria:**
+- Runbook in `docs/VOYAGR_DEPLOY_RUNBOOK.md` covering deploy order + rollback for cross-repo changes
+- Joint E2E smoke test (post-deploy): a script that hits voyagr's quiz form + verifies Contact + Deal appear in CRM
+- Per-environment domain mapping table (dev / staging / prod) so CORS allowlist + API key bindings are unambiguous
+
+---
+
 ## Summary table
 
 | Cluster | Items | Engineer-days | Blocking |
@@ -374,8 +464,9 @@ These don't need an engineer — they need a stakeholder decision. Once the deci
 | C. Cred-dependent integration | 7 | ~12 days post-cred | Yasin's cred chase |
 | D. Wellness session | 7 | ~6 days | Pick a wellness day |
 | E. Product-call | 2 | ~½ day post-call | Stakeholder decisions |
+| **F. Voyagr (OJR) integration** | **6** | **~15 days** | **Design call on auth model + form-type prioritisation** |
 
-**Total engineer time to clear:** ~75 days across all clusters. **Total cred-/product-call asks:** 9 (Yasin owns 7, counsel owns 1, TMC owns 1).
+**Total engineer time to clear:** ~90 days across all clusters. **Total cred-/product-call asks:** 9 (Yasin owns 7, counsel owns 1, TMC owns 1). **Cross-repo coordination:** voyagr (OJR) work spans 2 repos and needs a deploy-order runbook.
 
 ---
 

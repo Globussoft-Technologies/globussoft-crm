@@ -53,6 +53,29 @@ arrives. What remains falls into three buckets; none is autonomous-doable.
 
 ---
 
+## 🤖 QA-CRON tick — 2026-05-23 (15-min cadence, 3 parallel agents)
+
+**Cron `00d468d5` fired its first tick at ~05:23 UTC.** 3 parallel agents shipped 3 commits — clean 3/3 ship, no rebase conflicts, all 3 GitHub issues auto-closed via `Closes #N` trailers.
+
+| Tick | SHA | Issue | What |
+|---|---|---|---|
+| #1 | `85a843f` | #889 | `+ Create Itinerary` CTA + drawer on `/travel/itineraries` |
+| #1 | `50ac575` | #892 | `/leads` inline form → header CTA + drawer (refactor; 12 existing tests updated + 1 new CTA-visibility test) |
+| #1 | `8269e20` | #893 | `/tasks` Enqueue Activity inline form → header CTA + drawer |
+
+Cron will continue at :07/:22/:37/:52 until empty-tick threshold trips or user CronDeletes (`00d468d5`).
+
+---
+
+## 🌐 NEW INTEGRATION TARGET — Voyagr (OJR) CMS → CRM lead capture (2026-05-23)
+
+**Repo:** [Globussoft-Technologies/voyagr](https://github.com/Globussoft-Technologies/voyagr) (Next.js + Prisma multi-tenant CMS, locally at `c:/Users/Admin/gbs-projects/voyagr/`).
+**Why:** voyagr powers the 4 travel sub-brand websites (TMC / RFU / Travel Stall / Visa Sure). Lead capturing + the sales funnel will live on the websites; leads land in this CRM via a public lead-capture API.
+
+This is **multi-day cross-repo work** — not cron-pickable. Filed as Cluster F in [docs/MANUAL_CODING_BACKLOG.md](docs/MANUAL_CODING_BACKLOG.md) with the full implementation breakdown (CRM-side endpoints + CORS + voyagr-side forms + auth + dedup + spam guards + cross-system attribution).
+
+---
+
 ## 🏁 SESSION HANDOFF (2026-05-22 afternoon — QA issue triage: 10 closures across 4 batches)
 
 **HEAD on origin/main:** `c031ba0`. Working tree clean. All 4 batches pushed sequentially; deploy gate green 4/4 with auto-close trailers firing on every PR (8 unique issue numbers + 2 phantom-closures = **10 GitHub issues closed**).

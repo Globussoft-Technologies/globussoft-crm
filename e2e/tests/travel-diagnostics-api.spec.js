@@ -1021,6 +1021,72 @@ test.describe('Travel diagnostics API — form-vs-call comparison (PRD §4.1)', 
     const body = await res.json();
     expect(body.code).toBe('WRONG_VERTICAL');
   });
+
+  // PRD §4.1 Phase 1.5 — persist + cache. Eliminates duplicate-call noise
+  // from LlmSpend telemetry (paired with the 76996c8 dashboard) by letting
+  // DiagnosticDetail.jsx Section 3 read a cached envelope on reload
+  // instead of re-firing Claude Opus on every mount.
+  test('POST /diagnostics/:id/form-vs-call/compare persists the result on TravelDiagnostic.formVsCallJson', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    const id = created.diagnosticIds[0];
+    const computeRes = await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
+      callAnswers: { q1: 'many', q2: 'large' },
+    });
+    expect(computeRes.status()).toBe(200);
+    const computed = await computeRes.json();
+
+    // Read back the row via GET — the formVsCallJson column should be
+    // populated and decode to the same envelope shape the compute
+    // endpoint returned. generatedAt is hoisted so both sides share the
+    // exact ISO timestamp.
+    const getRes = await get(request, token, `/api/travel/diagnostics/${id}`);
+    expect(getRes.status()).toBe(200);
+    const diag = await getRes.json();
+    expect(diag.formVsCallJson).toBeTruthy();
+    const cached = JSON.parse(diag.formVsCallJson);
+    expect(cached.classification).toBe(computed.classification);
+    expect(cached.scorePercent).toBe(computed.scorePercent);
+    expect(cached.summary).toBe(computed.summary);
+    expect(cached.model).toBe(computed.model);
+    expect(cached.stub).toBe(Boolean(computed.stub));
+    expect(Array.isArray(cached.perFieldDiff)).toBe(true);
+    expect(cached.perFieldDiff.length).toBe(computed.perFieldDiff.length);
+    expect(cached.generatedAt).toBe(computed.generatedAt);
+  });
+
+  test('POST /diagnostics/:id/form-vs-call/compare again overwrites the prior cache', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
+    const id = created.diagnosticIds[0];
+
+    // First compute — matching tier
+    await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
+      callAnswers: { q1: 'many', q2: 'large' },
+    });
+    const getResA = await get(request, token, `/api/travel/diagnostics/${id}`);
+    const diagA = await getResA.json();
+    expect(diagA.formVsCallJson).toBeTruthy();
+    const firstCache = JSON.parse(diagA.formVsCallJson);
+
+    // Wait 10ms so generatedAt differs deterministically (ISO ms-precision).
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Second compute — mismatching tier so perFieldDiff payload differs too.
+    await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
+      callAnswers: { q1: 'first', q2: 'small' },
+    });
+    const getResB = await get(request, token, `/api/travel/diagnostics/${id}`);
+    const diagB = await getResB.json();
+    expect(diagB.formVsCallJson).toBeTruthy();
+    const secondCache = JSON.parse(diagB.formVsCallJson);
+
+    expect(secondCache.generatedAt).not.toBe(firstCache.generatedAt);
+    // Sanity: the perFieldDiff content reflects the new (mismatching) call answers.
+    for (const row of secondCache.perFieldDiff) {
+      expect(row.matched).toBe(false);
+    }
+  });
 });
 
 // Phase 3 (PRD §4.7 + §4.10) — Visa Sure 15Q Readiness Assessment seed

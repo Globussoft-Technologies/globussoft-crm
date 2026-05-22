@@ -508,10 +508,12 @@ router.post(
 // Response: { diagnosticId, classification, scorePercent, summary,
 //             model, stub, perFieldDiff[], generatedAt }
 //
-// Does NOT persist anything — endpoint is read/compute-only. The
-// audit-log-aware persistence (snapshot the comparison on the
-// TravelDiagnostic row so the next GET serves the cached panel)
-// is a P1.5 follow-up.
+// Persists the result envelope (minus diagnosticId — that's the row
+// itself) to TravelDiagnostic.formVsCallJson via fire-and-forget update
+// so the next GET /diagnostics/:id surfaces the cached panel without
+// re-billing the LLM. Mirrors the talkingPointsJson pattern. A persist
+// failure surfaces in logs but does NOT 500 the user's compute response
+// — the LLM call is already billed by then.
 //
 // PII discipline: payload contents (answers + transcripts) are
 // forwarded to the router but NEVER logged from the route — the
@@ -622,6 +624,33 @@ router.post(
         };
       });
 
+      // Hoisted so the persisted snapshot and the response envelope share
+      // the exact same ISO timestamp — gate spec pins parity.
+      const generatedAt = new Date().toISOString();
+
+      // Persist the result envelope so subsequent GETs serve the cached
+      // comparison without re-billing the LLM. Mirrors the talkingPointsJson
+      // pattern. Fire-and-forget — a persist failure surfaces in logs but
+      // MUST NOT 500 the user's compute response (we already paid for the
+      // LLM call).
+      const persistEnvelope = {
+        classification,
+        scorePercent,
+        summary: result.text,
+        model: result.model,
+        stub: Boolean(result.stub),
+        perFieldDiff,
+        generatedAt,
+      };
+      try {
+        await prisma.travelDiagnostic.update({
+          where: { id: diag.id },
+          data: { formVsCallJson: JSON.stringify(persistEnvelope) },
+        });
+      } catch (e) {
+        console.error("[travel-diag] form-vs-call persist error (non-fatal):", e.message);
+      }
+
       res.json({
         diagnosticId: diag.id,
         classification,
@@ -630,7 +659,7 @@ router.post(
         model: result.model,
         stub: Boolean(result.stub),
         perFieldDiff,
-        generatedAt: new Date().toISOString(),
+        generatedAt,
       });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

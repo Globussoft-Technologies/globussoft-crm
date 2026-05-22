@@ -4134,6 +4134,7 @@ model TravelDiagnostic {
   recommendedTier     String? // entry | primary | premium
   reportPdfUrl        String?
   talkingPointsJson   String?   @db.Text // LLM-generated advisor brief
+  formVsCallJson      String?   @db.Text // LLM-generated form-vs-call comparison cache
   consentCapturedAt   DateTime?
   tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt           DateTime  @default(now())

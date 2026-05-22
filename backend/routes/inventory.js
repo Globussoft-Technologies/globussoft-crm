@@ -33,6 +33,7 @@ const express = require("express");
 const prisma = require("../lib/prisma");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { requirePermission } = require("../middleware/requirePermission");
+const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const { generateReceiptNumber } = require("../lib/inventoryReceiptNumber");
 // #665: shared inverted-date-range guard — see lib/validateDateRange.js.
 const { validateDateRange } = require("../lib/validateDateRange");
@@ -86,6 +87,12 @@ const canWriteInventory = requirePermission("inventory", "write");
 const canUpdateInventory = requirePermission("inventory", "update");
 const canDeleteInventory = requirePermission("inventory", "delete");
 const canManageInventory = requirePermission("inventory", "manage");
+
+// Service-catalog uploads (/upload/service-image, /upload/service-category-image)
+// have no `services:manage` RBAC permission yet, so they fall back to the same
+// admin/manager wellnessRole gate used in routes/service_categories.js and
+// routes/pos.js.
+const adminGate = verifyWellnessRole(["admin", "manager"]);
 
 // ── ProductCategory CRUD ───────────────────────────────────────────
 

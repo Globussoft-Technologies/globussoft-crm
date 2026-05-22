@@ -218,6 +218,94 @@ describe('<OwnerDashboard />', () => {
     expect(screen.getByRole('button', { name: /Refresh recommendations from the orchestrator/i })).toBeInTheDocument();
   });
 
+  // #831: AdsGPT card now derives state from /api/integrations.
+  // Three render branches must be covered: linked (real account name +
+  // View campaigns CTA), not_linked (Connect AdsGPT CTA — the demo
+  // path that the pen-test asked for), error (Retry CTA).
+
+  it('AdsGPT card: renders "View campaigns" + the linked account name when /api/integrations reports an active adsgpt row', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/locations')) return Promise.resolve([{ id: 1, name: 'Ranchi' }]);
+      if (url.includes('/api/wellness/dashboard')) return Promise.resolve(dashboardJson);
+      if (url.includes('/api/wellness/reports/pnl-by-service')) return Promise.resolve({ totalRevenue: 0, totals: {}, rows: [] });
+      if (url === '/api/integrations') {
+        return Promise.resolve([
+          {
+            provider: 'adsgpt',
+            isActive: true,
+            settings: JSON.stringify({ login: 'enhancedwellness-prod' }),
+            id: 17,
+          },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    renderDashboard();
+    await waitFor(() => expect(screen.getByTestId('adsgpt-linked-label')).toBeInTheDocument());
+    expect(screen.getByTestId('adsgpt-linked-label').textContent).toMatch(/enhancedwellness-prod/i);
+    // "View campaigns" CTA is present (replaces the stale "Open AdsGPT" copy).
+    expect(screen.getByRole('button', { name: /Open AdsGPT campaigns for enhancedwellness-prod/i })).toBeInTheDocument();
+  });
+
+  it('AdsGPT card: renders "Connect AdsGPT" CTA when /api/integrations returns no adsgpt row (the canonical demo-blocker fix)', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/locations')) return Promise.resolve([{ id: 1, name: 'Ranchi' }]);
+      if (url.includes('/api/wellness/dashboard')) return Promise.resolve(dashboardJson);
+      if (url.includes('/api/wellness/reports/pnl-by-service')) return Promise.resolve({ totalRevenue: 0, totals: {}, rows: [] });
+      if (url === '/api/integrations') {
+        // No adsgpt row in the returned list — this is the staging
+        // state the pen-test #831 captured (card always read
+        // "Linked account: Not configured" with nowhere to go).
+        return Promise.resolve([
+          { provider: 'slack', isActive: true, id: 1 },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    renderDashboard();
+    await waitFor(() => expect(screen.getByTestId('adsgpt-not-linked-label')).toBeInTheDocument());
+    expect(screen.getByText(/No AdsGPT account linked yet/i)).toBeInTheDocument();
+    // The Connect CTA is the unambiguous "go link this now" surface.
+    expect(screen.getByRole('button', { name: /Connect AdsGPT account/i })).toBeInTheDocument();
+  });
+
+  it('AdsGPT card: renders Retry when /api/integrations rejects', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/locations')) return Promise.resolve([{ id: 1, name: 'Ranchi' }]);
+      if (url.includes('/api/wellness/dashboard')) return Promise.resolve(dashboardJson);
+      if (url.includes('/api/wellness/reports/pnl-by-service')) return Promise.resolve({ totalRevenue: 0, totals: {}, rows: [] });
+      if (url === '/api/integrations') return Promise.reject(new Error('boom'));
+      return Promise.resolve({});
+    });
+    renderDashboard();
+    await waitFor(() => expect(screen.getByTestId('adsgpt-error-label')).toBeInTheDocument());
+    expect(screen.getByText(/Unable to check link status/i)).toBeInTheDocument();
+    // Retry CTA is differentiated from "Connect" / "View campaigns" so
+    // the user knows this is a transient error, not a missing link.
+    expect(screen.getByRole('button', { name: /Retry checking AdsGPT link status/i })).toBeInTheDocument();
+  });
+
+  it('AdsGPT card: settings without a login field falls back to ADSGPT_DEMO_LOGIN', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/locations')) return Promise.resolve([{ id: 1, name: 'Ranchi' }]);
+      if (url.includes('/api/wellness/dashboard')) return Promise.resolve(dashboardJson);
+      if (url.includes('/api/wellness/reports/pnl-by-service')) return Promise.resolve({ totalRevenue: 0, totals: {}, rows: [] });
+      if (url === '/api/integrations') {
+        // Row exists + active, but settings doesn't carry a login —
+        // exercise the env-var fallback so demos with unannotated rows
+        // still render a name instead of going blank.
+        return Promise.resolve([
+          { provider: 'adsgpt', isActive: true, settings: '{}', id: 18 },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    renderDashboard();
+    await waitFor(() => expect(screen.getByTestId('adsgpt-linked-label')).toBeInTheDocument());
+    // env-var default is sumitgh2050 (per utils/adsgpt.js).
+    expect(screen.getByTestId('adsgpt-linked-label').textContent).toMatch(/sumitgh2050/);
+  });
+
   // #565 (HI-16): the dashboard's "Revenue this month" KPI now reads
   // from the canonical /api/wellness/reports/pnl-by-service endpoint
   // (totalRevenue scalar) so it agrees with /wellness/reports.

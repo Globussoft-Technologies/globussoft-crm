@@ -49,6 +49,18 @@ export default function OwnerDashboard() {
   const [locationId, setLocationId] = useState('');
   const [adsGptStatus, setAdsGptStatus] = useState({ state: 'idle', msg: '' });
   const [callifiedStatus, setCallifiedStatus] = useState({ state: 'idle', msg: '' });
+  // #831: AdsGPT card was hard-wired to ADSGPT_DEMO_LOGIN at build time
+  // and never consulted real linked-account state. Pen-test framing on
+  // staging: card reads "Linked account: Not configured" regardless of
+  // what's actually wired — the env var isn't baked into the staging
+  // build, and nothing falls back to a server-side truth source.
+  // Now: query /api/integrations, find the adsgpt row (if any), and
+  // render one of three states (linked / not-linked / fetch-error).
+  // 'idle' = first paint before /api/integrations resolves;
+  // 'linked' = Integration row exists + isActive;
+  // 'not_linked' = no Integration row, OR row exists but isActive=false;
+  // 'error' = /api/integrations call failed.
+  const [adsGptIntegration, setAdsGptIntegration] = useState({ state: 'idle', login: null });
   // #836: surface a freshness signal on the "Top recommendation" panel +
   // give Owner a manual-refresh CTA when the top card is stale. The
   // orchestrator runs daily 07:00 IST, but its output can age out if the
@@ -119,6 +131,66 @@ export default function OwnerDashboard() {
   useEffect(() => {
     fetchApi('/api/wellness/locations').then(setLocations).catch(() => setLocations([]));
   }, []);
+
+  // #831: load real AdsGPT linked-account state from /api/integrations.
+  // Pre-fix the card read a build-time env var (ADSGPT_DEMO_LOGIN) that
+  // wasn't set on the staging build — so every demo showed "Not
+  // configured" with no path forward. Wrapped in a callable so the
+  // "Retry" CTA on the error state can re-fire it without remounting
+  // the dashboard.
+  const loadAdsGptIntegration = () => {
+    setAdsGptIntegration((prev) => ({ ...prev, state: 'idle' }));
+    fetchApi('/api/integrations', { silent: true })
+      .then((rows) => {
+        const list = Array.isArray(rows) ? rows : [];
+        const adsgpt = list.find((r) => r && r.provider === 'adsgpt');
+        if (adsgpt && adsgpt.isActive) {
+          // settings is a JSON-stringified blob per the Integration model
+          // (@db.Text). Try to pull a human-readable account label off
+          // it; fall back to the build-time demo login so the demo box
+          // still has something to show when the row is wired but
+          // unannotated.
+          let login = null;
+          if (adsgpt.settings) {
+            try {
+              const parsed = typeof adsgpt.settings === 'string'
+                ? JSON.parse(adsgpt.settings)
+                : adsgpt.settings;
+              login = parsed?.login || parsed?.accountName || parsed?.account || null;
+            } catch (_e) { /* ignore parse failure — fallback handles it */ }
+          }
+          setAdsGptIntegration({ state: 'linked', login: login || ADSGPT_DEMO_LOGIN });
+        } else {
+          setAdsGptIntegration({ state: 'not_linked', login: null });
+        }
+      })
+      .catch(() => setAdsGptIntegration({ state: 'error', login: null }));
+  };
+
+  useEffect(() => {
+    loadAdsGptIntegration();
+  }, []);
+
+  // #831: "Connect AdsGPT" CTA path on the not_linked state — reuses
+  // the existing SSO impersonation helper so Owner gets the same
+  // one-click surface whether they're linking for the first time or
+  // re-entering an already-linked account. Server-side persistence of
+  // the Integration row is handled out-of-band today (demo fixture);
+  // this CTA is the user-visible "go connect now" surface the
+  // pen-test asked for. After launch, we don't optimistically flip to
+  // 'linked' — the source of truth is /api/integrations, so the user
+  // clicks Retry (or refreshes) to pick up the real state once the
+  // out-of-band link completes.
+  const handleConnectAdsGpt = async () => {
+    setAdsGptStatus({ state: 'loading', msg: 'Opening AdsGPT connect flow…' });
+    try {
+      await launchAdsGptAs(ADSGPT_DEMO_LOGIN);
+      setAdsGptStatus({ state: 'ok', msg: 'Connect flow opened in a new tab. Complete the link, then click Retry below.' });
+      setTimeout(() => setAdsGptStatus({ state: 'idle', msg: '' }), 6000);
+    } catch (err) {
+      setAdsGptStatus({ state: 'error', msg: err.message || 'AdsGPT connect failed' });
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -336,9 +408,31 @@ export default function OwnerDashboard() {
             </div>
             <div>
               <div style={{ fontSize: '1rem', fontWeight: 600 }}>AdsGPT</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }}>
-                Linked account: <strong>{ADSGPT_DEMO_LOGIN}</strong>
-              </div>
+              {/* #831: card now reflects real /api/integrations state
+                  rather than a build-time env var. Three render branches:
+                  linked (account name + View campaigns), not_linked
+                  (Connect AdsGPT CTA), error (Retry CTA). 'idle' is the
+                  pre-fetch flash — kept brief to avoid layout jitter. */}
+              {adsGptIntegration.state === 'linked' && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }} data-testid="adsgpt-linked-label">
+                  Linked account: <strong>{adsGptIntegration.login}</strong>
+                </div>
+              )}
+              {adsGptIntegration.state === 'not_linked' && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }} data-testid="adsgpt-not-linked-label">
+                  No AdsGPT account linked yet
+                </div>
+              )}
+              {adsGptIntegration.state === 'error' && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--warning-color, #f59e0b)', marginTop: 2 }} data-testid="adsgpt-error-label">
+                  Unable to check link status
+                </div>
+              )}
+              {adsGptIntegration.state === 'idle' && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                  Checking link status…
+                </div>
+              )}
               {adsGptStatus.state !== 'idle' && (
                 <div
                   role="status"
@@ -355,26 +449,74 @@ export default function OwnerDashboard() {
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={handleLaunchAdsGpt}
-            disabled={adsGptStatus.state === 'loading'}
-            aria-label={`Open AdsGPT as ${ADSGPT_DEMO_LOGIN}`}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
-              padding: '0.65rem 1rem', borderRadius: 10,
-              background: 'linear-gradient(135deg, #a855f7, #6366f1)',
-              color: '#fff', border: 'none',
-              fontSize: '0.9rem', fontWeight: 500,
-              boxShadow: '0 8px 20px rgba(139, 92, 246, 0.3)',
-              cursor: adsGptStatus.state === 'loading' ? 'wait' : 'pointer',
-              opacity: adsGptStatus.state === 'loading' ? 0.7 : 1,
-              alignSelf: 'flex-start',
-            }}
-          >
-            {adsGptStatus.state === 'loading' ? 'Signing in…' : 'Open AdsGPT'}
-            <ExternalLink size={14} />
-          </button>
+          {/* #831: state-driven CTA. 'linked' → existing View-campaigns SSO
+              into AdsGPT dashboard. 'not_linked' → Connect AdsGPT (same
+              SSO helper — out-of-band link completion writes the
+              Integration row). 'error' → Retry to re-fire the /api/
+              integrations fetch. 'idle' → disabled placeholder. */}
+          {adsGptIntegration.state === 'linked' && (
+            <button
+              type="button"
+              onClick={handleLaunchAdsGpt}
+              disabled={adsGptStatus.state === 'loading'}
+              aria-label={`Open AdsGPT campaigns for ${adsGptIntegration.login}`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                padding: '0.65rem 1rem', borderRadius: 10,
+                background: 'linear-gradient(135deg, #a855f7, #6366f1)',
+                color: '#fff', border: 'none',
+                fontSize: '0.9rem', fontWeight: 500,
+                boxShadow: '0 8px 20px rgba(139, 92, 246, 0.3)',
+                cursor: adsGptStatus.state === 'loading' ? 'wait' : 'pointer',
+                opacity: adsGptStatus.state === 'loading' ? 0.7 : 1,
+                alignSelf: 'flex-start',
+              }}
+            >
+              {adsGptStatus.state === 'loading' ? 'Signing in…' : 'View campaigns'}
+              <ExternalLink size={14} />
+            </button>
+          )}
+          {adsGptIntegration.state === 'not_linked' && (
+            <button
+              type="button"
+              onClick={handleConnectAdsGpt}
+              disabled={adsGptStatus.state === 'loading'}
+              aria-label="Connect AdsGPT account"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                padding: '0.65rem 1rem', borderRadius: 10,
+                background: 'linear-gradient(135deg, #f472b6, #8b5cf6)',
+                color: '#fff', border: 'none',
+                fontSize: '0.9rem', fontWeight: 500,
+                boxShadow: '0 8px 20px rgba(139, 92, 246, 0.3)',
+                cursor: adsGptStatus.state === 'loading' ? 'wait' : 'pointer',
+                opacity: adsGptStatus.state === 'loading' ? 0.7 : 1,
+                alignSelf: 'flex-start',
+              }}
+            >
+              {adsGptStatus.state === 'loading' ? 'Opening…' : 'Connect AdsGPT'}
+              <ExternalLink size={14} />
+            </button>
+          )}
+          {adsGptIntegration.state === 'error' && (
+            <button
+              type="button"
+              onClick={loadAdsGptIntegration}
+              aria-label="Retry checking AdsGPT link status"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                padding: '0.65rem 1rem', borderRadius: 10,
+                background: 'rgba(245, 158, 11, 0.15)',
+                color: 'var(--warning-color, #f59e0b)',
+                border: '1px solid rgba(245, 158, 11, 0.35)',
+                fontSize: '0.9rem', fontWeight: 500,
+                cursor: 'pointer',
+                alignSelf: 'flex-start',
+              }}
+            >
+              <RefreshCw size={14} /> Retry
+            </button>
+          )}
         </div>
 
         {/* Callified launch — one-click SSO into Callified for voice/WhatsApp

@@ -1,6 +1,6 @@
 import { useContext, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Activity, AlertTriangle, Calendar, IndianRupee, Sparkles, TrendingUp, Users, Bell, ArrowRight, Stethoscope, Megaphone, PhoneCall, ExternalLink } from 'lucide-react';
+import { Activity, AlertTriangle, Calendar, IndianRupee, Sparkles, TrendingUp, Users, Bell, ArrowRight, Stethoscope, Megaphone, PhoneCall, ExternalLink, RefreshCw } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
@@ -49,6 +49,39 @@ export default function OwnerDashboard() {
   const [locationId, setLocationId] = useState('');
   const [adsGptStatus, setAdsGptStatus] = useState({ state: 'idle', msg: '' });
   const [callifiedStatus, setCallifiedStatus] = useState({ state: 'idle', msg: '' });
+  // #836: surface a freshness signal on the "Top recommendation" panel +
+  // give Owner a manual-refresh CTA when the top card is stale. The
+  // orchestrator runs daily 07:00 IST, but its output can age out if the
+  // cron misses a day (or if it's running against a tenant whose payload
+  // hasn't changed). Pre-fix the panel read the top row's title/body with
+  // no date context — same copy every visit, regardless of when it was
+  // generated. The pen-test framing was "looks scripted" because it
+  // literally was reading week-old seed-table copy.
+  const [orchestratorStatus, setOrchestratorStatus] = useState({ state: 'idle', msg: '' });
+
+  const refreshDashboard = () => {
+    const url = locationId ? `/api/wellness/dashboard?locationId=${locationId}` : '/api/wellness/dashboard';
+    return fetchApi(url).then(setData).catch(() => {});
+  };
+
+  const handleRunOrchestrator = async () => {
+    setOrchestratorStatus({ state: 'loading', msg: 'Refreshing recommendations…' });
+    try {
+      const result = await fetchApi('/api/wellness/orchestrator/run', { method: 'POST', silent: true });
+      const count = (result && typeof result.created === 'number') ? result.created : 0;
+      await refreshDashboard();
+      setOrchestratorStatus({
+        state: 'ok',
+        msg: count > 0 ? `Generated ${count} new recommendation${count === 1 ? '' : 's'}.` : 'No new recommendations — today\'s queue is up-to-date.',
+      });
+      setTimeout(() => setOrchestratorStatus({ state: 'idle', msg: '' }), 4000);
+    } catch (err) {
+      const msg = err?.status === 403
+        ? 'Admin or manager only.'
+        : (err?.message || 'Refresh failed.');
+      setOrchestratorStatus({ state: 'error', msg });
+    }
+  };
 
   // #207/#214: redirect non-management away from the Owner Dashboard.
   // Direct URL nav by a doctor/telecaller/helper/professional now bounces
@@ -194,21 +227,93 @@ export default function OwnerDashboard() {
         </div>
 
         <div className="glass" style={{ padding: '1.25rem' }}>
-          <h3 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Sparkles size={16} color="#a855f7" /> Top recommendation
+          <h3 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Sparkles size={16} color="#a855f7" /> Top recommendation
+            </span>
+            {/* #836: manual orchestrator-run CTA — same endpoint the daily
+                07:00 IST cron uses. Backend dedup-suppresses re-emits for
+                cards already created today, so a double-click cannot
+                duplicate the queue. */}
+            <button
+              type="button"
+              onClick={handleRunOrchestrator}
+              disabled={orchestratorStatus.state === 'loading'}
+              aria-label="Refresh recommendations from the orchestrator"
+              title="Re-run the orchestrator to generate today's recommendations"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                padding: '0.3rem 0.6rem', borderRadius: 6,
+                background: 'rgba(168, 85, 247, 0.1)', color: '#a855f7',
+                border: '1px solid rgba(168, 85, 247, 0.25)',
+                fontSize: '0.75rem', fontWeight: 500,
+                cursor: orchestratorStatus.state === 'loading' ? 'wait' : 'pointer',
+                opacity: orchestratorStatus.state === 'loading' ? 0.7 : 1,
+              }}
+            >
+              <RefreshCw size={12} style={{ animation: orchestratorStatus.state === 'loading' ? 'spin 1s linear infinite' : 'none' }} />
+              {orchestratorStatus.state === 'loading' ? 'Refreshing…' : 'Refresh'}
+            </button>
           </h3>
+          {orchestratorStatus.state !== 'idle' && orchestratorStatus.state !== 'loading' && (
+            <div role="status" style={{
+              fontSize: '0.75rem', marginBottom: '0.5rem',
+              color: orchestratorStatus.state === 'error' ? '#f87171' : '#34d399',
+            }}>
+              {orchestratorStatus.msg}
+            </div>
+          )}
           {data.pendingRecommendations.length > 0 ? (
             <>
               <div style={{ fontSize: '0.95rem', fontWeight: 500 }}>{data.pendingRecommendations[0].title}</div>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.4rem', lineHeight: 1.4 }}>
                 {data.pendingRecommendations[0].body}
               </div>
+              {/* #836: surface the recommendation's age so Owner can tell
+                  at a glance whether the card reflects today's data or a
+                  week-old snapshot. Anything older than 1 day gets a
+                  warning-coloured chip and a hint to refresh. */}
+              {(() => {
+                const createdAt = data.pendingRecommendations[0].createdAt;
+                if (!createdAt) return null;
+                const ageMs = Date.now() - new Date(createdAt).getTime();
+                const ageHours = ageMs / 3600000;
+                const ageDays = ageMs / 86400000;
+                let label;
+                if (ageHours < 1) label = 'Generated less than an hour ago';
+                else if (ageHours < 24) label = `Generated ${Math.round(ageHours)} hour${Math.round(ageHours) === 1 ? '' : 's'} ago`;
+                else if (ageDays < 7) label = `Generated ${Math.round(ageDays)} day${Math.round(ageDays) === 1 ? '' : 's'} ago`;
+                else label = `Generated ${Math.round(ageDays)} days ago — likely stale`;
+                const stale = ageHours >= 24;
+                return (
+                  <div
+                    aria-label="recommendation age"
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                      marginTop: '0.5rem', padding: '0.2rem 0.5rem', borderRadius: 4,
+                      fontSize: '0.7rem',
+                      background: stale ? 'rgba(245, 158, 11, 0.1)' : 'rgba(52, 211, 153, 0.1)',
+                      color: stale ? 'var(--warning-color, #f59e0b)' : '#34d399',
+                      border: `1px solid ${stale ? 'rgba(245, 158, 11, 0.25)' : 'rgba(52, 211, 153, 0.2)'}`,
+                    }}
+                  >
+                    {label}
+                  </div>
+                );
+              })()}
               <Link to="/wellness/recommendations" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--accent-color)' }}>
                 Review all {data.pendingApprovals} <ArrowRight size={14} />
               </Link>
             </>
           ) : (
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No pending recommendations.</div>
+            // #836: honest empty-state instead of the old "No pending
+            // recommendations." which read as a UI-error placeholder when
+            // the user landed here with zero rows. Pen-test pushback was
+            // about believability — explicitly naming the orchestrator
+            // makes it clear this is a real engine, not stub copy.
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              No recommendations awaiting your review. The AI orchestrator runs daily at 07:00 IST — click <strong>Refresh</strong> to re-run now.
+            </div>
           )}
         </div>
       </div>

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { UsersRound, Trash2, Shield, Edit3, UserX, UserCheck, Key, MailPlus, X, Target, ExternalLink } from 'lucide-react';
+import { UsersRound, Trash2, Shield, Edit3, UserX, UserCheck, Key, MailPlus, UserPlus, X, Target, ExternalLink } from 'lucide-react';
 import { AuthContext } from '../App';
 import { formatDate } from '../utils/date';
 import { formatMoney } from '../utils/money';
@@ -94,6 +94,33 @@ export default function Staff() {
   // GET /api/staff round-trip.
   const [editingGoals, setEditingGoals] = useState([]);
   const [editingGoalsLoading, setEditingGoalsLoading] = useState(false);
+
+  // #891 — inline invite drawer on /staff so admins don't have to bounce
+  // to /settings to add a teammate. Same shape as Settings.jsx's invite
+  // form (name + email + temporary password + RBAC role) → POST
+  // /api/auth/register, then reload the directory.
+  const [inviting, setInviting] = useState(false);
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'USER' });
+  const [invitingSaving, setInvitingSaving] = useState(false);
+
+  const submitInvite = async (e) => {
+    e.preventDefault();
+    setInvitingSaving(true);
+    try {
+      await fetchApi('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(newUser),
+      });
+      notify.success(`Invited ${newUser.email}.`);
+      setNewUser({ name: '', email: '', password: '', role: 'USER' });
+      setInviting(false);
+      loadStaff();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to invite user.');
+    } finally {
+      setInvitingSaving(false);
+    }
+  };
 
   useEffect(() => { loadStaff(); loadCommissionProfiles(); }, []);
 
@@ -272,13 +299,26 @@ export default function Staff() {
 
   return (
     <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <UsersRound size={26} color="var(--accent-color)" /> Staff Directory
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Manage team members, roles, and access levels.
-        </p>
+      <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <UsersRound size={26} color="var(--accent-color)" /> Staff Directory
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Manage team members, roles, and access levels.
+          </p>
+        </div>
+        {canManageStaff && (
+          <button
+            type="button"
+            onClick={() => setInviting(true)}
+            data-testid="staff-invite-button"
+            className="btn-primary"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+          >
+            <UserPlus size={16} /> Invite Staff
+          </button>
+        )}
       </header>
 
       {/* Stats bar */}
@@ -481,6 +521,77 @@ export default function Staff() {
           </div>
         )}
       </div>
+
+      {/* #891 — inline Invite Staff modal. Mirrors Settings.jsx's invite
+          form so admins can add teammates from the directory itself. */}
+      {inviting && (
+        <div
+          data-testid="staff-invite-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setInviting(false); }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: '1rem',
+          }}
+        >
+          <div className="card" style={{ width: '100%', maxWidth: 460, padding: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <UserPlus size={18} color="var(--accent-color)" /> Invite Team Member
+              </h3>
+              <button
+                onClick={() => setInviting(false)}
+                aria-label="Close"
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={submitInvite} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <input
+                type="text" placeholder="Full Name" required className="input-field"
+                value={newUser.name}
+                onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+              />
+              <input
+                type="email" placeholder="Email Address" required className="input-field"
+                value={newUser.email}
+                onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+              />
+              <input
+                type="password" placeholder="Temporary Password" required className="input-field"
+                value={newUser.password}
+                onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+              />
+              <select
+                className="input-field"
+                value={newUser.role}
+                onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                style={{ background: 'var(--input-bg)' }}
+              >
+                <option value="USER">Standard Rep</option>
+                <option value="MANAGER">Sales Manager</option>
+                <option value="ADMIN">System Administrator</option>
+              </select>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setInviting(false)}
+                  style={{
+                    background: 'transparent', border: '1px solid var(--border-color)',
+                    color: 'var(--text-secondary)', padding: '0.5rem 1rem', borderRadius: 6, cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" disabled={invitingSaving}>
+                  {invitingSaving ? 'Sending…' : 'Send Invitation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* #618 — edit modal. Opens when an admin clicks Edit on a row. */}
       {editing && (

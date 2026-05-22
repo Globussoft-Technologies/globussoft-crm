@@ -230,7 +230,7 @@ router.post("/", async (req, res) => {
     // #464: strip write-restricted fields BEFORE destructuring so a USER
     // who has canWrite=false on Deal.amount can't push a value through.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency } = req.body;
+    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, subBrand } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
     const inputErr = validateDealInput(req.body, { isUpdate: false });
@@ -247,6 +247,7 @@ router.post("/", async (req, res) => {
     if (contactId) data.contactId = parseInt(contactId);
     if (pipelineId) data.pipelineId = parseInt(pipelineId);
     if (expectedClose) data.expectedClose = new Date(expectedClose);
+    if (subBrand) data.subBrand = String(subBrand);
     if (currency) {
       data.currency = currency;
     } else {

@@ -17,7 +17,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  AlertCircle, Filter, RefreshCw, Tag, UserPlus,
+  AlertCircle, Filter, RefreshCw, Tag, UserPlus, UserCircle,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -117,7 +117,16 @@ export default function TravelLeads() {
                   <td style={td}>
                     <Link to={`/deals/${d.id}`} style={dealLink}>{d.title || `Deal #${d.id}`}</Link>
                   </td>
-                  <td style={td}>{d.contact?.name || d.contact?.email || "—"}</td>
+                  <td style={td}>
+                    {d.contactId ? (
+                      <Link to={`/travel/leads/${d.contactId}`} style={{ ...dealLink, fontWeight: 500 }} title="Open unified travel lead view">
+                        <UserCircle size={14} aria-hidden />
+                        {d.contact?.name || d.contact?.email || `Contact #${d.contactId}`}
+                      </Link>
+                    ) : (
+                      d.contact?.name || d.contact?.email || "—"
+                    )}
+                  </td>
                   <td style={td}>
                     {d.subBrand ? <span style={brandBadge}>{d.subBrand}</span> : <span style={{ color: "var(--text-secondary)" }}>—</span>}
                   </td>

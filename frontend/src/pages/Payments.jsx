@@ -15,6 +15,7 @@ import { Link } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
 import { formatMoney } from '../utils/money';
+import { useNotify } from '../utils/notify';
 
 // ── Style constants ───────────────────────────────────────────────
 const GLASS = {
@@ -96,6 +97,7 @@ function formatDate(value) {
 export default function Payments() {
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
+  const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
   const [config, setConfig] = useState(null);
@@ -104,9 +106,51 @@ export default function Payments() {
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
 
+  // #895 — Record Payment drawer state. Operator-facing /payments previously
+  // had no way to capture a cash/UPI/manual receipt — the page was read-only
+  // ledger + admin-config. The drawer is opened from a header CTA and posts
+  // to /api/v1/invoices/:id/payments (canonical PRD §2 item 7c endpoint).
+  const [creating, setCreating] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [invoices, setInvoices] = useState([]);
+  const [form, setForm] = useState({
+    invoiceId: '',
+    amount: '',
+    method: 'cash',
+    reference: '',
+  });
+
   useEffect(() => {
     loadAll();
   }, []);
+
+  // #895 — fetch the open-invoice list once for the picker. Kept separate
+  // from loadAll() so a Refresh-payments click doesn't re-fetch invoices
+  // unnecessarily. Filters client-side to non-PAID/VOIDED rows in the
+  // dropdown render below.
+  useEffect(() => {
+    fetchApi('/api/billing')
+      .then((rows) => setInvoices(Array.isArray(rows) ? rows : []))
+      .catch(() => setInvoices([]));
+  }, []);
+
+  // #895 — close the Record-Payment drawer on Escape. Attached only while
+  // the drawer is open so we don't trap key events for users not actively
+  // recording.
+  useEffect(() => {
+    if (!creating) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setCreating(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [creating]);
+
+  const openCreate = () => setCreating(true);
+  const closeCreate = () => {
+    setCreating(false);
+    setForm({ invoiceId: '', amount: '', method: 'cash', reference: '' });
+  };
 
   async function loadAll() {
     setLoading(true);
@@ -122,6 +166,48 @@ export default function Payments() {
       setError(err.message || 'Failed to load payments');
     } finally {
       setLoading(false);
+    }
+  }
+
+  // #895 — Record Payment submit. Posts to the canonical /api/v1/invoices/:id/payments
+  // endpoint (v1_invoices.js:61), which writes a SUCCESS Payment row and auto-flips
+  // the invoice to PAID when sum-of-payments reaches grand_total ±0.01. The
+  // server stamps paidAt=now; we don't expose a "received date" field because
+  // it would be silently dropped on the server side — operator-honest UI.
+  async function handleRecord(e) {
+    e.preventDefault();
+    if (recording) return;
+    const invoiceId = parseInt(form.invoiceId, 10);
+    const amount = Number(form.amount);
+    if (!Number.isFinite(invoiceId) || invoiceId <= 0) {
+      notify.error('Please select an invoice');
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      notify.error('Amount must be greater than 0');
+      return;
+    }
+    if (!form.method) {
+      notify.error('Please select a payment method');
+      return;
+    }
+    setRecording(true);
+    try {
+      await fetchApi(`/api/v1/invoices/${invoiceId}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({
+          method: form.method,
+          amount,
+          reference: form.reference || undefined,
+        }),
+      });
+      notify.success('Payment recorded');
+      closeCreate();
+      loadAll();
+    } catch (err) {
+      notify.error(err.message || 'Failed to record payment');
+    } finally {
+      setRecording(false);
     }
   }
 
@@ -156,23 +242,49 @@ export default function Payments() {
           <CreditCard size={28} style={{ color: '#635bff' }} />
           <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 700 }}>Payments</h1>
         </div>
-        <button
-          onClick={loadAll}
-          disabled={loading}
-          style={{
-            ...GLASS,
-            padding: '0.5rem 1rem',
-            color: 'var(--text-primary)',
-            cursor: loading ? 'not-allowed' : 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-            fontSize: '0.85rem',
-          }}
-        >
-          <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-          Refresh
-        </button>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+          {/* #895 — Record Payment CTA (right-aligned, primary). Opens a drawer
+              capturing invoice + amount + method + reference for cash/UPI/
+              manual receipts. Mirrors the 50ac575 CTA + drawer pattern. */}
+          <button
+            type="button"
+            onClick={openCreate}
+            aria-label="Record a payment"
+            style={{
+              padding: '0.5rem 1rem',
+              background: 'rgba(99,91,255,0.18)',
+              border: '1px solid rgba(99,91,255,0.4)',
+              borderRadius: '8px',
+              color: '#a4a0ff',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              fontSize: '0.85rem',
+              fontWeight: 600,
+            }}
+          >
+            <Plus size={14} />
+            Record Payment
+          </button>
+          <button
+            onClick={loadAll}
+            disabled={loading}
+            style={{
+              ...GLASS,
+              padding: '0.5rem 1rem',
+              color: 'var(--text-primary)',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              fontSize: '0.85rem',
+            }}
+          >
+            <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       <p style={{ margin: '0 0 1.5rem 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
@@ -448,6 +560,164 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
 
       {/* Detail modal */}
       {selected && <DetailModal payment={selected} onClose={() => setSelected(null)} />}
+
+      {/* #895 — Record Payment drawer. Mounted only when `creating` is true.
+          Close triggers: X button, ESC keypress (handled by the useEffect
+          above), click on the dark overlay backdrop, Cancel button, and
+          successful submit. Fields: invoice picker (from /api/billing),
+          amount, method (cash/upi/bank-transfer/cheque/card/other),
+          reference (optional). Submits to /api/v1/invoices/:id/payments. */}
+      {creating && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'flex-end',
+            zIndex: 1000,
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Record Payment"
+        >
+          <div
+            style={{
+              background: 'rgba(20,20,30,0.98)',
+              color: 'var(--text-primary)',
+              width: '100%',
+              maxWidth: 460,
+              height: '100vh',
+              overflowY: 'auto',
+              padding: '1.5rem',
+              boxShadow: '-8px 0 24px rgba(0,0,0,0.4)',
+              borderLeft: '1px solid rgba(255,255,255,0.08)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Record Payment</h3>
+              <button
+                type="button"
+                onClick={closeCreate}
+                aria-label="Close"
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', padding: '0.25rem' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <p style={{ margin: '0 0 1rem 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              Capture a cash, UPI, bank-transfer, cheque, card, or other manual receipt
+              against an open invoice. The invoice auto-flips to PAID when the sum of
+              recorded payments reaches its total.
+            </p>
+
+            <form onSubmit={handleRecord} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Invoice *</span>
+                <select
+                  required
+                  value={form.invoiceId}
+                  onChange={(e) => setForm(f => ({ ...f, invoiceId: e.target.value }))}
+                  style={{ padding: '0.5rem', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-primary)' }}
+                >
+                  <option value="">Select an invoice…</option>
+                  {invoices
+                    .filter(inv => inv && inv.status !== 'PAID' && inv.status !== 'VOIDED')
+                    .map(inv => (
+                      <option key={inv.id} value={inv.id}>
+                        #{inv.invoiceNum || inv.id} — {formatCurrency(inv.amount, inv.currency)}
+                        {inv.contact && (inv.contact.name || inv.contact.email) ? ` (${inv.contact.name || inv.contact.email})` : ''}
+                      </option>
+                    ))}
+                </select>
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Amount *</span>
+                <input
+                  type="number"
+                  required
+                  min="0.01"
+                  step="0.01"
+                  value={form.amount}
+                  onChange={(e) => setForm(f => ({ ...f, amount: e.target.value }))}
+                  placeholder="0.00"
+                  style={{ padding: '0.5rem', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-primary)' }}
+                />
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Method *</span>
+                <select
+                  required
+                  value={form.method}
+                  onChange={(e) => setForm(f => ({ ...f, method: e.target.value }))}
+                  style={{ padding: '0.5rem', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-primary)' }}
+                >
+                  <option value="cash">Cash</option>
+                  <option value="upi">UPI</option>
+                  <option value="bank-transfer">Bank transfer</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="card">Card</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Reference</span>
+                <input
+                  type="text"
+                  maxLength={128}
+                  value={form.reference}
+                  onChange={(e) => setForm(f => ({ ...f, reference: e.target.value }))}
+                  placeholder="UPI txn ID / cheque no. / etc. (optional)"
+                  style={{ padding: '0.5rem', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-primary)' }}
+                />
+              </label>
+
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <button
+                  type="submit"
+                  disabled={recording}
+                  style={{
+                    flex: 1,
+                    padding: '0.6rem 1rem',
+                    background: 'rgba(99,91,255,0.25)',
+                    border: '1px solid rgba(99,91,255,0.5)',
+                    borderRadius: '8px',
+                    color: '#a4a0ff',
+                    cursor: recording ? 'not-allowed' : 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                  }}
+                >
+                  {recording ? 'Recording…' : 'Record Payment'}
+                </button>
+                <button
+                  type="button"
+                  onClick={closeCreate}
+                  disabled={recording}
+                  style={{
+                    padding: '0.6rem 1rem',
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '8px',
+                    color: 'var(--text-primary)',
+                    cursor: recording ? 'not-allowed' : 'pointer',
+                    fontSize: '0.85rem',
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       <style>{`@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }`}</style>
     </div>

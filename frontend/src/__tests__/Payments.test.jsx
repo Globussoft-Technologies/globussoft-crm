@@ -22,11 +22,17 @@
  *      unconfigured.
  *   8. Currency-aware amount rendering: passes through formatMoney()
  *      with the per-row currency override (e.g. INR / USD).
+ *   9. (#895) Record Payment CTA + drawer: the header CTA renders, the
+ *      drawer mounts only when clicked, the submit POSTs to
+ *      /api/v1/invoices/:id/payments with the manual-receipt body shape
+ *      (method/amount/reference), the drawer closes + list refreshes on
+ *      success.
  *
  * Drift note: actual payment initiation (Razorpay checkout open, Stripe
  * client-secret flow) is exercised by Invoices.jsx, not this page — this
- * dashboard is read-only ledger + admin-config. The detail modal open on
- * row click is a UI affordance and not load-bearing for backend contracts.
+ * dashboard is read-only ledger + admin-config (plus the #895 manual-
+ * receipt capture drawer). The detail modal open on row click is a UI
+ * affordance and not load-bearing for backend contracts.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -115,6 +121,15 @@ const samplePayments = [
   },
 ];
 
+// #895 — open-invoice list returned by /api/billing for the Record-Payment
+// drawer's invoice picker. Two open invoices (one INR, one USD) and one
+// already-PAID invoice that should be filtered out of the dropdown.
+const sampleInvoices = [
+  { id: 201, invoiceNum: 'INV-201', amount: 1500, currency: 'INR', status: 'SENT', contact: { name: 'Ravi Sharma', email: 'ravi@example.com' } },
+  { id: 202, invoiceNum: 'INV-202', amount: 500, currency: 'USD', status: 'OVERDUE', contact: { name: 'Jane Doe', email: 'jane@example.com' } },
+  { id: 203, invoiceNum: 'INV-203', amount: 100, currency: 'USD', status: 'PAID', contact: { name: 'Already Paid', email: 'p@example.com' } },
+];
+
 function defaultFetchMock(url) {
   if (url === '/api/payments') return Promise.resolve(samplePayments);
   if (url === '/api/payments/config') {
@@ -123,6 +138,7 @@ function defaultFetchMock(url) {
       razorpay: { configured: true, keyId: 'rzp_test_abc' },
     });
   }
+  if (url === '/api/billing') return Promise.resolve(sampleInvoices);
   return Promise.resolve(null);
 }
 
@@ -246,6 +262,7 @@ describe('<Payments /> — page surface', () => {
           razorpay: { configured: false },
         });
       }
+      if (url === '/api/billing') return Promise.resolve([]);
       return Promise.resolve(null);
     });
     renderPayments();
@@ -253,6 +270,104 @@ describe('<Payments /> — page surface', () => {
       expect(
         screen.getByText(/Stripe \/ Razorpay not configured/i)
       ).toBeInTheDocument();
+    });
+  });
+
+  // #895 — Record Payment CTA + drawer surface. Pins three invariants:
+  // (1) the CTA renders in the header but the drawer form is not in the
+  // DOM until the CTA is clicked; (2) clicking the CTA mounts the drawer
+  // with the canonical field set; (3) submitting POSTs to the
+  // /api/v1/invoices/:id/payments endpoint with the manual-receipt body
+  // shape and the drawer closes on success.
+  it('Record Payment CTA renders but the drawer is NOT mounted until clicked', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    // CTA renders in the header.
+    expect(screen.getByRole('button', { name: /Record a payment/i })).toBeInTheDocument();
+    // Drawer dialog is not in the DOM yet.
+    expect(screen.queryByRole('dialog', { name: /Record Payment/i })).toBeNull();
+    // Form fields are not mounted either.
+    expect(screen.queryByPlaceholderText(/UPI txn ID/i)).toBeNull();
+  });
+
+  it('clicking the CTA mounts the Record Payment drawer with invoice/amount/method/reference fields', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Record a payment/i }));
+    // Drawer dialog renders.
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Record Payment/i })).toBeInTheDocument();
+    });
+    // Invoice picker is populated with non-PAID/VOIDED rows only.
+    expect(screen.getByText(/INV-201/)).toBeInTheDocument();
+    expect(screen.getByText(/INV-202/)).toBeInTheDocument();
+    // INV-203 is PAID and must be filtered out of the dropdown.
+    expect(screen.queryByText(/INV-203/)).toBeNull();
+    // Amount + reference inputs are present.
+    expect(screen.getByPlaceholderText(/0\.00/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/UPI txn ID/i)).toBeInTheDocument();
+    // Method select defaults to "cash" and includes the canonical enum
+    // values per the route's accepted method strings.
+    expect(screen.getByRole('option', { name: /^Cash$/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^UPI$/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^Bank transfer$/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^Cheque$/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^Card$/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^Other$/i })).toBeInTheDocument();
+  });
+
+  it('submitting the drawer POSTs to /api/v1/invoices/:id/payments and closes on success', async () => {
+    // Add a happy-path POST mock alongside the defaults.
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/payments') return Promise.resolve(samplePayments);
+      if (url === '/api/payments/config') {
+        return Promise.resolve({
+          stripe: { configured: true },
+          razorpay: { configured: true },
+        });
+      }
+      if (url === '/api/billing') return Promise.resolve(sampleInvoices);
+      if (typeof url === 'string' && url.startsWith('/api/v1/invoices/') && url.endsWith('/payments') && opts && opts.method === 'POST') {
+        return Promise.resolve({ payment: { id: 999 }, fullyPaid: false });
+      }
+      return Promise.resolve(null);
+    });
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Record a payment/i }));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /Record Payment/i })).toBeInTheDocument());
+
+    // Fill the form — pick INV-201, amount 500, method=upi, reference=UPI123.
+    const invoiceSelect = screen.getByRole('combobox', { name: /Invoice/i });
+    fireEvent.change(invoiceSelect, { target: { value: '201' } });
+    fireEvent.change(screen.getByPlaceholderText(/0\.00/), { target: { value: '500' } });
+    const methodSelect = screen.getByRole('combobox', { name: /Method/i });
+    fireEvent.change(methodSelect, { target: { value: 'upi' } });
+    fireEvent.change(screen.getByPlaceholderText(/UPI txn ID/i), { target: { value: 'UPI-TXN-123' } });
+
+    // Submit — find the visible "Record Payment" submit button inside the
+    // drawer (the header CTA has the aria-label "Record a payment" — distinct).
+    const submitBtn = screen.getByRole('button', { name: /^Record Payment$/i });
+    fireEvent.click(submitBtn);
+
+    // The POST should have fired against the canonical endpoint with the
+    // manual-receipt body shape.
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => typeof url === 'string'
+          && url === '/api/v1/invoices/201/payments'
+          && opts && opts.method === 'POST'
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.method).toBe('upi');
+      expect(body.amount).toBe(500);
+      expect(body.reference).toBe('UPI-TXN-123');
+    });
+    // notify.success was called and the drawer unmounts on success.
+    await waitFor(() => {
+      expect(notifyObj.success).toHaveBeenCalledWith('Payment recorded');
+      expect(screen.queryByRole('dialog', { name: /Record Payment/i })).toBeNull();
     });
   });
 });
